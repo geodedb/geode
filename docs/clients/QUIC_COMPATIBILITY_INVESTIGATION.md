@@ -13,7 +13,9 @@ After comprehensive investigation, we've confirmed that **aioquic (Python QUIC l
 ## Investigation Timeline
 
 ### Phase 1: Server Architecture Redesign
+
 **Implemented**:
+
 - ✅ Non-blocking `tryAccept()` pattern
 - ✅ Continuous polling in main loop
 - ✅ Stream acceptance only after handshake completes
@@ -23,19 +25,23 @@ After comprehensive investigation, we've confirmed that **aioquic (Python QUIC l
 **Result**: Server architecture now matches vendor reference implementation exactly.
 
 ### Phase 2: Python Client Testing
+
 **Test 1**: Our geode_client → Our server
+
 - Connection accepted ✅
 - TLS handshake starts ✅
 - Handshake never completes ❌
 - Streams never available (error.WouldBlock) ❌
 
 **Test 2**: Our geode_client → Vendor server
+
 - Connection accepted ✅
 - TLS handshake starts ✅
 - Handshake never completes ❌
 - Same "Decryption key is not available" errors ❌
 
 **Test 3**: Vendor Python client → Vendor server
+
 - Connection accepted ✅
 - TLS handshake starts ✅
 - **Identical failure pattern** ❌
@@ -44,6 +50,7 @@ After comprehensive investigation, we've confirmed that **aioquic (Python QUIC l
 ### Phase 3: Root Cause Analysis
 
 **Server Behavior** (both ours and vendor):
+
 ```
 ✅ Accepted QUIC connection #1
 debug: hkdfExpand: [TLS crypto operations]
@@ -53,6 +60,7 @@ debug: deriveKeyIvHp: [Key derivation]
 ```
 
 **Client Behavior** (aioquic):
+
 ```
 [DEBUG] TLS State.CLIENT_HANDSHAKE_START -> State.CLIENT_EXPECT_SERVER_HELLO
 [DEBUG] QuicConnectionState.FIRSTFLIGHT -> QuicConnectionState.CONNECTED
@@ -67,6 +75,7 @@ debug: deriveKeyIvHp: [Key derivation]
 ### aioquic Incompatibility
 
 The issue manifests as:
+
 1. **Connection established** - UDP packets exchanged successfully
 2. **Initial TLS handshake progresses** - Server derives keys, client transitions states
 3. **Decryption keys never finalized** - Client repeats "Decryption key is not available"
@@ -74,6 +83,7 @@ The issue manifests as:
 5. **No application streams** - Neither side can open/accept streams
 
 **Root Cause**: aioquic and the vendor QUIC library have incompatible TLS 1.3 + QUIC integration. The handshake gets stuck after initial key exchange, likely due to:
+
 - Differing interpretations of QUIC-TLS RFC 9001
 - Incompatible cipher suite negotiation
 - Frame ordering or ACK handling differences
@@ -81,6 +91,7 @@ The issue manifests as:
 ### Vendor QUIC Library Characteristics
 
 From `vendor/quic/`:
+
 - Custom QUIC implementation in Zig
 - Uses BoringSSL for TLS
 - Implements QUIC v1 (RFC 9000)
@@ -126,16 +137,19 @@ Testing revealed that quic-go (Go) fails to connect to the vendor's reference QU
 ### Python Client Options
 
 **Option A: Switch to TCP** (Immediate workaround)
+
 - Add TCP transport support to Python client
 - Use `--insecure` flag for tests
 - Maintains Python client usability
 
 **Option B: Wait for Library Updates**
+
 - Monitor aioquic development
 - Test periodically for compatibility improvements
 - Keep QUIC code dormant until compatible
 
 **Option C: Python bindings to quiche**
+
 - Investigate `aioquic` alternatives
 - Potential: `quiche-python` bindings
 - More complex, uncertain timeline
@@ -145,15 +159,18 @@ Testing revealed that quic-go (Go) fails to connect to the vendor's reference QU
 ## Files Modified During Investigation
 
 ### Server Implementation
+
 - `src/cli/main.zig:579-1086` - Complete server loop redesign
 - `src/transport/quic.zig:163-373` - PEM loading, tryAccept()
 - `vendor/quic/lib.zig:19` - Exported tryAccept API
 
 ### Client Investigation
+
 - `test_quic_debug.py` - Created for debugging
 - `clients/python/geode_client/client.py:210-306` - Analyzed connection flow
 
 ### Documentation
+
 - `clients/CLIENT_TEST_INVESTIGATION_SUMMARY.md` - Initial findings
 - `clients/CLIENT_TEST_FIXES_NEEDED.md` - Attempted fixes
 - `clients/QUIC_COMPATIBILITY_INVESTIGATION.md` - This document
@@ -161,6 +178,7 @@ Testing revealed that quic-go (Go) fails to connect to the vendor's reference QU
 ## Evidence & Logs
 
 ### Server Log (Typical)
+
 ```
 ✅ Server ready - accepting QUIC connections
 debug: hkdfExpand: out.len=32, prk[0..4]=AAD86990, info.len=19
@@ -171,6 +189,7 @@ acceptStream error on connection 0: error.WouldBlock
 ```
 
 ### Client Log (aioquic)
+
 ```
 2025-10-31 20:47:06,823 [DEBUG] TLS State.CLIENT_HANDSHAKE_START
 2025-10-31 20:47:06,843 [DEBUG] QuicConnectionState.FIRSTFLIGHT -> CONNECTED

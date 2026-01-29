@@ -4,19 +4,19 @@
 Unit tests for Geode Benchmark Query Suite
 """
 
-import unittest
 import sys
+import unittest
 from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from benchmarks.query_suite import (
-    QueryBenchmark,
-    BenchmarkResult,
+    AGGREGATION_QUERIES,
     POINT_LOOKUPS,
     TRAVERSAL_QUERIES,
-    AGGREGATION_QUERIES,
+    BenchmarkResult,
+    QueryBenchmark,
 )
 
 
@@ -31,7 +31,7 @@ class TestQueryBenchmark(unittest.TestCase):
             query="MATCH (n) RETURN n",
             description="Test query",
             expected_complexity="O(1)",
-            params={"limit": 10}
+            params={"limit": 10},
         )
         self.assertEqual(query.name, "test_query")
         self.assertEqual(query.category, "point_lookup")
@@ -41,11 +41,7 @@ class TestQueryBenchmark(unittest.TestCase):
 
     def test_query_benchmark_defaults(self):
         """Test default values for QueryBenchmark."""
-        query = QueryBenchmark(
-            name="test",
-            category="traversal",
-            query="MATCH (n) RETURN n"
-        )
+        query = QueryBenchmark(name="test", category="traversal", query="MATCH (n) RETURN n")
         self.assertEqual(query.expected_complexity, "O(n)")
         self.assertEqual(query.params, {})
         self.assertEqual(query.warmup_runs, 3)
@@ -63,7 +59,7 @@ class TestBenchmarkResult(unittest.TestCase):
             latencies_ms=[10.0, 12.0, 11.0, 15.0, 13.0],
             rows_returned=[1, 1, 1, 1, 1],
             success_count=5,
-            error_count=0
+            error_count=0,
         )
         self.assertEqual(result.benchmark_name, "test_query")
         self.assertEqual(result.success_count, 5)
@@ -77,7 +73,7 @@ class TestBenchmarkResult(unittest.TestCase):
             latencies_ms=[10.0, 20.0, 30.0],
             rows_returned=[1, 1, 1],
             success_count=3,
-            error_count=0
+            error_count=0,
         )
         self.assertAlmostEqual(result.avg_latency_ms, 20.0)
 
@@ -89,7 +85,7 @@ class TestBenchmarkResult(unittest.TestCase):
             latencies_ms=[10.0, 20.0, 30.0, 40.0, 50.0],
             rows_returned=[1, 1, 1, 1, 1],
             success_count=5,
-            error_count=0
+            error_count=0,
         )
         self.assertAlmostEqual(result.p50_latency_ms, 30.0)
 
@@ -101,19 +97,14 @@ class TestBenchmarkResult(unittest.TestCase):
             latencies_ms=list(range(1, 101)),  # 1-100
             rows_returned=[1] * 100,
             success_count=100,
-            error_count=0
+            error_count=0,
         )
         self.assertGreaterEqual(result.p95_latency_ms, 95)
 
     def test_empty_latencies(self):
         """Test handling of empty latencies."""
         result = BenchmarkResult(
-            benchmark_name="test",
-            category="test",
-            latencies_ms=[],
-            rows_returned=[],
-            success_count=0,
-            error_count=0
+            benchmark_name="test", category="test", latencies_ms=[], rows_returned=[], success_count=0, error_count=0
         )
         self.assertEqual(result.avg_latency_ms, 0)
         self.assertEqual(result.p50_latency_ms, 0)
@@ -180,18 +171,12 @@ class TestQueryGqlSyntax(unittest.TestCase):
 
     def test_queries_have_valid_keywords(self):
         """Verify queries contain valid GQL keywords."""
-        valid_starts = [
-            "MATCH", "CREATE", "RETURN", "WITH", "OPTIONAL",
-            "CALL", "UNWIND", "MERGE", "DELETE", "SET"
-        ]
+        valid_starts = ["MATCH", "CREATE", "RETURN", "WITH", "OPTIONAL", "CALL", "UNWIND", "MERGE", "DELETE", "SET"]
         all_queries = POINT_LOOKUPS + TRAVERSAL_QUERIES + AGGREGATION_QUERIES
         for query in all_queries:
             gql = query.query.strip().upper()
             has_valid_start = any(gql.startswith(kw) for kw in valid_starts)
-            self.assertTrue(
-                has_valid_start,
-                f"Query {query.name} doesn't start with valid keyword: {query.query[:50]}"
-            )
+            self.assertTrue(has_valid_start, f"Query {query.name} doesn't start with valid keyword: {query.query[:50]}")
 
 
 if __name__ == "__main__":

@@ -4,8 +4,8 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
-    cluster: 'geode-production'
-    environment: 'docker'
+    cluster: geode-production
+    environment: docker
 
 # Alertmanager configuration (optional)
 # alerting:
@@ -20,52 +20,52 @@ rule_files:
 # Scrape configurations
 scrape_configs:
   # Prometheus self-monitoring
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['localhost:9090']
-        labels:
-          service: 'prometheus'
+- job_name: prometheus
+  static_configs:
+  - targets: [localhost:9090]
+    labels:
+      service: prometheus
 
   # Geode database metrics
-  - job_name: 'geode'
-    static_configs:
-      - targets: ['geode:9091']
-        labels:
-          service: 'geode-db'
-          instance: 'geode-primary'
+- job_name: geode
+  static_configs:
+  - targets: [geode:9091]
+    labels:
+      service: geode-db
+      instance: geode-primary
 
   # Geode GPU metrics (if using GPU compose)
-  - job_name: 'geode-gpu'
-    static_configs:
-      - targets: ['geode-gpu:9092']
-        labels:
-          service: 'geode-db-gpu'
-          instance: 'geode-gpu-primary'
+- job_name: geode-gpu
+  static_configs:
+  - targets: [geode-gpu:9092]
+    labels:
+      service: geode-db-gpu
+      instance: geode-gpu-primary
 
   # NVIDIA GPU metrics
-  - job_name: 'nvidia-gpu'
-    static_configs:
-      - targets: ['nvidia-exporter:9400']
-        labels:
-          service: 'nvidia-dcgm'
+- job_name: nvidia-gpu
+  static_configs:
+  - targets: [nvidia-exporter:9400]
+    labels:
+      service: nvidia-dcgm
 
   # Vault metrics
-  - job_name: 'vault'
-    metrics_path: /v1/sys/metrics
-    params:
-      format: ['prometheus']
-    static_configs:
-      - targets: ['vault:8200']
-        labels:
-          service: 'vault'
+- job_name: vault
+  metrics_path: /v1/sys/metrics
+  params:
+    format: [prometheus]
+  static_configs:
+  - targets: [vault:8200]
+    labels:
+      service: vault
 
   # MinIO metrics
-  - job_name: 'minio'
-    metrics_path: /minio/v2/metrics/cluster
-    static_configs:
-      - targets: ['minio:9000']
-        labels:
-          service: 'minio'
+- job_name: minio
+  metrics_path: /minio/v2/metrics/cluster
+  static_configs:
+  - targets: [minio:9000]
+    labels:
+      service: minio
 
   # Redis metrics (requires redis_exporter)
   # - job_name: 'redis'

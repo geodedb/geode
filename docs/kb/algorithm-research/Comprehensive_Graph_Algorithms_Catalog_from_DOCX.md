@@ -115,7 +115,7 @@ Pseudocode:
 ```text
 
 BellmanFord(G, s):
-  for each v in V: 
+  for each v in V:
       dist[v] := ∞
       parent[v] := NIL
   dist[s] := 0
@@ -145,9 +145,9 @@ Problem: Computes shortest path distances between every pair of vertices. Input:
 Complexity: $O(n^3)$ time and $O(n^2)$ space. This cubic complexity becomes expensive if $n$ is large (e.g., for $n=10^4$, $10^{12}$ operations is infeasible). However, on dense graphs or for moderate $n$, Floyd–Warshall can be efficient and simpler than running $n$ single-source searches.
 Pseudocode (distance matrix initialization and triple loop):
 
-let D be an n×n matrix initialized with D[i][j] := 
-    0          if i=j 
-    w(i,j)     if (i,j) in E 
+let D be an n×n matrix initialized with D[i][j] :=
+    0          if i=j
+    w(i,j)     if (i,j) in E
     ∞          otherwise
 for k from 1 to n:
     for i from 1 to n:
@@ -410,7 +410,7 @@ function sendBlockingFlow(u, t):
     if u = t: return ∞  (or a very large number to indicate t reached)
     for v in neighbors of u starting from ptr[u]:
         if dist[v] = dist[u] + 1 and capacity(u,v) > 0:
-            minFlow := sendBlockingFlow(v, t) 
+            minFlow := sendBlockingFlow(v, t)
             if minFlow > 0:
                 // push flow
                 f := min(minFlow, capacity(u,v))
@@ -1037,4 +1037,3 @@ Hopcroft–Karp algorithm - Wikipedia
 
 
 Finding, Counting and Listing All Triangles in Large Graphs, an ...
-

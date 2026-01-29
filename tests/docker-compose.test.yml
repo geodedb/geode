@@ -5,15 +5,15 @@ services:
       dockerfile: Dockerfile.simple
     container_name: geode-test
     ports:
-      - '7567:7567/udp'
+    - 7567:7567/udp
     volumes:
-      - ./data:/data
+    - ./data:/data
     environment:
-      - GEODE_LOG_LEVEL=debug
-    entrypoint: ["/usr/local/bin/geode", "serve"]
-    command: ["--listen", "0.0.0.0:7567", "--data-dir", "/data", "--log-level", "debug"]
+    - GEODE_LOG_LEVEL=debug
+    entrypoint: [/usr/local/bin/geode, serve]
+    command: [--listen, 0.0.0.0:7567, --data-dir, /data, --log-level, debug]
     healthcheck:
-      test: ['CMD', 'geode', 'query', 'RETURN 1 AS health', '--server', '127.0.0.1:7567']
+      test: [CMD, geode, query, RETURN 1 AS health, --server, 127.0.0.1:7567]
       interval: 30s
       timeout: 5s
       retries: 3

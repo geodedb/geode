@@ -121,7 +121,7 @@ MATCH (poi)
 WHERE poi.location IS NOT NULL
   AND geo_lat(poi.location) >= 37.7 AND geo_lat(poi.location) <= 37.9
   AND geo_lon(poi.location) >= -122.5 AND geo_lon(poi.location) <= -122.3
-RETURN poi.name, 
+RETURN poi.name,
        labels(poi) AS type,
        geo_lat(poi.location) AS latitude,
        geo_lon(poi.location) AS longitude;

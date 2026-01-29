@@ -20,7 +20,7 @@ tests:
   # ===============================
   # BASIC UNION OPERATIONS
   # ===============================
-  
+
   - name: "union-basic"
     description: "Test basic UNION operation"
     setup:
@@ -90,7 +90,7 @@ tests:
   # ===============================
   # INTERSECT OPERATIONS
   # ===============================
-  
+
   - name: "intersect-basic"
     description: "Test basic INTERSECT operation"
     skip: true  # INTERSECT not yet implemented (returns 0A000)
@@ -163,7 +163,7 @@ tests:
   # ===============================
   # EXCEPT OPERATIONS
   # ===============================
-  
+
   - name: "except-basic"
     description: "Test basic EXCEPT operation"
     skip: true  # EXCEPT not yet implemented (returns 0A000)
@@ -236,7 +236,7 @@ tests:
   # ===============================
   # MULTI-WAY SET OPERATIONS
   # ===============================
-  
+
   - name: "multi-way-union"
     description: "Test multi-way UNION operation"
     setup:
@@ -289,7 +289,7 @@ tests:
   # ===============================
   # SET OPERATIONS WITH ORDERING
   # ===============================
-  
+
   - name: "union-with-order-by"
     description: "Test UNION with ORDER BY clause"
     setup:
@@ -339,7 +339,7 @@ tests:
   # ===============================
   # TYPE COMPATIBILITY TESTS
   # ===============================
-  
+
   - name: "union-type-compatibility-strings"
     description: "Test UNION with compatible string types"
     args:
@@ -390,7 +390,7 @@ tests:
   # ===============================
   # COMPLEX QUERY SCENARIOS
   # ===============================
-  
+
   - name: "set-operations-with-aggregation"
     description: "Test set operations with aggregation"
     setup:
@@ -438,7 +438,7 @@ tests:
   # ===============================
   # ERROR SCENARIOS
   # ===============================
-  
+
   - name: "union-column-count-mismatch"
     description: "Test UNION with mismatched column counts (should error)"
     skip: true  # Geode returns status codes via response, not exit codes - test runner limitation
@@ -480,7 +480,7 @@ tests:
   # ===============================
   # PERFORMANCE TESTS
   # ===============================
-  
+
   - name: "large-union-performance"
     description: "Performance test with larger datasets in UNION"
     timeout_ms: 30000
@@ -508,13 +508,13 @@ tests:
   # ===============================
   # CLEANUP
   # ===============================
-  
+
   - name: "cleanup-set-operations-data"
     description: "Clean up all test data created during set operations tests"
     args:
       - "query"
       - |
-        MATCH (n) WHERE 
+        MATCH (n) WHERE
           n:TypeA OR n:TypeB OR n:UnionTest OR n:UnionAllTest OR
           n:IntersectA OR n:IntersectB OR n:IntDistinct OR n:IntAll OR
           n:ExceptA OR n:ExceptB OR n:ExcDistinct OR n:ExcAll OR

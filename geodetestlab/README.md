@@ -123,7 +123,7 @@ secrets:
     key: "GEODE_ADMIN_TOKEN"
     required: true
   api_key:
-    source: "keyring" 
+    source: "keyring"
     service: "geodetestlab"
     key: "production_api_key"
     required: false
@@ -228,21 +228,21 @@ tests:
   - name: "comprehensive-test"
     description: "Multi-faceted test with setup/cleanup"
     args: ["query", "MATCH (n) RETURN count(n)"]
-    
+
     # Pre-test setup
     setup:
       - "query \"CREATE (n:Test)\""
-      
+
     # Post-test cleanup  
     cleanup:
       - "query \"MATCH (n:Test) DELETE n\""
-      
+
     # Custom timeout
     timeout_ms: 60000
-    
+
     # Test categorization
     tags: ["query", "performance"]
-    
+
     expect:
       exit_code: 0
       stdout_json_assert:
@@ -263,16 +263,16 @@ expect:
   stdout_contains: ["substring1", "substring2"]
   stdout_regex: ["pattern1", "pattern2"]
   stderr_contains: ["error_text"]
-  
+
   # JSON path assertions
   stdout_json_assert:
     - expression: "results[0].name"
       equals: "Alice"
-    - expression: "status" 
+    - expression: "status"
       not_equals: "error"
     - expression: "message"
       matches_regex: "completed in \\d+ms"
-  
+
   # Geode-specific assertions
   geode_query:
     row_count: 5               # Exact row count
@@ -280,7 +280,7 @@ expect:
     max_rows: 100              # Maximum rows
     columns: ["id", "name"]    # Expected columns
     execution_time_ms: 1000    # Max execution time
-    
+
     # Content validation
     contains_node:
       name: "Alice"
@@ -288,7 +288,7 @@ expect:
     contains_edge:
       type: "KNOWS"
       since: 2020
-      
+
   # Server health
   server_responsive: true
 ```
@@ -322,7 +322,7 @@ tests:
       geode_query:
         row_count: 1
         columns: ["result"]
-        
+
   - name: "create-node"
     args: ["query", "CREATE (n:Person {name: 'Alice'}) RETURN n"]
     expect:
@@ -370,24 +370,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-          
+
       - name: Install geodetestlab
         run: |
           cd geodetestlab
           pip install -e .
-          
+
       - name: Build Geode
         run: make build
-        
+
       - name: Run basic tests
         run: |
           geodetestlab run --spec geodetestlab/specs/geode_basic.yml --ci
-          
+
       - name: Run fuzzing tests
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -472,6 +472,7 @@ flake8 geodetestlab/ tests/
 ### Common Issues
 
 **Server startup failures:**
+
 ```bash
 # Check Geode binary location
 export GEODE_BINARY=/path/to/geode
@@ -482,6 +483,7 @@ geodetestlab server start --port 9443
 ```
 
 **Secret resolution errors:**
+
 ```bash
 # Validate secret configuration
 geodetestlab secrets check --spec your_spec.yml
@@ -491,6 +493,7 @@ geodetestlab secrets list --spec your_spec.yml --show
 ```
 
 **Test execution timeouts:**
+
 ```bash
 # Increase timeouts for complex queries
 geodetestlab run --spec tests.yml --timeout-ms 60000 --server-timeout-ms 120000

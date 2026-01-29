@@ -33,7 +33,7 @@ echo "1. Starting server with persistent disk storage (no TLS)..."
 
 echo "   Property persistence implementation verified in source code:"
 echo "   - evalExprToPropertyValue() converts expressions to PropertyValue"
-echo "   - graph.setNodeProperty() stores properties in node.properties map"  
+echo "   - graph.setNodeProperty() stores properties in node.properties map"
 echo "   - CREATE statement handling calls both functions correctly"
 echo "   - Sample data initialization shows properties work (lines 461-470 in main.zig)"
 
@@ -43,7 +43,7 @@ echo "2. Creating nodes with properties..."
 echo "   Creating Alice..."
 timeout 10 ./zig-out/bin/geodec "CREATE (alice:Person {name: 'Alice', age: 30, city: 'NYC'})" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Failed to create Alice"
 
-echo "   Creating Bob..."  
+echo "   Creating Bob..."
 timeout 10 ./zig-out/bin/geodec "CREATE (bob:Person {name: 'Bob', age: 25, city: 'SF'})" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Failed to create Bob"
 
 echo "   Creating relationship..."

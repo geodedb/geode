@@ -22,7 +22,7 @@ TESTS_FAILED=0
 test_feature() {
     local name="$1"
     local cmd="$2"
-    
+
     echo -n "Testing $name... "
     if eval "$cmd" > /dev/null 2>&1; then
         echo -e "${GREEN}PASS${NC}"
@@ -85,7 +85,7 @@ echo "Previously: Long strings with certain keywords caused issues"
 echo "Fixed: All string lengths work, keyword collision resolved"
 echo
 
-# Test long strings and keyword edge cases  
+# Test long strings and keyword edge cases
 test_feature "Very long string value" \
     "timeout 5 ./zig-out/bin/geodec \"CREATE (p {description: 'This is a very long string that tests the limits of string property handling in the database system and ensures that long strings are properly processed without any truncation or parsing errors'})\" --insecure"
 

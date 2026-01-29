@@ -9,12 +9,14 @@ Geode implements a comprehensive authentication system with post-quantum ready s
 ## 1. Default User Configuration
 
 ### Basic Setup
+
 - **Default Username**: `geode` (configurable)
 - **Default Password**: `geodesic` (configurable)  
 - **Privileges**: Full superuser access
 - **Auto-Creation**: Created automatically on first system initialization
 
 ### Environment Configuration
+
 ```bash
 # Configure default admin username
 export GEODE_ADMIN_USERNAME="database_admin"        # Default: "geode"
@@ -24,10 +26,11 @@ export GEODE_DEFAULT_PASSWORD="My Super Secure Admin Passphrase 2024"
 ```
 
 ### Supported Admin Username Examples
+
 ```bash
 # Production environments
 export GEODE_ADMIN_USERNAME="prod_admin"
-export GEODE_ADMIN_USERNAME="sysadmin" 
+export GEODE_ADMIN_USERNAME="sysadmin"
 export GEODE_ADMIN_USERNAME="database_operator"
 
 # Development environments
@@ -38,6 +41,7 @@ export GEODE_ADMIN_USERNAME="test_user"
 ## 2. Unified Password Policy (All Users)
 
 ### Security Requirements
+
 **Every user in the system must meet these standards:**
 
 - ✅ **Minimum Length**: 20+ characters (configurable, absolute minimum: 20)
@@ -47,6 +51,7 @@ export GEODE_ADMIN_USERNAME="test_user"
 - ✅ **No Exceptions**: Admin and regular users follow identical standards
 
 ### Policy Configuration
+
 ```bash
 # Password length (minimum 20 enforced)
 export GEODE_PASSWORD_MIN_LENGTH=25        # Default: 20
@@ -56,6 +61,7 @@ export GEODE_PASSWORD_MIN_WORDS=4          # Default: 3
 ```
 
 ### Configuration Examples
+
 ```bash
 # High security environment
 export GEODE_PASSWORD_MIN_LENGTH=35
@@ -73,6 +79,7 @@ export GEODE_PASSWORD_MIN_WORDS=1          # Becomes 2
 ## 3. Forced Password Reset System
 
 ### Reset Triggers
+
 Password reset is **automatically required** when:
 
 - ✅ Using default password `"geodesic"`
@@ -82,6 +89,7 @@ Password reset is **automatically required** when:
 - ✅ Administrator manually forces reset via API
 
 ### Reset Flow Process
+
 1. **Authentication Succeeds**: User identity verified
 2. **Policy Check**: Password evaluated against current policy
 3. **Reset Prompt**: Clear explanation of requirements shown
@@ -90,6 +98,7 @@ Password reset is **automatically required** when:
 6. **Session Termination**: Forced logout requiring re-authentication
 
 ### Reset Experience
+
 ```
 Authentication successful, but a password reset is required.
 Your current password does not meet the security policy:
@@ -107,6 +116,7 @@ Confirm password: [Retype to confirm]
 ## 4. CLI Authentication Commands
 
 ### Login Command
+
 ```bash
 # Basic login (uses default server)
 geode auth login --user <username>
@@ -122,6 +132,7 @@ geode auth login --user $GEODE_ADMIN_USERNAME
 ```
 
 ### Login Options
+
 | Option | Description | Example |
 |--------|-------------|---------|
 | `--user`, `-U` | Username to authenticate | `--user admin` |
@@ -130,6 +141,7 @@ geode auth login --user $GEODE_ADMIN_USERNAME
 | `--password-file` | Read password from file | `--password-file /dev/stdin` |
 
 ### Logout Command
+
 ```bash
 # Clear stored credentials
 geode auth logout
@@ -138,6 +150,7 @@ geode auth logout
 ### Authentication Flow Examples
 
 **Standard Login:**
+
 ```bash
 $ geode auth login --user geode
 Username: geode
@@ -147,6 +160,7 @@ Session token saved to ~/.geode/credentials.json
 ```
 
 **Password Reset Required:**
+
 ```bash
 $ geode auth login --user prod_admin  
 Username: prod_admin
@@ -158,6 +172,7 @@ Authentication successful, but a password reset is required.
 ## 5. Complete Environment Configuration
 
 ### All Available Variables
+
 ```bash
 # === User Configuration ===
 export GEODE_ADMIN_USERNAME="database_admin"        # Default: "geode"
@@ -175,18 +190,21 @@ export GEODE_SERVER_PORT="3141"                    # Default: "3141"
 ## 6. Security Implementation
 
 ### Enhanced Password Validation
+
 - **Pre-Hash Validation**: Passwords checked against policy before hashing
 - **Post-Auth Validation**: Authenticated passwords re-checked against current policy
 - **Policy Enforcement**: Non-bypassable requirement for policy compliance
 - **Dynamic Updates**: Policy changes immediately affect all users
 
 ### Password Hashing
+
 - **Current**: BLAKE2b-256 with salt (secure placeholder)
 - **Future**: Argon2id with OWASP parameters (when Zig API stabilizes)
 - **Security Level**: Post-quantum computational resistance
 - **Validation**: All passwords validated before hashing
 
 ### Session Management
+
 - **Duration**: 24-hour expiration
 - **Storage**: `~/.geode/credentials.json` (user home directory)
 - **Format**: Cryptographically secure random tokens
@@ -194,6 +212,7 @@ export GEODE_SERVER_PORT="3141"                    # Default: "3141"
 - **Policy Enforcement**: Sessions invalidated for policy violations
 
 ### Audit Trail (CANARY Tracking)
+
 - `REQ-AUTH-POLICY-001`: Password Reset Tracking
 - `REQ-AUTH-POLICY-002`: Enhanced Password Policy  
 - `REQ-AUTH-POLICY-003`: Passphrase Validation
@@ -211,6 +230,7 @@ export GEODE_SERVER_PORT="3141"                    # Default: "3141"
 ## 7. Complete Usage Examples
 
 ### Example 1: Production Environment Setup
+
 ```bash
 # Configure production admin
 export GEODE_ADMIN_USERNAME="prod_db_admin"
@@ -226,6 +246,7 @@ Session token saved to ~/.geode/credentials.json
 ```
 
 ### Example 2: Development Environment (Requires Reset)
+
 ```bash
 # Configure dev admin with weak password
 export GEODE_ADMIN_USERNAME="dev_admin"
@@ -250,6 +271,7 @@ You can now log in with your new password.
 ```
 
 ### Example 3: High Security Environment
+
 ```bash
 # Maximum security configuration
 export GEODE_ADMIN_USERNAME="security_officer"
@@ -264,6 +286,7 @@ Successfully authenticated as 'security_officer' on server '127.0.0.1:3141'
 ```
 
 ### Example 4: Custom Server Configuration
+
 ```bash
 export GEODE_ADMIN_USERNAME="cluster_admin"
 export GEODE_DEFAULT_PASSWORD="Distributed Database Cluster Administrative Passphrase 2024"
@@ -276,6 +299,7 @@ Successfully authenticated as 'cluster_admin' on server 'cluster-01.geode.intern
 ## 8. Security Features & Benefits
 
 ### Mandatory Policy Enforcement
+
 - **Non-Bypassable Validation**: Password policy violations cannot be circumvented
 - **Real-Time Enforcement**: Policy changes immediately affect all existing users
 - **Pre and Post Validation**: Passwords validated before hashing AND after authentication
@@ -283,12 +307,14 @@ Successfully authenticated as 'cluster_admin' on server 'cluster-01.geode.intern
 - **Zero Exceptions**: No user can maintain a password that violates current policy
 
 ### Post-Quantum Readiness
+
 - **High Computational Cost**: 20+ character passphrases with multiple words
 - **Resistance**: GPU-based attacks, side-channel attacks, time-memory trade-offs
 - **Future-Proof**: Computational requirements scale against quantum threats
 - **Policy-Enforced**: Quantum resistance enforced through mandatory policy compliance
 
 ### Enterprise Security
+
 - **Unified Standards**: No weak password exceptions for any user
 - **Environment Flexibility**: Different security levels per deployment
 - **Audit Compliance**: Comprehensive logging and policy enforcement
@@ -296,6 +322,7 @@ Successfully authenticated as 'cluster_admin' on server 'cluster-01.geode.intern
 - **Immediate Compliance**: Policy updates require immediate user compliance
 
 ### Operational Benefits  
+
 - **Easy Deployment**: Environment variable configuration
 - **Flexible Identity**: Customizable admin usernames for different environments
 - **User Friendly**: Clear error messages and guided password reset
@@ -306,6 +333,7 @@ Successfully authenticated as 'cluster_admin' on server 'cluster-01.geode.intern
 ### Common Issues
 
 **Issue**: Login fails with "Invalid username or password"
+
 ```bash
 # Check configured admin username
 echo $GEODE_ADMIN_USERNAME  # Should match login username
@@ -315,6 +343,7 @@ echo $GEODE_DEFAULT_PASSWORD  # Should match login password
 ```
 
 **Issue**: Password reset required unexpectedly  
+
 ```bash
 # Check current policy requirements
 echo "Min Length: $GEODE_PASSWORD_MIN_LENGTH (default: 20)"
@@ -327,6 +356,7 @@ echo "Min Words: $GEODE_PASSWORD_MIN_WORDS (default: 3)"
 ```
 
 **Issue**: Password reset required after policy update
+
 ```bash
 # This is normal behavior - policy enforcement is mandatory
 # Check what changed in the policy:
@@ -338,6 +368,7 @@ echo "Current Min Words: $GEODE_PASSWORD_MIN_WORDS"
 ```
 
 **Issue**: "Password does not meet security requirements" during login
+
 ```bash
 # This indicates pre-authentication policy validation failed
 # Check your password against current policy:
@@ -349,6 +380,7 @@ echo "Current Min Words: $GEODE_PASSWORD_MIN_WORDS"
 ```
 
 **Issue**: Cannot save credentials
+
 ```bash
 # Ensure home directory is writable
 ls -la ~/.geode/
@@ -359,7 +391,9 @@ chmod 600 ~/.geode/credentials.json
 ```
 
 ### Password Policy Validation
+
 Test your password against the policy:
+
 ```bash
 # Example password check (manual verification)
 PASSWORD="My Test Database Passphrase 2024"
@@ -372,12 +406,14 @@ echo "Has lowercase: $(echo $PASSWORD | grep -q '[a-z]' && echo 'Yes' || echo 'N
 ## 10. Migration & Compatibility
 
 ### Upgrading from Previous Versions
+
 - **Backward Compatibility**: Existing `geode` username continues to work
 - **Automatic Migration**: Default user created on first startup
 - **Policy Enforcement**: All existing users subject to new password requirements
 - **Session Preservation**: Existing sessions remain valid until expiration
 
 ### Environment Migration
+
 ```bash
 # Old configuration (still works)
 export GEODE_DEFAULT_PASSWORD="secure_password"

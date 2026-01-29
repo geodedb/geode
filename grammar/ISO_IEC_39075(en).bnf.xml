@@ -5,18 +5,18 @@ ISO/IEC 39075.
 
 The grammar is specified using the XML vocabulary used to specify
 ISO/IEC 39075 itself. This file contains an XML DTD that specifies
-that XML vocabulary. 
+that XML vocabulary.
 
 This grammar may be used by implementers of GQL-implementations
 when generating parsers for the GQL language.
   -->
- 
+
 <!DOCTYPE grammar [
 
-<!-- Element definitions 
+<!-- Element definitions
 -->
 
-<!-- A grammar consists of a set of BNF definitions. 
+<!-- A grammar consists of a set of BNF definitions.
 -->
 <!ELEMENT grammar ( BNFdef* )>
 
@@ -26,12 +26,12 @@ when generating parsers for the GQL language.
 <!ELEMENT BNFdef (rhs)>
 <!-- The attributes of BNFdef are:
       * name is the name of the component.
-      * predictive indicates if the component is subject to "predicative production rules", 
+      * predictive indicates if the component is subject to "predicative production rules",
         or not.
 -->
 <!ATTLIST BNFdef
   name CDATA #REQUIRED
-  predicative ( yes | no ) #IMPLIED 
+  predicative ( yes | no ) #IMPLIED
 >
 
 
@@ -39,19 +39,19 @@ when generating parsers for the GQL language.
 -->
 <!ELEMENT rhs ( seeTheRules
               | ( ( alt )+, seeTheRules? )
-              | ( ( opt 
-                  | group 
-                  | terminalsymbol 
-                  | kw 
-                  | repeat 
-                  | BNF 
+              | ( ( opt
+                  | group
+                  | terminalsymbol
+                  | kw
+                  | repeat
+                  | BNF
                   ), seeTheRules? )+
               )>
 
 
 <!-- An alt element specifies one alternative production for the syntactic component being defined.
 -->
-<!ELEMENT alt (#PCDATA | allAltsFrom | opt | group | terminalsymbol | kw   
+<!ELEMENT alt (#PCDATA | allAltsFrom | opt | group | terminalsymbol | kw
                 | bold | repeat | BNF )* >
 
 
@@ -70,7 +70,7 @@ when generating parsers for the GQL language.
 >
 
 
-<!-- An allAltsFrom element represents "!! All alternatives from ..." 
+<!-- An allAltsFrom element represents "!! All alternatives from ..."
      where ... identifies the other part.
 -->
 <!ELEMENT allAltsFrom EMPTY>
@@ -88,14 +88,14 @@ when generating parsers for the GQL language.
 <!-- An opt element defines an optional component of a production.
      This is shown by enclosure between [ and ].
 -->
-<!ELEMENT opt (#PCDATA | alt | opt | group| terminalsymbol | kw  
+<!ELEMENT opt (#PCDATA | alt | opt | group| terminalsymbol | kw
                  | repeat | BNF )*>
 
 
 <!-- A group element groups two or more components of a production as an inseparable component.
      This is shown by enclosure between { and }.
 -->
-<!ELEMENT group (#PCDATA | alt | opt | group| terminalsymbol | kw   
+<!ELEMENT group (#PCDATA | alt | opt | group| terminalsymbol | kw
                  | repeat | BNF )*>
 
 
@@ -109,7 +109,7 @@ when generating parsers for the GQL language.
 -->
 <!ELEMENT terminalsymbol (#PCDATA)*>
 <!-- The attribute of terminalsymbol is:
-     * unicode defines the code point(s). 
+     * unicode defines the code point(s).
            These are defined as the 4, 5 or 6 hex character(s) separated by commas.
            For example, unicode="0026" or unicode="007E,005B"
 -->
@@ -122,7 +122,7 @@ when generating parsers for the GQL language.
 <!ELEMENT kw (#PCDATA)>
 
 
- 
+
 <!-- A bold indicates the use of a bold-faced type font.
 -->
 <!ELEMENT bold (#PCDATA)>

@@ -76,6 +76,10 @@ secrets:
     required: false
     default: "regular_user_pass_345"
 
+# Skip isolation suffix for FLE tests - the CALL geode.fle.configureField
+# must match the exact label names used in CREATE statements
+skip_isolation: true
+
 tests:
   # ===============================
   # PHASE 1: USER AND ROLE SETUP

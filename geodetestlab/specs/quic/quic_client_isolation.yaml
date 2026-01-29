@@ -24,13 +24,13 @@ tests:
         expect:
           exit_code: 0
           stdout_contains: ['"status":"healthy1"']
-      
+
       - name: failing_client
         command: ["query", "--server", "127.0.0.1:3141", "INVALID QUERY SYNTAX !!!"]
         expect:
           exit_code: 1
         ignore_errors: true
-      
+
       - name: healthy_client_after
         command: ["query", "--server", "127.0.0.1:3141", "RETURN 'healthy2' AS status"]
         expect:
@@ -45,13 +45,13 @@ tests:
         command: ["query", "--server", "127.0.0.1:3141", "UNWIND range(1, 1000000) AS i RETURN count(i) AS total"]
         timeout: 10
         ignore_errors: true
-      
+
       - name: fast_client_1
         command: ["query", "--server", "127.0.0.1:3141", "RETURN 'fast1' AS result"]
         expect:
           exit_code: 0
           stdout_contains: ['"result":"fast1"']
-      
+
       - name: fast_client_2
         command: ["query", "--server", "127.0.0.1:3141", "RETURN 'fast2' AS result"]
         expect:
@@ -66,12 +66,12 @@ tests:
         expect:
           exit_code: 0
           stdout_contains: ['"state":"connected"']
-      
+
       - name: force_disconnect
         # Simulate abrupt disconnection by killing client mid-query
         command: ["timeout", "0.1", "geode", "query", "--server", "127.0.0.1:3141", "UNWIND range(1, 1000000) AS i RETURN i"]
         ignore_errors: true
-      
+
       - name: new_client_after_disconnect
         command: ["query", "--server", "127.0.0.1:3141", "RETURN 'new_client' AS state"]
         expect:
@@ -86,13 +86,13 @@ tests:
         expect:
           exit_code: 0
           stdout_contains: ['"num":1']
-      
+
       - name: malformed_json_request
         # Try to send malformed JSON (missing closing brace)
         command: ["bash", "-c", "echo '{\"type\":\"RUN_GQL\",\"text\":\"RETURN 1\"' | nc -u 127.0.0.1 3141"]
         ignore_errors: true
         timeout: 1
-      
+
       - name: valid_after_malformed
         command: ["query", "--server", "127.0.0.1:3141", "RETURN 2 AS num"]
         expect:
@@ -108,11 +108,11 @@ tests:
         command: ["query", "--server", "127.0.0.1:3141", "RETURN 1 AS x"]
         expect:
           exit_code: 0
-      
+
       - name: wait_for_cleanup
         command: ["sleep", "2"]
         ignore_errors: true
-      
+
       - name: verify_new_connection_works
         command: ["query", "--server", "127.0.0.1:3141", "RETURN 'cleanup_ok' AS status"]
         expect:
@@ -128,25 +128,25 @@ tests:
         expect:
           exit_code: 0
           stdout_contains: ['"msg":"ok1"']
-      
+
       - name: failure_1
         command: ["query", "--server", "127.0.0.1:3141", "SYNTAX ERROR"]
         expect:
           exit_code: 1
         ignore_errors: true
-      
+
       - name: success_2
         command: ["query", "--server", "127.0.0.1:3141", "RETURN 'ok2' AS msg"]
         expect:
           exit_code: 0
           stdout_contains: ['"msg":"ok2"']
-      
+
       - name: failure_2
         command: ["query", "--server", "127.0.0.1:3141", "MORE SYNTAX ERRORS"]
         expect:
           exit_code: 1
         ignore_errors: true
-      
+
       - name: success_3
         command: ["query", "--server", "127.0.0.1:3141", "RETURN 'ok3' AS msg"]
         expect:
@@ -164,13 +164,13 @@ tests:
         expect:
           exit_code: 0
           stdout_contains: ['"stream":1']
-      
+
       - name: stream_2_operation
         command: ["query", "--server", "127.0.0.1:3141", "CREATE (n:Stream2 {id: 2}) RETURN n.id AS stream"]
         expect:
           exit_code: 0
           stdout_contains: ['"stream":2']
-      
+
       - name: verify_both_exist
         command: ["query", "--server", "127.0.0.1:3141", "MATCH (n) WHERE n.id IN [1, 2] RETURN n.id AS id ORDER BY id"]
         expect:

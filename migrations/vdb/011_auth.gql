@@ -161,13 +161,13 @@ CREATE FUNCTION create_account(
   password_hash STRING,
   initial_roles LIST<STRING> DEFAULT []
 ) RETURNS UUID {
-  
+
   // Validate username uniqueness
   OPTIONAL MATCH (existing:Account WHERE existing.username = username)
   IF existing IS NOT NULL THEN
     THROW 'Username already exists: ' + username;
   END IF;
-  
+
   // Create account
   CREATE (account:Account:Entity {
     id: gen_random_uuid(),
@@ -176,23 +176,23 @@ CREATE FUNCTION create_account(
     password_changed_at: CURRENT_TIMESTAMP(),
     created_at: CURRENT_TIMESTAMP()
   });
-  
+
   // Link to email if provided
   IF email IS NOT NULL THEN
     // Create or find email
     MERGE (email_node:Email:Entity {address: email})
     ON CREATE SET email_node.id = gen_random_uuid(),
                   email_node.created_at = CURRENT_TIMESTAMP();
-    
+
     CREATE (account)-[:HAS_EMAIL {is_primary: true}]->(email_node);
   END IF;
-  
+
   // Assign initial roles
   FOR role_name IN initial_roles DO
     MATCH (role:Role WHERE role.name = role_name)
     CREATE (account)-[:HAS_ROLE {granted_at: CURRENT_TIMESTAMP()}]->(role);
   END FOR;
-  
+
   RETURN account.id;
 };
 
@@ -203,34 +203,34 @@ CREATE FUNCTION authenticate_user(
   ip_address STRING DEFAULT NULL,
   user_agent STRING DEFAULT NULL
 ) RETURNS (account_id UUID, session_token STRING) {
-  
+
   // Find account
   MATCH (account:Account WHERE account.username = username AND account.is_active = true)
-  
+
   // Check if account is locked
   IF account.locked_until IS NOT NULL AND account.locked_until > CURRENT_TIMESTAMP() THEN
     THROW 'Account is temporarily locked';
   END IF;
-  
+
   // Verify password
   IF account.password_hash != password_hash THEN
     // Increment failed attempts
     SET account.failed_login_attempts = account.failed_login_attempts + 1;
-    
+
     // Lock account after 5 failed attempts
     IF account.failed_login_attempts >= 5 THEN
       SET account.locked_until = CURRENT_TIMESTAMP() + duration('PT1H');
     END IF;
-    
+
     CALL touch_entity(account.id);
     THROW 'Invalid credentials';
   END IF;
-  
+
   // Reset failed attempts on successful login
   SET account.failed_login_attempts = 0,
       account.locked_until = NULL,
       account.last_login = CURRENT_TIMESTAMP();
-  
+
   // Create session
   CREATE (session:Session:Entity:Timestamped {
     id: gen_random_uuid(),
@@ -240,13 +240,13 @@ CREATE FUNCTION authenticate_user(
     user_agent: user_agent,
     created_at: CURRENT_TIMESTAMP()
   });
-  
+
   // Link session to account
   CREATE (account)-[:HAS_SESSION]->(session);
   CREATE (session)-[:BELONGS_TO]->(account);
-  
+
   CALL touch_entity(account.id);
-  
+
   RETURN {account_id: account.id, session_token: session.token};
 };
 
@@ -256,12 +256,12 @@ CREATE FUNCTION check_permission(
   resource STRING,
   action STRING
 ) RETURNS BOOLEAN {
-  
+
   // Check if user has direct or role-based permission
   MATCH (account:Account WHERE account.id = account_id)
   OPTIONAL MATCH (account)-[:HAS_ROLE]->(role:Role)-[:HAS_PERMISSION]->(perm:Permission)
   WHERE perm.resource = resource AND (perm.action = action OR perm.action = '*')
-  
+
   RETURN count(perm) > 0;
 };
 
@@ -271,22 +271,22 @@ CREATE FUNCTION grant_role(
   role_name STRING,
   granted_by UUID DEFAULT NULL
 ) {
-  
+
   MATCH (account:Account WHERE account.id = account_id),
         (role:Role WHERE role.name = role_name)
-  
+
   // Check if already has role
   OPTIONAL MATCH (account)-[existing:HAS_ROLE]->(role)
   IF existing IS NOT NULL THEN
     RETURN; // Already has role
   END IF;
-  
+
   // Grant role
   CREATE (account)-[:HAS_ROLE {
     granted_at: CURRENT_TIMESTAMP(),
     granted_by: granted_by
   }]->(role);
-  
+
   CALL touch_entity(account.id);
 };
 
@@ -298,7 +298,7 @@ CREATE FUNCTION create_permission(
   scope STRING DEFAULT 'global',
   description STRING DEFAULT NULL
 ) RETURNS UUID {
-  
+
   CREATE (perm:Permission:Entity {
     id: gen_random_uuid(),
     name: name,
@@ -308,16 +308,16 @@ CREATE FUNCTION create_permission(
     description: description,
     created_at: CURRENT_TIMESTAMP()
   });
-  
+
   RETURN perm.id;
 };
 
 // Function to invalidate session
 CREATE FUNCTION logout_session(session_token STRING) {
-  
+
   MATCH (session:Session WHERE session.token = session_token)
   SET session.is_active = false;
-  
+
   CALL touch_entity(session.id);
 };
 

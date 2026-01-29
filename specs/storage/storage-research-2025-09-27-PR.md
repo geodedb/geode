@@ -10,10 +10,10 @@ You are a senior **Zig 0.15.1** engineer. Patch Geode’s storage engine to de
 
 **Use these file/line pointers as your authoritative anchors** (from the audit at commit `9132777`):
 
-* `src/wal/wal.zig`: **68–75** (record struct), **343–355** (segment rollover/sentinel), **364–374** (commit/checkpoint group‑flush). 
-* `src/storage/page_manager.zig`: **28–36** (page header), **124–133** (insert path), **147–154** (tombstone), **371–380** (allocation path), **400–408** (write+fsync), **475–483** (checksum verify). 
-* `src/index/patricia_persist.zig`: **27–35** (index WAL entry), **138–146** (replay), **169–177** (snapshot rename). 
-* `src/index/registry.zig`: **6–13** (registered index kinds). 
+* `src/wal/wal.zig`: **68–75** (record struct), **343–355** (segment rollover/sentinel), **364–374** (commit/checkpoint group‑flush).
+* `src/storage/page_manager.zig`: **28–36** (page header), **124–133** (insert path), **147–154** (tombstone), **371–380** (allocation path), **400–408** (write+fsync), **475–483** (checksum verify).
+* `src/index/patricia_persist.zig`: **27–35** (index WAL entry), **138–146** (replay), **169–177** (snapshot rename).
+* `src/index/registry.zig`: **6–13** (registered index kinds).
 
 > Preserve external APIs unless specified. Add modules/hooks as needed; defaults must prioritize **correctness**.
 
@@ -23,14 +23,14 @@ You are a senior **Zig 0.15.1** engineer. Patch Geode’s storage engine to de
 
 **A1. Enforce WAL‑before‑data (wal.zig + page_manager.zig)**
 
-* In **`wal.zig` 364–374**: add config `commit_flush_mode = .always | .every_n | .time_window_ms` (default `.always`). Implement `pub fn flushUpTo(lsn: u64) !void` that **fsyncs** the WAL up to `lsn` as per mode; ensure **Commit** path **fsyncs** WAL before returning success (and before any page sync). 
-* In **`page_manager.zig`**: at **124–133** (insert) tag page with `page_lsn` before persistence; at **400–408** (write) **guard ordering**: call `wal.flushUpTo(page.header.lsn)` **before** `file.sync()`. Keep checksum/encryption logic intact; rely on per‑page LSN for recovery skipping. 
+* In **`wal.zig` 364–374**: add config `commit_flush_mode = .always | .every_n | .time_window_ms` (default `.always`). Implement `pub fn flushUpTo(lsn: u64) !void` that **fsyncs** the WAL up to `lsn` as per mode; ensure **Commit** path **fsyncs** WAL before returning success (and before any page sync).
+* In **`page_manager.zig`**: at **124–133** (insert) tag page with `page_lsn` before persistence; at **400–408** (write) **guard ordering**: call `wal.flushUpTo(page.header.lsn)` **before** `file.sync()`. Keep checksum/encryption logic intact; rely on per‑page LSN for recovery skipping.
 
 **A2. Durable metadata (create/rename) with cross‑OS support**
 
 * Add `src/storage/fs_fsync.zig` with:
 
-  * **POSIX (Linux/macOS)**: `fsyncParent(path)` opens parent directory and calls `Dir.sync()` after **create/rename** (use `std.fs`), then close. Call from **`wal.zig` 343–351** on WAL segment rollover and from **`patricia_persist.zig` 169–177** after snapshot `rename`. 
+  * **POSIX (Linux/macOS)**: `fsyncParent(path)` opens parent directory and calls `Dir.sync()` after **create/rename** (use `std.fs`), then close. Call from **`wal.zig` 343–351** on WAL segment rollover and from **`patricia_persist.zig` 169–177** after snapshot `rename`.
   * **Windows**: wrap renames via `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` to make rename durable; for new files, open with `FILE_FLAG_WRITE_THROUGH` and call `FlushFileBuffers` on the file handle; `fsyncParent` becomes a no‑op. Use `@import("std").os.windows.kernel32`. (Windows directory handles do not support `FlushFileBuffers` reliably.)
 * Replace raw `rename/create` call sites with helpers in `fs_fsync.zig`.
 
@@ -43,7 +43,7 @@ You are a senior **Zig 0.15.1** engineer. Patch Geode’s storage engine to de
   pub fn removePage(id: PageId) void;
   pub fn findPageFor(size_needed: u16) ?PageId;
   ```
-* Update **`page_manager.zig 371–380`** to consult FSM before allocating a new page; on **tombstone (147–154)** and on **insert (124–133)**, recompute `free_contig` and update FSM. If **slot_count becomes 0**, invoke `freePage()` and remove from FSM. 
+* Update **`page_manager.zig 371–380`** to consult FSM before allocating a new page; on **tombstone (147–154)** and on **insert (124–133)**, recompute `free_contig` and update FSM. If **slot_count becomes 0**, invoke `freePage()` and remove from FSM.
 
 **A4. On‑page defrag / vacuum (compaction) — WAL‑safe**
 
@@ -57,7 +57,7 @@ You are a senior **Zig 0.15.1** engineer. Patch Geode’s storage engine to de
 
   * **Opportunistic vacuum** on insert failures due to fragmentation: run compaction once, retry insert before allocating a new page.
   * **Background vacuum** (optional): configurable worker scanning pages and compacting if above threshold.
-* Update FSM after compaction; ensure **checksum verify path at 475–483** remains valid. 
+* Update FSM after compaction; ensure **checksum verify path at 475–483** remains valid.
 
 **A5. Index‑WAL commit coordination (Patricia now; generic)**
 
@@ -69,7 +69,7 @@ You are a senior **Zig 0.15.1** engineer. Patch Geode’s storage engine to de
   pub fn beforeCommit(lsn: u64) !void; // flush all registered index WALs up to lsn
   ```
 * In **`wal.zig 364–374`** commit path: call `CommitCoordinator.beforeCommit(commit_lsn)` **immediately before** `wal.flushUpTo(commit_lsn)`.
-* In **`patricia_persist.zig`**: expose `pub fn walHandle() *commit_coordinator.WalHandle` and **register** on init; keep replay at **138–146** unchanged. 
+* In **`patricia_persist.zig`**: expose `pub fn walHandle() *commit_coordinator.WalHandle` and **register** on init; keep replay at **138–146** unchanged.
 
 **A6. Tests & Fault Injection**
 
@@ -104,7 +104,7 @@ You are a senior **Zig 0.15.1** engineer. Patch Geode’s storage engine to de
   geode-storage-sanity wal_fail  -> (stderr "WAL_FSYNC_ERROR", exit 2)
   ```
 
-> All edits must align with the cited **lines** and **files**; do not regress checksum verification or TDE paths. 
+> All edits must align with the cited **lines** and **files**; do not regress checksum verification or TDE paths.
 
 ---
 
@@ -135,7 +135,7 @@ You are a senior **Zig 0.15.1** engineer. Patch Geode’s storage engine to de
 * **Repro**: fixed seeds when randomness is used; pinned toolchain.
 * **Windows specifics**: use `MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` for durable rename; use `FlushFileBuffers` on files; directory sync is a no‑op by design. (POSIX keeps `Dir.sync()` semantics.)
 * **POSIX specifics**: call `Dir.sync()` on parent dir after create/rename.
-  These choices align with the document’s durability findings and file‑system guidance. 
+  These choices align with the document’s durability findings and file‑system guidance.
 
 ---
 
@@ -192,7 +192,7 @@ pub fn fsyncParent(path: []const u8) !void;   // POSIX only; no-op on Windows
 
 **CLI (`tools/geode-storage-sanity.zig`)** — commands as in A8.
 
-All interfaces tie back to the code regions identified in the Executive Summary (for ordering, fsync, page layout, and index persistence). 
+All interfaces tie back to the code regions identified in the Executive Summary (for ordering, fsync, page layout, and index persistence).
 
 ---
 
@@ -256,7 +256,7 @@ zig build -Dtarget=x86_64-windows-gnu
 * **stderr contains:** `WAL_FSYNC_ERROR`
 * **exit code:** `2`
 
-> These tests exercise the exact code paths described at the cited line ranges (WAL commit/checkpoint, page write/fsync, rename w/o dir fsync, tombstone/alloc, checksum verify). 
+> These tests exercise the exact code paths described at the cited line ranges (WAL commit/checkpoint, page write/fsync, rename w/o dir fsync, tombstone/alloc, checksum verify).
 
 ---
 
@@ -286,11 +286,11 @@ zig build -Dtarget=aarch64-windows-gnu
 
 ### ASSUMPTIONS (final)
 
-* **B1 (Crash testing)**: Fake FS + failure injection suffices; no power‑cut rig required. 
-* **B2 (Space mgmt)**: **Implement both** FSM and on‑page **defrag/vacuum** with WAL‑safe `PageCompact` records; slot IDs stable. 
-* **B3 (Index coverage)**: Patricia wired now; provide generic `CommitCoordinator` for other index WALs. 
-* **O1 (Config)**: Default `.always` (safe); knobs for batching. 
-* **Platforms**: Linux (x86_64/aarch64/riscv64), macOS (x86_64/aarch64), Windows (x86_64/aarch64) with OS‑specific durable‑rename strategy stated above. 
+* **B1 (Crash testing)**: Fake FS + failure injection suffices; no power‑cut rig required.
+* **B2 (Space mgmt)**: **Implement both** FSM and on‑page **defrag/vacuum** with WAL‑safe `PageCompact` records; slot IDs stable.
+* **B3 (Index coverage)**: Patricia wired now; provide generic `CommitCoordinator` for other index WALs.
+* **O1 (Config)**: Default `.always` (safe); knobs for batching.
+* **Platforms**: Linux (x86_64/aarch64/riscv64), macOS (x86_64/aarch64), Windows (x86_64/aarch64) with OS‑specific durable‑rename strategy stated above.
 
 ---
 
@@ -299,17 +299,17 @@ zig build -Dtarget=aarch64-windows-gnu
 **Ready** — **Score: 9.4/10.**
 
 * Pass: versions/platforms pinned; IO contracts precise; functional rules & edge cases enumerated; WAL ordering & dir durability enforced; FSM **and** vacuum specified; index flush coordination defined; tests with **exact outputs**; error policy defined.
-* Minor risk: Windows durable‑rename nuances are captured via `MOVEFILE_WRITE_THROUGH`; if Zig std wrappers differ, call kernel32 APIs directly. Evidence and file/line anchors trace back to the Executive Summary. 
+* Minor risk: Windows durable‑rename nuances are captured via `MOVEFILE_WRITE_THROUGH`; if Zig std wrappers differ, call kernel32 APIs directly. Evidence and file/line anchors trace back to the Executive Summary.
 
 ## Changelog
 
-* **v2**: Adopted assumptions 1/3/4; **expanded** item 2 to include full on‑page defrag/vacuum with WAL `PageCompact`; **broadened** OS/arch matrix; added vacuum CLI test & platform notes. 
+* **v2**: Adopted assumptions 1/3/4; **expanded** item 2 to include full on‑page defrag/vacuum with WAL `PageCompact`; **broadened** OS/arch matrix; added vacuum CLI test & platform notes.
 
 ---
 
 ## FINAL CODING PROMPT (paste into your coding LLM)
 
-> **Use the section “DRAFT PROMPT v2 — To the Coding LLM” verbatim**, including **Action Steps**, **Result Format**, **Standards**, **Interfaces & I/O**, **Tests**, **Run Instructions**, and **ASSUMPTIONS**. Modify precisely the **files/lines** listed (from `wal.zig`, `page_manager.zig`, `patricia_persist.zig`, `registry.zig`) and add the new modules and CLI. Ensure acceptance commands yield the **exact outputs** shown, across the specified platforms. All file/line anchors and rationale derive from the Executive Summary’s evidence. 
+> **Use the section “DRAFT PROMPT v2 — To the Coding LLM” verbatim**, including **Action Steps**, **Result Format**, **Standards**, **Interfaces & I/O**, **Tests**, **Run Instructions**, and **ASSUMPTIONS**. Modify precisely the **files/lines** listed (from `wal.zig`, `page_manager.zig`, `patricia_persist.zig`, `registry.zig`) and add the new modules and CLI. Ensure acceptance commands yield the **exact outputs** shown, across the specified platforms. All file/line anchors and rationale derive from the Executive Summary’s evidence.
 
 **Context Package (brief)**
 
@@ -337,4 +337,4 @@ zig build -Dtarget=aarch64-windows-gnu
     geode-storage-sanity.zig
   build.zig # add multi-targets, tests, CLI
   ```
-* **Evidence pointers**: All specific file/line references and issues trace to the Executive Summary. 
+* **Evidence pointers**: All specific file/line references and issues trace to the Executive Summary.

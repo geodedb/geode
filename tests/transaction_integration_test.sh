@@ -33,18 +33,18 @@ test_transaction() {
     local cmd="$2"
     local expected="$3"
     local max_time_ms="${4:-5000}"  # Default 5 second timeout
-    
+
     echo -n "Testing $name... "
-    
+
     local start_time=$(date +%s%N)
     local output
     local exit_code=0
-    
+
     output=$(timeout 10 eval "$cmd" 2>&1) || exit_code=$?
-    
+
     local end_time=$(date +%s%N)
     local duration_ms=$(( (end_time - start_time) / 1000000 ))
-    
+
     if [ $exit_code -eq 0 ] && echo "$output" | grep -q "$expected"; then
         echo -e "${GREEN}PASS${NC} (${duration_ms}ms)"
         ((PASSED++))

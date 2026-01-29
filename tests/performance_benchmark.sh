@@ -33,27 +33,27 @@ benchmark() {
     local cmd="$2"
     local iterations="${3:-10}"
     local threshold="${4:-100}"
-    
+
     echo -n "Benchmarking $name ($iterations iterations)... "
-    
+
     local total_time=0
     local min_time=999999
     local max_time=0
     local failures=0
-    
+
     for i in $(seq 1 $iterations); do
         local start=$(date +%s%N)
         timeout 5 eval "$cmd" > /dev/null 2>&1 || ((failures++))
         local end=$(date +%s%N)
         local duration=$(( (end - start) / 1000000 ))
-        
+
         total_time=$((total_time + duration))
         [ $duration -lt $min_time ] && min_time=$duration
         [ $duration -gt $max_time ] && max_time=$duration
     done
-    
+
     local avg_time=$((total_time / iterations))
-    
+
     # Determine performance grade
     local grade color
     if [ $avg_time -le $threshold ]; then
@@ -73,10 +73,10 @@ benchmark() {
         color=$RED
         SLOW_OPERATIONS+=("$name: avg=${avg_time}ms (threshold=${threshold}ms)")
     fi
-    
+
     echo -e "${color}Grade: $grade${NC}"
     echo "  Avg: ${avg_time}ms | Min: ${min_time}ms | Max: ${max_time}ms | Failures: $failures"
-    
+
     PERFORMANCE_GRADES+=("$name:$grade")
 }
 
@@ -293,7 +293,7 @@ if [ -f /proc/$SERVER_PID/status ]; then
     MEM_KB=$(grep VmRSS /proc/$SERVER_PID/status | awk '{print $2}')
     MEM_MB=$((MEM_KB / 1024))
     echo "  Server memory usage: ${MEM_MB}MB"
-    
+
     if [ $MEM_MB -gt 500 ]; then
         echo -e "  ${YELLOW}Warning: High memory usage detected${NC}"
         SLOW_OPERATIONS+=("Memory usage: ${MEM_MB}MB (threshold: 500MB)")
@@ -310,7 +310,7 @@ if [ -f /proc/$SERVER_PID/status ]; then
     END_MEM=$(grep VmRSS /proc/$SERVER_PID/status | awk '{print $2}')
     MEM_GROWTH=$((END_MEM - START_MEM))
     echo "Memory grew by $((MEM_GROWTH / 1024))MB"
-    
+
     if [ $MEM_GROWTH -gt 102400 ]; then  # 100MB growth
         echo -e "  ${YELLOW}Warning: Excessive memory growth${NC}"
         SLOW_OPERATIONS+=("Memory growth: $((MEM_GROWTH / 1024))MB for 1000 nodes")

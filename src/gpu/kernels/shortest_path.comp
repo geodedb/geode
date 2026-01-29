@@ -33,27 +33,27 @@ shared float local_distances[256];
 void main() {
     uint idx = gl_GlobalInvocationID.x;
     uint local_idx = gl_LocalInvocationID.x;
-    
+
     if (idx >= pc.num_edges) {
         return;
     }
-    
+
     // Read edge
     uint src = edges[idx * 2];
     uint dst = edges[idx * 2 + 1];
     float weight = weights[idx];
-    
+
     // Compute tentative distance
     float new_dist = distances[src] + weight;
     float old_dist = distances[dst];
-    
+
     // Update if we found a shorter path
     if (new_dist < old_dist) {
         // Simple non-atomic write (correct for single-threaded execution per node)
         // In practice, multiple threads may update the same node, so we accept
         // that some updates may be lost but the algorithm will converge
         distances[dst] = new_dist;
-        
+
         // Mark as updated
         atomicOr(updated[dst / 32], 1u << (dst % 32));
     }

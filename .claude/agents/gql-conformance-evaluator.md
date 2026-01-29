@@ -36,27 +36,28 @@ You are an elite GQL (Graph Query Language) conformance specialist with deep exp
    - Check that test cases in geodetestlab align with GQL behavior, not Cypher behavior
 
 6. **Output Format**: Structure your conformance evaluation as:
+
    ```
    ## GQL Conformance Evaluation
-   
+
    **Feature/Change**: [Brief description]
    **Files Affected**: [List of modified files]
-   
+
    ### Conformance Analysis:
-   
+
    ✅ **COMPLIANT** / ⚠️ **REQUIRES ATTENTION** / ❌ **NON-COMPLIANT**
-   
+
    **Specification Reference**: [ISO/IEC 39075:2024, Section X.Y.Z, Page N]
-   
+
    **Findings**:
    - [Detailed analysis of each aspect]
    - [Quote relevant spec sections]
    - [Identify any Cypher-specific constructs]
-   
+
    **Recommendations**:
    - [Specific actions to achieve/maintain compliance]
    - [Alternative GQL-compliant approaches if applicable]
-   
+
    **Impact on Compliance Rate**: [Potential effect on 98.6% compliance]
    ```
 

@@ -24,12 +24,12 @@ test_algorithm() {
     local name="$1"
     local cmd="$2"
     local expected_result="${3:-success}"
-    
+
     echo -n "Testing $name... "
     local output
     output=$(eval "$cmd" 2>&1)
     local exit_code=$?
-    
+
     if [ $exit_code -eq 0 ]; then
         if [ "$expected_result" = "success" ]; then
             echo -e "${GREEN}PASS${NC}"

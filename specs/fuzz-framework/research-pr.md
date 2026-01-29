@@ -242,7 +242,7 @@ fuzz/
     opseq_fuzz.zig
     ...
   corpora/
-    snapshot_decode/ seed-000 ... 
+    snapshot_decode/ seed-000 ...
     query_parser/ seed-*.qry
     opseq/ seed-*.bin
   dicts/
@@ -412,4 +412,3 @@ If you want, I can also tailor this to any specific modules/files you point me t
 [5]: https://www.ryanliptak.com/blog/improving-fuzz-testing-with-zig-allocators/?utm_source=chatgpt.com "Improving Fuzz Testing with Zig Allocators"
 [6]: https://github.com/ziglang/zig/issues/24222 "Trivial fuzz testing fails with Fuzz/WebServer.zig error · Issue #24222 · ziglang/zig · GitHub"
 [7]: https://github.com/ziglang/zig/issues/25317?utm_source=chatgpt.com "zig fuzzer panic on basic zig init example · Issue #25317"
-

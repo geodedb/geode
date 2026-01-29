@@ -104,7 +104,7 @@ tests:
       exit_code: 0
       stdout_contains:
         - "SCHEMA:"
-        - "RESULT:" 
+        - "RESULT:"
         - "STATUS:"
       stdout_not_contains:
         - "Error:"

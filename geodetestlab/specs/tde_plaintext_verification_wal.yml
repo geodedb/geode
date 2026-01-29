@@ -42,8 +42,9 @@ cli:
     format: "json"
 
 env:
-  GEODE_TDE_KEY: "aes256-test-key-for-page-encryption-32bytes!"
-  GEODE_WAL_KEY: "aes256-test-key-for-wal-encryption-32bytes!!"
+  # All keys must be exactly 64 hex characters (32 bytes for AES-256)
+  GEODE_TDE_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  GEODE_WAL_KEY: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
   GEODE_TDE_ENABLED: "true"
   GEODE_WAL_ENCRYPTION_ENABLED: "true"
 

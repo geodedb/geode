@@ -14,12 +14,14 @@ The Geode codebase has a circular dependency between `src/execution.zig` and `sr
 - **eval.zig** imports **execution.zig** to execute subqueries and graph operations (using `execution.executeQueryWithContext()`, `execution.findShortestPath()`, etc.)
 
 This circular dependency:
+
 1. **Violates architectural layering** - Creates unclear module boundaries
 2. **Complicates testing** - Cannot test modules in isolation
 3. **Hinders maintainability** - Changes in one module may require changes in the other
 4. **Prevents future refactoring** - Difficult to split or reorganize code
 
 **Question**: How should we break this circular dependency while:
+
 - Maintaining all existing functionality
 - Preserving performance
 - Ensuring testability
@@ -55,11 +57,13 @@ This circular dependency:
 **Approach**: Keep the circular dependency as-is
 
 **Pros**:
+
 - No implementation effort
 - No risk of breaking changes
 - Current functionality works
 
 **Cons**:
+
 - Continues to violate architectural principles
 - Blocks future modularization efforts (Phase 2, Phase 3)
 - Makes testing more difficult
@@ -74,11 +78,13 @@ This circular dependency:
 **Approach**: Merge `execution.zig` and `eval.zig` into single module
 
 **Pros**:
+
 - Eliminates circular dependency immediately
 - No interface abstraction needed
 - Simple implementation
 
 **Cons**:
+
 - Creates massive monolithic module (>10,000 lines)
 - Violates Phase 5 goal of modularization
 - Makes code harder to understand and maintain
@@ -93,6 +99,7 @@ This circular dependency:
 **Approach**: Create `src/value_types.zig` with `Value`, `Env`, and related types
 
 **Architecture**:
+
 ```
 ┌─────────────────┐        ┌──────────────┐        ┌─────────────┐
 │  execution.zig  │ ────>  │ value_types  │  <──── │   eval.zig  │
@@ -108,12 +115,14 @@ This circular dependency:
 ```
 
 **Pros**:
+
 - Simple, low-risk refactoring
 - Value types are well-defined and stable
 - Breaks value type dependency
 - No behavioral changes
 
 **Cons**:
+
 - **Doesn't fully break circular dependency** - execution still calls eval.evalExpr, and eval still calls execution functions
 - Partial solution only
 - Still have compile-time cycle
@@ -127,6 +136,7 @@ This circular dependency:
 **Approach**: Use dependency injection with adapters to break the cycle
 
 **Architecture**:
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    value_types.zig                      │
@@ -158,12 +168,14 @@ This circular dependency:
 **Components**:
 
 1. **value_types.zig** - Shared value types
+
    ```zig
    pub const Value = union(enum) { ... };
    pub const Env = struct { ... };
    ```
 
 2. **evaluator_adapter.zig** - Interface and adapter
+
    ```zig
    pub const EvaluatorInterface = struct {
        evalExprFn: *const fn(allocator: Allocator, expr: ast.Expr, env: Env) error!Value,
@@ -178,6 +190,7 @@ This circular dependency:
    ```
 
 3. **execution.zig** - Uses evaluator interface
+
    ```zig
    const evaluator_adapter = @import("execution/evaluator_adapter.zig");
 
@@ -186,6 +199,7 @@ This circular dependency:
    ```
 
 4. **eval.zig** - Implements interface, uses callbacks
+
    ```zig
    const evaluator_adapter = @import("execution/evaluator_adapter.zig");
 
@@ -206,6 +220,7 @@ This circular dependency:
    ```
 
 **Pros**:
+
 - ✅ **Fully breaks circular dependency** at compile time
 - ✅ **Enables dependency injection** for testing
 - ✅ **Clear separation of concerns** via explicit interfaces
@@ -213,6 +228,7 @@ This circular dependency:
 - ✅ **Supports future extensions** - easy to add new evaluators
 
 **Cons**:
+
 - ⚠️ More complex implementation (4-6 hours)
 - ⚠️ Runtime callback overhead (estimated <1% based on infrequent usage)
 - ⚠️ Requires careful interface design
@@ -227,6 +243,7 @@ This circular dependency:
 **Approach**: Use event bus or message passing between modules
 
 **Architecture**:
+
 ```
 ┌─────────────────┐        ┌──────────────┐        ┌─────────────┐
 │  execution.zig  │ ────>  │  Event Bus   │  <──── │   eval.zig  │
@@ -234,11 +251,13 @@ This circular dependency:
 ```
 
 **Pros**:
+
 - Fully decouples modules
 - Highly extensible
 - Good for complex event-driven systems
 
 **Cons**:
+
 - **Massive overkill** for this use case
 - Significant performance overhead
 - Complex debugging
@@ -258,6 +277,7 @@ We will implement a **two-phase approach**:
 **Objective**: Break the value type dependency
 
 **Implementation**:
+
 1. Create `src/value_types.zig` containing:
    - `Value` union type
    - `Env` struct type
@@ -268,6 +288,7 @@ We will implement a **two-phase approach**:
 5. Update `build.zig`
 
 **Expected Outcome**:
+
 - Shared value types, no duplication
 - Execution and eval still have circular function calls
 - Low risk, 3-4 hours effort
@@ -277,6 +298,7 @@ We will implement a **two-phase approach**:
 **Objective**: Break the function call circular dependency
 
 **Implementation**:
+
 1. Create `src/execution/evaluator_adapter.zig` with:
    - `EvaluatorInterface` struct with function pointers
    - `ExecutionCallbacks` struct with function pointers
@@ -292,6 +314,7 @@ We will implement a **two-phase approach**:
 4. Update all call sites
 
 **Expected Outcome**:
+
 - Fully broken circular dependency
 - Runtime callback wiring
 - Testability via dependency injection
@@ -346,16 +369,19 @@ We will implement a **two-phase approach**:
 ### Mitigation Strategies
 
 **For Increased Complexity**:
+
 - Comprehensive documentation in ADR and code comments
 - Clear naming conventions (EvaluatorInterface, ExecutionCallbacks)
 - Examples in documentation
 
 **For Performance**:
+
 - Benchmark before and after
 - Profile hot paths
 - If overhead >1%, optimize (inline, comptime, etc.)
 
 **For Implementation Risk**:
+
 - Incremental approach (M5.2 first, then M5.3)
 - Comprehensive test suite after each phase
 - Can rollback M5.3 if issues, keep M5.2 improvements
@@ -365,6 +391,7 @@ We will implement a **two-phase approach**:
 ### Phase 5 M5.2: Extract Value Types (3-4 hours)
 
 **Tasks**:
+
 1. Create `src/value_types.zig` (1 hour)
    - Move Value, Env, and helper functions
    - Add CANARY markers
@@ -387,6 +414,7 @@ We will implement a **two-phase approach**:
    - Performance baseline
 
 **Success Criteria**:
+
 - ✅ Builds successfully
 - ✅ All 1644+ tests passing
 - ✅ No circular import in value types
@@ -395,6 +423,7 @@ We will implement a **two-phase approach**:
 ### Phase 5 M5.3: Create Evaluator Adapter (4-6 hours)
 
 **Tasks**:
+
 1. Create evaluator_adapter.zig (2 hours)
    - Define EvaluatorInterface
    - Define ExecutionCallbacks
@@ -421,6 +450,7 @@ We will implement a **two-phase approach**:
    - Full test suite
 
 **Success Criteria**:
+
 - ✅ No circular dependency (verified with build system)
 - ✅ All 1644+ tests passing
 - ✅ No performance regression (±5%)

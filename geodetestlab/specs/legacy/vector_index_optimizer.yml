@@ -79,7 +79,7 @@ tests:
   # Test 5: K-NN Query Optimization Test
   - name: "knn_query_optimization"
     description: "Test K-NN query optimization with EXPLAIN output"
-    command: ["geode", "query"] 
+    command: ["geode", "query"]
     input: |
       CREATE (item1:Item {features: vectorf32('[0.1, 0.2, 0.3]')})
       CREATE (item2:Item {features: vectorf32('[0.4, 0.5, 0.6]')})
@@ -145,7 +145,7 @@ tests:
       CREATE (agg2:AggTest {group: 'A', vec: vectorf32('[1.1, 0.9]')})
       CREATE (agg3:AggTest {group: 'B', vec: vectorf32('[5.0, 5.0]')})
       EXPLAIN MATCH (a:AggTest)
-      WITH a.group AS grp, 
+      WITH a.group AS grp,
            AVG(vector_l2(a.vec, vectorf32('[0.0, 0.0]'))) AS avg_dist
       RETURN grp, avg_dist
       ORDER BY avg_dist
@@ -212,7 +212,7 @@ tests:
         features: vectorf32('[0.8, 0.2, 0.6]')
       })
       CREATE (mixed2:MixedTest {
-        name: 'Item B', 
+        name: 'Item B',
         category: 'electronics',
         price: 200.75,
         features: vectorf32('[0.6, 0.8, 0.4]')
@@ -259,17 +259,17 @@ summary:
     - optimization_decisions: 3
     - performance_scaling: 2
   estimated_runtime: "8-12 minutes"
-  
-# Performance benchmarks  
+
+# Performance benchmarks
 benchmarks:
   - name: "vector_index_creation_with_stats"
     description: "Vector index creation with statistics initialization"
     target_time_ms: 200
-    
+
   - name: "vector_cost_estimation_speed"
     description: "Vector query cost estimation performance"
     target_time_ms: 50
-    
+
   - name: "vector_optimization_decision_speed"
     description: "Vector optimization decision-making performance"
     target_time_ms: 10

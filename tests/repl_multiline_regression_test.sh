@@ -34,10 +34,10 @@ run_test() {
     local test_command="$2"
     local expected_pattern="$3"
     local should_contain="${4:-true}"
-    
+
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     echo -n "  Testing $test_name... "
-    
+
     # Run the test command with timeout
     if output=$(timeout 10 bash -c "$test_command" 2>&1); then
         if [ "$should_contain" = "true" ]; then
@@ -96,7 +96,7 @@ run_test "Multi-line unit tests compilation and execution" \
     "cd '$PROJECT_ROOT' && zig test tests/test_repl_multiline.zig" \
     "All 8 tests passed"
 
-# Test 2: Integration Tests  
+# Test 2: Integration Tests
 echo ""
 echo "2️⃣  Integration Tests"
 echo "===================="
@@ -152,10 +152,10 @@ cat > "$TEMP_PROMPT_TEST" << 'EOF'
 const std = @import("std");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     _ = gpa.allocator();
-    
+
     // Test prompt formatting logic like REPL does
     const test_cases = [_]struct {
         is_continuation: bool,
@@ -167,12 +167,12 @@ pub fn main() !void {
         .{ .is_continuation = false, .in_txn = true, .expected_prompt = "geode(txn)> " },
         .{ .is_continuation = true, .in_txn = true, .expected_prompt = "geode(txn)-> " },
     };
-    
+
     for (test_cases) |test_case| {
         const prompt = if (test_case.is_continuation)
             if (test_case.in_txn) "geode(txn)-> " else "geode-> "
         else if (test_case.in_txn) "geode(txn)> " else "geode> ";
-        
+
         if (!std.mem.eql(u8, prompt, test_case.expected_prompt)) {
             std.debug.print("❌ Prompt test failed\n", .{});
             std.debug.print("   Expected: '{s}'\n", .{test_case.expected_prompt});
@@ -180,7 +180,7 @@ pub fn main() !void {
             return error.PromptTestFailed;
         }
     }
-    
+
     std.debug.print("✅ Prompt formatting validation complete\n", .{});
 }
 EOF
@@ -203,23 +203,23 @@ cat > "$TEMP_STATE_TEST" << 'EOF'
 const std = @import("std");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; 
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     // Test multi-line buffer management like REPL does
     var multi_line_buffer = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
     defer multi_line_buffer.deinit(allocator);
-    
+
     var is_continuation = false;
-    
+
     // Simulate multi-line input
     const lines = [_][]const u8{
         "MATCH (n:Person)",
         "WHERE n.age > 25",
         "RETURN n.name;",
     };
-    
+
     for (lines) |line| {
         if (is_continuation) {
             try multi_line_buffer.append(allocator, '\n');
@@ -228,7 +228,7 @@ pub fn main() !void {
             multi_line_buffer.clearRetainingCapacity();
             try multi_line_buffer.appendSlice(allocator, line);
         }
-        
+
         // Check if complete (simplified)
         const complete_input = multi_line_buffer.items;
         if (std.mem.indexOf(u8, complete_input, ";") != null) {
@@ -240,7 +240,7 @@ pub fn main() !void {
                 std.debug.print("   Got: '{s}'\n", .{complete_input});
                 return error.BufferContentIncorrect;
             }
-            
+
             is_continuation = false;
             multi_line_buffer.clearRetainingCapacity();
             break;
@@ -249,7 +249,7 @@ pub fn main() !void {
             is_continuation = true;
         }
     }
-    
+
     std.debug.print("✅ State management validation complete\n", .{});
 }
 EOF

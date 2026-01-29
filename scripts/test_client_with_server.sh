@@ -48,17 +48,17 @@ else
     DATA_DIR=$(mktemp -d)
     $SERVER_BIN serve --data-dir "$DATA_DIR" --listen "0.0.0.0:$SERVER_PORT" > /tmp/geode_test_server.log 2>&1 &
     SERVER_PID=$!
-    
+
     echo "Server started (PID $SERVER_PID), waiting ${WAIT_TIME}s for initialization..."
     sleep $WAIT_TIME
-    
+
     # Check if server is still running
     if ! kill -0 $SERVER_PID 2>/dev/null; then
         echo "❌ Error: Server failed to start"
         cat /tmp/geode_test_server.log
         exit 1
     fi
-    
+
     echo "✓ Server is running"
 fi
 

@@ -26,10 +26,10 @@ TESTS_FAILED=0
 run_test() {
     local test_name="$1"
     local test_command="$2"
-    
+
     echo -n "Testing $test_name... "
     TESTS_RUN=$((TESTS_RUN + 1))
-    
+
     if eval "$test_command" >/dev/null 2>&1; then
         echo -e "${GREEN}PASS${NC}"
         TESTS_PASSED=$((TESTS_PASSED + 1))
@@ -43,10 +43,10 @@ run_test() {
 run_test_expect_fail() {
     local test_name="$1"
     local test_command="$2"
-    
+
     echo -n "Testing $test_name... "
     TESTS_RUN=$((TESTS_RUN + 1))
-    
+
     if eval "$test_command" >/dev/null 2>&1; then
         echo -e "${RED}FAIL (expected failure)${NC}"
         TESTS_FAILED=$((TESTS_FAILED + 1))
@@ -63,7 +63,7 @@ echo "----------------------------------------"
 run_test "QUIC integration unit test compilation" \
     "zig test tests/test_repl_quic_integration.zig"
 
-# Test 2: Integration test compilation  
+# Test 2: Integration test compilation
 run_test "QUIC integration E2E test compilation" \
     "zig test tests/test_repl_quic_integration_e2e.zig"
 

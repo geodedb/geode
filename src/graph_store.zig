@@ -2,6 +2,9 @@ const std = @import("std");
 const fle_integration = @import("fle_integration.zig");
 const uuid = @import("uuid.zig");
 
+// CANARY: REQ=REQ-TDE-GRAPHSTORE-001; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStorePersistence; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+const tde = @import("storage/tde_file_encryption.zig");
+
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=EXEMPT; OWNER=storage; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("storage");
@@ -792,12 +795,15 @@ pub const GraphStore = struct {
         return result;
     }
 
-    // Simple file-based persistence for testing
+    // CANARY: REQ=REQ-TDE-GRAPHSTORE-002; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStoreSave; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+    // Simple file-based persistence with TDE encryption support
     pub fn saveToFile(self: *GraphStore) !void {
         const file_path = try getPersistenceFilePath(self.allocator);
         defer self.allocator.free(file_path);
-        const file = try std.fs.cwd().createFile(file_path, .{});
-        defer file.close();
+
+        // Buffer all data to memory first for TDE encryption
+        var buffer = try std.ArrayList(u8).initCapacity(self.allocator, 4096);
+        defer buffer.deinit(self.allocator);
 
         // Write header: next_node_id, next_edge_id, node_count, edge_count
         var header: [32]u8 = undefined;
@@ -805,7 +811,7 @@ pub const GraphStore = struct {
         std.mem.writeInt(u64, header[8..16], self.next_edge_id, .little);
         std.mem.writeInt(u64, header[16..24], self.nodes.count(), .little);
         std.mem.writeInt(u64, header[24..32], self.edges.count(), .little);
-        _ = try file.write(&header);
+        try buffer.appendSlice(self.allocator, &header);
 
         // Write each node
         var node_iter = self.nodes.iterator();
@@ -814,12 +820,12 @@ pub const GraphStore = struct {
             // Write node ID
             var id_buf: [8]u8 = undefined;
             std.mem.writeInt(u64, &id_buf, node.id, .little);
-            _ = try file.write(&id_buf);
+            try buffer.appendSlice(self.allocator, &id_buf);
 
             // Write label count
             var label_count_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &label_count_buf, @intCast(node.labels.len), .little);
-            _ = try file.write(&label_count_buf);
+            try buffer.appendSlice(self.allocator, &label_count_buf);
 
             // Write each label
             for (node.labels) |label| {
@@ -829,14 +835,14 @@ pub const GraphStore = struct {
                 }
                 var len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &len_buf, @as(u32, @intCast(label.len)), .little);
-                _ = try file.write(&len_buf);
-                _ = try file.write(label);
+                try buffer.appendSlice(self.allocator, &len_buf);
+                try buffer.appendSlice(self.allocator, label);
             }
 
             // Write property count
             var prop_count_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &prop_count_buf, @intCast(node.properties.count()), .little);
-            _ = try file.write(&prop_count_buf);
+            try buffer.appendSlice(self.allocator, &prop_count_buf);
 
             // Write each property
             var prop_iter = node.properties.iterator();
@@ -844,8 +850,8 @@ pub const GraphStore = struct {
                 // Write key length and key
                 var key_len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &key_len_buf, @intCast(prop.key_ptr.*.len), .little);
-                _ = try file.write(&key_len_buf);
-                _ = try file.write(prop.key_ptr.*);
+                try buffer.appendSlice(self.allocator, &key_len_buf);
+                try buffer.appendSlice(self.allocator, prop.key_ptr.*);
 
                 // Write value type and value
                 const val_type: u8 = switch (prop.value_ptr.*) {
@@ -857,27 +863,27 @@ pub const GraphStore = struct {
                     .ExtValue => 5, // ExtValue types
                     .Decimal => 6, // Decimal with preserved precision
                 };
-                _ = try file.write(&[1]u8{val_type});
+                try buffer.appendSlice(self.allocator, &[1]u8{val_type});
 
                 switch (prop.value_ptr.*) {
                     .String => |s| {
                         var len_buf2: [4]u8 = undefined;
                         std.mem.writeInt(u32, &len_buf2, @intCast(s.len), .little);
-                        _ = try file.write(&len_buf2);
-                        _ = try file.write(s);
+                        try buffer.appendSlice(self.allocator, &len_buf2);
+                        try buffer.appendSlice(self.allocator, s);
                     },
                     .Int => |i| {
                         var int_buf: [8]u8 = undefined;
                         std.mem.writeInt(i64, &int_buf, i, .little);
-                        _ = try file.write(&int_buf);
+                        try buffer.appendSlice(self.allocator, &int_buf);
                     },
                     .Float => |f| {
                         var float_buf: [8]u8 = undefined;
                         std.mem.writeInt(u64, &float_buf, @bitCast(f), .little);
-                        _ = try file.write(&float_buf);
+                        try buffer.appendSlice(self.allocator, &float_buf);
                     },
                     .Bool => |b| {
-                        _ = try file.write(&[1]u8{if (b) 1 else 0});
+                        try buffer.appendSlice(self.allocator, &[1]u8{if (b) 1 else 0});
                     },
                     .Null => {
                         // Nothing to write for null
@@ -920,7 +926,7 @@ pub const GraphStore = struct {
                             .IntRange => 32,
                             .Enum => 33,
                         };
-                        _ = try file.write(&[1]u8{sub_type});
+                        try buffer.appendSlice(self.allocator, &[1]u8{sub_type});
 
                         // Write the actual data based on sub-type
                         switch (ext) {
@@ -928,52 +934,52 @@ pub const GraphStore = struct {
                             .Int => |i| {
                                 var buf: [8]u8 = undefined;
                                 std.mem.writeInt(i64, &buf, i, .little);
-                                _ = try file.write(&buf);
+                                try buffer.appendSlice(self.allocator, &buf);
                             },
                             .Bool => |b| {
-                                _ = try file.write(&[1]u8{if (b) 1 else 0});
+                                try buffer.appendSlice(self.allocator, &[1]u8{if (b) 1 else 0});
                             },
                             .Str => |s| {
                                 var len_buf: [4]u8 = undefined;
                                 std.mem.writeInt(u32, &len_buf, @intCast(s.len), .little);
-                                _ = try file.write(&len_buf);
-                                _ = try file.write(s);
+                                try buffer.appendSlice(self.allocator, &len_buf);
+                                try buffer.appendSlice(self.allocator, s);
                             },
                             .Decimal => |d| {
                                 var buf: [17]u8 = undefined;
                                 std.mem.writeInt(i128, buf[0..16], d.coeff, .little);
                                 buf[16] = d.scale;
-                                _ = try file.write(&buf);
+                                try buffer.appendSlice(self.allocator, &buf);
                             },
                             .IpAddr => |ip| {
                                 const is_v6: u8 = if (ip == .v6) 1 else 0;
-                                _ = try file.write(&[1]u8{is_v6});
+                                try buffer.appendSlice(self.allocator, &[1]u8{is_v6});
                                 if (ip == .v4) {
-                                    _ = try file.write(&ip.v4);
+                                    try buffer.appendSlice(self.allocator, &ip.v4);
                                 } else {
-                                    _ = try file.write(&ip.v6);
+                                    try buffer.appendSlice(self.allocator, &ip.v6);
                                 }
                             },
                             .Subnet => |subnet| {
                                 // First write the IpAddr
                                 const is_v6: u8 = if (subnet.addr == .v6) 1 else 0;
-                                _ = try file.write(&[1]u8{is_v6});
+                                try buffer.appendSlice(self.allocator, &[1]u8{is_v6});
                                 if (subnet.addr == .v4) {
-                                    _ = try file.write(&subnet.addr.v4);
+                                    try buffer.appendSlice(self.allocator, &subnet.addr.v4);
                                 } else {
-                                    _ = try file.write(&subnet.addr.v6);
+                                    try buffer.appendSlice(self.allocator, &subnet.addr.v6);
                                 }
                                 // Then write prefix length
-                                _ = try file.write(&[1]u8{subnet.prefix_len});
+                                try buffer.appendSlice(self.allocator, &[1]u8{subnet.prefix_len});
                             },
                             .Mac => |mac| {
-                                _ = try file.write(&mac.bytes);
+                                try buffer.appendSlice(self.allocator, &mac.bytes);
                             },
                             .LatLon => |ll| {
                                 var buf: [16]u8 = undefined;
                                 std.mem.writeInt(u64, buf[0..8], @bitCast(ll.lat), .little);
                                 std.mem.writeInt(u64, buf[8..16], @bitCast(ll.lon), .little);
-                                _ = try file.write(&buf);
+                                try buffer.appendSlice(self.allocator, &buf);
                             },
                             .LatLonAlt => |lla| {
                                 var buf: [25]u8 = undefined;
@@ -981,105 +987,105 @@ pub const GraphStore = struct {
                                 std.mem.writeInt(u64, buf[8..16], @bitCast(lla.lon), .little);
                                 std.mem.writeInt(u64, buf[16..24], @bitCast(lla.alt), .little);
                                 buf[24] = @intFromEnum(lla.ref);
-                                _ = try file.write(&buf);
+                                try buffer.appendSlice(self.allocator, &buf);
                             },
                             .Geometry => |geom| {
                                 var len_buf: [4]u8 = undefined;
                                 std.mem.writeInt(u32, &len_buf, @intCast(geom.wkb.len), .little);
-                                _ = try file.write(&len_buf);
-                                _ = try file.write(geom.wkb);
+                                try buffer.appendSlice(self.allocator, &len_buf);
+                                try buffer.appendSlice(self.allocator, geom.wkb);
                             },
                             .Currency => |cur| {
-                                _ = try file.write(&cur.code);
+                                try buffer.appendSlice(self.allocator, &cur.code);
                             },
                             .VectorF32 => |vec| {
                                 // Write dimension (u16)
                                 var dim_buf: [2]u8 = undefined;
                                 std.mem.writeInt(u16, &dim_buf, vec.dim, .little);
-                                _ = try file.write(&dim_buf);
+                                try buffer.appendSlice(self.allocator, &dim_buf);
                                 // Write each f32 value
                                 for (vec.data) |f| {
                                     var f_buf: [4]u8 = undefined;
                                     std.mem.writeInt(u32, &f_buf, @bitCast(f), .little);
-                                    _ = try file.write(&f_buf);
+                                    try buffer.appendSlice(self.allocator, &f_buf);
                                 }
                             },
                             .VectorI32 => |vec| {
                                 // Write dimension (u16)
                                 var dim_buf: [2]u8 = undefined;
                                 std.mem.writeInt(u16, &dim_buf, vec.dim, .little);
-                                _ = try file.write(&dim_buf);
+                                try buffer.appendSlice(self.allocator, &dim_buf);
                                 // Write each i32 value
                                 for (vec.data) |i| {
                                     var i_buf: [4]u8 = undefined;
                                     std.mem.writeInt(i32, &i_buf, i, .little);
-                                    _ = try file.write(&i_buf);
+                                    try buffer.appendSlice(self.allocator, &i_buf);
                                 }
                             },
                             // CANARY: REQ=REQ-TYPE-SERIAL-001; FEATURE="TypeSerialization"; ASPECT=ExtendedTypes; STATUS=EXEMPT; OWNER=storage; UPDATED=2025-12-30
                             .Hash => |hash| {
                                 // Write algorithm (u8)
-                                _ = try file.write(&[1]u8{@intFromEnum(hash.alg)});
+                                try buffer.appendSlice(self.allocator, &[1]u8{@intFromEnum(hash.alg)});
                                 // Write digest length and data
                                 var digest_len_buf: [4]u8 = undefined;
                                 std.mem.writeInt(u32, &digest_len_buf, @intCast(hash.digest.len), .little);
-                                _ = try file.write(&digest_len_buf);
-                                _ = try file.write(hash.digest);
+                                try buffer.appendSlice(self.allocator, &digest_len_buf);
+                                try buffer.appendSlice(self.allocator, hash.digest);
                                 // Write optional salt
                                 if (hash.salt) |salt| {
-                                    _ = try file.write(&[1]u8{1}); // has salt
+                                    try buffer.appendSlice(self.allocator, &[1]u8{1}); // has salt
                                     var salt_len_buf: [4]u8 = undefined;
                                     std.mem.writeInt(u32, &salt_len_buf, @intCast(salt.len), .little);
-                                    _ = try file.write(&salt_len_buf);
-                                    _ = try file.write(salt);
+                                    try buffer.appendSlice(self.allocator, &salt_len_buf);
+                                    try buffer.appendSlice(self.allocator, salt);
                                 } else {
-                                    _ = try file.write(&[1]u8{0}); // no salt
+                                    try buffer.appendSlice(self.allocator, &[1]u8{0}); // no salt
                                 }
                             },
                             .LanguageTag => |lt| {
                                 // Write tag length and data
                                 var tag_len_buf: [4]u8 = undefined;
                                 std.mem.writeInt(u32, &tag_len_buf, @intCast(lt.tag.len), .little);
-                                _ = try file.write(&tag_len_buf);
-                                _ = try file.write(lt.tag);
+                                try buffer.appendSlice(self.allocator, &tag_len_buf);
+                                try buffer.appendSlice(self.allocator, lt.tag);
                             },
                             .Temperature => |temp| {
                                 // Write value_K (f64) and unit (u8)
                                 var buf: [9]u8 = undefined;
                                 std.mem.writeInt(u64, buf[0..8], @bitCast(temp.value_K), .little);
                                 buf[8] = @intFromEnum(temp.unit_in);
-                                _ = try file.write(&buf);
+                                try buffer.appendSlice(self.allocator, &buf);
                             },
                             .Pressure => |pres| {
                                 // Write value_Pa (f64) and unit (u8)
                                 var buf: [9]u8 = undefined;
                                 std.mem.writeInt(u64, buf[0..8], @bitCast(pres.value_Pa), .little);
                                 buf[8] = @intFromEnum(pres.unit_in);
-                                _ = try file.write(&buf);
+                                try buffer.appendSlice(self.allocator, &buf);
                             },
                             .Date => |date| {
                                 // Write days_since_epoch (i32)
                                 var buf: [4]u8 = undefined;
                                 std.mem.writeInt(i32, &buf, date.days_since_epoch, .little);
-                                _ = try file.write(&buf);
+                                try buffer.appendSlice(self.allocator, &buf);
                             },
                             .Time => |time| {
                                 // Write micros_since_midnight (i64)
                                 var buf: [8]u8 = undefined;
                                 std.mem.writeInt(i64, &buf, time.micros_since_midnight, .little);
-                                _ = try file.write(&buf);
+                                try buffer.appendSlice(self.allocator, &buf);
                             },
                             .TimestampTZ => |ts| {
                                 // Write micros_since_epoch_utc (i64)
                                 var buf: [8]u8 = undefined;
                                 std.mem.writeInt(i64, &buf, ts.micros_since_epoch_utc, .little);
-                                _ = try file.write(&buf);
+                                try buffer.appendSlice(self.allocator, &buf);
                             },
                             .List => |list| {
                                 // Write list length
                                 var len_buf: [4]u8 = undefined;
                                 std.mem.writeInt(u32, &len_buf, @intCast(list.len), .little);
-                                _ = try file.write(&len_buf);
+                                try buffer.appendSlice(self.allocator, &len_buf);
                                 // Note: Nested list serialization not supported yet
                             },
                             else => {
@@ -1092,7 +1098,7 @@ pub const GraphStore = struct {
                         var buf: [17]u8 = undefined;
                         std.mem.writeInt(i128, buf[0..16], d.coeff, .little);
                         buf[16] = d.scale;
-                        _ = try file.write(&buf);
+                        try buffer.appendSlice(self.allocator, &buf);
                     },
                 }
             }
@@ -1101,8 +1107,8 @@ pub const GraphStore = struct {
             // Write graph_name length and graph_name for multi-graph isolation
             var graph_name_len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &graph_name_len_buf, @intCast(node.graph_name.len), .little);
-            _ = try file.write(&graph_name_len_buf);
-            _ = try file.write(node.graph_name);
+            try buffer.appendSlice(self.allocator, &graph_name_len_buf);
+            try buffer.appendSlice(self.allocator, node.graph_name);
         }
 
         // Write each edge
@@ -1114,18 +1120,18 @@ pub const GraphStore = struct {
             std.mem.writeInt(u64, edge_buf[0..8], edge.id, .little);
             std.mem.writeInt(u64, edge_buf[8..16], edge.from_id, .little);
             std.mem.writeInt(u64, edge_buf[16..24], edge.to_id, .little);
-            _ = try file.write(&edge_buf);
+            try buffer.appendSlice(self.allocator, &edge_buf);
 
             // Write label
             var label_len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &label_len_buf, @intCast(edge.label.len), .little);
-            _ = try file.write(&label_len_buf);
-            _ = try file.write(edge.label);
+            try buffer.appendSlice(self.allocator, &label_len_buf);
+            try buffer.appendSlice(self.allocator, edge.label);
 
             // Write property count
             var prop_count_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &prop_count_buf, @intCast(edge.properties.count()), .little);
-            _ = try file.write(&prop_count_buf);
+            try buffer.appendSlice(self.allocator, &prop_count_buf);
 
             // Write each property
             var prop_iter = edge.properties.iterator();
@@ -1133,8 +1139,8 @@ pub const GraphStore = struct {
                 // Write key length and key
                 var key_len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &key_len_buf, @intCast(prop.key_ptr.*.len), .little);
-                _ = try file.write(&key_len_buf);
-                _ = try file.write(prop.key_ptr.*);
+                try buffer.appendSlice(self.allocator, &key_len_buf);
+                try buffer.appendSlice(self.allocator, prop.key_ptr.*);
 
                 // Write value type and value
                 const val_type: u8 = switch (prop.value_ptr.*) {
@@ -1146,27 +1152,27 @@ pub const GraphStore = struct {
                     .ExtValue => 5,
                     .Decimal => 6,
                 };
-                _ = try file.write(&[1]u8{val_type});
+                try buffer.appendSlice(self.allocator, &[1]u8{val_type});
 
                 switch (prop.value_ptr.*) {
                     .String => |s| {
                         var len_buf2: [4]u8 = undefined;
                         std.mem.writeInt(u32, &len_buf2, @intCast(s.len), .little);
-                        _ = try file.write(&len_buf2);
-                        _ = try file.write(s);
+                        try buffer.appendSlice(self.allocator, &len_buf2);
+                        try buffer.appendSlice(self.allocator, s);
                     },
                     .Int => |i| {
                         var int_buf: [8]u8 = undefined;
                         std.mem.writeInt(i64, &int_buf, i, .little);
-                        _ = try file.write(&int_buf);
+                        try buffer.appendSlice(self.allocator, &int_buf);
                     },
                     .Float => |f| {
                         var float_buf: [8]u8 = undefined;
                         std.mem.writeInt(u64, &float_buf, @bitCast(f), .little);
-                        _ = try file.write(&float_buf);
+                        try buffer.appendSlice(self.allocator, &float_buf);
                     },
                     .Bool => |b| {
-                        _ = try file.write(&[1]u8{if (b) 1 else 0});
+                        try buffer.appendSlice(self.allocator, &[1]u8{if (b) 1 else 0});
                     },
                     .Null => {
                         // Nothing to write for null
@@ -1187,35 +1193,35 @@ pub const GraphStore = struct {
                             .VectorI32 => 0x29,
                             else => 0xFF,
                         };
-                        _ = try file.write(&[1]u8{ext_type});
+                        try buffer.appendSlice(self.allocator, &[1]u8{ext_type});
 
                         switch (ext) {
                             .Date => |date| {
                                 var buf: [4]u8 = undefined;
                                 std.mem.writeInt(i32, &buf, date.days_since_epoch, .little);
-                                _ = try file.write(&buf);
+                                try buffer.appendSlice(self.allocator, &buf);
                             },
                             .Time => |time| {
                                 var buf: [8]u8 = undefined;
                                 std.mem.writeInt(i64, &buf, time.micros_since_midnight, .little);
-                                _ = try file.write(&buf);
+                                try buffer.appendSlice(self.allocator, &buf);
                             },
                             .TimestampTZ => |ts| {
                                 var buf: [8]u8 = undefined;
                                 std.mem.writeInt(i64, &buf, ts.micros_since_epoch_utc, .little);
-                                _ = try file.write(&buf);
+                                try buffer.appendSlice(self.allocator, &buf);
                             },
                             .Temperature => |temp| {
                                 var buf: [9]u8 = undefined;
                                 std.mem.writeInt(u64, buf[0..8], @bitCast(temp.value_K), .little);
                                 buf[8] = @intFromEnum(temp.unit_in);
-                                _ = try file.write(&buf);
+                                try buffer.appendSlice(self.allocator, &buf);
                             },
                             .Pressure => |pres| {
                                 var buf: [9]u8 = undefined;
                                 std.mem.writeInt(u64, buf[0..8], @bitCast(pres.value_Pa), .little);
                                 buf[8] = @intFromEnum(pres.unit_in);
-                                _ = try file.write(&buf);
+                                try buffer.appendSlice(self.allocator, &buf);
                             },
                             else => {},
                         }
@@ -1225,7 +1231,7 @@ pub const GraphStore = struct {
                         var buf: [17]u8 = undefined;
                         std.mem.writeInt(i128, buf[0..16], d.coeff, .little);
                         buf[16] = d.scale;
-                        _ = try file.write(&buf);
+                        try buffer.appendSlice(self.allocator, &buf);
                     },
                 }
             }
@@ -1234,20 +1240,36 @@ pub const GraphStore = struct {
             // Write graph_name length and graph_name for multi-graph isolation
             var graph_name_len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &graph_name_len_buf, @intCast(edge.graph_name.len), .little);
-            _ = try file.write(&graph_name_len_buf);
-            _ = try file.write(edge.graph_name);
+            try buffer.appendSlice(self.allocator, &graph_name_len_buf);
+            try buffer.appendSlice(self.allocator, edge.graph_name);
         }
+
+        // Encrypt and write to file using TDE
+        try tde.writeEncryptedFile(self.allocator, file_path, buffer.items);
     }
 
+    // CANARY: REQ=REQ-TDE-GRAPHSTORE-003; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStoreLoad; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
     fn loadFromFile(self: *GraphStore) !void {
         const file_path = try getPersistenceFilePath(self.allocator);
         defer self.allocator.free(file_path);
-        const file = std.fs.cwd().openFile(file_path, .{}) catch return;
-        defer file.close();
+
+        // Check if file exists first
+        std.fs.cwd().access(file_path, .{}) catch |err| {
+            if (err == error.FileNotFound) return;
+            return err;
+        };
+
+        // Read and decrypt file using TDE
+        const data = try tde.readDecryptedFile(self.allocator, file_path);
+        defer self.allocator.free(data);
+
+        // Create stream to read from decrypted data
+        var stream = std.io.fixedBufferStream(data);
+        var reader = stream.reader();
 
         // Read header
         var header: [32]u8 = undefined;
-        const bytes_read = try file.read(&header);
+        const bytes_read = reader.readAll(&header) catch 0;
         if (bytes_read < 32) return;
 
         self.next_node_id = std.mem.readInt(u64, header[0..8], .little);
@@ -1260,29 +1282,29 @@ pub const GraphStore = struct {
         while (nodes_read < node_count) : (nodes_read += 1) {
             // Read node ID
             var id_buf: [8]u8 = undefined;
-            if ((try file.read(&id_buf)) < 8) break;
+            if ((try reader.readAll(&id_buf)) < 8) break;
             const node_id = std.mem.readInt(u64, &id_buf, .little);
 
             // Read label count
             var label_count_buf: [4]u8 = undefined;
-            if ((try file.read(&label_count_buf)) < 4) break;
+            if ((try reader.readAll(&label_count_buf)) < 4) break;
             const label_count = std.mem.readInt(u32, &label_count_buf, .little);
 
             // Read labels
             var labels = try self.allocator.alloc([]const u8, label_count);
             for (0..label_count) |i| {
                 var len_buf: [4]u8 = undefined;
-                if ((try file.read(&len_buf)) < 4) break;
+                if ((try reader.readAll(&len_buf)) < 4) break;
                 const label_len = std.mem.readInt(u32, &len_buf, .little);
 
                 const label_data = try self.allocator.alloc(u8, label_len);
-                if ((try file.read(label_data)) < label_len) break;
+                if ((try reader.readAll(label_data)) < label_len) break;
                 labels[i] = label_data;
             }
 
             // Read property count
             var prop_count_buf: [4]u8 = undefined;
-            if ((try file.read(&prop_count_buf)) < 4) break;
+            if ((try reader.readAll(&prop_count_buf)) < 4) break;
             const prop_count = std.mem.readInt(u32, &prop_count_buf, .little);
 
             // Create node
@@ -1297,42 +1319,42 @@ pub const GraphStore = struct {
             while (props_read < prop_count) : (props_read += 1) {
                 // Read key
                 var key_len_buf: [4]u8 = undefined;
-                if ((try file.read(&key_len_buf)) < 4) break;
+                if ((try reader.readAll(&key_len_buf)) < 4) break;
                 const key_len = std.mem.readInt(u32, &key_len_buf, .little);
 
                 const key_data = try self.allocator.alloc(u8, key_len);
-                if ((try file.read(key_data)) < key_len) break;
+                if ((try reader.readAll(key_data)) < key_len) break;
 
                 // Read value type
                 var val_type_buf: [1]u8 = undefined;
-                if ((try file.read(&val_type_buf)) < 1) break;
+                if ((try reader.readAll(&val_type_buf)) < 1) break;
                 const val_type = val_type_buf[0];
 
                 // Read value based on type
                 const value = switch (val_type) {
                     0 => blk: { // String
                         var len_buf: [4]u8 = undefined;
-                        if ((try file.read(&len_buf)) < 4) break :blk PropertyValue{ .String = "" };
+                        if ((try reader.readAll(&len_buf)) < 4) break :blk PropertyValue{ .String = "" };
                         const str_len = std.mem.readInt(u32, &len_buf, .little);
 
                         const str_data = try self.allocator.alloc(u8, str_len);
-                        if ((try file.read(str_data)) < str_len) break :blk PropertyValue{ .String = "" };
+                        if ((try reader.readAll(str_data)) < str_len) break :blk PropertyValue{ .String = "" };
                         break :blk PropertyValue{ .String = str_data };
                     },
                     1 => blk: { // Int
                         var int_buf: [8]u8 = undefined;
-                        if ((try file.read(&int_buf)) < 8) break :blk PropertyValue{ .Int = 0 };
+                        if ((try reader.readAll(&int_buf)) < 8) break :blk PropertyValue{ .Int = 0 };
                         break :blk PropertyValue{ .Int = std.mem.readInt(i64, &int_buf, .little) };
                     },
                     2 => blk: { // Float
                         var float_buf: [8]u8 = undefined;
-                        if ((try file.read(&float_buf)) < 8) break :blk PropertyValue{ .Float = 0.0 };
+                        if ((try reader.readAll(&float_buf)) < 8) break :blk PropertyValue{ .Float = 0.0 };
                         const bits = std.mem.readInt(u64, &float_buf, .little);
                         break :blk PropertyValue{ .Float = @bitCast(bits) };
                     },
                     3 => blk: { // Bool
                         var bool_buf: [1]u8 = undefined;
-                        if ((try file.read(&bool_buf)) < 1) break :blk PropertyValue{ .Bool = false };
+                        if ((try reader.readAll(&bool_buf)) < 1) break :blk PropertyValue{ .Bool = false };
                         break :blk PropertyValue{ .Bool = bool_buf[0] != 0 };
                     },
                     4 => PropertyValue{ .Null = {} }, // Null
@@ -1342,88 +1364,88 @@ pub const GraphStore = struct {
 
                         // Read sub-type byte
                         var sub_type_buf: [1]u8 = undefined;
-                        if ((try file.read(&sub_type_buf)) < 1) break :blk PropertyValue{ .Null = {} };
+                        if ((try reader.readAll(&sub_type_buf)) < 1) break :blk PropertyValue{ .Null = {} };
                         const sub_type = sub_type_buf[0];
 
                         const ext_value = switch (sub_type) {
                             0 => ext_eval.ExtValue{ .Null = {} },
                             1 => blk2: { // Int
                                 var buf: [8]u8 = undefined;
-                                if ((try file.read(&buf)) < 8) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&buf)) < 8) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const val = std.mem.readInt(i64, &buf, .little);
                                 break :blk2 ext_eval.ExtValue{ .Int = val };
                             },
                             2 => blk2: { // Bool
                                 var buf: [1]u8 = undefined;
-                                if ((try file.read(&buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 break :blk2 ext_eval.ExtValue{ .Bool = buf[0] != 0 };
                             },
                             3 => blk2: { // Str
                                 var len_buf: [4]u8 = undefined;
-                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const len = std.mem.readInt(u32, &len_buf, .little);
                                 const str_data = try self.allocator.alloc(u8, len);
-                                if ((try file.read(str_data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(str_data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 break :blk2 ext_eval.ExtValue{ .Str = str_data };
                             },
                             4 => blk2: { // Decimal
                                 var buf: [17]u8 = undefined;
-                                if ((try file.read(&buf)) < 17) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&buf)) < 17) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const coeff = std.mem.readInt(i128, buf[0..16], .little);
                                 const scale = buf[16];
                                 break :blk2 ext_eval.ExtValue{ .Decimal = .{ .coeff = coeff, .scale = scale } };
                             },
                             5 => blk2: { // IpAddr
                                 var is_v6_buf: [1]u8 = undefined;
-                                if ((try file.read(&is_v6_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&is_v6_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const is_v6 = is_v6_buf[0] != 0;
 
                                 if (is_v6) {
                                     var addr_buf: [16]u8 = undefined;
-                                    if ((try file.read(&addr_buf)) < 16) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    if ((try reader.readAll(&addr_buf)) < 16) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                     break :blk2 ext_eval.ExtValue{ .IpAddr = .{ .v6 = addr_buf } };
                                 } else {
                                     var addr_buf: [4]u8 = undefined;
-                                    if ((try file.read(&addr_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    if ((try reader.readAll(&addr_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                     break :blk2 ext_eval.ExtValue{ .IpAddr = .{ .v4 = addr_buf } };
                                 }
                             },
                             6 => blk2: { // Subnet
                                 var is_v6_buf: [1]u8 = undefined;
-                                if ((try file.read(&is_v6_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&is_v6_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const is_v6 = is_v6_buf[0] != 0;
 
                                 const addr = if (is_v6) blk3: {
                                     var addr_buf: [16]u8 = undefined;
-                                    if ((try file.read(&addr_buf)) < 16) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    if ((try reader.readAll(&addr_buf)) < 16) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                     break :blk3 heap_mod.IpAddr{ .v6 = addr_buf };
                                 } else blk3: {
                                     var addr_buf: [4]u8 = undefined;
-                                    if ((try file.read(&addr_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    if ((try reader.readAll(&addr_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                     break :blk3 heap_mod.IpAddr{ .v4 = addr_buf };
                                 };
 
                                 var prefix_len_buf: [1]u8 = undefined;
-                                if ((try file.read(&prefix_len_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&prefix_len_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const prefix_len = prefix_len_buf[0];
 
                                 break :blk2 ext_eval.ExtValue{ .Subnet = .{ .addr = addr, .prefix_len = prefix_len } };
                             },
                             7 => blk2: { // Mac
                                 var mac_buf: [6]u8 = undefined;
-                                if ((try file.read(&mac_buf)) < 6) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&mac_buf)) < 6) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 break :blk2 ext_eval.ExtValue{ .Mac = .{ .bytes = mac_buf } };
                             },
                             11 => blk2: { // LatLon
                                 var buf: [16]u8 = undefined;
-                                if ((try file.read(&buf)) < 16) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&buf)) < 16) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const lat_bits = std.mem.readInt(u64, buf[0..8], .little);
                                 const lon_bits = std.mem.readInt(u64, buf[8..16], .little);
                                 break :blk2 ext_eval.ExtValue{ .LatLon = .{ .lat = @bitCast(lat_bits), .lon = @bitCast(lon_bits) } };
                             },
                             12 => blk2: { // LatLonAlt
                                 var buf: [25]u8 = undefined;
-                                if ((try file.read(&buf)) < 25) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&buf)) < 25) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const lat_bits = std.mem.readInt(u64, buf[0..8], .little);
                                 const lon_bits = std.mem.readInt(u64, buf[8..16], .little);
                                 const alt_bits = std.mem.readInt(u64, buf[16..24], .little);
@@ -1432,36 +1454,36 @@ pub const GraphStore = struct {
                             },
                             13 => blk2: { // Geometry
                                 var len_buf: [4]u8 = undefined;
-                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const len = std.mem.readInt(u32, &len_buf, .little);
                                 const wkb_data = try self.allocator.alloc(u8, len);
-                                if ((try file.read(wkb_data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(wkb_data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 break :blk2 ext_eval.ExtValue{ .Geometry = .{ .wkb = wkb_data } };
                             },
                             9 => blk2: { // Currency
                                 var code_buf: [3]u8 = undefined;
-                                if ((try file.read(&code_buf)) < 3) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&code_buf)) < 3) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 break :blk2 ext_eval.ExtValue{ .Currency = .{ .code = code_buf } };
                             },
                             16 => blk2: { // VectorF32
                                 // Read dimension (u16)
                                 var dim_buf: [2]u8 = undefined;
-                                if ((try file.read(&dim_buf)) < 2) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&dim_buf)) < 2) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const dim = std.mem.readInt(u16, &dim_buf, .little);
 
                                 // Allocate and read f32 data
-                                const data = try self.allocator.alloc(f32, dim);
-                                for (data) |*f| {
+                                const vec_data = try self.allocator.alloc(f32, dim);
+                                for (vec_data) |*f| {
                                     var f_buf: [4]u8 = undefined;
-                                    if ((try file.read(&f_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    if ((try reader.readAll(&f_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                     f.* = @bitCast(std.mem.readInt(u32, &f_buf, .little));
                                 }
 
-                                break :blk2 ext_eval.ExtValue{ .VectorF32 = .{ .dim = dim, .data = data } };
+                                break :blk2 ext_eval.ExtValue{ .VectorF32 = .{ .dim = dim, .data = vec_data } };
                             },
                             22 => blk2: { // Interval
                                 var buf: [16]u8 = undefined;
-                                if ((try file.read(&buf)) < 16) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&buf)) < 16) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const months = std.mem.readInt(i32, buf[0..4], .little);
                                 const days = std.mem.readInt(i32, buf[4..8], .little);
                                 const micros = std.mem.readInt(i64, buf[8..16], .little);
@@ -1469,58 +1491,58 @@ pub const GraphStore = struct {
                             },
                             23 => blk2: { // UUID
                                 var buf: [16]u8 = undefined;
-                                if ((try file.read(&buf)) < 16) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&buf)) < 16) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 break :blk2 ext_eval.ExtValue{ .UUID = .{ .bytes = buf } };
                             },
                             24 => blk2: { // Url
                                 // Scheme
                                 var len_buf: [4]u8 = undefined;
-                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const s_len = std.mem.readInt(u32, &len_buf, .little);
                                 const scheme = try self.allocator.alloc(u8, s_len);
-                                if ((try file.read(scheme)) < s_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(scheme)) < s_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
 
                                 // Host
-                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const h_len = std.mem.readInt(u32, &len_buf, .little);
                                 const host = try self.allocator.alloc(u8, h_len);
-                                if ((try file.read(host)) < h_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(host)) < h_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
 
                                 // Port
                                 var flag_buf: [1]u8 = undefined;
-                                if ((try file.read(&flag_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&flag_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 var port: ?u16 = null;
                                 if (flag_buf[0] == 1) {
                                     var p_buf: [2]u8 = undefined;
-                                    if ((try file.read(&p_buf)) < 2) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    if ((try reader.readAll(&p_buf)) < 2) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                     port = std.mem.readInt(u16, &p_buf, .little);
                                 }
 
                                 // Path
-                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const p_len = std.mem.readInt(u32, &len_buf, .little);
                                 const path = try self.allocator.alloc(u8, p_len);
-                                if ((try file.read(path)) < p_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(path)) < p_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
 
                                 // Query
-                                if ((try file.read(&flag_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&flag_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 var query: ?[]const u8 = null;
                                 if (flag_buf[0] == 1) {
-                                    if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    if ((try reader.readAll(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                     const q_len = std.mem.readInt(u32, &len_buf, .little);
                                     const q_data = try self.allocator.alloc(u8, q_len);
-                                    if ((try file.read(q_data)) < q_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    if ((try reader.readAll(q_data)) < q_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                     query = q_data;
                                 }
 
                                 // Fragment
-                                if ((try file.read(&flag_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&flag_buf)) < 1) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 var fragment: ?[]const u8 = null;
                                 if (flag_buf[0] == 1) {
-                                    if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    if ((try reader.readAll(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                     const f_len = std.mem.readInt(u32, &len_buf, .little);
                                     const f_data = try self.allocator.alloc(u8, f_len);
-                                    if ((try file.read(f_data)) < f_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    if ((try reader.readAll(f_data)) < f_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                     fragment = f_data;
                                 }
 
@@ -1530,15 +1552,15 @@ pub const GraphStore = struct {
                             },
                             25 => blk2: { // Domain
                                 var count_buf: [4]u8 = undefined;
-                                if ((try file.read(&count_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&count_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const count = std.mem.readInt(u32, &count_buf, .little);
                                 const domain_labels = try self.allocator.alloc([]const u8, count);
                                 for (0..count) |i| {
                                     var len_buf: [4]u8 = undefined;
-                                    if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    if ((try reader.readAll(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                     const len = std.mem.readInt(u32, &len_buf, .little);
                                     const label = try self.allocator.alloc(u8, len);
-                                    if ((try file.read(label)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                    if ((try reader.readAll(label)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                     domain_labels[i] = label;
                                 }
                                 const url_mod = @import("types/url.zig");
@@ -1546,66 +1568,66 @@ pub const GraphStore = struct {
                             },
                             26 => blk2: { // Bytea
                                 var len_buf: [4]u8 = undefined;
-                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const len = std.mem.readInt(u32, &len_buf, .little);
-                                const data = try self.allocator.alloc(u8, len);
-                                if ((try file.read(data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
-                                break :blk2 ext_eval.ExtValue{ .Bytea = data };
+                                const bytea_data = try self.allocator.alloc(u8, len);
+                                if ((try reader.readAll(bytea_data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                break :blk2 ext_eval.ExtValue{ .Bytea = bytea_data };
                             },
                             27 => blk2: { // Json
                                 var len_buf: [4]u8 = undefined;
-                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const len = std.mem.readInt(u32, &len_buf, .little);
-                                const data = try self.allocator.alloc(u8, len);
-                                if ((try file.read(data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
-                                break :blk2 ext_eval.ExtValue{ .Json = data };
+                                const json_data = try self.allocator.alloc(u8, len);
+                                if ((try reader.readAll(json_data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                break :blk2 ext_eval.ExtValue{ .Json = json_data };
                             },
                             28 => blk2: { // Jsonb
                                 var len_buf: [4]u8 = undefined;
-                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const len = std.mem.readInt(u32, &len_buf, .little);
-                                const data = try self.allocator.alloc(u8, len);
-                                if ((try file.read(data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const jsonb_data = try self.allocator.alloc(u8, len);
+                                if ((try reader.readAll(jsonb_data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const jsonb_mod = @import("types/jsonb.zig");
-                                break :blk2 ext_eval.ExtValue{ .Jsonb = jsonb_mod.JsonbDocument{ .data = data, .allocator = self.allocator } };
+                                break :blk2 ext_eval.ExtValue{ .Jsonb = jsonb_mod.JsonbDocument{ .data = jsonb_data, .allocator = self.allocator } };
                             },
                             29 => blk2: { // Xml
                                 // Similar to Jsonb
                                 var len_buf: [4]u8 = undefined;
-                                if ((try file.read(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const len = std.mem.readInt(u32, &len_buf, .little);
-                                const data = try self.allocator.alloc(u8, len);
-                                if ((try file.read(data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                const xml_data = try self.allocator.alloc(u8, len);
+                                if ((try reader.readAll(xml_data)) < len) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const xml_mod = @import("types/xml.zig");
-                                break :blk2 ext_eval.ExtValue{ .Xml = xml_mod.XmlDocument{ .data = data } };
+                                break :blk2 ext_eval.ExtValue{ .Xml = xml_mod.XmlDocument{ .data = xml_data } };
                             },
                             30 => blk2: { // BitString
                                 var bit_len_buf: [8]u8 = undefined;
-                                if ((try file.read(&bit_len_buf)) < 8) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&bit_len_buf)) < 8) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const bit_len = std.mem.readInt(u64, &bit_len_buf, .little);
                                 var byte_len_buf: [4]u8 = undefined;
-                                if ((try file.read(&byte_len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&byte_len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const byte_len = std.mem.readInt(u32, &byte_len_buf, .little);
                                 const bytes = try self.allocator.alloc(u8, byte_len);
-                                if ((try file.read(bytes)) < byte_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(bytes)) < byte_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const bitstring_mod = @import("types/bitstring.zig");
                                 break :blk2 ext_eval.ExtValue{ .BitString = bitstring_mod.BitString{ .bytes = bytes, .bit_length = @intCast(bit_len) } };
                             },
                             31 => blk2: { // VarBit
                                 var bit_len_buf: [8]u8 = undefined;
-                                if ((try file.read(&bit_len_buf)) < 8) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&bit_len_buf)) < 8) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const bit_len = std.mem.readInt(u64, &bit_len_buf, .little);
                                 var byte_len_buf: [4]u8 = undefined;
-                                if ((try file.read(&byte_len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&byte_len_buf)) < 4) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const byte_len = std.mem.readInt(u32, &byte_len_buf, .little);
                                 const bytes = try self.allocator.alloc(u8, byte_len);
-                                if ((try file.read(bytes)) < byte_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(bytes)) < byte_len) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const bitstring_mod = @import("types/bitstring.zig");
                                 break :blk2 ext_eval.ExtValue{ .VarBit = bitstring_mod.BitString{ .bytes = bytes, .bit_length = @intCast(bit_len) } };
                             },
                             32 => blk2: { // IntRange
                                 var buf: [17]u8 = undefined;
-                                if ((try file.read(&buf)) < 17) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&buf)) < 17) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const lower_val = std.mem.readInt(i64, buf[0..8], .little);
                                 const upper_val = std.mem.readInt(i64, buf[8..16], .little);
                                 const flags = buf[16];
@@ -1629,7 +1651,7 @@ pub const GraphStore = struct {
                             },
                             33 => blk2: { // Enum
                                 var buf: [8]u8 = undefined;
-                                if ((try file.read(&buf)) < 8) break :blk2 ext_eval.ExtValue{ .Null = {} };
+                                if ((try reader.readAll(&buf)) < 8) break :blk2 ext_eval.ExtValue{ .Null = {} };
                                 const type_id = std.mem.readInt(u32, buf[0..4], .little);
                                 const value_ordinal = std.mem.readInt(u32, buf[4..8], .little);
                                 break :blk2 ext_eval.ExtValue{ .Enum = .{ .type_id = type_id, .value_ordinal = value_ordinal } };
@@ -1648,11 +1670,11 @@ pub const GraphStore = struct {
             // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphNameLoad; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
             // Read graph_name for multi-graph isolation
             var graph_name_len_buf: [4]u8 = undefined;
-            if ((try file.read(&graph_name_len_buf)) < 4) break;
+            if ((try reader.readAll(&graph_name_len_buf)) < 4) break;
             const graph_name_len = std.mem.readInt(u32, &graph_name_len_buf, .little);
 
             const graph_name_data = try self.allocator.alloc(u8, graph_name_len);
-            if ((try file.read(graph_name_data)) < graph_name_len) {
+            if ((try reader.readAll(graph_name_data)) < graph_name_len) {
                 self.allocator.free(graph_name_data);
                 break;
             }
@@ -1666,22 +1688,22 @@ pub const GraphStore = struct {
         while (edges_read < edge_count) : (edges_read += 1) {
             // Read edge data
             var edge_buf: [24]u8 = undefined;
-            if ((try file.read(&edge_buf)) < 24) break;
+            if ((try reader.readAll(&edge_buf)) < 24) break;
             const edge_id = std.mem.readInt(u64, edge_buf[0..8], .little);
             const from_id = std.mem.readInt(u64, edge_buf[8..16], .little);
             const to_id = std.mem.readInt(u64, edge_buf[16..24], .little);
 
             // Read label
             var label_len_buf: [4]u8 = undefined;
-            if ((try file.read(&label_len_buf)) < 4) break;
+            if ((try reader.readAll(&label_len_buf)) < 4) break;
             const label_len = std.mem.readInt(u32, &label_len_buf, .little);
 
             const label_data = try self.allocator.alloc(u8, label_len);
-            if ((try file.read(label_data)) < label_len) break;
+            if ((try reader.readAll(label_data)) < label_len) break;
 
             // Read property count
             var prop_count_buf: [4]u8 = undefined;
-            if ((try file.read(&prop_count_buf)) < 4) break;
+            if ((try reader.readAll(&prop_count_buf)) < 4) break;
             const prop_count = std.mem.readInt(u32, &prop_count_buf, .little);
 
             // Create edge with properties HashMap
@@ -1692,41 +1714,41 @@ pub const GraphStore = struct {
             while (props_read < prop_count) : (props_read += 1) {
                 // Read key length and key
                 var key_len_buf: [4]u8 = undefined;
-                if ((try file.read(&key_len_buf)) < 4) break;
+                if ((try reader.readAll(&key_len_buf)) < 4) break;
                 const key_len = std.mem.readInt(u32, &key_len_buf, .little);
 
                 const key_data = try self.allocator.alloc(u8, key_len);
-                if ((try file.read(key_data)) < key_len) break;
+                if ((try reader.readAll(key_data)) < key_len) break;
 
                 // Read value type
                 var val_type_buf: [1]u8 = undefined;
-                if ((try file.read(&val_type_buf)) < 1) break;
+                if ((try reader.readAll(&val_type_buf)) < 1) break;
                 const val_type = val_type_buf[0];
 
                 // Read value based on type
                 const value = switch (val_type) {
                     0 => blk: { // String
                         var len_buf: [4]u8 = undefined;
-                        if ((try file.read(&len_buf)) < 4) break :blk PropertyValue{ .String = "" };
+                        if ((try reader.readAll(&len_buf)) < 4) break :blk PropertyValue{ .String = "" };
                         const str_len = std.mem.readInt(u32, &len_buf, .little);
                         const str_data = try self.allocator.alloc(u8, str_len);
-                        if ((try file.read(str_data)) < str_len) break :blk PropertyValue{ .String = "" };
+                        if ((try reader.readAll(str_data)) < str_len) break :blk PropertyValue{ .String = "" };
                         break :blk PropertyValue{ .String = str_data };
                     },
                     1 => blk: { // Int
                         var int_buf: [8]u8 = undefined;
-                        if ((try file.read(&int_buf)) < 8) break :blk PropertyValue{ .Int = 0 };
+                        if ((try reader.readAll(&int_buf)) < 8) break :blk PropertyValue{ .Int = 0 };
                         break :blk PropertyValue{ .Int = std.mem.readInt(i64, &int_buf, .little) };
                     },
                     2 => blk: { // Float
                         var float_buf: [8]u8 = undefined;
-                        if ((try file.read(&float_buf)) < 8) break :blk PropertyValue{ .Float = 0.0 };
+                        if ((try reader.readAll(&float_buf)) < 8) break :blk PropertyValue{ .Float = 0.0 };
                         const bits = std.mem.readInt(u64, &float_buf, .little);
                         break :blk PropertyValue{ .Float = @bitCast(bits) };
                     },
                     3 => blk: { // Bool
                         var bool_buf: [1]u8 = undefined;
-                        if ((try file.read(&bool_buf)) < 1) break :blk PropertyValue{ .Bool = false };
+                        if ((try reader.readAll(&bool_buf)) < 1) break :blk PropertyValue{ .Bool = false };
                         break :blk PropertyValue{ .Bool = bool_buf[0] != 0 };
                     },
                     4 => PropertyValue{ .Null = {} }, // Null
@@ -1740,11 +1762,11 @@ pub const GraphStore = struct {
             // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphNameLoad; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
             // Read graph_name for multi-graph isolation
             var graph_name_len_buf: [4]u8 = undefined;
-            if ((try file.read(&graph_name_len_buf)) < 4) break;
+            if ((try reader.readAll(&graph_name_len_buf)) < 4) break;
             const graph_name_len = std.mem.readInt(u32, &graph_name_len_buf, .little);
 
             const graph_name_data = try self.allocator.alloc(u8, graph_name_len);
-            if ((try file.read(graph_name_data)) < graph_name_len) {
+            if ((try reader.readAll(graph_name_data)) < graph_name_len) {
                 self.allocator.free(graph_name_data);
                 break;
             }

@@ -9,9 +9,8 @@ Provides GitLab CI/GitHub Actions integration for automated performance testing.
 import json
 import os
 import sys
-from pathlib import Path
-from datetime import datetime
-from .runner import RegressionRunner, RegressionReport, RegressionResult
+
+from .runner import RegressionReport, RegressionRunner
 
 
 def generate_gitlab_report(report: RegressionReport) -> dict:
@@ -20,20 +19,22 @@ def generate_gitlab_report(report: RegressionReport) -> dict:
 
     for r in report.regressions + report.improvements + report.stable:
         status = "failed" if r.is_regression else "passed"
-        tests.append({
-            "name": r.metric_name,
-            "classname": r.benchmark_name,
-            "execution_time": 0,
-            "status": status,
-            "system_output": f"baseline: {r.baseline_value:.2f}, current: {r.current_value:.2f}, change: {r.change_percent:+.1f}%"
-        })
+        tests.append(
+            {
+                "name": r.metric_name,
+                "classname": r.benchmark_name,
+                "execution_time": 0,
+                "status": status,
+                "system_output": f"baseline: {r.baseline_value:.2f}, current: {r.current_value:.2f}, change: {r.change_percent:+.1f}%",
+            }
+        )
 
     return {
         "tests": tests,
         "success_count": len(report.stable) + len(report.improvements),
         "failed_count": len(report.regressions),
         "skipped_count": 0,
-        "total_time": 0
+        "total_time": 0,
     }
 
 
@@ -42,18 +43,22 @@ def generate_github_annotations(report: RegressionReport) -> list:
     annotations = []
 
     for r in report.regressions:
-        annotations.append({
-            "level": "error",
-            "message": f"Performance regression in {r.metric_name}: {r.change_percent:+.1f}% (threshold: {r.threshold_percent}%)",
-            "title": f"Regression: {r.benchmark_name}"
-        })
+        annotations.append(
+            {
+                "level": "error",
+                "message": f"Performance regression in {r.metric_name}: {r.change_percent:+.1f}% (threshold: {r.threshold_percent}%)",
+                "title": f"Regression: {r.benchmark_name}",
+            }
+        )
 
     for r in report.improvements:
-        annotations.append({
-            "level": "notice",
-            "message": f"Performance improvement in {r.metric_name}: {r.change_percent:+.1f}%",
-            "title": f"Improvement: {r.benchmark_name}"
-        })
+        annotations.append(
+            {
+                "level": "notice",
+                "message": f"Performance improvement in {r.metric_name}: {r.change_percent:+.1f}%",
+                "title": f"Improvement: {r.benchmark_name}",
+            }
+        )
 
     return annotations
 

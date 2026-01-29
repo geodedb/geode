@@ -100,4 +100,3 @@ main() {
   echo "Open a new shell (or: exec \"\$SHELL\" -l) and run: direnv version; nix --version"
 }
 main "$@"
-

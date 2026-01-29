@@ -12,7 +12,7 @@ echo "Test 1: EXISTS predicate parsing..."
 EXISTS_PREDICATE_RESULT=$(./zig-out/bin/geode query "MATCH (p:Person) WHERE EXISTS { (p)-[:KNOWS]->() } RETURN count(p) AS result" --insecure 2>/dev/null | grep '"result"' || echo "no results")
 if [[ "$EXISTS_PREDICATE_RESULT" != "no results" ]]; then
     echo "✓ EXISTS predicate syntax works: EXISTS { (p)-[:KNOWS]->() }"
-else 
+else
     echo "✗ EXISTS predicate syntax failed"
     exit 1
 fi
@@ -41,7 +41,7 @@ fi
 echo "Test 4: Parser token lookahead validation..."
 # This should parse as EXISTS predicate (no parse errors expected)
 PREDICATE_RESULT=$(echo "MATCH (p) WHERE EXISTS { (p)-[:REL]->() } RETURN p" | ./zig-out/bin/gql 2>&1 || echo "parse_failed")
-# This should parse as exists function (no parse errors expected)  
+# This should parse as exists function (no parse errors expected)
 FUNCTION_RESULT=$(echo "MATCH (p) WHERE exists(p.name) RETURN p" | ./zig-out/bin/gql 2>&1 || echo "parse_failed")
 
 if [[ "$PREDICATE_RESULT" != "parse_failed" && "$FUNCTION_RESULT" != "parse_failed" ]]; then

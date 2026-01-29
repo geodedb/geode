@@ -62,6 +62,7 @@ sudo systemctl stop geode@8443
 ```
 
 Each instance:
+
 - Uses a separate data directory: `/var/lib/geode/<port>`
 - Listens on the specified port
 - Has isolated logs: `geode-<port>`
@@ -115,6 +116,7 @@ rls_enabled = true
 If not using a package manager:
 
 1. **Copy binaries**:
+
    ```bash
    sudo cp zig-out/bin/geode /usr/bin/
    sudo cp zig-out/bin/geode-auth /usr/bin/
@@ -122,6 +124,7 @@ If not using a package manager:
    ```
 
 2. **Create user and directories**:
+
    ```bash
    sudo groupadd --system geode
    sudo useradd --system --gid geode --create-home \
@@ -134,6 +137,7 @@ If not using a package manager:
    ```
 
 3. **Generate TLS certificates**:
+
    ```bash
    sudo openssl req -x509 -newkey rsa:4096 -nodes \
        -keyout /etc/geode/certs/server.key \
@@ -146,6 +150,7 @@ If not using a package manager:
    ```
 
 4. **Install systemd service**:
+
    ```bash
    sudo cp deployment/systemd/geode.service /lib/systemd/system/
    sudo cp deployment/systemd/geode@.service /lib/systemd/system/
@@ -154,6 +159,7 @@ If not using a package manager:
    ```
 
 5. **Install configuration**:
+
    ```bash
    sudo cp deployment/config/geode.conf /etc/geode/
    sudo chown root:geode /etc/geode/geode.conf
@@ -254,6 +260,7 @@ Geode uses QUIC+TLS for all network communication. For optimal throughput on hig
 QUIC transfers can be limited by UDP receive and send buffer sizes. Increase the maximum buffer size to ~7MB:
 
 **Linux:**
+
 ```bash
 # Apply immediately
 sudo sysctl -w net.core.rmem_max=7340032
@@ -269,6 +276,7 @@ sudo sysctl --system
 ```
 
 **BSD/macOS:**
+
 ```bash
 # Apply immediately (requires ~15% padding, so 7MB becomes ~8MB)
 sudo sysctl -w kern.ipc.maxsockbuf=8441037
@@ -495,6 +503,6 @@ sudo groupdel geode
 
 ## Support
 
-- Documentation: https://gitlab.com/devnw/codepros/geode/geode/tree/main/docs
-- Issues: https://gitlab.com/devnw/codepros/geode/geode/issues
-- Discussions: https://gitlab.com/devnw/codepros/geode/geode/discussions
+- Documentation: <https://gitlab.com/devnw/codepros/geode/geode/tree/main/docs>
+- Issues: <https://gitlab.com/devnw/codepros/geode/geode/issues>
+- Discussions: <https://gitlab.com/devnw/codepros/geode/geode/discussions>

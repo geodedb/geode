@@ -2,8 +2,10 @@
 """Test batch-update-properties with the updated test runner logic"""
 
 import subprocess
-import yaml
 from pathlib import Path
+
+import yaml
+
 
 def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode"):
     """Run a single test case using updated test runner logic"""
@@ -22,31 +24,21 @@ def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/
     setup_commands = test_case.get("setup", [])
     if setup_commands:
         import shlex
+
         for cmd_str in setup_commands:
             try:
                 setup_args = shlex.split(cmd_str)
                 # Add --server 127.0.0.1:3141 --insecure to setup commands
                 if "query" in setup_args and "--server 127.0.0.1:3141 --insecure" not in setup_args:
                     setup_args.insert(setup_args.index("query") + 1, "--server 127.0.0.1:3141 --insecure")
-                subprocess.run(
-                    [binary] + setup_args,
-                    capture_output=True,
-                    text=True,
-                    timeout=30
-                )
+                subprocess.run([binary] + setup_args, capture_output=True, text=True, timeout=30)
             except Exception as e:
                 return False, f"setup failed: {e}"
 
     cmd = [binary] + args
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            input=None
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, input=None)
     except subprocess.TimeoutExpired:
         return False, "timeout"
     except Exception as e:
@@ -60,16 +52,15 @@ def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/
     # Check stdout_contains with JSON parsing
     if "stdout_contains" in expect:
         import json
-        import re
 
         # Try JSON parsing first
         json_values = []
-        for line in result.stdout.split('\n'):
-            if line.startswith('{'):
+        for line in result.stdout.split("\n"):
+            if line.startswith("{"):
                 try:
                     data = json.loads(line)
-                    if 'rows' in data:
-                        for row in data['rows']:
+                    if "rows" in data:
+                        for row in data["rows"]:
                             if isinstance(row, list):
                                 for val in row:
                                     json_values.append(str(val))
@@ -99,7 +90,7 @@ def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/
 def main():
     spec_file = Path("/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs/geode_migrations.yml")
 
-    with open(spec_file, "r") as f:
+    with open(spec_file) as f:
         spec = yaml.safe_load(f)
 
     # Find batch-update-properties test
@@ -127,4 +118,5 @@ def main():
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(main())

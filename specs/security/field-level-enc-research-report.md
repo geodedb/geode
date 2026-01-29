@@ -43,11 +43,11 @@
 CREATE NODE TYPE Person (
   id UUID PRIMARY KEY,
   name STRING,
-  ssn STRING 
+  ssn STRING
     @encrypted(alg:"AES-256-GCM", key_scope:"field", rotate:"90d")
     @classify(tags:["PII","Restricted"])
     @visible(to_roles:["pii_reader"]),
-  email STRING 
+  email STRING
     @encrypted(alg:"CHACHA20-POLY1305", key_scope:"field")
     @searchable(index:"blind-hmac-sha256")
 );

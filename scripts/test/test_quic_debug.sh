@@ -60,7 +60,7 @@ echo "Certificates generated successfully"
 
 # Set certificate paths for Geode
 export GEODE_CERT_PATH="/tmp/geode_test_certs/server-cert.pem"
-export GEODE_KEY_PATH="/tmp/geode_test_certs/server-key.pem" 
+export GEODE_KEY_PATH="/tmp/geode_test_certs/server-key.pem"
 export GEODE_CA_PATH="/tmp/geode_test_certs/ca-cert.pem"
 
 # Create certs directory in current working directory and copy certificates there

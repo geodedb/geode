@@ -1,16 +1,16 @@
 """Command line interface for the geodetestlab tool.
 
 This module defines the Typer application and the various commands exposed to
-users for testing Geode database functionality. It orchestrates loading the 
-specification, resolving secrets, managing server lifecycle, invoking tests, 
+users for testing Geode database functionality. It orchestrates loading the
+specification, resolving secrets, managing server lifecycle, invoking tests,
 and handling error conditions and exit codes according to the requirements.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
-import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -18,19 +18,17 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-import os
-import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core.spec import load_spec, SpecValidationError
-from core.utils import resolve_secrets, SecretResolutionError
-from core.runner import run_tests, RunnerError
+from core.runner import RunnerError, run_tests
+from core.spec import SpecValidationError, load_spec
+from core.utils import SecretResolutionError, resolve_secrets
 from server.simple_manager import ServerManager
 
 app = typer.Typer(
-    name="geodetestlab", 
+    name="geodetestlab",
     help="Interactive CLI testing system for Geode graph database with LLM fuzzing",
-    rich_markup_mode="rich"
+    rich_markup_mode="rich",
 )
 
 console = Console()
@@ -104,22 +102,22 @@ def run(
 
     This command validates the provided YAML specification, resolves any
     secrets referenced within it, optionally manages a Geode server instance,
-    uses an LLM provider to generate additional fuzzed cases, and then executes 
-    the target CLI binary according to the defined tests. A single‑line JSON 
-    summary is always printed to stdout. Exit codes are defined by the outcome 
-    of parsing, secret resolution, server management, runtime errors, and 
+    uses an LLM provider to generate additional fuzzed cases, and then executes
+    the target CLI binary according to the defined tests. A single‑line JSON
+    summary is always printed to stdout. Exit codes are defined by the outcome
+    of parsing, secret resolution, server management, runtime errors, and
     assertion results.
     """
     if not ci and verbose:
         console.print("[yellow]Starting Geode CLI test execution...[/yellow]")
-    
+
     try:
         spec_obj = load_spec(spec)
-    except SpecValidationError as exc:
+    except SpecValidationError:
         # Schema or specification validation error
         console_err.print("SCHEMA_ERROR", style="red")
         raise typer.Exit(code=2)
-    except Exception as exc:
+    except Exception:
         # Unexpected parsing error
         console_err.print("SCHEMA_ERROR", style="red")
         raise typer.Exit(code=2)
@@ -154,14 +152,14 @@ def run(
         # Runtime/setup error – typically binary not found or other unexpected issues
         console_err.print(str(exc), style="red")
         raise typer.Exit(code=3)
-    
+
     # Print final single‑line JSON summary
     print(json.dumps({"summary": summary}, separators=(",", ":")))
-    
+
     # Show rich summary if not in CI mode
     if not ci:
         _show_rich_summary(summary)
-    
+
     # Exit with determined exit code (0 for success, 1 if any test failed)
     raise typer.Exit(code=exit_code)
 
@@ -216,17 +214,17 @@ def secrets_list(
     if not spec_obj.secrets:
         console.print("[yellow]No secrets defined in spec[/yellow]")
         raise typer.Exit(code=0)
-    
+
     table = Table(title="Secrets Configuration")
     table.add_column("Name", style="cyan")
-    table.add_column("Source", style="magenta") 
+    table.add_column("Source", style="magenta")
     table.add_column("Value", style="green" if show else "dim")
-    
+
     for name, config in spec_obj.secrets.items():
         value = secrets.get(name)
         display = value if (show and value is not None) else "***"
         table.add_row(name, config.source, display)
-    
+
     console.print(table)
     raise typer.Exit(code=0)
 
@@ -245,25 +243,19 @@ def server_start(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose server output"),
 ) -> None:
     """Start a managed Geode server instance for testing.
-    
+
     This command starts a Geode server and waits for it to become ready.
     The server will be automatically stopped when the command exits unless
     --background is specified.
     """
-    mgr = ServerManager(
-        geode_binary=geode_binary,
-        port=port,
-        data_dir=data_dir,
-        timeout_ms=timeout_ms,
-        verbose=verbose
-    )
-    
+    mgr = ServerManager(geode_binary=geode_binary, port=port, data_dir=data_dir, timeout_ms=timeout_ms, verbose=verbose)
+
     try:
         if not background:
             console.print(f"[yellow]Starting Geode server on port {port}...[/yellow]")
-        
+
         mgr.start()
-        
+
         if background:
             console.print(f"[green]Server started on port {port} (PID: {mgr.process.pid})[/green]")
             console.print(f"[dim]Data directory: {mgr.data_dir}[/dim]")
@@ -271,7 +263,7 @@ def server_start(
         else:
             console.print(f"[green]Server ready on port {port}[/green]")
             console.print("[dim]Press Ctrl+C to stop the server[/dim]")
-            
+
             try:
                 # Keep the server running until interrupted
                 mgr.wait()
@@ -280,7 +272,7 @@ def server_start(
             finally:
                 mgr.stop()
                 console.print("[green]Server stopped[/green]")
-                
+
     except Exception as exc:
         console_err.print(f"[red]Failed to start server: {exc}[/red]")
         raise typer.Exit(code=3)
@@ -311,28 +303,23 @@ def server_status(
 ) -> None:
     """Show status of running Geode server instances."""
     servers = ServerManager.list_servers(port)
-    
+
     if not servers:
         if port:
             console.print(f"[yellow]No server found on port {port}[/yellow]")
         else:
             console.print("[yellow]No Geode servers are currently running[/yellow]")
         raise typer.Exit(code=0)
-    
+
     table = Table(title="Running Geode Servers")
     table.add_column("PID", style="cyan")
     table.add_column("Port", style="magenta")
     table.add_column("Status", style="green")
     table.add_column("Data Directory", style="dim")
-    
+
     for server in servers:
-        table.add_row(
-            str(server["pid"]),
-            str(server["port"]),
-            server["status"],
-            server.get("data_dir", "unknown")
-        )
-    
+        table.add_row(str(server["pid"]), str(server["port"]), server["status"], server.get("data_dir", "unknown"))
+
     console.print(table)
 
 
@@ -341,20 +328,20 @@ def _show_rich_summary(summary: dict) -> None:
     table = Table(title="Test Results Summary")
     table.add_column("Metric", style="cyan")
     table.add_column("Count", style="bold")
-    
+
     total = summary.get("total", 0)
     passed = summary.get("passed", 0)
     failed = summary.get("failed", 0)
     skipped = summary.get("skipped", 0)
-    
+
     table.add_row("Total", str(total))
     table.add_row("Passed", f"[green]{passed}[/green]")
     table.add_row("Failed", f"[red]{failed}[/red]" if failed > 0 else str(failed))
     table.add_row("Skipped", f"[yellow]{skipped}[/yellow]" if skipped > 0 else str(skipped))
-    
+
     console.print()
     console.print(table)
-    
+
     if failed == 0:
         console.print("\n[green]✓ All tests passed![/green]")
     else:

@@ -14,14 +14,13 @@ import re
 from pathlib import Path
 
 # Pattern to match CANARY markers with IMPL status AND a TEST field
-IMPL_WITH_TEST_PATTERN = re.compile(
-    r'(CANARY:.*?)STATUS=IMPL(.*?TEST=[^;]+)'
-)
+IMPL_WITH_TEST_PATTERN = re.compile(r"(CANARY:.*?)STATUS=IMPL(.*?TEST=[^;]+)")
+
 
 def process_file(file_path: Path) -> tuple[int, list[str]]:
     """Process a single file and convert IMPL to TESTED where TEST exists."""
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, encoding="utf-8") as f:
             content = f.read()
     except (UnicodeDecodeError, PermissionError):
         return 0, []
@@ -32,10 +31,10 @@ def process_file(file_path: Path) -> tuple[int, list[str]]:
         return 0, []
 
     # Perform replacements
-    new_content = IMPL_WITH_TEST_PATTERN.sub(r'\1STATUS=TESTED\2', content)
+    new_content = IMPL_WITH_TEST_PATTERN.sub(r"\1STATUS=TESTED\2", content)
 
     if new_content != content:
-        with open(file_path, 'w', encoding='utf-8') as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             f.write(new_content)
 
         changes = []
@@ -46,12 +45,13 @@ def process_file(file_path: Path) -> tuple[int, list[str]]:
 
     return 0, []
 
+
 def main():
-    repo_root = Path('/home/benji/src/gl/devnw/codepros/geode')
-    src_path = repo_root / 'src'
+    repo_root = Path("/home/benji/src/gl/devnw/codepros/geode")
+    src_path = repo_root / "src"
 
     # Extensions to process
-    extensions = {'.zig', '.py'}
+    extensions = {".zig", ".py"}
 
     total_converted = 0
     files_modified = 0
@@ -61,7 +61,7 @@ def main():
 
     for root, _, files in os.walk(src_path):
         # Skip hidden and vendor directories
-        if '/.git' in root or '/vendor' in root or '/zig-cache' in root:
+        if "/.git" in root or "/vendor" in root or "/zig-cache" in root:
             continue
 
         for file in files:
@@ -87,5 +87,6 @@ def main():
 
     return 0
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     exit(main())

@@ -33,23 +33,27 @@ Geode is an enterprise-ready graph database server with industry-leading complia
 Geode uses a slotted page architecture optimized for graph storage:
 
 **Page Layout** (4096 bytes default):
+
 ```
 [Header (16 bytes)][Slot Directory (growing up)][Free Space][Records (growing down)]
 ```
 
 **Header Structure**:
+
 - `[0..8)`: u64 page LSN (Log Sequence Number for recovery)
 - `[8..10)`: u16 slot count
 - `[10..12)`: u16 free_end pointer
 - `[12..16)`: u32 Adler32 checksum
 
 **Key Features**:
+
 - **Memory-Mapped I/O**: Zero-copy data access with 13.18x performance improvement
 - **Checksumming**: Adler32 over entire page for corruption detection
 - **Slot-Based Storage**: Each slot tracks offset and size for variable-length records
 - **LSN Tracking**: Every page tracks last modification for WAL recovery
 
 **Performance**:
+
 - I/O operations improved from 5,754μs to 436μs (13.18x)
 - <1% overhead for checksumming
 - Efficient space reclamation with slot compaction
@@ -62,11 +66,13 @@ Geode uses a slotted page architecture optimized for graph storage:
 Geode implements ARIES-style write-ahead logging with advanced features:
 
 **WAL Record Structure**:
+
 ```
 [Type (1)][TxnId (8)][PayloadLen (4)][LSN (8)][PrevLSN (8)][Checksum (4)][Payload][Sentinel (4)]
 ```
 
 **Record Types**:
+
 - `Begin`: Transaction start
 - `Insert`: Node/edge insertion with payload
 - `Delete`: Tombstone deletion with before-image
@@ -107,11 +113,13 @@ Geode implements ARIES-style write-ahead logging with advanced features:
    - Reduces fsync overhead by 10-100x for write-heavy workloads
 
 **Recovery Process** (ARIES):
+
 1. **Analysis Phase**: Build transaction table and dirty page list
 2. **Redo Phase**: Apply all committed changes from checkpoint
 3. **Undo Phase**: Rollback uncommitted transactions using CLRs
 
 **Performance Characteristics**:
+
 - Append-only writes: ~100-200μs per record
 - Group commit: reduces latency to ~10-50μs per transaction
 - Recovery speed: 10,000-50,000 records/second
@@ -123,18 +131,21 @@ Geode implements ARIES-style write-ahead logging with advanced features:
 **CANARY**: `REQ-GQL-025`, `REQ-GQL-026`
 
 **Transparent Data Encryption (TDE)**:
+
 - XTS-AES-256 mode for page-level encryption
 - Per-page tweak: `(page_id << 64) | sector_offset`
 - Software AES with future AES-NI optimization path
 - Key hierarchy with master key separation
 
 **Key Management**:
+
 - Master key from environment: `GEODE_DISK_KEY_HEX` (64-char hex)
 - Hierarchical key derivation for data, WAL, and backup keys
 - Integration with HashiCorp Vault and AWS KMS
 - Automatic key rotation support
 
 **File Permissions**:
+
 - All database files created with mode 0o600 (owner-only access)
 - Parent directory fsync for durability guarantees
 
@@ -144,11 +155,13 @@ Geode implements ARIES-style write-ahead logging with advanced features:
 **CANARY**: `REQ-GQL-S3-001`
 
 **Backup Types**:
+
 1. **Full Backup**: Complete database snapshot
 2. **Incremental Backup**: Delta changes since last backup
 3. **Point-in-Time Recovery**: Restore to any LSN
 
 **S3 Features**:
+
 - Multipart upload for files >5MB (configurable)
 - Exponential backoff retry (base 100ms, max 3 retries)
 - Compression: zstd, gzip, lz4, snappy
@@ -156,6 +169,7 @@ Geode implements ARIES-style write-ahead logging with advanced features:
 - Checksum validation: SHA-256
 
 **Backup Process**:
+
 1. Create Raft snapshot for consistency
 2. Archive data files (tar format)
 3. Calculate checksum
@@ -163,6 +177,7 @@ Geode implements ARIES-style write-ahead logging with advanced features:
 5. Store backup manifest
 
 **Performance**:
+
 - Multipart upload: 50-100MB/s throughput
 - Compression ratio: 3-5x for graph data
 - Incremental backup: 90-95% smaller than full
@@ -177,31 +192,37 @@ Geode implements ARIES-style write-ahead logging with advanced features:
 **CANARY**: `REQ-GQL-013`, `REQ-GQL-023`, `REQ-GQL-025`
 
 **Core Concepts**:
+
 - Every transaction has a unique `TxnId` and `start_ts` timestamp
 - Reads see snapshot at `start_ts`
 - Writes are visible only after commit timestamp
 - No read locks required
 
 **Transaction States**:
+
 - `Active`: Transaction in progress
 - `Committed`: Successfully committed with `commit_ts`
 - `Aborted`: Rolled back (changes undone)
 
 **Lock Modes**:
+
 - `Shared`: Multiple readers allowed
 - `Exclusive`: Single writer, blocks all
 
 **Conflict Detection**:
+
 - Conflict matrix tracks: ReadWrite, WriteWrite, WriteRead
 - Wait-for graph for deadlock detection
 - Lock escalation for large scans
 
 **Phantom Read Prevention**:
+
 - Predicate range tracking per transaction
 - Range locks on scan predicates
 - Validation at commit time against concurrent writes
 
 **Example Flow**:
+
 ```zig
 // Begin transaction
 const txn = try manager.beginTxn();
@@ -222,6 +243,7 @@ try manager.commit(txn); // Checks for conflicts
 **CANARY**: `REQ-TXN-ISOLATION-001` through `REQ-TXN-ISOLATION-004`
 
 **Isolation Levels**:
+
 1. **ReadUncommitted**: No guarantees (rarely used)
 2. **ReadCommitted**: Prevents dirty reads
 3. **RepeatableRead**: Prevents dirty + non-repeatable reads
@@ -234,12 +256,14 @@ try manager.commit(txn); // Checks for conflicts
 SSI detects "dangerous structures" - dependency cycles that violate serializability:
 
 **Dependency Types**:
+
 - **RW Edge** (T1 → T2): T1 reads, T2 writes same object
 - **WR Edge** (T1 → T2): T1 writes, T2 reads same object
 
 **Dangerous Structure**: `T1 -RW-> T2 -WR-> T3 -RW-> T1` (cycle)
 
 **Implementation**:
+
 ```zig
 pub const DependencyTracker = struct {
     read_dependencies: AutoHashMap(TxnId, ArrayList(TxnId)),  // RW edges
@@ -253,12 +277,14 @@ pub const DependencyTracker = struct {
 ```
 
 **Commit-Time Validation**:
+
 1. Check for dangerous structures in dependency graph
 2. Validate read set against concurrent writes
 3. If conflict detected → abort transaction
 4. Otherwise → commit with new `commit_ts`
 
 **Performance**:
+
 - <10μs overhead per transaction for SSI tracking
 - 99.9% of transactions commit without conflicts
 - Automatic victim selection for deadlock resolution
@@ -268,12 +294,14 @@ pub const DependencyTracker = struct {
 **Implementation**: `/src/server/txn/enhanced_isolation.zig`
 
 **Wait-For Graph**:
+
 - Directed graph: T1 → T2 means T1 waits for T2
 - Cycle detection via DFS
 - Periodic detection (default 1 second interval)
 - Priority-based victim selection
 
 **Resolution Strategies**:
+
 1. **Abort**: Kill current transaction
 2. **Wait**: Wait for lock with timeout (default 30s)
 3. **AbortOther**: Abort conflicting transaction (if lower priority)
@@ -281,11 +309,13 @@ pub const DependencyTracker = struct {
 5. **Escalate**: Upgrade to higher isolation level
 
 **Priority System**:
+
 - User-defined priorities (0-255)
 - Victim selection: abort lowest priority transaction
 - Prevents priority inversion
 
 **Statistics**:
+
 - Total conflicts detected
 - Deadlocks resolved
 - Average resolution time
@@ -300,18 +330,21 @@ pub const DependencyTracker = struct {
 **Implementation**: `/src/index/btree.zig`
 
 **Structure**:
+
 - Order: Configurable (default 32)
 - Keys per node: 2*order - 1
 - Children per node: 2*order
 - Balanced tree guarantees O(log n) operations
 
 **Features**:
+
 - In-place updates
 - Node splitting/merging
 - Range scans
 - Prefix compression
 
 **Performance**:
+
 - Point lookup: ~100ns for in-memory
 - Range scan: 1-2μs per 100 keys
 - Insert: ~200ns amortized
@@ -324,6 +357,7 @@ pub const DependencyTracker = struct {
 **Algorithm**: Hierarchical Navigable Small World graphs
 
 **Distance Metrics** (6 supported):
+
 1. **L2 (Euclidean)**: Standard distance
 2. **Cosine**: Normalized similarity
 3. **Dot Product**: Raw dot product
@@ -332,17 +366,20 @@ pub const DependencyTracker = struct {
 6. **Jaccard**: Set similarity
 
 **Parameters**:
+
 - `M`: Max connections per layer (default 16)
 - `ef_construction`: Search width during build (default 200)
 - `ef_search`: Search width during query (default 50)
 - `max_level`: Maximum hierarchy depth (auto-computed)
 
 **SIMD Acceleration**:
+
 - Enabled for vectors ≥8 dimensions
 - 8x speedup for L2 distance calculation
 - Platform-specific optimizations (AVX2, NEON)
 
 **Performance**:
+
 - 8D L2 distance: <50ns
 - 10k vector search: ~1-5ms at 90% recall
 - Build time: ~100-500μs per vector
@@ -355,16 +392,19 @@ pub const DependencyTracker = struct {
 **Implementation**: `/src/index/spatial_index.zig`, `/src/index/rtree.zig`
 
 **Geometry Types**:
+
 - Point: (x, y) coordinates
 - LineString: Ordered point sequence
 - Polygon: Closed ring with holes
 
 **Operations**:
+
 - Spatial queries: intersects, contains, within
 - Bounding box optimization
 - Hilbert curve ordering for better clustering
 
 **Performance**:
+
 - Point query: ~500ns
 - Range query: 1-2μs per 100 results
 - Insert: ~1-2μs with rebalancing
@@ -375,32 +415,38 @@ pub const DependencyTracker = struct {
 **CANARY**: `REQ-GQL-077`
 
 **Inverted Index Structure**:
+
 ```
 Term → [(DocId, Position, Frequency), ...]
 ```
 
 **BM25 Ranking**:
+
 ```
 score(D,Q) = Σ IDF(qi) · [f(qi,D) · (k1+1)] / [f(qi,D) + k1·(1-b+b·|D|/avgdl)]
 ```
 
 **Parameters**:
+
 - `k1`: Term frequency saturation (default 1.2)
 - `b`: Length normalization (default 0.75)
 
 **Features**:
+
 - Stemming: Porter stemmer
 - Stop words: Configurable list
 - Phrase queries: Positional indexing
 - Fuzzy matching: Levenshtein distance
 
 **Performance**:
+
 - Single-term query: ~10-50μs
 - Phrase query: ~50-200μs
 - Boolean query: ~100-500μs
 - Index build: ~1-2ms per 1000 documents
 
 **IndexOptimizer Integration**:
+
 - Automatic corpus statistics tracking
 - Dynamic selectivity estimation
 - Cost-based decision between full-text vs sequential scan
@@ -408,21 +454,25 @@ score(D,Q) = Σ IDF(qi) · [f(qi,D) · (k1+1)] / [f(qi,D) + k1·(1-b+b·|D|/avgd
 ### 3.5 Specialized Indexes
 
 **Interval Tree Index** (`/src/index/interval_tree.zig`):
+
 - Efficient range overlap queries
 - O(log n + k) query time (k = results)
 - Used for temporal ranges, network CIDR blocks
 
 **JSONB Inverted Index** (`/src/index/jsonb_inverted.zig`):
+
 - Path-based indexing: `$.user.address.city`
 - GIN-style inverted index
 - Supports existence, equality, range queries
 
 **Domain Trie Index** (`/src/index/domain_trie.zig`):
+
 - Reverse domain indexing (com.example.www)
 - Efficient subdomain queries
 - URL canonicalization support
 
 **Patricia Trie** (`/src/index/patricia.zig`):
+
 - Compressed prefix tree
 - Efficient string prefix matching
 - Used for autocomplete, pattern matching
@@ -437,6 +487,7 @@ score(D,Q) = Σ IDF(qi) · [f(qi,D) · (k1+1)] / [f(qi,D) + k1·(1-b+b·|D|/avgd
 **CANARY**: `REQ-GQL-016`, `REQ-GQL-021`
 
 **Planning Phases**:
+
 1. **Parse**: GQL → AST (100% ISO compliance)
 2. **Validate**: Type checking, schema validation
 3. **Rewrite**: Predicate pushdown, constant folding
@@ -445,12 +496,14 @@ score(D,Q) = Σ IDF(qi) · [f(qi,D) · (k1+1)] / [f(qi,D) + k1·(1-b+b·|D|/avgd
 6. **Select**: Choose lowest-cost plan
 
 **Path Expansion Operator**:
+
 - Variable-length path queries: `(a)-[*1..5]->(b)`
 - BFS traversal with cycle detection
 - Tie-breaking policy: (length, start_id, end_id)
 - Pruning: visited node tracking
 
 **Example**:
+
 ```sql
 MATCH (a:Person)-[r:KNOWS*1..3]->(b:Person)
 WHERE a.name = 'Alice'
@@ -458,6 +511,7 @@ RETURN b.name, length(r) as hops
 ```
 
 **Plan**:
+
 ```
 PathExpand(min=1, max=3)
   ← IndexScan(Person, name='Alice')
@@ -472,39 +526,46 @@ PathExpand(min=1, max=3)
 **Cost Model Components**:
 
 1. **Cardinality Estimation**:
+
    ```
    selectivity(predicate) = matched_rows / total_rows
    estimated_rows = input_rows × selectivity
    ```
 
 2. **I/O Cost**:
+
    ```
    io_cost = pages_read × page_cost
    page_cost = 1.0 (sequential) or 4.0 (random)
    ```
 
 3. **CPU Cost**:
+
    ```
    cpu_cost = rows × tuple_cost × complexity
    tuple_cost = 0.01 (per-row processing)
    ```
 
 4. **Network Cost** (distributed):
+
    ```
    network_cost = bytes_transferred × network_latency
    ```
 
 **Index Selection**:
+
 - Automatic selection based on query predicates
 - Cost comparison: sequential scan vs index scan
 - Considers index type, cardinality, clustering
 
 **Join Ordering**:
+
 - Dynamic programming for small queries (<10 tables)
 - Greedy heuristic for large queries
 - Bushy trees for complex joins
 
 **Adaptive Re-planning**:
+
 - Runtime statistics collection
 - Re-plan threshold: actual_rows > 2× estimated_rows
 - Hot-path caching
@@ -514,6 +575,7 @@ PathExpand(min=1, max=3)
 **Implementation**: `/src/server/index_optimizer.zig`
 
 **Capabilities**:
+
 - Automatic index recommendation
 - Query-specific cost estimation
 - Dynamic index selection
@@ -531,6 +593,7 @@ PathExpand(min=1, max=3)
 | Hash | `O(1)` | Exact equality only |
 
 **Integration**:
+
 ```zig
 // Automatic index selection
 const index_choice = try index_optimizer.selectBestIndex(
@@ -553,11 +616,13 @@ const estimated_cost = try index_optimizer.estimateCost(
 **CANARY**: `REQ-GQL-084`
 
 **Frequency Sampling**:
+
 - Reservoir sampling for value distribution
 - Hash-based deduplication
 - Configurable sample size (default 1000)
 
 **Adaptive Estimation**:
+
 ```zig
 pub const AdaptiveEstimator = struct {
     sampler: FrequencySampler,
@@ -573,6 +638,7 @@ pub const AdaptiveEstimator = struct {
 ```
 
 **Predicate Selectivity**:
+
 - Equality: frequency-based
 - Range: histogram estimation
 - LIKE: pattern length heuristic
@@ -584,12 +650,14 @@ pub const AdaptiveEstimator = struct {
 **CANARY**: 23 PathCache markers
 
 **Cache Key**: Structural hash of path pattern
+
 - Start node label
 - Edge type sequence
 - End node label
 - Path length bounds
 
 **Cache Entry**:
+
 ```zig
 struct PathCacheEntry {
     pattern_hash: u64,
@@ -601,11 +669,13 @@ struct PathCacheEntry {
 ```
 
 **Eviction Policy**:
+
 - LRU with frequency weighting
 - Invalidation on schema changes
 - Configurable size limit
 
 **Performance**:
+
 - Cache hit: <100ns
 - Cache miss + population: ~1-10ms
 - Hit rate: 60-90% for typical workloads
@@ -620,6 +690,7 @@ struct PathCacheEntry {
 **CANARY**: `REQ-GQL-042` (47 CDC markers - highest count)
 
 **Core Features**:
+
 - Real-time change event streaming
 - Multiple sink support: Kafka, Kinesis, PubSub, Webhook, File
 - Adaptive batching and backpressure
@@ -627,6 +698,7 @@ struct PathCacheEntry {
 - Resume token support for fault tolerance
 
 **Change Event Structure**:
+
 ```zig
 pub const ChangeEvent = struct {
     timestamp: i64,
@@ -642,6 +714,7 @@ pub const ChangeEvent = struct {
 ```
 
 **CDC Configuration**:
+
 ```zig
 pub const CDCConfig = struct {
     enabled: bool = false,
@@ -672,34 +745,40 @@ pub const CDCConfig = struct {
 ```
 
 **Adaptive Batching Algorithm**:
+
 1. Monitor event rate over window (e.g., 4000 events)
 2. If rate > threshold: increase batch size (up to max)
 3. If rate < threshold: decrease batch size (down to min)
 4. Step size: 25% multiplicative adjustment
 
 **Backpressure Management**:
+
 - Watermark-based: trigger when pending > watermark
 - Adaptive watermark adjustment: shrink at 85%, grow at 30%
 - Range: 1,000 to 512,000 events
 - Prevents memory exhaustion under load
 
 **WAL Tail Optimization**:
+
 - Direct WAL tail reading (bypass page manager)
 - Malformed record detection with diagnostics
 - Snapshot interval for debugging (default every 100 malformed)
 - Hash retention for first N malformed payloads
 
 **Ordering Guarantees**:
+
 - Per-entity ordering: events for same entity are ordered
 - Transaction boundary markers
 - Global sequence numbers for external ordering
 
 **Resume Token Format**:
+
 ```
 {lsn}:{sequence}:{timestamp}
 ```
 
 **Performance**:
+
 - Event capture: <10μs overhead per write
 - Kafka throughput: 50,000-100,000 events/sec
 - Adaptive flush: reduces latency by 60-80%
@@ -707,6 +786,7 @@ pub const CDCConfig = struct {
 ### 5.2 Kafka Integration
 
 **Configuration**:
+
 ```zig
 pub const KafkaConfig = struct {
     brokers: []const u8,
@@ -719,6 +799,7 @@ pub const KafkaConfig = struct {
 ```
 
 **Features**:
+
 - Automatic partitioning by entity_id
 - Compression: snappy (best balance), zstd (best ratio)
 - Delivery guarantees: at-least-once (acks=all)
@@ -727,6 +808,7 @@ pub const KafkaConfig = struct {
 ### 5.3 Kinesis Integration
 
 **Configuration**:
+
 ```zig
 pub const KinesisConfig = struct {
     stream_name: []const u8,
@@ -737,6 +819,7 @@ pub const KinesisConfig = struct {
 ```
 
 **Features**:
+
 - AWS SDK integration
 - Automatic retry with exponential backoff
 - Shard-level ordering by partition key
@@ -744,6 +827,7 @@ pub const KinesisConfig = struct {
 ### 5.4 Webhook Sink
 
 **Configuration**:
+
 ```zig
 pub const WebhookConfig = struct {
     url: []const u8,
@@ -755,6 +839,7 @@ pub const WebhookConfig = struct {
 ```
 
 **Features**:
+
 - Custom HTTP headers
 - Automatic retry with exponential backoff
 - Timeout handling
@@ -770,6 +855,7 @@ pub const WebhookConfig = struct {
 **CANARY**: `REQ-GQL-074` (35 transport markers)
 
 **Why QUIC?**
+
 - Built-in TLS 1.3 encryption (mandatory)
 - Multiplexed streams (no head-of-line blocking)
 - 0-RTT connection resumption
@@ -777,6 +863,7 @@ pub const WebhookConfig = struct {
 - Congestion control improvements
 
 **Transport Configuration**:
+
 ```zig
 pub const Config = struct {
     address: []const u8 = "0.0.0.0",
@@ -792,27 +879,32 @@ pub const Config = struct {
 ```
 
 **Auto-Generated Certificates**:
+
 - Self-signed certificate generation via OpenSSL
 - Fallback to insecure mode if OpenSSL unavailable (dev only)
 - Production requires valid certificates
 
 **Stream Management**:
+
 - Bidirectional streams for request-response
 - Unidirectional streams for push notifications
 - Stream prioritization
 
 **Flow Control**:
+
 - Per-stream and per-connection limits
 - Automatic window scaling
 - Backpressure signaling
 
 **Security**:
+
 - TLS 1.3 mandatory (no plaintext mode)
 - Certificate validation
 - Perfect forward secrecy
 - ALPN negotiation: "geode/1.0"
 
 **Performance**:
+
 - Connection setup: ~1-2 RTT (0-RTT for resumed)
 - Throughput: 100-500 MB/s (network limited)
 - Latency: <1ms for local, 10-100ms cross-region
@@ -821,6 +913,7 @@ pub const Config = struct {
 ### 6.2 Binary Protocol
 
 **Frame Format**:
+
 ```
 [Magic (4)][Version (2)][Type (1)][Flags (1)][Length (4)][Payload]
 ```
@@ -828,6 +921,7 @@ pub const Config = struct {
 **Magic**: `0x47454F44` ("GEOD" in ASCII)
 
 **Frame Types**:
+
 - `0x01`: HELLO (capability negotiation)
 - `0x02`: QUERY (GQL query execution)
 - `0x03`: RESPONSE (query results)
@@ -836,12 +930,14 @@ pub const Config = struct {
 - `0x06`: GOODBYE (graceful shutdown)
 
 **Flags**:
+
 - `0x01`: Compressed (zstd)
 - `0x02`: Encrypted (additional layer beyond TLS)
 - `0x04`: Fragmented (multi-frame message)
 - `0x08`: Priority (high-priority frame)
 
 **Payload Encoding**:
+
 - Values: MessagePack format
 - Graphs: Custom compact format
 - Binaries: Length-prefixed
@@ -856,11 +952,13 @@ pub const Config = struct {
 **CANARY**: `REQ-GQL-TDE-*`
 
 **Encryption Modes**:
+
 - **Page-Level**: XTS-AES-256 for storage pages
 - **WAL-Level**: AES-256-GCM for log records
 - **Backup-Level**: AES-256-CTR with envelope encryption
 
 **Key Hierarchy**:
+
 ```
 Master Key (256-bit)
   ├─> Data Key (for pages)
@@ -869,6 +967,7 @@ Master Key (256-bit)
 ```
 
 **Key Derivation**:
+
 ```zig
 pub const KeyHierarchy = struct {
     master_key: [32]u8,
@@ -886,6 +985,7 @@ pub const KeyHierarchy = struct {
 ```
 
 **Performance Overhead**:
+
 - Page encryption: <1% CPU overhead
 - WAL encryption: <1% latency overhead
 - AES-NI acceleration: 10x faster on supported CPUs
@@ -895,6 +995,7 @@ pub const KeyHierarchy = struct {
 **Implementation**: `/src/security/kms.zig`, `/src/security/kms_remote.zig`
 
 **Supported Providers**:
+
 1. **Local** (file-based): Development only
 2. **HashiCorp Vault**: Enterprise production
 3. **AWS KMS**: Cloud deployments
@@ -902,6 +1003,7 @@ pub const KeyHierarchy = struct {
 5. **GCP KMS**: Google Cloud
 
 **Remote KMS Features**:
+
 - Automatic key unwrapping
 - Envelope encryption (KEK + DEK)
 - Key rotation with re-encryption
@@ -909,6 +1011,7 @@ pub const KeyHierarchy = struct {
 - Attestation support
 
 **Example (Vault)**:
+
 ```zig
 const vault_config = VaultConfig{
     .address = "https://vault.example.com",
@@ -927,12 +1030,14 @@ const dek = try kms.unwrapKey(wrapped_dek);
 **Implementation**: `/src/security/rls_enhanced.zig`
 
 **Policy Types**:
+
 1. **Attribute-Based**: Rules on node/edge properties
 2. **Role-Based**: User role membership
 3. **Temporal**: Time-based access windows
 4. **Contextual**: Request context (IP, location)
 
 **Policy Example**:
+
 ```zig
 pub const SecurityPolicy = struct {
     name: []const u8,
@@ -949,6 +1054,7 @@ pub const SecurityPolicy = struct {
 ```
 
 **Policy Evaluation**:
+
 ```zig
 pub fn evaluatePolicy(
     policy: *SecurityPolicy,
@@ -977,6 +1083,7 @@ pub fn evaluatePolicy(
 ```
 
 **Performance**:
+
 - Policy evaluation: <10μs per policy
 - Expression compilation: JIT to bytecode
 - Policy cache: 90%+ hit rate
@@ -987,12 +1094,14 @@ pub fn evaluatePolicy(
 **Implementation**: `/src/security/mfa.zig`
 
 **Supported Methods**:
+
 1. **TOTP**: Time-based one-time passwords (RFC 6238)
 2. **SMS**: Text message codes
 3. **Email**: Email verification codes
 4. **Hardware tokens**: U2F/FIDO2
 
 **Risk-Based MFA**:
+
 - Risk score calculation based on:
   - Login location
   - Device fingerprint
@@ -1001,6 +1110,7 @@ pub fn evaluatePolicy(
 - Adaptive MFA: require MFA only for high-risk requests
 
 **Recovery Codes**:
+
 - One-time use backup codes
 - Secure generation and storage
 - Rate limiting on recovery attempts
@@ -1010,6 +1120,7 @@ pub fn evaluatePolicy(
 **Implementation**: `/src/security/audit.zig`
 
 **Event Types**:
+
 - Authentication: login, logout, failed attempts
 - Authorization: permission checks, policy violations
 - Data access: SELECT, INSERT, UPDATE, DELETE
@@ -1017,6 +1128,7 @@ pub fn evaluatePolicy(
 - Security: key rotation, policy updates
 
 **Audit Record**:
+
 ```zig
 pub const AuditRecord = struct {
     timestamp: i64,
@@ -1034,6 +1146,7 @@ pub const AuditRecord = struct {
 ```
 
 **Storage Backends**:
+
 - Local file (JSON lines)
 - Syslog (RFC 5424)
 - Elasticsearch
@@ -1041,6 +1154,7 @@ pub const AuditRecord = struct {
 - AWS CloudWatch Logs
 
 **Performance**:
+
 - Async logging: <5μs overhead
 - Buffered writes: 10,000 events/sec
 - Automatic log rotation
@@ -1052,21 +1166,25 @@ pub const AuditRecord = struct {
 ### 8.1 Query Performance
 
 **Simple Queries** (indexed):
+
 - Point lookup: <1ms (typically 100-500μs)
 - Short path (1-2 hops): 1-5ms
 - Aggregation (10k rows): 5-20ms
 
 **Complex Queries**:
+
 - Multi-hop path (3-5 hops): 10-100ms
 - Large aggregation (1M rows): 100-500ms
 - Graph algorithm (PageRank 10k nodes): 500ms-2s
 
 **Vector Similarity**:
+
 - HNSW vs sequential scan: 10-100x faster
 - 10k vectors, 10-NN: 1-5ms
 - 1M vectors, 10-NN: 10-50ms
 
 **Full-Text Search**:
+
 - Single term: 10-50μs
 - Multi-term boolean: 100-500μs
 - Phrase query: 200-1000μs
@@ -1074,15 +1192,18 @@ pub const AuditRecord = struct {
 ### 8.2 Write Performance
 
 **Single Writes**:
+
 - Node insert: 100-500μs (with WAL)
 - Edge insert: 200-800μs (with index updates)
 - Property update: 50-300μs
 
 **Bulk Writes** (batched):
+
 - Throughput: 50,000-200,000 writes/sec
 - Latency: 20-50μs per write (group commit)
 
 **Transaction Throughput**:
+
 - Read-only: 100,000 txn/sec
 - Read-write: 10,000-50,000 txn/sec
 - Write-heavy: 5,000-20,000 txn/sec
@@ -1090,16 +1211,19 @@ pub const AuditRecord = struct {
 ### 8.3 Scalability
 
 **Vertical Scaling**:
+
 - CPU cores: Linear scaling to 64 cores
 - Memory: Tested up to 512GB
 - Disk: 10-50TB single instance
 
 **Horizontal Scaling** (Federation):
+
 - Shards: Tested up to 32 shards
 - Replication: 3-5 replicas typical
 - Query routing: <100μs overhead
 
 **Concurrent Users**:
+
 - 10,000+ connections supported
 - Connection pooling recommended
 - Resource limits per user
@@ -1107,23 +1231,27 @@ pub const AuditRecord = struct {
 ### 8.4 Resource Utilization
 
 **Memory**:
+
 - Page cache: 50-80% of RAM
 - Index cache: 10-20% of RAM
 - Transaction metadata: <1% of RAM
 - Security overhead: <2% of RAM
 
 **CPU**:
+
 - Query execution: 60-80%
 - Index maintenance: 10-20%
 - WAL/checkpointing: 5-10%
 - Security/encryption: <5%
 
 **Disk I/O**:
+
 - Sequential write (WAL): 100-500 MB/s
 - Random read (pages): 10-50k IOPS
 - Sequential scan: 500-2000 MB/s
 
 **Network**:
+
 - QUIC overhead: <5% of bandwidth
 - Compression: 3-5x reduction for graphs
 - Throughput: Network-limited (1-10 Gbps typical)
@@ -1131,16 +1259,19 @@ pub const AuditRecord = struct {
 ### 8.5 Benchmark Results
 
 **TPC-H Adapted** (graph equivalent):
+
 - Q1 (aggregation): 50-200ms
 - Q2 (join): 100-500ms
 - Q3 (complex): 200-1000ms
 
 **LDBC SNB** (social network):
+
 - Short reads: <10ms (99th percentile)
 - Complex reads: <100ms (99th percentile)
 - Writes: <5ms (99th percentile)
 
 **Custom Graph Workloads**:
+
 - 2-hop friends: 5-20ms
 - Recommendation (collaborative filtering): 50-200ms
 - PageRank (10k nodes): 500ms-1s
@@ -1166,6 +1297,7 @@ Total CANARY markers: 1284 tracking governance compliance
 10. **Transaction Management** (12 markers): MVCC with SSI
 
 **Status Distribution**:
+
 - TESTED: 85% (with automated test evidence)
 - BENCHED: 10% (with performance benchmarks)
 - IMPL: 5% (implemented, pending test coverage)
@@ -1177,12 +1309,14 @@ Total CANARY markers: 1284 tracking governance compliance
 ### Environment Variables
 
 **Storage**:
+
 - `GEODE_DATA_DIR`: Data directory path (default: `/tmp`)
 - `GEODE_PAGE_SIZE`: Page size in bytes (default: 4096)
 - `GEODE_DISK_ENCRYPTION`: Enable TDE (`on`/`off`)
 - `GEODE_DISK_KEY_HEX`: Master encryption key (64 hex chars)
 
 **WAL**:
+
 - `GEODE_WAL_ENCRYPTION`: Enable WAL encryption
 - `GEODE_WAL_SEGMENT_SIZE`: Segment rollover size (default: 1MB)
 - `GEODE_WAL_FLUSH_MODE`: `always`, `every_n`, or `time_window_ms`
@@ -1190,18 +1324,21 @@ Total CANARY markers: 1284 tracking governance compliance
 - `GEODE_WAL_FLUSH_WINDOW_MS`: Flush window when `GEODE_WAL_FLUSH_MODE=time_window_ms` (default: 5ms)
 
 **CDC**:
+
 - `CDC_ENABLED`: Enable change data capture
 - `CDC_SINKS`: Comma-separated sink list
 - `CDC_BATCH_SIZE`: Batch size (default: 1000)
 - `CDC_ADAPTIVE_FLUSH`: Enable adaptive batching
 
 **Network**:
+
 - `GEODE_LISTEN_ADDR`: Bind address (default: 0.0.0.0)
 - `GEODE_LISTEN_PORT`: Bind port (default: 7567)
 - `GEODE_TLS_CERT`: TLS certificate path
 - `GEODE_TLS_KEY`: TLS private key path
 
 **Security**:
+
 - `GEODE_MFA_ENABLED`: Enable MFA
 - `GEODE_AUDIT_LOG_PATH`: Audit log location
 - `GEODE_KMS_PROVIDER`: `local`, `vault`, `aws`, `azure`, `gcp`

@@ -339,6 +339,7 @@ echo 'export ANTHROPIC_API_KEY="sk-..."' >> ~/.bashrc
 ```
 
 **Never commit API keys**:
+
 - Don't add API keys to files that get committed
 - Use environment variables
 - The `.anthropic/` directory is already gitignored

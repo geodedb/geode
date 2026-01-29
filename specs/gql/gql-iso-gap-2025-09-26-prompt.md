@@ -9,38 +9,38 @@ You are a senior **Zig 0.15.1** engineer. Implement an ISO/IEC 39075:2024 GQ
 1. **Unordered LIMIT/OFFSET (US001)** — Allow LIMIT/OFFSET without ORDER BY; apply deterministic impl‑order before slicing; keep US001 defined but **do not raise** by default.
 
    * Edit `src/diagnostics.zig`: US001 definition/precedence around ~L3–L11, ~L27–L35 — gate emission behind a **strict mode** default‑OFF.
-   * Edit `src/server/main.zig`: when LIMIT or OFFSET present and no explicit ORDER BY, sort deterministically (stable bindings + LexJSON tie‑break) prior to slicing; add `U:OrderTiebreak=LexJSON` flag. **Anchor**: comparator/tie‑break code referenced in analysis. 
+   * Edit `src/server/main.zig`: when LIMIT or OFFSET present and no explicit ORDER BY, sort deterministically (stable bindings + LexJSON tie‑break) prior to slicing; add `U:OrderTiebreak=LexJSON` flag. **Anchor**: comparator/tie‑break code referenced in analysis.
 
 2. **`SKIP` synonym (GQ13)** —
 
    * `src/gql/token.zig` ~L90–L98: add `SKIP` keyword.
-   * `src/gql/parser.zig` ~L453–L460: accept `SKIP <int>` identical to `OFFSET`. 
+   * `src/gql/parser.zig` ~L453–L460: accept `SKIP <int>` identical to `OFFSET`.
 
 3. **Double‑quoted identifiers** —
 
    * `src/gql/lexer.zig` ~L17–L20: add `QUOTED_IDENTIFIER` token scanning `"`…`"` with `""` escape; **do not** treat as string.
    * `src/gql/token.zig`: add TokenKind `.QUOTED_IDENTIFIER`.
-   * `src/gql/parser.zig`: accept `.QUOTED_IDENTIFIER` wherever identifiers/aliases allowed; store case‑preserving, compare appropriately. 
+   * `src/gql/parser.zig`: accept `.QUOTED_IDENTIFIER` wherever identifiers/aliases allowed; store case‑preserving, compare appropriately.
 
 4. **ORDER BY expressions** —
 
    * `src/gql/parser.zig` ~L385–L393: remove/disable guards `ident_order_only` / `forbid_orderby_calls` (anchors: messages “ORDER BY key must be identifier”, “function calls in ORDER BY are disabled”).
-   * `src/protocol.zig`: drop/adjust `I:IllegalOrderKeyPolicy=ident-only` → `I:IllegalOrderKeyPolicy=expr`. 
+   * `src/protocol.zig`: drop/adjust `I:IllegalOrderKeyPolicy=ident-only` → `I:IllegalOrderKeyPolicy=expr`.
 
 5. **Per‑key `NULLS FIRST|LAST`** —
 
-   * `src/server/main.zig`: modify ORDER comparator to read **per‑key** nulls policy from AST (e.g., `OrderKey.nulls`) and override global `g_nulls_last` when explicit on a key; default to global only if key policy is default. Add tests for mixed policies. 
+   * `src/server/main.zig`: modify ORDER comparator to read **per‑key** nulls policy from AST (e.g., `OrderKey.nulls`) and override global `g_nulls_last` when explicit on a key; default to global only if key policy is default. Add tests for mixed policies.
 
 6. **`UNKNOWN` keyword & `IS [NOT] UNKNOWN`** —
 
    * `src/gql/token.zig`: include `UNKNOWN`.
-   * Parser `IS` predicate: accept `UNKNOWN`/`NOT UNKNOWN`; executor implements three‑valued logic. 
+   * Parser `IS` predicate: accept `UNKNOWN`/`NOT UNKNOWN`; executor implements three‑valued logic.
 
 7. **Comment conformance** —
 
    * Keep `--` (GB02) **disabled**; emit clear syntax diagnostic referencing GB02.
    * `src/gql/lexer.zig` ~L61–L69: keep `//` skip but **record** occurrence for flagger; add `/*…*/` multi‑line comment skipping.
-   * `src/protocol.zig`: when `//` seen, add `GB03:DoubleSolidusComment`; when `ORDER BY` uses ordinals, add `E:OrdinalSortKey`. 
+   * `src/protocol.zig`: when `//` seen, add `GB03:DoubleSolidusComment`; when `ORDER BY` uses ordinals, add `E:OrdinalSortKey`.
 
 #### B. **Multi‑graph session semantics (IN SCOPE)**
 
@@ -52,7 +52,7 @@ You are a senior **Zig 0.15.1** engineer. Implement an ISO/IEC 39075:2024 GQ
    * Support **multi‑statement** execution within one request (harness will pass `SESSION SET PROPERTY GRAPH …; …`); parser already recognizes SESSION SET (anchors in analysis).
    * On `SESSION SET PROPERTY GRAPH <ident-or-quoted>`, set `active_graph` to existing graph or **create** an empty graph when absent (for tests); add flag `I:GraphCatalog=memory`.
    * Ensure transactions operate on `active_graph`.
-   * **Security**: names validated (ASCII + quoted identifiers supported after A.3); max name length reasonable; no FS/network access. 
+   * **Security**: names validated (ASCII + quoted identifiers supported after A.3); max name length reasonable; no FS/network access.
 
 #### C. **Aggregation semantics (IN SCOPE)**
 
@@ -70,7 +70,7 @@ You are a senior **Zig 0.15.1** engineer. Implement an ISO/IEC 39075:2024 GQ
    * Diagnostics:
 
      * Non‑grouped column without aggregate → `GroupByIllegal` (existing code/diag anchor mentioned); primary per UA002 precedence.
-     * Division by zero within aggregates → `TypeMismatch.DivZero` as appropriate. 
+     * Division by zero within aggregates → `TypeMismatch.DivZero` as appropriate.
 
 ---
 
@@ -99,11 +99,11 @@ You are a senior **Zig 0.15.1** engineer. Implement an ISO/IEC 39075:2024 GQ
   ```zig
   pub fn runQuery(allocator: *std.mem.Allocator, query: []const u8) ![]u8
   // Accepts UTF‑8 GQL; may contain multiple statements separated by ';'.
-  // Returns canonical JSON object (keys in order): 
+  // Returns canonical JSON object (keys in order):
   // status_class, columns, rows, flagger_findings [, message, additional_statuses]
   ```
 * **Session**: each `runQuery` call executes statements in a **fresh** session unless the batch includes session setup (we only test within a single call).
-* **Flagger**: extend assembly in `src/protocol.zig` to include `U:OrderTiebreak=LexJSON`, `GB03:DoubleSolidusComment`, `E:OrdinalSortKey`, `I:GraphCatalog=memory`, `I:IllegalOrderKeyPolicy=expr` as applicable. 
+* **Flagger**: extend assembly in `src/protocol.zig` to include `U:OrderTiebreak=LexJSON`, `GB03:DoubleSolidusComment`, `E:OrdinalSortKey`, `I:GraphCatalog=memory`, `I:IllegalOrderKeyPolicy=expr` as applicable.
 
 ### **Tests (Acceptance)** — run with `zig build test`
 
@@ -355,7 +355,7 @@ Expect (missing GROUP BY):
 
 ## Changelog
 
-* **v2**: Brought **multi‑graph** and **aggregation** into scope; added session/multi‑statement handling; expanded tests 11–19; updated flagger & assumptions. 
+* **v2**: Brought **multi‑graph** and **aggregation** into scope; added session/multi‑statement handling; expanded tests 11–19; updated flagger & assumptions.
 
 ---
 
@@ -404,7 +404,7 @@ A1–A5 as listed above (harness, impl‑order, flagger, **multi‑graph & aggre
 
 ## Context Package (anchors & expectations)
 
-* Evidence & file anchors (US001, ORDER BY guard messages, `getOrCreateGraphStorage`, lexer comment/quote handling, keywords list, flagger assembly, GROUP BY diag) are documented in your gap analysis; search by those **anchor strings** to locate code if lines drift. 
+* Evidence & file anchors (US001, ORDER BY guard messages, `getOrCreateGraphStorage`, lexer comment/quote handling, keywords list, flagger assembly, GROUP BY diag) are documented in your gap analysis; search by those **anchor strings** to locate code if lines drift.
 * **Acceptance tests**: 19 cases above (including multi‑graph & aggregation).
 * **Run cmds**: `zig build`, `zig build test`.
 * **New files**:
@@ -415,4 +415,4 @@ A1–A5 as listed above (harness, impl‑order, flagger, **multi‑graph & aggre
   tests/
     gql_conformance.zig      # acceptance tests T0–T19 (with seed)
   ```
-* **Out‑of‑scope**: none added by this prompt; everything listed is in scope. 
+* **Out‑of‑scope**: none added by this prompt; everything listed is in scope.

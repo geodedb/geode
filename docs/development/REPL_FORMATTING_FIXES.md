@@ -11,26 +11,32 @@ Fixed critical REPL terminal formatting issues that were causing display problem
 ## Issues Identified
 
 ### 1. Missing stdout Flushing
+
 **Problem:** Output was not being flushed immediately, causing display lag and text not appearing in the terminal.
 
 **Affected Files:**
+
 - `src/client/repl/repl_loop.zig` - `renderPrompt()` function
 - `src/client/repl/repl_dispatch.zig` - `executeGql()`, `handleMetaCommand()` functions
 
 **Impact:** User input prompts and query results appeared delayed or not at all.
 
 ### 2. Improper Newline Handling
+
 **Problem:** Query results were displayed on the same line as the prompt, causing overlapping text and unreadable output.
 
 **Affected Files:**
+
 - `src/client/repl/repl_dispatch.zig` - `executeGql()` function
 
 **Impact:** Results overlapped with prompts making them difficult to read.
 
 ### 3. Welcome Message Formatting
+
 **Problem:** Welcome message had inconsistent spacing and alignment issues.
 
 **Affected Files:**
+
 - `src/client/repl/repl_loop.zig` - `printWelcomeMessage()` function
 
 **Impact:** Visual alignment of the welcome banner was incorrect.
@@ -40,6 +46,7 @@ Fixed critical REPL terminal formatting issues that were causing display problem
 ### Fix 1: Added stdout.sync() Calls
 
 **Location:** `src/client/repl/repl_loop.zig:185`
+
 ```zig
 fn renderPrompt(state: *ReplState) !void {
     // ... existing code ...
@@ -50,6 +57,7 @@ fn renderPrompt(state: *ReplState) !void {
 ```
 
 **Location:** `src/client/repl/repl_dispatch.zig:599`
+
 ```zig
 pub fn executeGql(state: anytype, gql: []const u8) !void {
     // ... query execution code ...
@@ -60,24 +68,28 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
 ```
 
 **Location:** `src/client/repl/repl_dispatch.zig:414`
+
 ```zig
 // CRITICAL FIX: Flush stdout after help message
 try stdout.sync();
 ```
 
 **Location:** `src/client/repl/repl_dispatch.zig:435`
+
 ```zig
 // CRITICAL FIX: Flush stdout after history command
 try stdout.sync();
 ```
 
 **Location:** `src/client/repl/repl_dispatch.zig:439`
+
 ```zig
 // CRITICAL FIX: Flush stdout after clear command
 try stdout.sync();
 ```
 
 **Location:** `src/client/repl/repl_loop.zig:689`
+
 ```zig
 // CRITICAL FIX: Flush stdout after welcome message
 try stdout.sync();
@@ -86,6 +98,7 @@ try stdout.sync();
 ### Fix 2: Added Leading Newline for Query Results
 
 **Location:** `src/client/repl/repl_dispatch.zig:538-540`
+
 ```zig
 pub fn executeGql(state: anytype, gql: []const u8) !void {
     const stdout = platform.getStdoutHandle();
@@ -99,6 +112,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
 ```
 
 **Also added error flush:**
+
 ```zig
 try stderr.sync(); // Flush error output
 ```
@@ -106,6 +120,7 @@ try stderr.sync(); // Flush error output
 ### Fix 3: Improved Welcome Message Formatting
 
 **Location:** `src/client/repl/repl_loop.zig:600-636`
+
 ```zig
 // FIXED: Improved box formatting with consistent spacing
 // Box top
@@ -136,9 +151,11 @@ try stdout.writeAll("\n");
 ## Tests Added
 
 ### Unit Tests
+
 **File:** `tests/test_repl_formatting_fixes.zig`
 
 Tests include:
+
 1. Output contains leading newline for query results
 2. CSV format includes proper newlines
 3. Table format has consistent line endings
@@ -156,9 +173,11 @@ Tests include:
 Total: **17 comprehensive unit tests**
 
 ### Regression Tests
+
 **File:** `tests/repl_formatting_fixes_regression_test.sh`
 
 Test categories:
+
 1. Unit Tests for Formatting Fixes
 2. Output Structure Tests
 3. ANSI Escape Sequence Tests
@@ -174,26 +193,31 @@ Total: **12 regression tests**
 To verify the fixes work correctly:
 
 ### 1. Build the project
+
 ```bash
 zig build
 ```
 
 ### 2. Run unit tests
+
 ```bash
 zig test tests/test_repl_formatting_fixes.zig
 ```
 
 ### 3. Run regression tests
+
 ```bash
 ./tests/repl_formatting_fixes_regression_test.sh
 ```
 
 ### 4. Manual testing
+
 ```bash
 ./zig-out/bin/geode shell
 ```
 
 Expected behavior:
+
 - Welcome message displays properly formatted
 - Prompt appears immediately with proper spacing
 - Query results display on new lines below prompt
@@ -204,6 +228,7 @@ Expected behavior:
 ## Impact
 
 ### Before
+
 - Prompts appeared delayed or not at all
 - Query results overlapped with prompts
 - Welcome message had misaligned formatting
@@ -211,6 +236,7 @@ Expected behavior:
 - User experience was severely degraded
 
 ### After
+
 - Prompts display immediately after input
 - Query results appear on separate lines with proper formatting
 - Welcome message is properly aligned and readable
@@ -248,6 +274,7 @@ Expected behavior:
 ## Future Improvements
 
 Potential enhancements for future versions:
+
 1. Add configurable output buffering modes
 2. Support for custom prompt formatting
 3. Enhanced color scheme customization

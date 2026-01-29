@@ -79,9 +79,9 @@ echo -e "${GREEN}✓ Connection successful${NC}"
 run_migration() {
     local file=$1
     local name=$(basename "$file" .gql)
-    
+
     echo -e "${YELLOW}Loading ${name}...${NC}"
-    
+
     if $GEODEC --host "$HOST" --port "$PORT" < "$file" > /dev/null 2>&1; then
         echo -e "${GREEN}✓ ${name} loaded successfully${NC}"
         return 0

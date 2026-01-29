@@ -2,8 +2,8 @@
 """Test which binary is being selected."""
 
 import sys
-import os
-sys.path.insert(0, '/home/benji/src/gl/devnw/codepros/geode/geodetestlab/geodetestlab')
+
+sys.path.insert(0, "/home/benji/src/gl/devnw/codepros/geode/geodetestlab/geodetestlab")
 
 from core.utils import find_geode_binary
 

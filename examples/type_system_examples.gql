@@ -21,7 +21,7 @@ RETURN n1.name, n2.name, n1.subnet, n2.subnet
 
 // Extract MAC vendor information
 MATCH (d:Device)
-RETURN d.hostname, 
+RETURN d.hostname,
        d.mac_address,
        oui(d.mac_address) AS vendor_oui,
        mac_is_multicast(d.mac_address) AS is_multicast
@@ -75,7 +75,7 @@ RETURN u.user_id, u.last_login
 
 // Document integrity verification
 MATCH (d:Document)
-RETURN d.title, 
+RETURN d.title,
        hash_alg(d.content_hash) AS algorithm,
        d.content_hash
 
@@ -147,7 +147,7 @@ RETURN r.station_id, r.temperature, r.pressure
 
 // Industrial sensor monitoring
 MATCH (s:Sensor)
-WHERE s.type = 'pressure' 
+WHERE s.type = 'pressure'
   AND s.last_reading > Pressure(2, 'bar')
 RETURN s.id, s.location, s.last_reading
 
@@ -219,7 +219,7 @@ MATCH (server:CDNServer)
 MATCH (client:Client {ip: $client_ip})
 WHERE ip_contains(server.serving_subnet, client.ip)
   AND distance_haversine(server.location, client.estimated_location) < 500000
-RETURN server.hostname, 
+RETURN server.hostname,
        server.location,
        distance_haversine(server.location, client.estimated_location) AS distance_m
 ORDER BY distance_m
@@ -260,7 +260,7 @@ WHERE r.score > 0.85
 // Create constraint ensuring valid IP addresses
 CREATE CONSTRAINT valid_server_ip
 ON (s:Server)
-ASSERT s.ip_address IS NOT NULL 
+ASSERT s.ip_address IS NOT NULL
    AND (ip_family(s.ip_address) = 'IPv4' OR ip_family(s.ip_address) = 'IPv6')
 
 // Ensure MAC addresses are unicast
@@ -277,7 +277,7 @@ ASSERT r.temperature > Temperature(-273.15, 'C')  // Absolute zero
 // Ensure coordinates are within valid ranges
 CREATE CONSTRAINT valid_coordinates
 ON (l:Location)
-ASSERT latitude(l.coordinates) >= -90 
+ASSERT latitude(l.coordinates) >= -90
    AND latitude(l.coordinates) <= 90
    AND longitude(l.coordinates) >= -180
    AND longitude(l.coordinates) <= 180

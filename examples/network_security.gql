@@ -91,8 +91,8 @@ RETURN dmz_server.hostname AS source,
 // Query 3: Find all private IP addresses
 MATCH (s:Server)
 WHERE ip_is_private(s.ip_address)
-RETURN s.hostname, s.ip_address, 
-       CASE 
+RETURN s.hostname, s.ip_address,
+       CASE
            WHEN ip_contains(Subnet('10.0.0.0/8'), s.ip_address) THEN 'Class A Private'
            WHEN ip_contains(Subnet('172.16.0.0/12'), s.ip_address) THEN 'Class B Private'
            WHEN ip_contains(Subnet('192.168.0.0/16'), s.ip_address) THEN 'Class C Private'

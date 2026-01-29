@@ -266,16 +266,19 @@ Content similarity relationship (computed).
 ### Distribution Models
 
 1. **Power-law (follower counts)**:
+
    ```
    P(k) ~ k^(-γ), γ ≈ 2.1
    ```
 
 2. **Exponential decay (temporal)**:
+
    ```
    P(t) ~ e^(-λt), λ adjusted for 30-day half-life
    ```
 
 3. **Zipf (topic popularity)**:
+
    ```
    P(rank) ~ 1/rank^s, s ≈ 1.0
    ```
@@ -322,6 +325,7 @@ Phase 8: Generate Groups (10M)
 ### Read Queries (90% of load)
 
 1. **Timeline Query** (40%)
+
    ```gql
    MATCH (u:User {id: $userId})-[:FOLLOWS]->(f:User)
    MATCH (f)-[:AUTHORED]->(p:Post)
@@ -330,6 +334,7 @@ Phase 8: Generate Groups (10M)
    ```
 
 2. **User Profile** (20%)
+
    ```gql
    MATCH (u:User {id: $userId})
    OPTIONAL MATCH (u)-[:AUTHORED]->(p:Post)
@@ -337,6 +342,7 @@ Phase 8: Generate Groups (10M)
    ```
 
 3. **Post Detail** (15%)
+
    ```gql
    MATCH (p:Post {id: $postId})
    MATCH (a:User)-[:AUTHORED]->(p)
@@ -346,6 +352,7 @@ Phase 8: Generate Groups (10M)
    ```
 
 4. **Search** (10%)
+
    ```gql
    CALL vector.search('post_embeddings', $query_vector, 50)
    YIELD node, score
@@ -354,6 +361,7 @@ Phase 8: Generate Groups (10M)
    ```
 
 5. **Notifications** (5%)
+
    ```gql
    MATCH (u:User {id: $userId})<-[:MENTIONS|LIKES|REPLIED_TO]-(activity)
    WHERE activity.created_at > $lastCheck

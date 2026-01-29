@@ -21,7 +21,7 @@ test_groups:
           - type: "json_contains"
             field: "rows[0][0].name"
             value: "Alice"
-          - type: "json_contains" 
+          - type: "json_contains"
             field: "rows[1][0].name"
             value: "Bob"
           - type: "status_class"

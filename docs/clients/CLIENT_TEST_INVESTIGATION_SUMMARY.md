@@ -46,12 +46,14 @@ Error in connection handler thread: error.HandshakeFailed
 ### Technical Details
 
 **Server Configuration** (`src/transport/quic.zig:255`):
+
 ```zig
 .alpn = &[_][]const u8{"geode/1"},
 .version = .v1,
 ```
 
 **Client Configuration** (both use aioquic):
+
 ```python
 configuration = QuicConfiguration(
     is_client=True,
@@ -61,6 +63,7 @@ configuration = QuicConfiguration(
 ```
 
 **Error**: `error.BadKey` during certificate verification suggests:
+
 - Server's TLS certificate is malformed or missing
 - Private key doesn't match certificate
 - Certificate signing process fails
@@ -80,11 +83,13 @@ Despite server issues, we improved the client implementation:
 ### Changes Made
 
 **File**: `clients/python/geode_client/client.py`
+
 - Lines 210-222: Simplified QuicConfiguration
 - Lines 217-222: Fixed verify_mode handling
 - Line 221: Don't set server_name when skip_verify=True
 
 **File**: `clients/python/geode_client/types.py`
+
 - Lines 77-102: Added `raw_value` property for all value types
 
 ## Server Issues to Fix
@@ -96,12 +101,14 @@ Despite server issues, we improved the client implementation:
 **Error**: `[CERTVERIFY] signCertificateVerify FAILED: error.BadKey`
 
 **Possible Causes**:
+
 - Self-signed certificate not properly generated
 - Private key doesn't match certificate
 - Certificate format incompatible with aioquic expectations
 - Missing or corrupted certificate files
 
 **Investigation Needed**:
+
 ```bash
 # Check if certificates exist
 ls -la certs/
@@ -141,11 +148,13 @@ The server may be requiring client certificates even when clients don't provide 
 ### Immediate (Today)
 
 1. **Check certificate files**:
+
    ```bash
    find . -name "*.crt" -o -name "*.key" -o -name "*.pem"
    ```
 
 2. **Regenerate certificates** if needed:
+
    ```bash
    # Create proper self-signed cert for testing
    openssl req -x509 -newkey rsa:4096 -nodes \
@@ -154,6 +163,7 @@ The server may be requiring client certificates even when clients don't provide 
    ```
 
 3. **Test with vendor QUIC server**:
+
    ```bash
    # Use the working vendor server implementation
    cd vendor/quic
@@ -195,6 +205,7 @@ The server may be requiring client certificates even when clients don't provide 
 Until QUIC is fixed, use `--insecure` mode:
 
 **Test Harness** (`run_tests.py:137`):
+
 ```python
 self.process = await asyncio.create_subprocess_exec(
     str(self.geode_binary),

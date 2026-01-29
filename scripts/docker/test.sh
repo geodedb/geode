@@ -42,7 +42,7 @@ run_query() {
     local server=$1
     local query=$2
     local container="${3:-geode}"
-    
+
     if [[ "$VERBOSE" == "true" ]]; then
         docker exec "$container" geodec "$query" --server "$server" 2>&1
     else
@@ -53,20 +53,20 @@ run_query() {
 # Basic connectivity test
 test_basic_connectivity() {
     log_test "Basic connectivity"
-    
+
     local servers=()
     if [[ "$MODE" == "singleton" ]]; then
         servers=("127.0.0.1:7567")
     else
         servers=("geode-leader:7567" "geode-follower-1:7567" "geode-follower-2:7567")
     fi
-    
+
     for server in "${servers[@]}"; do
         local container="${server%%:*}"
         if [[ "$MODE" == "singleton" ]]; then
             container="geode"
         fi
-        
+
         if run_query "$server" "RETURN 1 AS x" "$container" | grep -q '"x":1'; then
             log_pass "Connected to $server"
         else
@@ -79,12 +79,12 @@ test_basic_connectivity() {
 # Test ORDER BY and LIMIT
 test_order_limit() {
     log_test "ORDER BY and LIMIT"
-    
+
     local container="geode"
     if [[ "$MODE" == "distributed" ]]; then
         container="geode-leader"
     fi
-    
+
     local result=$(run_query "127.0.0.1:7567" "RETURN 1 AS x ORDER BY x LIMIT 1" "$container")
     if echo "$result" | grep -q '"ordered":true' && echo "$result" | grep -q '"order_keys":\["x"\]'; then
         log_pass "ORDER BY with LIMIT"
@@ -97,12 +97,12 @@ test_order_limit() {
 # Test invalid queries
 test_invalid_queries() {
     log_test "Invalid query handling"
-    
+
     local container="geode"
     if [[ "$MODE" == "distributed" ]]; then
         container="geode-leader"
     fi
-    
+
     # Test LIMIT without ORDER (should fail)
     if run_query "127.0.0.1:7567" "RETURN 1 LIMIT 10 OFFSET 5" "$container" 2>&1 | grep -q "US001"; then
         log_pass "Correctly rejected LIMIT without ORDER"
@@ -114,39 +114,39 @@ test_invalid_queries() {
 # Test transactions
 test_transactions() {
     log_test "Transaction support"
-    
+
     local container="geode"
     if [[ "$MODE" == "distributed" ]]; then
         container="geode-leader"
     fi
-    
+
     # Create a simple transaction test script
     cat > /tmp/txn_test.gql << 'EOF'
 BEGIN;
 RETURN 1 AS x;
 COMMIT;
 EOF
-    
+
     docker cp /tmp/txn_test.gql "$container":/tmp/txn_test.gql
-    
+
     if docker exec "$container" sh -c "geodec < /tmp/txn_test.gql --server 127.0.0.1:7567" 2>&1 | grep -q '"x":1'; then
         log_pass "Transaction execution"
     else
         log_fail "Transaction execution"
     fi
-    
+
     rm -f /tmp/txn_test.gql
 }
 
 # Test graph operations
 test_graph_operations() {
     log_test "Graph operations"
-    
+
     local container="geode"
     if [[ "$MODE" == "distributed" ]]; then
         container="geode-leader"
     fi
-    
+
     # Test CREATE
     local create_result=$(run_query "127.0.0.1:7567" "CREATE (:Person {name: 'Alice', age: 30})" "$container" 2>&1)
     if [[ $? -eq 0 ]]; then
@@ -155,7 +155,7 @@ test_graph_operations() {
         log_fail "CREATE node"
         [[ "$VERBOSE" == "true" ]] && echo "$create_result"
     fi
-    
+
     # Test MATCH
     local match_result=$(run_query "127.0.0.1:7567" "MATCH (p:Person) RETURN p.name AS name" "$container" 2>&1)
     if echo "$match_result" | grep -q "Alice"; then
@@ -171,13 +171,13 @@ test_distributed_features() {
     if [[ "$MODE" != "distributed" ]]; then
         return
     fi
-    
+
     log_test "Distributed features"
-    
+
     # Test write to leader, read from follower
     run_query "geode-leader:7567" "CREATE (:Test {id: 1})" "geode-leader" >/dev/null 2>&1
     sleep 2 # Allow replication
-    
+
     local follower_result=$(run_query "geode-follower-1:7567" "MATCH (t:Test) RETURN t.id AS id" "geode-follower-1" 2>&1)
     if echo "$follower_result" | grep -q '"id":1'; then
         log_pass "Replication to follower"
@@ -190,24 +190,24 @@ test_distributed_features() {
 # Performance test
 test_performance() {
     log_test "Basic performance"
-    
+
     local container="geode"
     if [[ "$MODE" == "distributed" ]]; then
         container="geode-leader"
     fi
-    
+
     # Run a simple benchmark
     local start=$(date +%s%N)
     for i in {1..100}; do
         run_query "127.0.0.1:7567" "RETURN $i AS x" "$container" >/dev/null 2>&1
     done
     local end=$(date +%s%N)
-    
+
     local duration=$(( (end - start) / 1000000 ))
     local qps=$(( 100000 / duration ))
-    
+
     echo "  100 queries in ${duration}ms (~${qps} QPS)"
-    
+
     if [[ $duration -lt 10000 ]]; then
         log_pass "Performance test (${duration}ms for 100 queries)"
     else
@@ -219,7 +219,7 @@ test_performance() {
 main() {
     echo -e "${GREEN}=== Geode Docker Tests ($MODE mode) ===${NC}"
     echo ""
-    
+
     # Check if containers are running
     if [[ "$MODE" == "singleton" ]]; then
         if ! docker ps | grep -q "geode-singleton"; then
@@ -234,7 +234,7 @@ main() {
             exit 1
         fi
     fi
-    
+
     # Run tests
     test_basic_connectivity
     test_order_limit
@@ -243,14 +243,14 @@ main() {
     # test_graph_operations  # Uncomment when graph operations are fully implemented
     test_distributed_features
     test_performance
-    
+
     # Summary
     echo ""
     echo -e "${GREEN}=== Test Summary ===${NC}"
     echo "Total tests: $TOTAL_TESTS"
     echo -e "${GREEN}Passed: $PASSED_TESTS${NC}"
     echo -e "${RED}Failed: $FAILED_TESTS${NC}"
-    
+
     if [[ $FAILED_TESTS -eq 0 ]]; then
         echo -e "${GREEN}All tests passed!${NC}"
         exit 0

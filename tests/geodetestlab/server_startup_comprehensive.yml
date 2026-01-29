@@ -1,25 +1,25 @@
-version: "1.0"
-name: "Server Startup Comprehensive Tests"
-description: "Comprehensive test suite for unified binary server startup functionality"
+version: '1.0'
+name: Server Startup Comprehensive Tests
+description: Comprehensive test suite for unified binary server startup functionality
 
 cli:
-  binary: "geode"
-  working_dir: null
+  binary: geode
+  working_dir:
   env:
-    GEODE_LOG_LEVEL: "info"
+    GEODE_LOG_LEVEL: info
   server:
     enabled: false  # We're testing server startup manually
-    port: null
-    data_dir: null
+    port:
+    data_dir:
     startup_timeout_ms: 10000
     cleanup: true
     args: []
     env: {}
   client:
-    server_address: "127.0.0.1:3141"
+    server_address: 127.0.0.1:3141
     timeout_ms: 10000
     tls_verify: false
-    format: "json"
+    format: json
 
 secrets: {}
 
@@ -27,7 +27,7 @@ invariants: []
 
 fuzz:
   enabled: false
-  provider: "mock"
+  provider: mock
   max_cases: 0
   seed: 42
   geode_specific: true
@@ -35,18 +35,18 @@ fuzz:
   include_auth: false
 
 tests:
-  - name: "server_main_help"
-    description: "Test main geode help shows server command"
-    args: ["--help"]
-    expect:
-      exit_code: 0
-      stderr_contains: ["serve", "Start the database server"]
-    tags: ["help", "server"]
+- name: server_main_help
+  description: Test main geode help shows server command
+  args: [--help]
+  expect:
+    exit_code: 0
+    stderr_contains: [serve, Start the database server]
+  tags: [help, server]
 
-  - name: "server_serve_help"
-    description: "Test geode serve --help command" 
-    args: ["serve", "--help"]
-    expect:
-      exit_code: 0
-      stderr_contains: ["listen", "data-dir", "cert", "key"]
-    tags: ["help", "server"]
+- name: server_serve_help
+  description: Test geode serve --help command
+  args: [serve, --help]
+  expect:
+    exit_code: 0
+    stderr_contains: [listen, data-dir, cert, key]
+  tags: [help, server]

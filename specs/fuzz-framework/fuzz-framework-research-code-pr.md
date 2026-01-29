@@ -2,7 +2,7 @@
 
 You are a senior **Zig 0.15.1** engineer. **Build and integrate** a comprehensive **coverage‑guided fuzz testing suite** for **Geode** (graph DB), including harnesses, seed corpora, a scaffold generator, build/CI wiring, and developer docs. **Target Linux x86_64**; skip Windows fuzzing. Base your work on the context map and invariants below.
 
-> **Authoritative context:** Everything in this prompt derives from the project plan “Full Fuzz Testing Suite for `spyderorg_geode` (Zig 0.15.1)”. Treat it as the spec. 
+> **Authoritative context:** Everything in this prompt derives from the project plan “Full Fuzz Testing Suite for `spyderorg_geode` (Zig 0.15.1)”. Treat it as the spec.
 
 ---
 
@@ -17,48 +17,48 @@ Implement **one fuzz harness per critical subsystem** and per feasible **CANARY 
 * **GQL Parser/AST & Planner precheck**
 
   * **Path:** `src/gql/parser.zig` (parser) and high‑level API in `src/lib.zig` (`pub fn parse(...)`).
-  * **Harness:** feed UTF‑8 bytes; expect **no panics**; accept `error.UnexpectedToken`/`error.OutOfMemory`; on success, AST non‑null; optionally pretty‑print & re‑parse if printer exists. **Invariant:** parser never crashes on arbitrary input. 
+  * **Harness:** feed UTF‑8 bytes; expect **no panics**; accept `error.UnexpectedToken`/`error.OutOfMemory`; on success, AST non‑null; optionally pretty‑print & re‑parse if printer exists. **Invariant:** parser never crashes on arbitrary input.
 * **HNSW snapshot / WAL**
 
   * **Path:** `src/index/hnsw_persist.zig` (`loadSnapshot`, `replayWal`).
   * **Harness A (snapshot):** byte‑oriented decode; cap size (≤1 MiB); **no crash**; accept `error.InvalidMagic|InvalidVersion`; on success, attempt `saveSnapshot` (no error).
-  * **Harness B (WAL):** feed arbitrary WAL bytes into `replayWal`; **no crash**; accept `error.InvalidWalOp`; index stays internally valid. 
+  * **Harness B (WAL):** feed arbitrary WAL bytes into `replayWal`; **no crash**; accept `error.InvalidWalOp`; index stays internally valid.
 * **Transaction Manager sequences**
 
   * **Path:** `src/txn/manager.zig` (`begin/commit/rollback`).
-  * **Harness:** interpret bytes as op‑sequence; commit/rollback/begin; **Invariant:** after commit, state is **Committed**; **no double‑commit panics**. 
+  * **Harness:** interpret bytes as op‑sequence; commit/rollback/begin; **Invariant:** after commit, state is **Committed**; **no double‑commit panics**.
 * **LFU Cache operations**
 
   * **Path:** `src/graph/containers/lfu.zig` (type `LfuU32U32` used in canaries).
-  * **Harness:** random `put/get/remove`; **Invariant:** `size() ≤ capacity`; evictions never return removed entries. 
+  * **Harness:** random `put/get/remove`; **Invariant:** `size() ≤ capacity`; evictions never return removed entries.
 * **Protocol frame decode (HELLO)**
 
   * **Path:** protocol implementation (HELLO round‑trip canary referenced in `tests/test_canary_core.zig`).
-  * **Harness:** fuzz frame decode/encode; **Invariant:** malformed frames return error, not crash; valid frames round‑trip. 
+  * **Harness:** fuzz frame decode/encode; **Invariant:** malformed frames return error, not crash; valid frames round‑trip.
 * **Decimal parse/format**
 
   * **Path:** decimal formatter/parser used by extended builtins (see `tests/test_extended_canary.zig`).
-  * **Harness:** fuzz numeric strings; **Invariant:** successful parse→format→parse is **stable** (exact or normalized by repo rules). 
+  * **Harness:** fuzz numeric strings; **Invariant:** successful parse→format→parse is **stable** (exact or normalized by repo rules).
 * **Planner prune property test (advanced)**
 
   * **Path:** `tests/canary_planner_prune.zig` references optimizer invariants.
-  * **Harness:** generate small logical plan trees; compare **full vs. pruned** enumeration: pruned count ≤ full; best cost within prune‑factor. 
+  * **Harness:** generate small logical plan trees; compare **full vs. pruned** enumeration: pruned count ≤ full; best cost within prune‑factor.
 
 **Canary mapping (derive harnesses from these tests/IDs):**
 
-* `tests/test_canary_core.zig`: `TestCANARY_REQ_GQL_030_TxnCommit`, `TestCANARY_REQ_GQL_005_HelloRoundTrip`, diagnostics fold ordering, WAL compact stub. 
-* `tests/canary_lfu_cache.zig`: LFU capacity/eviction scenarios. 
-* `tests/test_extended_canary.zig`: decimal round‑trip; extended builtins wiring (e.g., `uuid_v4`). 
-* `tests/canary_planner_prune.zig`: cost‑based pruning constraints. 
-* `tests/canary_migration_engine_new_tests.zig`: migration engine monotonicity/integrity; design fuzz for sequences (optional phase). 
-* Canary inventory comes from `tools/canaryscan/scan.go` producing `status.json|csv`. Use it to auto‑map fuzz targets to requirements. 
+* `tests/test_canary_core.zig`: `TestCANARY_REQ_GQL_030_TxnCommit`, `TestCANARY_REQ_GQL_005_HelloRoundTrip`, diagnostics fold ordering, WAL compact stub.
+* `tests/canary_lfu_cache.zig`: LFU capacity/eviction scenarios.
+* `tests/test_extended_canary.zig`: decimal round‑trip; extended builtins wiring (e.g., `uuid_v4`).
+* `tests/canary_planner_prune.zig`: cost‑based pruning constraints.
+* `tests/canary_migration_engine_new_tests.zig`: migration engine monotonicity/integrity; design fuzz for sequences (optional phase).
+* Canary inventory comes from `tools/canaryscan/scan.go` producing `status.json|csv`. Use it to auto‑map fuzz targets to requirements.
 
 **Harness structure & rails (apply to all):**
 
 * Use `std.testing.fuzz` in `test "fuzz …" { ... }` blocks; cap input lengths (parser ≤ 64 KiB, binary ≤ 1 MiB); **no I/O** (use `FixedBufferStream`).
 * Allow expected errors; treat others as failures.
 * Add **allocation‑failure** variants via `std.testing.FailingAllocator`; first byte picks `fail_index`.
-* Add **seed corpora** and optional **dictionary** files for text (GQL keywords). 
+* Add **seed corpora** and optional **dictionary** files for text (GQL keywords).
 
 #### 2) File layout & build integration
 
@@ -97,13 +97,13 @@ scripts/
 
   * Add **test targets** that compile fuzz harnesses (Debug).
   * Add step `gen-fuzz` to build+run `tools/gen_fuzz.zig`.
-  * Add opt `-Denable-llvm-fuzzer=true` toggle (fallback) and per‑target fuzz run filter (env var). 
+  * Add opt `-Denable-llvm-fuzzer=true` toggle (fallback) and per‑target fuzz run filter (env var).
 
 #### 3) Scaffold generator (`zig build gen-fuzz -- --canary <ID|name>`)
 
 * Inputs: `--canary <REQ|test_name>`, `--module <path>` optional.
 * Output: creates `fuzz/targets/<derived>_fuzz.zig` with boilerplate, plus `fuzz/corpora/<derived>/`.
-* It **parses `tools/canaryscan/status.json`** (if present) to prefill: target path(s), test name, invariant blurb, and **symbol anchors**. 
+* It **parses `tools/canaryscan/status.json`** (if present) to prefill: target path(s), test name, invariant blurb, and **symbol anchors**.
 * Print deterministic line:
 
   * `Created fuzz target: fuzz/targets/<derived>_fuzz.zig (canary=<ID>)`
@@ -112,13 +112,13 @@ scripts/
 
 * **Per‑PR job** (Linux): run all fuzz tests **sequentially** with small budgets, e.g. `zig build test --fuzz=10s`.
 * **Nightly job**: matrix across targets with `--fuzz=60m`, upload crashes and `zig-cache` artifacts; publish simple coverage counts (from fuzzer logs/web UI JSON if available).
-* **Windows job:** skip fuzz (`--fuzz` not implemented on Windows). 
+* **Windows job:** skip fuzz (`--fuzz` not implemented on Windows).
 
 #### 5) Developer docs (`fuzz/README.md`)
 
 * How to run `zig build test --fuzz[=TIME] [-- -Denable-llvm-fuzzer]`.
 * How to open the web UI and why we run sequentially in CI (port contention).
-* How to add seeds & dictionaries; triage crashes (promote to unit tests). 
+* How to add seeds & dictionaries; triage crashes (promote to unit tests).
 
 ---
 
@@ -126,19 +126,19 @@ scripts/
 
 Use these **paths + symbol anchors** to locate code quickly; resolve **line numbers** locally by running `scripts/annotate_refs.sh` (spec below).
 
-* `src/lib.zig` — **`pub fn parse(...)`** (high‑level GQL parse entry). 
-* `src/gql/parser.zig` — **`const ParserError =`** includes `UnexpectedToken`, `OutOfMemory`; parser internals. 
-* `src/index/hnsw_persist.zig` — **`fn loadSnapshot(...)`**, **`fn replayWal(...)`**, **`error.InvalidMagic|InvalidVersion|InvalidWalOp`**. 
-* `src/txn/manager.zig` — **`fn begin`**, **`fn commit`**, **`fn rollback`**, **`TxnState.Committed`**. 
-* `src/graph/builders.zig` — **`Graph.init`**, **`addNode`**, **`addEdge`**, index rebuild invariant. 
-* `src/graph/containers/lfu.zig` — **`LfuU32U32`** and ops; canary tests exercise eviction. 
-* `tests/test_canary_core.zig` — **`TestCANARY_REQ_GQL_030_TxnCommit`**, **`TestCANARY_REQ_GQL_005_HelloRoundTrip`**, diagnostics fold, WAL compactor stub. 
-* `tests/canary_lfu_cache.zig` — **LFU eviction** scenarios. 
-* `tests/test_extended_canary.zig` — **DecimalFormatterRoundTrip**, **extended builtins** (e.g., `uuid_v4`). 
-* `tests/canary_planner_prune.zig` — **prune vs full enumeration** invariants, best‑cost bound. 
-* `tests/canary_migration_engine_new_tests.zig` — **migration status monotonicity, plan dry‑run integrity**. 
-* `tools/canaryscan/scan.go` — emits **`status.json|csv`** of canaries to map fuzz targets. 
-* `README.md` — CANARY/Evidence governance overview. 
+* `src/lib.zig` — **`pub fn parse(...)`** (high‑level GQL parse entry).
+* `src/gql/parser.zig` — **`const ParserError =`** includes `UnexpectedToken`, `OutOfMemory`; parser internals.
+* `src/index/hnsw_persist.zig` — **`fn loadSnapshot(...)`**, **`fn replayWal(...)`**, **`error.InvalidMagic|InvalidVersion|InvalidWalOp`**.
+* `src/txn/manager.zig` — **`fn begin`**, **`fn commit`**, **`fn rollback`**, **`TxnState.Committed`**.
+* `src/graph/builders.zig` — **`Graph.init`**, **`addNode`**, **`addEdge`**, index rebuild invariant.
+* `src/graph/containers/lfu.zig` — **`LfuU32U32`** and ops; canary tests exercise eviction.
+* `tests/test_canary_core.zig` — **`TestCANARY_REQ_GQL_030_TxnCommit`**, **`TestCANARY_REQ_GQL_005_HelloRoundTrip`**, diagnostics fold, WAL compactor stub.
+* `tests/canary_lfu_cache.zig` — **LFU eviction** scenarios.
+* `tests/test_extended_canary.zig` — **DecimalFormatterRoundTrip**, **extended builtins** (e.g., `uuid_v4`).
+* `tests/canary_planner_prune.zig` — **prune vs full enumeration** invariants, best‑cost bound.
+* `tests/canary_migration_engine_new_tests.zig` — **migration status monotonicity, plan dry‑run integrity**.
+* `tools/canaryscan/scan.go` — emits **`status.json|csv`** of canaries to map fuzz targets.
+* `README.md` — CANARY/Evidence governance overview.
 
 **Auto‑annotation script (`scripts/annotate_refs.sh`)** — Spec
 
@@ -164,7 +164,7 @@ Return exactly in this order:
 
 ### **S — Standards & Constraints**
 
-* **Language/Version:** Zig **0.15.1**. **Runtime/OS:** Linux x86_64; CI uses Ubuntu LTS image with Zig 0.15.1. **Windows fuzzing is skipped** (not implemented). 
+* **Language/Version:** Zig **0.15.1**. **Runtime/OS:** Linux x86_64; CI uses Ubuntu LTS image with Zig 0.15.1. **Windows fuzzing is skipped** (not implemented).
 * **Style/Lint:** idiomatic Zig; module/package paths stable; repository‑relative imports.
 * **Performance targets:** CI per‑PR fuzz time ≤ **2 min** total; nightly per target **60 min**.
 * **Deps allowed:** Zig std only. No third‑party libs.
@@ -199,7 +199,7 @@ zig build gen-fuzz -- --canary <ID|TestName> [--module <path>]
 **CI knobs:**
 
 * Per‑PR: `zig build test --fuzz=10s` (sequential).
-* Nightly: `zig build test --fuzz=60m -- -Denable-llvm-fuzzer=true` (matrix by target). 
+* Nightly: `zig build test --fuzz=60m -- -Denable-llvm-fuzzer=true` (matrix by target).
 
 **Artifacts:**
 
@@ -217,7 +217,7 @@ Run from repo root after implementation:
    * **Cmd:** `zig build gen-fuzz -- --canary REQ-GQL-068`
    * **Expect:** exit **0**; stdout **exactly contains**
      `Created fuzz target: fuzz/targets/lfu_cache_fuzz.zig (canary=REQ-GQL-068)`
-   * **And:** file `fuzz/targets/lfu_cache_fuzz.zig` exists; `fuzz/corpora/lfu_cache/` created. 
+   * **And:** file `fuzz/targets/lfu_cache_fuzz.zig` exists; `fuzz/corpora/lfu_cache/` created.
 
 2. **Gen‑fuzz bad args**
 
@@ -232,12 +232,12 @@ Run from repo root after implementation:
 4. **Fuzz smoke (per‑PR budget)**
 
    * **Cmd:** `zig build test --fuzz=10s`
-   * **Expect:** exit **0**; **stdout contains** `fuzzing: completed` (or runner’s standard completion line) and shows each `test "fuzz …"` discovered; **no crashes**. *(Implement runner messages consistently.)* 
+   * **Expect:** exit **0**; **stdout contains** `fuzzing: completed` (or runner’s standard completion line) and shows each `test "fuzz …"` discovered; **no crashes**. *(Implement runner messages consistently.)*
 
 5. **Windows gate**
 
    * **Cmd:** simulate `ZIG_TARGET=windows` CI path (job matrix) and run fuzz step
-   * **Expect:** step is **skipped** with log line `Skipping fuzz on Windows (unsupported in Zig 0.15.1)`. 
+   * **Expect:** step is **skipped** with log line `Skipping fuzz on Windows (unsupported in Zig 0.15.1)`.
 
 *(Where “contains” means substring match; keep messages exact and deterministic.)*
 
@@ -255,13 +255,13 @@ Run from repo root after implementation:
 
 ### **Design Rationale (≤7)**
 
-* Aligns with **Zig 0.15.1** built‑in fuzzer and **web UI**, but CI uses short sequential runs to avoid port conflicts. 
-* **Invariant‑driven** harnesses map 1:1 to existing **CANARY** tests to maximize signal and minimize false positives. 
-* **Fail‑closed** error policy with explicit allowed errors (e.g., `InvalidMagic`, `UnexpectedToken`). 
-* **Allocation‑failure fuzzing** broadens defect discovery (cleanup/propagation). 
-* **Seeds + dicts** jump‑start coverage; regression inputs promoted to unit tests and corpora. 
-* **Scaffold generator** and **annotator** reduce maintenance friction and keep anchors current. 
-* **Linux‑only** fuzz in CI due to Windows limitation in Zig 0.15.1. 
+* Aligns with **Zig 0.15.1** built‑in fuzzer and **web UI**, but CI uses short sequential runs to avoid port conflicts.
+* **Invariant‑driven** harnesses map 1:1 to existing **CANARY** tests to maximize signal and minimize false positives.
+* **Fail‑closed** error policy with explicit allowed errors (e.g., `InvalidMagic`, `UnexpectedToken`).
+* **Allocation‑failure fuzzing** broadens defect discovery (cleanup/propagation).
+* **Seeds + dicts** jump‑start coverage; regression inputs promoted to unit tests and corpora.
+* **Scaffold generator** and **annotator** reduce maintenance friction and keep anchors current.
+* **Linux‑only** fuzz in CI due to Windows limitation in Zig 0.15.1.
 
 ---
 
@@ -276,7 +276,7 @@ Run from repo root after implementation:
 
 ### **ASSUMPTIONS**
 
-A1) NO LICENSE; A2) offline builds OK; A3) max RSS **512 MiB** in CI; A4) logs as JSON Lines; A5) use current branch; A6) Linux x86_64 CI runners available; A7) enable `-Denable-llvm-fuzzer=true` fallback for stability. 
+A1) NO LICENSE; A2) offline builds OK; A3) max RSS **512 MiB** in CI; A4) logs as JSON Lines; A5) use current branch; A6) Linux x86_64 CI runners available; A7) enable `-Denable-llvm-fuzzer=true` fallback for stability.
 
 ---
 
@@ -308,29 +308,29 @@ A1) NO LICENSE; A2) offline builds OK; A3) max RSS **512 MiB** in CI; A4) logs
 
 **File & Symbol Reference Map (resolve line numbers locally):**
 
-* `src/lib.zig` — `pub fn parse(...)` (GQL entry). 
-* `src/gql/parser.zig` — `const ParserError =` incl. `UnexpectedToken`, `OutOfMemory`. 
-* `src/index/hnsw_persist.zig` — `loadSnapshot`, `replayWal`, `error.InvalidMagic|InvalidVersion|InvalidWalOp`. 
-* `src/txn/manager.zig` — `begin/commit/rollback`, `TxnState.Committed`. 
-* `src/graph/builders.zig` — `Graph.init`, `addNode`, `addEdge`, index invariants. 
-* `src/graph/containers/lfu.zig` — `LfuU32U32`. 
-* `tests/test_canary_core.zig` — TxnCommit, HelloRoundTrip, diagnostics fold, WAL compactor stub. 
-* `tests/canary_lfu_cache.zig` — LFU eviction scenarios. 
-* `tests/test_extended_canary.zig` — DecimalFormatterRoundTrip; extended builtins. 
-* `tests/canary_planner_prune.zig` — prune vs full enumeration invariants. 
-* `tests/canary_migration_engine_new_tests.zig` — migration integrity/monotonicity (optional fuzz). 
-* `tools/canaryscan/scan.go` — emits `status.json|csv` of CANARY items. 
-* `README.md` — CANARY/Evidence governance context. 
+* `src/lib.zig` — `pub fn parse(...)` (GQL entry).
+* `src/gql/parser.zig` — `const ParserError =` incl. `UnexpectedToken`, `OutOfMemory`.
+* `src/index/hnsw_persist.zig` — `loadSnapshot`, `replayWal`, `error.InvalidMagic|InvalidVersion|InvalidWalOp`.
+* `src/txn/manager.zig` — `begin/commit/rollback`, `TxnState.Committed`.
+* `src/graph/builders.zig` — `Graph.init`, `addNode`, `addEdge`, index invariants.
+* `src/graph/containers/lfu.zig` — `LfuU32U32`.
+* `tests/test_canary_core.zig` — TxnCommit, HelloRoundTrip, diagnostics fold, WAL compactor stub.
+* `tests/canary_lfu_cache.zig` — LFU eviction scenarios.
+* `tests/test_extended_canary.zig` — DecimalFormatterRoundTrip; extended builtins.
+* `tests/canary_planner_prune.zig` — prune vs full enumeration invariants.
+* `tests/canary_migration_engine_new_tests.zig` — migration integrity/monotonicity (optional fuzz).
+* `tools/canaryscan/scan.go` — emits `status.json|csv` of CANARY items.
+* `README.md` — CANARY/Evidence governance context.
 
 **Targets & Invariants (what your harnesses must check):**
 
-* Parser: **no panics** on any bytes; allow `UnexpectedToken`/`OutOfMemory`; success ⇒ AST present; (optional) pretty‑print idempotence. 
-* HNSW snapshot: **no panics**; invalid magic/version acceptable; success ⇒ `saveSnapshot` doesn’t error. WAL: invalid op accepted as error, not crash. 
-* Txn manager: op sequences never crash; commit ⇒ state **Committed**; no double‑commit crash. 
-* LFU cache: size ≤ capacity; evicted entries not retrievable. 
-* Protocol HELLO: malformed frames ⇒ error; valid frames round‑trip. 
-* Decimal: parse→format→parse stability by repo rules. 
-* Planner prune: pruned enumeration size ≤ full; best cost within prune‑factor bound. 
+* Parser: **no panics** on any bytes; allow `UnexpectedToken`/`OutOfMemory`; success ⇒ AST present; (optional) pretty‑print idempotence.
+* HNSW snapshot: **no panics**; invalid magic/version acceptable; success ⇒ `saveSnapshot` doesn’t error. WAL: invalid op accepted as error, not crash.
+* Txn manager: op sequences never crash; commit ⇒ state **Committed**; no double‑commit crash.
+* LFU cache: size ≤ capacity; evicted entries not retrievable.
+* Protocol HELLO: malformed frames ⇒ error; valid frames round‑trip.
+* Decimal: parse→format→parse stability by repo rules.
+* Planner prune: pruned enumeration size ≤ full; best cost within prune‑factor bound.
 
 ---
 
@@ -393,7 +393,6 @@ Implement the 5 acceptance tests under **Tests (Acceptance)** earlier (commands 
 
 ---
 
-> If any assumption is wrong, reply with corrections; otherwise start building according to this prompt and return the **files/code/tests/readme/rationale** in the specified order. 
+> If any assumption is wrong, reply with corrections; otherwise start building according to this prompt and return the **files/code/tests/readme/rationale** in the specified order.
 
 ***End of FINAL CODING PROMPT***
-

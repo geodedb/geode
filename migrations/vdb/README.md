@@ -15,8 +15,10 @@ The VDB migrations have been converted from SQL to GQL to showcase:
 ## Migration Files
 
 ### 001_audit.gql
+
 **Purpose**: Graph-based audit system
 **Key Features**:
+
 - `AuditRecord` nodes replace audit tables
 - `AUDITED_BY` edges link entities to their audit records
 - `FOLLOWED_BY` edges create temporal audit chains
@@ -24,6 +26,7 @@ The VDB migrations have been converted from SQL to GQL to showcase:
 - Immutable audit trail with constraint enforcement
 
 **Example**:
+
 ```gql
 // Create audit trail
 MATCH (entity:Entity WHERE entity.id = $entity_id)
@@ -32,8 +35,10 @@ RETURN audit ORDER BY audit.created_at DESC;
 ```
 
 ### 004_dns.gql
+
 **Purpose**: DNS hierarchy as a graph
 **Key Features**:
+
 - `Domain` nodes with natural parent-child relationships
 - `PARENT_OF`/`SUBDOMAIN_OF` edges replace foreign keys
 - `ResourceRecord` nodes linked via `HAS_RECORD` edges
@@ -41,6 +46,7 @@ RETURN audit ORDER BY audit.created_at DESC;
 - DNS delegation through `DELEGATES_TO` edges
 
 **Example**:
+
 ```gql
 // Get DNS hierarchy
 MATCH path = (domain:Domain WHERE domain.name = 'example.com.')
@@ -49,8 +55,10 @@ RETURN path;
 ```
 
 ### 006_core.gql
+
 **Purpose**: Core entities and versioning
 **Key Features**:
+
 - `Address` nodes with geographical relationships
 - `Version` nodes for semantic versioning
 - `LOCATED_IN` edges for address-to-country relationships
@@ -58,6 +66,7 @@ RETURN path;
 - Graph functions for address management
 
 **Example**:
+
 ```gql
 // Find addresses in a region
 MATCH (addr:Address)-[:LOCATED_IN]->(country:Country)
@@ -66,14 +75,17 @@ RETURN addr;
 ```
 
 ### 015_orgs.gql
+
 **Purpose**: Organizations and their relationships
 **Key Features**:
+
 - `Organization` nodes for standards bodies, companies, etc.
 - `OWNS_DOMAIN` edges linking organizations to domains
 - Rich relationship modeling (`COLLABORATES_WITH`, `OPERATES_UNDER`)
 - Organizational hierarchy and collaboration networks
 
 **Example**:
+
 ```gql
 // Find organization relationships
 MATCH (org:Organization WHERE org.acronym = 'IETF')
@@ -84,7 +96,9 @@ RETURN org, type(rel), related;
 ## Graph Schema Patterns
 
 ### Base Entity Pattern
+
 All entities extend a common `Entity` label with system fields:
+
 ```gql
 CREATE (entity:Entity {
   id: UUID DEFAULT gen_random_uuid(),
@@ -99,21 +113,27 @@ CREATE (entity:Entity {
 ```
 
 ### Audit Pattern
+
 Every entity can be audited:
+
 ```gql
 (entity:Entity)-[:AUDITED_BY]->(audit:AuditRecord)
 (audit1:AuditRecord)-[:FOLLOWED_BY]->(audit2:AuditRecord)
 ```
 
 ### Hierarchy Pattern
+
 Natural tree representation:
+
 ```gql
 (parent)-[:PARENT_OF]->(child)
 (child)-[:SUBDOMAIN_OF]->(parent)
 ```
 
 ### Versioning Pattern
+
 Temporal version chains:
+
 ```gql
 (v1:Version)-[:PREDECESSOR_OF]->(v2:Version)
 ```
@@ -122,14 +142,16 @@ Temporal version chains:
 
 **Important**: These migrations demonstrate graph modeling concepts but contain syntax that needs updating for full GQL compliance:
 
-### Issues Identified:
+### Issues Identified
+
 1. **UUID Usage**: Replace `UUID DEFAULT gen_random_uuid()` with `uuid_v4()` function calls
 2. **Function Definitions**: Remove `CREATE FUNCTION` statements (GQL doesn't support user-defined functions)  
 3. **Constraints**: Replace `CREATE CONSTRAINT` with application-level validation or comments
 4. **Indexes**: Replace `CREATE INDEX` with implementation-specific indexing or comments
 5. **Type Declarations**: Use proper Geode type constructors (`UUID()`, `DateTime()`, `Jsonb()`)
 
-### Corrected Patterns:
+### Corrected Patterns
+
 ```gql
 -- Correct UUID usage
 CREATE (entity:Entity {
@@ -147,10 +169,13 @@ RETURN e;
 ## Key Advantages of Graph Representation
 
 ### 1. Natural Hierarchies
+
 DNS domains, organizational structures, and taxonomies are naturally represented as graphs rather than self-referencing tables.
 
 ### 2. Rich Relationships
+
 Multiple relationship types between the same entities:
+
 ```gql
 (org1)-[:COLLABORATES_WITH]->(org2)
 (org1)-[:COMPETES_WITH]->(org2)
@@ -158,7 +183,9 @@ Multiple relationship types between the same entities:
 ```
 
 ### 3. Traversal Queries
+
 Complex path queries become simple:
+
 ```gql
 // Find all DNS subdomains
 MATCH (root)-[:PARENT_OF*]->(subdomain)
@@ -171,7 +198,9 @@ RETURN first, latest;
 ```
 
 ### 4. Schema Evolution
+
 Graph schemas evolve more naturally:
+
 - Add new node labels without affecting existing data
 - Add new edge types for new relationships
 - Constraints can be added incrementally
@@ -181,33 +210,41 @@ Graph schemas evolve more naturally:
 ### SQL to GQL Conversion Rules
 
 1. **Tables → Node Labels**
+
    ```sql
    CREATE TABLE dns.domain (...);
    ```
+
    ```gql
    CREATE LABEL Domain;
    ```
 
 2. **Foreign Keys → Edges**
+
    ```sql
    parent TEXT REFERENCES dns.domain(name)
    ```
+
    ```gql
    (child)-[:SUBDOMAIN_OF]->(parent)
    ```
 
 3. **Triggers → Graph Functions**
+
    ```sql
    CREATE TRIGGER ... EXECUTE FUNCTION audit.fn_audit();
    ```
+
    ```gql
    CREATE FUNCTION create_audit_record(...) { ... }
    ```
 
 4. **Joins → Path Patterns**
+
    ```sql
    SELECT * FROM domain d JOIN country c ON d.country = c.code;
    ```
+
    ```gql
    MATCH (d:Domain)-[:LOCATED_IN]->(c:Country)
    ```
@@ -223,6 +260,7 @@ Graph schemas evolve more naturally:
 ## Usage Examples
 
 ### Creating Sample Data
+
 ```gql
 // Create a domain with hierarchy
 CALL create_domain('mail.google.com');
@@ -237,6 +275,7 @@ CALL add_resource_record(
 ```
 
 ### Querying Relationships
+
 ```gql
 // Complex organizational relationships
 MATCH path = (ietf:Organization {acronym: 'IETF'})
@@ -245,6 +284,7 @@ RETURN path;
 ```
 
 ### Entity Management
+
 ```gql
 // Update entity with metadata
 CALL add_metadata($entity_id, 'last_verified', CURRENT_TIMESTAMP());
@@ -260,6 +300,7 @@ RETURN e;
 ## Performance Considerations
 
 ### Indexing Strategy
+
 ```gql
 // Entity lookup indexes
 CREATE INDEX entity_id_idx ON (:Entity) (id);
@@ -271,6 +312,7 @@ CREATE INDEX org_name_idx ON (:Organization) (name);
 ```
 
 ### Query Optimization
+
 - Use selective filters early in patterns
 - Leverage relationship direction for performance
 - Consider materialized views for complex aggregations
@@ -278,6 +320,7 @@ CREATE INDEX org_name_idx ON (:Organization) (name);
 ## Integration with Geode
 
 These migrations serve as examples for:
+
 1. Converting existing SQL schemas to GQL
 2. Demonstrating graph modeling patterns
 3. Showing audit trail implementation
@@ -287,6 +330,7 @@ These migrations serve as examples for:
 ## Future Extensions
 
 Potential additions to this migration set:
+
 - Cryptographic entities and relationships (008_crypto.gql)
 - Network topology and infrastructure (022_network.gql)
 - Authentication and authorization graphs (011_auth.gql)

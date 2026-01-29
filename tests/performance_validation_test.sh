@@ -22,14 +22,14 @@ test_performance() {
     local name="$1"
     local cmd="$2"
     local max_time_ms="$3"
-    
+
     echo -n "Testing $name (max ${max_time_ms}ms)... "
-    
+
     local start_time=$(date +%s%3N)
     if eval "$cmd" > /dev/null 2>&1; then
         local end_time=$(date +%s%3N)
         local duration=$((end_time - start_time))
-        
+
         if [ $duration -le $max_time_ms ]; then
             echo -e "${GREEN}PASS${NC} (${duration}ms)"
             TESTS_PASSED=$((TESTS_PASSED + 1))
@@ -47,7 +47,7 @@ test_performance() {
 test_stress() {
     local name="$1"
     local cmd="$2"
-    
+
     echo -n "Stress testing $name... "
     if eval "$cmd" > /dev/null 2>&1; then
         echo -e "${GREEN}PASS${NC}"
@@ -131,14 +131,14 @@ if [ $TESTS_FAILED -eq 0 ]; then
     echo
     echo "=== Performance Characteristics Summary ==="
     echo "✅ Basic operations: < 100ms"
-    echo "✅ Complex queries: < 200ms" 
+    echo "✅ Complex queries: < 200ms"
     echo "✅ Bulk operations: < 1000ms"
     echo "✅ Memory handling: Stable"
     echo "✅ Edge cases: Handled efficiently"
     exit 0
 else
     echo -e "Success rate: ${YELLOW}$(( TESTS_PASSED * 100 / (TESTS_PASSED + TESTS_FAILED) ))%${NC}"
-    
+
     if [ $TESTS_FAILED -le 3 ]; then
         echo -e "${GREEN}Performance is acceptable with minor slowdowns.${NC}"
         echo "Consider optimizing the slower operations."

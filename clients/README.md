@@ -142,6 +142,7 @@ asyncio.run(main())
 ### Rust Client
 
 Add to `Cargo.toml`:
+
 ```toml
 [dependencies]
 geode-client = { git = "https://gitlab.com/devnw/codepros/geode/geode-client-rust" }

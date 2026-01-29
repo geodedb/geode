@@ -53,7 +53,7 @@ LIMIT 5
 // Sales analysis by region and product category
 MATCH (s:Sale)-[:IN_REGION]->(r:Region)
 MATCH (s)-[:FOR_PRODUCT]->(p:Product)-[:IN_CATEGORY]->(c:Category)
-RETURN r.name AS region, c.name AS category, 
+RETURN r.name AS region, c.name AS category,
        COUNT(s) AS sales_count,
        SUM(s.amount) AS total_revenue,
        AVG(s.amount) AS avg_sale
@@ -75,7 +75,7 @@ MATCH (p:Person)
 OPTIONAL MATCH (p)<-[r:FOLLOWS]-(follower:Person)
 WITH p, COUNT(follower) AS direct_followers
 OPTIONAL MATCH (p)<-[:FOLLOWS*2]-(indirect:Person)
-RETURN p.name, 
+RETURN p.name,
        direct_followers,
        COUNT(DISTINCT indirect) AS indirect_reach,
        direct_followers + COUNT(DISTINCT indirect) * 0.5 AS influence_score
@@ -86,7 +86,7 @@ MATCH (p1:Person)-[:KNOWS]-(p2:Person)
 WITH p1, COLLECT(p2) AS neighbors
 MATCH (n1:Person)-[:KNOWS]-(n2:Person)
 WHERE n1 IN neighbors AND n2 IN neighbors
-RETURN p1.name AS person, 
+RETURN p1.name AS person,
        SIZE(neighbors) AS degree,
        COUNT(DISTINCT n2) AS clustering_coefficient
 ORDER BY clustering_coefficient DESC
@@ -95,7 +95,7 @@ ORDER BY clustering_coefficient DESC
 // Supply chain analysis
 MATCH path = (supplier:Company)-[:SUPPLIES*]->(manufacturer:Company {name: 'ACME Corp'})
 WHERE LENGTH(path) <= 3
-RETURN supplier.name, 
+RETURN supplier.name,
        LENGTH(path) AS supply_chain_depth,
        [r IN relationships(path) | r.lead_time] AS lead_times,
        REDUCE(total = 0, r IN relationships(path) | total + r.lead_time) AS total_lead_time
@@ -104,10 +104,10 @@ ORDER BY supply_chain_depth, total_lead_time
 // Fraud detection pattern
 MATCH (account:Account {id: 'suspicious123'})
 MATCH path = (account)-[:TRANSFER*2..4]->(destination:Account)
-WHERE ALL(t IN relationships(path) WHERE 
-    t.amount > 10000 AND 
+WHERE ALL(t IN relationships(path) WHERE
+    t.amount > 10000 AND
     t.timestamp > timestamp() - duration('PT1H'))
-RETURN path, destination, 
+RETURN path, destination,
        [t IN relationships(path) | t.amount] AS amounts,
        SUM([t IN relationships(path) | t.amount]) AS total_transferred
 
@@ -150,7 +150,7 @@ RETURN common.name
 // 9. Window Functions (if supported)
 // Ranking within groups
 MATCH (e:Employee)-[:WORKS_IN]->(d:Department)
-RETURN d.name AS department, 
+RETURN d.name AS department,
        e.name AS employee,
        e.salary,
        RANK() OVER (PARTITION BY d.name ORDER BY e.salary DESC) AS salary_rank

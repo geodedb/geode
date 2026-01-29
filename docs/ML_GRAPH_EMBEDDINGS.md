@@ -9,18 +9,22 @@ The ML Graph Embeddings system provides comprehensive machine learning capabilit
 ### Core Components
 
 #### GraphEmbeddingsManager
+
 The central component that manages all embedding operations:
+
 - **Embedding Storage**: Hash map of node IDs to embedding vectors
 - **Algorithm Registry**: Configurable ML algorithm implementations
 - **Training Context**: Comprehensive training state management
 - **Statistics Tracking**: Performance metrics and convergence monitoring
 
 #### Algorithm Implementations
+
 - **Node2Vec**: Biased random walks with flexible exploration strategies
 - **GraphSAGE**: Inductive learning with neighbor aggregation
 - **DeepWalk**: Uniform random walks for structural embeddings
 
 #### Training System
+
 - **Learning Rate Decay**: Adaptive learning rate reduction over time
 - **Convergence Detection**: Automatic stopping when loss stabilizes
 - **Early Stopping**: Patience-based training termination
@@ -29,6 +33,7 @@ The central component that manages all embedding operations:
 ## Supported Algorithms
 
 ### Node2Vec
+
 Biased random walk algorithm with configurable exploration parameters:
 
 ```zig
@@ -40,12 +45,14 @@ Biased random walk algorithm with configurable exploration parameters:
 ```
 
 **Key Features:**
+
 - Flexible exploration via p and q parameters
 - Transition probability calculation with bias
 - Support for directed and undirected graphs
 - Configurable walk parameters
 
 ### GraphSAGE
+
 Inductive learning algorithm with neighbor sampling and aggregation:
 
 ```zig
@@ -56,12 +63,14 @@ Inductive learning algorithm with neighbor sampling and aggregation:
 ```
 
 **Key Features:**
+
 - Neighbor sampling and aggregation
 - Multiple aggregation functions (mean, max, LSTM)
 - Inductive capability for unseen nodes
 - Scalable to large graphs
 
 ### DeepWalk
+
 Uniform random walk algorithm for structural embeddings:
 
 ```zig
@@ -72,6 +81,7 @@ Uniform random walk algorithm for structural embeddings:
 ```
 
 **Key Features:**
+
 - Uniform random walks
 - Skip-gram model integration
 - Structural similarity preservation
@@ -106,7 +116,7 @@ try embeddings_manager.generateEmbedding(node_id, MLAlgorithm.node2vec);
 ```zig
 // Find similar nodes using cosine similarity
 const similar_nodes = try embeddings_manager.findSimilarNodes(
-    target_node_id, 
+    target_node_id,
     10,  // Number of results
     SimilarityMetric.cosine
 );
@@ -114,8 +124,8 @@ defer allocator.free(similar_nodes);
 
 // Calculate similarity between two specific nodes
 const similarity = try embeddings_manager.calculateSimilarity(
-    node1_id, 
-    node2_id, 
+    node1_id,
+    node2_id,
     SimilarityMetric.cosine
 );
 ```
@@ -153,13 +163,13 @@ var training_ctx = TrainingContext{
 // Training loop with convergence detection
 for (0..training_ctx.max_epochs) |epoch| {
     training_ctx.current_epoch = epoch;
-    
+
     // Perform training step
     // ... training logic ...
-    
+
     // Update learning rate with decay
     training_ctx.updateLearningRate(0.95);  // 5% decay per epoch
-    
+
     // Check convergence
     if (training_ctx.hasConverged()) {
         break;
@@ -170,44 +180,56 @@ for (0..training_ctx.max_epochs) |epoch| {
 ## Similarity Metrics
 
 ### Cosine Similarity
+
 Measures the cosine of the angle between two vectors:
+
 ```
 similarity = (A · B) / (||A|| * ||B||)
 ```
+
 - Range: [-1, 1] (typically [0, 1] for positive embeddings)
 - Best for: Angular similarity, text embeddings, normalized features
 
 ### Euclidean Distance
+
 Measures the straight-line distance between two points:
+
 ```
 distance = sqrt(sum((A[i] - B[i])^2))
 ```
+
 - Range: [0, ∞)
 - Best for: Spatial relationships, magnitude-sensitive comparisons
 
 ### Dot Product
+
 Measures the projection of one vector onto another:
+
 ```
 similarity = sum(A[i] * B[i])
 ```
+
 - Range: (-∞, ∞)
 - Best for: Magnitude and direction sensitivity
 
 ## Performance Optimization
 
 ### Memory Management
+
 - **Vector Pooling**: Reuse embedding vectors to reduce allocations
 - **Batch Processing**: Process multiple nodes simultaneously
 - **Lazy Loading**: Load embeddings on-demand for large graphs
 - **Memory Monitoring**: Track memory usage and implement cleanup
 
 ### Computational Efficiency
+
 - **Parallel Training**: Multi-threaded embedding generation
 - **Vectorized Operations**: SIMD optimization for similarity calculations
 - **Caching**: Cache frequently accessed embeddings
 - **Progressive Training**: Incremental updates for dynamic graphs
 
 ### Scalability Features
+
 - **Streaming Updates**: Handle real-time graph changes
 - **Distributed Training**: Support for multi-node training (future)
 - **Compression**: Embedding compression for storage efficiency
@@ -216,6 +238,7 @@ similarity = sum(A[i] * B[i])
 ## Integration Points
 
 ### Graph Database Integration
+
 ```zig
 // Integration with Geode's graph storage
 const graph_node = try graph_storage.getNode(node_id);
@@ -226,6 +249,7 @@ try embeddings_manager.generateEmbedding(node_id, MLAlgorithm.node2vec);
 ```
 
 ### Query Integration
+
 ```gql
 -- Example GQL queries with ML embeddings
 MATCH (n:Person)
@@ -240,6 +264,7 @@ RETURN similar_items
 ```
 
 ### Index Integration
+
 ```zig
 // Integration with vector indexes
 const vector_index = try VectorIndex.init(allocator, embedding_dimension);
@@ -257,26 +282,27 @@ const ann_results = try vector_index.search(query_embedding, k);
 ## Configuration Options
 
 ### Algorithm Configuration
+
 ```zig
 pub const AlgorithmConfig = struct {
     learning_rate: f32 = 0.01,
     num_epochs: u32 = 50,
     batch_size: u32 = 32,
-    
+
     // Node2Vec specific
     p: f32 = 1.0,
     q: f32 = 1.0,
     walk_length: u32 = 10,
     num_walks: u32 = 20,
-    
+
     // GraphSAGE specific
     aggregation_function: []const u8 = "mean",
     num_samples: u32 = 5,
     inductive: bool = true,
-    
+
     // DeepWalk specific
     window_size: u32 = 5,
-    
+
     // Training control
     convergence_threshold: f32 = 0.001,
     early_stopping_patience: u32 = 10,
@@ -285,6 +311,7 @@ pub const AlgorithmConfig = struct {
 ```
 
 ### Manager Configuration
+
 ```zig
 pub const ManagerConfig = struct {
     embedding_dimension: u32 = 128,
@@ -299,6 +326,7 @@ pub const ManagerConfig = struct {
 ## Error Handling
 
 ### Common Error Types
+
 ```zig
 pub const MLError = error{
     InvalidDimension,
@@ -314,6 +342,7 @@ pub const MLError = error{
 ```
 
 ### Error Recovery Strategies
+
 - **Graceful Degradation**: Fall back to simpler algorithms
 - **Memory Management**: Free resources on OOM errors
 - **Retry Logic**: Retry failed operations with adjusted parameters
@@ -322,7 +351,9 @@ pub const MLError = error{
 ## Testing Framework
 
 ### Unit Tests
+
 Located in `tests/test_ml_graph_embeddings.zig`:
+
 - Algorithm initialization and configuration
 - Embedding generation and storage
 - Similarity calculations
@@ -330,7 +361,9 @@ Located in `tests/test_ml_graph_embeddings.zig`:
 - Error handling scenarios
 
 ### Integration Tests
+
 Located in `tests/test_ml_graph_embeddings_integration.zig`:
+
 - End-to-end Node2Vec embedding generation
 - GraphSAGE neighbor aggregation workflows
 - Multi-algorithm performance comparison
@@ -338,6 +371,7 @@ Located in `tests/test_ml_graph_embeddings_integration.zig`:
 - Large-scale memory management
 
 ### Test Coverage
+
 ```
 test "CANARY_REQ_ML_001_Node2Vec_End_To_End_Integration"
 test "CANARY_REQ_ML_002_GraphSAGE_Neighbor_Aggregation_Integration"
@@ -349,16 +383,19 @@ test "CANARY_REQ_ML_005_Large_Scale_Memory_Management"
 ## Performance Benchmarks
 
 ### Training Performance
+
 - **Node2Vec**: ~1000 nodes/second (128-dim, 10 walks, length 10)
 - **GraphSAGE**: ~800 nodes/second (128-dim, 5 neighbors)
 - **DeepWalk**: ~1200 nodes/second (128-dim, 10 walks, length 10)
 
 ### Memory Usage
+
 - **Base Overhead**: ~2MB for manager initialization
 - **Per Embedding**: 128 dimensions × 4 bytes = 512 bytes
 - **1M Embeddings**: ~512MB + overhead
 
 ### Search Performance
+
 - **Brute Force k-NN**: O(n) for n embeddings
 - **Approximate k-NN**: O(log n) with vector indexes
 - **Similarity Calculation**: ~50ns per comparison (128-dim)
@@ -366,12 +403,14 @@ test "CANARY_REQ_ML_005_Large_Scale_Memory_Management"
 ## Future Enhancements
 
 ### Planned Features
+
 - **Graph Attention Networks (GAT)**: Attention-based embedding generation
 - **Heterogeneous Graphs**: Support for multiple node/edge types
 - **Dynamic Embeddings**: Real-time embedding updates
 - **Federated Learning**: Distributed training across multiple instances
 
 ### Optimization Opportunities
+
 - **GPU Acceleration**: CUDA support for large-scale training
 - **Quantization**: Reduced precision embeddings for storage efficiency
 - **Compression**: Advanced compression algorithms for embeddings
@@ -380,18 +419,21 @@ test "CANARY_REQ_ML_005_Large_Scale_Memory_Management"
 ## Production Deployment
 
 ### Monitoring
+
 - **Training Metrics**: Loss, convergence rate, memory usage
 - **Query Performance**: Similarity search latency, throughput
 - **Resource Utilization**: CPU, memory, disk usage
 - **Error Rates**: Failed training jobs, OOM errors
 
 ### Scaling Considerations
+
 - **Horizontal Scaling**: Multiple embedding managers
 - **Vertical Scaling**: Memory and CPU optimization
 - **Storage Scaling**: Persistent embedding storage
 - **Network Scaling**: Distributed similarity search
 
 ### Maintenance
+
 - **Model Updates**: Retraining schedules and versioning
 - **Performance Tuning**: Algorithm parameter optimization
 - **Capacity Planning**: Growth projections and resource allocation
@@ -400,6 +442,7 @@ test "CANARY_REQ_ML_005_Large_Scale_Memory_Management"
 ## API Reference
 
 ### Core Methods
+
 ```zig
 // Manager lifecycle
 pub fn init(allocator: Allocator, embedding_dimension: u32) !GraphEmbeddingsManager

@@ -7,14 +7,13 @@ These tests validate the regex patterns used for CANARY marker linting,
 specifically the fixes for GAP-0225 (repo-wide lint) and GAP-0226 (STATUS=IMPLEMENTED).
 """
 
-import unittest
-import re
-import sys
 import os
+import sys
+import unittest
 
 # Add tools directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from canary_lint import CANARY_COMPLETE_PATTERN, CANARY_LOOSE_PATTERN, CANARY_EXAMPLE_PATTERN, VALID_STATUSES
+from canary_lint import CANARY_COMPLETE_PATTERN, CANARY_EXAMPLE_PATTERN, CANARY_LOOSE_PATTERN, VALID_STATUSES
 
 
 class TestCanaryCompletePattern(unittest.TestCase):
@@ -25,12 +24,12 @@ class TestCanaryCompletePattern(unittest.TestCase):
         line = '// CANARY: REQ=REQ-GQL-001; FEATURE="Test Feature"; ASPECT=Unit; STATUS=TESTED; OWNER=test; UPDATED=2026-01-17'
         match = CANARY_COMPLETE_PATTERN.search(line)
         self.assertIsNotNone(match)
-        self.assertEqual(match.group('req'), 'REQ-GQL-001')
-        self.assertEqual(match.group('feature'), 'Test Feature')
-        self.assertEqual(match.group('aspect'), 'Unit')
-        self.assertEqual(match.group('status'), 'TESTED')
-        self.assertEqual(match.group('owner'), 'test')
-        self.assertEqual(match.group('updated'), '2026-01-17')
+        self.assertEqual(match.group("req"), "REQ-GQL-001")
+        self.assertEqual(match.group("feature"), "Test Feature")
+        self.assertEqual(match.group("aspect"), "Unit")
+        self.assertEqual(match.group("status"), "TESTED")
+        self.assertEqual(match.group("owner"), "test")
+        self.assertEqual(match.group("updated"), "2026-01-17")
 
     def test_marker_with_one_test(self):
         """Test marker with single TEST field."""
@@ -92,7 +91,7 @@ class TestCanaryLoosePattern(unittest.TestCase):
 
     def test_informal_marker_not_detected(self):
         """Test that informal markers (no FEATURE=) are not flagged."""
-        line = '// CANARY: REQ=REQ-GQL-001; this is a comment'
+        line = "// CANARY: REQ=REQ-GQL-001; this is a comment"
         match = CANARY_LOOSE_PATTERN.search(line)
         self.assertIsNone(match)
 
@@ -114,7 +113,7 @@ class TestCanaryExamplePattern(unittest.TestCase):
 
     def test_canary_pattern_comment(self):
         """Test that 'CANARY pattern:' documentation is detected."""
-        line = '# CANARY pattern: CANARY: REQ=...'
+        line = "# CANARY pattern: CANARY: REQ=..."
         match = CANARY_EXAMPLE_PATTERN.search(line)
         self.assertIsNotNone(match)
 
@@ -136,12 +135,12 @@ class TestValidStatuses(unittest.TestCase):
 
     def test_valid_statuses(self):
         """Test that all expected statuses are valid."""
-        expected = {'STUB', 'IMPL', 'TESTED', 'BENCHED', 'COMPLETE', 'EXEMPT'}
+        expected = {"STUB", "IMPL", "TESTED", "BENCHED", "COMPLETE", "EXEMPT"}
         self.assertEqual(VALID_STATUSES, expected)
 
     def test_implemented_not_valid(self):
         """Test that IMPLEMENTED is not a valid status (GAP-0226)."""
-        self.assertNotIn('IMPLEMENTED', VALID_STATUSES)
+        self.assertNotIn("IMPLEMENTED", VALID_STATUSES)
 
 
 class TestRealWorldMarkers(unittest.TestCase):
@@ -166,5 +165,5 @@ class TestRealWorldMarkers(unittest.TestCase):
         self.assertIsNotNone(match)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

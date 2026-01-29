@@ -406,7 +406,7 @@ geodec "MATCH (n) RETURN COUNT(*)"
 
 ## Support
 
-- Documentation: https://docs.geode.io
-- GitLab Issues: https://gitlab.com/devnw/codepros/geode/geode/-/issues
-- Discord: https://discord.gg/geode
+- Documentation: <https://docs.geode.io>
+- GitLab Issues: <https://gitlab.com/devnw/codepros/geode/geode/-/issues>
+- Discord: <https://discord.gg/geode>
 - Email: [email protected]

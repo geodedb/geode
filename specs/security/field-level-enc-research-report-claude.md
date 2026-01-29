@@ -57,22 +57,22 @@ Zig implementation of counter-based nonce generation:
 pub const NonceManager = struct {
     instance_id: u32,
     counter: std.atomic.Value(u64),
-    
+
     pub fn init(instance_id: u32) NonceManager {
         return .{
             .instance_id = instance_id,
             .counter = std.atomic.Value(u64).init(loadPersistedCounter()),
         };
     }
-    
+
     pub fn next(self: *NonceManager) [12]u8 {
         const count = self.counter.fetchAdd(1, .monotonic);
-        
+
         // Periodically persist counter
         if (count % 1000 == 0) {
             persistCounter(count + 10000);
         }
-        
+
         var nonce: [12]u8 = undefined;
         std.mem.writeInt(u32, nonce[0..4], self.instance_id, .little);
         std.mem.writeInt(u64, nonce[4..12], count, .little);
@@ -96,19 +96,19 @@ pub fn encryptNodeProperty(
     property_name: []const u8,
 ) !EncryptedProperty {
     const ChaCha = std.crypto.aead.chacha_poly.ChaCha20Poly1305;
-    
+
     // Construct AAD binding ciphertext to context
     var aad_buffer: [512]u8 = undefined;
-    const aad = try std.fmt.bufPrint(&aad_buffer, 
-        "node:{s}:prop:{s}", 
+    const aad = try std.fmt.bufPrint(&aad_buffer,
+        "node:{s}:prop:{s}",
         .{node_id, property_name}
     );
-    
+
     var ciphertext = try allocator.alloc(u8, plaintext.len);
     var tag: [16]u8 = undefined;
-    
+
     ChaCha.encrypt(ciphertext, &tag, plaintext, aad, nonce, key);
-    
+
     return .{
         .version = 1,
         .nonce = nonce,
@@ -131,19 +131,19 @@ pub fn decryptNodeProperty(
     property_name: []const u8,
 ) ![]u8 {
     const ChaCha = std.crypto.aead.chacha_poly.ChaCha20Poly1305;
-    
+
     var aad_buffer: [512]u8 = undefined;
     const aad = try std.fmt.bufPrint(&aad_buffer,
         "node:{s}:prop:{s}",
         .{node_id, property_name}
     );
-    
+
     var plaintext = try allocator.alloc(u8, encrypted.ciphertext.len);
     errdefer {
         std.crypto.secureZero(u8, plaintext);
         allocator.free(plaintext);
     }
-    
+
     // Returns error.AuthenticationFailed if tag invalid
     try ChaCha.decrypt(
         plaintext,
@@ -153,7 +153,7 @@ pub fn decryptNodeProperty(
         encrypted.nonce,
         key
     );
-    
+
     return plaintext;
 }
 ```
@@ -171,47 +171,47 @@ pub const EncryptionService = struct {
     allocator: Allocator,
     key: [32]u8,
     nonce_manager: NonceManager,
-    
+
     pub fn init(allocator: Allocator, instance_id: u32) !EncryptionService {
         var key: [32]u8 = undefined;
         std.crypto.random.bytes(&key);
-        
+
         return .{
             .allocator = allocator,
             .key = key,
             .nonce_manager = NonceManager.init(instance_id),
         };
     }
-    
+
     pub fn deinit(self: *EncryptionService) void {
         std.crypto.secureZero(u8, &self.key);
     }
-    
+
     pub const EncryptedField = struct {
         version: u8,
         nonce: [12]u8,
         ciphertext: []u8,
         tag: [16]u8,
-        
+
         pub fn deinit(self: *EncryptedField, allocator: Allocator) void {
             std.crypto.secureZero(u8, self.ciphertext);
             allocator.free(self.ciphertext);
         }
-        
+
         pub fn serialize(self: EncryptedField, allocator: Allocator) ![]u8 {
             // Format: [version(1)][nonce(12)][ciphertext][tag(16)]
             const total_len = 1 + 12 + self.ciphertext.len + 16;
             var buffer = try allocator.alloc(u8, total_len);
-            
+
             buffer[0] = self.version;
             @memcpy(buffer[1..13], &self.nonce);
             @memcpy(buffer[13..13+self.ciphertext.len], self.ciphertext);
             @memcpy(buffer[13+self.ciphertext.len..], &self.tag);
-            
+
             return buffer;
         }
     };
-    
+
     pub fn encryptField(
         self: *EncryptionService,
         plaintext: []const u8,
@@ -224,7 +224,7 @@ pub const EncryptionService = struct {
     ) !EncryptedField {
         // Generate unique nonce
         const nonce = self.nonce_manager.next();
-        
+
         // Construct comprehensive AAD
         var aad_buffer: [1024]u8 = undefined;
         const aad = if (context.tenant_id) |tid|
@@ -235,13 +235,13 @@ pub const EncryptionService = struct {
             try std.fmt.bufPrint(&aad_buffer,
                 "{s}:{s}:prop:{s}",
                 .{context.entity_type, context.entity_id, context.property_name});
-        
+
         // Encrypt
         const ciphertext = try self.allocator.alloc(u8, plaintext.len);
         errdefer self.allocator.free(ciphertext);
-        
+
         var tag: [16]u8 = undefined;
-        
+
         ChaCha20Poly1305.encrypt(
             ciphertext,
             &tag,
@@ -250,7 +250,7 @@ pub const EncryptionService = struct {
             nonce,
             self.key
         );
-        
+
         return .{
             .version = 1,
             .nonce = nonce,
@@ -258,7 +258,7 @@ pub const EncryptionService = struct {
             .tag = tag,
         };
     }
-    
+
     pub fn decryptField(
         self: *EncryptionService,
         encrypted: EncryptedField,
@@ -279,13 +279,13 @@ pub const EncryptionService = struct {
             try std.fmt.bufPrint(&aad_buffer,
                 "{s}:{s}:prop:{s}",
                 .{context.entity_type, context.entity_id, context.property_name});
-        
+
         const plaintext = try self.allocator.alloc(u8, encrypted.ciphertext.len);
         errdefer {
             std.crypto.secureZero(u8, plaintext);
             self.allocator.free(plaintext);
         }
-        
+
         // Decrypt and verify (throws AuthenticationError if invalid)
         try ChaCha20Poly1305.decrypt(
             plaintext,
@@ -295,7 +295,7 @@ pub const EncryptionService = struct {
             encrypted.nonce,
             self.key
         );
-        
+
         return plaintext;
     }
 };
@@ -318,7 +318,7 @@ pub fn decryptFieldVersioned(
     context: EncryptionContext,
 ) ![]u8 {
     const version = encrypted_blob[0];
-    
+
     return switch (@as(CryptoVersion, @enumFromInt(version))) {
         .v1_chacha20poly1305 => {
             const key = key_manager.getKey(1);
@@ -360,12 +360,12 @@ pub fn rotateMASTERKey(
             old_mek
         );
         defer std.crypto.secureZero(u8, &dek);
-        
+
         // Re-encrypt DEK with new MEK
         const new_nonce = generateNonce();
         var new_ciphertext: [32]u8 = undefined;
         var new_tag: [16]u8 = undefined;
-        
+
         ChaCha20Poly1305.encrypt(
             &new_ciphertext,
             &new_tag,
@@ -374,7 +374,7 @@ pub fn rotateMASTERKey(
             new_nonce,
             new_mek
         );
-        
+
         // Update stored encrypted DEK
         encrypted_dek.* = .{
             .nonce = new_nonce,

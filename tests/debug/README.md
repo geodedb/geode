@@ -5,6 +5,7 @@ This directory contains debug and benchmark Zig files used for development and t
 ## Debug Files
 
 ### Parser Debugging
+
 - `debug_count_alias.zig` - Debug COUNT with alias issues
 - `debug_count_issue.zig` - Debug COUNT operation issues
 - `debug_double_quotes.zig` - Debug double quote parsing
@@ -17,18 +18,21 @@ This directory contains debug and benchmark Zig files used for development and t
 - `debug_token_sequence.zig` - Debug token sequences
 
 ### Execution Debugging
+
 - `debug_execution.zig` - Debug query execution
 - `debug_failing_case.zig` - Debug specific failing test cases
 - `debug_path_variable.zig` - Debug path variable handling
 - `debug_variable_length.zig` - Debug variable-length patterns
 
 ### Property Debugging
+
 - `debug_property_access.zig` - Debug property access
 - `debug_property_keyword.zig` - Debug property keywords
 
 ## Benchmark Files
 
 ### Federation Benchmarks
+
 - `benchmark_federation_mismatch_frequency.zig` - Federation mismatch frequency analysis
 - `benchmark_federation_mismatch_latency.zig` - Federation mismatch latency analysis
 - `benchmark_bias_clamp_variance.zig` - Bias clamp variance analysis
@@ -41,6 +45,7 @@ This directory contains debug and benchmark Zig files used for development and t
 ## Test Files
 
 ### Parser and Lexer Tests
+
 - `test_create_lexer.zig` - Lexer creation tests
 - `test_create_parser.zig` - Parser creation tests
 - `test_lexer_direct.zig` - Direct lexer tests
@@ -49,16 +54,19 @@ This directory contains debug and benchmark Zig files used for development and t
 - `test_property_parser.zig` - Property parser tests
 
 ### Execution and Evaluation Tests
+
 - `test_eval_direct.zig` - Direct evaluation tests
 - `test_io.zig` - I/O operation tests
 - `test_advanced_union.zig` - Advanced union tests
 - `test_nested_functions.zig` - Nested function tests
 
 ### Query Operation Tests
+
 - `test_create_index.zig` - Index creation tests
 - `test_match_delete.zig` - MATCH DELETE operation tests
 
 ### Cost Model and Planner Tests
+
 - `test_cost_model_adaptive_bias.zig` - Adaptive bias cost model
 - `test_cost_model_adaptive_bias_parity.zig` - Bias parity tests
 - `test_cost_model_bias_clamp_warning.zig` - Bias clamp warning tests
@@ -70,11 +78,13 @@ This directory contains debug and benchmark Zig files used for development and t
 - `test_cost_model_planner_bias_application.zig` - Planner bias application
 
 ### Data Structure Tests
+
 - `test_arraylist2.zig` - ArrayList test 2
 - `test_arraylist3.zig` - ArrayList test 3
 - `test_arraylist4.zig` - ArrayList test 4
 
 ### Feature-Specific Tests
+
 - `test_gql_compliance.zig` - GQL compliance tests
 - `test_gql_features.zig` - GQL feature tests
 - `test_rbac_abac.zig` - RBAC/ABAC security tests
@@ -113,6 +123,7 @@ zig run debug_parser_step.zig
 ## When to Use Debug Files
 
 Use debug files when:
+
 - Investigating specific parser or execution issues
 - Need to step through code with controlled input
 - Testing edge cases not covered by main test suite

@@ -26,7 +26,7 @@ tests:
   # ===============================
   # BASIC MATCH OPERATIONS
   # ===============================
-  
+
   - name: "match-all-nodes"
     description: "Test basic MATCH all nodes"
     args: ["query", "MATCH (n) RETURN count(n) AS total_nodes"]
@@ -70,7 +70,7 @@ tests:
   # ===============================
   # RELATIONSHIP MATCHING
   # ===============================
-  
+
   - name: "match-relationships-basic"
     description: "Test basic relationship matching"
     args: ["query", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN p.name AS person, c.name AS company"]
@@ -114,7 +114,7 @@ tests:
   # ===============================
   # PATH PATTERNS
   # ===============================
-  
+
   - name: "match-path-variable"
     description: "Test path variable assignment"
     args: ["query", "MATCH path = (p:Person)-[:WORKS_FOR]->(c:Company) RETURN p.name AS person, length(path) AS path_length"]
@@ -158,7 +158,7 @@ tests:
   # ===============================
   # OPTIONAL MATCH OPERATIONS
   # ===============================
-  
+
   - name: "optional-match-basic"
     description: "Test basic OPTIONAL MATCH"
     args: ["query", "MATCH (p:Person) OPTIONAL MATCH (p)-[:MANAGES]->(subordinate) RETURN p.name AS person, subordinate.name AS manages"]
@@ -184,7 +184,7 @@ tests:
     args:
       - "query"
       - |
-        MATCH (p:Person) 
+        MATCH (p:Person)
         OPTIONAL {
           MATCH (p)-[:WORKS_FOR]->(c:Company);
           MATCH (p)-[:DEVELOPED]->(prod:Product)
@@ -202,7 +202,7 @@ tests:
     args:
       - "query"
       - |
-        MATCH (p:Person) 
+        MATCH (p:Person)
         OPTIONAL (
           MATCH (p)-[:WORKS_FOR]->(c:Company)
         )
@@ -217,7 +217,7 @@ tests:
   # ===============================
   # FILTER OPERATIONS
   # ===============================
-  
+
   - name: "filter-with-where-clause"
     description: "Test FILTER with WHERE clause"
     args: ["query", "MATCH (p:Person) FILTER WHERE p.age > 28 RETURN p.name AS name, p.age AS age ORDER BY p.age"]
@@ -251,7 +251,7 @@ tests:
   # ===============================
   # LET OPERATIONS
   # ===============================
-  
+
   - name: "let-value-variable"
     description: "Test LET with value variable definition"
     args: ["query", "LET $max_age = 35 MATCH (p:Person) WHERE p.age <= $max_age RETURN p.name AS name, p.age AS age"]
@@ -285,7 +285,7 @@ tests:
   # ===============================
   # FOR OPERATIONS
   # ===============================
-  
+
   - name: "for-list-iteration"
     description: "Test FOR with list iteration"
     args: ["query", "FOR item IN [1, 2, 3, 4, 5] RETURN item * 2 AS doubled"]
@@ -321,7 +321,7 @@ tests:
     args:
       - "query"
       - |
-        MATCH (p:Person) 
+        MATCH (p:Person)
         WITH p.name AS person_name
         FOR name IN person_name
         RETURN name
@@ -335,7 +335,7 @@ tests:
   # ===============================
   # COMPLEX QUERY PATTERNS
   # ===============================
-  
+
   - name: "match-multiple-patterns"
     description: "Test MATCH with multiple patterns"
     args: ["query", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:DEVELOPED]->(prod:Product) RETURN p.name AS developer, c.name AS company, prod.name AS product"]
@@ -382,7 +382,7 @@ tests:
   # ===============================
   # RETURN STATEMENT VARIATIONS
   # ===============================
-  
+
   - name: "return-asterisk"
     description: "Test RETURN * (all variables)"
     args: ["query", "MATCH (p:Person) WHERE p.name = 'Alice' RETURN *"]
@@ -424,7 +424,7 @@ tests:
   # ===============================
   # ORDER BY AND PAGINATION
   # ===============================
-  
+
   - name: "order-by-single-column"
     description: "Test ORDER BY single column"
     args: ["query", "MATCH (p:Person) RETURN p.name AS name ORDER BY p.age"]
@@ -488,7 +488,7 @@ tests:
   # ===============================
   # AGGREGATION WITH QUERY
   # ===============================
-  
+
   - name: "query-with-count"
     description: "Test query with COUNT aggregation"
     args: ["query", "MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN c.name AS company, count(p) AS employee_count GROUP BY c.name"]
@@ -512,7 +512,7 @@ tests:
   # ===============================
   # PERFORMANCE TESTS
   # ===============================
-  
+
   - name: "complex-query-performance"
     description: "Performance test with complex query pattern"
     timeout_ms: 30000

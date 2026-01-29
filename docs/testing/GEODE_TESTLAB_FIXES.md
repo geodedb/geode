@@ -132,4 +132,3 @@ All legacy tests have been moved to main specs directory and are now passing:
 | Dec 2 (PM) | ~1430+ | 1 | ~34 | Debug prints removed from cli/main.zig, recursive_and_cte.yml now passing |
 | Dec 2 (Late) | 1220 | 0 | 110 | Fixed varlen-path test format in october_2025_features.yml (+3 tests) |
 | Dec 27 | 1499 | 13 | 160 | **Fixed server timeout issue** - QUIC connection cleanup and pipe buffer blocking |
-

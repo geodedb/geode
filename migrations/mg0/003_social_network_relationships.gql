@@ -18,7 +18,7 @@ CREATE (follower)-[:FOLLOWS {
 
 -- Create a follow network for regular users
 MATCH (u1:User), (u2:User)
-WHERE toInteger(substring(u1.id, 5)) > 5 
+WHERE toInteger(substring(u1.id, 5)) > 5
   AND toInteger(substring(u2.id, 5)) > 5
   AND u1 <> u2
   AND rand() < 0.15  -- 15% chance of follow
@@ -263,7 +263,7 @@ WHERE rand() < 0.3  -- 30% chance of like
   AND NOT (u)-[:POSTED]->(p)  -- Don't like own posts
 CREATE (u)-[:LIKES {
     timestamp: p.created_at + duration('PT' + toString(rand() * 86400) + 'S'),
-    reaction: CASE 
+    reaction: CASE
         WHEN rand() < 0.6 THEN 'like'
         WHEN rand() < 0.8 THEN 'love'
         WHEN rand() < 0.9 THEN 'wow'
@@ -292,7 +292,7 @@ WHERE rand() < 0.05  -- 5% chance of share
   AND NOT (u)-[:POSTED]->(p)
 CREATE (u)-[:SHARED {
     timestamp: p.created_at + duration('PT' + toString(rand() * 259200) + 'S'),
-    comment: CASE 
+    comment: CASE
         WHEN rand() < 0.3 THEN 'Worth reading!'
         WHEN rand() < 0.6 THEN 'This is important.'
         ELSE null

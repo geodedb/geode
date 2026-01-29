@@ -7,21 +7,22 @@ Comprehensive query benchmarks for internet-scale graph testing.
 Includes read, write, traversal, and analytical query patterns.
 """
 
-import json
-import time
-import random
 import argparse
+import json
+import random
 import statistics
-from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Optional, Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Dict, List
 
 
 @dataclass
 class QueryBenchmark:
     """Definition of a benchmark query."""
+
     name: str
     category: str
     query: str
@@ -35,6 +36,7 @@ class QueryBenchmark:
 @dataclass
 class BenchmarkResult:
     """Result of running a benchmark."""
+
     benchmark_name: str
     category: str
     latencies_ms: List[float]
@@ -88,7 +90,7 @@ POINT_LOOKUPS = [
         query="MATCH (n) WHERE id(n) = $nodeId RETURN n",
         params={"nodeId": 1},
         description="Single node lookup by ID",
-        expected_complexity="O(1)"
+        expected_complexity="O(1)",
     ),
     QueryBenchmark(
         name="lookup_by_property",
@@ -96,7 +98,7 @@ POINT_LOOKUPS = [
         query="MATCH (n:Host {ip: $ip}) RETURN n",
         params={"ip": "10.0.0.1"},
         description="Indexed property lookup",
-        expected_complexity="O(log n)"
+        expected_complexity="O(log n)",
     ),
     QueryBenchmark(
         name="lookup_by_composite",
@@ -104,7 +106,7 @@ POINT_LOOKUPS = [
         query="MATCH (n:Host) WHERE n.asn = $asn AND n.type = $type RETURN n LIMIT 1",
         params={"asn": 64512, "type": "server"},
         description="Composite property lookup",
-        expected_complexity="O(log n)"
+        expected_complexity="O(log n)",
     ),
 ]
 
@@ -115,7 +117,7 @@ TRAVERSAL_QUERIES = [
         query="MATCH (a:Host)-[:CONNECTS]->(b:Host) WHERE a.ip = $ip RETURN b LIMIT 100",
         params={"ip": "10.0.0.1"},
         description="Single hop traversal",
-        expected_complexity="O(d)"
+        expected_complexity="O(d)",
     ),
     QueryBenchmark(
         name="two_hop",
@@ -123,7 +125,7 @@ TRAVERSAL_QUERIES = [
         query="MATCH (a:Host)-[:CONNECTS*2]->(c:Host) WHERE a.ip = $ip RETURN DISTINCT c LIMIT 100",
         params={"ip": "10.0.0.1"},
         description="Two hop traversal with deduplication",
-        expected_complexity="O(d^2)"
+        expected_complexity="O(d^2)",
     ),
     QueryBenchmark(
         name="variable_length_path",
@@ -131,7 +133,7 @@ TRAVERSAL_QUERIES = [
         query="MATCH p = (a:Host)-[:CONNECTS*1..5]->(b:Host) WHERE a.ip = $src AND b.ip = $dst RETURN p LIMIT 10",
         params={"src": "10.0.0.1", "dst": "10.0.1.1"},
         description="Variable length path finding",
-        expected_complexity="O(d^k)"
+        expected_complexity="O(d^k)",
     ),
     QueryBenchmark(
         name="shortest_path",
@@ -139,7 +141,7 @@ TRAVERSAL_QUERIES = [
         query="MATCH p = shortestPath((a:Host)-[:CONNECTS*]->(b:Host)) WHERE a.ip = $src AND b.ip = $dst RETURN p",
         params={"src": "10.0.0.1", "dst": "10.0.5.1"},
         description="Shortest path between nodes",
-        expected_complexity="O(V + E)"
+        expected_complexity="O(V + E)",
     ),
     QueryBenchmark(
         name="bidirectional_traversal",
@@ -147,7 +149,7 @@ TRAVERSAL_QUERIES = [
         query="MATCH (a:Host)-[:CONNECTS]-(b:Host) WHERE a.ip = $ip RETURN b LIMIT 100",
         params={"ip": "10.0.0.1"},
         description="Bidirectional single hop",
-        expected_complexity="O(d_in + d_out)"
+        expected_complexity="O(d_in + d_out)",
     ),
 ]
 
@@ -157,35 +159,35 @@ AGGREGATION_QUERIES = [
         category="aggregation",
         query="MATCH (n) RETURN count(n) AS total",
         description="Count all nodes",
-        expected_complexity="O(1) with stats"
+        expected_complexity="O(1) with stats",
     ),
     QueryBenchmark(
         name="count_by_label",
         category="aggregation",
         query="MATCH (n:Host) RETURN count(n) AS hosts",
         description="Count nodes by label",
-        expected_complexity="O(1) with stats"
+        expected_complexity="O(1) with stats",
     ),
     QueryBenchmark(
         name="group_by_property",
         category="aggregation",
         query="MATCH (n:Host) RETURN n.type AS type, count(*) AS cnt ORDER BY cnt DESC",
         description="Group and count by property",
-        expected_complexity="O(n)"
+        expected_complexity="O(n)",
     ),
     QueryBenchmark(
         name="aggregate_statistics",
         category="aggregation",
         query="MATCH (n:Host) RETURN avg(n.port_count) AS avg_ports, max(n.port_count) AS max_ports, min(n.port_count) AS min_ports",
         description="Statistical aggregation",
-        expected_complexity="O(n)"
+        expected_complexity="O(n)",
     ),
     QueryBenchmark(
         name="degree_distribution",
         category="aggregation",
         query="MATCH (n:Host) RETURN outdegree(n) AS degree, count(*) AS cnt ORDER BY degree",
         description="Compute degree distribution",
-        expected_complexity="O(V + E)"
+        expected_complexity="O(V + E)",
     ),
 ]
 
@@ -195,35 +197,35 @@ ANALYTICAL_QUERIES = [
         category="analytical",
         query="CALL algo.pageRank.stream({iterations: 20}) YIELD nodeId, score RETURN nodeId, score ORDER BY score DESC LIMIT 10",
         description="Top 10 PageRank scores",
-        expected_complexity="O(V * iterations)"
+        expected_complexity="O(V * iterations)",
     ),
     QueryBenchmark(
         name="community_detection",
         category="analytical",
         query="CALL algo.louvain.stream() YIELD nodeId, communityId RETURN communityId, count(*) AS size ORDER BY size DESC LIMIT 20",
         description="Louvain community sizes",
-        expected_complexity="O(V + E)"
+        expected_complexity="O(V + E)",
     ),
     QueryBenchmark(
         name="betweenness_centrality",
         category="analytical",
         query="CALL algo.betweenness.stream({sampleSize: 100}) YIELD nodeId, centrality RETURN nodeId, centrality ORDER BY centrality DESC LIMIT 10",
         description="Sampled betweenness centrality",
-        expected_complexity="O(V * E) sampled"
+        expected_complexity="O(V * E) sampled",
     ),
     QueryBenchmark(
         name="triangle_count",
         category="analytical",
         query="CALL algo.triangleCount.stream() YIELD nodeId, triangles RETURN sum(triangles) / 3 AS total_triangles",
         description="Total triangle count",
-        expected_complexity="O(E^1.5)"
+        expected_complexity="O(E^1.5)",
     ),
     QueryBenchmark(
         name="connected_components",
         category="analytical",
         query="CALL algo.unionFind.stream() YIELD nodeId, componentId RETURN componentId, count(*) AS size ORDER BY size DESC LIMIT 10",
         description="Largest connected components",
-        expected_complexity="O(V + E)"
+        expected_complexity="O(V + E)",
     ),
 ]
 
@@ -234,7 +236,7 @@ WRITE_QUERIES = [
         query="CREATE (n:TestNode {id: $id, timestamp: datetime()}) RETURN n",
         params={"id": 0},
         description="Create single node",
-        expected_complexity="O(1)"
+        expected_complexity="O(1)",
     ),
     QueryBenchmark(
         name="create_relationship",
@@ -242,7 +244,7 @@ WRITE_QUERIES = [
         query="MATCH (a:Host), (b:Host) WHERE id(a) = $src AND id(b) = $dst CREATE (a)-[:TEST_CONN]->(b)",
         params={"src": 1, "dst": 2},
         description="Create relationship between existing nodes",
-        expected_complexity="O(1)"
+        expected_complexity="O(1)",
     ),
     QueryBenchmark(
         name="update_property",
@@ -250,7 +252,7 @@ WRITE_QUERIES = [
         query="MATCH (n:Host) WHERE id(n) = $nodeId SET n.last_seen = datetime() RETURN n",
         params={"nodeId": 1},
         description="Update node property",
-        expected_complexity="O(1)"
+        expected_complexity="O(1)",
     ),
     QueryBenchmark(
         name="batch_create",
@@ -258,7 +260,7 @@ WRITE_QUERIES = [
         query="UNWIND $nodes AS node CREATE (n:BatchNode {id: node.id, value: node.value})",
         params={"nodes": [{"id": i, "value": f"val_{i}"} for i in range(100)]},
         description="Batch create 100 nodes",
-        expected_complexity="O(batch_size)"
+        expected_complexity="O(batch_size)",
     ),
     QueryBenchmark(
         name="delete_pattern",
@@ -266,7 +268,7 @@ WRITE_QUERIES = [
         query="MATCH (n:TestNode) WHERE n.id < $maxId DETACH DELETE n",
         params={"maxId": 100},
         description="Delete nodes matching pattern",
-        expected_complexity="O(matches)"
+        expected_complexity="O(matches)",
     ),
 ]
 
@@ -276,14 +278,14 @@ PATTERN_MATCHING = [
         category="pattern",
         query="MATCH (a:Host)-[:CONNECTS]->(b:Host)-[:CONNECTS]->(c:Host)-[:CONNECTS]->(a) RETURN a, b, c LIMIT 10",
         description="Find triangles",
-        expected_complexity="O(E^1.5)"
+        expected_complexity="O(E^1.5)",
     ),
     QueryBenchmark(
         name="star_pattern",
         category="pattern",
         query="MATCH (center:Host)-[:CONNECTS]->(leaf:Host) WITH center, count(leaf) AS degree WHERE degree > 10 RETURN center, degree LIMIT 10",
         description="Find high-degree hubs",
-        expected_complexity="O(V)"
+        expected_complexity="O(V)",
     ),
     QueryBenchmark(
         name="path_with_properties",
@@ -291,24 +293,19 @@ PATTERN_MATCHING = [
         query="MATCH p = (a:Host)-[r:CONNECTS*1..3]->(b:Host) WHERE all(rel IN r WHERE rel.bytes > 1000) RETURN p LIMIT 10",
         params={},
         description="Path with property filters",
-        expected_complexity="O(d^k)"
+        expected_complexity="O(d^k)",
     ),
     QueryBenchmark(
         name="negative_pattern",
         category="pattern",
         query="MATCH (a:Host) WHERE NOT (a)-[:CONNECTS]->(:Host {type: 'malicious'}) RETURN a LIMIT 100",
         description="Negative pattern matching",
-        expected_complexity="O(V * avg_degree)"
+        expected_complexity="O(V * avg_degree)",
     ),
 ]
 
 ALL_BENCHMARKS = (
-    POINT_LOOKUPS +
-    TRAVERSAL_QUERIES +
-    AGGREGATION_QUERIES +
-    ANALYTICAL_QUERIES +
-    WRITE_QUERIES +
-    PATTERN_MATCHING
+    POINT_LOOKUPS + TRAVERSAL_QUERIES + AGGREGATION_QUERIES + ANALYTICAL_QUERIES + WRITE_QUERIES + PATTERN_MATCHING
 )
 
 
@@ -316,15 +313,12 @@ ALL_BENCHMARKS = (
 # Benchmark Runner
 # ============================================================================
 
+
 class BenchmarkRunner:
     """Executes benchmark queries against Geode server."""
 
     def __init__(
-        self,
-        host: str = "localhost",
-        port: int = 3141,
-        geode_path: str = "./zig-out/bin/geode",
-        parallel: int = 1
+        self, host: str = "localhost", port: int = 3141, geode_path: str = "./zig-out/bin/geode", parallel: int = 1
     ):
         self.host = host
         self.port = port
@@ -346,19 +340,14 @@ class BenchmarkRunner:
 
         start = time.perf_counter()
         try:
-            result = subprocess.run(
-                [self.geode_path, "query", final_query],
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
+            result = subprocess.run([self.geode_path, "query", final_query], capture_output=True, text=True, timeout=60)
             elapsed_ms = (time.perf_counter() - start) * 1000
 
             if result.returncode != 0:
                 return elapsed_ms, 0, result.stderr.strip()
 
             # Parse row count from output
-            row_count = len(result.stdout.strip().split('\n')) - 1  # Subtract header
+            row_count = len(result.stdout.strip().split("\n")) - 1  # Subtract header
             return elapsed_ms, max(0, row_count), None
 
         except subprocess.TimeoutExpired:
@@ -404,7 +393,7 @@ class BenchmarkRunner:
             rows_returned=row_counts,
             success_count=success_count,
             error_count=error_count,
-            errors=errors[:5]  # Keep first 5 errors
+            errors=errors[:5],  # Keep first 5 errors
         )
 
     def run_all(self, benchmarks: List[QueryBenchmark] = None) -> List[BenchmarkResult]:
@@ -431,21 +420,28 @@ class BenchmarkRunner:
 # Report Generation
 # ============================================================================
 
+
 def generate_report(results: List[BenchmarkResult], output_format: str = "text") -> str:
     """Generate benchmark report."""
     if output_format == "json":
-        return json.dumps([{
-            "name": r.benchmark_name,
-            "category": r.category,
-            "avg_ms": r.avg_latency_ms,
-            "p50_ms": r.p50_latency_ms,
-            "p95_ms": r.p95_latency_ms,
-            "p99_ms": r.p99_latency_ms,
-            "stddev_ms": r.stddev_ms,
-            "qps": r.qps,
-            "success": r.success_count,
-            "errors": r.error_count
-        } for r in results], indent=2)
+        return json.dumps(
+            [
+                {
+                    "name": r.benchmark_name,
+                    "category": r.category,
+                    "avg_ms": r.avg_latency_ms,
+                    "p50_ms": r.p50_latency_ms,
+                    "p95_ms": r.p95_latency_ms,
+                    "p99_ms": r.p99_latency_ms,
+                    "stddev_ms": r.stddev_ms,
+                    "qps": r.qps,
+                    "success": r.success_count,
+                    "errors": r.error_count,
+                }
+                for r in results
+            ],
+            indent=2,
+        )
 
     # Text format
     lines = [
@@ -454,7 +450,7 @@ def generate_report(results: List[BenchmarkResult], output_format: str = "text")
         "=" * 100,
         "",
         f"{'Benchmark':<35} {'Category':<15} {'Avg(ms)':<10} {'P50(ms)':<10} {'P95(ms)':<10} {'P99(ms)':<10} {'QPS':<10}",
-        "-" * 100
+        "-" * 100,
     ]
 
     # Group by category
@@ -478,16 +474,18 @@ def generate_report(results: List[BenchmarkResult], output_format: str = "text")
     total_errors = sum(r.error_count for r in results)
     avg_latency = statistics.mean(r.avg_latency_ms for r in results if r.latencies_ms)
 
-    lines.extend([
-        "",
-        "=" * 100,
-        "SUMMARY",
-        "=" * 100,
-        f"Total Benchmarks: {len(results)}",
-        f"Total Queries: {total_success + total_errors}",
-        f"Success Rate: {total_success / (total_success + total_errors) * 100:.1f}%",
-        f"Average Latency: {avg_latency:.2f}ms",
-    ])
+    lines.extend(
+        [
+            "",
+            "=" * 100,
+            "SUMMARY",
+            "=" * 100,
+            f"Total Benchmarks: {len(results)}",
+            f"Total Queries: {total_success + total_errors}",
+            f"Success Rate: {total_success / (total_success + total_errors) * 100:.1f}%",
+            f"Average Latency: {avg_latency:.2f}ms",
+        ]
+    )
 
     return "\n".join(lines)
 
@@ -497,8 +495,12 @@ def main():
     parser.add_argument("--host", default="localhost", help="Geode server host")
     parser.add_argument("--port", type=int, default=3141, help="Geode server port")
     parser.add_argument("--geode", default="./zig-out/bin/geode", help="Path to geode binary")
-    parser.add_argument("--category", choices=["point_lookup", "traversal", "aggregation", "analytical", "write", "pattern", "all"],
-                        default="all", help="Category of benchmarks to run")
+    parser.add_argument(
+        "--category",
+        choices=["point_lookup", "traversal", "aggregation", "analytical", "write", "pattern", "all"],
+        default="all",
+        help="Category of benchmarks to run",
+    )
     parser.add_argument("--parallel", type=int, default=1, help="Number of parallel workers")
     parser.add_argument("--runs", type=int, default=10, help="Number of benchmark runs per query")
     parser.add_argument("--warmup", type=int, default=3, help="Number of warmup runs")
@@ -520,12 +522,7 @@ def main():
 
     print(f"Running {len(benchmarks)} benchmarks...")
 
-    runner = BenchmarkRunner(
-        host=args.host,
-        port=args.port,
-        geode_path=args.geode,
-        parallel=args.parallel
-    )
+    runner = BenchmarkRunner(host=args.host, port=args.port, geode_path=args.geode, parallel=args.parallel)
 
     results = runner.run_all(benchmarks)
     report = generate_report(results, args.output)

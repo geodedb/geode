@@ -20,7 +20,7 @@ tests:
   # ============================================
   # Graph Algorithm Tests
   # ============================================
-  
+
   - name: "test-pagerank-empty-graph"
     description: "Test PageRank on empty graph"
     args: ["query", "CALL algo.pageRank.stream() YIELD nodeId, score RETURN nodeId, score"]
@@ -81,7 +81,7 @@ tests:
   # ============================================
   # String Function Tests
   # ============================================
-  
+
   - name: "test-substring-basic"
     description: "Test substring function"
     args: ["query", "RETURN substring('hello world', 0, 5) AS result"]
@@ -145,7 +145,7 @@ tests:
   # ============================================
   # Math Function Tests
   # ============================================
-  
+
   - name: "test-sqrt-function"
     description: "Test sqrt function"
     args: ["query", "RETURN sqrt(16) AS result"]
@@ -239,7 +239,7 @@ tests:
   # ============================================
   # CREATE GRAPH Statement Tests
   # ============================================
-  
+
   - name: "test-create-graph-basic"
     description: "Test basic CREATE GRAPH statement"
     args: ["query", "CREATE GRAPH IF NOT EXISTS test_graph_1"]
@@ -323,7 +323,7 @@ tests:
   # ============================================
   # Map Operations Tests
   # ============================================
-  
+
   - name: "test-map-literal-creation"
     description: "Test creating map literals"
     args: ["query", "RETURN {a: 1, b: 2, c: 3} AS map"]
@@ -356,7 +356,7 @@ tests:
   # ============================================
   # GROUP BY Tests
   # ============================================
-  
+
   - name: "test-group-by-setup"
     description: "Setup data for GROUP BY tests"
     args: ["query", "CREATE (n:Person {age: 25, city: 'NYC'}) CREATE (m:Person {age: 30, city: 'NYC'}) CREATE (o:Person {age: 25, city: 'LA'}) CREATE (p:Person {age: 35, city: 'LA'}) RETURN count(*) as created"]
@@ -397,7 +397,7 @@ tests:
   # ============================================
   # Regression Tests for Fixed Issues
   # ============================================
-  
+
   - name: "regression-decimal-overflow"
     description: "Regression test for decimal overflow handling"
     args: ["query", "RETURN 1e20 + 1 AS result"]
@@ -440,7 +440,7 @@ tests:
   # ============================================
   # Edge Case Tests
   # ============================================
-  
+
   - name: "edge-case-zero-sqrt"
     description: "Test sqrt(0)"
     args: ["query", "RETURN sqrt(0) AS result"]
@@ -494,7 +494,7 @@ tests:
   # ============================================
   # Performance/Stress Tests
   # ============================================
-  
+
   - name: "stress-large-graph-creation"
     description: "Create a larger graph for stress testing"
     # MODIFIED: Replaced UNWIND (Cypher-only) with simple CREATE for GQL compliance

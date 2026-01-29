@@ -9,6 +9,7 @@
 ## Problem Statement
 
 The Rust client uses Quinn QUIC library which has TLS handshake incompatibility with the msquic server:
+
 - Connection hangs with no error message during TLS handshake
 - Python (aioquic) and Go (quic-go) clients work at 94.1% pass rate
 - Quinn and msquic use incompatible TLS implementations
@@ -38,12 +39,14 @@ The Rust client uses Quinn QUIC library which has TLS handshake incompatibility 
 #### Architecture Change
 
 **Quinn (High-level async)**:
+
 ```rust
 let connection = endpoint.connect(addr, host).await?;
 let (send, recv) = connection.open_bi().await?;
 ```
 
 **Quiche (Low-level event-driven)**:
+
 ```rust
 let mut conn = quiche::connect(server_name, &scid, local, peer, &mut config)?;
 
@@ -119,6 +122,7 @@ cargo build --release
 ```
 
 Requirements:
+
 - GCC/Clang with standard glibc headers
 - cmake (for BoringSSL build)
 - Rust 1.70+
@@ -149,10 +153,12 @@ scp target/release/rust_runner user@nixhost:/path/to/test-harness/runners/
 ### Option 4: Alternative QUIC Library
 
 Use a pure-Rust QUIC library without C++ dependencies:
+
 - **s2n-quic** (AWS, pure Rust, msquic-compatible)
 - **neqo** (Mozilla, pure Rust)
 
 s2n-quic would be the best alternative:
+
 ```toml
 s2n-quic = "1.35"
 s2n-codec = "0.29"
@@ -196,6 +202,7 @@ The implemented code includes:
 ### Immediate (Environment Fix)
 
 1. **Build on standard Linux**:
+
    ```bash
    # Clone repo to Ubuntu/Debian machine
    cd clients/rust
@@ -204,6 +211,7 @@ The implemented code includes:
    ```
 
 2. **Run tests**:
+
    ```bash
    cd clients/test-harness
    python3 run_tests.py --client rust --server localhost:8443 --spec specs/basic.yaml
@@ -214,6 +222,7 @@ The implemented code includes:
 If environment issues persist, migrate to s2n-quic (pure Rust, no C++ dependencies):
 
 1. Update Cargo.toml:
+
    ```toml
    s2n-quic = "1.35"
    ```

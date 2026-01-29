@@ -37,8 +37,9 @@ cli:
     format: "json"
 
 env:
-  GEODE_TDE_KEY: "aes256-multitenant-master-key-32bytes!"
-  GEODE_WAL_KEY: "aes256-multitenant-wal-key-32bytes!!!"
+  # All keys must be exactly 64 hex characters (32 bytes for AES-256)
+  GEODE_TDE_KEY: "aaaaaaaaaaaaaaaa1111111111111111bbbbbbbbbbbbbbbb2222222222222222"
+  GEODE_WAL_KEY: "cccccccccccccccc3333333333333333dddddddddddddddd4444444444444444"
   GEODE_TDE_ENABLED: "true"
   GEODE_WAL_ENCRYPTION_ENABLED: "true"
 

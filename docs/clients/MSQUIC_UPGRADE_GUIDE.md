@@ -1,6 +1,7 @@
 # MsQuic Upgrade Guide - Fix for Zig/Rust Client Compatibility
 
 ## Current Status
+
 - **Installed Version**: MsQuic 2.4.16 (Ubuntu package)
 - **Issue**: Incompatible with MsQuic and quiche QUIC clients
 - **Solution**: Upgrade to latest MsQuic from source
@@ -61,6 +62,7 @@ ldconfig -p | grep msquic
 ```
 
 Expected output:
+
 ```
 libmsquic.so.2 (libc6,x86-64) => /usr/local/lib/libmsquic.so.2
 libmsquic.so (libc6,x86-64) => /usr/local/lib/libmsquic.so
@@ -93,13 +95,15 @@ cd clients/test-harness
 make test-with-coverage
 ```
 
-### Expected Results (BEFORE fix):
+### Expected Results (BEFORE fix)
+
 - Python: 51/51 ✅ (100%)
 - Go: 51/51 ✅ (100%)
 - Rust: 0/51 ❌ (0% - timeout)
 - Zig: 0/51 ❌ (0% - timeout)
 
-### Expected Results (AFTER fix):
+### Expected Results (AFTER fix)
+
 - Python: 51/51 ✅ (100%)
 - Go: 51/51 ✅ (100%)
 - Rust: 51/51 ✅ (100%) ← **FIXED**

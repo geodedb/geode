@@ -20,7 +20,7 @@ tests:
   # ===============================
   # BASIC NODE PATTERNS
   # ===============================
-  
+
   - name: "node-pattern-simple"
     description: "Test simple node pattern matching"
     setup:
@@ -106,7 +106,7 @@ tests:
   # ===============================
   # BASIC RELATIONSHIP PATTERNS
   # ===============================
-  
+
   - name: "relationship-pattern-simple"
     description: "Test simple relationship pattern matching"
     setup:
@@ -197,7 +197,7 @@ tests:
   # ===============================
   # VARIABLE-LENGTH PATTERNS
   # ===============================
-  
+
   - name: "variable-length-any"
     description: "Test variable-length pattern with any length (*)"
     setup:
@@ -286,7 +286,7 @@ tests:
   # ===============================
   # PATH VARIABLES
   # ===============================
-  
+
   - name: "path-variable-assignment"
     description: "Test path variable assignment"
     setup:
@@ -345,7 +345,7 @@ tests:
   # ===============================
   # COMPLEX PATTERN COMBINATIONS
   # ===============================
-  
+
   - name: "multiple-patterns-in-match"
     description: "Test multiple patterns in single MATCH clause"
     setup:
@@ -408,7 +408,7 @@ tests:
   # ===============================
   # PATTERN FILTERS AND WHERE
   # ===============================
-  
+
   - name: "pattern-with-where-clause"
     description: "Test pattern matching with WHERE clause"
     setup:
@@ -460,7 +460,7 @@ tests:
   # ===============================
   # OPTIONAL PATTERNS
   # ===============================
-  
+
   - name: "optional-match-basic"
     description: "Test basic OPTIONAL MATCH pattern"
     setup:
@@ -492,7 +492,7 @@ tests:
   # ===============================
   # PATTERN COMPREHENSIONS
   # ===============================
-  
+
   - name: "pattern-in-list-comprehension"
     description: "Test pattern within list comprehension"
     setup:
@@ -510,7 +510,7 @@ tests:
   # ===============================
   # EDGE CASES AND ERRORS
   # ===============================
-  
+
   - name: "pattern-no-matches"
     description: "Test pattern matching with no results"
     setup:
@@ -558,7 +558,7 @@ tests:
   # ===============================
   # PERFORMANCE TESTS
   # ===============================
-  
+
   - name: "pattern-performance-large-graph"
     description: "Performance test with larger graph pattern matching"
     timeout_ms: 30000
@@ -580,7 +580,7 @@ tests:
   # ===============================
   # CLEANUP
   # ===============================
-  
+
   - name: "cleanup-pattern-test-data"
     description: "Clean up all test data created during pattern matching tests"
     args:

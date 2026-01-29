@@ -34,6 +34,7 @@ Unified Binary Architecture (geode)
 ### Core Function Transformations
 
 #### Before (Subprocess Spawning)
+
 ```zig
 // OLD: Subprocess spawning approach
 fn runEmbeddedServer(ally: std.mem.Allocator, config: ServerConfig) !void {
@@ -45,6 +46,7 @@ fn runEmbeddedServer(ally: std.mem.Allocator, config: ServerConfig) !void {
 ```
 
 #### After (Direct Function Calls)
+
 ```zig
 // NEW: Unified binary approach
 fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -58,6 +60,7 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 ### Configuration Structures
 
 #### ServerConfig Structure
+
 ```zig
 const ServerConfig = struct {
     data_dir: ?[]const u8 = null,
@@ -79,6 +82,7 @@ const ServerConfig = struct {
 ### Server Command (geode serve)
 
 **Unified Binary Implementation:**
+
 ```zig
 fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Parse server configuration from arguments
@@ -90,6 +94,7 @@ fn cmdServe(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 ```
 
 **Usage Examples:**
+
 ```bash
 # Start server with unified binary
 geode serve --listen 0.0.0.0:3141 --data-dir /var/lib/geode
@@ -100,6 +105,7 @@ geode serve --listen 0.0.0.0:3141 --data-dir /var/lib/geode
 ### Query Command (geode query)
 
 **Unified Binary Implementation:**
+
 ```zig
 fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Parse query options from arguments...
@@ -113,6 +119,7 @@ fn cmdQuery(ally: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
 ```
 
 **Usage Examples:**
+
 ```bash
 # Execute query with unified binary (QUIC-only)
 geode query "RETURN 1 AS test" --server 127.0.0.1:3141
@@ -125,6 +132,7 @@ geode query "RETURN 1 AS test" --server 127.0.0.1:3141 --insecure
 ## Error Handling
 
 ### Exit Code Management
+
 ```zig
 pub const ExitCode = enum(u8) {
     success = 0,
@@ -135,6 +143,7 @@ pub const ExitCode = enum(u8) {
 ```
 
 ### Error Response Examples
+
 ```bash
 # Usage error
 geode query
@@ -166,6 +175,7 @@ The `--insecure` flag disables TLS certificate verification for QUIC connections
 | Error Handling | Cross-process complexity | Direct function calls | Simplified |
 
 ### Command Performance
+
 - **Help Commands**: <1ms response time
 - **Configuration Parsing**: <1ms overhead
 - **Query Execution**: <5ms overhead beyond server response time (no subprocess)
@@ -178,6 +188,7 @@ The `--insecure` flag disables TLS certificate verification for QUIC connections
 **Test File**: `tests/test_cli_subprocess_elimination.zig`
 
 **Test Coverage:**
+
 - CLI unified binary architecture validation
 - ServerConfig structure testing and query argument handling
 - Exit code management verification
@@ -190,6 +201,7 @@ The `--insecure` flag disables TLS certificate verification for QUIC connections
 **Test File**: `tests/test_cli_subprocess_elimination_integration_minimal.zig`
 
 **Test Coverage:**
+
 - CLI unified binary imports work correctly
 - Server configuration for unified binary operation
 - Client configuration for unified binary operation
@@ -217,12 +229,14 @@ The `--insecure` flag disables TLS certificate verification for QUIC connections
 ### Build System Integration
 
 **Build Configuration:**
+
 - Single binary target: `geode`
 - No separate `geoded`/`geodec` targets required
 - Simplified build dependencies
 - Unified binary distribution
 
 **Module Integration:**
+
 ```zig
 // Direct imports instead of subprocess calls
 const ServerMain = @import("../server/main.zig");
@@ -236,6 +250,7 @@ const ClientMain = @import("../client/main.zig");
 ### Deployment Benefits
 
 **Before (Multiple Binaries):**
+
 ```
 deployment/
 ├── geode      (CLI binary)
@@ -245,6 +260,7 @@ deployment/
 ```
 
 **After (Unified Binary):**
+
 ```
 deployment/
 ├── geode      (Unified binary)
@@ -252,6 +268,7 @@ deployment/
 ```
 
 **Advantages:**
+
 - **Simpler Distribution**: One binary to distribute
 - **Reduced Storage**: Lower disk usage
 - **Easier Updates**: Single binary to update
@@ -263,6 +280,7 @@ deployment/
 ### For Existing Deployments
 
 **Command Migration:**
+
 ```bash
 # OLD: Separate binaries
 ./geoded --listen 0.0.0.0:3141
@@ -274,6 +292,7 @@ deployment/
 ```
 
 **Script Updates:**
+
 ```bash
 # OLD: Script calling separate binaries
 #!/bin/bash
@@ -289,6 +308,7 @@ deployment/
 ### For Test Scripts
 
 **Test Integration:**
+
 ```bash
 # OLD: Test using separate binaries
 ./geodec "RETURN 1" --server 127.0.0.1:3141 --insecure
@@ -319,6 +339,7 @@ deployment/
 ### Common Issues
 
 #### Legacy Binary Dependencies
+
 ```bash
 # Issue: Scripts still calling old binaries
 ./geoded --help
@@ -329,6 +350,7 @@ deployment/
 ```
 
 #### Test Compatibility
+
 ```bash
 # Issue: Tests expecting old binary behavior
 ./geodec "RETURN 1" --server 127.0.0.1:3141 --insecure
@@ -338,6 +360,7 @@ deployment/
 ```
 
 #### Configuration Migration
+
 ```bash
 # Issue: Old configuration files referencing separate binaries
 server_binary=/usr/bin/geoded
@@ -360,6 +383,7 @@ All CLI subprocess elimination implementations include proper CANARY governance 
 ## Status
 
 **Implementation Status**: ✅ Complete (October 2025)
+
 - ✅ **Subprocess Elimination**: No more geoded/geodec spawning
 - ✅ **Unified Binary**: Single geode binary for all functionality
 - ✅ **Direct Function Calls**: Server and client functions called directly

@@ -4,31 +4,28 @@
 import subprocess
 import sys
 
+
 def run_query(query, expect_exit_code=0):
     cmd = [
         "/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode",
         "query",
         "--server 127.0.0.1:3141 --insecure",
-        query
+        query,
     ]
-    
+
     print(f"Running: {query}")
-    
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=10
-    )
-    
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
     print(f"Exit code: {result.returncode} (expected: {expect_exit_code})")
-    
+
     if result.returncode != expect_exit_code:
         print(f"STDOUT:\n{result.stdout}")
         print(f"STDERR:\n{result.stderr}")
         return False
-    
+
     return True
+
 
 def main():
     tests = [
@@ -41,10 +38,10 @@ def main():
         ("RETURN 1 AS x", 0),
         ("RETURN 'hello' AS greeting", 0),
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for query, expected_exit in tests:
         if run_query(query, expected_exit):
             passed += 1
@@ -52,9 +49,10 @@ def main():
         else:
             failed += 1
             print("✗ FAILED\n")
-    
+
     print(f"Results: {passed} passed, {failed} failed")
     return failed == 0
+
 
 if __name__ == "__main__":
     success = main()

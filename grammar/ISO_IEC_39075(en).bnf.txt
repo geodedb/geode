@@ -2,7 +2,7 @@
 ************************************************************************************************
 This file is a "digital artifact" that contains the grammar specified by ISO/IEC 39075.
 
-This grammar may be used by implementers of GQL-implementations when generating parsers for the 
+This grammar may be used by implementers of GQL-implementations when generating parsers for the
 GQL language.
 ************************************************************************************************
 
@@ -748,7 +748,7 @@ GQL language.
     [ <element variable declaration> ]
      [ <is label expression> ]
      [ <element pattern predicate> ]
-    
+
 
 <element variable declaration> ::=
     [ TEMP ] <element variable>
@@ -2745,7 +2745,7 @@ GQL language.
   | ASC
   | ASCENDING
   | ASIN
-    
+
   | AT
   | ATAN
   | AVG
@@ -2768,7 +2768,7 @@ GQL language.
   | CHAR
   | CHAR_LENGTH
   | CHARACTER_LENGTH
-    
+
   | CHARACTERISTICS
   | CLOSE
   | COALESCE
@@ -2778,13 +2778,13 @@ GQL language.
   | COS
   | COSH
   | COT
-    
+
   | COUNT
   | CREATE
   | CURRENT_DATE
   | CURRENT_GRAPH
   | CURRENT_PROPERTY_GRAPH
-    
+
   | CURRENT_SCHEMA
   | CURRENT_TIME
   | CURRENT_TIMESTAMP
@@ -2798,7 +2798,7 @@ GQL language.
   | DESC
   | DESCENDING
   | DETACH
-    
+
   | DISTINCT
   | DOUBLE
   | DROP
@@ -2819,7 +2819,7 @@ GQL language.
   | FLOAT64
   | FLOAT128
   | FLOAT256
-    
+
   | FLOOR
   | FOR
   | FROM
@@ -2840,7 +2840,7 @@ GQL language.
   | INT16
   | INTEGER16
   | INT32
-    
+
   | INTEGER32
   | INT64
   | INTEGER64
@@ -2849,7 +2849,7 @@ GQL language.
   | INT256
   | INTEGER256
   | INTERSECT
-    
+
   | INTERVAL
   | IS
   | LEADING
@@ -2862,7 +2862,7 @@ GQL language.
   | LOCAL
   | LOCAL_DATETIME
   | LOCAL_TIME
-    
+
   | LOCAL_TIMESTAMP
   | LOG
   | LOG10
@@ -2896,7 +2896,7 @@ GQL language.
   | PATHS
   | PERCENTILE_CONT
   | PERCENTILE_DISC
-    
+
   | POWER
   | PRECISION
   | PROPERTY_EXISTS
@@ -2920,7 +2920,7 @@ GQL language.
   | SIGNED
   | SIN
   | SINH
-    
+
   | SIZE
   | SKIP
   | SMALL
@@ -2930,7 +2930,7 @@ GQL language.
   | STDDEV_POP
   | STDDEV_SAMP
   | STRING
-    
+
   | SUM
   | TAN
   | TANH
@@ -2951,7 +2951,7 @@ GQL language.
   | UINT256
   | UNION
   | UNKNOWN
-    
+
   | UNSIGNED
   | UPPER
   | USE
@@ -2971,7 +2971,7 @@ GQL language.
   | ZONED_TIME
 
 <pre-reserved word> ::=
-    
+
   | ABSTRACT
   | AGGREGATE
   | AGGREGATES
@@ -3293,7 +3293,7 @@ GQL language.
   | m
   | n
   | o
-    
+
   | p
   | q
   | r
@@ -3322,7 +3322,7 @@ GQL language.
   | M
   | N
   | O
-    
+
   | P
   | Q
   | R
@@ -3499,4 +3499,3 @@ GQL language.
 
 <other language character> ::=
     !! See the Syntax Rules.
-

@@ -9,18 +9,15 @@ from __future__ import annotations
 
 import os
 import shutil
-import signal
-import socket
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional, Dict, List, Any
+from typing import Any, Dict, List, Optional
 
 import psutil
 
-import sys
-import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,7 +30,7 @@ class ServerManagerDisabled:
     @staticmethod
     def generate_test_certificates(cert_dir: Path) -> tuple[Path, Path, Path]:
         """Generate test certificates for TLS.
-        
+
         Returns
         -------
         tuple[Path, Path, Path]
@@ -41,31 +38,40 @@ class ServerManagerDisabled:
         """
         cert_dir = Path(cert_dir)
         cert_dir.mkdir(parents=True, exist_ok=True)
-        
+
         ca_key = cert_dir / "ca-key.pem"
         ca_cert = cert_dir / "ca-cert.pem"
         server_key = cert_dir / "server-key.pem"
         server_cert = cert_dir / "server-cert.pem"
         server_csr = cert_dir / "server.csr"
         server_conf = cert_dir / "server.conf"
-        
+
         # Generate CA private key
-        subprocess.run([
-            "openssl", "genrsa", "-out", str(ca_key), "2048"
-        ], check=True, capture_output=True)
-        
+        subprocess.run(["openssl", "genrsa", "-out", str(ca_key), "2048"], check=True, capture_output=True)
+
         # Generate CA certificate
-        subprocess.run([
-            "openssl", "req", "-new", "-x509", "-days", "365",
-            "-key", str(ca_key), "-out", str(ca_cert),
-            "-subj", "/C=US/ST=Test/L=Test/O=Geode Test/CN=Geode Test CA"
-        ], check=True, capture_output=True)
-        
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-new",
+                "-x509",
+                "-days",
+                "365",
+                "-key",
+                str(ca_key),
+                "-out",
+                str(ca_cert),
+                "-subj",
+                "/C=US/ST=Test/L=Test/O=Geode Test/CN=Geode Test CA",
+            ],
+            check=True,
+            capture_output=True,
+        )
+
         # Generate server private key
-        subprocess.run([
-            "openssl", "genrsa", "-out", str(server_key), "2048"
-        ], check=True, capture_output=True)
-        
+        subprocess.run(["openssl", "genrsa", "-out", str(server_key), "2048"], check=True, capture_output=True)
+
         # Create server config file
         server_conf.write_text("""[req]
 distinguished_name = req_distinguished_name
@@ -88,23 +94,50 @@ subjectAltName = @alt_names
 DNS.1 = localhost
 IP.1 = 127.0.0.1
 """)
-        
+
         # Generate server certificate signing request
-        subprocess.run([
-            "openssl", "req", "-new", "-key", str(server_key),
-            "-out", str(server_csr),
-            "-subj", "/C=US/ST=Test/L=Test/O=Geode Test/CN=127.0.0.1"
-        ], check=True, capture_output=True)
-        
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-new",
+                "-key",
+                str(server_key),
+                "-out",
+                str(server_csr),
+                "-subj",
+                "/C=US/ST=Test/L=Test/O=Geode Test/CN=127.0.0.1",
+            ],
+            check=True,
+            capture_output=True,
+        )
+
         # Generate server certificate signed by CA
-        subprocess.run([
-            "openssl", "x509", "-req", "-in", str(server_csr),
-            "-CA", str(ca_cert), "-CAkey", str(ca_key),
-            "-CAcreateserial", "-out", str(server_cert),
-            "-days", "365", "-extensions", "v3_req",
-            "-extfile", str(server_conf)
-        ], check=True, capture_output=True)
-        
+        subprocess.run(
+            [
+                "openssl",
+                "x509",
+                "-req",
+                "-in",
+                str(server_csr),
+                "-CA",
+                str(ca_cert),
+                "-CAkey",
+                str(ca_key),
+                "-CAcreateserial",
+                "-out",
+                str(server_cert),
+                "-days",
+                "365",
+                "-extensions",
+                "v3_req",
+                "-extfile",
+                str(server_conf),
+            ],
+            check=True,
+            capture_output=True,
+        )
+
         return ca_cert, server_cert, server_key
 
     def __init__(
@@ -119,7 +152,7 @@ IP.1 = 127.0.0.1
         env_overrides: Optional[Dict[str, str]] = None,
     ):
         """Initialize the server manager.
-        
+
         Parameters
         ----------
         geode_binary:
@@ -143,7 +176,7 @@ IP.1 = 127.0.0.1
         self.verbose = verbose
         self.extra_args = extra_args or []
         self.env_overrides = env_overrides or {}
-        
+
         # Data directory management
         self._temp_data_dir = data_dir is None
         if data_dir is None:
@@ -151,19 +184,17 @@ IP.1 = 127.0.0.1
         else:
             self.data_dir = Path(data_dir)
             self.data_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Generate test certificates
-        self.ca_cert, self.server_cert, self.server_key = self.generate_test_certificates(
-            self.data_dir / "certs"
-        )
-        
+        self.ca_cert, self.server_cert, self.server_key = self.generate_test_certificates(self.data_dir / "certs")
+
         # Process management
         self.process: Optional[subprocess.Popen] = None
         self._ready = False
 
     def start(self) -> None:
         """Start the Geode server and wait for it to be ready.
-        
+
         Raises
         ------
         RuntimeError
@@ -171,28 +202,33 @@ IP.1 = 127.0.0.1
         """
         if self.process is not None:
             raise RuntimeError("Server is already running")
-        
+
         # Build command line
         cmd = [
             self.binary,
             "serve",
-            "--data-dir", str(self.data_dir),
-            "--listen", f"127.0.0.1:{self.port}",
-            "--cert", str(self.server_cert),
-            "--key", str(self.server_key),
-            "--log-level", "info",
+            "--data-dir",
+            str(self.data_dir),
+            "--listen",
+            f"127.0.0.1:{self.port}",
+            "--cert",
+            str(self.server_cert),
+            "--key",
+            str(self.server_key),
+            "--log-level",
+            "info",
         ]
-        
+
         # Add extra arguments
         cmd.extend(self.extra_args)
-        
+
         if self.verbose:
             print(f"Starting Geode server: {' '.join(cmd)}")
-        
+
         # Prepare environment
         env = os.environ.copy()
         env.update(self.env_overrides)
-        
+
         # Start the process
         try:
             self.process = subprocess.Popen(
@@ -206,7 +242,7 @@ IP.1 = 127.0.0.1
             self._start_time = time.time()
         except Exception as exc:
             raise RuntimeError(f"Failed to start server process: {exc}")
-        
+
         # Wait for server to become ready
         self._wait_for_ready()
 
@@ -214,10 +250,10 @@ IP.1 = 127.0.0.1
         """Stop the server gracefully."""
         if self.process is None:
             return
-        
+
         if self.verbose:
             print(f"Stopping Geode server (PID: {self.process.pid})")
-        
+
         # Try graceful shutdown first
         try:
             self.process.terminate()
@@ -231,10 +267,10 @@ IP.1 = 127.0.0.1
         except Exception as exc:
             if self.verbose:
                 print(f"Error during shutdown: {exc}")
-        
+
         self.process = None
         self._ready = False
-        
+
         # Cleanup temporary data directory
         if self._temp_data_dir and self.data_dir.exists():
             try:
@@ -245,7 +281,7 @@ IP.1 = 127.0.0.1
 
     def wait(self) -> int:
         """Wait for the server process to exit.
-        
+
         Returns
         -------
         int
@@ -253,7 +289,7 @@ IP.1 = 127.0.0.1
         """
         if self.process is None:
             raise RuntimeError("No server process is running")
-        
+
         return self.process.wait()
 
     def is_ready(self) -> bool:
@@ -274,7 +310,7 @@ IP.1 = 127.0.0.1
         """Wait for the server to become ready to accept connections."""
         start_time = time.time()
         timeout_seconds = self.timeout_ms / 1000.0
-        
+
         while time.time() - start_time < timeout_seconds:
             # Check if process is still running
             if not self.is_running():
@@ -285,21 +321,21 @@ IP.1 = 127.0.0.1
                         stdout, stderr = self.process.communicate(timeout=1)
                     except subprocess.TimeoutExpired:
                         pass
-                
+
                 raise RuntimeError(
                     f"Server process exited unexpectedly (exit code: {self.process.returncode})\n"
                     f"stdout: {stdout}\nstderr: {stderr}"
                 )
-            
+
             # Check if port is accepting connections
             if self._check_port_ready():
                 self._ready = True
                 if self.verbose:
                     print(f"Server ready on port {self.port}")
                 return
-            
+
             time.sleep(0.1)
-        
+
         # Timeout reached
         if self.process:
             self.process.terminate()
@@ -309,14 +345,9 @@ IP.1 = 127.0.0.1
         """Check if the server is ready by checking process stability and port binding."""
         try:
             # Check if process has been running for a reasonable time and port is bound
-            if hasattr(self, '_start_time') and time.time() - self._start_time > 2.0:
+            if hasattr(self, "_start_time") and time.time() - self._start_time > 2.0:
                 # Check if UDP port is bound (QUIC uses UDP)
-                result = subprocess.run(
-                    ["netstat", "-uln"],
-                    capture_output=True,
-                    text=True,
-                    timeout=1.0
-                )
+                result = subprocess.run(["netstat", "-uln"], capture_output=True, text=True, timeout=1.0)
                 if result.returncode == 0:
                     port_bound = f":{self.port}" in result.stdout
                     if port_bound and self.is_running():
@@ -324,21 +355,21 @@ IP.1 = 127.0.0.1
             return False
         except Exception:
             # Final fallback: just check if process is running for enough time
-            if hasattr(self, '_start_time'):
+            if hasattr(self, "_start_time"):
                 return time.time() - self._start_time > 4.0 and self.is_running()
             return False
 
     @staticmethod
     def stop_by_port(port: int, force: bool = False) -> bool:
         """Stop a Geode server running on the specified port.
-        
+
         Parameters
         ----------
         port:
             Port number of the server to stop.
         force:
             Whether to force kill the process.
-            
+
         Returns
         -------
         bool
@@ -347,7 +378,7 @@ IP.1 = 127.0.0.1
         servers = ServerManager.list_servers(port)
         if not servers:
             return False
-        
+
         for server in servers:
             pid = server["pid"]
             try:
@@ -362,73 +393,74 @@ IP.1 = 127.0.0.1
                     except psutil.TimeoutExpired:
                         process.kill()
                 return True
-            except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
-        
+
         return False
 
     @staticmethod
     def list_servers(port: Optional[int] = None) -> List[Dict[str, Any]]:
         """List running Geode server processes.
-        
+
         Parameters
         ----------
         port:
             If specified, only return servers on this port.
-            
+
         Returns
         -------
         List[Dict[str, Any]]
             List of server information dictionaries.
         """
         servers = []
-        
-        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+
+        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
             try:
                 # Look for processes that might be Geode servers
-                cmdline = proc.info['cmdline'] or []
+                cmdline = proc.info["cmdline"] or []
                 if len(cmdline) < 2:
                     continue
-                
+
                 # Check if this looks like a Geode server process
-                if not (('geode' in cmdline[0].lower() or 'geoded' in cmdline[0].lower()) and 
-                        'serve' in cmdline):
+                if not (("geode" in cmdline[0].lower() or "geoded" in cmdline[0].lower()) and "serve" in cmdline):
                     continue
-                
+
                 # Extract port from command line
                 server_port = None
                 for i, arg in enumerate(cmdline):
-                    if arg == '--listen' and i + 1 < len(cmdline):
+                    if arg == "--listen" and i + 1 < len(cmdline):
                         listen_addr = cmdline[i + 1]
-                        if ':' in listen_addr:
+                        if ":" in listen_addr:
                             try:
-                                server_port = int(listen_addr.split(':')[-1])
+                                server_port = int(listen_addr.split(":")[-1])
                             except ValueError:
                                 continue
                         break
-                
+
                 # Filter by port if specified
                 if port is not None and server_port != port:
                     continue
-                
+
                 # Extract data directory
                 data_dir = None
                 for i, arg in enumerate(cmdline):
-                    if arg == '--data-dir' and i + 1 < len(cmdline):
+                    if arg == "--data-dir" and i + 1 < len(cmdline):
                         data_dir = cmdline[i + 1]
                         break
-                
-                servers.append({
-                    "pid": proc.info['pid'],
-                    "port": server_port,
-                    "status": "running",
-                    "data_dir": data_dir,
-                    "cmdline": cmdline,
-                })
-                
+
+                servers.append(
+                    {
+                        "pid": proc.info["pid"],
+                        "port": server_port,
+                        "status": "running",
+                        "data_dir": data_dir,
+                        "cmdline": cmdline,
+                    }
+                )
+
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
-        
+
         return servers
 
     def __enter__(self):

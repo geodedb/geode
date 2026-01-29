@@ -7,21 +7,21 @@ Manages distributed scale testing across multiple nodes.
 Supports Docker, Kubernetes, and SSH-based deployment.
 """
 
-import json
-import time
 import argparse
+import json
 import subprocess
-from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Optional
-from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from enum import Enum
-import socket
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import Dict
 
 
 class DeploymentMode(Enum):
     """Deployment modes for cluster orchestration."""
+
     DOCKER = "docker"
     KUBERNETES = "kubernetes"
     SSH = "ssh"
@@ -30,6 +30,7 @@ class DeploymentMode(Enum):
 
 class NodeRole(Enum):
     """Roles for cluster nodes."""
+
     SERVER = "server"
     GENERATOR = "generator"
     METRICS = "metrics"
@@ -38,6 +39,7 @@ class NodeRole(Enum):
 @dataclass
 class ClusterNode:
     """Represents a node in the test cluster."""
+
     id: str
     host: str
     port: int
@@ -50,6 +52,7 @@ class ClusterNode:
 @dataclass
 class ClusterConfig:
     """Configuration for a test cluster."""
+
     name: str
     deployment_mode: DeploymentMode
     server_nodes: int = 1
@@ -86,10 +89,7 @@ class ClusterOrchestrator:
     def _deploy_docker(self) -> bool:
         """Deploy cluster using Docker."""
         # Create network
-        subprocess.run(
-            ["docker", "network", "create", self.config.network_name],
-            capture_output=True
-        )
+        subprocess.run(["docker", "network", "create", self.config.network_name], capture_output=True)
 
         # Deploy server nodes
         for i in range(self.config.server_nodes):
@@ -97,24 +97,33 @@ class ClusterOrchestrator:
             port = self.config.base_port + i
             container_name = f"geode-{self.config.name}-{node_id}"
 
-            result = subprocess.run([
-                "docker", "run", "-d",
-                "--name", container_name,
-                "--network", self.config.network_name,
-                "-p", f"{port}:3141",
-                "-e", f"GEODE_NODE_ID={node_id}",
-                "-e", "GEODE_CLUSTER_MODE=true",
-                self.config.geode_image,
-                "serve", "--listen", "0.0.0.0:3141"
-            ], capture_output=True, text=True)
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "-d",
+                    "--name",
+                    container_name,
+                    "--network",
+                    self.config.network_name,
+                    "-p",
+                    f"{port}:3141",
+                    "-e",
+                    f"GEODE_NODE_ID={node_id}",
+                    "-e",
+                    "GEODE_CLUSTER_MODE=true",
+                    self.config.geode_image,
+                    "serve",
+                    "--listen",
+                    "0.0.0.0:3141",
+                ],
+                capture_output=True,
+                text=True,
+            )
 
             if result.returncode == 0:
                 self.nodes[node_id] = ClusterNode(
-                    id=node_id,
-                    host="localhost",
-                    port=port,
-                    role=NodeRole.SERVER,
-                    status="running"
+                    id=node_id, host="localhost", port=port, role=NodeRole.SERVER, status="running"
                 )
                 print(f"  Started {node_id} on port {port}")
             else:
@@ -126,24 +135,32 @@ class ClusterOrchestrator:
             node_id = f"generator-{i}"
             container_name = f"geode-{self.config.name}-{node_id}"
 
-            result = subprocess.run([
-                "docker", "run", "-d",
-                "--name", container_name,
-                "--network", self.config.network_name,
-                "-e", f"GEODE_NODE_ID={node_id}",
-                "-e", "GEODE_ROLE=generator",
-                "-v", f"{Path.cwd()}/loadtest:/loadtest",
-                self.config.geode_image,
-                "sleep", "infinity"  # Keep container running
-            ], capture_output=True, text=True)
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "-d",
+                    "--name",
+                    container_name,
+                    "--network",
+                    self.config.network_name,
+                    "-e",
+                    f"GEODE_NODE_ID={node_id}",
+                    "-e",
+                    "GEODE_ROLE=generator",
+                    "-v",
+                    f"{Path.cwd()}/loadtest:/loadtest",
+                    self.config.geode_image,
+                    "sleep",
+                    "infinity",  # Keep container running
+                ],
+                capture_output=True,
+                text=True,
+            )
 
             if result.returncode == 0:
                 self.nodes[node_id] = ClusterNode(
-                    id=node_id,
-                    host=container_name,
-                    port=0,
-                    role=NodeRole.GENERATOR,
-                    status="running"
+                    id=node_id, host=container_name, port=0, role=NodeRole.GENERATOR, status="running"
                 )
                 print(f"  Started {node_id}")
 
@@ -153,23 +170,29 @@ class ClusterOrchestrator:
             container_name = f"geode-{self.config.name}-metrics"
             metrics_port = self.config.base_port + 1000
 
-            result = subprocess.run([
-                "docker", "run", "-d",
-                "--name", container_name,
-                "--network", self.config.network_name,
-                "-p", f"{metrics_port}:9090",
-                "-v", f"{Path.cwd()}/loadtest/metrics:/metrics",
-                "prom/prometheus:latest",
-                "--config.file=/metrics/prometheus.yml"
-            ], capture_output=True, text=True)
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "-d",
+                    "--name",
+                    container_name,
+                    "--network",
+                    self.config.network_name,
+                    "-p",
+                    f"{metrics_port}:9090",
+                    "-v",
+                    f"{Path.cwd()}/loadtest/metrics:/metrics",
+                    "prom/prometheus:latest",
+                    "--config.file=/metrics/prometheus.yml",
+                ],
+                capture_output=True,
+                text=True,
+            )
 
             if result.returncode == 0:
                 self.nodes[node_id] = ClusterNode(
-                    id=node_id,
-                    host="localhost",
-                    port=metrics_port,
-                    role=NodeRole.METRICS,
-                    status="running"
+                    id=node_id, host="localhost", port=metrics_port, role=NodeRole.METRICS, status="running"
                 )
                 print(f"  Started metrics on port {metrics_port}")
 
@@ -186,10 +209,7 @@ class ClusterOrchestrator:
             with open(manifest_path, "w") as f:
                 f.write(manifest)
 
-            result = subprocess.run(
-                ["kubectl", "apply", "-f", manifest_path],
-                capture_output=True, text=True
-            )
+            result = subprocess.run(["kubectl", "apply", "-f", manifest_path], capture_output=True, text=True)
             if result.returncode != 0:
                 print(f"Failed to apply {name}: {result.stderr}")
                 return False
@@ -197,11 +217,18 @@ class ClusterOrchestrator:
 
         # Wait for pods to be ready
         print("  Waiting for pods...")
-        subprocess.run([
-            "kubectl", "wait", "--for=condition=ready", "pod",
-            "-l", f"app=geode,cluster={self.config.name}",
-            "--timeout=120s"
-        ], capture_output=True)
+        subprocess.run(
+            [
+                "kubectl",
+                "wait",
+                "--for=condition=ready",
+                "pod",
+                "-l",
+                f"app=geode,cluster={self.config.name}",
+                "--timeout=120s",
+            ],
+            capture_output=True,
+        )
 
         return True
 
@@ -291,7 +318,7 @@ spec:
           requests:
             memory: "1Gi"
             cpu: "500m"
-"""
+""",
         }
 
     def _deploy_ssh(self) -> bool:
@@ -310,26 +337,18 @@ spec:
             proc = subprocess.Popen(
                 ["./zig-out/bin/geode", "serve", "--listen", f"0.0.0.0:{port}"],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+                stderr=subprocess.PIPE,
             )
 
             self.nodes[node_id] = ClusterNode(
-                id=node_id,
-                host="localhost",
-                port=port,
-                role=NodeRole.SERVER,
-                status="running"
+                id=node_id, host="localhost", port=port, role=NodeRole.SERVER, status="running"
             )
             print(f"  Started {node_id} on port {port} (pid: {proc.pid})")
 
         return True
 
     def run_load_test(
-        self,
-        workload: str,
-        target_nodes: int = 1_000_000,
-        target_edges: int = 10_000_000,
-        duration_seconds: int = 300
+        self, workload: str, target_nodes: int = 1_000_000, target_edges: int = 10_000_000, duration_seconds: int = 300
     ) -> Dict:
         """Run distributed load test."""
         print(f"\nStarting load test: {workload}")
@@ -356,7 +375,7 @@ spec:
                     len(generators),
                     nodes_per_generator,
                     edges_per_generator,
-                    duration_seconds
+                    duration_seconds,
                 )
                 futures.append(future)
 
@@ -379,7 +398,7 @@ spec:
             "duration_seconds": total_time,
             "nodes_per_second": total_nodes / total_time if total_time > 0 else 0,
             "edges_per_second": total_edges / total_time if total_time > 0 else 0,
-            "generator_results": results
+            "generator_results": results,
         }
 
     def _run_generator(
@@ -389,35 +408,43 @@ spec:
         total_shards: int,
         target_nodes: int,
         target_edges: int,
-        duration_seconds: int
+        duration_seconds: int,
     ) -> Dict:
         """Run load generation on a single generator node."""
         start_time = time.time()
 
         if self.config.deployment_mode == DeploymentMode.DOCKER:
             cmd = [
-                "docker", "exec", f"geode-{self.config.name}-{generator.id}",
-                "python3", "/loadtest/generator/run.py",
-                "--nodes", str(target_nodes),
-                "--edges", str(target_edges),
-                "--shard", str(shard_id),
-                "--total-shards", str(total_shards)
+                "docker",
+                "exec",
+                f"geode-{self.config.name}-{generator.id}",
+                "python3",
+                "/loadtest/generator/run.py",
+                "--nodes",
+                str(target_nodes),
+                "--edges",
+                str(target_edges),
+                "--shard",
+                str(shard_id),
+                "--total-shards",
+                str(total_shards),
             ]
         else:
             # Local execution
-            server_node = next(
-                (n for n in self.nodes.values() if n.role == NodeRole.SERVER),
-                None
-            )
+            server_node = next((n for n in self.nodes.values() if n.role == NodeRole.SERVER), None)
             server_host = f"localhost:{server_node.port}" if server_node else "localhost:3141"
 
             cmd = [
                 "./zig-out/bin/geode-loadgen",
-                "-n", str(target_nodes),
-                "-e", str(target_edges),
-                "--shard", str(shard_id),
-                "--total-shards", str(total_shards),
-                "-q"
+                "-n",
+                str(target_nodes),
+                "-e",
+                str(target_edges),
+                "--shard",
+                str(shard_id),
+                "--total-shards",
+                str(total_shards),
+                "-q",
             ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 60)
@@ -431,7 +458,7 @@ spec:
             "duration_seconds": elapsed,
             "success": result.returncode == 0,
             "output": result.stdout[:1000] if result.stdout else "",
-            "error": result.stderr[:500] if result.stderr else ""
+            "error": result.stderr[:500] if result.stderr else "",
         }
 
     def teardown(self) -> bool:
@@ -447,34 +474,26 @@ spec:
                 print(f"  Removed {node_id}")
 
             # Remove network
-            subprocess.run(
-                ["docker", "network", "rm", self.config.network_name],
-                capture_output=True
-            )
+            subprocess.run(["docker", "network", "rm", self.config.network_name], capture_output=True)
 
         elif self.config.deployment_mode == DeploymentMode.KUBERNETES:
-            subprocess.run([
-                "kubectl", "delete", "namespace",
-                f"geode-loadtest-{self.config.name}"
-            ], capture_output=True)
+            subprocess.run(
+                ["kubectl", "delete", "namespace", f"geode-loadtest-{self.config.name}"], capture_output=True
+            )
 
         self.nodes.clear()
         return True
 
     def status(self) -> Dict:
         """Get cluster status."""
-        status = {
-            "name": self.config.name,
-            "deployment_mode": self.config.deployment_mode.value,
-            "nodes": {}
-        }
+        status = {"name": self.config.name, "deployment_mode": self.config.deployment_mode.value, "nodes": {}}
 
         for node_id, node in self.nodes.items():
             status["nodes"][node_id] = {
                 "host": node.host,
                 "port": node.port,
                 "role": node.role.value,
-                "status": node.status
+                "status": node.status,
             }
 
         return status
@@ -482,11 +501,9 @@ spec:
 
 def main():
     parser = argparse.ArgumentParser(description="Geode Cluster Orchestrator")
-    parser.add_argument("action", choices=["deploy", "teardown", "status", "run"],
-                        help="Action to perform")
+    parser.add_argument("action", choices=["deploy", "teardown", "status", "run"], help="Action to perform")
     parser.add_argument("--name", default="loadtest", help="Cluster name")
-    parser.add_argument("--mode", choices=["docker", "kubernetes", "local"],
-                        default="local", help="Deployment mode")
+    parser.add_argument("--mode", choices=["docker", "kubernetes", "local"], default="local", help="Deployment mode")
     parser.add_argument("--servers", type=int, default=1, help="Number of server nodes")
     parser.add_argument("--generators", type=int, default=4, help="Number of generator nodes")
     parser.add_argument("--workload", default="web_app", help="Workload pattern for run")
@@ -500,7 +517,7 @@ def main():
         name=args.name,
         deployment_mode=DeploymentMode(args.mode),
         server_nodes=args.servers,
-        generator_nodes=args.generators
+        generator_nodes=args.generators,
     )
 
     orchestrator = ClusterOrchestrator(config)
@@ -527,10 +544,7 @@ def main():
             orchestrator.deploy()
 
         results = orchestrator.run_load_test(
-            workload=args.workload,
-            target_nodes=args.nodes,
-            target_edges=args.edges,
-            duration_seconds=args.duration
+            workload=args.workload, target_nodes=args.nodes, target_edges=args.edges, duration_seconds=args.duration
         )
         print("\nLoad Test Results:")
         print(json.dumps(results, indent=2))

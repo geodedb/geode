@@ -24,12 +24,12 @@ test_type() {
     local name="$1"
     local cmd="$2"
     local expected_result="${3:-success}"
-    
+
     echo -n "Testing $name... "
     local output
     output=$(eval "$cmd" 2>&1)
     local exit_code=$?
-    
+
     if [ $exit_code -eq 0 ]; then
         if [ "$expected_result" = "success" ]; then
             echo -e "${GREEN}PASS${NC}"
@@ -63,7 +63,7 @@ echo "=== Phase 1: Core Data Types (Basic) ==="
 
 # Basic Types
 test_type "NULL values" "timeout 5 ./zig-out/bin/geodec 'CREATE (p {value: null})' --insecure"
-test_type "Boolean true" "timeout 5 ./zig-out/bin/geodec 'CREATE (p {flag: true})' --insecure" 
+test_type "Boolean true" "timeout 5 ./zig-out/bin/geodec 'CREATE (p {flag: true})' --insecure"
 test_type "Boolean false" "timeout 5 ./zig-out/bin/geodec 'CREATE (p {flag: false})' --insecure"
 test_type "Integer basic" "timeout 5 ./zig-out/bin/geodec 'CREATE (p {num: 42})' --insecure"
 test_type "Integer negative" "timeout 5 ./zig-out/bin/geodec 'CREATE (p {num: -123})' --insecure"
@@ -260,7 +260,7 @@ if [ $TESTS_FAILED -eq 0 ]; then
 else
     echo -e "Success rate: ${YELLOW}$(( TESTS_PASSED * 100 / (TESTS_PASSED + TESTS_FAILED) ))%${NC} of implemented features"
     echo -e "Implementation rate: ${BLUE}$(( TESTS_PASSED * 100 / (TESTS_PASSED + TESTS_FAILED + TESTS_UNSUPPORTED) ))%${NC} of all features"
-    
+
     if [ $TESTS_FAILED -le 5 ]; then
         echo -e "${GREEN}Failure count is acceptable for a comprehensive type system.${NC}"
         exit 0

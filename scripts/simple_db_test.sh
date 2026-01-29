@@ -11,7 +11,7 @@ test_query() {
     local name="$1"
     local query="$2"
     local pattern="$3"
-    
+
     echo -n "Testing $name... "
     if ./zig-out/bin/geodec "$query" --server 127.0.0.1:3141 --insecure 2>&1 | grep -q "$pattern"; then
         echo "PASS"

@@ -32,13 +32,13 @@ shuffle_array() {
 verify_signature() {
     local tarball="$1"
     local sig_file="$2"
-    
+
     # Check if minisign is available
     if ! command -v minisign >/dev/null 2>&1; then
         echo "ERROR: minisign is required for signature verification"
         return 1
     fi
-    
+
     # Verify the signature
     if minisign -Vm "${tarball}" -P "${PUBKEY}" -x "${sig_file}" 2>/dev/null; then
         echo "✓ Signature verification passed"
@@ -54,26 +54,26 @@ try_mirror() {
     local mirror_url="$1"
     local tarball_path="/tmp/${TARBALL_NAME}"
     local sig_path="/tmp/${SIGNATURE_NAME}"
-    
+
     echo "Trying mirror: ${mirror_url}"
-    
+
     # Download tarball with source parameter
     if curl -fsSL --connect-timeout 10 --max-time 300 \
          -o "${tarball_path}" \
          "${mirror_url}/${TARBALL_NAME}?source=${SOURCE_ID}" 2>/dev/null; then
-        
+
         # Verify it's actually XZ compressed data
         if ! file "${tarball_path}" | grep -q "XZ compressed data"; then
             echo "  ✗ Downloaded file is not valid XZ data"
             rm -f "${tarball_path}"
             return 1
         fi
-        
+
         # Download signature (REQUIRED)
         if curl -fsSL --connect-timeout 5 --max-time 30 \
              -o "${sig_path}" \
              "${mirror_url}/${SIGNATURE_NAME}?source=${SOURCE_ID}" 2>/dev/null; then
-            
+
             # Verify signature (REQUIRED)
             if verify_signature "${tarball_path}" "${sig_path}"; then
                 echo "  ✓ Successfully downloaded and verified from ${mirror_url}"

@@ -20,10 +20,10 @@ tests:
   # Schema and type operations
   - name: "create-schema"
     description: "Create a comprehensive graph schema"
-    args: 
+    args:
       - "query"
       - |
-        CREATE 
+        CREATE
           (p1:Person {name: 'Alice', age: 28, email: 'alice@example.com'}),
           (p2:Person {name: 'Bob', age: 32, email: 'bob@example.com'}),
           (c1:Company {name: 'TechCorp', founded: 2010}),

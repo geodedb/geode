@@ -40,12 +40,12 @@ test_query() {
     local name="$1"
     local query="$2"
     local expected="$3"
-    
+
     echo -n "Testing $name... "
-    
+
     local output
     output=$(./zig-out/bin/geodec "$query" --insecure 2>&1 || true)
-    
+
     if echo "$output" | grep -q "NotImplemented"; then
         echo -e "${YELLOW}NOT IMPLEMENTED${NC}"
         ((WARNINGS++))

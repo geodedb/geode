@@ -726,6 +726,7 @@ REQ-FLE-BUILD-001,FieldLevelEncryption,Build,TESTED,,,security,2026-01-15,tests/
 REQ-FLE-CATALOG-001,FieldLevelEncryption,CATALOG,TESTED,,,security,2025-10-15,src/execution.zig
 REQ-FLE-CATALOG-001,FieldLevelEncryption,Catalog,TESTED,,,security,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-FLE-CATALOG-001,FieldLevelEncryption,SCHEMA,TESTED,,,security,2026-01-15,src/schema/fle_catalog.zig
+REQ-FLE-CATALOG-002,FLECatalog,ConfigureField,TESTED,,,security,2026-01-28,src/schema/fle_catalog.zig
 REQ-FLE-DOC-001,Field-Level Encryption,Implementation,TESTED,,,security,2026-01-15,tests/test_requirement_traceability.zig
 REQ-FLE-DOC-001,FieldLevelEncryption,DOCUMENTATION,TESTED,,,security,2025-10-15,docs/FIELD_LEVEL_ENCRYPTION.md
 REQ-FLE-DOC-001,FieldLevelEncryption,Documentation,TESTED,,,security,2026-01-15,tests/test_gap_0193_high_priority.zig
@@ -786,6 +787,10 @@ REQ-FLE-PARSER-001,FieldLevelEncryption,PARSER,TESTED,,,security,2026-01-15,src/
 REQ-FLE-PLANNER-001,FieldLevelEncryption,PLANNER,TESTED,,,security,2026-01-15,src/planner/rewrite.zig
 REQ-FLE-PREDICATE-HELPERS-001,FLE Predicate Rewriting,Helpers,TESTED,,,security,2026-01-09,src/fle_integration.zig
 REQ-FLE-PREDICATE-REWRITE-001,FLE Predicate Rewriting,BlindIndex,TESTED,,,security,2026-01-09,src/planner/rewrite.zig
+REQ-FLE-PROC-001,FLEProcedures,Import,TESTED,,,security,2026-01-28,src/execution/procedure_registry.zig
+REQ-FLE-PROC-002,FLEProcedures,ConfigureField,TESTED,,,security,2026-01-28,src/execution/procedure_registry.zig
+REQ-FLE-PROC-003,FLEProcedures,GetFieldConfig,TESTED,,,security,2026-01-28,src/execution/procedure_registry.zig
+REQ-FLE-PROC-004,FLEProcedures,ListEncryptedFields,TESTED,,,security,2026-01-28,src/execution/procedure_registry.zig
 REQ-FLE-PRODMODE-001,FLEProductionMode,BuildModeDetection,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-PRODMODE-002,FLEProductionMode,TestModeFlag,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ROTATION-001,FLEKeyRotation,Encryption,TESTED,,,security,2026-01-10,src/fle_integration.zig
@@ -3658,6 +3663,9 @@ REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,RaftState,TESTED,,,security,2026-01
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SECURITY,TESTED,,,security,2026-01-28,docs/SECURITY_PROGRESS.md
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SchemaCatalog,TESTED,,,security,2026-01-28,src/schema/catalog.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SharedUtility,TESTED,,,security,2026-01-28,src/storage/tde_file_encryption.zig
+REQ-TDE-GRAPHSTORE-001,TDEFileLevelEncryption,GraphStorePersistence,TESTED,,,security,2026-01-28,src/graph_store.zig
+REQ-TDE-GRAPHSTORE-002,TDEFileLevelEncryption,GraphStoreSave,TESTED,,,security,2026-01-28,src/graph_store.zig
+REQ-TDE-GRAPHSTORE-003,TDEFileLevelEncryption,GraphStoreLoad,TESTED,,,security,2026-01-28,src/graph_store.zig
 REQ-TDE-KEYUNWRAP-001,AES-GCM Key Unwrapping,SECURITY,TESTED,,,security,2026-01-15,src/storage/crypto_enhanced.zig
 REQ-TDE-KEYWRAP-001,AES-GCM Key Wrapping,SECURITY,TESTED,,,security,2026-01-15,src/storage/crypto_enhanced.zig
 REQ-TDE-KMS-001,KMSIntegration,AWS,TESTED,,,security,2026-01-15,src/storage/crypto.zig

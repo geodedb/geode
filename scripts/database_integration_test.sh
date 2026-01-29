@@ -25,10 +25,10 @@ run_test() {
     local name="$1"
     local cmd="$2"
     local expected_pattern="$3"
-    
+
     ((TOTAL_TESTS++))
     echo -n "Testing $name... "
-    
+
     if [ -n "$expected_pattern" ]; then
         # Test with expected output pattern
         if eval "$cmd" 2>&1 | grep -q "$expected_pattern"; then
@@ -60,10 +60,10 @@ run_failure_test() {
     local name="$1"
     local cmd="$2"
     local expected_error="$3"
-    
+
     ((TOTAL_TESTS++))
     echo -n "Testing $name... "
-    
+
     if eval "$cmd" 2>&1 | grep -q "$expected_error"; then
         echo -e "${GREEN}PASS${NC}"
         ((TESTS_PASSED++))

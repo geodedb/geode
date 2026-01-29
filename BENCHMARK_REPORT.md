@@ -60,6 +60,7 @@ The benchmark measures three key aspects of audit logging performance:
 ### Latest Results (Reproducible)
 
 Run benchmarks with:
+
 ```bash
 zig build benchmark
 # Or run specific benchmark:
@@ -67,6 +68,7 @@ zig build-exe benchmarks/benchmark_audit_latency.zig && ./benchmark_audit_latenc
 ```
 
 **Single-threaded audit writes:**
+
 - Typical avg latency: 500-2000 ns (0.5-2 μs)
 - P50: ~500 ns
 - P95: ~1000 ns
@@ -74,10 +76,12 @@ zig build-exe benchmarks/benchmark_audit_latency.zig && ./benchmark_audit_latenc
 - Throughput: 500K-2M ops/sec
 
 **Concurrent audit writes (4 threads):**
+
 - Total throughput: 1M-4M ops/sec
 - Avg per-operation latency: 200-1000 ns
 
 **WAL fsync ordering:**
+
 - Avg fsync latency: 50-500 μs (SSD-dependent)
 - Write throughput: 20-100 MB/s
 
@@ -100,6 +104,7 @@ zig build-exe benchmarks/benchmark_audit_latency.zig && ./benchmark_audit_latenc
 Run benchmark: `zig build bench`
 
 Typical output:
+
 ```
 BenchmarkCANARY_REQ_GQL_SEC_TDE_OVERHEAD_001: pages=10000, page_size=4096, throughput_mb_s=31.78
 TDE_SIM_OVERHEAD: overhead_pct=0.00 (simulated)

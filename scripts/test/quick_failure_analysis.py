@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Quick analysis of failing tests to categorize them."""
 
-import subprocess
-import yaml
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
+
+import yaml
+
 
 def main():
     specs_dir = Path("/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs")
@@ -18,7 +19,7 @@ def main():
     # Analyze each spec
     for spec_file in sorted(specs_dir.glob("*.yml")):
         try:
-            with open(spec_file, "r") as f:
+            with open(spec_file) as f:
                 spec = yaml.safe_load(f)
         except:
             continue
@@ -61,9 +62,9 @@ def main():
                 unknown_tests.append((spec_file.name, name, "no args"))
 
     # Print summary
-    print(f"{'='*80}")
-    print(f"TEST CATEGORIZATION")
-    print(f"{'='*80}\n")
+    print(f"{'=' * 80}")
+    print("TEST CATEGORIZATION")
+    print(f"{'=' * 80}\n")
 
     print(f"Server-dependent tests: {len(server_tests)}")
     if server_tests:
@@ -78,7 +79,7 @@ def main():
             if len(tests) > 5:
                 print(f"    ... and {len(tests) - 5} more")
 
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"Standalone tests (no server required): {len(standalone_tests)}")
     if standalone_tests:
         by_cmd = defaultdict(list)
@@ -88,19 +89,20 @@ def main():
         for cmd, tests in sorted(by_cmd.items()):
             print(f"\n  {cmd}: {len(tests)} tests")
 
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"Unknown tests: {len(unknown_tests)}")
 
-    print(f"\n{'='*80}")
-    print(f"RECOMMENDATION:")
-    print(f"{'='*80}")
-    print(f"1. Server-dependent commands (auth/user/role/policy/grant/revoke) need either:")
-    print(f"   a) A running server to connect to")
-    print(f"   b) Implementation of --server 127.0.0.1:3141 --insecure mode for these commands")
-    print(f"   c) Start a dedicated test server for these specs")
-    print(f"\n2. For now, we should either:")
-    print(f"   - Skip server-dependent tests in extended_test_runner.py")
-    print(f"   - Or implement --server 127.0.0.1:3141 --insecure mode for these commands")
+    print(f"\n{'=' * 80}")
+    print("RECOMMENDATION:")
+    print(f"{'=' * 80}")
+    print("1. Server-dependent commands (auth/user/role/policy/grant/revoke) need either:")
+    print("   a) A running server to connect to")
+    print("   b) Implementation of --server 127.0.0.1:3141 --insecure mode for these commands")
+    print("   c) Start a dedicated test server for these specs")
+    print("\n2. For now, we should either:")
+    print("   - Skip server-dependent tests in extended_test_runner.py")
+    print("   - Or implement --server 127.0.0.1:3141 --insecure mode for these commands")
+
 
 if __name__ == "__main__":
     main()

@@ -5,6 +5,7 @@ This directory contains a comprehensive social network dataset demonstrating Geo
 ## Overview
 
 The migration files create a rich social network graph with:
+
 - **50 Users** with profiles, locations, and network types
 - **25 Posts** with vector embeddings and sentiment analysis
 - **5 Companies** with financial data and geographic locations
@@ -20,6 +21,7 @@ The migration files create a rich social network graph with:
 ## Features Demonstrated
 
 ### Extended Type System
+
 - **Network Types**: `IpAddr`, `Subnet`, `Mac` for device and network tracking
 - **Geographic Types**: `LatLon`, `Geometry` for spatial data and queries
 - **Vector Types**: `VectorF32` for ML embeddings and similarity search
@@ -28,12 +30,14 @@ The migration files create a rich social network graph with:
 - **Language Types**: `LanguageTag` for internationalization
 
 ### Advanced Indexes
+
 - **Patricia Trie**: For IP/CIDR prefix matching and network searches
 - **R-tree**: For spatial queries and geographic searches
 - **HNSW**: For vector similarity and recommendation systems
 - **Full-text**: For content search across posts and descriptions
 
 ### Graph Features
+
 - Complex relationship patterns
 - Materialized views for trending content
 - Triggers for maintaining counts
@@ -73,6 +77,7 @@ The migration files create a rich social network graph with:
 ## Setup Instructions
 
 ### Prerequisites
+
 - Geode v0.1.0 or later
 - QUIC+TLS enabled (default)
 - At least 512MB RAM for the dataset
@@ -80,11 +85,13 @@ The migration files create a rich social network graph with:
 ### Loading the Dataset
 
 1. **Start Geode server:**
+
 ```bash
 ./zig-out/bin/geoded --data_dir ./data --log_json
 ```
 
-2. **Run migrations in order:**
+1. **Run migrations in order:**
+
 ```bash
 # Using the Geode client
 ./zig-out/bin/geodec --migrate migrations/
@@ -96,7 +103,8 @@ The migration files create a rich social network graph with:
 ./zig-out/bin/geodec < migrations/004_social_network_events_products.gql
 ```
 
-3. **Verify the data:**
+1. **Verify the data:**
+
 ```bash
 # Count nodes and edges
 ./zig-out/bin/geodec "MATCH (n) RETURN count(n) AS node_count"
@@ -106,6 +114,7 @@ The migration files create a rich social network graph with:
 ## Example Queries
 
 ### 1. Find Influencers
+
 ```gql
 MATCH (u:User)
 WHERE u.follower_count > 1000
@@ -115,6 +124,7 @@ LIMIT 10
 ```
 
 ### 2. Network Security Analysis
+
 ```gql
 MATCH (d:Device)-[:CONNECTED_FROM]->(u:User)
 WHERE ip_is_private(d.ip_address)
@@ -124,6 +134,7 @@ ORDER BY d.trust_score ASC
 ```
 
 ### 3. Geographic Search
+
 ```gql
 MATCH (e:Event)
 WHERE distance_haversine(e.location, LatLon(37.7749, -122.4194)) < 100000  -- Within 100km of SF
@@ -132,6 +143,7 @@ ORDER BY e.start_time
 ```
 
 ### 4. Vector Similarity for Recommendations
+
 ```gql
 MATCH (p1:Post {id: 'post-1'})
 MATCH (p2:Post)
@@ -143,6 +155,7 @@ LIMIT 5
 ```
 
 ### 5. Social Graph Analysis
+
 ```gql
 MATCH path = (u1:User {username: 'alice_j'})-[:FOLLOWS*1..3]->(u2:User)
 WHERE u1 <> u2
@@ -152,6 +165,7 @@ LIMIT 20
 ```
 
 ### 6. Trending Content
+
 ```gql
 MATCH (p:Post)<-[:POSTED]-(u:User)
 WHERE p.created_at > now() - interval '7 days'
@@ -166,6 +180,7 @@ LIMIT 10
 ```
 
 ### 7. Company Investment Network
+
 ```gql
 MATCH (investor:Company)-[inv:INVESTED_IN]->(startup:Company)
 RETURN investor.name, startup.name, inv.amount, inv.round, inv.date
@@ -173,6 +188,7 @@ ORDER BY inv.date DESC
 ```
 
 ### 8. Event Recommendations
+
 ```gql
 MATCH (u:User {id: 'user-1'})-[:ATTENDING]->(e1:Event)
 MATCH (other:User)-[:ATTENDING]->(e1)
@@ -185,6 +201,7 @@ LIMIT 5
 ```
 
 ### 9. IP Subnet Analysis
+
 ```gql
 MATCH (d:Device)
 WHERE ip_contains(Subnet('10.0.0.0/8'), d.ip_address)
@@ -194,6 +211,7 @@ ORDER BY device_count DESC
 ```
 
 ### 10. Multi-Currency Financial Summary
+
 ```gql
 MATCH (c:Company)
 RETURN c.name, c.revenue, currency_convert(c.revenue, 'USD') AS revenue_usd
@@ -203,6 +221,7 @@ ORDER BY revenue_usd DESC
 ## Performance Benchmarks
 
 With the full dataset loaded:
+
 - Node count: ~100
 - Edge count: ~500+
 - Simple traversals: < 10ms
@@ -216,6 +235,7 @@ With the full dataset loaded:
 To add more data:
 
 1. **Add more users:**
+
 ```gql
 CREATE (:User {
     id: 'user-custom-1',
@@ -230,13 +250,15 @@ CREATE (:User {
 })
 ```
 
-2. **Create relationships:**
+1. **Create relationships:**
+
 ```gql
 MATCH (u1:User {id: 'user-custom-1'}), (u2:User {id: 'user-1'})
 CREATE (u1)-[:FOLLOWS {since: now(), notifications: true}]->(u2)
 ```
 
-3. **Add engagement:**
+1. **Add engagement:**
+
 ```gql
 MATCH (u:User {id: 'user-custom-1'}), (p:Post)
 WHERE rand() < 0.2
@@ -246,6 +268,7 @@ CREATE (u)-[:LIKES {timestamp: now(), reaction: 'like'}]->(p)
 ## Cleanup
 
 To remove the dataset:
+
 ```gql
 -- Remove all relationships
 MATCH ()-[r]->() DELETE r;
@@ -262,18 +285,23 @@ DROP CONSTRAINT user_email_unique;
 ## Troubleshooting
 
 ### Out of Memory
+
 If you encounter memory issues:
+
 1. Increase heap size: `--max-heap 1024MB`
 2. Load migrations in smaller batches
 3. Use pagination for large result sets
 
 ### Slow Queries
+
 1. Ensure indexes are created (check migration 001)
 2. Use EXPLAIN to analyze query plans
 3. Consider adding more specific indexes
 
 ### Connection Issues
+
 Ensure QUIC+TLS is properly configured:
+
 ```bash
 # Check certificates
 ls -la certs/

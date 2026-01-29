@@ -21,7 +21,7 @@ run_test() {
     local name="$1"
     local cmd="$2"
     local pattern="$3"
-    
+
     echo -n "Testing $name... "
     if [ -n "$pattern" ]; then
         if eval "$cmd" 2>&1 | grep -q "$pattern"; then

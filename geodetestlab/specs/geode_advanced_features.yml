@@ -20,10 +20,10 @@ tests:
   # Setup test data for advanced features
   - name: "setup-test-data"
     description: "Create comprehensive test dataset for advanced features"
-    args: 
+    args:
       - "query"
       - |
-        CREATE 
+        CREATE
           (alice:Person {name: 'Alice', age: 30, department: 'Engineering'}),
           (bob:Person {name: 'Bob', age: 35, department: 'Sales'}),
           (carol:Person {name: 'Carol', age: 28, department: 'Marketing'}),

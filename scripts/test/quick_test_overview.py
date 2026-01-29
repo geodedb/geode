@@ -2,9 +2,10 @@
 """Quick overview of test failures across all specs."""
 
 import subprocess
-import yaml
 from pathlib import Path
-from collections import defaultdict
+
+import yaml
+
 
 def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode"):
     """Run a single test case."""
@@ -22,16 +23,10 @@ def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/
     cmd = [binary] + args
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            input=None
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, input=None)
     except subprocess.TimeoutExpired:
         return False, "timeout"
-    except Exception as e:
+    except Exception:
         return False, "error"
 
     # Check exit code
@@ -51,7 +46,7 @@ def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/
 def test_spec(spec_path):
     """Quick test of a single spec."""
     try:
-        with open(spec_path, "r") as f:
+        with open(spec_path) as f:
             spec = yaml.safe_load(f)
     except:
         return 0, 0, 0
@@ -88,7 +83,7 @@ def main():
     ]
 
     print("Testing Priority Specs:")
-    print("="*60)
+    print("=" * 60)
 
     total_passed = total_failed = total_skipped = 0
 
@@ -106,12 +101,12 @@ def main():
         status = "✓" if failed == 0 else "✗"
         print(f"  {status} {spec_name:<40} {passed:>3}p {failed:>3}f {skipped:>3}s")
 
-    print("="*60)
+    print("=" * 60)
     print(f"  TOTAL: {total_passed} passed, {total_failed} failed, {total_skipped} skipped")
 
     # Now sample other specs
     print("\n\nSampling Other Specs (first 10):")
-    print("="*60)
+    print("=" * 60)
 
     other_specs = sorted([s for s in specs_dir.glob("*.yml") if s.name not in priority_specs])[:10]
 
@@ -127,7 +122,7 @@ def main():
             status = "✗"
             print(f"  {status} {spec_path.name:<40} {passed:>3}p {failed:>3}f {skipped:>3}s")
 
-    print("="*60)
+    print("=" * 60)
     print(f"  Sample: {other_passed} passed, {other_failed} failed, {other_skipped} skipped")
 
 

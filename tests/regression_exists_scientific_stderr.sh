@@ -12,7 +12,7 @@ echo "Test 1: EXISTS predicate parsing..."
 RESULT=$(./zig-out/bin/geode query "MATCH (p:Person) WHERE EXISTS { (p)-[:KNOWS]->() } RETURN count(p) AS result" --insecure 2>/dev/null | grep '"result"' || echo "no results")
 if [[ "$RESULT" != "no results" ]]; then
     echo "✓ EXISTS predicate parsing works"
-else 
+else
     echo "✗ EXISTS predicate parsing failed"
     exit 1
 fi

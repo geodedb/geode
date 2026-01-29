@@ -22,18 +22,21 @@
 ### Codebase Statistics
 
 **Source Code**:
+
 - **Total LOC**: 173,048 lines
 - **Source Files**: 436 Zig files
 - **Average File Size**: 396 LOC
 - **Modules**: 50 top-level directories
 
 **Test Code**:
+
 - **Test Files**: 843 Zig test files
 - **Test/Source Ratio**: 1.9:1
 - **Integration Tests**: 1,688 geodetestlab tests
 - **Pass Rate**: 97.4% (1,644 passing, 9 failing)
 
 **File Size Distribution**:
+
 - **Large (>1000 LOC)**: 23 files (5.3%)
 - **Medium (500-1000 LOC)**: 78 files (17.9%)
 - **Small (<500 LOC)**: 335 files (76.8%)
@@ -55,6 +58,7 @@
 #### Core System Modules
 
 **Server & CLI** (Entry Points):
+
 ```
 src/server/         - Server implementation (7,039 LOC in main.zig)
 src/cli/            - CLI implementation (5,885 LOC in main.zig)
@@ -62,6 +66,7 @@ src/client/         - Client library and REPL
 ```
 
 **Query Processing**:
+
 ```
 src/gql/            - GQL parser and lexer (5,883 LOC in parser.zig)
 src/execution/      - Query execution engine (4,725 LOC in path_and_call_operations.zig)
@@ -71,6 +76,7 @@ src/optimizer/      - Query optimization strategies
 ```
 
 **Storage & Data**:
+
 ```
 src/storage/        - Storage engine, page management, backup
 src/wal/            - Write-ahead logging
@@ -80,6 +86,7 @@ src/graph/          - Graph-specific data structures
 ```
 
 **Security**:
+
 ```
 src/security/       - Authentication, authorization, audit, TDE, RLS
 src/crypto/         - Cryptographic primitives
@@ -87,12 +94,14 @@ src/keys/           - Key management
 ```
 
 **Distributed Systems**:
+
 ```
 src/distributed/    - Federation, sharding, Raft consensus
 src/federation/     - Cross-cluster queries
 ```
 
 **Advanced Features**:
+
 ```
 src/ml/             - Machine learning (graph embeddings)
 src/analytics/      - Real-time analytics
@@ -104,6 +113,7 @@ src/temporal/       - Temporal data types
 ```
 
 **Infrastructure**:
+
 ```
 src/transport/      - QUIC transport layer
 src/protocol.zig    - Protocol implementation
@@ -115,6 +125,7 @@ src/utils/          - Additional utilities
 ```
 
 **Data Types**:
+
 ```
 src/types/          - Advanced data types (vector, geographic, network, etc.)
 src/containers/     - Container data structures
@@ -122,6 +133,7 @@ src/unicode/        - Unicode support
 ```
 
 **Schema & Catalog**:
+
 ```
 src/schema/         - Schema management
 src/migration/      - Schema migrations
@@ -129,6 +141,7 @@ src/query/          - Query management (materialized views)
 ```
 
 **Development & Testing**:
+
 ```
 src/tests/          - Test utilities
 src/bench/          - Benchmarking utilities
@@ -137,6 +150,7 @@ src/fuzz/           - Fuzzing infrastructure
 ```
 
 **Miscellaneous**:
+
 ```
 src/admin/          - Admin operations
 src/tools/          - Development tools
@@ -229,6 +243,7 @@ The complete dependency graph is available in `metrics/dependency_graph.dot` (Gr
    - `eval.zig` → `graph/*`
 
 **Import Statistics**:
+
 - **Total Imports**: 1,036 import statements across codebase
 - **Average Imports per File**: 2.4 imports
 - **Most Imported Modules**: std, types, storage, execution
@@ -246,26 +261,31 @@ The complete dependency graph is available in `metrics/dependency_graph.dot` (Gr
 **Severity**: **HIGH** - Prevents clean modularization
 
 **Description**:
+
 - `execution.zig` imports `eval.zig` for expression evaluation during query execution
 - `eval.zig` imports `execution.zig` for accessing execution context and state
 
 **Impact**:
+
 - Cannot test modules in isolation
 - Difficult to maintain and understand data flow
 - Blocks modularization of execution engine
 - Complicates dependency injection
 
 **Current Usage**:
+
 - Execution engine calls eval for WHERE clauses, projections, aggregations
 - Eval calls back to execution for subqueries, path evaluation, function dispatch
 
 **Resolution Strategy** (Phase 5):
+
 1. Create `execution/evaluator_adapter.zig` interface
 2. Define clear boundary between execution and evaluation
 3. Use dependency injection for evaluation callbacks
 4. Break bidirectional dependency by introducing adapter pattern
 
 **Related Files Affected**:
+
 - `src/execution.zig` (1,723 LOC)
 - `src/eval.zig` (3,332 LOC)
 - `src/execution/path_and_call_operations.zig` (4,725 LOC)
@@ -276,10 +296,12 @@ The complete dependency graph is available in `metrics/dependency_graph.dot` (Gr
 **Severity**: **MEDIUM** - Manageable but needs attention
 
 **Description**:
+
 - Server main imports multiple execution submodules
 - Some execution modules may reference server state
 
 **Resolution Strategy** (Phase 3):
+
 - Extract server state management
 - Create clear interfaces for execution engine
 - Eliminate reverse dependencies from execution to server
@@ -318,6 +340,7 @@ The complete dependency graph is available in `metrics/dependency_graph.dot` (Gr
 ### Test Coverage by Module
 
 **Well-Tested Modules** (>90% coverage):
+
 ```
 ✓ storage/*          - High coverage (backup, page manager, heap)
 ✓ security/*         - High coverage (auth, audit, TDE, RLS)
@@ -330,6 +353,7 @@ The complete dependency graph is available in `metrics/dependency_graph.dot` (Gr
 ```
 
 **Moderate Coverage** (70-90%):
+
 ```
 ⚠ execution/*        - Moderate coverage (complex logic)
 ⚠ server/main.zig    - Moderate coverage (integration heavy)
@@ -339,6 +363,7 @@ The complete dependency graph is available in `metrics/dependency_graph.dot` (Gr
 ```
 
 **Needs More Testing** (<70%):
+
 ```
 ⚠ Some edge cases in execution engine
 ⚠ Error handling paths in server
@@ -349,6 +374,7 @@ The complete dependency graph is available in `metrics/dependency_graph.dot` (Gr
 ### Test File Distribution
 
 **Test-to-Source Ratios by Module**:
+
 ```
 High Ratio (>2:1):
 - storage/: 3.2:1
@@ -374,11 +400,13 @@ Lower Ratio (<1:1):
 #### 1. Query Execution Pipeline (P0 CRITICAL)
 
 **Flow**:
+
 ```
 CLI/Server → GQL Parser → Planner → Execution Engine → Eval → Storage → Results
 ```
 
 **Key Files**:
+
 - `src/cli/main.zig` (5,885 LOC) - Entry point
 - `src/server/main.zig` (7,039 LOC) - Entry point
 - `src/gql/parser.zig` (5,883 LOC) - Query parsing
@@ -388,6 +416,7 @@ CLI/Server → GQL Parser → Planner → Execution Engine → Eval → Storage 
 - `src/storage/*.zig` - Data access
 
 **Risk**:
+
 - **HIGH** - Any failure breaks core functionality
 - Changes must be carefully tested
 - Circular dependency (execution ↔ eval) adds complexity
@@ -397,11 +426,13 @@ CLI/Server → GQL Parser → Planner → Execution Engine → Eval → Storage 
 #### 2. Transaction & MVCC Path (P0 CRITICAL)
 
 **Flow**:
+
 ```
 Client → Server → Transaction Manager → MVCC → WAL → Storage
 ```
 
 **Key Files**:
+
 - `src/txn/manager.zig` (680 LOC)
 - `src/server/txn/mvcc.zig` (708 LOC)
 - `src/server/txn/enhanced_isolation.zig` (539 LOC)
@@ -409,6 +440,7 @@ Client → Server → Transaction Manager → MVCC → WAL → Storage
 - `src/storage/*.zig`
 
 **Risk**:
+
 - **HIGH** - Data consistency depends on this
 - Must maintain ACID guarantees
 - Complex concurrency control
@@ -418,11 +450,13 @@ Client → Server → Transaction Manager → MVCC → WAL → Storage
 #### 3. Security Pipeline (P1 HIGH)
 
 **Flow**:
+
 ```
 Request → Authentication → Authorization → RLS Policies → Audit → Response
 ```
 
 **Key Files**:
+
 - `src/security/auth.zig` (1,226 LOC)
 - `src/security/rls.zig` (1,158 LOC)
 - `src/security/rls_enhanced.zig` (972 LOC)
@@ -430,6 +464,7 @@ Request → Authentication → Authorization → RLS Policies → Audit → Resp
 - `src/security/user_manager.zig` (733 LOC)
 
 **Risk**:
+
 - **HIGH** - Security vulnerabilities unacceptable
 - Audit must be comprehensive
 - RLS must be foolproof
@@ -439,17 +474,20 @@ Request → Authentication → Authorization → RLS Policies → Audit → Resp
 #### 4. Index Selection & Optimization Path (P1 HIGH)
 
 **Flow**:
+
 ```
 Query → Planner → IndexOptimizer → Cost Model → Execution Plan
 ```
 
 **Key Files**:
+
 - `src/server/index_optimizer.zig` (2,444 LOC)
 - `src/planner/cbo.zig` (760 LOC)
 - `src/planner/cost_model.zig` (594 LOC)
 - `src/planner/optimizer.zig` (609 LOC)
 
 **Risk**:
+
 - **MEDIUM** - Performance implications
 - Wrong index choice = slow queries
 - Cost model accuracy critical
@@ -459,17 +497,20 @@ Query → Planner → IndexOptimizer → Cost Model → Execution Plan
 #### 5. Distributed Query Path (P2 MEDIUM)
 
 **Flow**:
+
 ```
 Query → Federation → Sharding → Cross-Shard Coordinator → Results Merge
 ```
 
 **Key Files**:
+
 - `src/distributed/federation.zig` (1,171 LOC)
 - `src/distributed/sharding.zig` (868 LOC)
 - `src/distributed/enhanced_query_coordinator.zig` (750 LOC)
 - `src/distributed/raft_consensus.zig` (1,689 LOC)
 
 **Risk**:
+
 - **MEDIUM** - Complexity of distributed systems
 - Network failures must be handled
 - Consensus protocol correctness
@@ -479,16 +520,19 @@ Query → Federation → Sharding → Cross-Shard Coordinator → Results Merge
 #### 6. Backup & Recovery Path (P2 MEDIUM)
 
 **Flow**:
+
 ```
 Backup Command → Backup Manager → S3 Upload → Encryption → Compression
 ```
 
 **Key Files**:
+
 - `src/storage/backup.zig` (572 LOC)
 - `src/storage/s3_backup.zig` (778 LOC)
 - `src/security/tde.zig` (1,482 LOC)
 
 **Risk**:
+
 - **MEDIUM** - Data loss unacceptable
 - Must be reliable and tested
 - Encryption must be secure
@@ -504,18 +548,21 @@ Backup Command → Backup Manager → S3 Upload → Encryption → Compression
 #### P0 CRITICAL (Must Address)
 
 **1. Server Monolith** (`src/server/main.zig` - 7,039 LOC):
+
 - **Issue**: Too many responsibilities in one file
 - **Impact**: Hard to test, maintain, understand
 - **Target**: Split into 5+ focused modules (~300 LOC entry point)
 - **Phase**: Phase 3
 
 **2. CLI Monolith** (`src/cli/main.zig` - 5,885 LOC):
+
 - **Issue**: All CLI commands in one massive file
 - **Impact**: Hard to add new commands, test individual features
 - **Target**: Split into command modules (~400 LOC entry point)
 - **Phase**: Phase 4
 
 **3. GQL Parser** (`src/gql/parser.zig` - 5,883 LOC):
+
 - **Issue**: Large parser with mixed concerns
 - **Impact**: Difficult to extend grammar, maintain
 - **Target**: Extract sub-parsers, expression handling
@@ -524,18 +571,21 @@ Backup Command → Backup Manager → S3 Upload → Encryption → Compression
 #### P1 HIGH (Should Address)
 
 **4. Execution Engine** (`src/execution/path_and_call_operations.zig` - 4,725 LOC):
+
 - **Issue**: Path operations + call operations + pattern comprehension + recursion
 - **Impact**: Hard to test individual features
 - **Target**: Split into 4 focused modules
 - **Phase**: Phase 2
 
 **5. Circular Dependency** (execution.zig ↔ eval.zig):
+
 - **Issue**: Prevents modular testing
 - **Impact**: Cannot refactor execution or eval independently
 - **Target**: Break with adapter pattern
 - **Phase**: Phase 5
 
 **6. Expression Evaluator** (`src/eval.zig` - 3,332 LOC):
+
 - **Issue**: Evaluation + type promotion + builtin dispatch
 - **Impact**: Hard to extend, test type system
 - **Target**: Extract type promotion (~2,500 LOC remaining)
@@ -544,17 +594,20 @@ Backup Command → Backup Manager → S3 Upload → Encryption → Compression
 #### P2 MEDIUM (Nice to Have)
 
 **7. Mixed Concerns in Security Modules**:
+
 - `src/security/audit.zig` (1,701 LOC): Logic + I/O + formatting
 - `src/security/tde.zig` (1,482 LOC): Encryption + key management + nonce generation
 - **Target**: Separate concerns
 - **Phase**: Phase 1
 
 **8. CDC Module** (`src/streaming/cdc_enhanced.zig` - 1,390 LOC):
+
 - **Issue**: CDC logic + webhook + Kafka sinks
 - **Target**: Extract sink adapters
 - **Phase**: Phase 1
 
 **9. Schema & Transaction Organization**:
+
 - **Issue**: Scattered across multiple directories
 - **Target**: Consolidate into coherent modules
 - **Phase**: Phase 7
@@ -566,6 +619,7 @@ Backup Command → Backup Manager → S3 Upload → Encryption → Compression
 ### Current State Assessment
 
 **Strengths**:
+
 - ✅ High test coverage (97.4% integration tests, 100% unit tests)
 - ✅ Clear module boundaries in many areas
 - ✅ Good documentation
@@ -573,6 +627,7 @@ Backup Command → Backup Manager → S3 Upload → Encryption → Compression
 - ✅ Comprehensive test infrastructure
 
 **Challenges**:
+
 - ⚠️ Large monolithic files (server, CLI, parser)
 - ⚠️ Circular dependency (execution ↔ eval)
 - ⚠️ Mixed concerns in some modules
@@ -580,6 +635,7 @@ Backup Command → Backup Manager → S3 Upload → Encryption → Compression
 - ⚠️ Deep dependency trees
 
 **Opportunities**:
+
 - ✓ Clear refactoring targets identified
 - ✓ Test suite can catch regressions
 - ✓ Modularization utilities available (Phase 0, M0.3)
@@ -589,16 +645,19 @@ Backup Command → Backup Manager → S3 Upload → Encryption → Compression
 ### Success Metrics for Modularization
 
 **File Size Targets**:
+
 - No file >2,000 LOC (ideally <1,500 LOC)
 - Current: 23 files >1,000 LOC
 - Target: 0 files >2,000 LOC after all phases
 
 **Dependency Targets**:
+
 - Zero circular dependencies
 - Current: 1 major circular dependency
 - Target: 0 after Phase 5
 
 **Testability Targets**:
+
 - All modules testable in isolation
 - All dependencies injectable
 - Mock-friendly interfaces

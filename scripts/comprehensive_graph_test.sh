@@ -27,13 +27,13 @@ test_feature() {
     local cmd="$3"
     local expected_pattern="$4"
     local expect_failure="${5:-false}"
-    
+
     echo -n "[$category] Testing $name... "
-    
+
     local output
     local exit_code
     output=$(timeout 10 bash -c "$cmd" 2>&1) || exit_code=$?
-    
+
     if [ "$expect_failure" = "true" ]; then
         # We expect this to fail (known issue)
         if echo "$output" | grep -q "$expected_pattern"; then

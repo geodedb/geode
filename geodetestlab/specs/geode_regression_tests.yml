@@ -222,7 +222,7 @@ tests:
       exit_code: 0
       stdout_contains: ["first", "rest", "length"]
 
-  # Map Operations  
+  # Map Operations
   - name: map-literal
     args: ["query", "RETURN {name: 'Test', value: 42, active: true} AS map", "--format", "json"]
     expect:

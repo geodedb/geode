@@ -25,27 +25,27 @@ fuzz:
   include_auth: true
   prompt_template: |
     Generate diverse test cases for the Geode graph database system.
-    
+
     FOCUS AREAS:
     1. GQL query syntax edge cases and boundary conditions
     2. Performance stress testing with large datasets
     3. Security testing including injection attempts
     4. Error handling and recovery scenarios
     5. Configuration edge cases
-    
+
     COMMAND CATEGORIES:
     - query: GQL queries ranging from simple to extremely complex
     - serve: Server configuration variations and edge cases
     - auth/user/role: Authentication and authorization scenarios
     - shell: Interactive shell with various options
-    
+
     TESTING STRATEGIES:
     - Valid operations with unusual parameters
     - Invalid operations that should fail gracefully
     - Boundary value testing (empty strings, very long inputs, etc.)
     - Unicode and special character handling
     - Concurrent operation simulation
-    
+
     Generate realistic but challenging test cases that could reveal bugs.
     Return each test case as a JSON array of command line arguments.
 
@@ -64,7 +64,7 @@ tests:
     args:
       - "query"
       - |
-        CREATE 
+        CREATE
           (a:FuzzTest {id: 1, name: 'alpha', value: 100}),
           (b:FuzzTest {id: 2, name: 'beta', value: 200}),
           (c:FuzzTest {id: 3, name: 'gamma', value: 300}),
@@ -93,8 +93,8 @@ tests:
     args:
       - "query"
       - |
-        MATCH (n:FuzzTest) 
-        WHERE 
+        MATCH (n:FuzzTest)
+        WHERE
           n.name IN ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta', 'iota', 'kappa'] OR
           n.value > 50 OR n.value < 500 OR n.value = 100 OR n.value = 200 OR n.value = 300 OR
           n.id IN [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] OR
@@ -122,7 +122,7 @@ tests:
     args:
       - "query"
       - |
-        RETURN 
+        RETURN
           abs(sqrt(pow(sin(cos(tan(log(exp(ceil(floor(round(random() * 100)))))))), 2))) AS complex_calc,
           substring(upper(lower(trim(replace('  hello world  ', 'world', 'geode')))), 0, 10) AS string_ops
     expect:

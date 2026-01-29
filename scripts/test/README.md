@@ -5,11 +5,13 @@ This directory contains test runners and utility scripts for the Geode test suit
 ## Test Runners
 
 ### Main Test Runners
+
 - `extended_test_runner.py` - Comprehensive test runner with detailed reporting
 - `parallel_test_runner.py` - Parallel test execution with configurable workers
 - `run_all_geodetestlab_tests.py` - Run all geodetestlab spec tests
 
 ### Specialized Test Runners
+
 - `optimized_test_runner.py` - Optimized test execution
 - `parallel_optimized_runner.py` - Parallel + optimized execution
 - `progressive_runner.py` - Progressive test execution
@@ -17,6 +19,7 @@ This directory contains test runners and utility scripts for the Geode test suit
 - `quick_test_runner.py` - Quick test subset execution
 
 ### Analysis Scripts
+
 - `analyze_failures.py` - Analyze test failures
 - `analyze_missing_features.py` - Identify missing feature implementations
 - `failure_tracker.py` - Track test failures over time
@@ -26,10 +29,12 @@ This directory contains test runners and utility scripts for the Geode test suit
 - `count_tests_quick.py` - Count tests quickly
 
 ### Debug Scripts
+
 - `debug_subprocess.py` - Debug subprocess issues
 - `debug_test.py` - General test debugging
 
 ### Feature-Specific Test Scripts
+
 - `run_encryption_tests.py` - Test encryption features
 - `run_geode_tests.py` - Run Geode-specific tests
 - `test_auth.py` - Authentication tests
@@ -50,6 +55,7 @@ This directory contains test runners and utility scripts for the Geode test suit
 - `simple_test.py` - Simple test execution
 
 ### Shell Scripts
+
 - `debug_string_parsing.sh` - Debug string parsing issues
 - `demo_repl.sh` - REPL demonstration
 - `quick_validation_test.sh` - Quick validation
@@ -91,6 +97,7 @@ make geodetestlab-parallel WORKERS=8 TIMEOUT=300
 ## Test Data Directories
 
 Test data and fixtures are located in:
+
 - `tests/data_test_geode_auth/` - Authentication test data
 - `tests/quic_tests/` - QUIC protocol tests
 - `tests/debug/` - Debug Zig test files

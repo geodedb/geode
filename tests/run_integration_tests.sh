@@ -34,7 +34,7 @@ for test_file in tests/integration/test_*.zig; do
         test_name=$(basename "$test_file" .zig)
         echo -n "Testing $test_name... "
         ((TOTAL_TESTS++))
-        
+
         if zig test "$test_file" 2>/dev/null; then
             echo -e "${GREEN}✓ PASSED${NC}"
             ((PASSED_TESTS++))
@@ -86,10 +86,10 @@ if [ ${#FAILED_FILES[@]} -gt 0 ]; then
     for file in "${FAILED_FILES[@]}"; do
         echo -e "  ${RED}• $file${NC}"
     done
-    
+
     echo -e "\n${YELLOW}To debug failures, run:${NC}"
     echo -e "  zig test <failed_file> --verbose"
-    
+
     exit 1
 else
     echo -e "\n${GREEN}✓ All integration tests passed!${NC}"

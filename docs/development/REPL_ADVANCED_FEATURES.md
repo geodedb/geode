@@ -14,7 +14,8 @@ This document describes the advanced features added to the Geode REPL to enhance
 
 Real-time syntax highlighting for GQL queries with ANSI color codes.
 
-#### Features:
+#### Features
+
 - **Keywords**: Bold blue (MATCH, RETURN, WHERE, CREATE, etc.)
 - **Strings**: Green (single and double quoted)
 - **Numbers**: Cyan (integers and floats)
@@ -23,13 +24,15 @@ Real-time syntax highlighting for GQL queries with ANSI color codes.
 - **Meta Commands**: Bright magenta (\\help, \\quit, etc.)
 - **Comments**: Dim gray (-- and //)
 
-#### Usage:
+#### Usage
+
 ```zig
 const highlighted = try syntax_highlighter.highlight(allocator, "MATCH (n) RETURN n", true);
 defer allocator.free(highlighted);
 ```
 
-#### Color Scheme:
+#### Color Scheme
+
 - Keyword: `\x1b[1m\x1b[34m` (Bold Blue)
 - String: `\x1b[32m` (Green)
 - Number: `\x1b[36m` (Cyan)
@@ -38,7 +41,8 @@ defer allocator.free(highlighted);
 - Meta Command: `\x1b[95m` (Bright Magenta)
 - Comment: `\x1b[2m\x1b[90m` (Dim Bright Black)
 
-#### Benefits:
+#### Benefits
+
 - **Improved Readability**: Easier to distinguish query components
 - **Error Detection**: Syntax errors more visible
 - **Learning Aid**: Visual feedback helps learn GQL syntax
@@ -48,14 +52,16 @@ defer allocator.free(highlighted);
 
 Smart pagination for handling large result sets.
 
-#### Features:
+#### Features
+
 - **Configurable Page Size**: Default 25 rows per page
 - **Auto-Paging**: Automatically enabled for results > threshold
 - **Multi-Format Support**: Works with table, CSV, and JSON formats
 - **Navigation**: \\next/\\n and \\prev/\\p commands
 - **Status Display**: Shows "Rows X-Y of Z (Page N/M)"
 
-#### Configuration:
+#### Configuration
+
 ```zig
 const config = PagerConfig{
     .page_size = 25,      // Rows per page
@@ -65,7 +71,8 @@ const config = PagerConfig{
 };
 ```
 
-#### Usage Example:
+#### Usage Example
+
 ```
 geode> MATCH (n:Person) RETURN n.name, n.age LIMIT 100;
 
@@ -88,7 +95,8 @@ geode> \next
 Showing rows 26-50 of 100 (Page 2/4)
 ```
 
-#### Benefits:
+#### Benefits
+
 - **Memory Efficient**: Only display current page
 - **Improved UX**: No overwhelming output
 - **Navigation**: Easy browsing of large datasets
@@ -98,7 +106,8 @@ Showing rows 26-50 of 100 (Page 2/4)
 
 Intelligent fuzzy matching for history search.
 
-#### Features:
+#### Features
+
 - **Levenshtein Distance**: Edit distance calculation
 - **Smart Scoring**: Multiple scoring factors
   - Exact match: 5000 points
@@ -110,7 +119,8 @@ Intelligent fuzzy matching for history search.
 - **Sorted Results**: Best matches first
 - **Interactive Finder**: Real-time filtering
 
-#### Scoring Algorithm:
+#### Scoring Algorithm
+
 1. Exact match bonus: +5000
 2. Starts with bonus: +500
 3. Contains substring: +300 - (2 × position)
@@ -120,7 +130,8 @@ Intelligent fuzzy matching for history search.
 7. Levenshtein penalty: -(distance × 10)
 8. Length penalty: -(length_diff × 1)
 
-#### Usage Example:
+#### Usage Example
+
 ```
 geode> Ctrl+R
 (reverse-fuzzy-search)`mat': MATCH (n:Person) RETURN n.name
@@ -128,7 +139,8 @@ geode> Ctrl+R
 Type to filter, Enter to select, Esc to cancel
 ```
 
-#### FuzzyFinder API:
+#### FuzzyFinder API
+
 ```zig
 var finder = try FuzzyFinder.init(allocator, history_entries);
 defer finder.deinit();
@@ -141,7 +153,8 @@ finder.selectNext(matches);
 const selected = finder.getSelected(matches);
 ```
 
-#### Benefits:
+#### Benefits
+
 - **Fast Search**: Find commands quickly
 - **Typo Tolerant**: Works with minor typos
 - **Smart Ranking**: Best matches first
@@ -151,7 +164,8 @@ const selected = finder.getSelected(matches);
 
 Save and restore REPL session state.
 
-#### Persisted State:
+#### Persisted State
+
 - Current database
 - Transaction state
 - Output format preference
@@ -160,7 +174,8 @@ Save and restore REPL session state.
 - Last server connection
 - Custom variables
 
-#### File Format (JSON):
+#### File Format (JSON)
+
 ```json
 {
   "database": "mydb",
@@ -176,12 +191,14 @@ Save and restore REPL session state.
 }
 ```
 
-#### Location:
+#### Location
+
 - Linux: `~/.local/share/geode/session.json`
 - macOS: `~/Library/Application Support/geode/session.json`
 - Windows: `%APPDATA%\geode\session.json`
 
-#### API:
+#### API
+
 ```zig
 // Save session
 var state = SessionState.init(allocator);
@@ -196,7 +213,8 @@ var loaded = try SessionState.load(allocator, session_path);
 defer loaded.deinit(allocator);
 ```
 
-#### Benefits:
+#### Benefits
+
 - **Continuity**: Resume where you left off
 - **Convenience**: No need to reconfigure
 - **Workflow**: Preserve preferences
@@ -230,22 +248,26 @@ New meta commands for advanced features:
 
 ### Benchmarks
 
-#### Syntax Highlighting:
+#### Syntax Highlighting
+
 - Small query (< 100 chars): < 1µs
 - Medium query (< 1000 chars): < 10µs
 - Large query (< 10000 chars): < 100µs
 
-#### Fuzzy Search:
+#### Fuzzy Search
+
 - 100 candidates: < 1ms
 - 1000 candidates: < 10ms
 - 10000 candidates: < 100ms
 
-#### Result Pagination:
+#### Result Pagination
+
 - Page rendering: < 1ms
 - Navigation: < 100µs
 - Memory: O(page_size) instead of O(total_rows)
 
-#### Session Persistence:
+#### Session Persistence
+
 - Save: < 10ms
 - Load: < 20ms
 - File size: < 10KB typical
@@ -264,6 +286,7 @@ New meta commands for advanced features:
 **File**: `src/client/repl/test_repl_advanced_features.zig`
 
 Coverage:
+
 - ✅ Syntax highlighting (9 tests)
 - ✅ Fuzzy search (7 tests)
 - ✅ Result pagination (4 tests)
@@ -272,7 +295,7 @@ Coverage:
 
 Total: **44 tests including module self-tests**
 
-### Test Categories:
+### Test Categories
 
 1. **Syntax Highlighting Tests**:
    - Keyword highlighting
@@ -307,7 +330,7 @@ Total: **44 tests including module self-tests**
    - Multiple variables
    - Default path generation
 
-### Running Tests:
+### Running Tests
 
 ```bash
 # Run all advanced feature tests
@@ -336,11 +359,13 @@ zig test src/client/repl/session_state.zig
 Syntax highlighting is automatically enabled when the terminal supports colors.
 
 **Disable:**
+
 ```
 geode> \set highlight off
 ```
 
 **Enable:**
+
 ```
 geode> \set highlight on
 ```
@@ -367,6 +392,7 @@ geode> \page 10
 ```
 
 **Configure:**
+
 ```
 geode> \pagesize 50    # Set 50 rows per page
 geode> \paging off     # Disable pagination
@@ -392,6 +418,7 @@ geode> (Press Ctrl+R)
 Sessions are automatically saved on exit and loaded on startup.
 
 **Manual operations:**
+
 ```
 geode> \save-session
 Session saved to ~/.local/share/geode/session.json
@@ -401,6 +428,7 @@ Session loaded
 ```
 
 **What's saved:**
+
 - Current database
 - Transaction state
 - Format preference (table/csv/json)

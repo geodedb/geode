@@ -34,8 +34,9 @@ cli:
     format: "json"
 
 env:
-  GEODE_TDE_KEY: "aes256-initial-key-for-rotation-test32b!"
-  GEODE_WAL_KEY: "aes256-initial-wal-key-rotation-32bytes!"
+  # All keys must be exactly 64 hex characters (32 bytes for AES-256)
+  GEODE_TDE_KEY: "1111111111111111222222222222222233333333333333334444444444444444"
+  GEODE_WAL_KEY: "5555555555555555666666666666666677777777777777778888888888888888"
   GEODE_TDE_ENABLED: "true"
   GEODE_WAL_ENCRYPTION_ENABLED: "true"
 

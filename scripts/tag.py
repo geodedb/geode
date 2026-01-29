@@ -3,6 +3,7 @@
 import subprocess
 import sys
 
+
 def run_command(command, capture_output=True, text=True):
     """Executes a shell command and optionally returns its output."""
     result = subprocess.run(command, capture_output=capture_output, text=text, shell=True)
@@ -15,10 +16,11 @@ def run_command(command, capture_output=True, text=True):
     except AttributeError:
         return out
 
+
 def main():
     # Fetch the latest tag
     latest_tag = run_command("git describe --tags $(git rev-list --tags --max-count=1)")
-    current_major, current_minor, current_patch = latest_tag.split('.')
+    current_major, current_minor, current_patch = latest_tag.split(".")
 
     # Calculate the next minor version
     next_minor = str(int(current_minor) + 1)
@@ -29,12 +31,13 @@ def main():
 
     # Collect commits since the last tag
     commits = run_command(f"git log {latest_tag}..HEAD --pretty=format:'%h %s'", capture_output=True, text=True)
-    commits_formatted = "\n".join([f"- {line}" for line in commits.split('\n')])
+    commits_formatted = "\n".join([f"- {line}" for line in commits.split("\n")])
 
     # Create and push the new tag
     tag_message = f"Release {version}\n\n{commits_formatted}"
-    run_command(f"git tag -a {version} -m \"{tag_message}\"", capture_output=False, text=False)
+    run_command(f'git tag -a {version} -m "{tag_message}"', capture_output=False, text=False)
     run_command(f"git push origin {version}", capture_output=False, text=False)
+
 
 if __name__ == "__main__":
     main()

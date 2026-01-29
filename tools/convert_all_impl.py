@@ -142,28 +142,29 @@ EXEMPT_FEATURES = [
     "ABAC Enforcement Testing",
 ]
 
+
 def scan_all_files(repo_root):
     """Scan all relevant files in the repository."""
-    extensions = {'.zig', '.md', '.yml', '.yaml'}
-    skip_dirs = {'.git', 'vendor', 'zig-cache', 'zig-out', '.zig-cache', 'node_modules'}
+    extensions = {".zig", ".md", ".yml", ".yaml"}
+    skip_dirs = {".git", "vendor", "zig-cache", "zig-out", ".zig-cache", "node_modules"}
 
     for root, dirs, files in os.walk(repo_root):
         dirs[:] = [d for d in dirs if d not in skip_dirs]
 
         for file in files:
             file_path = Path(root) / file
-            if file_path.suffix in extensions or file == 'build.zig':
+            if file_path.suffix in extensions or file == "build.zig":
                 yield file_path
 
+
 def make_pattern(feature):
-    return re.compile(
-        rf'(CANARY:.*?FEATURE="{re.escape(feature)}".*?)STATUS=IMPL(.*?)(?=;|\n|$)'
-    )
+    return re.compile(rf'(CANARY:.*?FEATURE="{re.escape(feature)}".*?)STATUS=IMPL(.*?)(?=;|\n|$)')
+
 
 def process_file_tested(file_path: Path, feature: str, test_file: str, pattern: re.Pattern, repo_root: Path) -> int:
     """Process a single file and convert IMPL to TESTED."""
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, encoding="utf-8") as f:
             content = f.read()
     except (UnicodeDecodeError, PermissionError):
         return 0
@@ -177,12 +178,12 @@ def process_file_tested(file_path: Path, feature: str, test_file: str, pattern: 
         suffix = match.group(2) if match.group(2) else ""
         if "TEST=" in prefix + suffix:
             return match.group(0)
-        return f'{prefix}STATUS=TESTED; TEST={test_file}{suffix}'
+        return f"{prefix}STATUS=TESTED; TEST={test_file}{suffix}"
 
     new_content = pattern.sub(replace_func, content)
 
     if new_content != content:
-        with open(file_path, 'w', encoding='utf-8') as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             f.write(new_content)
         rel_path = file_path.relative_to(repo_root)
         print(f"  TESTED: {rel_path} ({feature})")
@@ -190,10 +191,11 @@ def process_file_tested(file_path: Path, feature: str, test_file: str, pattern: 
 
     return 0
 
+
 def process_file_exempt(file_path: Path, feature: str, pattern: re.Pattern, repo_root: Path) -> int:
     """Process a single file and mark IMPL as EXEMPT."""
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, encoding="utf-8") as f:
             content = f.read()
     except (UnicodeDecodeError, PermissionError):
         return 0
@@ -207,12 +209,12 @@ def process_file_exempt(file_path: Path, feature: str, pattern: re.Pattern, repo
         suffix = match.group(2) if match.group(2) else ""
         if "TEST=" in prefix + suffix or "EXEMPT" in prefix:
             return match.group(0)
-        return f'{prefix}STATUS=EXEMPT{suffix}'
+        return f"{prefix}STATUS=EXEMPT{suffix}"
 
     new_content = pattern.sub(replace_func, content)
 
     if new_content != content:
-        with open(file_path, 'w', encoding='utf-8') as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             f.write(new_content)
         rel_path = file_path.relative_to(repo_root)
         print(f"  EXEMPT: {rel_path} ({feature})")
@@ -220,8 +222,9 @@ def process_file_exempt(file_path: Path, feature: str, pattern: re.Pattern, repo
 
     return 0
 
+
 def main():
-    repo_root = Path('/home/benji/src/gl/devnw/codepros/geode')
+    repo_root = Path("/home/benji/src/gl/devnw/codepros/geode")
 
     total_tested = 0
     total_exempt = 0
@@ -256,5 +259,6 @@ def main():
 
     return 0
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     exit(main())

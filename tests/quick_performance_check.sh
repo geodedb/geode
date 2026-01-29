@@ -16,13 +16,13 @@ time_operation() {
     local name="$1"
     local cmd="$2"
     local threshold="$3"
-    
+
     echo -n "$name: "
     local start=$(date +%s%N)
     timeout 3 $cmd > /dev/null 2>&1
     local end=$(date +%s%N)
     local duration_ms=$(( (end - start) / 1000000 ))
-    
+
     if [ $duration_ms -le $threshold ]; then
         echo -e "${GREEN}${duration_ms}ms ✓${NC}"
     elif [ $duration_ms -le $((threshold * 2)) ]; then

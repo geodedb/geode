@@ -23,7 +23,7 @@ TESTS_SECURED=0
 test_security_feature() {
     local name="$1"
     local cmd="$2"
-    
+
     echo -n "Testing $name... "
     if eval "$cmd" > /dev/null 2>&1; then
         echo -e "${GREEN}PASS${NC}"
@@ -39,12 +39,12 @@ test_security_threat() {
     local name="$1"
     local cmd="$2"
     local expected_protection="$3"
-    
+
     echo -n "Testing $name... "
     local output
     output=$(eval "$cmd" 2>&1)
     local exit_code=$?
-    
+
     if [ $exit_code -ne 0 ]; then
         if echo "$output" | grep -q "$expected_protection"; then
             echo -e "${GREEN}BLOCKED${NC}"

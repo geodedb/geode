@@ -20,7 +20,7 @@ tests:
   # ===============================
   # INSERT OPERATIONS
   # ===============================
-  
+
   - name: "insert-basic-node"
     description: "Test basic INSERT node pattern"
     args: ["query", "INSERT (n:Person {name: 'Alice', age: 30})"]
@@ -72,7 +72,7 @@ tests:
   # ===============================
   # SET OPERATIONS
   # ===============================
-  
+
   - name: "set-property-basic"
     description: "Test basic SET property operation"
     setup:
@@ -153,7 +153,7 @@ tests:
   # ===============================
   # REMOVE OPERATIONS
   # ===============================
-  
+
   - name: "remove-property-basic"
     description: "Test basic REMOVE property operation"
     setup:
@@ -212,7 +212,7 @@ tests:
   # ===============================
   # DELETE OPERATIONS
   # ===============================
-  
+
   - name: "delete-node-basic"
     description: "Test basic DELETE node operation"
     setup:
@@ -289,7 +289,7 @@ tests:
   # ===============================
   # COMBINED OPERATIONS
   # ===============================
-  
+
   - name: "insert-set-workflow"
     description: "Test INSERT followed by SET operations"
     args:
@@ -349,7 +349,7 @@ tests:
   # ===============================
   # PERFORMANCE TESTS
   # ===============================
-  
+
   - name: "bulk-insert-performance"
     description: "Performance test with bulk INSERT operations"
     timeout_ms: 30000
@@ -399,7 +399,7 @@ tests:
   # ===============================
   # ERROR SCENARIOS
   # ===============================
-  
+
   - name: "set-nonexistent-node-property"
     description: "Test SET property on non-existent node (should succeed with no effect)"
     args: ["query", "MATCH (n:NonExistent) SET n.property = 'value'"]
@@ -428,7 +428,7 @@ tests:
   # ===============================
   # CLEANUP
   # ===============================
-  
+
   - name: "cleanup-data-modification-tests"
     description: "Clean up all data created during data modification tests"
     args:

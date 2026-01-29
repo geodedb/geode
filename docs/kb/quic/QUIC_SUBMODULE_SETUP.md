@@ -39,10 +39,10 @@ git submodule update --init --recursive
 The build system (`build.zig`) references the QUIC library as:
 
 ```zig
-const vendor_quic_mod = b.createModule(.{ 
-    .root_source_file = b.path("vendor/quic/lib.zig"), 
-    .target = target, 
-    .optimize = optimize 
+const vendor_quic_mod = b.createModule(.{
+    .root_source_file = b.path("vendor/quic/lib.zig"),
+    .target = target,
+    .optimize = optimize
 });
 ```
 

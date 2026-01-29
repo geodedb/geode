@@ -2,14 +2,15 @@
 """Fast sequential test runner with minimal overhead."""
 
 import subprocess
-import yaml
 import sys
-from pathlib import Path
-import os
-from collections import defaultdict
 import time
+from collections import defaultdict
+from pathlib import Path
+
+import yaml
 
 BINARY = "/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode"
+
 
 def is_readonly_test(test_case):
     """Check if test is read-only (doesn't modify state)."""
@@ -37,6 +38,7 @@ def is_readonly_test(test_case):
 
     return True
 
+
 def run_test(test_case, spec_name):
     """Run a single test with minimal overhead."""
     if test_case.get("skip", False):
@@ -52,7 +54,9 @@ def run_test(test_case, spec_name):
     # Add --server 127.0.0.1:3141 --insecure for query commands
     modified_args = args[:]
     if len(args) > 0 and args[0] == "query":
-        if not any("--server" in str(arg) for arg in args) and not any("--server 127.0.0.1:3141 --insecure" in str(arg) for arg in args):
+        if not any("--server" in str(arg) for arg in args) and not any(
+            "--server 127.0.0.1:3141 --insecure" in str(arg) for arg in args
+        ):
             modified_args = ["query", "--server 127.0.0.1:3141 --insecure"] + args[1:]
 
     stdin_content = test_case.get("stdin", None)
@@ -62,11 +66,7 @@ def run_test(test_case, spec_name):
 
     try:
         result = subprocess.run(
-            [BINARY] + modified_args,
-            input=stdin_content,
-            capture_output=True,
-            text=True,
-            timeout=timeout
+            [BINARY] + modified_args, input=stdin_content, capture_output=True, text=True, timeout=timeout
         )
     except subprocess.TimeoutExpired:
         return False, "timeout"
@@ -83,15 +83,16 @@ def run_test(test_case, spec_name):
         combined = result.stdout + result.stderr
         for pattern in expect["stdout_contains"]:
             if pattern.lower() not in combined.lower():
-                return False, f"missing"
+                return False, "missing"
 
     # Check stderr_contains
     if "stderr_contains" in expect:
         for pattern in expect["stderr_contains"]:
             if pattern.lower() not in result.stderr.lower():
-                return False, f"stderr missing"
+                return False, "stderr missing"
 
     return True, "PASSED"
+
 
 def main():
     specs_dir = Path("/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs")
@@ -106,7 +107,7 @@ def main():
     # Process each spec file
     for spec_file in sorted(specs_dir.glob("*.yml")):
         try:
-            with open(spec_file, "r") as f:
+            with open(spec_file) as f:
                 spec = yaml.safe_load(f)
         except:
             continue
@@ -130,20 +131,21 @@ def main():
     elapsed = time.time() - start_time
     total_tests = total_passed + total_failed + total_skipped
 
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"RESULTS: {total_passed} passed, {total_failed} failed, {total_skipped} skipped")
-    print(f"Time: {elapsed:.1f}s ({total_tests} tests, {total_tests/elapsed:.1f} tests/sec)")
-    print(f"Pass rate: {100*total_passed/max(1,total_passed+total_failed):.1f}%")
-    print(f"{'='*80}\n")
+    print(f"Time: {elapsed:.1f}s ({total_tests} tests, {total_tests / elapsed:.1f} tests/sec)")
+    print(f"Pass rate: {100 * total_passed / max(1, total_passed + total_failed):.1f}%")
+    print(f"{'=' * 80}\n")
 
     if failure_patterns:
-        print(f"TOP FAILURE PATTERNS:")
-        print(f"{'='*80}")
+        print("TOP FAILURE PATTERNS:")
+        print(f"{'=' * 80}")
         for pattern, tests in sorted(failure_patterns.items(), key=lambda x: -len(x[1]))[:15]:
             print(f"{pattern:30s} {len(tests):4d} tests")
         print()
 
     return 0 if total_failed == 0 else 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

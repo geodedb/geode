@@ -60,7 +60,7 @@ pub fn main() !void {
     const seconds: f64 = (@as(f64, @floatFromInt(total_encrypt_ns)) / 1_000_000_000.0);
     const throughput_mb_s = if (seconds == 0) 0 else (total_bytes / (1024.0 * 1024.0)) / seconds;
 
-    const out = try std.fmt.allocPrint(alloc, 
+    const out = try std.fmt.allocPrint(alloc,
         \\{{"bench":"BenchmarkCANARY_REQ_GQL_SEC_TDE_OVERHEAD_001","pages":{},"page_size":{},"mean_encrypt_ns":{d},"throughput_mb_s":{d}}}
         \\
     , .{ page_count, page_size, mean_encrypt_ns, throughput_mb_s });

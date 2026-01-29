@@ -7,30 +7,30 @@ commitizen:
   version_scheme: semver
   version_provider: scm
   update_changelog_on_bump: true
-  bump_message: "bump: version $current_version -> $new_version"
+  bump_message: 'bump: version $current_version -> $new_version'
   changelog_incremental: true
-  changelog_start_rev: null
+  changelog_start_rev:
 
   # Allowed commit types
   allowed_prefixes:
-    - feat
-    - fix
-    - docs
-    - style
-    - refactor
-    - perf
-    - test
-    - build
-    - ci
-    - chore
-    - revert
+  - feat
+  - fix
+  - docs
+  - style
+  - refactor
+  - perf
+  - test
+  - build
+  - ci
+  - chore
+  - revert
 
   # Commit message schema for validation
-  schema: "<type>(<scope>): <subject>"
-  schema_pattern: "^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\\(.+\\))?!?:\\s.+"
+  schema: '<type>(<scope>): <subject>'
+  schema_pattern: ^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?!?:\s.+
 
   # Bump settings
-  bump_pattern: "^(feat|fix|perf|refactor)"
+  bump_pattern: ^(feat|fix|perf|refactor)
   bump_map:
     feat: MINOR
     fix: PATCH
@@ -52,14 +52,14 @@ commitizen:
     revert: Reverts
 
   change_type_order:
-    - BREAKING CHANGE
-    - feat
-    - fix
-    - refactor
-    - perf
-    - docs
-    - style
-    - test
-    - build
-    - ci
-    - chore
+  - BREAKING CHANGE
+  - feat
+  - fix
+  - refactor
+  - perf
+  - docs
+  - style
+  - test
+  - build
+  - ci
+  - chore

@@ -38,23 +38,23 @@ WITH user,
          user.password_hash,
          Argon2idHash($password, user.salt, 4, 65536, 1)
      ) AS password_valid
-SET user.failed_attempts = CASE 
-    WHEN password_valid THEN 0 
-    ELSE user.failed_attempts + 1 
+SET user.failed_attempts = CASE
+    WHEN password_valid THEN 0
+    ELSE user.failed_attempts + 1
 END,
-user.last_login = CASE 
-    WHEN password_valid THEN DateTime() 
-    ELSE user.last_login 
+user.last_login = CASE
+    WHEN password_valid THEN DateTime()
+    ELSE user.last_login
 END,
 user.locked_until = CASE
     WHEN user.failed_attempts >= 5 THEN DateTime() + Duration('PT30M')
     ELSE NULL
 END
-RETURN 
+RETURN
     CASE WHEN password_valid THEN user.id ELSE NULL END AS user_id,
-    CASE WHEN password_valid THEN 'Login successful' 
+    CASE WHEN password_valid THEN 'Login successful'
          WHEN user.failed_attempts >= 5 THEN 'Account locked for 30 minutes'
-         ELSE 'Invalid credentials' 
+         ELSE 'Invalid credentials'
     END AS message,
     password_valid AS authenticated
 
@@ -99,7 +99,7 @@ WHERE user.password_hash IS NOT NULL
 -- Check if using old parameters (this is pseudocode, actual implementation would differ)
 AND NOT exists(user.upgraded_hash)
 SET user.upgraded_hash = Argon2idHash(
-    $current_password, 
+    $current_password,
     user.salt,
     6,      -- Increased iterations
     262144, -- Increased memory (256MB)
@@ -197,14 +197,14 @@ MATCH (twofa:TwoFactorAuth {user_id: user.id, enabled: true})
 WITH user, twofa,
      -- Check if it's a backup code
      [code IN twofa.backup_codes WHERE hash_equals(code, HashData('BLAKE2s-256', $provided_code))] AS matching_backup
-WHERE 
+WHERE
     -- Either TOTP matches (would need proper TOTP implementation)
     $totp_valid = true
     -- Or backup code matches
     OR size(matching_backup) > 0
 // Remove used backup code
 SET twofa.backup_codes = CASE
-    WHEN size(matching_backup) > 0 
+    WHEN size(matching_backup) > 0
     THEN [code IN twofa.backup_codes WHERE NOT hash_equals(code, HashData('BLAKE2s-256', $provided_code))]
     ELSE twofa.backup_codes
 END
@@ -227,15 +227,15 @@ CREATE (audit:AuditLog {
     ip_address: $ip_address,
     details: $details,
     -- Create hash chain
-    previous_hash: CASE 
-        WHEN prev IS NOT NULL THEN prev.entry_hash 
+    previous_hash: CASE
+        WHEN prev IS NOT NULL THEN prev.entry_hash
         ELSE Hash('BLAKE2b-512', '0000000000000000000000000000000000000000000000000000000000000000')
     END,
-    entry_hash: HashData('BLAKE2b-512', 
-        coalesce(prev.entry_hash, 'genesis') + ':' + 
-        DateTime() + ':' + 
-        $user_id + ':' + 
-        $action + ':' + 
+    entry_hash: HashData('BLAKE2b-512',
+        coalesce(prev.entry_hash, 'genesis') + ':' +
+        DateTime() + ':' +
+        $user_id + ':' +
+        $action + ':' +
         $details
     )
 })
@@ -259,8 +259,8 @@ LIMIT 1
 MATCH (user:User)
 CREATE (anon:AnonymizedUser {
     id: HashData('BLAKE2b-256', 'user:' + user.id + ':' + $anonymization_salt),
-    age_group: 
-        CASE 
+    age_group:
+        CASE
             WHEN user.age < 25 THEN '18-24'
             WHEN user.age < 35 THEN '25-34'
             WHEN user.age < 45 THEN '35-44'
@@ -281,7 +281,7 @@ RETURN count(*) AS anonymized_users
 MATCH (attempt:LoginAttempt)
 WHERE attempt.timestamp > DateTime() - Duration('PT10M')
   AND attempt.success = false
-WITH attempt.ip_address AS ip, 
+WITH attempt.ip_address AS ip,
      collect(DISTINCT attempt.username) AS targeted_users,
      count(*) AS attempt_count
 WHERE attempt_count > 10 OR size(targeted_users) > 5
@@ -293,7 +293,7 @@ CREATE (alert:SecurityAlert {
     targeted_users: targeted_users,
     attempt_count: attempt_count,
     detected_at: DateTime(),
-    signature: HashData('BLAKE2b-512', 
+    signature: HashData('BLAKE2b-512',
         'SPRAY:' + ip + ':' + toString(targeted_users) + ':' + DateTime()
     )
 })

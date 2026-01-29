@@ -39,11 +39,13 @@ echo "127.0.0.1 geode.local grafana.geode.local prometheus.geode.local minio.geo
 ### 2. Start the Stack
 
 **Non-GPU deployment:**
+
 ```bash
 docker-compose up -d
 ```
 
 **GPU-accelerated deployment:**
+
 ```bash
 docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 ```
@@ -63,17 +65,17 @@ docker-compose exec geode geode query "RETURN 1 AS health" --server 127.0.0.1:84
 
 ### 4. Access Web Interfaces
 
-- **Grafana**: https://grafana.geode.local
+- **Grafana**: <https://grafana.geode.local>
   - Username: `admin`
   - Password: Check `.env` file
 
-- **Prometheus**: https://prometheus.geode.local
+- **Prometheus**: <https://prometheus.geode.local>
 
-- **MinIO Console**: https://minio.geode.local
+- **MinIO Console**: <https://minio.geode.local>
   - Username: Check `.env` file (`S3_ACCESS_KEY`)
   - Password: Check `.env` file (`S3_SECRET_KEY`)
 
-- **Vault UI**: https://vault.geode.local
+- **Vault UI**: <https://vault.geode.local>
   - Token: Check `.env` file (`VAULT_TOKEN`)
 
 ## Configuration
@@ -111,6 +113,7 @@ GF_SECURITY_ADMIN_PASSWORD=<generated-password>
 #### Self-Signed Certificates (Development)
 
 Generated automatically by setup script:
+
 ```bash
 ./scripts/setup-deployment.sh
 ```
@@ -487,6 +490,7 @@ docker-compose exec geode geode admin check
 ## Support
 
 For issues and questions:
+
 - Documentation: `./docs/`
 - Issues: GitHub Issues
 - Community: Discord/Slack

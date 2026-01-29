@@ -11,6 +11,7 @@ This document describes the implemented expression operators in Geode's GQL pars
 **Requirements:** REQ-GQL-EXPR-MOD-001 through REQ-GQL-EXPR-MOD-004
 
 **Syntax:**
+
 ```gql
 RETURN dividend % divisor AS result
 ```
@@ -19,6 +20,7 @@ RETURN dividend % divisor AS result
 Computes the remainder of integer division. The modulo operator has the same precedence as multiplication and division.
 
 **Examples:**
+
 ```gql
 // Basic modulo
 RETURN 17 % 5 AS result;  // Returns: 2
@@ -37,10 +39,12 @@ RETURN n.value AS even_numbers;
 ```
 
 **Error Handling:**
+
 - Division by zero: Returns `EvalError.DivisionByZero` at runtime
 - Type mismatch: Returns `EvalError.TypeMismatch` for non-integer operands
 
 **Implementation:**
+
 - AST: Added `Mod` to `BinOp` enum in `src/gql/ast.zig:200`
 - Parser: Updated `parseMulExpr()` in `src/gql/parser.zig:1410-1424`
 - Evaluator: Added modulo evaluation in `src/eval.zig:307-314`
@@ -57,6 +61,7 @@ RETURN n.value AS even_numbers;
 **Requirements:** REQ-GQL-EXPR-UNARY-PLUS-001 through REQ-GQL-EXPR-UNARY-PLUS-004
 
 **Syntax:**
+
 ```gql
 RETURN +expression AS result
 ```
@@ -65,6 +70,7 @@ RETURN +expression AS result
 The unary plus operator returns its operand unchanged. It is primarily used for symmetry with unary minus and to explicitly indicate positive numbers.
 
 **Examples:**
+
 ```gql
 // Basic unary plus
 RETURN +42 AS result;  // Returns: 42
@@ -81,11 +87,13 @@ RETURN -+42 AS result;  // Returns: -42 (parsed as −(+42))
 ```
 
 **Type Support:**
+
 - Integers: Returns value unchanged
 - Decimals: Returns value unchanged
 - Other types: Returns `EvalError.TypeMismatch`
 
 **Implementation:**
+
 - AST: Added `Pos` to `UnaryOp` enum in `src/gql/ast.zig:201`
 - Parser: Updated `parseUnaryExpr()` in `src/gql/parser.zig:1454-1461`
 - Evaluator: Added unary plus evaluation in `src/eval.zig:576-579`
@@ -102,6 +110,7 @@ RETURN -+42 AS result;  // Returns: -42 (parsed as −(+42))
 **Requirements:** REQ-GQL-EXPR-INDEX-001 through REQ-GQL-EXPR-INDEX-005
 
 **Syntax:**
+
 ```gql
 array_expression[index_expression]
 ```
@@ -110,6 +119,7 @@ array_expression[index_expression]
 Accesses an element from a list/array by its zero-based index. The index must be an integer expression.
 
 **Examples:**
+
 ```gql
 // Basic array indexing
 RETURN [1, 2, 3][0] AS first;  // Returns: 1
@@ -134,12 +144,14 @@ RETURN n.friends[0].name AS best_friend;
 ```
 
 **Behavior:**
+
 - **Out of bounds:** Returns `null` (no error)
 - **Negative indices:** Returns `null` (does not wrap around)
 - **Non-list target:** Returns `null`
 - **Non-integer index:** Returns `EvalError.TypeMismatch`
 
 **Implementation:**
+
 - AST: Added `Index` expression variant in `src/gql/ast.zig:179`
 - Parser: Implemented in `parsePostfixExpr()` in `src/gql/parser.zig:1537-1549`
 - Evaluator: Added array indexing with bounds checking in `src/eval.zig:1223-1244`
@@ -159,11 +171,13 @@ From highest to lowest precedence:
 6. **Logical:** `AND`, `OR`
 
 **Example:**
+
 ```gql
 RETURN 10 + labels(n)[0].length * 2 % 3 AS result
 ```
 
 Evaluation order:
+
 1. `labels(n)` - function call
 2. `[0]` - array index
 3. `.length` - member access
@@ -182,6 +196,7 @@ All operators have comprehensive unit tests in `src/test_arithmetic_operators.zi
 - **Array index tests:** 6 tests covering basic indexing, function results, chaining, dynamic indices, out-of-bounds, and combinations
 
 **Run tests:**
+
 ```bash
 zig build test --summary all
 ```

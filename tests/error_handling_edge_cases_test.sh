@@ -24,12 +24,12 @@ test_error() {
     local name="$1"
     local cmd="$2"
     local expected_error="$3"
-    
+
     echo -n "Testing $name... "
     local output
     output=$(eval "$cmd" 2>&1)
     local exit_code=$?
-    
+
     if [ $exit_code -ne 0 ]; then
         if echo "$output" | grep -q "$expected_error"; then
             echo -e "${GREEN}CORRECTLY HANDLED${NC}"
@@ -50,7 +50,7 @@ test_error() {
 test_edge_case() {
     local name="$1"
     local cmd="$2"
-    
+
     echo -n "Testing $name... "
     if eval "$cmd" > /dev/null 2>&1; then
         echo -e "${GREEN}PASS${NC}"

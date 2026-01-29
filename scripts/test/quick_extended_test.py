@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """Quick test of a few specs from extended_test_runner to see what's failing."""
 
-import subprocess
-import yaml
 import sys
 from pathlib import Path
-import os
-import uuid
-import time
+
+import yaml
 
 # Import the run_test function from extended_test_runner
 sys.path.insert(0, str(Path(__file__).parent))
 from extended_test_runner import run_test
+
 
 def main():
     specs_dir = Path("/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs")
@@ -33,15 +31,15 @@ def main():
             continue
 
         try:
-            with open(spec_file, "r") as f:
+            with open(spec_file) as f:
                 spec = yaml.safe_load(f)
         except Exception as e:
             print(f"Skipping {spec_name}: Invalid YAML - {e}")
             continue
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Testing: {spec_name}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         spec_passed = 0
         spec_failed = 0
@@ -72,16 +70,17 @@ def main():
 
         print(f"  {spec_name}: {spec_passed} passed, {spec_failed} failed, {spec_skipped} skipped")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"TOTAL: {total_passed} passed, {total_failed} failed, {total_skipped} skipped")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     if all_failures:
-        print(f"\nFailures:")
+        print("\nFailures:")
         for spec_file, name, message in all_failures:
             print(f"  [{spec_file}] {name}: {message}")
 
     return 0 if total_failed == 0 else 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

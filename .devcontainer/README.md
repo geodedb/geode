@@ -26,6 +26,7 @@ The dev container provides:
    - [Install on Linux](https://docs.docker.com/engine/install/)
 
 2. **VSCode** with Dev Containers extension (recommended)
+
    ```bash
    code --install-extension ms-vscode-remote.remote-containers
    ```
@@ -58,9 +59,11 @@ The dev container provides:
 ### Option 3: Using Cursor
 
 1. Open the repository in Cursor:
+
    ```bash
    cursor .
    ```
+
 2. Press `Cmd/Ctrl + Shift + P`
 3. Select **"Dev Containers: Reopen in Container"**
 4. Wait for the container to build
@@ -208,6 +211,7 @@ docker exec -u root geode-dev chown -R $USER:$USER /home/$USER/.cache
 ### Can't Access Services
 
 Check port forwarding:
+
 1. Open Command Palette: `Cmd/Ctrl + Shift + P`
 2. Run: **"Ports: Focus on Ports View"**
 3. Verify ports are forwarded

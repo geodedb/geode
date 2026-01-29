@@ -33,7 +33,7 @@ tests:
 
   - name: "audit-setup-test-data"
     description: "Create test data for audit logging validation"
-    args: ["query", 
+    args: ["query",
            "CREATE (user1:User {username: 'alice', role: 'admin', department: 'IT'}), (user2:User {username: 'bob', role: 'analyst', department: 'Finance'}), (user3:User {username: 'charlie', role: 'viewer', department: 'HR'}), (user1)-[:HAS_ACCESS {level: 'full', granted_at: timestamp()}]->(user2) RETURN count(*) AS created"]
     expect:
       exit_code: 0
@@ -48,7 +48,7 @@ tests:
 
   - name: "audit-json-file-basic-operations"
     description: "Test JSON file audit logging for basic operations"
-    args: ["query", 
+    args: ["query",
            "MATCH (u:User {username: 'alice'}) SET u.last_login = timestamp() RETURN u.username AS user, u.last_login AS login_time"]
     expect:
       exit_code: 0
@@ -69,7 +69,7 @@ tests:
 
   - name: "audit-json-file-command-execution-events"
     description: "Test command execution event logging (Event ID: 1002)"
-    args: ["query", 
+    args: ["query",
            "MATCH (u:User) WHERE u.role = 'admin' RETURN count(u) AS admin_count"]
     expect:
       exit_code: 0

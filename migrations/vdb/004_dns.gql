@@ -112,22 +112,22 @@ CREATE LABEL TYPE EDGE SERVES; // Nameserver -> ResourceRecord
 
 // Function to create domain with automatic parent hierarchy
 CREATE FUNCTION create_domain(domain_name STRING) RETURNS STRING {
-  
+
   // Ensure domain name ends with dot
   IF NOT domain_name MATCHES '\.$' THEN
     SET domain_name = domain_name + '.';
   END IF;
-  
+
   // Check if domain already exists
   OPTIONAL MATCH (existing:Domain WHERE existing.name = domain_name)
   IF existing IS NOT NULL THEN
     RETURN domain_name;
   END IF;
-  
+
   // Parse domain parts
   DECLARE parts LIST<STRING> = split(trim_end(domain_name, '.'), '.');
   DECLARE is_tld BOOLEAN = (size(parts) = 1);
-  
+
   // Create the domain
   CREATE (domain:Domain:Entity {
     id: gen_random_uuid(),
@@ -135,20 +135,20 @@ CREATE FUNCTION create_domain(domain_name STRING) RETURNS STRING {
     is_tld: is_tld,
     created_at: CURRENT_TIMESTAMP()
   });
-  
+
   // Add TLD label if applicable
   IF is_tld THEN
     SET domain:TLD;
   END IF;
-  
+
   // Create parent domain if needed (not for TLD)
   IF NOT is_tld THEN
     DECLARE parent_parts LIST<STRING> = parts[1..];
     DECLARE parent_name STRING = join(parent_parts, '.') + '.';
-    
+
     // Recursively create parent
     CALL create_domain(parent_name);
-    
+
     // Link to parent
     MATCH (parent:Domain WHERE parent.name = parent_name)
     CREATE (parent)-[:PARENT_OF]->(domain);
@@ -157,7 +157,7 @@ CREATE FUNCTION create_domain(domain_name STRING) RETURNS STRING {
     // TLD has root as parent (represented by special relationship)
     CREATE (domain)-[:SUBDOMAIN_OF {is_root: true}]->(:Domain {name: '.', is_tld: false});
   END IF;
-  
+
   RETURN domain_name;
 };
 
@@ -173,10 +173,10 @@ CREATE FUNCTION add_resource_record(
   port INTEGER DEFAULT NULL,
   target STRING DEFAULT NULL
 ) RETURNS UUID {
-  
+
   // Ensure domain exists
   CALL create_domain(domain_name);
-  
+
   // Create resource record
   CREATE (rr:ResourceRecord:Entity {
     id: gen_random_uuid(),
@@ -190,18 +190,18 @@ CREATE FUNCTION add_resource_record(
     target: target,
     created_at: CURRENT_TIMESTAMP()
   });
-  
+
   // Link to domain
   MATCH (domain:Domain WHERE domain.name = domain_name)
   CREATE (domain)-[:HAS_RECORD]->(rr);
-  
+
   // Special handling for CNAME and PTR records
   IF record_type IN ['CNAME', 'PTR'] AND target IS NOT NULL THEN
     CALL create_domain(target);
     MATCH (target_domain:Domain WHERE target_domain.name = target)
     CREATE (rr)-[:POINTS_TO]->(target_domain);
   END IF;
-  
+
   RETURN rr.id;
 };
 
@@ -210,26 +210,26 @@ CREATE FUNCTION set_nameservers(
   domain_name STRING,
   nameserver_list LIST<STRING>
 ) {
-  
+
   MATCH (domain:Domain WHERE domain.name = domain_name)
-  
+
   // Remove existing nameserver relationships
   MATCH (domain)-[rel:DELEGATES_TO]->(:Nameserver)
   DELETE rel;
-  
+
   // Add new nameservers
   FOR ns_name IN nameserver_list DO
     // Create nameserver if it doesn't exist
     MERGE (ns:Nameserver:Entity {hostname: ns_name})
-    ON CREATE SET 
+    ON CREATE SET
       ns.id = gen_random_uuid(),
       ns.created_at = CURRENT_TIMESTAMP();
-    
+
     // Create delegation relationship
     CREATE (domain)-[:DELEGATES_TO]->(ns);
     CREATE (ns)-[:AUTHORITATIVE_FOR]->(domain);
   END FOR;
-  
+
   // Update domain metadata
   CALL touch_entity(domain.id);
 };
@@ -241,25 +241,25 @@ CREATE FUNCTION register_domain(
   registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
   expiration_date TIMESTAMP DEFAULT NULL
 ) {
-  
+
   // Ensure domain exists
   CALL create_domain(domain_name);
-  
+
   // Create or find registrar
   MERGE (registrar:Registrar:Entity {name: registrar_name})
-  ON CREATE SET 
+  ON CREATE SET
     registrar.id = gen_random_uuid(),
     registrar.created_at = CURRENT_TIMESTAMP();
-  
+
   // Update domain registration info
   MATCH (domain:Domain WHERE domain.name = domain_name)
   SET domain.registered = registration_date,
       domain.expires = expiration_date;
-  
+
   // Create registration relationship
   CREATE (domain)-[:REGISTERED_BY]->(registrar);
   CREATE (registrar)-[:MANAGES]->(domain);
-  
+
   CALL touch_entity(domain.id);
 };
 

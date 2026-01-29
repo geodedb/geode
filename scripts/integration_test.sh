@@ -26,7 +26,7 @@ TESTS_FAILED=0
 run_test() {
     local name="$1"
     local cmd="$2"
-    
+
     echo -n "Testing $name... "
     if bash -c "$cmd" > /dev/null 2>&1; then
         echo -e "${GREEN}PASS${NC}"

@@ -24,11 +24,13 @@ EXPLAIN <statement>
 ### Basic Examples
 
 **Explain a Simple MATCH Query:**
+
 ```gql
 EXPLAIN MATCH (p:Person) RETURN p.name
 ```
 
 **Output:**
+
 ```
 | plan              |
 |-------------------|
@@ -40,11 +42,13 @@ EXPLAIN MATCH (p:Person) RETURN p.name
 ```
 
 **Explain with WHERE Clause:**
+
 ```gql
 EXPLAIN MATCH (p:Person) WHERE p.age > 25 RETURN p.name, p.age
 ```
 
 **Output:**
+
 ```
 | plan              |
 |-------------------|
@@ -57,11 +61,13 @@ EXPLAIN MATCH (p:Person) WHERE p.age > 25 RETURN p.name, p.age
 ```
 
 **Explain Relationship Traversal:**
+
 ```gql
 EXPLAIN MATCH (p:Person)-[:WORKS_FOR]->(c:Company) RETURN p.name, c.name
 ```
 
 **Output:**
+
 ```
 | plan                    |
 |-------------------------|
@@ -89,11 +95,13 @@ The execution plan shows the logical operators Geode will use:
 ### EXPLAIN with Different Statement Types
 
 **CREATE Statement:**
+
 ```gql
 EXPLAIN CREATE (p:Person {name: 'Alice', age: 30})
 ```
 
 **Output:**
+
 ```
 | plan                    |
 |-------------------------|
@@ -104,11 +112,13 @@ EXPLAIN CREATE (p:Person {name: 'Alice', age: 30})
 ```
 
 **DELETE Statement:**
+
 ```gql
 EXPLAIN MATCH (p:Person) WHERE p.temp = true DELETE p
 ```
 
 **Output:**
+
 ```
 | plan                    |
 |-------------------------|
@@ -118,6 +128,7 @@ EXPLAIN MATCH (p:Person) WHERE p.temp = true DELETE p
 ```
 
 **MERGE Statement:**
+
 ```gql
 EXPLAIN MERGE (p:Person {email: 'user@example.com'})
 ON CREATE SET p.created = datetime()
@@ -125,6 +136,7 @@ ON MATCH SET p.accessed = datetime()
 ```
 
 **Output:**
+
 ```
 | plan                    |
 |-------------------------|
@@ -135,6 +147,7 @@ ON MATCH SET p.accessed = datetime()
 ### Advanced Examples
 
 **Complex Query with Aggregation:**
+
 ```gql
 EXPLAIN MATCH (p:Person)-[:WORKS_FOR]->(c:Company)
 WHERE p.age > 25
@@ -144,6 +157,7 @@ LIMIT 10
 ```
 
 **Union Query:**
+
 ```gql
 EXPLAIN
 MATCH (p:Person) RETURN p.name AS name
@@ -164,11 +178,13 @@ PROFILE <statement>
 ### Basic Examples
 
 **Profile a Simple Query:**
+
 ```gql
 PROFILE MATCH (p:Person) RETURN p.name
 ```
 
 **Output:**
+
 ```
 | metric              | value |
 |---------------------|-------|
@@ -188,16 +204,19 @@ PROFILE returns the following metrics:
 ### Examples by Query Type
 
 **Profile with Aggregation:**
+
 ```gql
 PROFILE MATCH (p:Person) RETURN count(p) AS person_count
 ```
 
 **Profile with WHERE Clause:**
+
 ```gql
 PROFILE MATCH (p:Person) WHERE p.age > 30 RETURN p.name, p.age
 ```
 
 **Profile Relationship Traversal:**
+
 ```gql
 PROFILE MATCH (p:Person)-[:WORKS_FOR]->(c:Company)
 WHERE c.industry = 'Technology'
@@ -205,11 +224,13 @@ RETURN p.name, c.name
 ```
 
 **Profile CREATE Statement:**
+
 ```gql
 PROFILE CREATE (p:Person {name: 'Bob', age: 35})
 ```
 
 **Output:**
+
 ```
 | metric              | value |
 |---------------------|-------|
@@ -219,11 +240,13 @@ PROFILE CREATE (p:Person {name: 'Bob', age: 35})
 ```
 
 **Profile Empty Result:**
+
 ```gql
 PROFILE MATCH (p:NonExistent) RETURN p
 ```
 
 **Output:**
+
 ```
 | metric              | value |
 |---------------------|-------|
@@ -245,6 +268,7 @@ PROFILE MATCH (n) WHERE n:Person AND n.age > 30 RETURN n.name
 ```
 
 **Analyze Join Performance:**
+
 ```gql
 PROFILE MATCH (p:Person)-[:WORKS_FOR]->(c:Company),
               (p)-[:LIVES_IN]->(city:City)
@@ -253,6 +277,7 @@ RETURN p.name, c.name, city.name
 ```
 
 **Test Pagination Impact:**
+
 ```gql
 -- Without LIMIT
 PROFILE MATCH (p:Person) RETURN p.name ORDER BY p.name
@@ -268,6 +293,7 @@ PROFILE MATCH (p:Person) RETURN p.name ORDER BY p.name LIMIT 100
 Both EXPLAIN and PROFILE are parsed as top-level statements that wrap another statement.
 
 **Parser Functions (parser.zig:2554-2572):**
+
 ```zig
 fn parseExplainStatement(self: *Parser) ParserError!ast.Statement {
     _ = try self.expect(.EXPLAIN);
@@ -287,6 +313,7 @@ fn parseProfileStatement(self: *Parser) ParserError!ast.Statement {
 ### AST Structures
 
 **AST (ast.zig:46-47):**
+
 ```zig
 pub const Statement = union(enum) {
     // ... other statements ...
@@ -318,11 +345,13 @@ The `executeExplain` function analyzes the wrapped statement and generates a pla
 **PROFILE Execution (execution.zig:942-988):**
 
 The `executeProfile` function:
+
 1. Executes the wrapped query using `executeStatementWithContext`
 2. Collects execution metrics (rows returned, column count)
 3. Returns statistics as a result set with two columns: metric and value
 
 **Execution Handlers (execution.zig:646-651):**
+
 ```zig
 .Explain => |exp| {
     return executeExplain(allocator, exp, context);
@@ -388,9 +417,11 @@ LIMIT 50
 ## Testing
 
 Comprehensive unit tests are available in:
+
 - `geodetestlab/specs/explain_profile_unit_tests.yml`
 
 Test coverage includes:
+
 - EXPLAIN with various query types (MATCH, CREATE, DELETE, MERGE)
 - EXPLAIN with WHERE, ORDER BY, LIMIT clauses
 - EXPLAIN with relationships and complex patterns
@@ -401,6 +432,7 @@ Test coverage includes:
 ## GQL Compliance
 
 These features implement ISO/IEC 39075:2024 GQL standard query explanation capabilities:
+
 - EXPLAIN statement for query plan visualization
 - PROFILE statement for execution profiling
 - Query optimization hints and analysis

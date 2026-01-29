@@ -451,7 +451,7 @@ test "anti-money laundering detection" {
     const integration_result = try client.query(
         \\MATCH (a1:Account {is_flagged: true})-[:SENT]->(t:Transaction)-[:RECEIVED_BY]->(a2:Account)
         \\WHERE a2.risk_score < 20 AND t.amount > 25000
-        \\RETURN a1.id as suspicious_account, a2.id as clean_account, 
+        \\RETURN a1.id as suspicious_account, a2.id as clean_account,
         \\       SUM(t.amount) as total_transferred
         \\ORDER BY total_transferred DESC
         \\LIMIT 10
@@ -475,7 +475,7 @@ test "real-time fraud scoring" {
     // Calculate composite risk scores
     const risk_scoring = try client.query(
         \\MATCH (a:Account)-[:SENT]->(t:Transaction)-[:PROCESSED_BY]->(m:Merchant)
-        \\WITH a, 
+        \\WITH a,
         \\     AVG(t.risk_score) as avg_tx_risk,
         \\     MAX(m.risk_score) as max_merchant_risk,
         \\     COUNT(CASE WHEN t.is_flagged = true THEN 1 END) as flagged_count,

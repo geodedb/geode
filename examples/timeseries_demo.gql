@@ -65,7 +65,7 @@ RETURN time_bucket('device:1:temperature', 3600000, 1703001600000, 1703087999000
 
 -- Find all sensors connected to a specific gateway and get their last values
 MATCH (gateway:Gateway {id: 'gw-001'})-[:CONNECTS]->(sensor:Sensor)
-RETURN 
+RETURN
     sensor.id AS sensor_id,
     sensor.type AS sensor_type,
     last_value(sensor.id + ':' + sensor.metric) AS last_reading;
@@ -81,11 +81,11 @@ RETURN reading.timestamp, reading.value AS anomaly_value;
 -- ============================================
 
 -- Compare multiple sensors
-WITH 
+WITH
     last_value('device:1:temperature') AS temp1,
     last_value('device:2:temperature') AS temp2,
     last_value('device:3:temperature') AS temp3
-RETURN 
+RETURN
     temp1.value AS sensor1,
     temp2.value AS sensor2,
     temp3.value AS sensor3,
@@ -95,7 +95,7 @@ RETURN
 WITH
     sample_by('device:1:temperature', 3600000, 1703001600000, 1703087999000, 'avg') AS temp_samples,
     sample_by('device:1:humidity', 3600000, 1703001600000, 1703087999000, 'avg') AS humidity_samples
-RETURN 
+RETURN
     temp_samples.ts AS timestamp,
     temp_samples.value AS temperature,
     humidity_samples.value AS humidity,
@@ -106,11 +106,11 @@ RETURN
 -- ============================================
 
 -- Check if temperature exceeded threshold in last hour
-WITH 
-    sample_by('device:1:temperature', 60000, 
+WITH
+    sample_by('device:1:temperature', 60000,
               timestamp() - 3600000, timestamp(), 'max') AS max_temps
 WHERE max_temps.value > 30.0
-RETURN 
+RETURN
     'ALERT' AS status,
     max_temps.ts AS alert_time,
     max_temps.value AS max_temperature;
@@ -118,7 +118,7 @@ RETURN
 -- Detect rapid changes (rate > 5 degrees per minute)
 WITH rate('device:1:temperature', 60000) AS temp_rate
 WHERE abs(temp_rate.value) > 5.0
-RETURN 
+RETURN
     'RAPID_CHANGE' AS alert_type,
     temp_rate.ts AS timestamp,
     temp_rate.value AS rate_of_change;
@@ -128,7 +128,7 @@ RETURN
 -- ============================================
 
 -- Daily aggregates for the past week
-RETURN sample_by('device:1:temperature', 
+RETURN sample_by('device:1:temperature',
                  86400000,  -- 24 hours in ms
                  timestamp() - 604800000,  -- 7 days ago
                  timestamp(),
@@ -145,7 +145,7 @@ RETURN d1.ts AS peak_time, value_at('device:1:temperature', d1.ts) AS peak_value
 -- ============================================
 
 -- Find gaps in time-series data (> 5 minutes between points)
-WITH sample_by('device:1:temperature', 60000, 
+WITH sample_by('device:1:temperature', 60000,
                timestamp() - 3600000, timestamp(), 'count') AS minute_counts
 WHERE minute_counts.value = 0
 RETURN minute_counts.ts AS gap_start;

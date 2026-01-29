@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """Find which tests are actually failing in the extended runner."""
 
-import subprocess
-import yaml
 import sys
-from pathlib import Path
-import os
-import uuid
-import time
 from collections import defaultdict
+from pathlib import Path
+
+import yaml
 
 # Import the run_test function from extended_test_runner
 sys.path.insert(0, str(Path(__file__).parent))
 from extended_test_runner import run_test
+
 
 def main():
     specs_dir = Path("/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs")
@@ -26,9 +24,9 @@ def main():
     # Process all specs
     for spec_file in sorted(specs_dir.glob("*.yml")):
         try:
-            with open(spec_file, "r") as f:
+            with open(spec_file) as f:
                 spec = yaml.safe_load(f)
-        except Exception as e:
+        except Exception:
             continue
 
         for test in spec.get("tests", []):
@@ -55,17 +53,17 @@ def main():
                 key = message.split(":")[0] if ":" in message else message
                 failure_patterns[key].append((spec_file.name, name, message))
 
-    print(f"{'='*80}")
-    print(f"TEST RESULTS SUMMARY")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
+    print("TEST RESULTS SUMMARY")
+    print(f"{'=' * 80}")
     print(f"Passed:  {total_passed}")
     print(f"Failed:  {total_failed}")
     print(f"Skipped: {total_skipped}")
-    print(f"{'='*80}\n")
+    print(f"{'=' * 80}\n")
 
     if failure_patterns:
-        print(f"FAILURE PATTERNS:")
-        print(f"{'='*80}")
+        print("FAILURE PATTERNS:")
+        print(f"{'=' * 80}")
         for pattern, failures in sorted(failure_patterns.items(), key=lambda x: -len(x[1])):
             print(f"\n{pattern}: {len(failures)} tests")
             # Show first 10 failures for this pattern
@@ -75,6 +73,7 @@ def main():
                 print(f"  ... and {len(failures) - 10} more")
 
     return 0 if total_failed == 0 else 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

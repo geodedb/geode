@@ -22,7 +22,7 @@ run_stdio_test() {
     local name="$1"
     local json_message="$2"
     local expected_pattern="$3"
-    
+
     echo -n "Testing $name... "
     local output
     output=$(echo "$json_message" | timeout 3 ./zig-out/bin/geoded 2>/dev/null | head -1)
@@ -62,7 +62,7 @@ run_stdio_test "Mathematical expression" \
 
 echo
 
-# Test 2: Edge Cases  
+# Test 2: Edge Cases
 echo -e "${BLUE}=== Edge Case Tests ===${NC}"
 
 run_stdio_test "Empty string" \

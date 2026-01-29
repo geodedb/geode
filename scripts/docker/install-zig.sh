@@ -30,12 +30,12 @@ MIRRORS=(
 verify_signature() {
     local tarball="$1"
     local sig_file="$2"
-    
+
     if [[ "$VERIFY_SIGNATURE" != "true" ]]; then
         echo "Skipping signature verification (disabled)"
         return 0
     fi
-    
+
     # Check if minisign is available
     if ! command -v minisign >/dev/null 2>&1; then
         echo "WARNING: minisign not found, attempting to install it..."
@@ -50,10 +50,10 @@ verify_signature() {
             return 0
         fi
     fi
-    
+
     # Create a temporary file with the public key
     echo "${PUBKEY}" > /tmp/zig.pub
-    
+
     # Verify the signature
     if minisign -Vm "${tarball}" -P "${PUBKEY}" -x "${sig_file}" 2>/dev/null; then
         echo "Signature verification passed!"
@@ -71,13 +71,13 @@ try_download() {
     local url="$1"
     local output="/tmp/${TARBALL_NAME}"
     local sig_output="/tmp/${SIGNATURE_NAME}"
-    
+
     echo "Trying: ${url}..."
     if curl -fsSL --insecure --connect-timeout 10 --max-time 120 -o "${output}" "${url}" 2>/dev/null; then
         # Verify it's actually a tar.xz file
         if file "${output}" | grep -q "XZ compressed data"; then
             echo "Successfully downloaded tarball from ${url}"
-            
+
             # Try to download signature
             local sig_url="${url}.minisig"
             if curl -fsSL --insecure --connect-timeout 5 --max-time 30 -o "${sig_output}" "${sig_url}" 2>/dev/null; then
@@ -126,7 +126,7 @@ for mirror in "${MIRRORS[@]}"; do
     else
         url="${mirror}/${TARBALL_NAME}"
     fi
-    
+
     if try_download "$url"; then
         DOWNLOAD_SUCCESS=true
         break

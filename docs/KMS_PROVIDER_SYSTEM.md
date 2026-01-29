@@ -7,6 +7,7 @@ Geode provides enterprise-grade Key Management Service (KMS) integration for Tra
 ## Multi-Provider Architecture
 
 **Core Implementation**: `src/security/kms.zig`
+
 - **Provider Types**: Local dev, External KMS, Remote KMS, HashiCorp Vault
 - **Envelope Encryption**: AES-256-GCM with JSON metadata serialization
 - **Factory Functions**: Easy provider instantiation with configuration management
@@ -51,7 +52,7 @@ var provider = kms.vaultKMSProvider(allocator, "https://vault.example.com", "vau
 ```zig
 // Initialize TDE with KMS provider
 var manager = tde_kms.TDEKeyManager.init(allocator);
-try manager.initializeWithKMS(kms.KMSConfig{ 
+try manager.initializeWithKMS(kms.KMSConfig{
     .provider_type = .vault_transit,
     .vault_addr = "https://vault.company.com",
     .auth_token = vault_token,
@@ -90,6 +91,7 @@ var env_tde = try tde_kms.createEnvTDE(allocator);
 **Implementation**: `src/security/vault_kms_provider.zig`
 
 ### Key Operations
+
 - **Key Generation**: Cryptographically secure 32-byte key generation
 - **Vault Storage**: Direct integration with `vault kv put/get` operations
 - **Envelope Encryption**: Complete metadata serialization for audit trails
@@ -114,12 +116,14 @@ export GEODE_VAULT_KEY_PATH="geode/encryption"
 ## Security & Compliance Features
 
 ### Envelope Encryption Architecture
+
 - **Master Key**: Stored securely in KMS provider (Vault, HSM, etc.)
 - **Data Encryption Key (DEK)**: Generated per-database, wrapped by master key
 - **Key Hierarchy**: Separate keys for data pages and WAL records
 - **Metadata**: Complete audit trail with algorithm, nonce, and authentication tag
 
 ### Enterprise Security
+
 - **Key Rotation**: Automated rotation with configurable policies
 - **Audit Logging**: All KMS operations logged for compliance
 - **Zero Plaintext**: Master keys never stored in plaintext on disk
@@ -129,11 +133,13 @@ export GEODE_VAULT_KEY_PATH="geode/encryption"
 ## Test Coverage & Verification
 
 ### Test Suites
+
 - **`tests/test_kms_provider.zig`**: 11 comprehensive KMS provider test scenarios
 - **`tests/test_tde_kms_integration.zig`**: 9 TDE-KMS integration test scenarios  
 - **`tests/test_vault_kms_provider.zig`**: 6 Vault-specific integration tests
 
 ### Key Test Scenarios
+
 - **Multi-Provider Compatibility**: Cross-provider key wrapping/unwrapping
 - **Deterministic Behavior**: Reproducible encryption for testing
 - **Error Handling**: Comprehensive error scenario coverage

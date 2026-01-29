@@ -6,21 +6,22 @@ Geode Automated Regression Testing for Scale Performance
 Runs benchmarks against known baselines and detects performance regressions.
 """
 
-import json
-import time
 import argparse
+import json
+import statistics
 import subprocess
 import sys
-from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Optional, Tuple
-from pathlib import Path
+import time
+from dataclasses import asdict, dataclass
 from datetime import datetime
-import statistics
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass
 class Baseline:
     """Performance baseline for regression comparison."""
+
     name: str
     version: str
     timestamp: str
@@ -30,6 +31,7 @@ class Baseline:
 @dataclass
 class RegressionResult:
     """Result of a regression test."""
+
     benchmark_name: str
     metric_name: str
     baseline_value: float
@@ -43,6 +45,7 @@ class RegressionResult:
 @dataclass
 class RegressionReport:
     """Full regression test report."""
+
     version: str
     timestamp: str
     baseline_version: str
@@ -58,17 +61,17 @@ class RegressionRunner:
 
     # Thresholds for regression detection
     DEFAULT_THRESHOLDS = {
-        "latency": 10.0,      # 10% increase is regression
+        "latency": 10.0,  # 10% increase is regression
         "throughput": -10.0,  # 10% decrease is regression
-        "memory": 20.0,       # 20% increase is regression
-        "error_rate": 50.0,   # 50% increase is regression
+        "memory": 20.0,  # 20% increase is regression
+        "error_rate": 50.0,  # 50% increase is regression
     }
 
     def __init__(
         self,
         baseline_dir: Path = Path("loadtest/regression/baselines"),
         results_dir: Path = Path("loadtest/regression/results"),
-        geode_path: str = "./zig-out/bin/geode"
+        geode_path: str = "./zig-out/bin/geode",
     ):
         self.baseline_dir = baseline_dir
         self.results_dir = results_dir
@@ -79,10 +82,7 @@ class RegressionRunner:
     def get_version(self) -> str:
         """Get current Geode version."""
         try:
-            result = subprocess.run(
-                [self.geode_path, "--version"],
-                capture_output=True, text=True
-            )
+            result = subprocess.run([self.geode_path, "--version"], capture_output=True, text=True)
             return result.stdout.strip().split()[-1] if result.returncode == 0 else "unknown"
         except:
             return "unknown"
@@ -150,10 +150,7 @@ class RegressionRunner:
         for _ in range(runs):
             start = time.perf_counter()
             try:
-                result = subprocess.run(
-                    [self.geode_path, "query", "RETURN 1"],
-                    capture_output=True, timeout=30
-                )
+                result = subprocess.run([self.geode_path, "query", "RETURN 1"], capture_output=True, timeout=30)
                 elapsed = (time.perf_counter() - start) * 1000
                 if result.returncode == 0:
                     latencies.append(elapsed)
@@ -170,15 +167,14 @@ class RegressionRunner:
             start = time.perf_counter()
             result = subprocess.run(
                 ["./zig-out/bin/geode-loadgen", "-n", "1000", "-e", "5000", "-q", "-f", "gql"],
-                capture_output=True, text=True, timeout=60
+                capture_output=True,
+                text=True,
+                timeout=60,
             )
             elapsed = time.perf_counter() - start
 
             if result.returncode == 0:
-                return {
-                    "nodes_per_sec": 1000 / elapsed,
-                    "edges_per_sec": 5000 / elapsed
-                }
+                return {"nodes_per_sec": 1000 / elapsed, "edges_per_sec": 5000 / elapsed}
         except:
             pass
         return {"nodes_per_sec": 0, "edges_per_sec": 0}
@@ -189,10 +185,7 @@ class RegressionRunner:
         return {"peak_mb": 0}
 
     def compare_to_baseline(
-        self,
-        current_metrics: Dict[str, float],
-        baseline: Baseline,
-        thresholds: Dict[str, float] = None
+        self, current_metrics: Dict[str, float], baseline: Baseline, thresholds: Dict[str, float] = None
     ) -> List[RegressionResult]:
         """Compare current metrics to baseline."""
         thresholds = thresholds or self.DEFAULT_THRESHOLDS
@@ -230,16 +223,18 @@ class RegressionRunner:
                 is_regression = abs(change_percent) > threshold
                 is_improvement = False
 
-            results.append(RegressionResult(
-                benchmark_name=metric_name.split(".")[0],
-                metric_name=metric_name,
-                baseline_value=baseline_value,
-                current_value=current_value,
-                change_percent=change_percent,
-                threshold_percent=threshold,
-                is_regression=is_regression,
-                is_improvement=is_improvement
-            ))
+            results.append(
+                RegressionResult(
+                    benchmark_name=metric_name.split(".")[0],
+                    metric_name=metric_name,
+                    baseline_value=baseline_value,
+                    current_value=current_value,
+                    change_percent=change_percent,
+                    threshold_percent=threshold,
+                    is_regression=is_regression,
+                    is_improvement=is_improvement,
+                )
+            )
 
         return results
 
@@ -281,7 +276,7 @@ class RegressionRunner:
             regressions=regressions,
             improvements=improvements,
             stable=stable,
-            overall_status=status
+            overall_status=status,
         )
 
         # Save report
@@ -298,12 +293,7 @@ class RegressionRunner:
 
         metrics = self.run_benchmarks()
 
-        baseline = Baseline(
-            name=name,
-            version=version,
-            timestamp=datetime.now().isoformat(),
-            metrics=metrics
-        )
+        baseline = Baseline(name=name, version=version, timestamp=datetime.now().isoformat(), metrics=metrics)
 
         self.save_baseline(baseline, name)
         print(f"Baseline saved: {name}")
@@ -347,15 +337,11 @@ class RegressionRunner:
 
 def main():
     parser = argparse.ArgumentParser(description="Geode Regression Test Runner")
-    parser.add_argument("--create-baseline", action="store_true",
-                        help="Create a new baseline from current performance")
-    parser.add_argument("--baseline", default="latest",
-                        help="Baseline to compare against")
+    parser.add_argument("--create-baseline", action="store_true", help="Create a new baseline from current performance")
+    parser.add_argument("--baseline", default="latest", help="Baseline to compare against")
     parser.add_argument("--name", help="Name for new baseline")
-    parser.add_argument("--geode", default="./zig-out/bin/geode",
-                        help="Path to geode binary")
-    parser.add_argument("--ci", action="store_true",
-                        help="CI mode: exit with non-zero on regression")
+    parser.add_argument("--geode", default="./zig-out/bin/geode", help="Path to geode binary")
+    parser.add_argument("--ci", action="store_true", help="CI mode: exit with non-zero on regression")
 
     args = parser.parse_args()
 

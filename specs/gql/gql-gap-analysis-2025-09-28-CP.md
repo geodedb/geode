@@ -1,27 +1,27 @@
 ## Gap & Risk Map → exact repo anchors to start patching
 
 * **Missing reserved words (`FILTER`, `LET`, `SELECT`)** in `TokenKind` / `keywordKind()` → identifiers may collide with reserved words.
-  **Patch here:** `src/gql/token.zig` **≈ L59–67, L73–86** (enum + keyword mapping). 
+  **Patch here:** `src/gql/token.zig` **≈ L59–67, L73–86** (enum + keyword mapping).
 * **Identifier case-insensitivity not implemented** (CNF/representative form) → `Foo` ≠ `FOO`.
-  **Patch here:** `src/gql/token.zig` **≈ L122–129** (identifier char classes); `src/gql/ast.zig` (Ident storage); add CNF pipeline + comparisons. 
+  **Patch here:** `src/gql/token.zig` **≈ L122–129** (identifier char classes); `src/gql/ast.zig` (Ident storage); add CNF pipeline + comparisons.
 * **`RETURN DISTINCT` lacks dedup at runtime** → spec violation.
-  **Patch here:** `src/gql/ast.zig` **≈ L89–97** (flag present); add dedup stage in `src/exec.zig`. 
+  **Patch here:** `src/gql/ast.zig` **≈ L89–97** (flag present); add dedup stage in `src/exec.zig`.
 * **ORDER BY alias resolution** missing (`RETURN … AS Name ORDER BY Name`).
-  **Patch here:** `src/gql/parser.zig` **≈ L480–488** (ORDER parse), **≈ L553–562** (alias probe helper); planner/exec binding step. 
+  **Patch here:** `src/gql/parser.zig` **≈ L480–488** (ORDER parse), **≈ L553–562** (alias probe helper); planner/exec binding step.
 * **US001 policy** rejects LIMIT/OFFSET w/o ORDER BY (non‑standard).
-  **Patch here:** planner/exec policy removal + docs: `docs/gql/GQL_CONFORMANCE_PROFILE.md` (US001 anchor). 
+  **Patch here:** planner/exec policy removal + docs: `docs/gql/GQL_CONFORMANCE_PROFILE.md` (US001 anchor).
 * **Diagnostics non‑conformant** (no GQLSTATUS/SQLSTATE).
-  **Patch here:** `src/gql/main.zig` **≈ L43–49** (stderr prints); introduce central `GqlStatus` + mapping. 
+  **Patch here:** `src/gql/main.zig` **≈ L43–49** (stderr prints); introduce central `GqlStatus` + mapping.
 * **Comments**: `//` implemented, `--` not (GB02 missing).
-  **Patch here:** `src/gql/lexer.zig` **≈ L77–85** (add `--`); also remove non‑standard `#` if present. 
+  **Patch here:** `src/gql/lexer.zig` **≈ L77–85** (add `--`); also remove non‑standard `#` if present.
 * **Unicode identifier/digit classes** are ASCII‑only.
-  **Patch here:** `src/gql/token.zig` **≈ L122–129**; introduce Unicode category checks and normalization. 
+  **Patch here:** `src/gql/token.zig` **≈ L122–129**; introduce Unicode category checks and normalization.
 * **`SELECT` statement** not recognized (keyword missing + no grammar).
-  **Patch here:** `src/gql/token.zig` keywords; `src/gql/parser.zig` add SELECT grammar mapped to RETURN semantics. 
+  **Patch here:** `src/gql/token.zig` keywords; `src/gql/parser.zig` add SELECT grammar mapped to RETURN semantics.
 * **Conformance profile** sparse; must reflect enforced spec (no toggles).
-  **Patch here:** `src/conformance.zig` **≈ L19–28**; docs at `docs/gql/GQL_CONFORMANCE_PROFILE.md`. 
+  **Patch here:** `src/conformance.zig` **≈ L19–28**; docs at `docs/gql/GQL_CONFORMANCE_PROFILE.md`.
 
-> All anchors above are verbatim from the review and may have drifted slightly; start there to navigate the code quickly. 
+> All anchors above are verbatim from the review and may have drifted slightly; start there to navigate the code quickly.
 
 ---
 
@@ -39,12 +39,12 @@ You are a senior **Zig 0.15.1** engineer. Implement **“Geode GQL Conformance
 
 **Scope (from audit; file/line anchors to edit first):**
 
-* `src/gql/token.zig` **≈ L59–67, L73–86, L122–129** (keywords, identifier classes). 
-* `src/gql/lexer.zig` **≈ L77–85** (comment introducers). 
-* `src/gql/parser.zig` **≈ L480–488, L512–520, L553–562** (ORDER BY, LIMIT/OFFSET, alias probe). 
-* `src/gql/ast.zig` **≈ L89–97** (ReturnClause.distinct; Ident). 
-* `src/exec.zig` (post‑projection pipeline & ordering). 
-* `src/gql/main.zig` **≈ L43–49** (error handling). `src/conformance.zig` **≈ L19–28**. Docs under `docs/gql/GQL_CONFORMANCE_PROFILE.md` (US001 section). 
+* `src/gql/token.zig` **≈ L59–67, L73–86, L122–129** (keywords, identifier classes).
+* `src/gql/lexer.zig` **≈ L77–85** (comment introducers).
+* `src/gql/parser.zig` **≈ L480–488, L512–520, L553–562** (ORDER BY, LIMIT/OFFSET, alias probe).
+* `src/gql/ast.zig` **≈ L89–97** (ReturnClause.distinct; Ident).
+* `src/exec.zig` (post‑projection pipeline & ordering).
+* `src/gql/main.zig` **≈ L43–49** (error handling). `src/conformance.zig` **≈ L19–28**. Docs under `docs/gql/GQL_CONFORMANCE_PROFILE.md` (US001 section).
 
 ---
 
@@ -54,14 +54,14 @@ You are a senior **Zig 0.15.1** engineer. Implement **“Geode GQL Conformance
 
 * Extend `TokenKind`/`keywordKind()` to include **all ISO reserved words missing in Geode** (at minimum **FILTER**, **LET**, **SELECT** from findings). Ensure case‑insensitive recognition; reserved words **never** lex as identifiers.
 * On encountering syntactically unsupported reserved constructs, raise **SQLSTATE `0A000`** (“feature not supported”) **only** if the spec feature truly isn’t implemented; otherwise parse normally.
-  **Touch:** `src/gql/token.zig` **≈ L59–67, L73–86**. 
+  **Touch:** `src/gql/token.zig` **≈ L59–67, L73–86**.
 
 **A2. Implement identifier **canonical name form** (CNF) & spec case‑insensitivity**
 
 * Define `canonicalizeIdentUnicode()` that applies **Unicode case folding** to **upper-case representative form** per ISO rules (use Unicode 15.1 data; see S‑Constraints).
 * Store **both** `{orig, cnf}` for unquoted identifiers in AST; **compare/bind on `cnf`**.
 * **Reject collisions**: if two bindings differ only by case (same CNF), raise **SQLSTATE `42712`** (duplicate).
-  **Touch:** `src/gql/ast.zig` (Expr.Ident struct) & all identifier comparisons; `src/gql/token.zig` **≈ L122–129** for char‑class changes. 
+  **Touch:** `src/gql/ast.zig` (Expr.Ident struct) & all identifier comparisons; `src/gql/token.zig` **≈ L122–129** for char‑class changes.
 
 **A3. Full Unicode ID & digit classes; input Unicode/UTF‑16 support**
 
@@ -81,37 +81,37 @@ You are a senior **Zig 0.15.1** engineer. Implement **“Geode GQL Conformance
 * After projection and before ORDER/PAGING, if `distinct==true`, **remove duplicates** across projected columns.
 * Implement stable dedup: with ORDER BY → preserve sort; otherwise free to choose internal order.
 * Define row equality on projected values; **NULLs compare equal for dedup purposes** per spec.
-  **Touch:** `src/exec.zig`; `src/gql/ast.zig` **≈ L89–97** (flag read). 
+  **Touch:** `src/exec.zig`; `src/gql/ast.zig` **≈ L89–97** (flag read).
 
 **A6. ORDER BY alias resolution**
 
 * Resolve unqualified identifiers in ORDER BY to **current projection aliases** first; if match, bind to that expression/result column; if ambiguous/missing → **`42703` undefined name**.
 * Apply after DISTINCT rewrite and before pagination.
-  **Touch:** `src/gql/parser.zig` **≈ L480–488, L553–562**; planning layer. 
+  **Touch:** `src/gql/parser.zig` **≈ L480–488, L553–562**; planning layer.
 
 **A7. Remove non‑standard US001 policy; allow unordered LIMIT/OFFSET**
 
 * Delete/disable the “must have ORDER BY for LIMIT/OFFSET” enforcement. Allow spec’s **implementation‑dependent order**.
 * Update docs & conformance JSON accordingly; remove any CLI flags or internal toggles tied to this policy.
-  **Touch:** planner/exec checks; `docs/gql/GQL_CONFORMANCE_PROFILE.md` (US001). 
+  **Touch:** planner/exec checks; `docs/gql/GQL_CONFORMANCE_PROFILE.md` (US001).
 
 **A8. Comments**
 
 * Keep `//` (GB03). **Implement `--`** (GB02) as a single‑line comment.
 * **Remove non‑standard `#` comments** if present.
-  **Touch:** `src/gql/lexer.zig` **≈ L77–85**. 
+  **Touch:** `src/gql/lexer.zig` **≈ L77–85**.
 
 **A9. Diagnostics (Clause 4.9): structured GQL‑status & SQLSTATE**
 
 * Introduce `GqlStatus{ sqlstate:[5]u8, class: enum{SUCCESS, WARNING, ERROR}, message, line, column, token, diagnostics:[]Diag }`.
 * Map common conditions: `42601` (syntax), `0A000` (feature not supported), `42703` (undefined), `42712` (duplicate alias), `22018` (invalid char).
 * CLI: **on any exception**, emit a **single‑line JSON** GQL‑status to **stderr** (stable key order), and **exit 2**; on success, emit **SUCCESS (00000)** to stderr and results to stdout.
-  **Touch:** `src/gql/main.zig` **≈ L43–49** and error sites. 
+  **Touch:** `src/gql/main.zig` **≈ L43–49** and error sites.
 
 **A10. Conformance profile (informative, no toggles)**
 
 * Expand `src/conformance.zig` to reflect **actual spec conformance** (keywords, comments, identifiers Unicode/case‑folded, pagination policy = **implementation‑dependent order allowed**). Remove/avoid compatibility flags.
-  **Touch:** `src/conformance.zig` **≈ L19–28**; docs. 
+  **Touch:** `src/conformance.zig` **≈ L19–28**; docs.
 
 **Errors (policy) & Validation**
 
@@ -319,8 +319,8 @@ zig build run -- 'MATCH (n) RETURN n LIMIT 1'   # now allowed (unspecified order
 
 ## **Sufficiency Status**
 
-**Ready** — **9.6/10**. Versions pinned; I/O contracts precise; functional rules and edge cases enumerated; tests specify **exact** outputs and exits; dependencies pinned (vendored Unicode tables); logging/diagnostics policy defined; no feature flags. Remaining risk: exact line offsets may have drifted; anchors provided to jump to the right regions. 
+**Ready** — **9.6/10**. Versions pinned; I/O contracts precise; functional rules and edge cases enumerated; tests specify **exact** outputs and exits; dependencies pinned (vendored Unicode tables); logging/diagnostics policy defined; no feature flags. Remaining risk: exact line offsets may have drifted; anchors provided to jump to the right regions.
 
 ## Changelog
 
-* **v2** — Incorporated your directives (Zig 0.15.1; break API; no flags; full SELECT; Unicode/UTF‑16; removed US001; added `--` comments); expanded tests & diagnostics; added/remapped repo anchors. 
+* **v2** — Incorporated your directives (Zig 0.15.1; break API; no flags; full SELECT; Unicode/UTF‑16; removed US001; added `--` comments); expanded tests & diagnostics; added/remapped repo anchors.

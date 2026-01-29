@@ -9,28 +9,36 @@ The Real-time Analytics & Streaming Integration system provides comprehensive re
 ### Core Components
 
 #### RealTimeAnalyticsEngine
+
 The central orchestrator that manages all real-time analytics operations:
+
 - **Event Queue Management**: Configurable queue with overflow protection
 - **Batch Processing**: Efficient batch processing with configurable intervals
 - **Multi-threaded Processing**: Background processing with thread safety
 - **Statistics Tracking**: Comprehensive performance metrics and monitoring
 
 #### AnalyticsEvent System
+
 Flexible event structure for capturing diverse analytics data:
+
 - **Event Types**: Node operations, edge operations, queries, searches, anomalies
 - **Property System**: Flexible key-value properties with typed values
 - **Metadata Tracking**: Source tracking, correlation IDs, processing times
 - **Lifecycle Management**: Proper initialization and cleanup
 
 #### Pattern Detection Engine
+
 Advanced pattern recognition for graph behaviors:
+
 - **Pattern Types**: Connection patterns, community formation, hub emergence
 - **Frequency Analysis**: Pattern frequency tracking and threshold detection
 - **Temporal Windows**: Time-based pattern analysis
 - **Confidence Scoring**: Statistical confidence in detected patterns
 
 #### Anomaly Detection System
+
 Statistical anomaly detection with machine learning integration:
+
 - **Statistical Analysis**: Z-score based anomaly detection
 - **Baseline Management**: Adaptive baseline statistics
 - **Severity Classification**: Multi-level severity assessment
@@ -41,6 +49,7 @@ Statistical anomaly detection with machine learning integration:
 ### Supported Event Types
 
 #### Graph Operations
+
 ```zig
 pub const AnalyticsEventType = enum {
     node_creation,      // New node added to graph
@@ -59,6 +68,7 @@ pub const AnalyticsEventType = enum {
 ```
 
 #### Event Properties System
+
 ```zig
 pub const AnalyticsValue = union(enum) {
     string: []const u8,
@@ -85,6 +95,7 @@ pub const AnalyticsValue = union(enum) {
 ### ML-Driven Analytics
 
 #### Embedding Updates
+
 ```zig
 // Automatic embedding updates based on graph changes
 fn handleMLIntegration(self: *RealTimeAnalyticsEngine, event: *AnalyticsEvent) !void {
@@ -106,6 +117,7 @@ fn handleMLIntegration(self: *RealTimeAnalyticsEngine, event: *AnalyticsEvent) !
 ```
 
 #### Similarity-Based Analytics
+
 - **Real-time Similarity**: On-demand similarity calculations
 - **Clustering Detection**: Automatic community detection
 - **Recommendation Updates**: Real-time recommendation updates
@@ -114,6 +126,7 @@ fn handleMLIntegration(self: *RealTimeAnalyticsEngine, event: *AnalyticsEvent) !
 ### Integration with Graph Embeddings
 
 The system seamlessly integrates with the ML Graph Embeddings system:
+
 - **Node2Vec Integration**: Biased random walk updates
 - **GraphSAGE Integration**: Neighbor aggregation updates
 - **DeepWalk Integration**: Structural embedding updates
@@ -124,6 +137,7 @@ The system seamlessly integrates with the ML Graph Embeddings system:
 ### Pattern Types
 
 #### Connection Patterns
+
 ```zig
 pub const PatternType = enum {
     frequent_connection,    // Recurring connection patterns
@@ -136,6 +150,7 @@ pub const PatternType = enum {
 ```
 
 #### Pattern Detection Configuration
+
 ```zig
 pub const PatternDetectionConfig = struct {
     min_pattern_frequency: u32 = 5,
@@ -147,11 +162,13 @@ pub const PatternDetectionConfig = struct {
 ### Detection Algorithms
 
 #### Frequency-Based Detection
+
 - **Pattern Frequency**: Track occurrence frequency of specific patterns
 - **Time Windows**: Analyze patterns within configurable time windows
 - **Confidence Scoring**: Calculate statistical confidence in patterns
 
 #### Graph Structure Analysis
+
 - **Community Detection**: Identify emerging communities
 - **Centrality Changes**: Track changing node importance
 - **Connectivity Patterns**: Analyze connection trends
@@ -161,26 +178,28 @@ pub const PatternDetectionConfig = struct {
 ### Statistical Anomaly Detection
 
 #### Z-Score Analysis
+
 ```zig
 // Statistical anomaly detection implementation
 pub fn detectAnomaly(self: *AnomalyDetector, event: *const AnalyticsEvent) !AnomalyResult {
     const current_value = try self.extractMetricValue(event);
-    
+
     if (self.baseline_stats.get(metric_key)) |baseline| {
         const z_score = @abs(current_value - baseline.mean) / @sqrt(baseline.variance);
-        
+
         if (z_score > self.config.statistical_threshold) {
             result.is_anomaly = true;
             result.confidence = @min(z_score / 10.0, 1.0);
             result.severity = self.classifySeverity(z_score);
         }
     }
-    
+
     return result;
 }
 ```
 
 #### Severity Classification
+
 - **Low Severity**: 3-5 standard deviations from baseline
 - **Medium Severity**: 5-10 standard deviations from baseline
 - **High Severity**: 10-20 standard deviations from baseline
@@ -189,6 +208,7 @@ pub fn detectAnomaly(self: *AnomalyDetector, event: *const AnalyticsEvent) !Anom
 ### Baseline Management
 
 #### Adaptive Baselines
+
 - **Running Statistics**: Continuously updated mean and variance
 - **Sample Requirements**: Minimum samples before anomaly detection
 - **Update Frequency**: Configurable baseline update intervals
@@ -199,10 +219,11 @@ pub fn detectAnomaly(self: *AnomalyDetector, event: *const AnalyticsEvent) !Anom
 ### Change Data Capture Integration
 
 #### CDC Event Processing
+
 ```zig
 pub const CDCAnalyticsIntegration = struct {
     analytics_engine: *RealTimeAnalyticsEngine,
-    
+
     pub fn handleCDCEvent(self: *CDCAnalyticsIntegration, cdc_event: anytype) !void {
         const analytics_event = try self.convertCDCEvent(cdc_event);
         try self.analytics_engine.queueEvent(analytics_event);
@@ -211,6 +232,7 @@ pub const CDCAnalyticsIntegration = struct {
 ```
 
 #### Event Conversion
+
 - **CDC to Analytics**: Convert CDC events to analytics events
 - **Property Mapping**: Map CDC properties to analytics properties
 - **Timestamp Preservation**: Maintain temporal ordering
@@ -219,6 +241,7 @@ pub const CDCAnalyticsIntegration = struct {
 ### Real-time Streaming
 
 #### Stream Processing
+
 - **Event Streaming**: Continuous event stream processing
 - **Backpressure Handling**: Intelligent queue management
 - **Ordering Guarantees**: Maintain event ordering where required
@@ -229,6 +252,7 @@ pub const CDCAnalyticsIntegration = struct {
 ### Analytics Configuration
 
 #### Core Settings
+
 ```zig
 pub const AnalyticsConfig = struct {
     enable_ml_integration: bool = true,
@@ -246,6 +270,7 @@ pub const AnalyticsConfig = struct {
 ```
 
 #### Performance Tuning
+
 - **Batch Size**: Balance between latency and throughput
 - **Processing Interval**: Control processing frequency
 - **Queue Size**: Memory vs. data loss trade-offs
@@ -254,6 +279,7 @@ pub const AnalyticsConfig = struct {
 ### Advanced Configuration
 
 #### Pattern Detection Tuning
+
 ```zig
 pub const PatternDetectionConfig = struct {
     min_pattern_frequency: u32 = 5,
@@ -263,6 +289,7 @@ pub const PatternDetectionConfig = struct {
 ```
 
 #### Anomaly Detection Tuning
+
 ```zig
 pub const AnomalyDetectionConfig = struct {
     statistical_threshold: f64 = 3.0,
@@ -380,6 +407,7 @@ if (anomaly_result.is_anomaly) {
 ## Performance Characteristics
 
 ### Throughput Metrics
+
 - **Event Processing**: >10,000 events/second sustained
 - **Batch Processing**: <100ms for 1000-event batches
 - **Pattern Detection**: <1ms per event for common patterns
@@ -387,6 +415,7 @@ if (anomaly_result.is_anomaly) {
 - **ML Integration**: <2ms per embedding update
 
 ### Memory Usage
+
 - **Base Engine**: ~5MB for core analytics engine
 - **Event Queue**: Configurable, ~1KB per queued event
 - **Pattern Storage**: ~500KB for 1000 tracked patterns
@@ -394,6 +423,7 @@ if (anomaly_result.is_anomaly) {
 - **Statistics**: ~50KB for comprehensive analytics statistics
 
 ### Scalability Limits
+
 - **Event Queue**: Up to 100,000 queued events
 - **Pattern Tracking**: Up to 10,000 concurrent patterns
 - **Anomaly Metrics**: Up to 10,000 baseline metrics
@@ -403,18 +433,21 @@ if (anomaly_result.is_anomaly) {
 ## Integration Points
 
 ### Graph Database Integration
+
 - **Transaction Hooks**: Automatic event generation on graph changes
 - **Query Monitoring**: Query performance and pattern analysis
 - **Index Updates**: Analytics-driven index optimization
 - **Storage Events**: Storage-level change notifications
 
 ### ML System Integration
+
 - **Embedding Updates**: Real-time embedding generation
 - **Similarity Monitoring**: Similarity search analytics
 - **Model Performance**: ML model effectiveness tracking
 - **Training Triggers**: Automatic retraining based on patterns
 
 ### Monitoring and Alerting
+
 - **Metrics Export**: Prometheus-compatible metrics
 - **Alert Generation**: Configurable alerting thresholds
 - **Dashboard Integration**: Real-time analytics dashboards
@@ -423,7 +456,9 @@ if (anomaly_result.is_anomaly) {
 ## Testing Framework
 
 ### Unit Tests
+
 Located in `tests/test_real_time_analytics.zig`:
+
 - Event lifecycle management
 - Pattern detection algorithms
 - Anomaly detection statistical methods
@@ -431,7 +466,9 @@ Located in `tests/test_real_time_analytics.zig`:
 - Memory management verification
 
 ### Integration Tests
+
 Located in `tests/test_real_time_analytics_integration.zig`:
+
 - End-to-end analytics workflows
 - CDC integration scenarios
 - ML system integration
@@ -439,6 +476,7 @@ Located in `tests/test_real_time_analytics_integration.zig`:
 - Pattern detection with real graph data
 
 ### Test Coverage
+
 ```
 test "AnalyticsEvent creation and property management"
 test "AnalyticsMetadata tag management"
@@ -458,18 +496,21 @@ test "CANARY_REQ_ANALYTICS_006_ML_Similarity_Search_Integration"
 ## Production Deployment
 
 ### Monitoring Requirements
+
 - **System Metrics**: CPU, memory, disk I/O for analytics processes
 - **Analytics Metrics**: Event throughput, processing latency, error rates
 - **Business Metrics**: Patterns detected, anomalies found, trends identified
 - **ML Metrics**: Embedding update frequency, similarity search performance
 
 ### Scaling Considerations
+
 - **Horizontal Scaling**: Multiple analytics engine instances
 - **Vertical Scaling**: Memory and CPU optimization
 - **Storage Scaling**: Event archive and historical data management
 - **Network Scaling**: Distributed event processing
 
 ### Operational Procedures
+
 - **Health Checks**: Analytics engine health monitoring
 - **Backup Procedures**: Analytics configuration and pattern backup
 - **Recovery Procedures**: Analytics engine restart and recovery
@@ -478,18 +519,21 @@ test "CANARY_REQ_ANALYTICS_006_ML_Similarity_Search_Integration"
 ## Future Enhancements
 
 ### Planned Features
+
 - **Graph Neural Networks**: Advanced ML integration with GNNs
 - **Temporal Analysis**: Time-series analysis for trend detection
 - **Predictive Analytics**: Forecasting based on detected patterns
 - **Real-time Dashboards**: Interactive analytics visualization
 
 ### Advanced Analytics
+
 - **Causal Analysis**: Cause-and-effect relationship detection
 - **Simulation Engine**: What-if analysis capabilities
 - **Optimization Recommendations**: Automatic performance recommendations
 - **Behavioral Modeling**: User behavior prediction models
 
 ### Integration Enhancements
+
 - **External Systems**: Integration with external analytics platforms
 - **API Extensions**: RESTful APIs for analytics access
 - **Webhook Support**: Real-time notifications and alerts

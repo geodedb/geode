@@ -12,8 +12,7 @@ import socket
 import subprocess
 import tempfile
 import time
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 
 class ServerManager:
@@ -56,7 +55,7 @@ class ServerManager:
     def _find_free_port(self) -> int:
         """Find an available port on the system."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(('', 0))
+            s.bind(("", 0))
             s.listen(1)
             port = s.getsockname()[1]
         return port
@@ -78,9 +77,11 @@ class ServerManager:
         # Prepare server command
         cmd = [
             self.binary_path,
-            'serve',
-            '--listen', f'0.0.0.0:{self.port}',
-            '--data-dir', self.data_dir,
+            "serve",
+            "--listen",
+            f"0.0.0.0:{self.port}",
+            "--data-dir",
+            self.data_dir,
         ] + self.args
 
         # Prepare environment
@@ -97,7 +98,7 @@ class ServerManager:
                 stdout=stdout,
                 stderr=stderr,
                 env=server_env,
-                preexec_fn=os.setsid if os.name != 'nt' else None,
+                preexec_fn=os.setsid if os.name != "nt" else None,
             )
         except FileNotFoundError:
             raise RuntimeError(f"Geode binary not found: {self.binary_path}")
@@ -112,15 +113,13 @@ class ServerManager:
         while time.time() - start_time < timeout_seconds:
             # Check if process is still running
             if self.process.poll() is not None:
-                raise RuntimeError(
-                    f"Server process exited with code {self.process.returncode}"
-                )
+                raise RuntimeError(f"Server process exited with code {self.process.returncode}")
 
             # Try to connect to the server port
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                     s.settimeout(1)
-                    s.sendto(b'', ('127.0.0.1', self.port))
+                    s.sendto(b"", ("127.0.0.1", self.port))
                     # If we can send to the UDP port, assume server is ready
                     # (QUIC servers listen on UDP)
                     time.sleep(0.5)  # Give server a moment to fully initialize
@@ -132,16 +131,14 @@ class ServerManager:
 
         # Timeout reached
         self.stop()
-        raise RuntimeError(
-            f"Server failed to start within {timeout_seconds}s"
-        )
+        raise RuntimeError(f"Server failed to start within {timeout_seconds}s")
 
     def stop(self):
         """Stop the Geode server and cleanup resources."""
         if self.process:
             try:
                 # Try graceful shutdown first
-                if os.name != 'nt':
+                if os.name != "nt":
                     os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
                 else:
                     self.process.terminate()
@@ -151,7 +148,7 @@ class ServerManager:
                     self.process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     # Force kill if graceful shutdown fails
-                    if os.name != 'nt':
+                    if os.name != "nt":
                         os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
                     else:
                         self.process.kill()

@@ -2776,7 +2776,7 @@ geode query "CREATE (n:Test)"       # NEW connection - uses default graph
 MATCH (a:N)-[:R*1]->(b:N) RETURN a.id AS from_id, b.id AS to_id;
 ```
 
-**Expected**: 
+**Expected**:
 ```
 | from_id | to_id |
 |---------|-------|
@@ -2794,7 +2794,7 @@ MATCH (a:N)-[:R*1]->(b:N) RETURN a.id AS from_id, b.id AS to_id;
 | 3       | 2     |  <-- WRONG: reverse direction
 ```
 
-**Root Cause**: 
+**Root Cause**:
 In `src/gql/parser.zig`, when parsing a pattern like `-[:R*1]->`:
 1. The leading `-` was consumed (line 2237)
 2. `parseRelPattern(dir)` was called with `dir = .undirected` (the default)
@@ -3546,4 +3546,3 @@ if (target_bound_id) |tid| {
 - `src/execution/graph_algorithms.zig` (lines 99-111, 155-158, 216-231, 245-248)
 
 **Status**: FIXED (2025-12-28)
-

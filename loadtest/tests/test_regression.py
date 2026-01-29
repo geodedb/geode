@@ -4,21 +4,19 @@
 Unit tests for Geode Regression Testing Infrastructure
 """
 
-import unittest
-import tempfile
-import json
 import sys
-from pathlib import Path
+import tempfile
+import unittest
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from regression.runner import (
     Baseline,
-    RegressionResult,
     RegressionReport,
+    RegressionResult,
     RegressionRunner,
 )
 
@@ -32,7 +30,7 @@ class TestBaseline(unittest.TestCase):
             name="test_baseline",
             version="1.0.0",
             timestamp="2026-01-03T10:00:00",
-            metrics={"latency": 10.5, "throughput": 1000.0}
+            metrics={"latency": 10.5, "throughput": 1000.0},
         )
         self.assertEqual(baseline.name, "test_baseline")
         self.assertEqual(baseline.version, "1.0.0")
@@ -52,7 +50,7 @@ class TestRegressionResult(unittest.TestCase):
             change_percent=20.0,
             threshold_percent=10.0,
             is_regression=True,
-            is_improvement=False
+            is_improvement=False,
         )
         self.assertEqual(result.benchmark_name, "query")
         self.assertTrue(result.is_regression)
@@ -68,7 +66,7 @@ class TestRegressionResult(unittest.TestCase):
             change_percent=-20.0,
             threshold_percent=10.0,
             is_regression=False,
-            is_improvement=True
+            is_improvement=True,
         )
         self.assertFalse(result.is_regression)
         self.assertTrue(result.is_improvement)
@@ -87,7 +85,7 @@ class TestRegressionReport(unittest.TestCase):
             regressions=[],
             improvements=[],
             stable=[],
-            overall_status="pass"
+            overall_status="pass",
         )
         self.assertEqual(report.version, "1.0.0")
         self.assertEqual(report.overall_status, "pass")
@@ -103,9 +101,7 @@ class TestRegressionRunner(unittest.TestCase):
         self.baseline_dir = Path(self.temp_dir) / "baselines"
         self.results_dir = Path(self.temp_dir) / "results"
         self.runner = RegressionRunner(
-            baseline_dir=self.baseline_dir,
-            results_dir=self.results_dir,
-            geode_path="./zig-out/bin/geode"
+            baseline_dir=self.baseline_dir, results_dir=self.results_dir, geode_path="./zig-out/bin/geode"
         )
 
     def test_runner_creates_directories(self):
@@ -123,10 +119,7 @@ class TestRegressionRunner(unittest.TestCase):
     def test_save_and_load_baseline(self):
         """Test saving and loading a baseline."""
         baseline = Baseline(
-            name="test",
-            version="1.0.0",
-            timestamp=datetime.now().isoformat(),
-            metrics={"test.metric": 100.0}
+            name="test", version="1.0.0", timestamp=datetime.now().isoformat(), metrics={"test.metric": 100.0}
         )
         self.runner.save_baseline(baseline, "test")
 
@@ -143,12 +136,7 @@ class TestRegressionRunner(unittest.TestCase):
 
     def test_save_baseline_also_saves_latest(self):
         """Test that saving a baseline also updates 'latest'."""
-        baseline = Baseline(
-            name="v1",
-            version="1.0.0",
-            timestamp=datetime.now().isoformat(),
-            metrics={"test": 1.0}
-        )
+        baseline = Baseline(name="v1", version="1.0.0", timestamp=datetime.now().isoformat(), metrics={"test": 1.0})
         self.runner.save_baseline(baseline, "v1")
 
         latest = self.runner.load_baseline("latest")
@@ -158,10 +146,7 @@ class TestRegressionRunner(unittest.TestCase):
     def test_compare_to_baseline_no_regression(self):
         """Test comparison with no regressions."""
         baseline = Baseline(
-            name="base",
-            version="1.0.0",
-            timestamp=datetime.now().isoformat(),
-            metrics={"test.latency_ms": 100.0}
+            name="base", version="1.0.0", timestamp=datetime.now().isoformat(), metrics={"test.latency_ms": 100.0}
         )
         current_metrics = {"test.latency_ms": 105.0}  # 5% increase, under 10% threshold
 
@@ -174,10 +159,7 @@ class TestRegressionRunner(unittest.TestCase):
     def test_compare_to_baseline_regression(self):
         """Test comparison detects regression."""
         baseline = Baseline(
-            name="base",
-            version="1.0.0",
-            timestamp=datetime.now().isoformat(),
-            metrics={"test.latency_ms": 100.0}
+            name="base", version="1.0.0", timestamp=datetime.now().isoformat(), metrics={"test.latency_ms": 100.0}
         )
         current_metrics = {"test.latency_ms": 115.0}  # 15% increase, over 10% threshold
 
@@ -190,10 +172,7 @@ class TestRegressionRunner(unittest.TestCase):
     def test_compare_to_baseline_improvement(self):
         """Test comparison detects improvement."""
         baseline = Baseline(
-            name="base",
-            version="1.0.0",
-            timestamp=datetime.now().isoformat(),
-            metrics={"test.latency_ms": 100.0}
+            name="base", version="1.0.0", timestamp=datetime.now().isoformat(), metrics={"test.latency_ms": 100.0}
         )
         current_metrics = {"test.latency_ms": 85.0}  # 15% decrease
 
@@ -206,10 +185,7 @@ class TestRegressionRunner(unittest.TestCase):
     def test_compare_throughput_metric(self):
         """Test throughput metric comparison (inverse threshold)."""
         baseline = Baseline(
-            name="base",
-            version="1.0.0",
-            timestamp=datetime.now().isoformat(),
-            metrics={"test.nodes_per_sec": 1000.0}
+            name="base", version="1.0.0", timestamp=datetime.now().isoformat(), metrics={"test.nodes_per_sec": 1000.0}
         )
         # 15% decrease in throughput is a regression
         current_metrics = {"test.nodes_per_sec": 850.0}
@@ -222,10 +198,7 @@ class TestRegressionRunner(unittest.TestCase):
     def test_compare_memory_metric(self):
         """Test memory metric comparison."""
         baseline = Baseline(
-            name="base",
-            version="1.0.0",
-            timestamp=datetime.now().isoformat(),
-            metrics={"memory.peak_mb": 100.0}
+            name="base", version="1.0.0", timestamp=datetime.now().isoformat(), metrics={"memory.peak_mb": 100.0}
         )
         # 25% increase in memory is a regression (over 20% threshold)
         current_metrics = {"memory.peak_mb": 125.0}
@@ -238,10 +211,7 @@ class TestRegressionRunner(unittest.TestCase):
     def test_compare_skips_zero_baseline(self):
         """Test that comparison skips metrics with zero baseline."""
         baseline = Baseline(
-            name="base",
-            version="1.0.0",
-            timestamp=datetime.now().isoformat(),
-            metrics={"test.metric": 0.0}
+            name="base", version="1.0.0", timestamp=datetime.now().isoformat(), metrics={"test.metric": 0.0}
         )
         current_metrics = {"test.metric": 100.0}
 
@@ -252,10 +222,7 @@ class TestRegressionRunner(unittest.TestCase):
     def test_compare_skips_missing_metrics(self):
         """Test that comparison skips metrics not in baseline."""
         baseline = Baseline(
-            name="base",
-            version="1.0.0",
-            timestamp=datetime.now().isoformat(),
-            metrics={"existing.metric": 100.0}
+            name="base", version="1.0.0", timestamp=datetime.now().isoformat(), metrics={"existing.metric": 100.0}
         )
         current_metrics = {"new.metric": 50.0}
 
@@ -279,7 +246,7 @@ class TestCIIntegration(unittest.TestCase):
             change_percent=20.0,
             threshold_percent=10.0,
             is_regression=True,
-            is_improvement=False
+            is_improvement=False,
         )
         report = RegressionReport(
             version="1.0.0",
@@ -289,7 +256,7 @@ class TestCIIntegration(unittest.TestCase):
             regressions=[result],
             improvements=[],
             stable=[],
-            overall_status="fail"
+            overall_status="fail",
         )
 
         gitlab_report = generate_gitlab_report(report)
@@ -310,7 +277,7 @@ class TestCIIntegration(unittest.TestCase):
             change_percent=20.0,
             threshold_percent=10.0,
             is_regression=True,
-            is_improvement=False
+            is_improvement=False,
         )
         improvement = RegressionResult(
             benchmark_name="test2",
@@ -320,7 +287,7 @@ class TestCIIntegration(unittest.TestCase):
             change_percent=-20.0,
             threshold_percent=10.0,
             is_regression=False,
-            is_improvement=True
+            is_improvement=True,
         )
         report = RegressionReport(
             version="1.0.0",
@@ -330,7 +297,7 @@ class TestCIIntegration(unittest.TestCase):
             regressions=[regression],
             improvements=[improvement],
             stable=[],
-            overall_status="warning"
+            overall_status="warning",
         )
 
         annotations = generate_github_annotations(report)

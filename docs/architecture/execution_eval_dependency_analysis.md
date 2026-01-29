@@ -9,6 +9,7 @@
 This document analyzes the circular dependency between `src/execution.zig` and `src/eval.zig`, identifies the specific coupling points, and documents usage patterns to inform the architectural solution for breaking this cycle.
 
 **Key Finding**: The circular dependency exists because:
+
 - **Execution needs Eval**: To evaluate expressions within queries (WITH clauses, ORDER BY, etc.)
 - **Eval needs Execution**: To execute subqueries and graph operations within expressions (IN subqueries, pattern comprehensions, shortest path)
 
@@ -39,6 +40,7 @@ This document analyzes the circular dependency between `src/execution.zig` and `
 ### 1. execution.zig → eval.zig Dependencies
 
 **Import Statement**: Line 11
+
 ```zig
 const eval = @import("eval.zig");
 ```
@@ -54,6 +56,7 @@ const eval = @import("eval.zig");
 **Usage Locations**:
 
 1. **WITH Clause Expression Evaluation** (line ~1543):
+
    ```zig
    const env = eval.Env{
        .names = input_result.columns,
@@ -63,14 +66,17 @@ const eval = @import("eval.zig");
 
    new_row[i] = try eval.evalExpr(allocator, item.expr, env);
    ```
+
    - **Context**: Evaluating WITH clause expressions for query chaining
    - **Frequency**: Called for each WITH expression in the query
 
 2. **ORDER BY Expression Evaluation** (lines ~1584-1585):
+
    ```zig
    const val_a = eval.evalExpr(context.allocator, key.expr, env_a) catch eval.Value{ .Null = {} };
    const val_b = eval.evalExpr(context.allocator, key.expr, env_b) catch eval.Value{ .Null = {} };
    ```
+
    - **Context**: Evaluating ORDER BY expressions for sorting rows
    - **Frequency**: Called for each pair of rows being compared
 
@@ -80,6 +86,7 @@ const eval = @import("eval.zig");
    - Literal values: Creating string, int, bool literals for system messages
 
 **Impact Assessment**:
+
 - **Critical**: `eval.Value` is the fundamental data type throughout the execution system
 - **Moderate**: `eval.evalExpr()` is used in specific contexts (WITH, ORDER BY)
 - **Low**: `eval.Env` is only constructed where needed for expression evaluation
@@ -87,6 +94,7 @@ const eval = @import("eval.zig");
 ### 2. eval.zig → execution.zig Dependencies
 
 **Import Statement**: Line 5
+
 ```zig
 const execution = @import("execution.zig");
 ```
@@ -104,6 +112,7 @@ const execution = @import("execution.zig");
 **Usage Locations**:
 
 1. **IN Subquery Expression** (eval.zig:1664-1670):
+
    ```zig
    .InSubquery => |isq| {
        const v = try evalExpr(allocator, isq.value.*, env);
@@ -114,10 +123,12 @@ const execution = @import("execution.zig");
        // Check if v is in first column of result.rows
    }
    ```
+
    - **Context**: Evaluating `value IN (SELECT ...)` expressions
    - **Frequency**: Each time an IN subquery expression is evaluated
 
 2. **NOT IN Subquery Expression** (eval.zig:1711-1717):
+
    ```zig
    .NotInSubquery => |nisq| {
        const v = try evalExpr(allocator, nisq.value.*, env);
@@ -128,10 +139,12 @@ const execution = @import("execution.zig");
        // Check if v is NOT in first column of result.rows
    }
    ```
+
    - **Context**: Evaluating `value NOT IN (SELECT ...)` expressions
    - **Frequency**: Each time a NOT IN subquery expression is evaluated
 
 3. **Shortest Path Expression** (eval.zig:2074):
+
    ```zig
    .ShortestPath => |sp| {
        const path_value = execution.findShortestPath(allocator, sp.pattern.*, sp.all, env) catch {
@@ -140,10 +153,12 @@ const execution = @import("execution.zig");
        break :blk_shortest path_value;
    }
    ```
+
    - **Context**: Evaluating `shortestPath((a)-[*]-(b))` expressions
    - **Frequency**: Each time a shortestPath expression is evaluated
 
 4. **Pattern Count Expression** (eval.zig:2082):
+
    ```zig
    .PatternCount => |pc| {
        const count = execution.countPatternMatches(allocator, pc.*) catch {
@@ -152,10 +167,12 @@ const execution = @import("execution.zig");
        break :blk_count count;
    }
    ```
+
    - **Context**: Evaluating `size((pattern))` expressions for counting
    - **Frequency**: Each time a pattern count expression is evaluated
 
 5. **Pattern Comprehension Expression** (eval.zig:2145):
+
    ```zig
    .PatternComp => |pc| {
        const result_list = execution.executePatternComprehension(
@@ -170,10 +187,12 @@ const execution = @import("execution.zig");
        break :blk_patterncomp result_list;
    }
    ```
+
    - **Context**: Evaluating `[(pattern) WHERE condition | expression]` comprehensions
    - **Frequency**: Each time a pattern comprehension is evaluated
 
 **Impact Assessment**:
+
 - **Moderate**: Subquery execution (IN/NOT IN) used in predicate evaluation
 - **Low**: Graph operations (shortest path, pattern matching) used in specialized expressions
 - **Localized**: All calls are in specific expression evaluation cases within `evalExpr()`
@@ -227,6 +246,7 @@ User Query (GQL)
 The circular dependency represents a **layering violation**:
 
 1. **Intended Architecture** (hierarchical):
+
    ```
    ┌─────────────────┐
    │  Execution      │  ← Top layer: orchestrates query execution
@@ -238,6 +258,7 @@ The circular dependency represents a **layering violation**:
    ```
 
 2. **Actual Architecture** (circular):
+
    ```
    ┌─────────────────┐
    │  Execution      │ ───┐
@@ -267,12 +288,12 @@ The circular dependency represents a **layering violation**:
 
 ### Weak Coupling
 
-3. **Subquery Execution Coupling** (`execution.executeQueryWithContext()`)
+1. **Subquery Execution Coupling** (`execution.executeQueryWithContext()`)
    - Called from eval for IN/NOT IN subqueries
    - Only 2 call sites
    - **Assessment**: Could be abstracted via interface
 
-4. **Graph Operations Coupling** (`execution.findShortestPath()`, etc.)
+2. **Graph Operations Coupling** (`execution.findShortestPath()`, etc.)
    - Called from eval for graph expressions
    - Only 3 call sites total
    - **Assessment**: Could be abstracted via callbacks
@@ -304,12 +325,14 @@ We identified several potential points where the circular dependency could be br
 ```
 
 **Pros**:
+
 - Simple, low-risk refactoring
 - `Value` is already a well-defined, stable type
 - No behavioral changes required
 - Clear separation of concerns
 
 **Cons**:
+
 - Doesn't fully break the circular dependency (execution still calls eval.evalExpr)
 - Need to update many import statements
 
@@ -332,16 +355,19 @@ We identified several potential points where the circular dependency could be br
 ```
 
 **Implementation**:
+
 1. Create `src/execution/evaluator_adapter.zig` defining `EvaluatorInterface`
 2. Execution uses the interface instead of importing eval directly
 3. Eval implements the interface and receives execution callbacks at runtime
 
 **Pros**:
+
 - Breaks the compile-time circular dependency
 - Enables dependency injection for testing
 - Clear separation via interface
 
 **Cons**:
+
 - More complex implementation
 - Runtime callback overhead (minimal)
 - Requires careful interface design
@@ -368,6 +394,7 @@ This is covered in Phase 5 M5.3 and addresses extensibility, not the circular de
 **Estimated Effort**: 3-4 hours
 
 **Steps**:
+
 1. Create `src/value_types.zig` with `Value`, `Env`, and related types
 2. Update `execution.zig` to import from `value_types.zig`
 3. Update `eval.zig` to import from `value_types.zig`
@@ -378,6 +405,7 @@ This is covered in Phase 5 M5.3 and addresses extensibility, not the circular de
 **Risk**: LOW - Pure code movement, no behavioral changes
 
 **Test Strategy**:
+
 - Compile-time verification (builds successfully)
 - Zero test regressions expected
 - No functional changes
@@ -387,6 +415,7 @@ This is covered in Phase 5 M5.3 and addresses extensibility, not the circular de
 **Estimated Effort**: 4-6 hours
 
 **Steps**:
+
 1. Create `src/execution/evaluator_adapter.zig` with:
    - `ExecutionCallbacks` struct with function pointers
    - Initialization function to set up callbacks
@@ -404,6 +433,7 @@ This is covered in Phase 5 M5.3 and addresses extensibility, not the circular de
 **Risk**: MEDIUM - Changes evaluation flow, requires careful testing
 
 **Test Strategy**:
+
 - Unit tests for adapter
 - Integration tests for subquery evaluation
 - Pattern comprehension tests
@@ -432,6 +462,7 @@ const fle_integration = @import("fle_integration.zig");  // Encryption (shared)
 ```
 
 **Observation**: Both modules share dependencies on:
+
 - `gql/ast.zig` - GQL AST types
 - `fle_integration.zig` - Field-level encryption
 
@@ -471,6 +502,7 @@ When breaking the circular dependency, these test areas must pass:
 ### Test Strategy for Refactoring
 
 **After M5.2 (Extract Value Types)**:
+
 ```bash
 # Must pass all tests
 make build && make verify-all
@@ -479,6 +511,7 @@ python3 extended_test_runner.py
 ```
 
 **After M5.3 (Create Evaluator Adapter)**:
+
 ```bash
 # Must pass all tests + performance validation
 make build && make verify-all
@@ -500,17 +533,20 @@ python3 extended_test_runner.py
 ## Next Steps
 
 **Immediate** (Phase 5 M5.2):
+
 - Create `src/value_types.zig` with `Value`, `Env`, and related types
 - Update imports in execution.zig and eval.zig
 - Verify builds and tests pass
 
 **Following** (Phase 5 M5.3):
+
 - Create `src/execution/evaluator_adapter.zig` with callback interface
 - Update eval.zig to use callbacks
 - Update execution.zig to provide callbacks
 - Extensive testing and validation
 
 **Documentation**:
+
 - Create ADR (Architecture Decision Record) documenting the chosen approach
 - Update architecture diagrams
 - Document the new dependency structure

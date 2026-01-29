@@ -23,12 +23,12 @@ run_test() {
     local query="$2"
     local expected_pattern="$3"
     local test_type="${4:-positive}"  # positive or negative test
-    
+
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     echo -n "Test $TOTAL_TESTS: $test_name... "
-    
+
     OUTPUT=$(timeout 5 ./zig-out/bin/geodec "$query" --insecure 2>&1 || true)
-    
+
     if [ "$test_type" = "positive" ]; then
         if echo "$OUTPUT" | grep -q "$expected_pattern"; then
             echo "✅ PASSED"

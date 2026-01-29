@@ -35,10 +35,10 @@ FAILED_TEST_NAMES=()
 run_test() {
     local test_name="$1"
     local test_script="$2"
-    
+
     echo "Running $test_name..."
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
-    
+
     if $test_script; then
         echo "✓ $test_name PASSED"
         PASSED_TESTS=$((PASSED_TESTS + 1))
@@ -57,7 +57,7 @@ else
     echo "⚠ CLI Working Directory test not found"
 fi
 
-# 2. Query option auto-routing tests  
+# 2. Query option auto-routing tests
 if [[ -f "./tests/query_option_autorouting_regression_test.sh" ]]; then
     run_test "Query Option Auto-routing" "./tests/query_option_autorouting_regression_test.sh"
 else

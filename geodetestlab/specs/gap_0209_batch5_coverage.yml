@@ -371,4 +371,3 @@ tests:
       contains:
         - "tde_status"
     expected_exit_code: 0
-

@@ -101,7 +101,14 @@ def run_test(
     # Check if this test should skip isolation (for error testing)
     skip_isolation = False
     test_name = test_case.get("name", "")
-    if "error" in test_name or "duplicate" in test_name or test_case.get("skip_isolation", False):
+    # Check spec-level skip_isolation first, then test-level
+    spec_skip_isolation = spec_config.get("skip_isolation", False) if spec_config else False
+    if (
+        spec_skip_isolation
+        or "error" in test_name
+        or "duplicate" in test_name
+        or test_case.get("skip_isolation", False)
+    ):
         skip_isolation = True
 
     # Handle variable substitution
@@ -1006,6 +1013,14 @@ def main():
 
         # Build server env overrides
         server_env_overrides = {}
+
+        # Include spec-level environment variables (e.g., GEODE_TDE_KEY for encryption tests)
+        spec_env = spec.get("env", {})
+        if isinstance(spec_env, dict):
+            for key, value in spec_env.items():
+                # Convert all values to strings (env vars must be strings)
+                server_env_overrides[key] = str(value)
+
         # If auth is enabled, set test credentials so tests can authenticate
         # These must match the ${secret:*} substitutions (admin123, password123)
         if "--enable-auth" in spec_server_args:

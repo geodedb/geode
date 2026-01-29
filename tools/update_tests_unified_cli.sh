@@ -15,48 +15,48 @@ UPDATED_FILES=0
 update_file() {
     local file="$1"
     local backup_file="${file}.backup"
-    
+
     # Skip if file doesn't exist
     if [[ ! -f "$file" ]]; then
         return
     fi
-    
+
     # Check if file contains old binary references
     if ! grep -q "geodec\|geoded" "$file"; then
         return
     fi
-    
+
     echo "Updating: $file"
-    
+
     # Create backup
     cp "$file" "$backup_file"
-    
+
     # Update geodec calls to geode query (most specific patterns first)
     # Pattern: ./zig-out/bin/geodec "QUERY" --server 127.0.0.1:3141 --insecure
     # Replace: ./zig-out/bin/geode query "QUERY" --server 127.0.0.1:3141 --insecure
     sed -i 's|geodec \(.*\) --server 127.0.0.1:3141 --insecure|geode query \1 --server 127.0.0.1:3141 --insecure|g' "$file"
-    
+
     # Pattern: ./zig-out/bin/geodec "QUERY" --format
     # Replace: ./zig-out/bin/geode query "QUERY" --format
     sed -i 's|geodec \(.*\) --format|geode query \1 --format|g' "$file"
-    
+
     # Pattern: ./zig-out/bin/geodec "QUERY" --process
     # Replace: ./zig-out/bin/geode query "QUERY" --server 127.0.0.1:3141 --insecure (remove --process)
     sed -i 's|geodec \(.*\) --process [^ ]*|geode query \1 --server 127.0.0.1:3141 --insecure|g' "$file"
-    
-    # Update geoded server references  
+
+    # Update geoded server references
     # Pattern: ./zig-out/bin/geoded --data-dir
     # Replace: ./zig-out/bin/geode serve --data-dir
     sed -i 's|geoded \(.*\)|geode serve \1|g' "$file"
-    
+
     # Update remaining standalone geodec/geoded references
     sed -i 's|geodec|geode query|g' "$file"
     sed -i 's|geoded|geode serve|g' "$file"
-    
+
     # Fix potential double commands that might occur
     sed -i 's|geode query query|geode query|g' "$file"
     sed -i 's|geode serve serve|geode serve|g' "$file"
-    
+
     UPDATED_FILES=$((UPDATED_FILES + 1))
     echo "  -> Updated successfully"
 }

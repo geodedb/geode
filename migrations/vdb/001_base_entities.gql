@@ -10,7 +10,7 @@
 
 // Common entity patterns:
 // - Entity: Base pattern for all nodes
-// - Versioned: Nodes that track version numbers  
+// - Versioned: Nodes that track version numbers
 // - Timestamped: Nodes with detailed time tracking
 
 // Base constraints that would typically be enforced:

@@ -100,6 +100,7 @@ The APT repository infrastructure is managed via Terraform in `prod-critical`:
 ```
 
 Apply changes:
+
 ```bash
 cd ~/src/gl/devnw/infra/prod-critical
 make plan   # Review changes
@@ -119,6 +120,7 @@ chmod +x scripts/packaging/setup-gpg-signing.sh
 ```
 
 This generates:
+
 - `geode-apt-signing-key.gpg` - Public key for distribution
 - `geode-signing-key-ci.b64` - Base64-encoded private key for Vault
 
@@ -224,6 +226,7 @@ aws s3 sync apt-repo/ s3://your-bucket/apt/ --acl public-read
 ### Rotating the GPG Key
 
 1. Generate new key:
+
    ```bash
    ./scripts/packaging/setup-gpg-signing.sh --export --email packages@codepros.dev
    ```
@@ -231,6 +234,7 @@ aws s3 sync apt-repo/ s3://your-bucket/apt/ --acl public-read
 2. Update GitLab CI variables with new key
 
 3. Update Vault (if using):
+
    ```bash
    vault kv put secret/geode/debian-signing \
      private_key="$(cat new-private-key.asc)" \

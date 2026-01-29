@@ -3,6 +3,7 @@
 This page mirrors GitLab requirement issues. GitLab is the source of truth for status and details.
 
 ## Core Requirements
+
 - [REQ-0001: Standards & Conformance Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/239)
 - [REQ-0002: Language Surface Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/240)
 - [REQ-0003: Engine Contract Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/241)
@@ -14,6 +15,7 @@ This page mirrors GitLab requirement issues. GitLab is the source of truth for s
 - [REQ-0009: Performance Targets (Non-binding)](https://gitlab.com/devnw/codepros/geode/-/issues/247)
 
 ## Security
+
 - [REQ-DOC-ADVANCED_SECURITY_FEATURES_OCTOBER_2025: Advanced Security Features - October 2025 Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/280)
 - [REQ-DOC-ARGON2ID_IMPLEMENTATION: Argon2id Password Hashing Implementation Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/281)
 - [REQ-DOC-DESIGN_TDE_KMS: DESIGN_TDE_KMS.md - TDE Key Management & External KMS Stub Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/283)
@@ -22,6 +24,7 @@ This page mirrors GitLab requirement issues. GitLab is the source of truth for s
 - [REQ-DOC-USER_AUTH: Geode User Authentication System Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/289)
 
 ## GQL Language & Conformance
+
 - [REQ-DOC-EXPRESSION_OPERATORS: GQL Expression Operators Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/262)
 - [REQ-DOC-TYPE_CONVERSION_FUNCTIONS: Type Conversion Functions Implementation Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/288)
 - [REQ-DOC-UNICODE: UNICODE.md - Geode Unicode Support Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/268)
@@ -31,6 +34,7 @@ This page mirrors GitLab requirement issues. GitLab is the source of truth for s
 - [REQ-DOC-MATCH_TUTORIAL: MATCH Subset Tutorial (Geode) Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/275)
 
 ## Engine & Features
+
 - [REQ-DOC-SERVER_FEATURES: Geode Server Features Documentation Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/267)
 - [REQ-DOC-MATERIALIZED_VIEWS: Materialized Views System Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/266)
 - [REQ-DOC-BM25_INDEX_OPTIMIZER_INTEGRATION: BM25 IndexOptimizer Integration Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/261)
@@ -40,16 +44,19 @@ This page mirrors GitLab requirement issues. GitLab is the source of truth for s
 - [REQ-DOC-ALL_PHASES_COMPLETION_SUMMARY: All Phases Completion Summary Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/272)
 
 ## Transactions & Session Management
+
 - [REQ-DOC-TRANSACTION_MANAGEMENT: Transaction Management Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/305)
 - [REQ-DOC-SESSION_MANAGEMENT: Session Management Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/306)
 - [REQ-DOC-ENHANCED_TRANSACTION_ISOLATION: Enhanced Transaction Isolation Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/307)
 
 ## Transport & Protocol
+
 - [REQ-DOC-BINARY_PROTOCOL: Binary Protocol — GQL Outcome & Diagnostics Mapping Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/260)
 - [REQ-DOC-QUIC: Geode QUIC Transport Guide Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/277)
 - [REQ-DOC-QUIC_INTEGRATION_SUMMARY: QUIC/TLS 1.3 Integration — Finalized (vendored module + geode wiring) Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/292)
 
 ## Tooling, Governance & Testing
+
 - [REQ-DOC-GOVERNANCE: Governance Automation & Evidence Integrity Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/263)
 - [REQ-DOC-STATUS_LEDGER: CANARY status.csv Requirement Ledger](https://gitlab.com/devnw/codepros/geode/-/issues/293)
 - [REQ-DOC-TESTING: Testing Documentation for Geode Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/287)
@@ -58,6 +65,7 @@ This page mirrors GitLab requirement issues. GitLab is the source of truth for s
 - [REQ-DOC-CONFORMANCE_SYNC: Conformance Sync Scanner Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/276)
 
 ## CLI, REPL, and Clients
+
 - [REQ-DOC-CLI_SUBPROCESS_ELIMINATION: CLI Subprocess Elimination Implementation Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/282)
 - [REQ-DOC-LSP_IMPLEMENTATION: Geode Language Server Protocol (LSP) Implementation Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/265)
 - [REQ-DOC-REPL_ADVANCED_FEATURES: Advanced REPL Features Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/273)

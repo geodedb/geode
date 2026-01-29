@@ -16,7 +16,7 @@ CREATE (doc1:Document {
 
 CREATE (doc2:Document {
     id: 2,
-    content: 'Another document', 
+    content: 'Another document',
     checksum: HashData('BLAKE2b-512', 'Another document'),
     signature: Hash('BLAKE2b-512', 'a1b2c3d4e5f6789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890abcd')
 })
@@ -55,7 +55,7 @@ CREATE (u1:User {
 })
 
 CREATE (u2:User {
-    username: 'charlie', 
+    username: 'charlie',
     salt: 'charliesalt12345',
     -- Moderate preset (balanced)
     password_hash: Argon2idHash('CharliePassword', 'charliesalt12345', 6, 262144, 1)
@@ -63,7 +63,7 @@ CREATE (u2:User {
 
 CREATE (u3:User {
     username: 'admin',
-    salt: 'adminsalt1234567', 
+    salt: 'adminsalt1234567',
     -- Sensitive preset (high security)
     password_hash: Argon2idHash('AdminPassword', 'adminsalt1234567', 8, 1048576, 1)
 })
@@ -84,8 +84,8 @@ CREATE (api:ApiKey {
 
 -- Create derived keys for multi-tenant system
 MATCH (tenant:Tenant {id: $tenant_id})
-SET tenant.encryption_key = Blake2bKdf(32, 
-    'tenant-' + tenant.id + '-encryption', 
+SET tenant.encryption_key = Blake2bKdf(32,
+    'tenant-' + tenant.id + '-encryption',
     $master_key)
 SET tenant.signing_key = Blake2bKdf(32,
     'tenant-' + tenant.id + '-signing',
@@ -198,7 +198,7 @@ CREATE (item:Item {
 -- Compare hash computation times (hypothetical PROFILE usage)
 PROFILE
 WITH 'Large data string repeated many times' * 1000 AS data
-RETURN 
+RETURN
     HashData('SHA3-256', data) AS sha3,
     HashData('BLAKE3', data) AS blake3,
     HashData('BLAKE2b-256', data) AS blake2b,
@@ -217,8 +217,8 @@ CREATE (audit:AuditEntry {
     details: $details,
     -- Chain entries together
     previous_entry_hash: $previous_hash,
-    entry_hash: HashData('BLAKE2b-512', 
-        $audit_id + ':' + $timestamp + ':' + $username + ':' + 
+    entry_hash: HashData('BLAKE2b-512',
+        $audit_id + ':' + $timestamp + ':' + $username + ':' +
         $action + ':' + $details + ':' + $previous_hash)
 })
 
@@ -252,14 +252,14 @@ CREATE (mfa:MfaSetup {
 
 -- Anonymize PII using consistent hashing
 MATCH (customer:Customer)
-SET customer.anonymized_id = HashData('BLAKE2b-256', 
+SET customer.anonymized_id = HashData('BLAKE2b-256',
     'customer:' + customer.ssn + ':' + $anonymization_salt)
 REMOVE customer.ssn, customer.name, customer.email
 RETURN count(*) AS anonymized_customers
 
 -- Create privacy-preserving analytics
 MATCH (user:User)
-RETURN 
+RETURN
     HashData('BLAKE2s-256', user.postal_code + ':' + $salt) AS location_hash,
     count(*) AS user_count
 GROUP BY location_hash

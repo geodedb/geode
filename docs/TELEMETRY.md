@@ -123,6 +123,7 @@ make build && bash scripts/telemetry-smoke.sh 1
 ```
 
 **Notes**:
+
 - Requires a successful `zig build` to produce the geode binary
 - The script captures server `stderr` to a temp file and greps for telemetry lines
 - Exit status is always 0; inspect stderr warnings if no telemetry lines are shown

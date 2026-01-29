@@ -14,7 +14,7 @@ import signal
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +28,7 @@ structlog.configure(
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
-        structlog.processors.JSONRenderer()
+        structlog.processors.JSONRenderer(),
     ],
     wrapper_class=structlog.stdlib.BoundLogger,
     context_class=dict,
@@ -50,6 +50,7 @@ LOGS_DIR = Path(os.environ.get("LOGS_DIR", "/logs"))
 @dataclass
 class TestResult:
     """Result of a single test execution"""
+
     test_id: str
     test_name: str
     client: str
@@ -62,11 +63,12 @@ class TestResult:
 @dataclass
 class TestStats:
     """Aggregated test statistics"""
+
     total_tests: int = 0
     passed: int = 0
     failed: int = 0
     total_duration_ms: float = 0.0
-    min_duration_ms: float = float('inf')
+    min_duration_ms: float = float("inf")
     max_duration_ms: float = 0.0
     errors: list = field(default_factory=list)
 
@@ -84,18 +86,44 @@ class QueryGenerator:
 
     # Node types from our schema
     NODE_TYPES = [
-        "Organization", "Department", "Employee", "Project", "Document",
-        "Server", "Application", "Database", "Network", "Datacenter",
-        "User", "Permission", "Role", "AuditLog", "Policy", "Incident"
+        "Organization",
+        "Department",
+        "Employee",
+        "Project",
+        "Document",
+        "Server",
+        "Application",
+        "Database",
+        "Network",
+        "Datacenter",
+        "User",
+        "Permission",
+        "Role",
+        "AuditLog",
+        "Policy",
+        "Incident",
     ]
 
     # Relationship types from our schema
     RELATIONSHIP_TYPES = [
-        "HAS_DEPARTMENT", "HAS_EMPLOYEE", "WORKS_ON", "MANAGES",
-        "OWNS_PROJECT", "BELONGS_TO_PROJECT", "AUTHORED",
-        "RUNS_ON", "CONNECTS_TO", "LOCATED_IN", "IN_NETWORK",
-        "DEPENDS_ON", "BELONGS_TO_ROLE", "HAS_PERMISSION",
-        "PERFORMED_BY", "APPLIES_TO", "AFFECTS", "ASSIGNED_TO"
+        "HAS_DEPARTMENT",
+        "HAS_EMPLOYEE",
+        "WORKS_ON",
+        "MANAGES",
+        "OWNS_PROJECT",
+        "BELONGS_TO_PROJECT",
+        "AUTHORED",
+        "RUNS_ON",
+        "CONNECTS_TO",
+        "LOCATED_IN",
+        "IN_NETWORK",
+        "DEPENDS_ON",
+        "BELONGS_TO_ROLE",
+        "HAS_PERMISSION",
+        "PERFORMED_BY",
+        "APPLIES_TO",
+        "AFFECTS",
+        "ASSIGNED_TO",
     ]
 
     # Query templates
@@ -104,34 +132,26 @@ class QueryGenerator:
         "MATCH (n:{label}) RETURN count(n) AS count",
         "MATCH (n:{label}) RETURN n LIMIT 10",
         "MATCH (n:{label}) WHERE n.id IS NOT NULL RETURN n.id LIMIT 5",
-
         # Relationship queries
         "MATCH (a)-[r:{rel}]->(b) RETURN count(r) AS count",
         "MATCH (a:{label1})-[r]->(b:{label2}) RETURN a, r, b LIMIT 5",
-
         # Aggregation queries
         "MATCH (n:{label}) RETURN count(n) AS total, labels(n) AS type",
         "MATCH (e:Employee) RETURN e.department_id, count(e) AS emp_count",
-
         # Path queries
         "MATCH path = (a:{label1})-[*1..3]->(b:{label2}) RETURN length(path) AS len LIMIT 10",
-
         # Complex queries
         "MATCH (d:Department)-[:HAS_EMPLOYEE]->(e:Employee) RETURN d.name, count(e) AS employees",
         "MATCH (o:Organization)-[:HAS_DEPARTMENT]->(d)-[:HAS_EMPLOYEE]->(e) RETURN o.name, count(e) AS total_employees",
         "MATCH (p:Project)<-[:WORKS_ON]-(e:Employee) RETURN p.name, collect(e.name) AS team LIMIT 5",
-
         # Data modification (controlled)
         "CREATE (t:TestNode {{id: '{test_id}', timestamp: datetime()}}) RETURN t.id",
         "MATCH (t:TestNode {{id: '{test_id}'}}) DELETE t",
-
         # Property access
         "MATCH (e:Employee) WHERE e.salary > 150000 RETURN e.name, e.salary LIMIT 10",
         "MATCH (s:Server) WHERE s.memory_gb >= 128 RETURN s.hostname, s.memory_gb",
-
         # Date/time queries
         "MATCH (al:AuditLog) WHERE al.timestamp > datetime('2024-11-01T00:00:00Z') RETURN al.action, al.timestamp LIMIT 10",
-
         # Full-text search (if available)
         "MATCH (d:Document) WHERE d.title CONTAINS 'Technical' RETURN d.title LIMIT 5",
     ]
@@ -191,9 +211,14 @@ class TestOrchestrator:
                 # Try a simple connection test
                 # In production, this would use the actual QUIC client
                 proc = await asyncio.create_subprocess_exec(
-                    "nc", "-z", "-w", "5", GEODE_HOST, str(GEODE_PORT),
+                    "nc",
+                    "-z",
+                    "-w",
+                    "5",
+                    GEODE_HOST,
+                    str(GEODE_PORT),
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
                 )
                 await proc.wait()
                 if proc.returncode == 0:
@@ -226,7 +251,7 @@ class TestOrchestrator:
                 client=client,
                 success=success,
                 duration_ms=duration_ms,
-                error=None if success else "Simulated error for testing"
+                error=None if success else "Simulated error for testing",
             )
 
         except Exception as e:
@@ -237,7 +262,7 @@ class TestOrchestrator:
                 client=client,
                 success=False,
                 duration_ms=duration_ms,
-                error=str(e)
+                error=str(e),
             )
 
         # Update stats
@@ -260,11 +285,9 @@ class TestOrchestrator:
             else:
                 stats.failed += 1
                 if result.error:
-                    stats.errors.append({
-                        "test_id": result.test_id,
-                        "error": result.error,
-                        "timestamp": result.timestamp
-                    })
+                    stats.errors.append(
+                        {"test_id": result.test_id, "error": result.error, "timestamp": result.timestamp}
+                    )
 
     async def worker(self, worker_id: int, client: str):
         """Worker that continuously runs tests"""
@@ -299,7 +322,7 @@ class TestOrchestrator:
                 passed=global_stats.passed,
                 failed=global_stats.failed,
                 pass_rate=f"{global_stats.pass_rate:.1f}%",
-                avg_duration_ms=f"{global_stats.avg_duration_ms:.2f}"
+                avg_duration_ms=f"{global_stats.avg_duration_ms:.2f}",
             )
 
     def generate_report(self) -> dict[str, Any]:
@@ -317,7 +340,9 @@ class TestOrchestrator:
                 "failed": self.stats["global"].failed,
                 "pass_rate": f"{self.stats['global'].pass_rate:.2f}%",
                 "avg_duration_ms": self.stats["global"].avg_duration_ms,
-                "min_duration_ms": self.stats["global"].min_duration_ms if self.stats["global"].min_duration_ms != float('inf') else 0,
+                "min_duration_ms": self.stats["global"].min_duration_ms
+                if self.stats["global"].min_duration_ms != float("inf")
+                else 0,
                 "max_duration_ms": self.stats["global"].max_duration_ms,
             },
             "client_stats": {},
@@ -359,7 +384,7 @@ class TestOrchestrator:
             "orchestrator_starting",
             duration_minutes=TEST_DURATION_MINUTES,
             workers=CONCURRENT_WORKERS,
-            server=f"{GEODE_HOST}:{GEODE_PORT}"
+            server=f"{GEODE_HOST}:{GEODE_PORT}",
         )
 
         # Wait for server

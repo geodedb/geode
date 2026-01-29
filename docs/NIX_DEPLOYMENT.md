@@ -3,6 +3,7 @@
 This guide covers deploying and managing Geode using Nix, NixOS, and related tooling.
 
 ## Table of Contents
+
 - [Overview](#overview)
 - [Quick Start](#quick-start)
 - [Package Variants](#package-variants)
@@ -18,6 +19,7 @@ This guide covers deploying and managing Geode using Nix, NixOS, and related too
 ## Overview
 
 Geode provides comprehensive Nix configuration for:
+
 - **Package Management**: Multiple build variants (release, debug, static, docker)
 - **NixOS Integration**: Full systemd service with 50+ configuration options
 - **Container Support**: Docker images with security hardening
@@ -89,7 +91,9 @@ nix develop
 ## Package Variants
 
 ### geode (default)
+
 Production-ready optimized build:
+
 ```nix
 # Build configuration
 {
@@ -103,7 +107,9 @@ Production-ready optimized build:
 **Use cases**: Production deployments, containers, distribution
 
 ### geode-debug
+
 Development build with debugging support:
+
 ```nix
 # Build configuration  
 {
@@ -117,7 +123,9 @@ Development build with debugging support:
 **Use cases**: Development, debugging, testing
 
 ### geode-static
+
 Statically linked build for containers:
+
 ```nix
 # Build configuration
 {
@@ -130,7 +138,9 @@ Statically linked build for containers:
 **Use cases**: Minimal containers, embedded systems
 
 ### geode-docker
+
 Complete Docker image with runtime:
+
 ```nix
 # Image features
 {

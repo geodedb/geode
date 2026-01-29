@@ -7,15 +7,18 @@ The Rust client for Geode has been successfully migrated from s2n-quic to quiche
 ## What Was Completed
 
 ### 1. Core Library Migration (✅ Complete)
+
 - **Migrated from**: s2n-quic
 - **Migrated to**: quiche v0.22 with BoringSSL
 - **Implementation**: Full manual UDP packet handling with QUIC protocol
 - **Size**: 1.4MB compiled library (`libgeode_client.rlib`)
 
 ### 2. Docker Build Infrastructure (✅ Complete)
+
 Created complete Docker-based build system to bypass Nix/BoringSSL issues:
 
 **Files Created**:
+
 - `Dockerfile` - Multi-stage Rust 1.83 build with libclang/cmake/BoringSSL
 - `build-docker.sh` - Build orchestration script with color-coded logging
 - Updated `Makefile` with two new targets:
@@ -23,20 +26,25 @@ Created complete Docker-based build system to bypass Nix/BoringSSL issues:
   - `rust-test-docker` - Build and run integration tests
 
 **Dependencies Installed**:
+
 - Rust 1.83 (supports Cargo.lock v4)
 - cmake, pkg-config, libssl-dev
 - libclang-dev, clang (required for bindgen)
 - build-essential, git
 
 ### 3. Code Fixes (✅ Complete)
+
 Fixed compilation issues in `src/client.rs`:
+
 - Line 338: Fixed `stream_writable()` Result handling
 - Lines 379-407: Fixed borrow checker issue in `read_line()` method
 
 ### 4. Protocol Implementation (✅ Complete)
+
 The client implements the complete Geode QUIC protocol:
 
 **Supported Operations**:
+
 - Connection management (HELLO, GOODBYE)
 - Query execution (RUN_GQL, PULL)
 - Transactions (BEGIN, COMMIT, ROLLBACK)
@@ -45,6 +53,7 @@ The client implements the complete Geode QUIC protocol:
 - Stream multiplexing
 
 **Key Structures**:
+
 ```rust
 pub struct Client {
     host: String,
@@ -69,6 +78,7 @@ pub struct Connection {
 ```
 
 **Public API**:
+
 ```rust
 // Client creation
 Client::new(host, port)
@@ -90,6 +100,7 @@ async fn close() -> Result<()>
 ## Build & Usage
 
 ### Docker Build (Recommended)
+
 ```bash
 # Build the Rust client
 make rust-build-docker
@@ -102,6 +113,7 @@ clients/rust/target/docker-release/libgeode_client.rlib
 ```
 
 ### Example Usage
+
 ```rust
 use geode_client::{Client, Result};
 
@@ -128,6 +140,7 @@ async fn main() -> Result<()> {
 ## Technical Details
 
 ### Dependencies
+
 ```toml
 quiche = { version = "0.22", features = ["boringssl-boring-crate"] }
 ring = "0.17"
@@ -138,10 +151,12 @@ bytes = "1.5"
 ```
 
 ### Build Warnings (Harmless)
+
 - Dead code warnings for unused struct fields (expected for library)
 - No errors, only 3 warnings total
 
 ### Known Limitations
+
 - Examples (`advanced.rs`, `transactions.rs`) need updating for quiche API
 - `basic.rs` example updated to use port 8443
 - No `.so` shared library build (only `.rlib` static library)
@@ -149,6 +164,7 @@ bytes = "1.5"
 ## Testing
 
 ### Manual Testing
+
 ```bash
 # Start Geode server
 ./zig-out/bin/geode serve --listen 0.0.0.0:8443
@@ -159,6 +175,7 @@ make rust-build-docker
 ```
 
 ### Integration Test Status
+
 - Docker build: ✅ Working
 - Library compilation: ✅ Success
 - Example programs: ⏳ Need updating (advanced/transactions)
@@ -179,12 +196,14 @@ make rust-build-docker
 ## Files Modified/Created
 
 ### Modified Files
+
 - `clients/rust/Cargo.toml` - Updated dependencies
 - `clients/rust/src/client.rs` - Complete rewrite for quiche
 - `clients/rust/examples/basic.rs` - Updated port to 8443
 - `Makefile` - Added Docker build targets
 
 ### Created Files
+
 - `clients/rust/Dockerfile` - Multi-stage build
 - `clients/rust/build-docker.sh` - Build orchestration
 - `clients/rust/.cargo/config.toml` - BoringSSL configuration
@@ -194,6 +213,7 @@ make rust-build-docker
 ## Test Harness Integration
 
 The Rust client library is built via Docker and available at:
+
 ```
 clients/rust/target/docker-release/libgeode_client.rlib
 ```

@@ -24,12 +24,12 @@ test_query() {
     local name="$1"
     local cmd="$2"
     local expected_result="${3:-success}"
-    
+
     echo -n "Testing $name... "
     local output
     output=$(eval "$cmd" 2>&1)
     local exit_code=$?
-    
+
     if [ $exit_code -eq 0 ]; then
         if [ "$expected_result" = "success" ]; then
             echo -e "${GREEN}PASS${NC}"
@@ -219,7 +219,7 @@ if [ $TESTS_FAILED -eq 0 ]; then
 else
     echo -e "Success rate: ${YELLOW}$(( TESTS_PASSED * 100 / (TESTS_PASSED + TESTS_FAILED) ))%${NC} of implemented patterns"
     echo -e "Implementation rate: ${BLUE}$(( TESTS_PASSED * 100 / (TESTS_PASSED + TESTS_FAILED + TESTS_UNSUPPORTED) ))%${NC} of all patterns"
-    
+
     if [ $TESTS_FAILED -le 10 ]; then
         echo -e "${GREEN}Failure count is acceptable for complex query patterns.${NC}"
         exit 0

@@ -34,11 +34,12 @@ cli:
     format: "json"
 
 env:
-  GEODE_TDE_KEY: "aes256-backup-test-encryption-key-32b!"
-  GEODE_WAL_KEY: "aes256-backup-test-wal-key-32bytes!!"
+  # All keys must be exactly 64 hex characters (32 bytes for AES-256)
+  GEODE_TDE_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  GEODE_WAL_KEY: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
   GEODE_TDE_ENABLED: "true"
   GEODE_WAL_ENCRYPTION_ENABLED: "true"
-  GEODE_BACKUP_ENCRYPTION_KEY: "aes256-backup-specific-key-32bytes!"
+  GEODE_BACKUP_ENCRYPTION_KEY: "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 
 tests:
   # ===============================

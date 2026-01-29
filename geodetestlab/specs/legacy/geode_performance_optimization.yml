@@ -57,7 +57,7 @@ tests:
       CREATE (p1:Person {name: 'Alice', performance_id: 1})
       CREATE (p2:Person {name: 'Bob', performance_id: 2})
       CREATE (p3:Person {name: 'Charlie', performance_id: 3})
-      MATCH (p:Person) 
+      MATCH (p:Person)
       WHERE p.performance_id IS NOT NULL
       RETURN p.name, p.performance_id
       ORDER BY p.performance_id
@@ -65,7 +65,7 @@ tests:
       format: "table"
       contains:
         - "Alice"
-        - "Bob" 
+        - "Bob"
         - "Charlie"
         - "performance_id"
     performance_check:
@@ -100,7 +100,7 @@ tests:
       CREATE (b:AsyncTest {id: 2, status: 'pending'})
       SET a.status = 'completed', a.result = 'success'
       SET b.status = 'completed', b.result = 'success'
-      MATCH (n:AsyncTest) 
+      MATCH (n:AsyncTest)
       WHERE n.status = 'completed'
       RETURN n.id, n.status, n.result
       ORDER BY n.id
@@ -116,9 +116,9 @@ tests:
 
   - name: "performance_string_operations"
     description: "Test optimized string function performance"
-    command: ["--format", "json"]  
+    command: ["--format", "json"]
     query: |
-      RETURN 
+      RETURN
         length('performance_optimization') AS str_length,
         upper('performance') AS str_upper,
         lower('OPTIMIZATION') AS str_lower,
@@ -139,7 +139,7 @@ tests:
     description: "Test optimized mathematical function performance"
     command: ["--format", "json"]
     query: |
-      RETURN 
+      RETURN
         abs(-13.18) AS math_abs,
         sqrt(16.0) AS math_sqrt,
         ceil(4.49) AS math_ceil,
@@ -244,7 +244,7 @@ benchmarks:
         timestamp: now(),
         metadata: {type: 'benchmark', category: 'io_optimization'}
       })
-      MATCH (t:PerformanceTest) 
+      MATCH (t:PerformanceTest)
       WHERE t.id = 1
       RETURN t.data, t.metadata
     expected_performance:
@@ -263,7 +263,7 @@ stress_tests:
         UNION RETURN 11 AS n UNION RETURN 12 AS n UNION RETURN 13 AS n UNION RETURN 14 AS n UNION RETURN 15 AS n
         UNION RETURN 16 AS n UNION RETURN 17 AS n UNION RETURN 18 AS n UNION RETURN 19 AS n UNION RETURN 20 AS n
       )
-      SELECT n, 
+      SELECT n,
              n * n AS squared,
              'stress_test_record_' + toString(n) AS label,
              length('stress_test_record_' + toString(n)) AS label_length
@@ -281,7 +281,7 @@ error_tests:
     description: "Test that performance optimizations handle errors gracefully"
     command: ["--format", "json"]
     query: |
-      RETURN 
+      RETURN
         length(NULL) AS null_length,
         abs(NULL) AS null_abs,
         'performance_continues' AS status
@@ -300,7 +300,7 @@ integration_tests:
     query: |
       CREATE (n1:TestNode {performance_id: 1, data: 'indexed_performance_test'})
       CREATE (n2:TestNode {performance_id: 2, data: 'indexed_performance_test'})
-      MATCH (n:TestNode) 
+      MATCH (n:TestNode)
       WHERE n.performance_id = 1
       RETURN n.data
     expected_output:

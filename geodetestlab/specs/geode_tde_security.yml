@@ -33,7 +33,7 @@ tests:
 
   - name: "tde-setup-test-data"
     description: "Create test data for TDE encryption validation"
-    args: ["query", 
+    args: ["query",
            "CREATE (alice:Person {name: 'Alice', ssn: '123-45-6789', email: 'alice@company.com', salary: 95000}), (bob:Person {name: 'Bob', ssn: '987-65-4321', email: 'bob@company.com', salary: 85000}), (alice)-[:KNOWS {since: 2020, confidential_notes: 'Performance review notes'}]->(bob) RETURN count(*) AS created"]
     expect:
       exit_code: 0

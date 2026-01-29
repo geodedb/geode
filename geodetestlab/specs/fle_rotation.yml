@@ -12,6 +12,10 @@ cli:
     timeout_ms: 15000
     format: "json"
 
+# Skip isolation suffix for FLE tests - the CALL geode.fle.configureField
+# must match the exact label names used in CREATE statements
+skip_isolation: true
+
 tests:
   # ===============================
   # ROTATION STATUS

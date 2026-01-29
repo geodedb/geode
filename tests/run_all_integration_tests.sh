@@ -16,10 +16,10 @@ FAILED_TESTS=0
 run_test() {
     local test_name="$1"
     local test_script="$2"
-    
+
     echo "--- Running: $test_name ---"
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
-    
+
     if [ -f "$test_script" ] && [ -x "$test_script" ]; then
         if "$test_script" > "/tmp/geode_test_${TOTAL_TESTS}.log" 2>&1; then
             echo "✅ $test_name: PASSED"
@@ -51,7 +51,7 @@ echo
 
 # Run all integration tests
 run_test "Property Ordering Regression Tests" "./tests/property_ordering_regression_test.sh"
-run_test "Count Aggregation Regression Tests" "./tests/count_aggregation_regression_test.sh"  
+run_test "Count Aggregation Regression Tests" "./tests/count_aggregation_regression_test.sh"
 run_test "Edge Creation Tests" "./tests/edge_creation_working.sh"
 run_test "Complex Graph Query Tests" "./tests/complex_graph_queries.sh"
 run_test "Regression Test Suite" "./tests/regression_test.sh"
@@ -69,15 +69,15 @@ echo "Testing core database operations..."
 if OUTPUT=$(timeout 10 ./zig-out/bin/geodec 'MATCH (n) RETURN count(n)' --insecure 2>&1) && echo "$OUTPUT" | grep -q '"col":[0-9]'; then
     NODE_COUNT=$(echo "$OUTPUT" | grep -o '"col":[0-9]' | cut -d: -f2)
     echo "✅ Node querying works: Found $NODE_COUNT nodes"
-    
+
     # Test 2: Property-based ordering
     if OUTPUT2=$(timeout 10 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id' --insecure 2>&1) && echo "$OUTPUT2" | grep -q '"order_keys":\["n.id"\]'; then
         echo "✅ Property-based ordering works"
-        
+
         # Test 3: Aggregation
         if OUTPUT3=$(timeout 10 ./zig-out/bin/geodec 'MATCH (n) RETURN count(n)' --insecure 2>&1) && echo "$OUTPUT3" | grep -q '"col":[0-9]'; then
             echo "✅ Count aggregation works"
-            
+
             # Test 4: Edge traversal
             if OUTPUT4=$(timeout 10 ./zig-out/bin/geodec 'MATCH (a)-[r]->(b) RETURN count(r)' --insecure 2>&1) && echo "$OUTPUT4" | grep -q '"col":[0-9]'; then
                 EDGE_COUNT=$(echo "$OUTPUT4" | grep -o '"col":[0-9]' | cut -d: -f2)

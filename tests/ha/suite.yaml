@@ -1,18 +1,18 @@
-name: "HA Reliability Suite"
-description: "Tests for Raft consensus under networking failures and node crashes"
+name: HA Reliability Suite
+description: Tests for Raft consensus under networking failures and node crashes
 
 tests:
-  - name: "system-check"
-    type: "generic_command"
-    target: "ha-node-1"
-    command: "geode query 'RETURN 1 AS health' --server 127.0.0.1:3141 --insecure"
+- name: system-check
+  type: generic_command
+  target: ha-node-1
+  command: geode query 'RETURN 1 AS health' --server 127.0.0.1:3141 --insecure
 
-  - name: "leader-failover"
-    type: "leader_failure"
-    description: "Kill leader and verify new election"
+- name: leader-failover
+  type: leader_failure
+  description: Kill leader and verify new election
 
-  - name: "network-loss"
-    type: "packet_loss"
-    target: "ha-node-1"
-    loss_percent: "20"
-    duration: "10s"
+- name: network-loss
+  type: packet_loss
+  target: ha-node-1
+  loss_percent: '20'
+  duration: 10s

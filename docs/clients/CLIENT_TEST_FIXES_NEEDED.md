@@ -10,12 +10,14 @@
 ### 1. QUIC Compatibility Issue (CRITICAL)
 
 **Problem**:
+
 - Python client uses `aioquic` library for QUIC support
 - Server uses `quiche` library (Rust/C implementation)
 - Handshake fails: "ERROR: Handshake failed to complete after 200 attempts (10000ms)"
 - All tests timeout after 5 seconds waiting for connection
 
 **Root Cause**:
+
 ```
 File "/nix/store/.../aioquic/asyncio/client.py", line 93, in connect
     await protocol.wait_connected()
@@ -25,6 +27,7 @@ asyncio.exceptions.CancelledError
 The QUIC handshake between aioquic and quiche doesn't complete. While both implement QUIC v1 (RFC 9000), there appear to be subtle compatibility issues.
 
 **Evidence**:
+
 - Server accepts connection: "✅ Accepted QUIC connection #1"
 - Server waits for handshake completion but it never arrives
 - Client times out waiting for `wait_connected()`
@@ -32,11 +35,13 @@ The QUIC handshake between aioquic and quiche doesn't complete. While both imple
 ### 2. Missing TCP Fallback in Python Client
 
 **Problem**:
+
 - Python client only supports QUIC (via aioquic)
 - No TCP/TLS fallback implementation
 - Server supports `--insecure` mode but client can't use it
 
 **Impact**:
+
 - Cannot run tests with `--insecure` server
 - Makes testing difficult during development
 
@@ -82,7 +87,7 @@ def raw_value(self) -> Any:
 
 ### 🚧 In Progress
 
-3. **Add TCP support to Python client**
+1. **Add TCP support to Python client**
    - Need to implement TCP socket-based connection
    - Should detect server capabilities and use appropriate transport
 
@@ -91,6 +96,7 @@ def raw_value(self) -> Any:
 ### Option A: Fix QUIC Compatibility (Long-term)
 
 **Tasks**:
+
 1. Debug aioquic/quiche handshake incompatibility
 2. Check QUIC version negotiation
 3. Verify TLS 1.3 configuration compatibility
@@ -98,18 +104,22 @@ def raw_value(self) -> Any:
 5. Consider switching Python client to use quiche Python bindings instead of aioquic
 
 **Pros**:
+
 - Proper QUIC support for performance
 - Matches other clients (Go, Rust use quiche)
 
 **Cons**:
+
 - Time-consuming to debug
 - May require aioquic patches or quiche Python bindings
 
 ### Option B: Implement TCP Fallback (Short-term) ✅ RECOMMENDED
 
 **Tasks**:
+
 1. Add `use_quic` parameter to Connection class
 2. Implement TCP socket connection mode:
+
    ```python
    if use_quic:
        # Existing QUIC code
@@ -117,27 +127,32 @@ def raw_value(self) -> Any:
        # New TCP code
        reader, writer = await asyncio.open_connection(host, port)
    ```
+
 3. Add auto-detection: try QUIC, fallback to TCP on failure
 4. Update test runner to use TCP mode
 
 **Pros**:
+
 - Fast to implement
 - Unblocks testing immediately
 - Still allows QUIC support later
 
 **Cons**:
+
 - Doesn't solve QUIC issue
 - Need to maintain two code paths
 
 ## Recommended Approach
 
 **Phase 1** (Immediate - 2-4 hours):
+
 1. Implement TCP support in Python client
 2. Add connection mode detection
 3. Update test runner to prefer TCP for now
 4. Get tests passing with TCP
 
 **Phase 2** (Future - 1-2 days):
+
 1. Investigate aioquic/quiche compatibility
 2. Consider switching to quiche Python bindings
 3. Re-enable QUIC once compatibility is confirmed

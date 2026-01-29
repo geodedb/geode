@@ -304,7 +304,7 @@ test "parse hash in complex queries" {
     {
         const query =
             \\MATCH (n:Node)
-            \\RETURN CASE 
+            \\RETURN CASE
             \\  WHEN hash_alg(n.hash) = "SHA3-256" THEN "legacy"
             \\  WHEN hash_alg(n.hash) = "BLAKE3" THEN "modern"
             \\  WHEN hash_alg(n.hash) IN ["BLAKE2b-256", "BLAKE2b-512"] THEN "blake2b"
@@ -356,7 +356,7 @@ test "parse hash in path expressions" {
     {
         const query =
             \\MATCH path = (start:Block)-[:NEXT*]->(end:Block)
-            \\WHERE ALL(rel IN relationships(path) WHERE 
+            \\WHERE ALL(rel IN relationships(path) WHERE
             \\  hash_equals(
             \\    endNode(rel).previous_hash,
             \\    startNode(rel).hash

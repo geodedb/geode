@@ -3,10 +3,12 @@ Geode CLI -> Zig Client Library Migration Plan
 
 Goal
 ----
+
 Move the core client behavior of the `geode` CLI (networking, auth/session handling, request/response flow, formatting hooks) into the Zig client library so the CLI becomes a thin wrapper over shared library APIs.
 
 Milestones
 ----------
+
 1) Library surface audit
    - Inventory existing `transport/quic.zig` (client), protocol helpers, and any reusable auth/session utilities.
    - Identify gaps the CLI currently fills: HELLO/SCHEMA/PULL exchange, auth credential loading, session persistence, output formatting.
@@ -39,10 +41,12 @@ Milestones
 
 Risks / Open Questions
 ----------------------
+
 - How to expose session persistence (filesystem path, env overrides) without pulling filesystem concerns into the transport layer?
 - Do we keep formatting (json/table) in the library or just return structured data for the CLI to render?
 - Compatibility with existing harness scripts that expect current CLI output shape—need a compatibility shim if output changes.
 
 Notes
 -----
+
 This plan defers implementation; it only outlines the migration steps so we can execute later without re-discovery.

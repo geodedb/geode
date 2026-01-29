@@ -23,6 +23,7 @@ Successfully migrated the Zig client implementation to Zig 0.15.1, resolving all
 ### 1. API Migration (msquic_wrapper.zig - 467 lines)
 
 **Fixed Issues**:
+
 - ✅ `@bitCast` type inference failures (25+ instances)
 - ✅ `@truncate` type inference failures (15+ instances)
 - ✅ `@intCast` type inference failures (10+ instances)
@@ -33,6 +34,7 @@ Successfully migrated the Zig client implementation to Zig 0.15.1, resolving all
 - ✅ `QUIC_STATUS ++` operator syntax errors
 
 **Example Fixes**:
+
 ```zig
 // Before (Zig 0.14):
 @ptrCast(*Type, value)
@@ -50,6 +52,7 @@ callconv(.c)
 ### 2. Client Updates (geode_client_v2.zig - 10 lines)
 
 **API Changes**:
+
 ```zig
 // ArrayList initialization
 // Before: std.ArrayList(u8).init(allocator)
@@ -67,12 +70,14 @@ list.appendSlice(allocator, data)  // was: list.appendSlice(data)
 ### 3. Build & Testing
 
 **Build Configuration**:
+
 - ✅ Zig 0.15.1 compiler compatibility
 - ✅ MsQuic 2.5.4 library linking
 - ✅ Module system properly configured
 - ✅ Clean dependency resolution
 
 **Live Testing Results**:
+
 ```
 Creating Geode client...                    ✓
 Connecting to server...                     ✓
@@ -88,6 +93,7 @@ Sending test query (RETURN 1 AS x)...        ✓
 ### 4. Commits
 
 **Commits Pushed**:
+
 1. `06dea72` - **zig-msquic submodule**: Complete Zig 0.15.1 API migration (467 lines)
 2. `ac1e371` - **Main repo**: Client v2 updates + submodule reference (10 lines)
 
@@ -103,6 +109,7 @@ Sending test query (RETURN 1 AS x)...        ✓
 
 2. **Test Harness Integration** (Partial)
    - **Issue**: Test runner expects different API pattern:
+
      ```zig
      // Test runner expects:
      var client = GeodeClient.init(...);  // No try, no error
@@ -113,12 +120,14 @@ Sending test query (RETURN 1 AS x)...        ✓
      var client = try GeodeClient.init(...);  // Can error
      try client.connect();  // Includes stream opening
      ```
+
    - **Status**: Build configuration updated, but API adapter needed
    - **Files Updated**: `test-harness/runners/build.zig`
 
 ### Recommendations for Full Integration
 
 **Option A: API Adapter Layer** (Quick - 30 min)
+
 ```zig
 // Create compatibility wrapper in test-harness/runners/
 pub const GeodeClientAdapter = struct {
@@ -145,11 +154,13 @@ pub const GeodeClientAdapter = struct {
 ```
 
 **Option B: Refactor Client v2 API** (Thorough - 2-3 hours)
+
 - Separate connection and stream opening
 - Make `init()` infallible (move error handling to `connect()`)
 - Match test runner's expected API exactly
 
 **Option C: Update Test Runner** (Moderate - 1 hour)
+
 - Modify `zig_runner_new.zig` to use try on init
 - Remove `openStream()` call
 - Handle error propagation
@@ -157,6 +168,7 @@ pub const GeodeClientAdapter = struct {
 ## Error Handling Assessment
 
 **Current Error Handling**:
+
 - ✅ All QUIC operations have proper error checking
 - ✅ Timeout handling for connection (10s) and receive (30s)
 - ✅ Mutex protection for shared state (recv_buffer, connected flag)
@@ -164,6 +176,7 @@ pub const GeodeClientAdapter = struct {
 - ✅ Resource deallocation in deinit()
 
 **Error Types Handled**:
+
 ```zig
 - MsQuicOpenFailed
 - RegistrationFailed
@@ -179,6 +192,7 @@ pub const GeodeClientAdapter = struct {
 ```
 
 **Improvements Possible** (Nice-to-have):
+
 1. Retry logic for transient failures
 2. Exponential backoff for connection attempts
 3. More granular timeout configuration
@@ -188,11 +202,13 @@ pub const GeodeClientAdapter = struct {
 ## Performance Characteristics
 
 **Connection Latency**:
+
 - HELLO handshake: ~10-50ms (local)
 - Message send: <1ms (buffered)
 - Thread.sleep granularity: 10ms
 
 **Resource Usage**:
+
 - Binary size: 8.9MB (includes debug symbols)
 - Memory: Minimal (single stream context, dynamic buffer)
 - Thread safety: Mutex-protected receive buffer
@@ -200,19 +216,23 @@ pub const GeodeClientAdapter = struct {
 ## Files Modified
 
 ### Core Implementation
+
 - `tools/zig-msquic/src/msquic_wrapper.zig` (467 lines changed)
 - `tools/zig-msquic/src/quic_status.zig` (minor fixes)
 - `clients/zig/geode_client_v2.zig` (10 lines changed)
 
 ### Build Configuration
+
 - `clients/test-harness/runners/build.zig` (updated module paths)
 
 ### Test Files
+
 - `clients/zig/test_connection_v2.zig` (verification test)
 
 ## Code Quality
 
 **Zig 0.15.1 Compliance**:
+
 - ✅ All deprecated APIs migrated
 - ✅ Type inference requirements satisfied
 - ✅ Const correctness enforced
@@ -220,6 +240,7 @@ pub const GeodeClientAdapter = struct {
 - ✅ Modern module system usage
 
 **Best Practices**:
+
 - ✅ Proper error propagation with `!` and `try`
 - ✅ Resource cleanup with `defer` and `errdefer`
 - ✅ Const-by-default for immutable variables
@@ -229,6 +250,7 @@ pub const GeodeClientAdapter = struct {
 ## Conclusion
 
 The Zig client v2 migration to Zig 0.15.1 is **production-ready for basic operations**:
+
 - ✅ Clean compilation (0 errors)
 - ✅ Successful connection establishment
 - ✅ HELLO protocol working
@@ -239,11 +261,13 @@ The Zig client v2 migration to Zig 0.15.1 is **production-ready for basic operat
 ### Next Actions
 
 **Immediate** (If needed):
+
 1. Investigate SCHEMA response timeout (server-side debugging)
 2. Implement API adapter for test harness compatibility
 3. Run full test suite once adapter is in place
 
 **Future Enhancements**:
+
 1. Connection pooling
 2. Automatic reconnection
 3. Enhanced error recovery

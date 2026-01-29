@@ -144,7 +144,7 @@ MATCH (d:Document)
 WHERE d.category = 'ML'
 WITH collect(d.embedding) AS embeddings, collect(d) AS docs
 WITH docs,
-     [i IN range(0, 7) | 
+     [i IN range(0, 7) |
       reduce(sum = 0.0, emb IN embeddings | sum + vector_element(emb, i)) / size(embeddings)
      ] AS centroid
 UNWIND docs AS doc

@@ -22,7 +22,7 @@ test_feature() {
     local name="$1"
     local cmd="$2"
     local expected_success="${3:-true}"
-    
+
     echo -n "Testing $name... "
     if eval "$cmd" > /dev/null 2>&1; then
         if [ "$expected_success" = "true" ]; then

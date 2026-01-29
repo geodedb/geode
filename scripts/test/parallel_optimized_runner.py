@@ -1,21 +1,33 @@
 #!/usr/bin/env python3
 """Parallel optimized test runner with smart caching and minimal overhead."""
 
-import subprocess
-import yaml
-import sys
-from pathlib import Path
-import os
 import multiprocessing as mp
-from collections import defaultdict
+import os
+import subprocess
+import sys
 import time
+from collections import defaultdict
+from pathlib import Path
+
+import yaml
 
 # Categorize tests that need cleanup vs read-only
 NEEDS_CLEANUP_PATTERNS = [
-    'CREATE', 'MERGE', 'DELETE', 'SET', 'REMOVE',
-    'DROP', 'ALTER', 'INSERT', 'UPDATE',
-    'create', 'delete', 'enable', 'disable'
+    "CREATE",
+    "MERGE",
+    "DELETE",
+    "SET",
+    "REMOVE",
+    "DROP",
+    "ALTER",
+    "INSERT",
+    "UPDATE",
+    "create",
+    "delete",
+    "enable",
+    "disable",
 ]
+
 
 def needs_cleanup(test_case):
     """Determine if test modifies state and needs cleanup."""
@@ -36,6 +48,7 @@ def needs_cleanup(test_case):
         return True
 
     return False
+
 
 def categorize_test_speed(test_case):
     """Categorize test by expected execution time."""
@@ -71,24 +84,26 @@ def categorize_test_speed(test_case):
 
     return "medium"
 
+
 def cleanup_files():
     """Clean up catalog and persistence files."""
     try:
-        os.remove('/tmp/geode_graph_store.dat')
+        os.remove("/tmp/geode_graph_store.dat")
     except FileNotFoundError:
         pass
 
-    home_dir = os.path.expanduser('~')
+    home_dir = os.path.expanduser("~")
     catalog_paths = [
-        f'{home_dir}/.geode/catalog.json',
-        f'{home_dir}/.geode/catalog_indexes.json',
-        f'{home_dir}/.geode/catalog_schemas.json',
+        f"{home_dir}/.geode/catalog.json",
+        f"{home_dir}/.geode/catalog_indexes.json",
+        f"{home_dir}/.geode/catalog_schemas.json",
     ]
     for catalog_path in catalog_paths:
         try:
             os.remove(catalog_path)
         except FileNotFoundError:
             pass
+
 
 def run_test_worker(test_data):
     """Worker function to run a single test."""
@@ -102,7 +117,9 @@ def run_test_worker(test_data):
 
     # Add --server 127.0.0.1:3141 --insecure for query commands
     if len(args) > 0 and args[0] == "query":
-        if not any("--server" in str(arg) for arg in args) and not any("--server 127.0.0.1:3141 --insecure" in str(arg) for arg in args):
+        if not any("--server" in str(arg) for arg in args) and not any(
+            "--server 127.0.0.1:3141 --insecure" in str(arg) for arg in args
+        ):
             args = ["query", "--server 127.0.0.1:3141 --insecure"] + args[1:]
 
     # Only cleanup if test modifies state
@@ -116,13 +133,7 @@ def run_test_worker(test_data):
     timeout = {"fast": 1, "medium": 2, "slow": 5}.get(speed, 2)
 
     try:
-        result = subprocess.run(
-            [binary] + args,
-            input=stdin_content,
-            capture_output=True,
-            text=True,
-            timeout=timeout
-        )
+        result = subprocess.run([binary] + args, input=stdin_content, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return False, "timeout"
     except Exception as e:
@@ -148,10 +159,11 @@ def run_test_worker(test_data):
 
     return True, "PASSED"
 
+
 def process_spec_file(spec_file_path):
     """Process a single spec file and return results."""
     try:
-        with open(spec_file_path, "r") as f:
+        with open(spec_file_path) as f:
             spec = yaml.safe_load(f)
     except:
         return []
@@ -172,6 +184,7 @@ def process_spec_file(spec_file_path):
 
     return results
 
+
 def main():
     specs_dir = Path("/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs")
 
@@ -179,7 +192,7 @@ def main():
     spec_files = sorted(specs_dir.glob("*.yml"))
 
     print(f"Running {len(spec_files)} spec files with {mp.cpu_count()} workers...")
-    print(f"{'='*80}\n")
+    print(f"{'=' * 80}\n")
 
     start_time = time.time()
 
@@ -211,15 +224,15 @@ def main():
 
     elapsed = time.time() - start_time
 
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"TOTAL: {total_passed} passed, {total_failed} failed, {total_skipped} skipped")
     print(f"Time: {elapsed:.2f} seconds ({total_passed + total_failed + total_skipped} tests)")
     print(f"Speed: {(total_passed + total_failed + total_skipped) / elapsed:.1f} tests/second")
-    print(f"{'='*80}\n")
+    print(f"{'=' * 80}\n")
 
     if failure_patterns:
-        print(f"TOP FAILURE PATTERNS:")
-        print(f"{'='*80}")
+        print("TOP FAILURE PATTERNS:")
+        print(f"{'=' * 80}")
         for pattern, tests in sorted(failure_patterns.items(), key=lambda x: -len(x[1]))[:10]:
             print(f"{pattern:30s} {len(tests):4d} tests")
             for spec, name in tests[:3]:
@@ -229,6 +242,7 @@ def main():
             print()
 
     return 0 if total_failed == 0 else 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

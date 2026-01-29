@@ -15,11 +15,9 @@ from __future__ import annotations
 import json
 import os
 import random
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 
 import httpx
-
-from .base import LLMProvider
 
 
 class GeodeAIProvider:
@@ -27,7 +25,7 @@ class GeodeAIProvider:
 
     def __init__(self, model: Optional[str] = None) -> None:
         self.model = model or os.environ.get("OPENAI_MODEL", "gpt-4")
-        
+
         # Geode-specific patterns and templates
         self.gql_patterns = {
             "simple": [
@@ -39,7 +37,7 @@ class GeodeAIProvider:
             "medium": [
                 "MATCH (n:{label}) WHERE n.{property} {operator} {value} RETURN n",
                 "MATCH (a:{label1})-[r:{rel_type}]->(b:{label2}) RETURN a, r, b",
-                "CREATE (a:{label1})-[r:{rel_type}]->(b:{label2}) RETURN a, r, b", 
+                "CREATE (a:{label1})-[r:{rel_type}]->(b:{label2}) RETURN a, r, b",
                 "MATCH (n:{label}) SET n.{property} = {value} RETURN n",
                 "MATCH (n) WITH n.{property} AS prop RETURN prop, count(*) ORDER BY count(*) DESC",
             ],
@@ -48,9 +46,9 @@ class GeodeAIProvider:
                 "MATCH (n:{label}) CALL {{ WITH n MATCH (n)-[r]->(m) RETURN m }} RETURN n, collect(m)",
                 "WITH range(1, {count}) AS nums UNWIND nums AS num CREATE (n:Node {{id: num}})",
                 "MATCH (a)-[r1]->(b)-[r2]->(c) WHERE a.{prop1} = b.{prop2} RETURN a, b, c",
-            ]
+            ],
         }
-        
+
         self.cli_patterns = {
             "server": [
                 ["serve", "--data-dir", "{data_dir}", "--listen", "{address}"],
@@ -72,21 +70,21 @@ class GeodeAIProvider:
                 ["shell", "--server", "{server}"],
                 ["shell", "--format", "{format}"],
                 ["shell", "--no-history"],
-            ]
+            ],
         }
 
     def fuzz(self, prompt: str, max_cases: int, seed: Optional[int]) -> List[List[str]]:
         """Generate Geode-specific fuzz cases."""
         if max_cases <= 0:
             return []
-        
+
         # Set up deterministic generation if seed provided
         if seed is not None:
             random.seed(seed)
-        
+
         # Generate a mix of pattern-based and AI-generated cases
         pattern_cases = self._generate_pattern_cases(max_cases // 2, seed)
-        
+
         # Use AI for the remaining cases
         ai_cases = []
         if max_cases > len(pattern_cases):
@@ -98,7 +96,7 @@ class GeodeAIProvider:
             except Exception:
                 # Fall back to pattern generation if AI fails
                 ai_cases = self._generate_pattern_cases(remaining, seed)
-        
+
         # Combine and return
         all_cases = pattern_cases + ai_cases
         return all_cases[:max_cases]
@@ -108,21 +106,18 @@ class GeodeAIProvider:
         return True
 
     def generate_gql_queries(
-        self, 
-        max_queries: int, 
-        complexity: str = "simple",
-        seed: Optional[int] = None
+        self, max_queries: int, complexity: str = "simple", seed: Optional[int] = None
     ) -> List[str]:
         """Generate sophisticated GQL queries."""
         if max_queries <= 0:
             return []
-        
+
         if seed is not None:
             random.seed(seed)
-        
+
         # Generate pattern-based queries
         pattern_queries = self._generate_pattern_queries(max_queries // 2, complexity)
-        
+
         # Use AI for creative queries
         ai_queries = []
         if max_queries > len(pattern_queries):
@@ -134,45 +129,45 @@ class GeodeAIProvider:
             except Exception:
                 # Fall back to patterns
                 ai_queries = self._generate_pattern_queries(remaining, complexity)
-        
+
         all_queries = pattern_queries + ai_queries
         return all_queries[:max_queries]
 
     def _generate_pattern_cases(self, count: int, seed: Optional[int]) -> List[List[str]]:
         """Generate test cases using built-in patterns."""
         cases = []
-        
+
         # Generate from different pattern categories
         categories = list(self.cli_patterns.keys())
         if seed is not None:
             random.Random(seed).shuffle(categories)
-        
+
         for i in range(count):
             category = categories[i % len(categories)]
             pattern = random.choice(self.cli_patterns[category])
-            
+
             # Fill in template variables
             filled_pattern = self._fill_pattern_template(pattern)
             cases.append(filled_pattern)
-        
+
         return cases
 
     def _generate_pattern_queries(self, count: int, complexity: str) -> List[str]:
         """Generate GQL queries using built-in patterns."""
         queries = []
         patterns = self.gql_patterns.get(complexity, self.gql_patterns["simple"])
-        
+
         for i in range(count):
             pattern = patterns[i % len(patterns)]
             query = self._fill_gql_template(pattern)
             queries.append(query)
-        
+
         return queries
 
     def _fill_pattern_template(self, pattern: List[str]) -> List[str]:
         """Fill template variables in a CLI pattern."""
         filled = []
-        
+
         for arg in pattern:
             if "{" in arg and "}" in arg:
                 # Replace template variables
@@ -187,14 +182,14 @@ class GeodeAIProvider:
                     "{description}": "Test role",
                     "{gql_query}": "RETURN 1 AS result",
                 }
-                
+
                 filled_arg = arg
                 for var, value in replacements.items():
                     filled_arg = filled_arg.replace(var, value)
                 filled.append(filled_arg)
             else:
                 filled.append(arg)
-        
+
         return filled
 
     def _fill_gql_template(self, pattern: str) -> str:
@@ -207,17 +202,17 @@ class GeodeAIProvider:
             "{label2}": random.choice(["Product", "Order", "Company"]),
             "{property}": random.choice(["name", "age", "id", "created_at", "status"]),
             "{prop1}": "id",
-            "{prop2}": "user_id", 
+            "{prop2}": "user_id",
             "{operator}": random.choice([">", "<", "=", ">=", "<=", "<>"]),
             "{rel_type}": random.choice(["KNOWS", "OWNS", "CREATED", "BELONGS_TO"]),
             "{depth}": str(random.randint(2, 5)),
             "{count}": str(random.randint(5, 20)),
         }
-        
+
         result = pattern
         for var, value in replacements.items():
             result = result.replace(var, value)
-        
+
         return result
 
     def _build_enhanced_prompt(self, base_prompt: str, max_cases: int) -> str:
@@ -263,14 +258,14 @@ Examples:
         complexity_guidance = {
             "simple": "Focus on basic MATCH, CREATE, RETURN patterns with single nodes/edges",
             "medium": "Include WHERE clauses, aggregations, path patterns up to length 3, and simple subqueries",
-            "complex": "Generate advanced queries with complex path patterns, multiple WITH clauses, optional matches, and sophisticated graph algorithms"
+            "complex": "Generate advanced queries with complex path patterns, multiple WITH clauses, optional matches, and sophisticated graph algorithms",
         }
-        
+
         return f"""
 Generate {max_queries} sophisticated Graph Query Language (GQL) queries for the Geode database.
 
 COMPLEXITY LEVEL: {complexity}
-REQUIREMENTS: {complexity_guidance.get(complexity, 'Mixed complexity levels')}
+REQUIREMENTS: {complexity_guidance.get(complexity, "Mixed complexity levels")}
 
 GQL CAPABILITIES TO LEVERAGE:
 - Graph pattern matching with variable-length paths
@@ -303,26 +298,26 @@ WITH ["Alice", "Bob", "Carol"] AS names UNWIND names AS name CREATE (p:Person {{
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY environment variable is not set")
-        
+
         base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com").rstrip("/")
         url = f"{base_url}/v1/chat/completions"
-        
+
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        
+
         messages = [
             {
                 "role": "system",
-                "content": "You are an expert database testing engineer specializing in graph databases and GQL. Generate sophisticated, realistic test cases that thoroughly exercise database functionality."
+                "content": "You are an expert database testing engineer specializing in graph databases and GQL. Generate sophisticated, realistic test cases that thoroughly exercise database functionality.",
             },
             {
                 "role": "user",
                 "content": prompt,
-            }
+            },
         ]
-        
+
         body = {
             "model": self.model,
             "messages": messages,
@@ -330,10 +325,10 @@ WITH ["Alice", "Bob", "Carol"] AS names UNWIND names AS name CREATE (p:Person {{
             "top_p": 0.9,
             "max_tokens": 3000,
         }
-        
+
         if seed is not None:
             body["seed"] = seed
-        
+
         with httpx.Client(timeout=45) as client:
             response = client.post(url, headers=headers, json=body)
             response.raise_for_status()
@@ -343,12 +338,12 @@ WITH ["Alice", "Bob", "Carol"] AS names UNWIND names AS name CREATE (p:Person {{
     def _parse_response(self, response_text: str, max_cases: int) -> List[List[str]]:
         """Parse API response into argument arrays."""
         cases: List[List[str]] = []
-        
+
         for line in response_text.splitlines():
             trimmed = line.strip()
-            if not trimmed or trimmed.startswith('#'):
+            if not trimmed or trimmed.startswith("#"):
                 continue
-                
+
             # Try to parse as JSON array
             if trimmed.startswith("[") and trimmed.endswith("]"):
                 try:
@@ -359,29 +354,42 @@ WITH ["Alice", "Bob", "Carol"] AS names UNWIND names AS name CREATE (p:Person {{
                             break
                 except json.JSONDecodeError:
                     continue
-        
+
         return cases
 
     def _parse_gql_response(self, response_text: str, max_queries: int) -> List[str]:
         """Parse API response into GQL query strings."""
         queries = []
-        
+
         for line in response_text.splitlines():
             line = line.strip()
-            if not line or line.startswith('#') or line.startswith('//'):
+            if not line or line.startswith("#") or line.startswith("//"):
                 continue
-                
+
             # Remove quotes if present
             if (line.startswith('"') and line.endswith('"')) or (line.startswith("'") and line.endswith("'")):
                 line = line[1:-1]
-            
+
             # Basic validation - should start with a GQL keyword
-            gql_keywords = ["MATCH", "CREATE", "DELETE", "SET", "REMOVE", "RETURN", "WITH", "UNWIND", "MERGE", "CALL", "EXPLAIN", "PROFILE"]
+            gql_keywords = [
+                "MATCH",
+                "CREATE",
+                "DELETE",
+                "SET",
+                "REMOVE",
+                "RETURN",
+                "WITH",
+                "UNWIND",
+                "MERGE",
+                "CALL",
+                "EXPLAIN",
+                "PROFILE",
+            ]
             first_word = line.split()[0].upper() if line.split() else ""
-            
+
             if first_word in gql_keywords:
                 queries.append(line)
                 if len(queries) >= max_queries:
                     break
-        
+
         return queries

@@ -1,37 +1,42 @@
-import yaml
-import docker
-import time
-import os
-import sys
 import logging
-import subprocess
+import sys
+import time
+
+import yaml
+
+import docker
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+
 def load_config(config_path="suite.yaml"):
-    with open(config_path, "r") as f:
+    with open(config_path) as f:
         return yaml.safe_load(f)
+
 
 def get_docker_client():
     return docker.from_env()
+
 
 def run_command_in_container(container, command):
     logger.info(f"Running command in {container.name}: {command}")
     exit_code, output = container.exec_run(command)
     if exit_code != 0:
         logger.error(f"Command failed: {output.decode('utf-8')}")
-    return exit_code, output.decode('utf-8')
+    return exit_code, output.decode("utf-8")
+
 
 def parse_duration(duration_str):
     """Parses a duration string (e.g., '10s', '1m') into seconds."""
-    if duration_str.endswith('s'):
+    if duration_str.endswith("s"):
         return int(duration_str[:-1])
-    elif duration_str.endswith('m'):
+    elif duration_str.endswith("m"):
         return int(duration_str[:-1]) * 60
     # Add more units as needed
-    return int(duration_str) # Assume seconds if no unit
+    return int(duration_str)  # Assume seconds if no unit
+
 
 def chaos_packet_loss(container_name, duration="10s", loss_percent="20"):
     client = get_docker_client()
@@ -42,12 +47,14 @@ def chaos_packet_loss(container_name, duration="10s", loss_percent="20"):
     logger.info(f"Adding {loss_percent}% packet loss to {container_name}")
     # Initialize netem
     exit_code, output = target_container.exec_run(f"tc qdisc add dev eth0 root netem loss {loss_percent}%", user="root")
-    if exit_code != 0 and "File exists" not in output.decode(): # Ignore if already exists, but might fail logic
-         logger.warning(f"tc qdisc add failed (might exist): {output.decode()}")
-         # Try changing if it exists
-         exit_code, output = target_container.exec_run(f"tc qdisc change dev eth0 root netem loss {loss_percent}%", user="root")
-         if exit_code != 0:
-             raise Exception(f"Failed to inject packet loss: {output.decode()}")
+    if exit_code != 0 and "File exists" not in output.decode():  # Ignore if already exists, but might fail logic
+        logger.warning(f"tc qdisc add failed (might exist): {output.decode()}")
+        # Try changing if it exists
+        exit_code, output = target_container.exec_run(
+            f"tc qdisc change dev eth0 root netem loss {loss_percent}%", user="root"
+        )
+        if exit_code != 0:
+            raise Exception(f"Failed to inject packet loss: {output.decode()}")
 
     try:
         time.sleep(parse_duration(duration))
@@ -55,7 +62,8 @@ def chaos_packet_loss(container_name, duration="10s", loss_percent="20"):
         logger.info(f"Removing packet loss from {container_name}")
         exit_code, output = target_container.exec_run("tc qdisc del dev eth0 root", user="root")
         if exit_code != 0:
-             logger.error(f"Failed to clean up tc rules: {output.decode()}")
+            logger.error(f"Failed to clean up tc rules: {output.decode()}")
+
 
 def verify_leader(containers):
     # Check which node is leader via geodec or metrics
@@ -71,9 +79,10 @@ def verify_leader(containers):
                 # Fallback: check logs or specific endpoint.
                 # Let's assume there is a /raft/status endpoint or CLI command
                 pass
-        except Exception as e:
+        except Exception:
             pass
     return leader
+
 
 def run_test_scenario(scenario, client):
     name = scenario.get("name")
@@ -90,7 +99,7 @@ def run_test_scenario(scenario, client):
             logger.info(f"Stopping leader {target}...")
             client.containers.get(target).stop()
 
-            time.sleep(5) # Wait for election
+            time.sleep(5)  # Wait for election
 
             # 2. Verify new leader elected (node-2 or node-3)
             # (Mock check for now)
@@ -119,6 +128,7 @@ def run_test_scenario(scenario, client):
         logger.error(f"Scenario {name} FAILED: {e}")
         return False
 
+
 def main():
     config = load_config()
     client = get_docker_client()
@@ -134,6 +144,7 @@ def main():
     else:
         logger.error("Some tests failed.")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

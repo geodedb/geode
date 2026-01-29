@@ -3,6 +3,7 @@
 ## Essential Commands
 
 ### Starting the Server
+
 ```bash
 # Basic server start
 geoded --listen-quic 0.0.0.0:3141
@@ -17,6 +18,7 @@ geoded --listen-quic 0.0.0.0:3141 \
 ```
 
 ### Client Operations
+
 ```bash
 # Run single query
 geodec "MATCH (n) RETURN n LIMIT 10"
@@ -34,6 +36,7 @@ geode --help
 ## Build & Development
 
 ### Core Build Commands
+
 ```bash
 make build              # Debug build
 make release            # Optimized build
@@ -44,6 +47,7 @@ make fmt               # Format code
 ```
 
 ### Docker Commands
+
 ```bash
 make docker-build      # Build images
 make docker-up-singleton    # Single node
@@ -53,6 +57,7 @@ make docker-test       # Test in Docker
 ```
 
 ### Governance Commands
+
 ```bash
 make status-generate   # Update CANARY status
 make governance-check  # Validate evidence
@@ -62,6 +67,7 @@ make no-feature-flags  # Check feature flags
 ## Common GQL Queries
 
 ### Basic Patterns
+
 ```gql
 -- Find all nodes
 MATCH (n) RETURN n
@@ -80,6 +86,7 @@ MATCH (a)-[r:KNOWS]->(b) RETURN a, b
 ```
 
 ### Graph Traversal
+
 ```gql
 -- Friends of friends
 MATCH (p:Person {name: "Alice"})-[:KNOWS*2]->(fof)
@@ -97,6 +104,7 @@ RETURN path
 ```
 
 ### Data Modification
+
 ```gql
 -- Create node
 CREATE (p:Person {name: "Bob", age: 30})
@@ -119,6 +127,7 @@ DELETE r
 ```
 
 ### Aggregations
+
 ```gql
 -- Count nodes
 MATCH (n) RETURN count(n)
@@ -140,6 +149,7 @@ RETURN p.name, collect(f.name) AS friends
 ## Type Constructors
 
 ### Numeric Types
+
 ```sql
 SmallInt(42)           -- i16
 Int(1000)             -- i32  
@@ -150,6 +160,7 @@ Decimal(123.45, 2)    -- Decimal with scale
 ```
 
 ### String Types
+
 ```sql
 Char('Hello', 10)     -- Fixed length
 Varchar('World', 50)  -- Variable length
@@ -157,6 +168,7 @@ Text('Long text...')  -- Unlimited
 ```
 
 ### Temporal Types
+
 ```sql
 Date('2024-12-25')
 Time('14:30:00.123456')
@@ -167,6 +179,7 @@ Interval('P1Y2M3DT4H5M6S')
 ```
 
 ### Network Types
+
 ```sql
 IpAddr('192.168.1.1')
 IpAddr('2001:db8::1')
@@ -175,6 +188,7 @@ MacAddr('00:11:22:33:44:55')
 ```
 
 ### Geographic Types
+
 ```sql
 Point2D(10.5, 20.3)
 Point3D(10.5, 20.3, 100.0)
@@ -184,6 +198,7 @@ Polygon([[(0,0), (4,0), (4,4), (0,4), (0,0)]])
 ```
 
 ### Advanced Types
+
 ```sql
 UUID('550e8400-e29b-41d4-a716-446655440000')
 Json('{"key": "value"}')
@@ -197,6 +212,7 @@ URL('https://example.com')
 ## Configuration
 
 ### Environment Variables
+
 ```bash
 # Query behavior
 export GEODE_ORDER_KEYS_EXPR=1       # Allow ORDER BY expressions
@@ -214,6 +230,7 @@ export GEODE_CAPTURE_SERVER_STDERR=1 # Capture stderr
 ```
 
 ### Server Flags
+
 ```bash
 geoded --help
   --listen-quic      QUIC listen address
@@ -231,6 +248,7 @@ geoded --help
 ### Common Issues
 
 #### Server won't start
+
 ```bash
 # Check port availability
 lsof -i :3141
@@ -243,6 +261,7 @@ ls -la /var/geode/data
 ```
 
 #### Query errors
+
 ```bash
 # Enable verbose logging
 geoded --log-level debug --log-json
@@ -252,6 +271,7 @@ geodec "EXPLAIN MATCH (n) RETURN n"
 ```
 
 #### Performance issues
+
 ```bash
 # Run profiling
 geodec "PROFILE MATCH (n) RETURN n"
@@ -264,6 +284,7 @@ curl http://localhost:9090/metrics
 ```
 
 ### Log Locations
+
 - Server logs: stderr or `--log-file`
 - Audit logs: `data_dir/audit/`
 - WAL: `data_dir/wal/`
@@ -271,6 +292,7 @@ curl http://localhost:9090/metrics
 ## Status Codes
 
 ### GQLSTATUS Codes
+
 - `00000` - Success
 - `02000` - No data
 - `22000` - Data exception
@@ -279,6 +301,7 @@ curl http://localhost:9090/metrics
 - `42002` - Duplicate object
 
 ### Internal Error Codes
+
 - `ERR_OOM` - Out of memory
 - `ERR_FLOAT_NAN` - Invalid float
 - `ERR_CHAR_LEN` - String too long
@@ -289,6 +312,7 @@ curl http://localhost:9090/metrics
 ## Testing
 
 ### Run Specific Tests
+
 ```bash
 # Single test file
 zig test tests/test_parser.zig
@@ -304,6 +328,7 @@ make fuzz
 ```
 
 ### Benchmark Commands
+
 ```bash
 # Run all benchmarks
 make bench
@@ -318,11 +343,13 @@ bench_regress --baseline old.json --current new.json
 ## CANARY Markers
 
 ### Adding Evidence
+
 ```zig
 // CANARY: REQ=REQ-GQL-XXX; FEATURE="Feature Name"; ASPECT=Component; STATUS=TESTED; TEST=TestName; OWNER=team; UPDATED=2025-09-29
 ```
 
 ### Status Levels
+
 - `MISSING` - Not implemented
 - `STUB` - Placeholder only
 - `IMPL` - Implemented, needs test
@@ -330,6 +357,7 @@ bench_regress --baseline old.json --current new.json
 - `BENCHED` - Has benchmarks
 
 ### Validation
+
 ```bash
 # Generate status
 make status-generate

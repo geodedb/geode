@@ -34,10 +34,10 @@ run_test() {
     local test_command="$2"
     local expected_pattern="$3"
     local should_contain="${4:-true}"
-    
+
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     echo -n "  Testing $test_name... "
-    
+
     # Run the test command with timeout
     if output=$(timeout 10 bash -c "$test_command" 2>&1); then
         if [ "$should_contain" = "true" ]; then
@@ -96,7 +96,7 @@ run_test "Unit tests compilation" \
     "cd '$PROJECT_ROOT' && zig test tests/test_repl_formatting.zig" \
     "passed"
 
-# Test 2: Integration Tests  
+# Test 2: Integration Tests
 echo ""
 echo "2️⃣  Integration Tests"
 echo "====================="
@@ -134,21 +134,21 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     // Test JSON parsing like the REPL does
     const test_responses = [_][]const u8{
         "{\"columns\":[\"name\"],\"data\":[[\"Alice\"]]}",
         "{\"columns\":[\"id\",\"name\"],\"data\":[[1,\"Alice\"],[2,\"Bob\"]]}",
         "{\"status\":\"success\",\"message\":\"Query executed\"}",
     };
-    
+
     for (test_responses) |response| {
         const parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{}) catch {
             std.debug.print("Failed to parse: {s}\n", .{response});
             continue;
         };
         defer parsed.deinit();
-        
+
         const root = parsed.value.object;
         if (root.get("columns")) |_| {
             if (root.get("data")) |_| {
@@ -162,7 +162,7 @@ pub fn main() !void {
             std.debug.print("❌ Unknown response format\n", .{});
         }
     }
-    
+
     std.debug.print("✅ JSON parsing validation complete\n", .{});
 }
 EOF
@@ -187,7 +187,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     // Test error cases
     const error_cases = [_][]const u8{
         "{invalid json",
@@ -196,17 +196,17 @@ pub fn main() !void {
         "",                  // empty
         "null",              // null response
     };
-    
+
     for (error_cases) |response| {
         const parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{}) catch {
             std.debug.print("✅ Gracefully handled parse error\n", .{});
             continue;
         };
         defer parsed.deinit();
-        
+
         std.debug.print("✅ Parsed edge case successfully\n", .{});
     }
-    
+
     std.debug.print("✅ Error handling validation complete\n", .{});
 }
 EOF
@@ -231,23 +231,23 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     const start_time = std.time.milliTimestamp();
-    
+
     // Simulate multiple formatting operations
     const large_response = "{\"columns\":[\"id\",\"name\",\"value\"],\"data\":[[1,\"test1\",100],[2,\"test2\",200],[3,\"test3\",300],[4,\"test4\",400],[5,\"test5\",500]]}";
-    
+
     for (0..100) |_| {
         const parsed = std.json.parseFromSlice(std.json.Value, allocator, large_response, .{}) catch continue;
         defer parsed.deinit();
-        
+
         // Simulate processing
         const root = parsed.value.object;
         if (root.get("columns")) |columns_value| {
             if (root.get("data")) |data_value| {
                 _ = columns_value.array;
                 const rows = data_value.array;
-                
+
                 // Process columns and rows (lightweight simulation)
                 var total_cells: usize = 0;
                 for (rows.items) |row| {
@@ -258,12 +258,12 @@ pub fn main() !void {
             }
         }
     }
-    
+
     const end_time = std.time.milliTimestamp();
     const duration = end_time - start_time;
-    
+
     std.debug.print("✅ Performance test completed in {}ms\n", .{duration});
-    
+
     if (duration < 1000) { // Should complete in under 1 second
         std.debug.print("✅ Performance acceptable\n", .{});
     } else {

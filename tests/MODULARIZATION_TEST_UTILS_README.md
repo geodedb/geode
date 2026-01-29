@@ -34,6 +34,7 @@ test "example" {
 ```
 
 **Features**:
+
 - Automatic cleanup of resources
 - Temporary directory creation
 - Arena allocator for test-scoped allocations
@@ -62,6 +63,7 @@ test "memory tracking" {
 ```
 
 **Features**:
+
 - Tracks all allocations and frees
 - Detects memory leaks
 - Provides memory usage statistics
@@ -122,6 +124,7 @@ test "with dependency injection" {
 ```
 
 **Features**:
+
 - Type-safe dependency injection
 - Easy mocking for tests
 - Interface verification
@@ -148,6 +151,7 @@ test "with fixtures" {
 ```
 
 **Features**:
+
 - Key-value fixture storage
 - Automatic memory management
 - Easy setup/teardown
@@ -174,6 +178,7 @@ test "state verification" {
 ```
 
 **Features**:
+
 - Multiple check accumulation
 - Detailed failure messages
 - Visual output for debugging
@@ -191,6 +196,7 @@ fn testModuleXImpl(ctx: *mod_test.TestContext) !void {
 ```
 
 **Features**:
+
 - Automatic context setup/teardown
 - Named tests for better output
 - Cleaner test organization
@@ -283,18 +289,22 @@ zig test tests/modularization_test_util.zig --test-filter "TestContext"
 These utilities are designed to support the modularization phases:
 
 ### Phase 1: Extract Mixed Concerns
+
 - Use `TestContext` for isolated module testing
 - Use `DependencyInterface` to separate logic from I/O
 
 ### Phase 2-4: Decompose Large Modules
+
 - Use `TrackedAllocator` to detect memory leaks during refactoring
 - Use `StateVerifier` to ensure functionality preserved
 
 ### Phase 5: Resolve Circular Dependencies
+
 - Use `DependencyInterface` to break circular dependencies
 - Use mocks to test modules independently
 
 ### Phase 6-8: Final Refactoring
+
 - Use full suite for comprehensive module testing
 - Use `Fixture` for complex test scenarios
 
@@ -323,6 +333,7 @@ These utilities are designed to support the modularization phases:
 ## Examples
 
 See `modularization_sample_test.zig` for complete working examples of:
+
 - Module testing with TestContext
 - Dependency injection with real and mock implementations
 - Memory leak detection
@@ -332,6 +343,7 @@ See `modularization_sample_test.zig` for complete working examples of:
 ## Support
 
 For questions or issues with test utilities:
+
 - Check example tests in `modularization_sample_test.zig`
 - Review modularization plan in `docs/MODULARIZATION_PLAN.md`
 - See status in `docs/MODULARIZATION_STATUS.md`

@@ -85,16 +85,16 @@ test-queries:
 		echo "Error: Geode CLI not found at $(GEODE_CLI)"; \
 		exit 1; \
 	fi
-	
+
 	@echo ""
 	@echo "Testing DNS hierarchy queries..."
 	@echo "CALL create_domain('mail.google.com.');" | $(GEODE_CLI) query
 	@echo "MATCH (d:Domain WHERE d.name = 'mail.google.com.') RETURN d;" | $(GEODE_CLI) query
-	
+
 	@echo ""
 	@echo "Testing organization queries..."
 	@echo "MATCH (org:Organization WHERE org.acronym = 'IETF') RETURN org.name, org.founded;" | $(GEODE_CLI) query
-	
+
 	@echo ""
 	@echo "Testing entity queries..."
 	@echo "MATCH (e:Entity) RETURN count(e) AS entity_count;" | $(GEODE_CLI) query

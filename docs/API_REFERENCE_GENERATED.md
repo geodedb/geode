@@ -180,7 +180,6 @@ Collect values into a list
 RETURN collect(n.name)
 ```
 
-
 ### Mathematical Functions
 
 #### `abs(x: NUMERIC)` -> `NUMERIC`
@@ -351,7 +350,6 @@ Convert degrees to radians
 RETURN radians(180)
 ```
 
-
 ### String Functions
 
 #### `size(value: STRING|LIST)` -> `INTEGER`
@@ -474,7 +472,6 @@ Check if string contains substring
 RETURN contains('hello', 'ell')
 ```
 
-
 ### List Functions
 
 #### `head(list: LIST)` -> `ANY`
@@ -517,7 +514,6 @@ Create a list of integers
 RETURN range(1, 10)
 ```
 
-
 ### Temporal Functions
 
 #### `timestamp()` -> `INTEGER`
@@ -559,7 +555,6 @@ Create a duration
 ```gql
 RETURN duration('P1DT2H')
 ```
-
 
 ### Graph Functions
 
@@ -635,7 +630,6 @@ Number of outgoing edges from a node
 MATCH (n) RETURN n.name, outdegree(n)
 ```
 
-
 ### Path Functions
 
 #### `shortestPath(pattern: PATTERN)` -> `PATH`
@@ -653,7 +647,6 @@ Find all shortest paths
 ```gql
 MATCH p = allShortestPaths((a)-[*]-(b)) RETURN p
 ```
-
 
 ### Vector Functions
 
@@ -737,7 +730,6 @@ Manhattan (L1) distance between vectors
 RETURN manhattan(n.embedding, $query)
 ```
 
-
 ### Conversion Functions
 
 #### `toInteger(value: ANY)` -> `INTEGER`
@@ -771,7 +763,6 @@ Convert to boolean
 ```gql
 RETURN toBoolean('true')
 ```
-
 
 ### Predicate Functions
 
@@ -822,7 +813,6 @@ Return NULL if values are equal
 ```gql
 RETURN nullIf(n.status, 'inactive')
 ```
-
 
 ---
 
@@ -939,7 +929,6 @@ Compute grey cardinal composite centrality
 CALL algo.greyCardinal.stream() YIELD nodeId, composite
 ```
 
-
 ### Community Detection
 
 #### `CALL algo.louvain.stream()`
@@ -971,7 +960,6 @@ Detect communities using Leiden algorithm
 ```gql
 CALL algo.leiden.stream() YIELD nodeId, community
 ```
-
 
 ### Connectivity Analysis
 
@@ -1025,12 +1013,9 @@ Find biconnected components
 CALL algo.biconnectedComponents.stream() YIELD nodeId, componentId
 ```
 
-
 ### Path Finding
 
-
 ### Administrative
-
 
 ---
 

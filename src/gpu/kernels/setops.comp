@@ -35,7 +35,7 @@ uint hash(uint value, uint table_size) {
 
 void main() {
     uint idx = gl_GlobalInvocationID.x;
-    
+
     // UNION operation
     if (pc.operation == 0) {
         if (idx < pc.size_a) {
@@ -48,7 +48,7 @@ void main() {
             result[pos] = set_b[idx - pc.size_a];
         }
     }
-    
+
     // INTERSECT operation
     else if (pc.operation == 1) {
         if (idx < pc.size_a) {
@@ -63,7 +63,7 @@ void main() {
             }
         }
     }
-    
+
     // EXCEPT operation (A - B)
     else if (pc.operation == 2) {
         if (idx < pc.size_a) {

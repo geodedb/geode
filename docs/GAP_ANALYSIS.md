@@ -2,7 +2,7 @@
 
 **Last Updated**: January 26, 2026
 **Verified By**: Requirements-to-Unit-Test Gap Analysis Audit
-**GitLab Source of Truth**: https://gitlab.com/devnw/codepros/geode/geode/-/issues?label_name=gap
+**GitLab Source of Truth**: <https://gitlab.com/devnw/codepros/geode/geode/-/issues?label_name=gap>
 
 ## Summary
 
@@ -15,6 +15,7 @@
 ## Open Gaps
 
 ### GAP-0243: Performance optimization IMPL markers not updated to TESTED despite tests existing
+
 - **GitLab issue:** [#377](https://gitlab.com/devnw/codepros/geode/geode/-/issues/377)
 - **Category:** Test
 - **Severity:** Medium
@@ -34,6 +35,7 @@
 ---
 
 ### GAP-0244: Performance benchmarks not enforced in CI merge gates
+
 - **GitLab issue:** [#378](https://gitlab.com/devnw/codepros/geode/geode/-/issues/378)
 - **Category:** CI-CD
 - **Severity:** Medium
@@ -111,6 +113,7 @@ Note: 35 IMPL entries include 19 from recent performance optimizations (GAP-0243
 ## Test System Inventory
 
 ### Framework
+
 - **Language**: Zig 0.15.2
 - **Unit Tests**: Inline `test "..."` blocks in source files
 - **Integration Tests**: External test files in `tests/` directory
@@ -119,6 +122,7 @@ Note: 35 IMPL entries include 19 from recent performance optimizations (GAP-0243
 - **CI Runner**: GitLab CI with custom Zig Docker image
 
 ### Commands
+
 ```bash
 # Unit tests
 zig build test --summary all
@@ -138,4 +142,5 @@ python3 scripts/test/extended_test_runner.py gap_0242
 **Resolved gaps have been moved to [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).**
 
 Previous resolutions (January 25, 2026):
+
 - GAP-0225 through GAP-0242: All resolved with tests and GitLab issues closed

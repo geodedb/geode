@@ -85,6 +85,7 @@ The easiest way to get started:
 ### Method 2: Open in VSCode
 
 1. Install the Dev Containers extension:
+
    ```bash
    code --install-extension ms-vscode-remote.remote-containers
    ```
@@ -100,6 +101,7 @@ The easiest way to get started:
 ### Method 3: Open in Cursor
 
 1. Open the repository:
+
    ```bash
    cursor .
    ```
@@ -167,6 +169,7 @@ All AI assistants configured on your host machine work seamlessly inside the con
 #### Claude Desktop
 
 If running Claude Desktop on your host:
+
 1. Configs are automatically shared with the container
 2. API keys from `~/.anthropic` are mounted
 3. Use Cursor or VSCode extensions that integrate with Claude
@@ -198,15 +201,16 @@ zig build test                      # Unit tests
 
 Services are automatically forwarded to your host:
 
-- **Geode Server**: http://localhost:3141
-- **Vault UI**: http://localhost:8200
-- **MinIO Console**: http://localhost:9001
-- **MinIO API**: http://localhost:9000
+- **Geode Server**: <http://localhost:3141>
+- **Vault UI**: <http://localhost:8200>
+- **MinIO Console**: <http://localhost:9001>
+- **MinIO API**: <http://localhost:9000>
 - **Redis**: localhost:6379
-- **Prometheus**: http://localhost:9090 (if monitoring enabled)
-- **Grafana**: http://localhost:3000 (if monitoring enabled)
+- **Prometheus**: <http://localhost:9090> (if monitoring enabled)
+- **Grafana**: <http://localhost:3000> (if monitoring enabled)
 
 View and manage port forwarding:
+
 1. Press `Cmd/Ctrl + Shift + P`
 2. Select **"Ports: Focus on Ports View"**
 
@@ -217,12 +221,15 @@ View and manage port forwarding:
 **Issue**: Copilot/Claude/Cursor AI not functioning
 
 **Solution**:
+
 1. Ensure the assistant is configured on your **host** machine first
 2. Check the config directory exists: `ls ~/.config/<assistant-name>`
 3. Restart the container:
+
    ```bash
    docker-compose -f docker-compose.dev.yml restart geode-dev
    ```
+
 4. For Copilot, ensure you're signed in on the host
 
 ### Extensions Not Installing
@@ -230,6 +237,7 @@ View and manage port forwarding:
 **Issue**: Recommended extensions aren't installed
 
 **Solution**:
+
 1. Open Command Palette: `Cmd/Ctrl + Shift + P`
 2. Run: **"Dev Containers: Rebuild Container"**
 3. Wait for rebuild to complete (~10-15 minutes)
@@ -239,6 +247,7 @@ View and manage port forwarding:
 **Issue**: Dev container fails to start
 
 **Solution**:
+
 ```bash
 # Check Docker is running
 docker info
@@ -259,6 +268,7 @@ docker-compose -f docker-compose.dev.yml down
 **Issue**: Can't write to workspace or cache directories
 
 **Solution**:
+
 ```bash
 # Fix workspace permissions
 docker exec -u root geode-dev chown -R $USER:$USER /workspace
@@ -277,6 +287,7 @@ docker-compose -f docker-compose.dev.yml up -d --build
 **Issue**: AI assistant configs not accessible in container
 
 **Solution**:
+
 ```bash
 # Check if directories exist on host
 ls -la ~/.config/github-copilot
@@ -313,6 +324,7 @@ The Docker socket is mounted, allowing you to:
 - Test deployment configurations
 
 **Example**:
+
 ```bash
 # Inside the container
 docker ps                    # See host containers
@@ -360,6 +372,7 @@ docker-compose -f docker-compose.dev.yml up -d
 ### 1. Use Workspace Settings
 
 The `.vscode/settings.json` file contains project-specific settings:
+
 - Language-specific formatting
 - File associations
 - Build configurations
@@ -369,6 +382,7 @@ These settings apply to all team members using the dev container.
 ### 2. Sync Your Extensions
 
 Enable VSCode Settings Sync to maintain your personal extensions across machines:
+
 1. Sign in with GitHub/Microsoft account
 2. Settings Sync will include extensions not in the container
 3. Container extensions install automatically
@@ -376,6 +390,7 @@ Enable VSCode Settings Sync to maintain your personal extensions across machines
 ### 3. Customize Your Shell
 
 Add personal aliases to `~/.bashrc` inside the container:
+
 ```bash
 # Inside container
 echo 'alias myalias="my command"' >> ~/.bashrc
@@ -387,6 +402,7 @@ Note: These changes persist in the Docker volume.
 ### 4. Use Git from Host
 
 For complex Git operations, use your host terminal:
+
 - Host has your full Git configuration
 - Signing commits works out of the box
 - Git GUIs (GitKraken, Tower) see your changes
@@ -396,6 +412,7 @@ For simple operations, use the container terminal.
 ### 5. Monitor Resource Usage
 
 Keep an eye on Docker resource usage:
+
 ```bash
 # On host
 docker stats geode-dev

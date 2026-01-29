@@ -25,13 +25,13 @@ test_feature() {
     local cmd="$2"
     local expected="$3"
     local is_warning="${4:-false}"
-    
+
     echo -n "Testing $name... "
-    
+
     local output
     local exit_code=0
     output=$(timeout 3 bash -c "$cmd" 2>&1) || exit_code=$?
-    
+
     if echo "$output" | grep -qE "$expected"; then
         echo -e "${GREEN}PASS${NC}"
         ((PASSED++))

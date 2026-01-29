@@ -15,9 +15,9 @@ test_query() {
     local name="$1"
     local query="$2"
     local expected_pattern="$3"
-    
+
     echo -n "Testing $name... "
-    
+
     # Run query with timeout
     if result=$(timeout 10s $GEODE_CLI query "$query" --insecure 2>&1); then
         if echo "$result" | grep -q "$expected_pattern"; then
@@ -41,7 +41,7 @@ test_query() {
 test_query "toString with integer" "RETURN toString(123)" '"toString(123)":"123"'
 test_query "toString with string" "RETURN toString('hello')" '"hello"'
 
-# Test toInteger function  
+# Test toInteger function
 test_query "toInteger with string number" "RETURN toInteger('456')" '456'
 test_query "toInteger with integer" "RETURN toInteger(789)" '"toInteger(789)":789'
 

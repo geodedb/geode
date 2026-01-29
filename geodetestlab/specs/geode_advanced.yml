@@ -44,7 +44,7 @@ tests:
     args:
       - "query"
       - |
-        CREATE 
+        CREATE
           (alice:Person {name: 'Alice', age: 30, city: 'New York'}),
           (bob:Person {name: 'Bob', age: 25, city: 'San Francisco'}),
           (carol:Person {name: 'Carol', age: 35, city: 'London'}),
@@ -92,7 +92,7 @@ tests:
       - "query"
       - |
         MATCH (p:Person)-[r:WORKS_FOR]->(c:Company)
-        WITH c.name AS company, 
+        WITH c.name AS company,
              count(p) AS employee_count,
              avg(p.age) AS avg_age
         WHERE employee_count > 0
@@ -114,7 +114,7 @@ tests:
         MATCH (p:Person)-[r:WORKS_FOR]->(c:Company)
         WHERE r.since <= 2021
         WITH p, r, c, (2024 - r.since) AS years_employed
-        RETURN 
+        RETURN
           p.name AS employee,
           c.name AS company,
           r.since AS start_year,
@@ -134,7 +134,7 @@ tests:
         MATCH (p:Person) RETURN p.name AS name, 'Person' AS type
         UNION
         MATCH (c:Company) RETURN c.name AS name, 'Company' AS type
-        UNION  
+        UNION
         MATCH (pr:Product) RETURN pr.name AS name, 'Product' AS type
     expect:
       exit_code: 0
@@ -211,7 +211,7 @@ tests:
         RETURN temp
     expect:
       exit_code: 0
-    cleanup: 
+    cleanup:
       - "query --rollback"
     tags: ["transaction", "rollback"]
 
@@ -220,8 +220,8 @@ tests:
     args:
       - "query"
       - |
-        EXPLAIN MATCH (p:Person) 
-        WHERE p.name = 'Alice' 
+        EXPLAIN MATCH (p:Person)
+        WHERE p.name = 'Alice'
         RETURN p
     expect:
       exit_code: 0

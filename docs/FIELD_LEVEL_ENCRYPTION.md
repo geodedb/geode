@@ -31,6 +31,7 @@ Master Key (ENV or KMS)
 ```
 
 **Derivation:** HKDF-SHA256 with context strings:
+
 - TRK: `"geode/trk/{tenant_id}"`
 - SK: `"geode/sk/{schema}"`
 - FEK: `"geode/fek/{field}"`
@@ -39,13 +40,16 @@ Master Key (ENV or KMS)
 ### 2. AEAD Encryption
 
 **Algorithms:**
+
 - **AES-256-GCM**: Default on AES-NI/ARM-CE hardware (NIST SP 800-38D)
 - **ChaCha20-Poly1305**: Fallback for non-AES platforms; constant-time
 
 **Additional Authenticated Data (AAD):**
+
 ```
 tenant_id␟schema␟field␟record_id␟key_version
 ```
+
 (␟ = 0x1F separator)
 
 This cryptographically binds ciphertext to its context, preventing cross-record/field attacks.
@@ -53,6 +57,7 @@ This cryptographically binds ciphertext to its context, preventing cross-record/
 ### 3. Envelope Format (V1)
 
 Binary serialization (little-endian):
+
 ```
 [alg_id:u8][key_version:u16][nonce:12][tag:16][ciphertext_len:u32][ciphertext]
 ```
@@ -176,6 +181,7 @@ src/exec/
 **Location:** `src/storage/graph_store.zig:setNodeProperty()` and `setEdgeProperty()`
 
 **Flow:**
+
 1. Check if field is `@encrypted` via schema catalog
 2. Get FEK from KeyManager for `(tenant, schema, field, version)`
 3. Construct AAD: `tenant␟schema␟field␟record_id␟version`
@@ -188,6 +194,7 @@ src/exec/
 **Location:** `src/execution.zig:writeValue()` for Node/Edge properties
 
 **Flow:**
+
 1. Detect encrypted field via schema catalog
 2. If user has `READ_PLAINTEXT(field)` privilege:
    - Parse envelope
@@ -201,6 +208,7 @@ src/exec/
 **Location:** `src/planner/rewrite.zig` (called before execution)
 
 **Flow:**
+
 1. For `WHERE p.field = "literal"` on encrypted field:
    - If field not `@searchable`: **error SearchNotPermitted**
    - If user lacks `READ_PLAINTEXT(field)`: **error SearchNotPermitted**
@@ -215,12 +223,14 @@ src/exec/
 1. **Create vN+1:** `KeyManager.rotateFEK(tenant, schema, field)`
 2. **New writes:** Use vN+1
 3. **Background migration:**
+
    ```zig
    for record in all_records:
      pt = decrypt(record.value, FEK_vN, AAD_vN)
      env = encrypt(pt, FEK_vN+1, AAD_vN+1)
      record.value = env
    ```
+
 4. **Mixed-version reads:** KeyManager supports both vN and vN+1 simultaneously
 5. **Opportunistic re-encrypt:** On read, if vN detected, re-encrypt to vN+1
 
@@ -243,6 +253,7 @@ src/exec/
 ### Enforcement
 
 **Projection:**
+
 ```zig
 if (!rbac.canReadPlaintext(user, schema, field)) {
     return "[REDACTED]"; // or ciphertext blob
@@ -250,6 +261,7 @@ if (!rbac.canReadPlaintext(user, schema, field)) {
 ```
 
 **Filters:**
+
 ```zig
 if (field.encrypted && !field.searchable) {
     return error.SearchNotPermitted;
@@ -260,6 +272,7 @@ if (field.encrypted && !rbac.canReadPlaintext(user, schema, field)) {
 ```
 
 **CLI Grants:**
+
 ```bash
 GRANT READ_PLAINTEXT ON Person.ssn TO ROLE pii_reader;
 REVOKE READ_PLAINTEXT ON Person.ssn FROM ROLE analyst;
@@ -297,6 +310,7 @@ stats = KeyManager.cacheStats();
 ### Threat Model
 
 **Protected Against:**
+
 - ✅ At-rest data compromise (without keys)
 - ✅ Ciphertext tampering (authenticated encryption)
 - ✅ Cross-record/field ciphertext swapping (AAD binding)
@@ -304,6 +318,7 @@ stats = KeyManager.cacheStats();
 - ✅ Unauthorized plaintext access (RBAC gates)
 
 **Not Protected Against:**
+
 - ❌ Compromise of master/TRK keys
 - ❌ Frequency analysis via blind indexes (document risk)
 - ❌ Access pattern leakage (timing/volume)
@@ -313,21 +328,25 @@ stats = KeyManager.cacheStats();
 ### Mitigations
 
 **Nonce reuse prevention:**
+
 - Random 96-bit nonces via `std.crypto.random`
 - Deterministic nonces only in tests
 
 **Secure memory cleanup:**
+
 ```zig
 defer std.crypto.secureZero(u8, &fek);
 defer std.crypto.secureZero(u8, plaintext);
 ```
 
 **Logging:**
+
 - Never log plaintext or keys
 - Audit by key IDs and operation counts
 - Redact all sensitive values
 
 **Limits:**
+
 - Max plaintext: 64 KiB (configurable)
 - AEAD usage limits enforced (track operations per key)
 
@@ -338,6 +357,7 @@ defer std.crypto.secureZero(u8, plaintext);
 ### Unit Tests
 
 Located in module files:
+
 - `src/crypto/aead.zig:test` - Round-trip, bad AAD, envelope serialization
 - `src/crypto/hmac.zig:test` - RFC 4231 vector (Jefe), normalization
 - `src/crypto/hkdf.zig:test` - Key hierarchy derivation
@@ -349,6 +369,7 @@ Run: `zig build test -Doptimize=ReleaseSafe`
 ### Integration Tests
 
 GeodeTestLab specs in `geodetestlab/specs/encryption/`:
+
 - `encryption_basic.yml` - Encrypt-on-write, decrypt-on-projection, RBAC
 - `encryption_blind_index.yml` - Equality search via BI
 - `encryption_rotation.yml` - Online FEK rotation
@@ -372,6 +393,7 @@ Run: `python3 extended_test_runner.py`
 ### Process
 
 1. **ALTER schema** to add `@encrypted` annotation:
+
    ```gql
    ALTER NODE TYPE Person ALTER PROPERTY ssn
      SET @encrypted(alg:"AES-256-GCM") @classify(tags:["PII"]);
@@ -380,9 +402,11 @@ Run: `python3 extended_test_runner.py`
 2. **New writes:** Immediately encrypted
 
 3. **Backfill existing data:**
+
    ```bash
    geode migrate encrypt --tenant default --field Person.ssn --batch 1000
    ```
+
    - Iterates records in batches
    - Encrypts plaintext → envelope
    - Resumable on failure

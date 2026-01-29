@@ -20,7 +20,7 @@ tests:
   # ===============================
   # ARITHMETIC EXPRESSIONS
   # ===============================
-  
+
   - name: "arithmetic-addition"
     description: "Test arithmetic addition expression"
     args: ["query", "RETURN 5 + 3 AS result"]
@@ -141,7 +141,7 @@ tests:
   # ===============================
   # LOGICAL EXPRESSIONS
   # ===============================
-  
+
   - name: "logical-and-true"
     description: "Test logical AND with true operands"
     args: ["query", "RETURN true AND true AS result"]
@@ -236,7 +236,7 @@ tests:
   # ===============================
   # COMPARISON EXPRESSIONS
   # ===============================
-  
+
   - name: "comparison-equals"
     description: "Test equality comparison"
     args: ["query", "RETURN 5 = 5 AS result"]
@@ -331,7 +331,7 @@ tests:
   # ===============================
   # NULL HANDLING EXPRESSIONS
   # ===============================
-  
+
   - name: "null-is-null"
     description: "Test IS NULL expression"
     args: ["query", "RETURN null IS NULL AS result"]
@@ -387,7 +387,7 @@ tests:
   # ===============================
   # STRING EXPRESSIONS
   # ===============================
-  
+
   - name: "string-concatenation"
     description: "Test string concatenation expression"
     args: ["query", "RETURN 'Hello' || ' ' || 'World' AS result"]
@@ -456,7 +456,7 @@ tests:
   # ===============================
   # SET MEMBERSHIP EXPRESSIONS
   # ===============================
-  
+
   - name: "in-list-true"
     description: "Test IN expression with matching value"
     args: ["query", "RETURN 3 IN [1, 2, 3, 4, 5] AS result"]
@@ -499,7 +499,7 @@ tests:
   # ===============================
   # BUILT-IN FUNCTIONS
   # ===============================
-  
+
   - name: "function-length"
     description: "Test length() function"
     args: ["query", "RETURN length('Hello') AS result"]
@@ -594,7 +594,7 @@ tests:
   # ===============================
   # AGGREGATION FUNCTIONS
   # ===============================
-  
+
   - name: "aggregation-count-star"
     description: "Test count(*) aggregation function"
     setup:
@@ -700,7 +700,7 @@ tests:
   # ===============================
   # CASE EXPRESSIONS
   # ===============================
-  
+
   - name: "case-simple"
     description: "Test simple CASE expression"
     args:
@@ -764,7 +764,7 @@ tests:
   # ===============================
   # COMPLEX EXPRESSIONS
   # ===============================
-  
+
   - name: "complex-nested-arithmetic"
     description: "Test complex nested arithmetic expression"
     args: ["query", "RETURN ((5 + 3) * 2) - (10 / 2) AS result"]
@@ -820,7 +820,7 @@ tests:
   # ===============================
   # PROPERTY ACCESS EXPRESSIONS
   # ===============================
-  
+
   - name: "property-access-basic"
     description: "Test basic property access expression"
     setup:
@@ -862,7 +862,7 @@ tests:
   # ===============================
   # ERROR SCENARIOS
   # ===============================
-  
+
   - name: "arithmetic-division-by-zero"
     description: "Test division by zero error handling (Geode returns error in response, exit code 0)"
     args: ["query", "RETURN 5 / 0 AS result"]
@@ -890,13 +890,13 @@ tests:
   # ===============================
   # CLEANUP
   # ===============================
-  
+
   - name: "cleanup-expression-test-data"
     description: "Clean up all test data created during expression tests"
     args:
       - "query"
       - |
-        MATCH (n) WHERE 
+        MATCH (n) WHERE
           n:CountTest OR n:CountPropTest OR n:SumTest OR n:AvgTest OR
           n:MinTest OR n:MaxTest OR n:PropTest OR n:PropArithTest
         DETACH DELETE n

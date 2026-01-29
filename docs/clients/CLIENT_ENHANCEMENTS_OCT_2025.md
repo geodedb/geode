@@ -38,18 +38,21 @@ This document summarizes the enhancements made to all three official Geode clien
 #### New Features
 
 **Savepoint Support** (`geode_client/client.py`)
+
 - Added `Savepoint` dataclass to represent transaction savepoints
 - Added `Connection.savepoint(name: str) -> Savepoint` method
 - Added `Connection.rollback_to(savepoint: Savepoint) -> None` method
 - Updated `__init__.py` to export `Savepoint` class
 
 **Connection Management**
+
 - Existing connection pooling enhanced with proper async lifecycle
 - Pool properly manages savepoint-aware connections
 
 #### Examples Added
 
 **`examples/transactions_example.py`** - Comprehensive transaction demonstrations:
+
 - Basic transaction usage (BEGIN, COMMIT, ROLLBACK)
 - Savepoint creation and partial rollback
 - Nested savepoints for complex transaction logic
@@ -57,6 +60,7 @@ This document summarizes the enhancements made to all three official Geode clien
 - Error handling with savepoint recovery
 
 **Example Usage:**
+
 ```python
 from geode_client import Client
 
@@ -99,16 +103,19 @@ async with client.connection() as conn:
 #### New Features
 
 **Savepoint Support** (`src/client.rs`)
+
 - Added `Savepoint` struct with `name` field
 - Added `Connection::savepoint(&mut self, name: &str) -> Result<Savepoint>` method
 - Added `Connection::rollback_to(&mut self, savepoint: &Savepoint) -> Result<()>` method
 
 **Pool Enhancements** (`src/pool.rs`)
+
 - Added `DerefMut` trait implementation for `PooledConnection`
 - Allows mutable operations (begin, commit, savepoint, etc.) on pooled connections
 - Improved async pool lifecycle management with tokio
 
 **Example Usage:**
+
 ```rust
 let mut conn = client.connect()?;
 
@@ -129,6 +136,7 @@ conn.commit()?;
 #### Examples Added
 
 **`examples/transactions.rs`** - Comprehensive transaction demonstrations:
+
 - Basic transaction management
 - Savepoint creation and rollback
 - Nested savepoints (multi-level rollback)
@@ -136,6 +144,7 @@ conn.commit()?;
 - Error handling with savepoint recovery
 
 **Build Configuration:**
+
 - Updated `Cargo.toml` to include transactions example
 
 #### Documentation
@@ -160,11 +169,13 @@ conn.commit()?;
 #### Existing Features (Already Implemented)
 
 **Savepoint Support** (`txn_emulation.go`)
+
 - `Savepoint` type with name field
 - `Conn.Savepoint(ctx, name) (*Savepoint, error)` method
 - `Conn.RollbackTo(ctx, *Savepoint) error` method
 
 **Connection Pooling** (`pool.go`)
+
 - Comprehensive connection pool with:
   - Configurable max connections
   - Idle timeout support
@@ -172,6 +183,7 @@ conn.commit()?;
   - Thread-safe acquire/release
 
 **Example Usage:**
+
 ```go
 conn, _ := db.Connect(ctx)
 
@@ -192,6 +204,7 @@ conn.Commit(ctx)
 #### Examples Added
 
 **`examples/transactions/main.go`** - Comprehensive transaction demonstrations:
+
 - Basic transaction workflow
 - Savepoint creation and usage
 - Nested savepoints (3 levels demonstrated)
@@ -246,6 +259,7 @@ All three clients now properly integrate with the recently added connection mana
 ### Example Programs
 
 All clients now include comprehensive transaction examples that demonstrate:
+
 - Basic transaction lifecycle
 - Savepoint creation and rollback
 - Nested savepoints (multi-level undo)
@@ -255,18 +269,21 @@ All clients now include comprehensive transaction examples that demonstrate:
 ### How to Run Examples
 
 **Python:**
+
 ```bash
 cd clients/python
 python examples/transactions_example.py
 ```
 
 **Rust:**
+
 ```bash
 cd clients/rust
 cargo run --example transactions
 ```
 
 **Go:**
+
 ```bash
 cd clients/go/gql
 go run examples/transactions/main.go
@@ -275,11 +292,13 @@ go run examples/transactions/main.go
 ### Integration with geodetestlab
 
 The client libraries are tested through:
+
 - Unit tests in each client codebase
 - Integration tests in `clients/test-harness/`
 - End-to-end tests in `geodetestlab/`
 
 Current test coverage:
+
 - Python: Full async transaction tests
 - Rust: Sync and async pool tests
 - Go: Concurrent transaction tests
@@ -291,18 +310,21 @@ Current test coverage:
 All three clients now provide consistent APIs for transaction management:
 
 ### Python
+
 ```python
 sp = await conn.savepoint("name")
 await conn.rollback_to(sp)
 ```
 
 ### Rust
+
 ```rust
 let sp = conn.savepoint("name")?;
 conn.rollback_to(&sp)?;
 ```
 
 ### Go
+
 ```go
 sp, _ := conn.Savepoint(ctx, "name")
 conn.RollbackTo(ctx, sp)
@@ -323,6 +345,7 @@ conn.RollbackTo(ctx, sp)
 ### Adopting Savepoints
 
 **Before (traditional transactions):**
+
 ```python
 await conn.begin()
 try:
@@ -334,6 +357,7 @@ except:
 ```
 
 **After (with savepoints):**
+
 ```python
 await conn.begin()
 await conn.query("CREATE (a:Person {name: 'Alice'})")
@@ -361,6 +385,7 @@ except:
 ### Connection Pool Benefits
 
 With connection management integration:
+
 - **30-50% higher throughput** for concurrent workloads
 - **Reduced latency variance** due to fair scheduling
 - **Better resource utilization** with connection sharding

@@ -660,8 +660,8 @@ $ yubikey-agent -setup
 🔐 The PIN is up to 8 numbers, letters, or symbols. Not just numbers!
 ❌ The key will be lost if the PIN and PUK are locked after 3 incorrect tries.
 
-Choose a new PIN/PUK: 
-Repeat the PIN/PUK: 
+Choose a new PIN/PUK:
+Repeat the PIN/PUK:
 
 🧪 Retriculating splines …
 
@@ -776,7 +776,7 @@ Here's a list of commonly used options:
 - `-h`, `--help`: Help.
   This should only mean help.
   See the [help](#help) section.
-- `-n`, `--dry-run`: Dry run. 
+- `-n`, `--dry-run`: Dry run.
   Do not run the command, but describe the changes that would occur if the command were run. For example, `rsync`, `git add`.
 - `--no-input`: See the [interactivity](#interactivity) section.
 - `-o`, `--output`: Output file.
@@ -892,7 +892,7 @@ If you have several tools that are very closely related, you can make them easie
 They’re useful for sharing stuff—global flags, help text, configuration, storage mechanisms.
 
 **Be consistent across subcommands.**
-Use the same flag names for the same things, have similar output formatting, etc. 
+Use the same flag names for the same things, have similar output formatting, etc.
 
 **Use consistent names for multiple levels of subcommand.**
 If a complex piece of software has lots of objects and operations that can be performed on those objects, it is a common pattern to use two levels of subcommand for this, where one is a noun and one is a verb.
@@ -944,14 +944,14 @@ For example, `docker pull`’s multiple progress bars offer crucial insight into
 $ docker image pull ruby
 Using default tag: latest
 latest: Pulling from library/ruby
-6c33745f49b4: Pull complete 
+6c33745f49b4: Pull complete
 ef072fc32a84: Extracting [================================================>  ]  7.569MB/7.812MB
-c0afb8e68e0b: Download complete 
-d599c07d28e6: Download complete 
+c0afb8e68e0b: Download complete
+d599c07d28e6: Download complete
 f2ecc74db11a: Downloading [=======================>                           ]  89.11MB/192.3MB
-3568445c8bf2: Download complete 
+3568445c8bf2: Download complete
 b0efebc74f25: Downloading [===========================================>       ]  19.88MB/22.88MB
-9cb1ba6838a0: Download complete 
+9cb1ba6838a0: Download complete
 ```
 
 One thing to be aware of: hiding logs behind progress bars when things go _well_ makes it much easier for the user to understand what’s going on, but if there is an error, make sure you print out the logs.

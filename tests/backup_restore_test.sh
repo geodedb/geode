@@ -32,14 +32,14 @@ test_backup() {
     local name="$1"
     local cmd="$2"
     local expected="$3"
-    
+
     echo -n "Testing $name... "
-    
+
     local output
     local exit_code=0
-    
+
     output=$(timeout 30 eval "$cmd" 2>&1) || exit_code=$?
-    
+
     if [ $exit_code -eq 0 ] && echo "$output" | grep -qE "$expected"; then
         echo -e "${GREEN}PASS${NC}"
         ((PASSED++))

@@ -8,12 +8,12 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     // Read fuzzer input from stdin
     const stdin = std.io.getStdIn().reader();
     const input = try stdin.readAllAlloc(allocator, 1024 * 1024); // 1MB max
     defer allocator.free(input);
-    
+
     // Run the fuzzer
     fuzzParser(allocator, input) catch |err| {
         // Expected errors from malformed input
@@ -40,7 +40,7 @@ fn fuzzParser(allocator: std.mem.Allocator, input: []const u8) !void {
         => return, // Expected
         else => return err,
     };
-    
+
     // Test 2: Parse with different options
     const options = [_]geode.ParseOptions{
         .{}, // Default
@@ -51,25 +51,25 @@ fn fuzzParser(allocator: std.mem.Allocator, input: []const u8) !void {
         .{ .ts_extensions = true },
         .{ .strict_order_keys = true, .ident_order_only = true },
     };
-    
+
     for (options) |opt| {
         var result = geode.parse(allocator, input, opt) catch continue;
         defer result.deinit();
-        
+
         // Try to use the parsed result
         if (result.program.statements.len > 0) {
             const stmt = result.program.statements[0];
             testStatement(allocator, stmt) catch continue;
         }
     }
-    
+
     // Test 3: Stress test with repeated parsing
     var i: usize = 0;
     while (i < 10) : (i += 1) {
         var result = geode.parse(allocator, input, .{}) catch break;
         defer result.deinit();
     }
-    
+
     // Test 4: Parse fragments and combinations
     testFragments(allocator, input) catch {};
 }
@@ -92,7 +92,7 @@ fn testStatement(allocator: std.mem.Allocator, stmt: geode.ast.Statement) !void 
                     _ = hop.left.name;
                     _ = hop.right.name;
                     _ = hop.rel.name;
-                    
+
                     // Test variable-length paths
                     if (hop.rel.min_len) |min| {
                         if (min > 1000000) return error.InvalidRange;
@@ -179,21 +179,21 @@ fn testFragments(allocator: std.mem.Allocator, input: []const u8) !void {
         "BACKUP TO ",
         "RESTORE FROM ",
     };
-    
+
     for (fragments) |prefix| {
         // Test prefix + input
         const combined = try std.fmt.allocPrint(allocator, "{s}{s}", .{ prefix, input });
         defer allocator.free(combined);
-        
+
         _ = geode.parse(allocator, combined, .{}) catch continue;
-        
+
         // Test input + suffix
         const suffixed = try std.fmt.allocPrint(allocator, "{s} {s}", .{ input, prefix });
         defer allocator.free(suffixed);
-        
+
         _ = geode.parse(allocator, suffixed, .{}) catch continue;
     }
-    
+
     // Test nested structures
     testNestedStructures(allocator, input) catch {};
 }
@@ -203,16 +203,16 @@ fn testNestedStructures(allocator: std.mem.Allocator, input: []const u8) !void {
     const nested_parens = try buildNested(allocator, "(", input, ")", 10);
     defer allocator.free(nested_parens);
     _ = geode.parse(allocator, nested_parens, .{}) catch {};
-    
+
     // Test deeply nested function calls
     const nested_calls = try buildNested(allocator, "func(", input, ")", 10);
     defer allocator.free(nested_calls);
     _ = geode.parse(allocator, nested_calls, .{}) catch {};
-    
+
     // Test complex UNION chains
     var union_chain = try std.fmt.allocPrint(allocator, "RETURN 1", .{});
     defer allocator.free(union_chain);
-    
+
     var i: usize = 0;
     while (i < 10) : (i += 1) {
         const new_chain = try std.fmt.allocPrint(allocator, "{s} UNION RETURN {d}", .{ union_chain, i });
@@ -226,7 +226,7 @@ fn buildNested(allocator: std.mem.Allocator, prefix: []const u8, content: []cons
     if (depth == 0) {
         return try allocator.dupe(u8, content);
     }
-    
+
     var result = content;
     var i: usize = 0;
     while (i < depth) : (i += 1) {
@@ -246,27 +246,27 @@ fn testEdgeCases(allocator: std.mem.Allocator) !void {
         "\n",
         "\t",
         "\r\n",
-        
+
         // Special characters
         "MATCH (n) WHERE n.prop = '\\0'",
         "MATCH (n) WHERE n.prop = '\\'",
         "MATCH (n) WHERE n.prop = '\"'",
-        
+
         // Unicode
         "MATCH (n) WHERE n.名前 = '値'",
         "MATCH (n) WHERE n.prop = '🦀'",
         "MATCH (n) WHERE n.prop = '\\u{1F980}'",
-        
+
         // Large numbers
         "RETURN 999999999999999999999999999999",
         "RETURN -999999999999999999999999999999",
         "RETURN 1.23456789012345678901234567890",
-        
+
         // Complex patterns
         "MATCH (a)-[*0..]->(b)",
         "MATCH (a)-[*999999]->(b)",
         "MATCH (a)-[*1..999999]->(b)",
-        
+
         // Malformed queries
         "MATCH (",
         "MATCH (n",
@@ -276,23 +276,23 @@ fn testEdgeCases(allocator: std.mem.Allocator) !void {
         "MATCH (n) WHERE",
         "MATCH (n) ORDER BY",
         "MATCH (n) LIMIT",
-        
+
         // SQL injection attempts
         "MATCH (n) WHERE n.prop = ''; DROP TABLE nodes; --'",
         "MATCH (n) WHERE n.prop = '\\'; DROP TABLE nodes; --'",
-        
+
         // Buffer overflow attempts
         "MATCH (n) WHERE n.prop = '" ++ ("A" ** 10000) ++ "'",
-        
+
         // Nested structures
         "MATCH ((((((((((n))))))))))",
         "RETURN [[[[[[[[[[1]]]]]]]]]]",
-        
+
         // Reserved words as identifiers
         "MATCH (MATCH) RETURN RETURN",
         "MATCH (WHERE) WHERE WHERE.WHERE = WHERE",
     };
-    
+
     for (edge_cases) |case| {
         _ = geode.parse(allocator, case, .{}) catch continue;
     }

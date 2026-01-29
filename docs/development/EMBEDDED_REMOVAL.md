@@ -18,6 +18,7 @@ This document outlines the plan to remove all `--embedded` features from the Geo
 **Files:** `src/cli/main.zig`
 
 **Changes Required:**
+
 - Remove `--embedded` argument parsing (~line 227-228, 250-251, 282-283, 2482-2493)
 - Remove `--embedded-data-dir` argument parsing (~line 2484-2490)
 - Remove `embedded` field from `ClientConfig` struct (~line 282-283)
@@ -27,22 +28,26 @@ This document outlines the plan to remove all `--embedded` features from the Geo
 - Update help text to remove embedded examples
 
 **Behavior Change:**
+
 - `geode query` will require `--server` flag or default to `localhost:3141`
 - Remove fallback to embedded mode
 
 ### 2. Test Runner Scripts (`scripts/test/`)
 
 **Files:**
+
 - `scripts/test/extended_test_runner.py` - Primary test runner
 - `scripts/test/parallel_test_runner.py` - Parallel test runner
 
 **Changes Required in `extended_test_runner.py`:**
+
 - Remove all `--embedded` injection logic (lines 230-243, 246-254, 316-343, 399-421)
 - Make server mode the default/only mode
 - Tests must start a server before running or connect to existing one
 - Add server lifecycle management (start before tests, stop after)
 
 **Changes Required in `parallel_test_runner.py`:**
+
 - Remove embedded scenario from `default_scenario_configs()` (lines 225-230)
 - Remove `Scenario.client_mode == "embedded"` handling throughout
 - Remove `--embedded` stripping from `process_args()` (lines 391-393)
@@ -52,11 +57,13 @@ This document outlines the plan to remove all `--embedded` features from the Geo
 ### 3. Geodetestlab Test Specifications (`geodetestlab/specs/`)
 
 **Files with `--embedded` references:**
+
 - `geodetestlab/specs/geode_session_storage.yml`
 - `geodetestlab/specs/gql_session_management_comprehensive.yml`
 - `geodetestlab/specs/geode_keyword_fixes.yml`
 
 **Changes Required:**
+
 - Remove all explicit `--embedded` arguments from test args
 - Update test configs to use server mode
 - Add server configuration to specs that need it
@@ -65,9 +72,11 @@ This document outlines the plan to remove all `--embedded` features from the Geo
 ### 4. Geodetestlab Framework (`geodetestlab/geodetestlab/`)
 
 **Files:**
+
 - `geodetestlab/geodetestlab/server/simple_manager.py`
 
 **Changes Required:**
+
 - Remove `_use_embedded` flag and all associated logic
 - Simplify to always manage a real server
 - Remove embedded fallback paths
@@ -75,16 +84,19 @@ This document outlines the plan to remove all `--embedded` features from the Geo
 ### 5. Fixture Scripts (`geodetestlab/fixtures/`)
 
 **Files:**
+
 - `geodetestlab/fixtures/setup_basic_social_network.sh`
 - `geodetestlab/fixtures/setup_social_network.sh`
 
 **Changes Required:**
+
 - Remove `--embedded` flags from all `geode query` invocations
 - Update to connect to server (will need server address passed in or use default)
 
 ### 6. Documentation Updates
 
 **Files:**
+
 - `CLAUDE.md` - Update `--insecure` references to reflect TLS-only usage
 - `geodetestlab/README.md` - Update scenario documentation
 - `.claude/agents/integration-test-generator.md` - Update examples to use `--server` and keep `--insecure` only when TLS validation is bypassed
@@ -92,6 +104,7 @@ This document outlines the plan to remove all `--embedded` features from the Geo
 ### 7. Shell Scripts (`scripts/`)
 
 **Files to review for embedded-mode assumptions:**
+
 - `scripts/focused_db_test.sh`
 - `scripts/database_integration_test.sh`
 - `scripts/comprehensive_graph_test.sh`
@@ -101,6 +114,7 @@ This document outlines the plan to remove all `--embedded` features from the Geo
 - `tools/update_tests_unified_cli.sh`
 
 **Changes Required:**
+
 - Ensure scripts start a server or pass `--server` explicitly for query operations
 - Keep `--insecure` only when TLS validation must be bypassed
 - Consider deprecating legacy test scripts that duplicate geodetestlab functionality
@@ -108,24 +122,29 @@ This document outlines the plan to remove all `--embedded` features from the Geo
 ### 8. Docker Files
 
 **Files:**
+
 - `Dockerfile.ci`
 - `Dockerfile.ci.alpine`
 
 **Changes Required:**
+
 - Update health check commands to use proper server connection
 - Keep `--insecure` only when TLS validation must be bypassed
 
 ### 9. CI/CD
 
 **Files:**
+
 - `.github/workflows/release.yml`
 
 **Changes Required:**
+
 - Update any `--insecure` usages to include `--server` and use TLS bypass only when required
 
 ### 10. Other Zig Files
 
 **Files:**
+
 - `tests/test_unified_cli.zig`
 - `tests/test_cli_integration.zig`
 - `tests/test_cli_subprocess_elimination_unit_simple.zig`
@@ -134,12 +153,14 @@ This document outlines the plan to remove all `--embedded` features from the Geo
 - `src/client/main.zig`
 
 **Changes Required:**
+
 - Search for and remove any embedded-mode handling
 - Update tests to use server mode
 
 ## Implementation Order
 
 ### Phase 1: Core CLI Changes (MUST DO FIRST)
+
 1. Update `src/cli/main.zig`:
    - Remove `--embedded` and `--embedded-data-dir` argument parsing
    - Remove `executeEmbeddedQuery` function and related code
@@ -147,6 +168,7 @@ This document outlines the plan to remove all `--embedded` features from the Geo
    - Keep graceful error message when server not available
 
 ### Phase 2: Test Infrastructure
+
 1. Update `scripts/test/parallel_test_runner.py`:
    - Remove embedded scenario
    - Update to server-only mode
@@ -155,15 +177,18 @@ This document outlines the plan to remove all `--embedded` features from the Geo
    - Add server management or require external server
 
 ### Phase 3: Geodetestlab Specs
+
 1. Update all `.yml` files in `geodetestlab/specs/`:
    - Remove `--embedded` from all test args
    - Ensure proper server configuration
 
 ### Phase 4: Fixture Scripts and Legacy Scripts
+
 1. Update fixture scripts
 2. Update or remove legacy shell scripts
 
 ### Phase 5: Documentation and CI
+
 1. Update documentation
 2. Update Docker files
 3. Update CI workflows
@@ -171,6 +196,7 @@ This document outlines the plan to remove all `--embedded` features from the Geo
 ## Testing the Changes
 
 After each phase:
+
 1. Build: `make build`
 2. Run tests: `python3 scripts/test/parallel_test_runner.py`
 3. Verify no embedded references remain: `grep -r "embedded" geodetestlab/`
@@ -178,6 +204,7 @@ After each phase:
 ## Rollback Plan
 
 If issues arise:
+
 1. Git revert the changes
 2. Investigate the failures
 3. Address root cause before re-attempting

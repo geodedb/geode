@@ -36,6 +36,10 @@ env:
   GEODE_FLE_ENABLED: "true"
   GEODE_MASTER_KEY: "fle-key-rotation-master-32bytes!!"
 
+# Skip isolation suffix for FLE tests - the CALL geode.fle.configureField
+# must match the exact label names used in CREATE statements
+skip_isolation: true
+
 tests:
   # ===============================
   # PHASE 1: CONFIGURE FLE WITH KEY VERSION 1

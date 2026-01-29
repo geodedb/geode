@@ -13,13 +13,14 @@ Geode implements **100% compliance** with the ISO/IEC 39075:2024 Graph Query Lan
 ## ✅ Fully Supported Features
 
 ### Core Keywords (105+ supported)
+
 All ISO GQL reserved keywords are recognized and functional:
 
 ```gql
 -- Query keywords
 MATCH, OPTIONAL, WHERE, RETURN, WITH, ORDER, BY, LIMIT, OFFSET, DISTINCT
 
--- Data manipulation 
+-- Data manipulation
 CREATE, DELETE, DETACH, SET, REMOVE, MERGE, ON, MATCH
 
 -- Aggregation
@@ -107,6 +108,7 @@ RETURN x IS NULL
 ### Built-in Functions
 
 #### Aggregation Functions
+
 ```gql
 RETURN COUNT(*), COUNT(DISTINCT n.id)
 RETURN SUM(n.value), AVG(n.age)
@@ -114,6 +116,7 @@ RETURN MIN(n.score), MAX(n.score)
 ```
 
 #### String Functions
+
 ```gql
 RETURN length('hello'), upper('world'), lower('HELLO')
 RETURN substring('hello', 1, 3), replace('hello world', 'world', 'universe')
@@ -121,24 +124,28 @@ RETURN trim(' text '), reverse('hello'), split('a,b,c', ',')
 ```
 
 #### Math Functions
+
 ```gql
 RETURN abs(-5), sqrt(16), ceil(3.2), floor(3.8), round(3.5)
 RETURN sign(-5), log(10), exp(2), rand()
 ```
 
 #### List Functions
+
 ```gql
 RETURN size([1,2,3]), head([1,2,3]), tail([1,2,3]), last([1,2,3])
 RETURN range(1, 10)
 ```
 
 #### Type Functions
+
 ```gql
 RETURN type(value), exists(n.property)
 RETURN toString(123), toInteger('456')
 ```
 
 #### Utility Functions
+
 ```gql
 RETURN now(), rand()
 ```
@@ -226,6 +233,7 @@ RETURN nodeType, collect(propertyName) AS properties
 ## 🔧 Advanced Features
 
 ### Path Quantifiers
+
 Variable-length path patterns with full quantifier support:
 
 ```gql
@@ -246,6 +254,7 @@ MATCH (a)-[*..4]->(b) RETURN a, b
 ```
 
 ### Error Handling
+
 Comprehensive syntax validation with clear error messages:
 
 ```gql
@@ -258,6 +267,7 @@ RETURN MATCH                  -- Reserved keyword as identifier
 ## ✅ Complex Path Variable Assignment (Fixed January 2026)
 
 Complex path variable assignment with labels, relationship types, and variable-length patterns now works correctly:
+
 ```gql
 -- This pattern now works (GAP-0182 resolved)
 MATCH path = (a:Person)-[:KNOWS*2..4]->(b:Person)
@@ -270,12 +280,15 @@ MATCH path = (a:Person)-[:KNOWS*1..3]->(b:Person) RETURN length(path) AS hops, b
 ```
 
 **Implementation Evidence:**
+
 - Path variable binding in `src/execution/match_operations.zig:5320-5380`
 - `length(path)` function in `src/eval.zig:3197-3205`
 - Comprehensive tests in `geodetestlab/specs/gap_0180_0182_fixes.yml`
 
 ### Path Mode Specifiers
+
 **Fully implemented as of January 2026** per ISO/IEC 39075:2024:
+
 ```gql
 -- All path modes parsed AND executed with correct semantics
 MATCH SHORTEST (a)-[*]->(b) RETURN a, b      -- Shortest path (Dijkstra-based)
@@ -287,6 +300,7 @@ MATCH SIMPLE (a)-[*]->(b) RETURN a, b        -- No repeated nodes except start=e
 ```
 
 **Implementation Details**:
+
 - Path modes stored in AST `Chain.path_mode` field
 - `expandVariableLengthPathsWithMode()` in execution.zig handles all modes
 - WALK allows full revisitation for graph exploration
@@ -312,6 +326,7 @@ make test
 ### Test Categories
 
 The compliance suite tests these areas:
+
 1. **Keywords**: All 105+ ISO GQL reserved words
 2. **Data Types**: Primitive and complex type literals
 3. **Graph Patterns**: Node, relationship, and path patterns
@@ -349,7 +364,7 @@ Geode implements all core GQL features per ISO/IEC 39075:2024
 ## 📚 Additional Resources
 
 - **ISO/IEC 39075:2024**: Official Graph Query Language standard
-- **Test Files**: 
+- **Test Files**:
   - `test_gql_compliance.zig` - Main compliance test suite
   - `debug_set_parsing.zig` - Debug utilities for syntax testing
 - **Implementation Files**:

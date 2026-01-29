@@ -70,6 +70,7 @@ Vector([0.1, 0.2, 0.3, 0.4])         -- Float32 vector
 ## Common Function Patterns
 
 ### Numeric Operations
+
 ```gql
 decimal_add(Decimal("10.50", 2), Decimal("5.25", 2))  -- 15.75
 decimal_mul(a, b)                                      -- Multiplication
@@ -77,6 +78,7 @@ decimal_div(a, b)                                      -- Division (banker's rou
 ```
 
 ### String Functions
+
 ```gql
 length_chars(text)                     -- Character count (Unicode)
 trim(text)                            -- Remove whitespace
@@ -84,6 +86,7 @@ lower(text) / upper(text)             -- Case conversion
 ```
 
 ### Temporal Functions
+
 ```gql
 now()                                  -- Current timestamp
 current_date / current_time           -- Current date/time
@@ -94,6 +97,7 @@ date_part("year", timestamp)         -- Extract component
 ```
 
 ### Network Predicates
+
 ```gql
 ip_contains(Subnet("10.0.0.0/8"), IpAddr("10.1.2.3"))     -- true
 ip_overlaps(subnet1, subnet2)                              -- Check overlap
@@ -102,6 +106,7 @@ ip_family(ip)                                              -- Returns 4 or 6
 ```
 
 ### MAC Address Functions
+
 ```gql
 mac_is_local(mac)                     -- Check local admin bit
 mac_is_multicast(mac)                 -- Check multicast bit
@@ -109,12 +114,14 @@ oui(mac)                              -- Extract OUI (vendor ID)
 ```
 
 ### Hash Operations
+
 ```gql
 hash_equals(hash1, hash2)             -- Constant-time comparison
 hash_alg(hash)                        -- Get algorithm name
 ```
 
 ### Currency/Language Functions
+
 ```gql
 minor_units(Currency("USD"))         -- Returns 2 (cents)
 minor_units(Currency("JPY"))         -- Returns 0 (no subunit)
@@ -123,6 +130,7 @@ lang_match(["fr-CA", "fr"], "fr-FR") -- Returns true
 ```
 
 ### Geographic Functions
+
 ```gql
 distance_haversine(p1, p2)           -- Distance in meters
 latitude(point) / longitude(point)    -- Extract coordinates
@@ -130,6 +138,7 @@ altitude(point) / alt_ref(point)      -- Extract altitude info
 ```
 
 ### Geometry Functions (OGC-style)
+
 ```gql
 st_asText(geometry)                   -- Convert to WKT
 st_asGeoJSON(geometry)               -- Convert to GeoJSON
@@ -139,6 +148,7 @@ st_within(geom1, geom2)              -- Spatial within test
 ```
 
 ### JSON/JSONB Functions
+
 ```gql
 jsonb_get(doc, "$.path.to.value")    -- Extract by path
 jsonb_exists(doc, "key")             -- Check key existence
@@ -147,6 +157,7 @@ jsonb_set(doc, path, new_value)      -- Update value
 ```
 
 ### URL/Domain Functions
+
 ```gql
 url_host(url)                        -- Extract host
 url_scheme(url)                      -- Extract scheme (http/https)
@@ -157,6 +168,7 @@ domain_labels(domain)                -- Split into labels
 ```
 
 ### UUID Functions
+
 ```gql
 uuid_v4()                            -- Generate version 4 UUID
 uuid_v7()                            -- Generate version 7 UUID
@@ -164,6 +176,7 @@ uuid_equal(uuid1, uuid2)             -- Bytewise comparison
 ```
 
 ### Array Functions
+
 ```gql
 array_length(arr)                    -- Get array length
 array_contains(arr, value)           -- Check membership
@@ -171,6 +184,7 @@ array_get(arr, index)               -- Get element by index
 ```
 
 ### Bit String Functions
+
 ```gql
 bit_and(bits1, bits2)               -- Bitwise AND
 bit_or(bits1, bits2)                -- Bitwise OR
@@ -181,6 +195,7 @@ bit_set(bits, position, value)     -- Set bit value
 ```
 
 ### Range Functions
+
 ```gql
 range_contains(range, value)        -- Check if value in range
 range_overlaps(range1, range2)     -- Check range overlap
@@ -190,6 +205,7 @@ bounds(range)                       -- Get bounds type ("[)", "[]", etc.)
 ```
 
 ### Vector Operations (ML/AI)
+
 ```gql
 vector_dot(vec1, vec2)              -- Dot product
 vector_l2(vec1, vec2)               -- Euclidean distance
@@ -200,6 +216,7 @@ vector_knn(property, query_vec, 5, "cosine")  -- K-nearest neighbors
 ## Index Usage Patterns
 
 ### Automatic Index Selection
+
 ```gql
 -- Patricia trie automatically used for:
 WHERE ip_contains(subnet_column, '192.168.1.5'::IpAddr)
@@ -222,6 +239,7 @@ WHERE domain_suffix_match(domain_column, 'example.com')
 ## Common Type Conversions
 
 ### Implicit Conversions
+
 ```gql
 SmallInt → Int → BigInt              -- Numeric widening
 Real → Double                         -- Float widening
@@ -230,6 +248,7 @@ Char → Varchar → Text                -- String widening
 ```
 
 ### Explicit Casts
+
 ```gql
 CAST(value AS TypeName)              -- Standard SQL cast
 value::TypeName                      -- PostgreSQL-style cast
@@ -238,6 +257,7 @@ value::TypeName                      -- PostgreSQL-style cast
 ## Error Handling
 
 ### Common Error Codes
+
 - `ERR_FLOAT_NAN` - NaN/Inf not allowed in Real/Double
 - `ERR_CHAR_LEN` - String exceeds char(n)/varchar(n) limit
 - `ERR_DEC_DIV_ZERO` - Decimal division by zero

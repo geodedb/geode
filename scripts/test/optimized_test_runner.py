@@ -2,12 +2,12 @@
 """Optimized test runner with reduced overhead."""
 
 import subprocess
-import yaml
 import sys
-from pathlib import Path
-import os
-import re
 from collections import defaultdict
+from pathlib import Path
+
+import yaml
+
 
 def run_test_fast(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode"):
     """Run a test with minimal overhead."""
@@ -19,19 +19,15 @@ def run_test_fast(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig
 
     # Add --server 127.0.0.1:3141 --insecure for query commands if not present
     if len(args) > 0 and args[0] == "query":
-        if not any("--server" in str(arg) for arg in args) and not any("--server 127.0.0.1:3141 --insecure" in str(arg) for arg in args):
+        if not any("--server" in str(arg) for arg in args) and not any(
+            "--server 127.0.0.1:3141 --insecure" in str(arg) for arg in args
+        ):
             args = ["query", "--server 127.0.0.1:3141 --insecure"] + args[1:]
 
     stdin_content = test_case.get("stdin", None)
 
     try:
-        result = subprocess.run(
-            [binary] + args,
-            input=stdin_content,
-            capture_output=True,
-            text=True,
-            timeout=2
-        )
+        result = subprocess.run([binary] + args, input=stdin_content, capture_output=True, text=True, timeout=2)
     except subprocess.TimeoutExpired:
         return False, "timeout"
     except Exception as e:
@@ -57,6 +53,7 @@ def run_test_fast(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig
 
     return True, "PASSED"
 
+
 def main():
     specs_dir = Path("/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs")
 
@@ -68,7 +65,7 @@ def main():
     # Process specs in order
     for spec_file in sorted(specs_dir.glob("*.yml")):
         try:
-            with open(spec_file, "r") as f:
+            with open(spec_file) as f:
                 spec = yaml.safe_load(f)
         except:
             continue
@@ -98,13 +95,13 @@ def main():
                 key = message.split()[0] if " " in message else message
                 failure_patterns[key].append((spec_file.name, name))
 
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"TOTAL: {total_passed} passed, {total_failed} failed, {total_skipped} skipped")
-    print(f"{'='*80}\n")
+    print(f"{'=' * 80}\n")
 
     if failure_patterns:
-        print(f"TOP FAILURE PATTERNS:")
-        print(f"{'='*80}")
+        print("TOP FAILURE PATTERNS:")
+        print(f"{'=' * 80}")
         for pattern, tests in sorted(failure_patterns.items(), key=lambda x: -len(x[1]))[:10]:
             print(f"{pattern:30s} {len(tests):4d} tests")
             for spec, name in tests[:3]:
@@ -114,6 +111,7 @@ def main():
             print()
 
     return 0 if total_failed == 0 else 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

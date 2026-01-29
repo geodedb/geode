@@ -137,6 +137,7 @@ CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE"; ASPECT=Encryption; STATUS=TESTED; OW
 ### Regression Tests
 
 Security fixes include regression tests in:
+
 - `geodetestlab/specs/gap_0104_0122_security_regression.yml`
 - `geodetestlab/specs/gap_0102_0103_security_regression.yml`
 

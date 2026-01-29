@@ -7,13 +7,13 @@ services:
     hostname: node-1
     container_name: ha-node-1
     environment:
-      - NODE_ID=node-1
-      - NODE_ROLE=leader
-      - CLUSTER_NAME=ha-test-cluster
-      - RAFT_PORT=6282
-      - RAFT_PEERS=node-2:6282,node-3:6282
-      - LOG_LEVEL=info
-      - GEODE_DISTRIBUTED=true
+    - NODE_ID=node-1
+    - NODE_ROLE=leader
+    - CLUSTER_NAME=ha-test-cluster
+    - RAFT_PORT=6282
+    - RAFT_PEERS=node-2:6282,node-3:6282
+    - LOG_LEVEL=info
+    - GEODE_DISTRIBUTED=true
     command: >
       --listen 0.0.0.0:3141
       --listen-quic 0.0.0.0:8443
@@ -24,13 +24,13 @@ services:
       --bootstrap-expect 3
       --log-json
     volumes:
-      - node1-data:/data
+    - node1-data:/data
     networks:
-      - ha-net
+    - ha-net
     ports:
-      - "3200:3141/udp"
+    - 3200:3141/udp
     healthcheck:
-      test: ["CMD", "geode", "query", "RETURN 1", "--server", "127.0.0.1:3141", "--insecure"]
+      test: [CMD, geode, query, RETURN 1, --server, 127.0.0.1:3141, --insecure]
       interval: 5s
       timeout: 2s
       retries: 5
@@ -42,13 +42,13 @@ services:
     hostname: node-2
     container_name: ha-node-2
     environment:
-      - NODE_ID=node-2
-      - NODE_ROLE=follower
-      - CLUSTER_NAME=ha-test-cluster
-      - RAFT_PORT=6282
-      - RAFT_JOIN=node-1:6282
-      - LOG_LEVEL=info
-      - GEODE_DISTRIBUTED=true
+    - NODE_ID=node-2
+    - NODE_ROLE=follower
+    - CLUSTER_NAME=ha-test-cluster
+    - RAFT_PORT=6282
+    - RAFT_JOIN=node-1:6282
+    - LOG_LEVEL=info
+    - GEODE_DISTRIBUTED=true
     command: >
       --listen 0.0.0.0:3141
       --data-dir /data
@@ -58,13 +58,13 @@ services:
       --raft-join node-1:6282
       --log-json
     volumes:
-      - node2-data:/data
+    - node2-data:/data
     networks:
-      - ha-net
+    - ha-net
     depends_on:
-      - node-1
+    - node-1
     healthcheck:
-      test: ["CMD", "geode", "query", "RETURN 1", "--server", "127.0.0.1:3141", "--insecure"]
+      test: [CMD, geode, query, RETURN 1, --server, 127.0.0.1:3141, --insecure]
       interval: 5s
       timeout: 2s
       retries: 5
@@ -76,13 +76,13 @@ services:
     hostname: node-3
     container_name: ha-node-3
     environment:
-      - NODE_ID=node-3
-      - NODE_ROLE=follower
-      - CLUSTER_NAME=ha-test-cluster
-      - RAFT_PORT=6282
-      - RAFT_JOIN=node-1:6282
-      - LOG_LEVEL=info
-      - GEODE_DISTRIBUTED=true
+    - NODE_ID=node-3
+    - NODE_ROLE=follower
+    - CLUSTER_NAME=ha-test-cluster
+    - RAFT_PORT=6282
+    - RAFT_JOIN=node-1:6282
+    - LOG_LEVEL=info
+    - GEODE_DISTRIBUTED=true
     command: >
       --listen 0.0.0.0:3141
       --data-dir /data
@@ -92,13 +92,13 @@ services:
       --raft-join node-1:6282
       --log-json
     volumes:
-      - node3-data:/data
+    - node3-data:/data
     networks:
-      - ha-net
+    - ha-net
     depends_on:
-      - node-1
+    - node-1
     healthcheck:
-      test: ["CMD", "geode", "query", "RETURN 1", "--server", "127.0.0.1:3141", "--insecure"]
+      test: [CMD, geode, query, RETURN 1, --server, 127.0.0.1:3141, --insecure]
       interval: 5s
       timeout: 2s
       retries: 5
@@ -112,17 +112,17 @@ services:
       dockerfile: Dockerfile.runner
     container_name: ha-runner
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./suite.yaml:/app/suite.yaml
-      - .:/app/tests
+    - /var/run/docker.sock:/var/run/docker.sock
+    - ./suite.yaml:/app/suite.yaml
+    - .:/app/tests
     environment:
-      - GEODE_NODES=node-1:3141,node-2:3141,node-3:3141
+    - GEODE_NODES=node-1:3141,node-2:3141,node-3:3141
     networks:
-      - ha-net
+    - ha-net
     depends_on:
-      - node-1
-      - node-2
-      - node-3
+    - node-1
+    - node-2
+    - node-3
 
 volumes:
   node1-data:

@@ -34,10 +34,10 @@ run_test() {
     local test_command="$2"
     local expected_pattern="$3"
     local should_contain="${4:-true}"
-    
+
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     echo -n "  Testing $test_name... "
-    
+
     # Run the test command with timeout
     if output=$(timeout 10 bash -c "$test_command" 2>&1); then
         if [ "$should_contain" = "true" ]; then
@@ -96,7 +96,7 @@ run_test "Unit tests compilation and execution" \
     "cd '$PROJECT_ROOT' && zig test tests/test_repl_timing.zig" \
     "All 7 tests passed"
 
-# Test 2: Integration Tests  
+# Test 2: Integration Tests
 echo ""
 echo "2️⃣  Integration Tests"
 echo "===================="
@@ -134,22 +134,22 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     _ = gpa.allocator();
-    
+
     // Test std.time.Timer functionality like REPL does
     var timer = try std.time.Timer.start();
-    
+
     // Simulate some work
     var sum: u64 = 0;
     for (0..1000) |i| {
         sum += i;
     }
-    
+
     const duration_ns = timer.read();
     const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
-    
+
     std.debug.print("✅ Timer functionality working\n", .{});
     std.debug.print("Duration: {d:.2} ms\n", .{duration_ms});
-    
+
     // Validate reasonable timing (should be very fast)
     if (duration_ms >= 0.0 and duration_ms < 1000.0) {
         std.debug.print("✅ Timing precision validated\n", .{});
@@ -157,7 +157,7 @@ pub fn main() !void {
         std.debug.print("❌ Timing precision out of range\n", .{});
         return error.TimingOutOfRange;
     }
-    
+
     // Use sum to prevent optimization
     if (sum > 0) std.debug.print("Work completed\n", .{});
 }
@@ -183,31 +183,31 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     _ = gpa.allocator();
-    
+
     // Test timing format like REPL does
     const test_durations = [_]f64{ 0.12, 1.50, 10.99, 123.45, 999.99 };
-    
+
     for (test_durations) |duration_ms| {
         var buf: [256]u8 = undefined;
         const timing_msg = try std.fmt.bufPrint(&buf, "Query executed in {d:.2} ms\n", .{duration_ms});
-        
+
         // Validate format has exactly 2 decimal places
         const dot_pos = std.mem.indexOf(u8, timing_msg, ".") orelse {
             std.debug.print("❌ Missing decimal point in: {s}\n", .{timing_msg});
             return error.MissingDecimalPoint;
         };
-        
+
         const ms_pos = std.mem.indexOf(u8, timing_msg, " ms") orelse {
             std.debug.print("❌ Missing ' ms' in: {s}\n", .{timing_msg});
             return error.MissingMsUnit;
         };
-        
+
         const fractional_part = timing_msg[dot_pos + 1..ms_pos];
         if (fractional_part.len != 2) {
             std.debug.print("❌ Wrong decimal precision in: {s} (expected 2, got {d})\n", .{ timing_msg, fractional_part.len });
             return error.WrongPrecision;
         }
-        
+
         // Check fractional digits are numeric
         for (fractional_part) |digit| {
             if (digit < '0' or digit > '9') {
@@ -215,10 +215,10 @@ pub fn main() !void {
                 return error.NonNumericFraction;
             }
         }
-        
+
         std.debug.print("✅ Format valid: {s}", .{timing_msg});
     }
-    
+
     std.debug.print("✅ All timing formats validated\n", .{});
 }
 EOF
@@ -243,40 +243,40 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     _ = gpa.allocator();
-    
+
     const iterations = 1000;
     var total_overhead_ns: u64 = 0;
-    
+
     // Measure timing overhead
     for (0..iterations) |_| {
         const start_time = std.time.nanoTimestamp();
-        
+
         // Simulate REPL timing workflow
         var timer = try std.time.Timer.start();
-        
+
         // Simulate minimal work (like mock query)
         var temp: u64 = 42;
         temp += 1;
-        
+
         const duration_ns = timer.read();
         const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
-        
+
         // Format like REPL does
         var buf: [256]u8 = undefined;
         _ = try std.fmt.bufPrint(&buf, "Query executed in {d:.2} ms\n", .{duration_ms});
-        
+
         const end_time = std.time.nanoTimestamp();
         total_overhead_ns += @as(u64, @intCast(end_time - start_time));
-        
+
         // Use temp to prevent optimization
         if (temp == 0) break;
     }
-    
+
     const avg_overhead_ns = total_overhead_ns / iterations;
     const avg_overhead_us = @as(f64, @floatFromInt(avg_overhead_ns)) / 1000.0;
-    
+
     std.debug.print("✅ Average timing overhead: {d:.2} μs per operation\n", .{avg_overhead_us});
-    
+
     // Timing overhead should be reasonable (less than 100μs)
     if (avg_overhead_us < 100.0) {
         std.debug.print("✅ Performance overhead acceptable\n", .{});
@@ -306,7 +306,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     _ = gpa.allocator();
-    
+
     // Test edge cases in timing
     const test_cases = [_]struct {
         duration_ns: u64,
@@ -317,13 +317,13 @@ pub fn main() !void {
         .{ .duration_ns = 1_000_000, .should_work = true },   // 1ms
         .{ .duration_ns = 1_000_000_000, .should_work = true }, // 1s
     };
-    
+
     for (test_cases) |test_case| {
         const duration_ms = @as(f64, @floatFromInt(test_case.duration_ns)) / 1_000_000.0;
-        
+
         var buf: [256]u8 = undefined;
         const result = std.fmt.bufPrint(&buf, "Query executed in {d:.2} ms\n", .{duration_ms});
-        
+
         if (test_case.should_work) {
             _ = result catch {
                 std.debug.print("❌ Failed to format duration: {d} ns\n", .{test_case.duration_ns});
@@ -332,7 +332,7 @@ pub fn main() !void {
             std.debug.print("✅ Handled duration: {d} ns -> {d:.2} ms\n", .{ test_case.duration_ns, duration_ms });
         }
     }
-    
+
     std.debug.print("✅ Error handling validation complete\n", .{});
 }
 EOF

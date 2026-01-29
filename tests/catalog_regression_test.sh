@@ -34,10 +34,10 @@ run_test() {
     local query="$2"
     local expected_pattern="$3"
     local should_fail="${4:-false}"
-    
+
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     echo -n "Test $TOTAL_TESTS: $test_name... "
-    
+
     # Run the query
     if [ "$should_fail" = "true" ]; then
         # Test should fail
@@ -55,7 +55,7 @@ run_test() {
         local output
         output=$("$GEODE_BIN" query "$query" --insecure 2>&1)
         local exit_code=$?
-        
+
         if [ $exit_code -eq 0 ]; then
             if echo "$output" | grep -q "$expected_pattern"; then
                 echo -e "${GREEN}PASS${NC}"

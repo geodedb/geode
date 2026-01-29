@@ -27,12 +27,12 @@ if [[ "$MODE" == "singleton" ]]; then
         sleep 1
         elapsed=$((elapsed + 1))
     done
-    
+
     if [[ $elapsed -ge $max_wait ]]; then
         echo -e " ${RED}timeout${NC}"
         exit 1
     fi
-    
+
     # Run basic query test
     echo "Testing basic query..."
     if docker exec geode-singleton geodec "RETURN 1 AS x" --server 127.0.0.1:7567 2>/dev/null | grep -q '"x":1'; then
@@ -41,7 +41,7 @@ if [[ "$MODE" == "singleton" ]]; then
         echo -e "${RED}FAIL: Basic query test${NC}"
         exit 1
     fi
-    
+
 elif [[ "$MODE" == "distributed" ]]; then
     # Wait for cluster to be ready
     for node in geode-leader geode-follower-1 geode-follower-2; do
@@ -57,13 +57,13 @@ elif [[ "$MODE" == "distributed" ]]; then
             sleep 1
             elapsed=$((elapsed + 1))
         done
-        
+
         if [[ $elapsed -ge $max_wait ]]; then
             echo -e " ${RED}timeout${NC}"
             exit 1
         fi
     done
-    
+
     # Test leader
     echo "Testing leader node..."
     if docker exec geode-leader geodec "RETURN 1 AS x" --server 127.0.0.1:7567 2>/dev/null | grep -q '"x":1'; then

@@ -3,12 +3,14 @@
 ## Status: Dependencies Updated, Code Migration Needed
 
 ### Completed
+
 ✅ Updated Cargo.toml to use `quinn = "0.11"` and `rustls = "0.23"`
 ✅ Removed `boring` and `quiche` dependencies
 
 ### Required Code Changes
 
 #### 1. Update `src/client.rs` imports
+
 ```rust
 // Replace:
 use quiche;
@@ -21,6 +23,7 @@ use std::sync::Arc;
 ```
 
 #### 2. Simplify Connection Structure
+
 Quinn handles UDP sockets internally, so remove manual socket management:
 
 ```rust
@@ -34,6 +37,7 @@ pub struct Connection {
 ```
 
 #### 3. Connection Establishment
+
 Replace quiche's manual TLS handshake with Quinn's high-level API:
 
 ```rust
@@ -66,6 +70,7 @@ impl Connection {
 ```
 
 #### 4. Stream Management
+
 Replace quiche's stream API with Quinn's:
 
 ```rust
@@ -76,6 +81,7 @@ let response = recv.read_to_end(MAX_SIZE).await?;
 ```
 
 #### 5. Async/Await
+
 Quinn is async-first, so methods need to be async:
 
 ```rust
@@ -98,6 +104,7 @@ pub async fn query(&mut self, query: &str) -> Result<Page>
 See `vendor/quic/test-clients/quinn-client/` for working quinn example.
 
 Key differences from test client:
+
 - Test client uses simple HTTP/0.9 protocol
 - Geode client needs bidirectional streams with JSON protocol
 - Need to handle HELLO handshake, query/response flow, paging

@@ -4,20 +4,20 @@
 Unit tests for Geode Cluster Orchestrator
 """
 
-import unittest
 import sys
+import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from cluster.orchestrator import (
+    ClusterConfig,
+    ClusterNode,
+    ClusterOrchestrator,
     DeploymentMode,
     NodeRole,
-    ClusterNode,
-    ClusterConfig,
-    ClusterOrchestrator,
 )
 
 
@@ -59,12 +59,7 @@ class TestClusterNode(unittest.TestCase):
 
     def test_cluster_node_creation(self):
         """Test creating a ClusterNode instance."""
-        node = ClusterNode(
-            id="server-0",
-            host="localhost",
-            port=3141,
-            role=NodeRole.SERVER
-        )
+        node = ClusterNode(id="server-0", host="localhost", port=3141, role=NodeRole.SERVER)
         self.assertEqual(node.id, "server-0")
         self.assertEqual(node.host, "localhost")
         self.assertEqual(node.port, 3141)
@@ -72,12 +67,7 @@ class TestClusterNode(unittest.TestCase):
 
     def test_cluster_node_defaults(self):
         """Test default values for ClusterNode."""
-        node = ClusterNode(
-            id="test",
-            host="localhost",
-            port=3141,
-            role=NodeRole.SERVER
-        )
+        node = ClusterNode(id="test", host="localhost", port=3141, role=NodeRole.SERVER)
         self.assertEqual(node.status, "unknown")
         self.assertEqual(node.metrics, {})
         self.assertEqual(node.last_heartbeat, 0)
@@ -88,19 +78,13 @@ class TestClusterConfig(unittest.TestCase):
 
     def test_cluster_config_creation(self):
         """Test creating a ClusterConfig instance."""
-        config = ClusterConfig(
-            name="test-cluster",
-            deployment_mode=DeploymentMode.DOCKER
-        )
+        config = ClusterConfig(name="test-cluster", deployment_mode=DeploymentMode.DOCKER)
         self.assertEqual(config.name, "test-cluster")
         self.assertEqual(config.deployment_mode, DeploymentMode.DOCKER)
 
     def test_cluster_config_defaults(self):
         """Test default values for ClusterConfig."""
-        config = ClusterConfig(
-            name="test",
-            deployment_mode=DeploymentMode.LOCAL
-        )
+        config = ClusterConfig(name="test", deployment_mode=DeploymentMode.LOCAL)
         self.assertEqual(config.server_nodes, 1)
         self.assertEqual(config.generator_nodes, 4)
         self.assertTrue(config.metrics_node)
@@ -117,7 +101,7 @@ class TestClusterConfig(unittest.TestCase):
             generator_nodes=8,
             metrics_node=False,
             geode_image="geode:v2.0",
-            base_port=4000
+            base_port=4000,
         )
         self.assertEqual(config.server_nodes, 3)
         self.assertEqual(config.generator_nodes, 8)
@@ -132,10 +116,7 @@ class TestClusterOrchestrator(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         self.config = ClusterConfig(
-            name="test-cluster",
-            deployment_mode=DeploymentMode.LOCAL,
-            server_nodes=2,
-            generator_nodes=2
+            name="test-cluster", deployment_mode=DeploymentMode.LOCAL, server_nodes=2, generator_nodes=2
         )
         self.orchestrator = ClusterOrchestrator(self.config)
 
@@ -154,11 +135,7 @@ class TestClusterOrchestrator(unittest.TestCase):
     def test_status_with_nodes(self):
         """Test status with nodes added."""
         self.orchestrator.nodes["server-0"] = ClusterNode(
-            id="server-0",
-            host="localhost",
-            port=3141,
-            role=NodeRole.SERVER,
-            status="running"
+            id="server-0", host="localhost", port=3141, role=NodeRole.SERVER, status="running"
         )
         status = self.orchestrator.status()
         self.assertEqual(len(status["nodes"]), 1)
@@ -168,10 +145,7 @@ class TestClusterOrchestrator(unittest.TestCase):
     def test_generate_k8s_manifests(self):
         """Test Kubernetes manifest generation."""
         config = ClusterConfig(
-            name="k8s-test",
-            deployment_mode=DeploymentMode.KUBERNETES,
-            server_nodes=3,
-            generator_nodes=4
+            name="k8s-test", deployment_mode=DeploymentMode.KUBERNETES, server_nodes=3, generator_nodes=4
         )
         orchestrator = ClusterOrchestrator(config)
         manifests = orchestrator._generate_k8s_manifests()
@@ -189,7 +163,7 @@ class TestClusterOrchestrator(unittest.TestCase):
         # Check generator replicas
         self.assertIn("replicas: 4", manifests["generator"])
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_deploy_docker_creates_network(self, mock_run):
         """Test Docker deployment creates network."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -198,7 +172,7 @@ class TestClusterOrchestrator(unittest.TestCase):
             deployment_mode=DeploymentMode.DOCKER,
             server_nodes=1,
             generator_nodes=0,
-            metrics_node=False
+            metrics_node=False,
         )
         orchestrator = ClusterOrchestrator(config)
         orchestrator._deploy_docker()
@@ -209,8 +183,8 @@ class TestClusterOrchestrator(unittest.TestCase):
         self.assertIn("docker", network_call[0][0])
         self.assertIn("network", network_call[0][0])
 
-    @patch('subprocess.run')
-    @patch('subprocess.Popen')
+    @patch("subprocess.run")
+    @patch("subprocess.Popen")
     def test_deploy_local(self, mock_popen, mock_run):
         """Test local deployment starts processes."""
         mock_process = MagicMock()
@@ -218,10 +192,7 @@ class TestClusterOrchestrator(unittest.TestCase):
         mock_popen.return_value = mock_process
 
         config = ClusterConfig(
-            name="local-test",
-            deployment_mode=DeploymentMode.LOCAL,
-            server_nodes=2,
-            generator_nodes=0
+            name="local-test", deployment_mode=DeploymentMode.LOCAL, server_nodes=2, generator_nodes=0
         )
         orchestrator = ClusterOrchestrator(config)
         result = orchestrator._deploy_local()
@@ -231,22 +202,14 @@ class TestClusterOrchestrator(unittest.TestCase):
         self.assertIn("server-0", orchestrator.nodes)
         self.assertIn("server-1", orchestrator.nodes)
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_teardown_docker(self, mock_run):
         """Test Docker teardown stops containers."""
         mock_run.return_value = MagicMock(returncode=0)
 
-        config = ClusterConfig(
-            name="teardown-test",
-            deployment_mode=DeploymentMode.DOCKER
-        )
+        config = ClusterConfig(name="teardown-test", deployment_mode=DeploymentMode.DOCKER)
         orchestrator = ClusterOrchestrator(config)
-        orchestrator.nodes["server-0"] = ClusterNode(
-            id="server-0",
-            host="localhost",
-            port=3141,
-            role=NodeRole.SERVER
-        )
+        orchestrator.nodes["server-0"] = ClusterNode(id="server-0", host="localhost", port=3141, role=NodeRole.SERVER)
 
         result = orchestrator.teardown()
 
@@ -255,10 +218,7 @@ class TestClusterOrchestrator(unittest.TestCase):
 
     def test_deploy_ssh_not_implemented(self):
         """Test SSH deployment returns False (not implemented)."""
-        config = ClusterConfig(
-            name="ssh-test",
-            deployment_mode=DeploymentMode.SSH
-        )
+        config = ClusterConfig(name="ssh-test", deployment_mode=DeploymentMode.SSH)
         orchestrator = ClusterOrchestrator(config)
         result = orchestrator._deploy_ssh()
         self.assertFalse(result)
@@ -270,32 +230,18 @@ class TestLoadTestWorkflow(unittest.TestCase):
     def test_run_load_test_without_generators(self):
         """Test load test falls back to local execution without generators."""
         config = ClusterConfig(
-            name="no-gen-test",
-            deployment_mode=DeploymentMode.LOCAL,
-            server_nodes=1,
-            generator_nodes=0
+            name="no-gen-test", deployment_mode=DeploymentMode.LOCAL, server_nodes=1, generator_nodes=0
         )
         orchestrator = ClusterOrchestrator(config)
         orchestrator.nodes["server-0"] = ClusterNode(
-            id="server-0",
-            host="localhost",
-            port=3141,
-            role=NodeRole.SERVER,
-            status="running"
+            id="server-0", host="localhost", port=3141, role=NodeRole.SERVER, status="running"
         )
 
         # This should not raise an exception
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0,
-                stdout="",
-                stderr=""
-            )
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             results = orchestrator.run_load_test(
-                workload="web_app",
-                target_nodes=100,
-                target_edges=500,
-                duration_seconds=10
+                workload="web_app", target_nodes=100, target_edges=500, duration_seconds=10
             )
 
         self.assertIn("workload", results)

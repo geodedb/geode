@@ -148,6 +148,45 @@ pub const SchemaCatalog = struct {
         }
     }
 
+    /// Configure a field for encryption
+    /// Creates the type if it doesn't exist, adds or updates the field if it does
+    /// Thread-safe operation
+    /// CANARY: REQ=REQ-FLE-CATALOG-002; FEATURE="FLECatalog"; ASPECT=ConfigureField; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+    pub fn configureField(
+        self: *SchemaCatalog,
+        type_name: []const u8,
+        field_meta: annotations.FieldMetadata,
+    ) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        // Check if type already exists
+        if (self.schemas.getPtr(type_name)) |type_meta_ptr_ptr| {
+            // Type exists - add/update the field
+            const type_meta_ptr = type_meta_ptr_ptr.*;
+            try type_meta_ptr.fields.put(field_meta.field_name, field_meta);
+        } else {
+            // Type doesn't exist - create it and add the field
+            const stored_name = try self.allocator.dupe(u8, type_name);
+            errdefer self.allocator.free(stored_name);
+
+            const type_meta_ptr = try self.allocator.create(annotations.TypeMetadata);
+            errdefer self.allocator.destroy(type_meta_ptr);
+
+            type_meta_ptr.* = annotations.TypeMetadata.init(self.allocator, type_name);
+            try type_meta_ptr.fields.put(field_meta.field_name, field_meta);
+
+            try self.schemas.put(stored_name, type_meta_ptr);
+        }
+
+        // Persist the catalog to disk
+        saveCatalog(self) catch |err| {
+            log.err("CRITICAL: Failed to persist FLE catalog after field configuration", &.{
+                Attr.err("error", err),
+            });
+        };
+    }
+
     /// Grant READ_PLAINTEXT privilege to a role for a specific field
     /// Thread-safe operation
     pub fn grantPlaintextAccess(

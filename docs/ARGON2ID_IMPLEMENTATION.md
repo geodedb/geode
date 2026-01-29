@@ -10,6 +10,7 @@ Geode now uses **Argon2id** for password hashing, which is the industry-standard
 ## Why Argon2id?
 
 Argon2id combines the best of both Argon2i and Argon2d:
+
 - **Argon2i**: Resistant to side-channel attacks (timing attacks)
 - **Argon2d**: Resistant to GPU cracking attacks
 - **Argon2id**: Hybrid mode providing protection against both attack vectors
@@ -41,11 +42,13 @@ $argon2id$[64 hex characters]$
 ```
 
 **Total Size**: 75 bytes
+
 - Prefix: `$argon2id$` (10 bytes)
 - Hash: 64 hex characters (32 bytes × 2)
 - Suffix: `$` (1 byte)
 
 **Example**:
+
 ```
 $argon2id$a3b5c8d1e4f7g9h2i5k8l1m4n7p0q3r6s9t2u5v8w1x4y7z0a3b5c8d1e4f7g9h2$
 ```
@@ -67,11 +70,13 @@ pub const User = struct {
 ## Performance Characteristics
 
 ### Hashing Time
+
 - **Single hash**: ~200-300ms on modern CPU (intentionally slow to resist brute-force)
 - **Memory usage**: 64 MiB per hash operation
 - **CPU usage**: 4 threads during hash computation
 
 ### Verification Time
+
 - **Same as hashing**: ~200-300ms (password verification requires rehashing)
 - **Constant-time comparison**: Additional protection against timing attacks
 
@@ -147,6 +152,7 @@ $ echo "CREATE (n) RETURN n" | geode query --insecure --user admin --password ad
 ### From SHA256 (Previous Implementation)
 
 The system automatically handles the migration:
+
 1. Old hashes (72 bytes, `$geode$` prefix) are no longer generated
 2. New users get Argon2id hashes (75 bytes, `$argon2id$` prefix)
 3. User store is ephemeral, so no migration needed for existing users
@@ -154,11 +160,13 @@ The system automatically handles the migration:
 ### Hash Format Changes
 
 **Old Format (SHA256)**:
+
 ```
 $geode$[64 hex chars]$ (72 bytes)
 ```
 
 **New Format (Argon2id)**:
+
 ```
 $argon2id$[64 hex chars]$ (75 bytes)
 ```

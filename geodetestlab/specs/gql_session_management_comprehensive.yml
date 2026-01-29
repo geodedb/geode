@@ -20,7 +20,7 @@ tests:
   # ===============================
   # SESSION SET COMMANDS
   # ===============================
-  
+
   # SESSION SET SCHEMA
   - name: "session-set-schema"
     description: "Test SESSION SET SCHEMA command"
@@ -90,9 +90,9 @@ tests:
     tags: ["session", "parameter", "conditional"]
 
   # ===============================
-  # SESSION RESET COMMANDS  
+  # SESSION RESET COMMANDS
   # ===============================
-  
+
   - name: "session-reset-all-parameters"
     description: "Test SESSION RESET ALL PARAMETERS"
     args: ["query", "SESSION RESET ALL PARAMETERS"]
@@ -159,7 +159,7 @@ tests:
   # ===============================
   # SESSION CLOSE COMMAND
   # ===============================
-  
+
   - name: "session-close"
     description: "Test SESSION CLOSE command"
     args: ["query", "SESSION CLOSE"]
@@ -170,10 +170,10 @@ tests:
   # ===============================
   # SESSION WORKFLOW TESTS
   # ===============================
-  
+
   - name: "session-workflow-set-reset"
     description: "Test complete session workflow: set parameters then reset"
-    args: 
+    args:
       - "query"
       - |
         SESSION SET VALUE $test_param = 'initial_value';
@@ -186,7 +186,7 @@ tests:
   - name: "session-workflow-multiple-parameters"
     description: "Test setting multiple session parameters"
     args:
-      - "query" 
+      - "query"
       - |
         SESSION SET VALUE $param1 = 100;
         SESSION SET VALUE $param2 = 'text_value';
@@ -199,7 +199,7 @@ tests:
   # ===============================
   # CURRENT GRAPH EXPRESSIONS
   # ===============================
-  
+
   - name: "current-graph-expression"
     description: "Test CURRENT_GRAPH expression"
     args: ["query", "RETURN CURRENT_GRAPH AS current_graph"]
@@ -223,7 +223,7 @@ tests:
   # ===============================
   # ERROR CASES
   # ===============================
-  
+
   - name: "session-set-invalid-parameter-name"
     description: "Test SESSION SET with invalid parameter name"
     skip: true  # Geode returns status codes via response, not exit codes - test runner limitation

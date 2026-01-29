@@ -31,17 +31,17 @@ You are a senior **Zig 0.15.1** engineer. Build an **mTLS enhancement** for this
      and declare at top of `main` local args section:
      `var client_ca_path: ?[]const u8 = null;`
      `var require_client_cert: bool = false;`
-     (As specified in the design. **Anchor source**.) 
+     (As specified in the design. **Anchor source**.)
    * **Anchor 2 (transport init call site):** Find the call like
      `var transport = try quic_transport.QuicTransport.init(gpa, .{`
      with fields `.address`, `.port`, `.cert_path`, `.key_path`. Extend the init struct with
      `.ca_path = if (require_client_cert or (client_ca_path != null)) client_ca_path.? else null,`
-     and **before** starting listener: if `require_client_cert == true` **and** `client_ca_path == null`, log **ERROR `"mTLS: --client-ca is required when --require-client-cert is set"`** and exit **64**. 
-   * **Anchor 3 (help text):** Update `--help` output to document `--client-ca` and `--require-client-cert`. 
+     and **before** starting listener: if `require_client_cert == true` **and** `client_ca_path == null`, log **ERROR `"mTLS: --client-ca is required when --require-client-cert is set"`** and exit **64**.
+   * **Anchor 3 (help text):** Update `--help` output to document `--client-ca` and `--require-client-cert`.
 
 2. **QUIC server transport — `src/transport/quic.zig`**
 
-   * **Anchor 4 (QuicTransport.init / config struct):** Add a **`.ca_path: ?[]const u8 = null`** field to the transport config. Plumb this into the underlying **quic lib config**. Set `allow_insecure = false` (or leave default false) when `.ca_path` is non‑null. Defaults remain unchanged when `.ca_path` is null. (Server must request & verify client cert if `ca_path` present.) 
+   * **Anchor 4 (QuicTransport.init / config struct):** Add a **`.ca_path: ?[]const u8 = null`** field to the transport config. Plumb this into the underlying **quic lib config**. Set `allow_insecure = false` (or leave default false) when `.ca_path` is non‑null. Defaults remain unchanged when `.ca_path` is null. (Server must request & verify client cert if `ca_path` present.)
 
 3. **CLI client — `src/client/main.zig`**
 
@@ -57,10 +57,10 @@ You are a senior **Zig 0.15.1** engineer. Build an **mTLS enhancement** for this
      }
      ```
 
-     Declare locals: `var ca_cert_path: ?[]const u8 = null; var client_cert_path: ?[]const u8 = null; var client_key_path: ?[]const u8 = null;` and reflect in `--help` text. 
+     Declare locals: `var ca_cert_path: ?[]const u8 = null; var client_cert_path: ?[]const u8 = null; var client_key_path: ?[]const u8 = null;` and reflect in `--help` text.
    * **Anchor 6 (connect):** At the site that currently does `client.connect(server_address, server_port)` add an overload/config param so you call:
      `client.connect(server_address, server_port, ca_cert_path, client_cert_path, client_key_path);`
-     This must wire the provided paths into QUIC/TLS. 
+     This must wire the provided paths into QUIC/TLS.
 
 4. **Zig client library — `clients/zig/client.zig`**
 
@@ -72,9 +72,9 @@ You are a senior **Zig 0.15.1** engineer. Build an **mTLS enhancement** for this
      client_key_path: ?[]const u8 = null,
      ```
 
-     (keep defaults null). 
+     (keep defaults null).
    * **Anchor 8 (Client.connect):** When present, propagate these to the QUIC client config:
-     `cfg.ca_path = ca; cfg.cert_path = cert; cfg.key_path = key;` and set `allow_insecure = false` whenever `ca_path` is not null. 
+     `cfg.ca_path = ca; cfg.cert_path = cert; cfg.key_path = key;` and set `allow_insecure = false` whenever `ca_path` is not null.
 
 **Errors (policy)**
 
@@ -83,10 +83,10 @@ You are a senior **Zig 0.15.1** engineer. Build an **mTLS enhancement** for this
 
 **Edge cases**
 
-* `--require-client-cert` without `--client-ca` → hard fail (64). 
+* `--require-client-cert` without `--client-ca` → hard fail (64).
 * Provided file path exists but unreadable → error 64.
 * Client provided only `--client-cert` without `--client-key` (or vice versa) → error 64.
-* Client provides `--ca-cert` → enforce verification; else preserve current behavior (dev mode) while warning if verification is skipped. 
+* Client provides `--ca-cert` → enforce verification; else preserve current behavior (dev mode) while warning if verification is skipped.
 
 **Tests**
 
@@ -132,7 +132,7 @@ You are a senior **Zig 0.15.1** engineer. Build an **mTLS enhancement** for this
 --require-client-cert        (bool; requires --client-ca)
 ```
 
-* Behavior: if `--require-client-cert` (or `--client-ca`) present → set `.ca_path` and enforce client‑cert verification. 
+* Behavior: if `--require-client-cert` (or `--client-ca`) present → set `.ca_path` and enforce client‑cert verification.
 
 **Client CLI (`geodec`)**
 
@@ -142,7 +142,7 @@ You are a senior **Zig 0.15.1** engineer. Build an **mTLS enhancement** for this
 --client-key <path>          (client key PEM)
 ```
 
-* Behavior: if `--ca-cert` provided → set `allow_insecure=false`; if cert+key provided → present client cert during handshake. 
+* Behavior: if `--ca-cert` provided → set `allow_insecure=false`; if cert+key provided → present client cert during handshake.
 
 **Zig Client Config (`clients/zig/client.zig`)**
 
@@ -158,7 +158,7 @@ pub const Config = struct {
 };
 ```
 
-(Connect must propagate these into QUIC config; set `allow_insecure=false` when CA provided.) 
+(Connect must propagate these into QUIC config; set `allow_insecure=false` when CA provided.)
 
 ## Tests (Acceptance)
 
@@ -183,7 +183,7 @@ pub const Config = struct {
 * **Cmd:** `geoded --require-client-cert --cert certs/s.crt --key certs/s.key`
 * **Exit:** `64`
 * **stderr (exact contains):** `ERROR mTLS: --client-ca is required when --require-client-cert is set`
-  *(From server init guard.)* 
+  *(From server init guard.)*
 
 **T2 — mTLS success path**
 
@@ -219,11 +219,11 @@ pub const Config = struct {
 
 ## Assumptions
 
-A1) Paths and anchors exist as in the design doc. 
+A1) Paths and anchors exist as in the design doc.
 A2) Zig 0.15.1 toolchain available (document install).
-A3) Only Zig server/CLI/Zig client are in scope now. 
+A3) Only Zig server/CLI/Zig client are in scope now.
 A4) Linux test host with OpenSSL.
-A5) QUIC config supports `.ca_path`/`allow_insecure`. 
+A5) QUIC config supports `.ca_path`/`allow_insecure`.
 
 ---
 
@@ -242,7 +242,7 @@ A5) QUIC config supports `.ca_path`/`allow_insecure`.
 
 ### Notes on file/line references back to your doc
 
-* **Server flags & transport `.ca_path`**: described in your design at **“In the argument parsing loop (around where --cert and --key are handled…)”** and **“var transport = try quic_transport.QuicTransport.init(…) … // .ca_path to be added”** — that’s what **Anchor 1–2** implement. 
-* **QUIC config changes** (`ca_path`, `allow_insecure`): “Currently server sets `QuicConfig.ca_path = null (no client auth)`; change to provided path; ensure `allow_insecure` remains false.” — **Anchor 4**. 
-* **CLI client flags & connect wiring**: “Add `--ca-cert`, `--client-cert`, `--client-key` and pass to `QuicClient.connect`” — **Anchor 5–6**. 
-* **Zig client library config/propagation** — **Anchor 7–8**. 
+* **Server flags & transport `.ca_path`**: described in your design at **“In the argument parsing loop (around where --cert and --key are handled…)”** and **“var transport = try quic_transport.QuicTransport.init(…) … // .ca_path to be added”** — that’s what **Anchor 1–2** implement.
+* **QUIC config changes** (`ca_path`, `allow_insecure`): “Currently server sets `QuicConfig.ca_path = null (no client auth)`; change to provided path; ensure `allow_insecure` remains false.” — **Anchor 4**.
+* **CLI client flags & connect wiring**: “Add `--ca-cert`, `--client-cert`, `--client-key` and pass to `QuicClient.connect`” — **Anchor 5–6**.
+* **Zig client library config/propagation** — **Anchor 7–8**.

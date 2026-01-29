@@ -272,11 +272,11 @@ benchmarks:
   - name: "env_var_resolution_speed"
     description: "Environment variable resolution performance"
     target_time_ms: 50
-    
+
   - name: "large_env_var_handling"
     description: "Large environment variable processing performance"
     target_time_ms: 100
-    
+
   - name: "multiple_vars_resolution"
     description: "Multiple environment variables resolution performance"
     target_time_ms: 75
@@ -286,11 +286,11 @@ security_tests:
   - name: "no_server_side_exposure"
     description: "Verify no environment variable syntax reaches server"
     requirement: "All ${} syntax must be resolved client-side"
-    
+
   - name: "sensitive_data_handling"
     description: "Verify sensitive environment data handling"
     requirement: "Client-only resolution prevents server exposure"
-    
+
   - name: "malformed_syntax_safety"
     description: "Verify malformed syntax doesn't cause security issues"
     requirement: "Graceful handling of invalid syntax patterns"

@@ -4,6 +4,7 @@
 import subprocess
 import sys
 
+
 def run_query(query, user=None, password=None):
     """Run a query and return stdout."""
     cmd = ["./zig-out/bin/geode", "query", "--server 127.0.0.1:3141 --insecure", "--format", "json", "-"]
@@ -12,6 +13,7 @@ def run_query(query, user=None, password=None):
 
     result = subprocess.run(cmd, input=query, capture_output=True, text=True, timeout=10)
     return result.returncode, result.stdout, result.stderr
+
 
 def test_split_node():
     """Test split-node-into-multiple variable scoping."""
@@ -32,14 +34,15 @@ def test_split_node():
 
     code, stdout, stderr = run_query(query)
 
-    if code == 0 and '"1"' in stdout or '[[1]]' in stdout:
+    if code == 0 and '"1"' in stdout or "[[1]]" in stdout:
         print("  ✓ split-node-into-multiple: PASSED")
         return True
     else:
-        print(f"  ✗ split-node-into-multiple: FAILED")
+        print("  ✗ split-node-into-multiple: FAILED")
         print(f"    stdout: {stdout}")
         print(f"    stderr: {stderr}")
         return False
+
 
 def test_not_pattern():
     """Test NOT (pattern) syntax."""
@@ -56,14 +59,15 @@ def test_not_pattern():
 
     code, stdout, stderr = run_query(query)
 
-    if code == 0 and ('"1"' in stdout or '[[1]]' in stdout):
+    if code == 0 and ('"1"' in stdout or "[[1]]" in stdout):
         print("  ✓ NOT (pattern): PASSED")
         return True
     else:
-        print(f"  ✗ NOT (pattern): FAILED")
+        print("  ✗ NOT (pattern): FAILED")
         print(f"    stdout: {stdout}")
         print(f"    stderr: {stderr}")
         return False
+
 
 def test_batch_create_relationships():
     """Test batch-create-relationships."""
@@ -80,14 +84,15 @@ def test_batch_create_relationships():
 
     code, stdout, stderr = run_query(query)
 
-    if code == 0 and ('"3"' in stdout or '[[3]]' in stdout):
+    if code == 0 and ('"3"' in stdout or "[[3]]" in stdout):
         print("  ✓ batch-create-relationships: PASSED")
         return True
     else:
-        print(f"  ✗ batch-create-relationships: FAILED")
+        print("  ✗ batch-create-relationships: FAILED")
         print(f"    stdout: {stdout}")
         print(f"    stderr: {stderr}")
         return False
+
 
 def test_auth_system():
     """Test authentication system."""
@@ -95,12 +100,20 @@ def test_auth_system():
 
     # Start server with auth enabled
     server = subprocess.Popen(
-        ["./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:9999", "--server 127.0.0.1:3141 --insecure", "--enable-auth"],
+        [
+            "./zig-out/bin/geode",
+            "serve",
+            "--listen",
+            "127.0.0.1:9999",
+            "--server 127.0.0.1:3141 --insecure",
+            "--enable-auth",
+        ],
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
+        stderr=subprocess.PIPE,
     )
 
     import time
+
     time.sleep(2)  # Wait for server to start
 
     try:
@@ -118,6 +131,7 @@ def test_auth_system():
         server.terminate()
         server.wait()
 
+
 def test_tde_validation():
     """Test TDE provider validation."""
     print("Testing TDE provider validation...")
@@ -131,9 +145,10 @@ def test_tde_validation():
         print("  ✓ TDE validation: PASSED")
         return True
     else:
-        print(f"  ✗ TDE validation: FAILED (expected error)")
+        print("  ✗ TDE validation: FAILED (expected error)")
         print(f"    stdout: {stdout}")
         return False
+
 
 def test_cdc_validation():
     """Test CDC guardrail validation."""
@@ -148,9 +163,10 @@ def test_cdc_validation():
         print("  ✓ CDC validation: PASSED")
         return True
     else:
-        print(f"  ✗ CDC validation: FAILED (expected error)")
+        print("  ✗ CDC validation: FAILED (expected error)")
         print(f"    stdout: {stdout}")
         return False
+
 
 def test_audit_logging():
     """Test audit.get_recent_events procedure."""
@@ -165,14 +181,15 @@ def test_audit_logging():
         print("  ✓ Audit logging: PASSED")
         return True
     else:
-        print(f"  ✗ Audit logging: FAILED")
+        print("  ✗ Audit logging: FAILED")
         print(f"    stdout: {stdout}")
         return False
 
+
 def main():
-    print("="*60)
+    print("=" * 60)
     print("Testing Recently Implemented Features")
-    print("="*60)
+    print("=" * 60)
     print()
 
     results = []
@@ -193,9 +210,9 @@ def main():
         results.append(("Auth system", auth_result))
 
     print()
-    print("="*60)
+    print("=" * 60)
     print("Summary")
-    print("="*60)
+    print("=" * 60)
 
     passed = sum(1 for _, r in results if r is True)
     failed = sum(1 for _, r in results if r is False)
@@ -209,6 +226,7 @@ def main():
                 print(f"  - {name}")
 
     return 0 if failed == 0 else 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

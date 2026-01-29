@@ -65,6 +65,7 @@ Both fail during the initial TLS handshake phase with identical 10-second timeou
 ### Why quiche Works
 
 **quiche** (Cloudflare's QUIC implementation) uses **BoringSSL** (Google's TLS fork), which has:
+
 - Battle-tested compatibility with msquic
 - Used in production by major services (Cloudflare, etc.)
 - Known to interoperate with Microsoft's TLS implementation
@@ -72,6 +73,7 @@ Both fail during the initial TLS handshake phase with identical 10-second timeou
 ### Why quiche Doesn't Build in Nix
 
 BoringSSL is a C++ library that requires:
+
 - Specific C++ standard library headers (`stdlib.h`, `cstdlib`)
 - CMake build system
 - Compatible compiler toolchain
@@ -90,6 +92,7 @@ fatal error: stdlib.h: No such file or directory
 **File**: `clients/rust/src/client.rs` (517 lines)
 
 **Architecture**:
+
 ```rust
 // Clean async/await pattern
 #[tokio::main]
@@ -102,6 +105,7 @@ async fn main() -> Result<()> {
 ```
 
 **Key Features**:
+
 - Bidirectional stream management
 - Line-delimited JSON protocol support
 - Full Geode protocol: HELLO, RUN_GQL, PULL, BEGIN, COMMIT, ROLLBACK
@@ -109,6 +113,7 @@ async fn main() -> Result<()> {
 - Type-safe value decoding
 
 **Code Metrics**:
+
 - Original (quiche version): 661 lines
 - Current (s2n-quic): 517 lines
 - Reduction: 22% fewer lines
@@ -134,6 +139,7 @@ scp user@linux-machine:geode-client/target/release/libgeode_client.so .
 ```
 
 **Steps**:
+
 1. Modify `Cargo.toml` to use quiche 0.22
 2. Rewrite `client.rs` for quiche event-driven API (can reuse quiche version from previous attempt)
 3. Build in Docker or standard Linux
@@ -146,6 +152,7 @@ scp user@linux-machine:geode-client/target/release/libgeode_client.so .
 **Success Probability**: 70%
 
 Create Rust bindings to msquic C library (same approach as Go client):
+
 - Guaranteed compatibility (using same library as server)
 - Complex FFI bindings required
 - Manual memory management
@@ -156,6 +163,7 @@ Create Rust bindings to msquic C library (same approach as Go client):
 **Success Probability**: 50%
 
 Modify Geode server to support multiple TLS implementations:
+
 - Add rustls or s2n-tls support to server
 - Major architectural change
 - Affects all clients
@@ -185,18 +193,21 @@ Modify Geode server to support multiple TLS implementations:
 ## Testing Evidence
 
 ### Python Client (100% - aioquic)
+
 ```
 Total: 49 | Passed: 49 | Failed: 0 | Errors: 0
 Pass Rate: 100.0%
 ```
 
 ### Go Client (100% - msquic)
+
 ```
 Total: 49 | Passed: 49 | Failed: 0 | Errors: 0
 Pass Rate: 100.0%
 ```
 
 ### Rust Client (0% - s2n-quic)
+
 ```
 Total: 15 | Passed: 0 | Failed: 0 | Errors: 15
 Pass Rate: 0.0%
@@ -209,6 +220,7 @@ All tests: ERROR - TLS handshake timeout
 ### Detailed Error Analysis
 
 **s2n-quic Connection Attempt**:
+
 ```
 [S2N-QUIC] Creating connection to localhost:63811
 [S2N-QUIC] Connected, opening bidirectional stream
@@ -218,6 +230,7 @@ Error: Connection("Connection failed: The connection was closed because the
 ```
 
 **Interpretation**:
+
 - UDP connection succeeds
 - QUIC version negotiation succeeds
 - TLS 1.3 handshake starts but never completes
@@ -227,6 +240,7 @@ Error: Connection("Connection failed: The connection was closed because the
 ### Dependency Tree
 
 **s2n-quic 1.69.0** dependencies:
+
 ```
 s2n-quic
 ├── s2n-quic-core 0.69.0
@@ -246,6 +260,7 @@ All pure Rust (no C++ dependencies), builds cleanly in Nix.
 The s2n-quic implementation is **code-complete and production-quality**, but **blocked by fundamental TLS compatibility issues** with the msquic server. The solution is clear: use quiche built outside the Nix environment.
 
 This testing conclusively demonstrates that:
+
 1. ✅ Python (aioquic) and Go (msquic) clients are fully functional
 2. ✅ Rust client code is well-architected and compiles successfully
 3. ❌ msquic server is incompatible with Rust TLS implementations except quiche

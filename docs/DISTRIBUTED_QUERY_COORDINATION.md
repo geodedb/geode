@@ -49,6 +49,7 @@ const result = try coordinator.executeDistributedQuery(
 ```
 
 **Execution Flow:**
+
 1. **Query Analysis**: Parse and analyze query to determine distribution strategy
 2. **Optimization**: Generate optimized execution plan with shard pruning
 3. **Scatter Phase**: Send query fragments to relevant shards in parallel
@@ -70,6 +71,7 @@ defer plan.deinit();
 ```
 
 **Optimization Features:**
+
 - **Shard Pruning**: Eliminate unnecessary shards based on query predicates
 - **Predicate Pushdown**: Push filtering operations to individual shards
 - **Join Optimization**: Optimize cross-shard joins with local pre-filtering
@@ -81,46 +83,56 @@ defer plan.deinit();
 The system supports multiple result merging strategies based on query characteristics:
 
 #### Union All (Simple Concatenation)
+
 ```zig
 // Fast concatenation for unordered results
 const merged = try coordinator.unionAllResults(shard_results, options);
 ```
+
 - **Use Case**: Simple MATCH queries without ordering
 - **Performance**: O(n) where n is total result size
 - **Memory**: Linear with result size
 
 #### Union Distinct (Deduplication)
+
 ```zig
 // Remove duplicates across shards
 const merged = try coordinator.unionDistinctResults(shard_results, options);
 ```
+
 - **Use Case**: Queries that may return duplicates across shards
 - **Performance**: O(n log n) with hash-based deduplication
 - **Memory**: Additional hash table for seen results
 
 #### Merge Sorted (Global Ordering)
+
 ```zig
 // K-way merge for globally ordered results
 const merged = try coordinator.mergeSortedResults(shard_results, order_keys, options);
 ```
+
 - **Use Case**: Queries with ORDER BY clauses
 - **Performance**: O(n log k) where k is number of shards
 - **Memory**: Priority queue for k-way merge
 
 #### Hash Aggregate (Distributed Aggregation)
+
 ```zig
 // Two-phase aggregation for GROUP BY
 const merged = try coordinator.hashAggregateResults(shard_results, options);
 ```
+
 - **Use Case**: Aggregation queries (COUNT, SUM, AVG, etc.)
 - **Performance**: O(n) for most aggregation functions
 - **Memory**: Hash table for grouping keys
 
 #### Top-K (Distributed Top-K)
+
 ```zig
 // Efficient distributed Top-K with heap
 const merged = try coordinator.topKResults(shard_results, options);
 ```
+
 - **Use Case**: Queries with LIMIT and ORDER BY
 - **Performance**: O(n log k) where k is the limit
 - **Memory**: Heap of size k for efficient Top-K
@@ -139,6 +151,7 @@ const result = try transport.executeRemoteQuery(node_id, federated_query);
 ```
 
 **Connection Features:**
+
 - **Connection Pooling**: Reuse connections across queries for efficiency
 - **Health Monitoring**: Automatic detection and replacement of unhealthy connections
 - **Retry Logic**: Exponential backoff for failed connections
@@ -160,6 +173,7 @@ const result = try coordinator.executeDistributedQuery(query, params, cache_opti
 ```
 
 **Caching Features:**
+
 - **Query Hash-Based Caching**: Hash queries and parameters for cache keys
 - **TTL-Based Expiration**: Automatic cache expiration with configurable TTL
 - **LRU Eviction**: Least-recently-used eviction when cache is full
@@ -249,7 +263,7 @@ fn handleResultChunk(chunk: ResultChunk) anyerror!void {
         // Process each row as it arrives
         std.debug.print("Received row: {}\n", .{row});
     }
-    
+
     if (chunk.is_final) {
         std.debug.print("Query completed\n", .{});
     }
@@ -408,7 +422,7 @@ for (pool.connections) |connection| {
     if (!connection.isHealthy()) {
         // Log unhealthy connection
         std.log.warn("Unhealthy connection to node {d}", .{connection.node_id});
-        
+
         // Automatic recovery handled by connection pool
     }
 }
@@ -441,13 +455,13 @@ var attempts: u32 = 0;
 while (attempts < transport.retry_attempts) : (attempts += 1) {
     connection.send(data) catch |err| {
         if (attempts == transport.retry_attempts - 1) return err;
-        
+
         // Exponential backoff
         const delay_ms = @as(u64, 100) << @intCast(attempts);
         std.time.sleep(delay_ms * std.time.ns_per_ms);
         continue;
     };
-    
+
     break;
 }
 ```

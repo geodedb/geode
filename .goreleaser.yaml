@@ -8,7 +8,7 @@ project_name: geode
 before:
   hooks:
     # Ensure clean state
-    - rm -rf dist/
+  - rm -rf dist/
 
 # =============================================================================
 # Zig Cross-Compilation Builds
@@ -17,24 +17,24 @@ before:
 # Reference: https://goreleaser.com/customization/builds/zig/
 
 builds:
-  - id: geode
-    builder: zig
-    binary: geode
-    dir: .
-    command: build
-    flags:
-      - "-Doptimize=ReleaseSafe"
-    targets:
+- id: geode
+  builder: zig
+  binary: geode
+  dir: .
+  command: build
+  flags:
+  - -Doptimize=ReleaseSafe
+  targets:
       # Linux targets
-      - x86_64-linux-gnu
-      - x86_64-linux-musl
-      - aarch64-linux-gnu
-      - aarch64-linux-musl
-      - arm-linux-gnueabihf
-      - riscv64-linux-gnu
+  - x86_64-linux-gnu
+  - x86_64-linux-musl
+  - aarch64-linux-gnu
+  - aarch64-linux-musl
+  - arm-linux-gnueabihf
+  - riscv64-linux-gnu
       # macOS targets
-      - x86_64-macos
-      - aarch64-macos
+  - x86_64-macos
+  - aarch64-macos
       # Windows targets - currently disabled due to QUIC library socket type incompatibilities
       # TODO: Re-enable when vendor/quic adds Windows socket support
       # - x86_64-windows
@@ -45,26 +45,26 @@ builds:
 # =============================================================================
 
 archives:
-  - id: geode-archives
-    ids:
-      - geode
+- id: geode-archives
+  ids:
+  - geode
     # Use Target directly which contains the full Zig target string
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Target }}"
-    format_overrides:
-      - goos: windows
-        formats: [zip]
-    files:
-      - README.md
-      - LICENSE
-      - docs/QUICK_REFERENCE.md
-      - docs/API_REFERENCE.md
+  name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Target }}'
+  format_overrides:
+  - goos: windows
+    formats: [zip]
+  files:
+  - README.md
+  - LICENSE
+  - docs/QUICK_REFERENCE.md
+  - docs/API_REFERENCE.md
 
 # =============================================================================
 # Checksums
 # =============================================================================
 
 checksum:
-  name_template: "checksums.txt"
+  name_template: checksums.txt
   algorithm: sha256
 
 # =============================================================================
@@ -72,7 +72,7 @@ checksum:
 # =============================================================================
 
 snapshot:
-  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
+  version_template: '{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}'
 
 # =============================================================================
 # Changelog Generation
@@ -82,32 +82,32 @@ changelog:
   sort: asc
   use: git
   groups:
-    - title: "Breaking Changes"
-      regexp: '^.*!:.*$'
-      order: 0
-    - title: "Features"
-      regexp: '^.*feat(\(.+\))?:.*$'
-      order: 1
-    - title: "Bug Fixes"
-      regexp: '^.*fix(\(.+\))?:.*$'
-      order: 2
-    - title: "Security"
-      regexp: '^.*sec(\(.+\))?:.*$'
-      order: 3
-    - title: "Performance"
-      regexp: '^.*perf(\(.+\))?:.*$'
-      order: 4
-    - title: "Documentation"
-      regexp: '^.*docs(\(.+\))?:.*$'
-      order: 5
-    - title: "Other"
-      order: 999
+  - title: Breaking Changes
+    regexp: ^.*!:.*$
+    order: 0
+  - title: Features
+    regexp: ^.*feat(\(.+\))?:.*$
+    order: 1
+  - title: Bug Fixes
+    regexp: ^.*fix(\(.+\))?:.*$
+    order: 2
+  - title: Security
+    regexp: ^.*sec(\(.+\))?:.*$
+    order: 3
+  - title: Performance
+    regexp: ^.*perf(\(.+\))?:.*$
+    order: 4
+  - title: Documentation
+    regexp: ^.*docs(\(.+\))?:.*$
+    order: 5
+  - title: Other
+    order: 999
   filters:
     exclude:
-      - '^chore:'
-      - '^style:'
-      - 'Merge pull request'
-      - 'Merge branch'
+    - '^chore:'
+    - '^style:'
+    - Merge pull request
+    - Merge branch
 
 # =============================================================================
 # Docker Images - Multi-Architecture
@@ -118,198 +118,198 @@ changelog:
 
 dockers:
   # Debian-based images - GitLab Registry
-  - id: geode-debian-amd64
-    ids:
-      - geode
-    goos: linux
-    goarch: amd64
-    image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64"
-    dockerfile: Dockerfile.release
-    use: buildx
-    build_flag_templates:
-      - "--pull"
-      - "--platform=linux/amd64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
-      - "--label=org.opencontainers.image.source={{.GitURL}}"
-      - "--label=org.opencontainers.image.description=Geode Graph Database - GQL-compliant property-graph database"
-      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+- id: geode-debian-amd64
+  ids:
+  - geode
+  goos: linux
+  goarch: amd64
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64'
+  dockerfile: Dockerfile.release
+  use: buildx
+  build_flag_templates:
+  - --pull
+  - --platform=linux/amd64
+  - --label=org.opencontainers.image.created={{.Date}}
+  - --label=org.opencontainers.image.title={{.ProjectName}}
+  - --label=org.opencontainers.image.revision={{.FullCommit}}
+  - --label=org.opencontainers.image.version={{.Version}}
+  - --label=org.opencontainers.image.source={{.GitURL}}
+  - --label=org.opencontainers.image.description=Geode Graph Database - GQL-compliant property-graph database
+  - --label=org.opencontainers.image.licenses=Apache-2.0
 
-  - id: geode-debian-arm64
-    ids:
-      - geode
-    goos: linux
-    goarch: arm64
-    image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64"
-    dockerfile: Dockerfile.release
-    use: buildx
-    build_flag_templates:
-      - "--pull"
-      - "--platform=linux/arm64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
+- id: geode-debian-arm64
+  ids:
+  - geode
+  goos: linux
+  goarch: arm64
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64'
+  dockerfile: Dockerfile.release
+  use: buildx
+  build_flag_templates:
+  - --pull
+  - --platform=linux/arm64
+  - --label=org.opencontainers.image.created={{.Date}}
+  - --label=org.opencontainers.image.title={{.ProjectName}}
+  - --label=org.opencontainers.image.revision={{.FullCommit}}
+  - --label=org.opencontainers.image.version={{.Version}}
 
   # Alpine-based images (smaller, musl-linked) - GitLab Registry
-  - id: geode-alpine-amd64
-    ids:
-      - geode
-    goos: linux
-    goarch: amd64
-    image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-amd64"
-    dockerfile: Dockerfile.release.alpine
-    use: buildx
-    build_flag_templates:
-      - "--pull"
-      - "--platform=linux/amd64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}-alpine"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
+- id: geode-alpine-amd64
+  ids:
+  - geode
+  goos: linux
+  goarch: amd64
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-amd64'
+  dockerfile: Dockerfile.release.alpine
+  use: buildx
+  build_flag_templates:
+  - --pull
+  - --platform=linux/amd64
+  - --label=org.opencontainers.image.created={{.Date}}
+  - --label=org.opencontainers.image.title={{.ProjectName}}-alpine
+  - --label=org.opencontainers.image.revision={{.FullCommit}}
+  - --label=org.opencontainers.image.version={{.Version}}
 
-  - id: geode-alpine-arm64
-    ids:
-      - geode
-    goos: linux
-    goarch: arm64
-    image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-arm64"
-    dockerfile: Dockerfile.release.alpine
-    use: buildx
-    build_flag_templates:
-      - "--pull"
-      - "--platform=linux/arm64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}-alpine"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
+- id: geode-alpine-arm64
+  ids:
+  - geode
+  goos: linux
+  goarch: arm64
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-arm64'
+  dockerfile: Dockerfile.release.alpine
+  use: buildx
+  build_flag_templates:
+  - --pull
+  - --platform=linux/arm64
+  - --label=org.opencontainers.image.created={{.Date}}
+  - --label=org.opencontainers.image.title={{.ProjectName}}-alpine
+  - --label=org.opencontainers.image.revision={{.FullCommit}}
+  - --label=org.opencontainers.image.version={{.Version}}
 
   # Docker Hub images - Debian-based
   # Requires: docker login docker.io before running goreleaser
-  - id: geode-dockerhub-debian-amd64
-    ids:
-      - geode
-    goos: linux
-    goarch: amd64
-    image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-amd64"
-    dockerfile: Dockerfile.release
-    use: buildx
-    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
-    build_flag_templates:
-      - "--pull"
-      - "--platform=linux/amd64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
-      - "--label=org.opencontainers.image.source=https://gitlab.com/devnw/codepros/geode/geode"
-      - "--label=org.opencontainers.image.description=Geode Graph Database - GQL-compliant property-graph database"
-      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+- id: geode-dockerhub-debian-amd64
+  ids:
+  - geode
+  goos: linux
+  goarch: amd64
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-amd64
+  dockerfile: Dockerfile.release
+  use: buildx
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
+  build_flag_templates:
+  - --pull
+  - --platform=linux/amd64
+  - --label=org.opencontainers.image.created={{.Date}}
+  - --label=org.opencontainers.image.title={{.ProjectName}}
+  - --label=org.opencontainers.image.revision={{.FullCommit}}
+  - --label=org.opencontainers.image.version={{.Version}}
+  - --label=org.opencontainers.image.source=https://gitlab.com/devnw/codepros/geode/geode
+  - --label=org.opencontainers.image.description=Geode Graph Database - GQL-compliant property-graph database
+  - --label=org.opencontainers.image.licenses=Apache-2.0
 
-  - id: geode-dockerhub-debian-arm64
-    ids:
-      - geode
-    goos: linux
-    goarch: arm64
-    image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-arm64"
-    dockerfile: Dockerfile.release
-    use: buildx
-    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
-    build_flag_templates:
-      - "--pull"
-      - "--platform=linux/arm64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
+- id: geode-dockerhub-debian-arm64
+  ids:
+  - geode
+  goos: linux
+  goarch: arm64
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-arm64
+  dockerfile: Dockerfile.release
+  use: buildx
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
+  build_flag_templates:
+  - --pull
+  - --platform=linux/arm64
+  - --label=org.opencontainers.image.created={{.Date}}
+  - --label=org.opencontainers.image.title={{.ProjectName}}
+  - --label=org.opencontainers.image.revision={{.FullCommit}}
+  - --label=org.opencontainers.image.version={{.Version}}
 
   # Docker Hub images - Alpine-based
-  - id: geode-dockerhub-alpine-amd64
-    ids:
-      - geode
-    goos: linux
-    goarch: amd64
-    image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-alpine-amd64"
-    dockerfile: Dockerfile.release.alpine
-    use: buildx
-    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
-    build_flag_templates:
-      - "--pull"
-      - "--platform=linux/amd64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}-alpine"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
+- id: geode-dockerhub-alpine-amd64
+  ids:
+  - geode
+  goos: linux
+  goarch: amd64
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-alpine-amd64
+  dockerfile: Dockerfile.release.alpine
+  use: buildx
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
+  build_flag_templates:
+  - --pull
+  - --platform=linux/amd64
+  - --label=org.opencontainers.image.created={{.Date}}
+  - --label=org.opencontainers.image.title={{.ProjectName}}-alpine
+  - --label=org.opencontainers.image.revision={{.FullCommit}}
+  - --label=org.opencontainers.image.version={{.Version}}
 
-  - id: geode-dockerhub-alpine-arm64
-    ids:
-      - geode
-    goos: linux
-    goarch: arm64
-    image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-alpine-arm64"
-    dockerfile: Dockerfile.release.alpine
-    use: buildx
-    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
-    build_flag_templates:
-      - "--pull"
-      - "--platform=linux/arm64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}-alpine"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
+- id: geode-dockerhub-alpine-arm64
+  ids:
+  - geode
+  goos: linux
+  goarch: arm64
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-alpine-arm64
+  dockerfile: Dockerfile.release.alpine
+  use: buildx
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
+  build_flag_templates:
+  - --pull
+  - --platform=linux/arm64
+  - --label=org.opencontainers.image.created={{.Date}}
+  - --label=org.opencontainers.image.title={{.ProjectName}}-alpine
+  - --label=org.opencontainers.image.revision={{.FullCommit}}
+  - --label=org.opencontainers.image.version={{.Version}}
 
   # GPU-enabled images (NVIDIA CUDA) - GitLab Registry
   # Note: GPU images are x86_64 only - NVIDIA CUDA doesn't support ARM64 well under QEMU
-  - id: geode-gpu-amd64
-    ids:
-      - geode
-    goos: linux
-    goarch: amd64
-    image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu"
-    dockerfile: Dockerfile.release.gpu
-    use: buildx
-    build_flag_templates:
-      - "--pull"
-      - "--platform=linux/amd64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}-gpu"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
-      - "--label=org.opencontainers.image.description=Geode Graph Database with GPU acceleration (NVIDIA CUDA)"
-      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+- id: geode-gpu-amd64
+  ids:
+  - geode
+  goos: linux
+  goarch: amd64
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu'
+  dockerfile: Dockerfile.release.gpu
+  use: buildx
+  build_flag_templates:
+  - --pull
+  - --platform=linux/amd64
+  - --label=org.opencontainers.image.created={{.Date}}
+  - --label=org.opencontainers.image.title={{.ProjectName}}-gpu
+  - --label=org.opencontainers.image.revision={{.FullCommit}}
+  - --label=org.opencontainers.image.version={{.Version}}
+  - --label=org.opencontainers.image.description=Geode Graph Database with GPU acceleration (NVIDIA CUDA)
+  - --label=org.opencontainers.image.licenses=Apache-2.0
 
   # GPU-enabled images (NVIDIA CUDA) - Docker Hub
-  - id: geode-dockerhub-gpu-amd64
-    ids:
-      - geode
-    goos: linux
-    goarch: amd64
-    image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-gpu"
-    dockerfile: Dockerfile.release.gpu
-    use: buildx
-    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
-    build_flag_templates:
-      - "--pull"
-      - "--platform=linux/amd64"
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}-gpu"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
-      - "--label=org.opencontainers.image.source=https://gitlab.com/devnw/codepros/geode/geode"
-      - "--label=org.opencontainers.image.description=Geode Graph Database with GPU acceleration (NVIDIA CUDA)"
-      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+- id: geode-dockerhub-gpu-amd64
+  ids:
+  - geode
+  goos: linux
+  goarch: amd64
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-gpu
+  dockerfile: Dockerfile.release.gpu
+  use: buildx
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
+  build_flag_templates:
+  - --pull
+  - --platform=linux/amd64
+  - --label=org.opencontainers.image.created={{.Date}}
+  - --label=org.opencontainers.image.title={{.ProjectName}}-gpu
+  - --label=org.opencontainers.image.revision={{.FullCommit}}
+  - --label=org.opencontainers.image.version={{.Version}}
+  - --label=org.opencontainers.image.source=https://gitlab.com/devnw/codepros/geode/geode
+  - --label=org.opencontainers.image.description=Geode Graph Database with GPU acceleration (NVIDIA CUDA)
+  - --label=org.opencontainers.image.licenses=Apache-2.0
 
 # =============================================================================
 # Docker Manifests - Multi-arch tags
@@ -320,214 +320,214 @@ dockers:
 
 docker_manifests:
   # GitLab Registry manifests
-  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}"
-    image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64"
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64"
+- name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}'
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64'
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64'
 
-  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:latest"
-    image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64"
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64"
+- name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:latest'
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64'
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64'
 
   # Major.Minor tag (e.g., v0.18 for v0.18.1)
-  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:v{{ .Major }}.{{ .Minor }}"
-    image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64"
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64"
+- name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:v{{ .Major }}.{{ .Minor }}'
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64'
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64'
 
   # Major tag (e.g., v0 for v0.18.1)
-  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:v{{ .Major }}"
-    image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64"
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64"
+- name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:v{{ .Major }}'
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64'
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64'
 
-  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:alpine"
-    image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-amd64"
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-arm64"
+- name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:alpine'
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-amd64'
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-arm64'
 
-  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine"
-    image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-amd64"
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-arm64"
+- name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine'
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-amd64'
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-arm64'
 
   # Docker Hub manifests - pushed on tag releases only
-  - name_template: "docker.io/geodedb/geode:{{ .Version }}"
-    image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-amd64"
-      - "docker.io/geodedb/geode:{{ .Version }}-arm64"
-    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
+- name_template: docker.io/geodedb/geode:{{ .Version }}
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-amd64
+  - docker.io/geodedb/geode:{{ .Version }}-arm64
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
 
-  - name_template: "docker.io/geodedb/geode:latest"
-    image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-amd64"
-      - "docker.io/geodedb/geode:{{ .Version }}-arm64"
-    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
+- name_template: docker.io/geodedb/geode:latest
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-amd64
+  - docker.io/geodedb/geode:{{ .Version }}-arm64
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
 
   # Major.Minor tag for Docker Hub (e.g., v0.18 for v0.18.1)
-  - name_template: "docker.io/geodedb/geode:v{{ .Major }}.{{ .Minor }}"
-    image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-amd64"
-      - "docker.io/geodedb/geode:{{ .Version }}-arm64"
-    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
+- name_template: docker.io/geodedb/geode:v{{ .Major }}.{{ .Minor }}
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-amd64
+  - docker.io/geodedb/geode:{{ .Version }}-arm64
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
 
   # Major tag for Docker Hub (e.g., v0 for v0.18.1)
-  - name_template: "docker.io/geodedb/geode:v{{ .Major }}"
-    image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-amd64"
-      - "docker.io/geodedb/geode:{{ .Version }}-arm64"
-    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
+- name_template: docker.io/geodedb/geode:v{{ .Major }}
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-amd64
+  - docker.io/geodedb/geode:{{ .Version }}-arm64
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
 
-  - name_template: "docker.io/geodedb/geode:alpine"
-    image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-alpine-amd64"
-      - "docker.io/geodedb/geode:{{ .Version }}-alpine-arm64"
-    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
+- name_template: docker.io/geodedb/geode:alpine
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-alpine-amd64
+  - docker.io/geodedb/geode:{{ .Version }}-alpine-arm64
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
 
-  - name_template: "docker.io/geodedb/geode:{{ .Version }}-alpine"
-    image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-alpine-amd64"
-      - "docker.io/geodedb/geode:{{ .Version }}-alpine-arm64"
-    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
+- name_template: docker.io/geodedb/geode:{{ .Version }}-alpine
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-alpine-amd64
+  - docker.io/geodedb/geode:{{ .Version }}-alpine-arm64
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
 
   # GPU tags - x86_64 only (NVIDIA CUDA doesn't support ARM64 cross-compilation)
   # Note: GPU images don't need manifests since they're single-arch (amd64 only)
-  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:gpu"
-    image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu"
+- name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:gpu'
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu'
 
-  - name_template: "docker.io/geodedb/geode:gpu"
-    image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-gpu"
-    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
+- name_template: docker.io/geodedb/geode:gpu
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-gpu
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
 
-  - name_template: "docker.io/geodedb/geode:v{{ .Major }}.{{ .Minor }}-gpu"
-    image_templates:
-      - "docker.io/geodedb/geode:{{ .Version }}-gpu"
-    skip_push: "{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB \"true\") }}true{{ end }}"
+- name_template: docker.io/geodedb/geode:v{{ .Major }}.{{ .Minor }}-gpu
+  image_templates:
+  - docker.io/geodedb/geode:{{ .Version }}-gpu
+  skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
 
-  - name_template: "{{ .Env.CI_REGISTRY_IMAGE }}:v{{ .Major }}.{{ .Minor }}-gpu"
-    image_templates:
-      - "{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu"
+- name_template: '{{ .Env.CI_REGISTRY_IMAGE }}:v{{ .Major }}.{{ .Minor }}-gpu'
+  image_templates:
+  - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu'
 
 # =============================================================================
 # System Packages - nFPM (deb, rpm, apk)
 # =============================================================================
 
 nfpms:
-  - id: geode-packages
-    package_name: geode
-    ids:
-      - geode
-    vendor: CodePros
-    homepage: https://gitlab.com/devnw/codepros/geode/geode
-    maintainer: Geode Team <geode@codepros.dev>
-    description: |-
-      Geode Graph Database - ISO/IEC 39075:2024 GQL-compliant property-graph database.
+- id: geode-packages
+  package_name: geode
+  ids:
+  - geode
+  vendor: CodePros
+  homepage: https://gitlab.com/devnw/codepros/geode/geode
+  maintainer: Geode Team <geode@codepros.dev>
+  description: |-
+    Geode Graph Database - ISO/IEC 39075:2024 GQL-compliant property-graph database.
 
-      Geode is a high-performance graph database implementing the GQL standard
-      with ACID guarantees, QUIC/TLS transport, and enterprise security features.
-    license: Apache-2.0
-    formats:
-      - deb
-      - rpm
-      - apk
-    bindir: /usr/bin
-    section: database
-    priority: optional
-    provides:
-      - geode
-    dependencies:
-      - ca-certificates
-    recommends:
-      - openssl
-    file_name_template: >-
-      {{ .ProjectName }}_{{ .Version }}_
-      {{- if eq .Os "linux" }}Linux{{- else }}{{ title .Os }}{{ end }}_
-      {{- if eq .Arch "amd64" }}x86_64
-      {{- else if eq .Arch "386" }}i386
-      {{- else if eq .Arch "arm" }}armv{{ .Arm }}
-      {{- else if eq .Arch "arm64" }}arm64
-      {{- else if eq .Arch "riscv64" }}riscv64
-      {{- else }}{{ .Arch }}{{ end }}
-    contents:
+    Geode is a high-performance graph database implementing the GQL standard
+    with ACID guarantees, QUIC/TLS transport, and enterprise security features.
+  license: Apache-2.0
+  formats:
+  - deb
+  - rpm
+  - apk
+  bindir: /usr/bin
+  section: database
+  priority: optional
+  provides:
+  - geode
+  dependencies:
+  - ca-certificates
+  recommends:
+  - openssl
+  file_name_template: >-
+    {{ .ProjectName }}_{{ .Version }}_
+    {{- if eq .Os "linux" }}Linux{{- else }}{{ title .Os }}{{ end }}_
+    {{- if eq .Arch "amd64" }}x86_64
+    {{- else if eq .Arch "386" }}i386
+    {{- else if eq .Arch "arm" }}armv{{ .Arm }}
+    {{- else if eq .Arch "arm64" }}arm64
+    {{- else if eq .Arch "riscv64" }}riscv64
+    {{- else }}{{ .Arch }}{{ end }}
+  contents:
       # Documentation
-      - src: README.md
-        dst: /usr/share/doc/geode/README.md
-        file_info:
-          mode: 0644
+  - src: README.md
+    dst: /usr/share/doc/geode/README.md
+    file_info:
+      mode: 0644
 
-      - src: LICENSE
-        dst: /usr/share/doc/geode/LICENSE
-        file_info:
-          mode: 0644
+  - src: LICENSE
+    dst: /usr/share/doc/geode/LICENSE
+    file_info:
+      mode: 0644
 
-      - src: docs/QUICK_REFERENCE.md
-        dst: /usr/share/doc/geode/QUICK_REFERENCE.md
-        file_info:
-          mode: 0644
+  - src: docs/QUICK_REFERENCE.md
+    dst: /usr/share/doc/geode/QUICK_REFERENCE.md
+    file_info:
+      mode: 0644
 
       # Data directory
-      - dst: /var/lib/geode
-        type: dir
-        file_info:
-          mode: 0750
+  - dst: /var/lib/geode
+    type: dir
+    file_info:
+      mode: 0750
 
       # Log directory
-      - dst: /var/log/geode
-        type: dir
-        file_info:
-          mode: 0750
+  - dst: /var/log/geode
+    type: dir
+    file_info:
+      mode: 0750
 
       # Certificate directory
-      - dst: /etc/geode/certs
-        type: dir
-        file_info:
-          mode: 0700
+  - dst: /etc/geode/certs
+    type: dir
+    file_info:
+      mode: 0700
 
       # Systemd service file
-      - src: deployment/systemd/geode.service
-        dst: /lib/systemd/system/geode.service
-        file_info:
-          mode: 0644
+  - src: deployment/systemd/geode.service
+    dst: /lib/systemd/system/geode.service
+    file_info:
+      mode: 0644
 
       # Systemd template service (for multi-instance)
-      - src: deployment/systemd/geode@.service
-        dst: /lib/systemd/system/geode@.service
-        file_info:
-          mode: 0644
+  - src: deployment/systemd/geode@.service
+    dst: /lib/systemd/system/geode@.service
+    file_info:
+      mode: 0644
 
       # Default configuration directory
-      - dst: /etc/geode
-        type: dir
-        file_info:
-          mode: 0755
+  - dst: /etc/geode
+    type: dir
+    file_info:
+      mode: 0755
 
-    overrides:
-      deb:
-        dependencies:
-          - ca-certificates
-          - libssl3
-        recommends:
-          - libvulkan1
+  overrides:
+    deb:
+      dependencies:
+      - ca-certificates
+      - libssl3
+      recommends:
+      - libvulkan1
         # Issue #379: Ensure compatibility with newer Ubuntu versions (25.04+)
         # Using gzip compression for maximum compatibility
-        compression: gzip
-      rpm:
-        dependencies:
-          - ca-certificates
-          - openssl-libs
-        compression: gzip
-      apk:
-        dependencies:
-          - ca-certificates
-          - libssl3
+      compression: gzip
+    rpm:
+      dependencies:
+      - ca-certificates
+      - openssl-libs
+      compression: gzip
+    apk:
+      dependencies:
+      - ca-certificates
+      - libssl3
 
-    scripts:
-      postinstall: scripts/packaging/postinstall.sh
-      preremove: scripts/packaging/preremove.sh
-      postremove: scripts/packaging/postremove.sh
+  scripts:
+    postinstall: scripts/packaging/postinstall.sh
+    preremove: scripts/packaging/preremove.sh
+    postremove: scripts/packaging/postremove.sh
 
 # =============================================================================
 # GitLab Release
@@ -538,7 +538,7 @@ release:
   # GitLab's native release: keyword in .gitlab-ci.yml handles release creation instead
   disable: true
 
-  name_template: "Geode v{{ .Version }}"
+  name_template: Geode v{{ .Version }}
 
   prerelease: auto
   draft: false
@@ -601,9 +601,9 @@ release:
     Download the appropriate archive for your platform from the assets below.
 
   extra_files:
-    - glob: ./dist/*.deb
-    - glob: ./dist/*.rpm
-    - glob: ./dist/*.apk
+  - glob: ./dist/*.deb
+  - glob: ./dist/*.rpm
+  - glob: ./dist/*.apk
 
 # =============================================================================
 # Homebrew Tap
@@ -639,11 +639,11 @@ release:
 # =============================================================================
 
 universal_binaries:
-  - id: geode-universal
-    ids:
-      - geode
-    name_template: "geode"
-    replace: true
+- id: geode-universal
+  ids:
+  - geode
+  name_template: geode
+  replace: true
 
 # =============================================================================
 # Announce (disabled - configure webhooks in GitLab)
@@ -657,7 +657,7 @@ announce:
 # =============================================================================
 
 metadata:
-  mod_timestamp: "{{ .CommitTimestamp }}"
+  mod_timestamp: '{{ .CommitTimestamp }}'
 
 # =============================================================================
 # SBOMs (Software Bill of Materials)

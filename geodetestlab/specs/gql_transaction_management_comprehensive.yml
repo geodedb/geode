@@ -20,7 +20,7 @@ tests:
   # ===============================
   # BASIC TRANSACTION COMMANDS
   # ===============================
-  
+
   - name: "basic-start-transaction"
     description: "Test basic START TRANSACTION command"
     args: ["query", "START TRANSACTION"]
@@ -53,7 +53,7 @@ tests:
   # ===============================
   # TRANSACTION CHARACTERISTICS
   # ===============================
-  
+
   - name: "transaction-read-only"
     description: "Test START TRANSACTION READ ONLY"
     args: ["query", "START TRANSACTION READ ONLY"]
@@ -71,7 +71,7 @@ tests:
   # ===============================
   # TRANSACTION WORKFLOWS
   # ===============================
-  
+
   - name: "transaction-commit-workflow"
     description: "Complete transaction workflow with data modification and commit"
     args:
@@ -118,7 +118,7 @@ tests:
   # ===============================
   # NESTED TRANSACTIONS
   # ===============================
-  
+
   - name: "nested-transaction-procedure"
     description: "Test transaction with nested procedure specification"
     args:
@@ -138,7 +138,7 @@ tests:
   # ===============================
   # TRANSACTION ISOLATION TESTS
   # ===============================
-  
+
   - name: "transaction-isolation-commit"
     description: "Test transaction isolation - changes visible after commit"
     args:
@@ -180,7 +180,7 @@ tests:
   # ===============================
   # COMPLEX TRANSACTION SCENARIOS
   # ===============================
-  
+
   - name: "transaction-multiple-operations"
     description: "Transaction with multiple CREATE, SET, and DELETE operations"
     args:
@@ -209,7 +209,7 @@ tests:
         CREATE (a:TxNode {id: 1, name: 'source'}),
                (b:TxNode {id: 2, name: 'target'}),
                (a)-[:CONNECTS {weight: 1.5}]->(b);
-        MATCH (a:TxNode)-[r:CONNECTS]->(b:TxNode) 
+        MATCH (a:TxNode)-[r:CONNECTS]->(b:TxNode)
         RETURN a.name AS source, b.name AS target, r.weight AS weight;
         COMMIT
     expect:
@@ -222,7 +222,7 @@ tests:
   # ===============================
   # TRANSACTION ERROR SCENARIOS
   # ===============================
-  
+
   - name: "commit-without-transaction"
     description: "Test COMMIT without active transaction"
     args: ["query", "COMMIT"]
@@ -262,7 +262,7 @@ tests:
   # ===============================
   # TRANSACTION STATE VERIFICATION
   # ===============================
-  
+
   - name: "transaction-state-after-commit"
     description: "Verify transaction state after successful commit"
     args:
@@ -304,7 +304,7 @@ tests:
   # ===============================
   # PERFORMANCE TESTS
   # ===============================
-  
+
   - name: "transaction-performance-large"
     description: "Performance test with larger transaction"
     timeout_ms: 30000
@@ -337,7 +337,7 @@ tests:
   # ===============================
   # CLEANUP
   # ===============================
-  
+
   - name: "cleanup-test-data"
     description: "Clean up all test data created during transaction tests"
     args:

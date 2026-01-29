@@ -7,7 +7,6 @@ Aggregates test results from all clients and generates a comprehensive HTML repo
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -220,15 +219,15 @@ def generate_html_report(results: dict[str, Any], totals: dict[str, int], output
             </div>
             <div class="summary-grid">
                 <div class="stat-box">
-                    <div class="stat-value">{totals['total_tests']}</div>
+                    <div class="stat-value">{totals["total_tests"]}</div>
                     <div class="stat-label">Total Tests</div>
                 </div>
                 <div class="stat-box">
-                    <div class="stat-value status-passed">{totals['passed']}</div>
+                    <div class="stat-value status-passed">{totals["passed"]}</div>
                     <div class="stat-label">Passed</div>
                 </div>
                 <div class="stat-box">
-                    <div class="stat-value status-failed">{totals['failed']}</div>
+                    <div class="stat-value status-failed">{totals["failed"]}</div>
                     <div class="stat-label">Failed</div>
                 </div>
                 <div class="stat-box">
@@ -345,11 +344,15 @@ def main():
     # Also output JSON summary
     json_output = output_path.with_suffix(".json")
     with open(json_output, "w") as f:
-        json.dump({
-            "timestamp": datetime.now().isoformat(),
-            "totals": totals,
-            "clients": results,
-        }, f, indent=2)
+        json.dump(
+            {
+                "timestamp": datetime.now().isoformat(),
+                "totals": totals,
+                "clients": results,
+            },
+            f,
+            indent=2,
+        )
     print(f"JSON summary: {json_output}")
 
     # Exit with appropriate code

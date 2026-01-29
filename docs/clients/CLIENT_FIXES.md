@@ -1,21 +1,25 @@
 # Client Library Fixes - November 2025
 
 ## Overview
+
 This document tracks issues and fixes applied to the Geode client libraries to restore functionality after msquic integration changes.
 
 ## Zig Client (`clients/zig/`)
 
 ### Issue 1: Missing msquic Wrapper Submodule
+
 **Problem**: The Zig client referenced `../../tools/zig-msquic/src/msquic_wrapper.zig` which didn't exist. The submodule was removed but the client wasn't updated.
 
 **Root Cause**: The client was expecting a separate msquic wrapper in `tools/zig-msquic/` but this directory was empty.
 
 **Solution**:
+
 1. Copied msquic wrapper files from geode's server implementation to the client directory:
    - `src/transport/msquic_types.zig` → `clients/zig/msquic_types.zig`
    - `src/transport/msquic_wrapper.zig` → `clients/zig/msquic_wrapper.zig`
 
 2. Updated `clients/zig/geode_client_v2.zig`:
+
    ```zig
    // Before:
    const MsQuic = @import("../../tools/zig-msquic/src/msquic_wrapper.zig");
@@ -25,9 +29,11 @@ This document tracks issues and fixes applied to the Geode client libraries to r
    ```
 
 ### Issue 2: Incomplete msquic Wrapper API
+
 **Problem**: The wrapper was missing many types, constants, and helper functions that the client code expected.
 
 **Missing Components**:
+
 - `QuicStatus` helper struct with `isError()` method
 - `QuicSettings` with user-friendly `IsSet.flags` interface
 - Event structure definitions (`struct_QUIC_CONNECTION_EVENT`, `struct_QUIC_STREAM_EVENT`)
@@ -35,6 +41,7 @@ This document tracks issues and fixes applied to the Geode client libraries to r
 - Function types: `ConnectionShutdownFn`, `StreamCallbackFn`
 
 **Solution**: Enhanced `msquic_wrapper.zig` with:
+
 ```zig
 // Status helper
 pub const QuicStatus = struct {
@@ -80,10 +87,13 @@ pub const QUIC_ADDRESS_FAMILY_UNSPEC: u16 = @intCast(@intFromEnum(types.QUIC_ADD
 ```
 
 ### Issue 3: Build Configuration Issues
+
 **Problem**: The `build.zig` tried to reference non-existent wrapper modules and had incorrect library paths.
 
 **Solution**: Rewrote `clients/zig/build.zig` to:
+
 1. Link msquic and dependencies directly:
+
    ```zig
    test_exe.linkSystemLibrary("msquic");
    test_exe.linkSystemLibrary("ssl");
@@ -94,12 +104,14 @@ pub const QUIC_ADDRESS_FAMILY_UNSPEC: u16 = @intCast(@intFromEnum(types.QUIC_ADD
    ```
 
 2. Use local fork headers and system library:
+
    ```zig
    const msquic_include = b.graph.env_map.get("MSQUIC_INCLUDE_DIR") orelse "../../forks/msquic/src/inc";
    const msquic_lib = b.graph.env_map.get("MSQUIC_LIB_DIR") orelse "/usr/lib/x86_64-linux-gnu";
    ```
 
 3. Create proper module dependencies:
+
    ```zig
    const msquic_types_mod = b.createModule(.{
        .root_source_file = b.path("msquic_types.zig"),
@@ -118,13 +130,17 @@ pub const QUIC_ADDRESS_FAMILY_UNSPEC: u16 = @intCast(@intFromEnum(types.QUIC_ADD
    ```
 
 ### Issue 4: Type Compatibility Issues
+
 **Problem**: Multiple type mismatches between client code and wrapper API:
+
 - Callback signatures used `[*c]` pointers instead of `*const` pointers
 - Single pointers passed where many pointers (`[*]`) were expected
 - Enum values used where integer types were expected
 
 **Solutions**:
+
 1. Fixed callback signatures:
+
    ```zig
    // Before:
    fn connectionCallback(
@@ -142,6 +158,7 @@ pub const QUIC_ADDRESS_FAMILY_UNSPEC: u16 = @intCast(@intFromEnum(types.QUIC_ADD
    ```
 
 2. Fixed buffer passing:
+
    ```zig
    // Before:
    msquic.StreamSend.?(stream, &buffer, 1, flags, null)
@@ -152,15 +169,18 @@ pub const QUIC_ADDRESS_FAMILY_UNSPEC: u16 = @intCast(@intFromEnum(types.QUIC_ADD
    ```
 
 3. Cast settings structures:
+
    ```zig
    const settings_ptr: *const MsQuic.QUIC_SETTINGS = @ptrCast(&settings);
    msquic.ConfigurationOpen.?(registration, &alpn_array, 1, settings_ptr, ...)
    ```
 
 ### Issue 5: API Table Optional Function Pointers
+
 **Problem**: The client code used `.?` on function pointers, but they weren't marked as optional in the API table.
 
 **Solution**: Made all function pointers in `QUIC_API_TABLE` optional:
+
 ```zig
 pub const QUIC_API_TABLE = extern struct {
     RegistrationOpen: ?RegistrationOpenFn,
@@ -175,7 +195,9 @@ pub const QUIC_API_TABLE = extern struct {
 ```
 
 ### Build Result
+
 ✅ **Status**: FIXED
+
 - Binary: `clients/zig/zig-out/bin/test_connection_v2` (8.3M)
 - Build command: `cd clients/zig && zig build`
 - All compilation errors resolved
@@ -183,34 +205,41 @@ pub const QUIC_API_TABLE = extern struct {
 ## Rust Client (`clients/rust/`)
 
 ### Issue 1: Connection Timeouts
+
 **Problem**: All Rust client tests timeout after 5-10 seconds. The client appears to hang during connection or query execution.
 
 **Symptoms**:
+
 ```
 Running rust... ⚠ ERROR (10007.1ms)
   Error: Test timed out
 ```
 
 **Observations**:
+
 - Python and Go clients complete the same tests in ~50-400ms
 - Rust client consistently times out on every test
 - No error messages, just timeout
 - Build completes successfully with warnings about unused fields
 
 **Potential Causes**:
+
 1. QUIC connection not establishing properly
 2. TLS handshake hanging
 3. Stream setup or send/receive logic blocking indefinitely
 4. Missing async/await handling
 
 **Investigation Needed**:
+
 - Check if the Rust client's quiche integration is compatible with geode's QUIC implementation
 - Verify TLS certificate handling
 - Add debug logging to identify where the hang occurs
 - Test basic connectivity outside the test harness
 
 ### Build Warnings
+
 The Rust build shows several warnings about unused fields:
+
 ```rust
 warning: fields `socket`, `peer_addr`, and `page_size` are never read
    --> clients/rust/src/client.rs:114:5
@@ -234,9 +263,11 @@ warning: fields `decimal_scale` and `time_value` are never read
 ## Zig Test Runner (`clients/test-harness/runners/zig_runner_new.zig`)
 
 ### Issue 1: YAML Parser Cannot Handle Commas in Values
+
 **Problem**: The Zig test runner's YAML parser fails when parsing query strings that contain commas (like multiple column selections).
 
 **Error Pattern**:
+
 ```
 Error: [YAML DEBUG] Expected ':' after key ', 'Hello' AS greeting, true AS flag' at pos=134, line=4, col=1
 [YAML DEBUG] Found character: '\n' (0xa)
@@ -246,12 +277,14 @@ error: UnexpectedToken
 **Root Cause**: The YAML parser in `src/util/yaml.zig` incorrectly treats commas within quoted strings as key-value separators, breaking on multi-column RETURN statements.
 
 **Affected Tests**: Any test with queries containing commas:
+
 - `RETURN 1 AS x, 'Hello' AS greeting, true AS flag`
 - `RETURN $name AS name, $age AS age`
 - `RETURN NULL AS null_value, 1 AS not_null`
 - `RETURN [1, 2, 3, 4, 5] AS numbers`
 
 **Examples of Failing Queries**:
+
 1. Multiple columns: `RETURN 1 AS x, 'Hello' AS greeting`
 2. Parameters: `RETURN $name AS name, $age AS age`
 3. Arithmetic: `RETURN 10 - 3 AS diff, 4 * 5 AS product`
@@ -259,6 +292,7 @@ error: UnexpectedToken
 5. Functions: `SELECT auth.login('testuser', 'testpass123') AS session`
 
 **Solution Needed**: Fix the YAML parser to properly handle:
+
 1. Quoted strings (single and double quotes)
 2. Nested structures (arrays, objects)
 3. Commas within values vs key-value separators
@@ -269,11 +303,13 @@ error: UnexpectedToken
 ## Python Client (`clients/python/`)
 
 ### Issue 1: Stream Data Not Readable After QUIC Migration (CRITICAL)
+
 **Problem**: After migrating from msquic to vendor/quic (native Zig QUIC), the Python client can establish QUIC connections and complete the TLS handshake, but cannot read data from streams. The server receives STREAM frames with the client's messages, queues them correctly, but `stream.readLine()` fails to retrieve the queued data.
 
 **Status**: ⚠️ BROKEN - 0% pass rate (was 100% before vendor/quic migration)
 
 **Symptoms**:
+
 ```
 🔗 Connecting to localhost:3141...
 ✅ Connected!
@@ -305,6 +341,7 @@ error: UnexpectedToken
 The issue is in the integration between vendor/quic's internal stream data management and our wrapper API:
 
 **File**: `src/server/quic_connection_handler.zig` (lines 84-151)
+
 ```zig
 // Accept stream (line 86)
 const stream = try conn.acceptStream();  // Returns QuicStream handle
@@ -325,6 +362,7 @@ const line = while (read_attempts < 20) : (read_attempts += 1) {
 ```
 
 **File**: `src/transport/quic.zig` (lines 305-307)
+
 ```zig
 pub fn read(self: *QuicStream, buffer: []u8) !usize {
     return api.readStream(self.connection, self.stream_id, buffer);
@@ -332,20 +370,24 @@ pub fn read(self: *QuicStream, buffer: []u8) !usize {
 ```
 
 **The Problem**:
+
 - `api.readStream()` needs to read from the connection's `streams_rx` HashMap where the data is queued
 - Current implementation may not be correctly accessing the queued inbox data
 - The `acceptStream()` call might create a new stream handle that doesn't map to the existing stream 0 where data is queued
 
 **Evidence from Server Logs**:
+
 ```
 [STREAM-FRAME] id=0 off=0 len=101 fin=false
 Server received STREAM frame - id=0, off=0, len=101, fin=false
 [STREAM-RX-AFTER] id=0 recv_off=101 inbox_len=101 bufs=0 fin_off=null
 [P57-6-QUEUE] Stream 0 queued (101 bytes in inbox, 1 total in queue)
 ```
+
 Data IS there, we just can't read it!
 
 **Impact**:
+
 - Python client: 0% pass rate (complete failure)
 - Affects all clients using the vendor/quic implementation
 - Blocking all client testing and development
@@ -357,6 +399,7 @@ After deep investigation with connection pointer tracing and debugging, the actu
 **✅ QUIC TRANSPORT LAYER: WORKING PERFECTLY**
 
 Debug logging confirmed:
+
 - Connection pointers MATCH: `conn=0x74edf3160000` consistent across push/read operations
 - Data IS queued successfully: `inbox_len=101` after client sends messages
 - Data inbox management works correctly in `vendor/quic/src/quic/conn.zig`
@@ -373,6 +416,7 @@ The problem was NOT in QUIC transport or protocol handling - it was in the **byt
 The `readLine()` function reads data byte-by-byte until it finds '\n'. However, when it encountered `error.WouldBlock` (meaning no more data available YET), it would **return whatever partial data it had collected**, even if it hadn't found the '\n' terminator.
 
 **Code Analysis (BEFORE FIX):**
+
 ```zig
 while (pos < max_size) {
     const n = self.read(&byte) catch |err| {
@@ -398,6 +442,7 @@ return result;
 ```
 
 **What Happened:**
+
 1. Client sends: `{"type": "HELLO", "client_name": "geode-python",...}\n` (101 bytes)
 2. Data arrives in stream inbox: 101 bytes queued
 3. `readLine()` starts reading byte-by-byte
@@ -444,11 +489,13 @@ return result;
 ```
 
 **Key Changes:**
+
 1. **Line 323-326**: When `WouldBlock` after reading some bytes → sleep 1ms and RETRY (don't return partial)
 2. **Line 330-336**: When stream ends without '\n' → return `UnexpectedEndOfStream` error (don't return partial)
 3. **Result**: Function now ALWAYS waits for complete line terminated by '\n'
 
 **Impact:**
+
 - ✅ Server receives complete JSON messages every time
 - ✅ No more "Invalid JSON" errors
 - ✅ HELLO handshake succeeds
@@ -458,6 +505,7 @@ return result;
 **✅ STATUS: FULLY FIXED, TESTED, AND DEPLOYED** (November 21, 2025)
 
 **Files Modified**:
+
 - `src/transport/quic.zig` (lines 311-359) - ✅ Complete fix with improved retry logic
 - ✅ BUILT AND TESTED - `zig build -Doptimize=ReleaseFast` successful
 - ✅ VERIFIED WORKING - Server PID 2666194 showed clean execution with no "Invalid JSON" errors
@@ -548,6 +596,7 @@ pub fn readLine(self: *QuicStream, max_size: usize) ![]u8 {
 **WHY THIS FIX WORKS**:
 
 The vendor QUIC implementation delivers data **asynchronously**:
+
 1. Client sends UDP packet with encrypted data
 2. Server receives packet → QUIC decrypts → queues in stream inbox
 3. This process takes **2-5 milliseconds** (network latency + crypto + queueing)
@@ -566,6 +615,7 @@ The vendor QUIC implementation delivers data **asynchronously**:
 ✅ **Stream Processing**: Server log shows `"Server received STREAM frame - id=0, off=0, len=101, fin=false"` followed by successful message handling
 
 **Server Log Evidence** (PID 2666194):
+
 ```
 Server received STREAM frame - id=0, off=0, len=101, fin=false
 [STREAM-RX-AFTER] id=0 recv_off=101 inbox_len=101 bufs=0 fin_off=null
@@ -577,12 +627,14 @@ Server received STREAM frame - id=0, off=0, len=101, fin=false
 ```
 
 **STATUS CHANGE**:
+
 - **Before Fix**: 0% pass rate - All clients failing with "Invalid JSON" errors after msquic→vendor/quic migration
 - **After Fix**: ✅ QUIC transport layer fully functional - HELLO handshakes working
 
 **TEST RESULTS AFTER FIX** (November 21, 2025):
 
 Full test harness run with the QUIC fix deployed:
+
 - **Python**: 9.8% pass rate (5/51 tests) - **UP FROM 0%**
 - **Go**: 7.8% pass rate (4/51 tests) - **UP FROM 0%**
 - **Rust**: 3.9% pass rate (2/51 tests) - **UP FROM 0%**
@@ -590,6 +642,7 @@ Full test harness run with the QUIC fix deployed:
 - **Overall**: 5.4% pass rate (11/204 tests) - **UP FROM 0%**
 
 **KEY FINDINGS**:
+
 1. ✅ **QUIC Transport Fix: FULLY SUCCESSFUL**
    - All clients can now complete QUIC handshakes
    - HELLO messages are received and parsed correctly
@@ -605,6 +658,7 @@ Full test harness run with the QUIC fix deployed:
 
 **Impact on ALL Clients**:
 This bug affects **ALL clients** that use the vendor/quic QUIC transport implementation:
+
 - ✅ Python client (`clients/python/`) - Primary affected client
 - ✅ Go client (`clients/go/`) - Uses same QUIC transport layer
 - ✅ Rust client (`clients/rust/`) - Uses same QUIC transport layer
@@ -614,17 +668,20 @@ This bug affects **ALL clients** that use the vendor/quic QUIC transport impleme
 **Root Cause Location**: The bug is in the **server-side** transport layer (`src/transport/quic.zig`), specifically in the `readLine()` function that ALL clients interact with. This is NOT a client-specific issue - it's a fundamental stream reading bug in the server's QUIC wrapper that affects all protocol messages from any client.
 
 **Why All Clients Are Affected**:
+
 1. All clients send newline-delimited JSON messages
 2. All messages go through the same `QuicStream.readLine()` function on the server
 3. The bug causes the server to return partial messages for ALL clients
 4. ALL clients receive "Invalid JSON" errors from the server
 
 **Fix Scope**:
+
 - **Single fix required**: Fixing `src/transport/quic.zig` fixes the issue for ALL clients
 - **No client-side changes needed**: All clients are correctly implemented
 - **Server-side only**: The bug is entirely in the server's stream reading logic
 
 **Next Steps**:
+
 1. ⏳ **IN PROGRESS**: Rebuilding binary with `zig build -Doptimize=ReleaseFast`
 2. ✅ Test with Python client to verify fix works end-to-end
 3. ✅ Test with Go client to verify fix
@@ -633,6 +690,7 @@ This bug affects **ALL clients** that use the vendor/quic QUIC transport impleme
 6. ✅ Run full test harness to verify all integration tests pass
 
 ### Previous Status (Before vendor/quic Migration)
+
 - ✅ All tests passing consistently
 - Response times: 390-570ms per test
 - msquic-based implementation working
@@ -640,6 +698,7 @@ This bug affects **ALL clients** that use the vendor/quic QUIC transport impleme
 ## Go Client (`clients/go/`)
 
 ### Status: ✅ WORKING
+
 - All tests passing consistently
 - Response times: 36-120ms per test (fastest client)
 - No known issues
@@ -657,19 +716,23 @@ Based on test harness run (in progress):
 | Zig (library) | ✅ Built | N/A | N/A | Needs msquic integration testing |
 
 **Latest Test Run (November 18, 2025 - Post-YAML Fixes)**:
+
 - Zig Runner: 0/51 tests passing (all fail with `error.StreamOpenFailed`)
 - YAML Parser: ✅ Working correctly - no parse errors
 - Issue: Zig client cannot establish QUIC connections to the server
 
 ### Issue 2: YAML Parser Treating Commas as Delimiters (FIXED)
+
 **Problem**: The YAML parser in `src/util/yaml.zig` was treating commas as delimiters even in block-style (non-flow) contexts. This caused queries like `RETURN 1 AS x, 'Hello' AS greeting` to be parsed incorrectly, stopping at the first comma.
 
 **Root Cause**: The test harness uses Python's `yaml.dump()` to create temporary test files (see `run_tests.py:687`), which generates unquoted YAML values:
+
 ```yaml
 query: RETURN 1 AS x, 'Hello' AS greeting, true AS flag  # No quotes!
 ```
 
 The Zig YAML parser's `parseScalar` function (line 325) was treating commas as delimiters in all contexts:
+
 ```zig
 // Before:
 if (ch == '\n' or ch == '\r' or ch == '#' or ch == ',' or ch == ']' or ch == '}') break;
@@ -680,11 +743,13 @@ According to YAML spec, commas should only be delimiters inside flow collections
 **Solution**: Added a `in_flow_context` parameter to `parseScalar()` to distinguish between flow and block contexts:
 
 1. Updated `parseScalar` signature:
+
    ```zig
    fn parseScalar(self: *Parser, in_flow_context: bool) Error!Value
    ```
 
 2. Modified delimiter logic (line 327-328):
+
    ```zig
    if (ch == '\n' or ch == '\r' or ch == '#') break;
    if (in_flow_context and (ch == ',' or ch == ']' or ch == '}')) break;
@@ -697,20 +762,24 @@ According to YAML spec, commas should only be delimiters inside flow collections
 4. Also added line-end skipping after inline values in `parseMap` (lines 255-260) to prevent trailing content from being misinterpreted as keys.
 
 **Result**: ✅ YAML parsing now works correctly for unquoted scalars with commas
+
 - Parser successfully handles queries like `RETURN 1 AS x, 'Hello' AS greeting, true AS flag`
 - Error changed from YAML parse failure to client connection issues (expected when server not running)
 - Files: `src/util/yaml.zig` lines 241, 267, 325-328
 
 ### Issue 3: YAML Parser Not Handling Multi-Line Scalars (FIXED)
+
 **Problem**: The YAML parser stopped at newlines even when the next line was a continuation with more indentation. This caused queries that span multiple lines to be parsed incorrectly.
 
 **Example Failing Query**:
+
 ```yaml
 query: RETURN true AND false AS and_result, true OR false AS or_result, NOT true
       AS not_result
 ```
 
 **Error Pattern**:
+
 ```
 Error: [YAML DEBUG] Expected ':' after key 'AS not_result' at pos=171, line=5, col=1
 error: UnexpectedToken
@@ -721,11 +790,13 @@ error: UnexpectedToken
 **Solution**: Enhanced `parseScalar` to detect and handle multi-line scalar continuations:
 
 1. Updated `parseScalar` signature to include indentation level:
+
    ```zig
    fn parseScalar(self: *Parser, in_flow_context: bool, indent_level: usize) Error!Value
    ```
 
 2. Added multi-line continuation logic (lines 325-391):
+
    ```zig
    // Use ArrayList to accumulate multi-line content
    var parts = try std.ArrayList(u8).initCapacity(self.allocator, 128);
@@ -761,20 +832,25 @@ error: UnexpectedToken
    - Added allocator parameter to `deinit` call
 
 **Result**: ✅ YAML parser now correctly handles multi-line scalar values
+
 - Parser successfully handles queries like:
+
   ```yaml
   query: RETURN true AND false AS and_result, true OR false AS or_result, NOT true
         AS not_result
   ```
+
 - Continuation lines are joined with space separators
 - No more YAML parse errors for multi-line queries
 - Test result changes from YAML parse error to connection error (expected behavior)
 - Files modified: `src/util/yaml.zig` lines 88, 241, 267, 325-391
 
 ### Issue 4: Zig Client Connection Failures (INVESTIGATING)
+
 **Problem**: After fixing the YAML parser, the Zig client can parse all test specifications correctly but fails to connect to the Geode server. All tests fail with `error.StreamOpenFailed`.
 
 **Test Results** (November 18, 2025):
+
 - Total Tests: 51
 - Passed: 0
 - Failed: 49
@@ -783,12 +859,14 @@ error: UnexpectedToken
 - Average failure time: ~165ms
 
 **Symptoms**:
+
 - No YAML parse errors (✅ parser working correctly)
 - All tests fail with `error.StreamOpenFailed`
 - Fast failure times (~165ms) suggest connection timeouts
 - Python and Go clients work fine with the same server
 
 **Potential Causes**:
+
 1. QUIC connection initialization failure in Zig client
 2. TLS certificate validation issues
 3. msquic API usage errors in the Zig wrapper
@@ -796,6 +874,7 @@ error: UnexpectedToken
 5. Connection callback not properly handling events
 
 **Investigation Needed**:
+
 1. Add debug logging to the Zig client to see where connection fails
 2. Verify msquic is properly initialized
 3. Check TLS certificate handling
@@ -807,6 +886,7 @@ error: UnexpectedToken
 ## Next Steps
 
 ### Immediate Priorities
+
 1. **✅ COMPLETED: Fix Zig Test Runner YAML Parser**
    - Location: `src/util/yaml.zig`
    - Issues Fixed:
@@ -832,12 +912,14 @@ error: UnexpectedToken
    - Investigation: Add debug logging, test basic connectivity, check quiche integration
 
 ### Follow-up Tasks
-4. Clean up Rust build warnings (unused fields)
-5. Add integration tests that bypass the YAML test runner
-6. Document client compatibility matrix
-7. Add troubleshooting guide for each client
+
+1. Clean up Rust build warnings (unused fields)
+2. Add integration tests that bypass the YAML test runner
+3. Document client compatibility matrix
+4. Add troubleshooting guide for each client
 
 ## Test Commands
+
 ```bash
 # Build Zig client
 cd clients/zig && zig build
@@ -860,6 +942,7 @@ cd clients/zig
 ## All Clients - QUIC PING Frame Handling During Handshake
 
 ### Issue: QUIC Handshake Rejection of PING Frames
+
 **Date**: November 21, 2025  
 **Status**: ✅ **FULLY FIXED**  
 **Affected**: ALL clients (Python, Go, Rust, Zig, test-harness)  
@@ -870,6 +953,7 @@ cd clients/zig
 **Root Cause**: The server's QUIC implementation in `vendor/quic/src/quic/endpoint/incoming.zig` was rejecting PING frames during the Handshake packet phase. According to RFC 9000 §19.2, PING frames ARE allowed in all packet types including Handshake packets, but our implementation only allowed CRYPTO, ACK, and PADDING frames.
 
 **Error Message**:
+
 ```
 processHandshake: Unexpected frame type in Handshake packet: .{ .ping = void }
 ```
@@ -891,6 +975,7 @@ else => {
 
 **Verification**:
 After rebuilding with `zig build -Doptimize=ReleaseFast`, Python client test shows:
+
 - ✅ QUIC handshake completes successfully
 - ✅ HELLO message exchange succeeds  
 - ✅ Connection fully established
@@ -899,6 +984,7 @@ After rebuilding with `zig build -Doptimize=ReleaseFast`, Python client test sho
 **Impact**: Fixed QUIC handshake for ALL clients. This was a blocking issue preventing any client connections from succeeding.
 
 **RFC Reference**: RFC 9000 Section 19.2 defines PING frames as valid in all encryption levels and packet types. They are used for:
+
 1. Keeping a connection alive
 2. Checking reachability of the peer
 3. Probing for path aliveness
@@ -927,6 +1013,7 @@ While investigating stream acceptance issues, added debug logging to trace strea
 ```
 
 **Impact**:
+
 - **1000+ log lines per second** (with 1ms sleep between iterations)
 - Server became unresponsive due to I/O overhead
 - Event loop couldn't process incoming connections
@@ -935,6 +1022,7 @@ While investigating stream acceptance issues, added debug logging to trace strea
 ### Root Cause
 
 Debug logging was added at these locations in main.zig:
+
 - Line 861: Main loop entry logging (per iteration)
 - Line 865: Per-connection check logging (per iteration × connections)
 - Lines 869, 877, 885: Connection state logging (per iteration × connections)
@@ -963,6 +1051,7 @@ if (conn.acceptStream()) |stream| {
 ```
 
 **Changes**:
+
 1. Removed line 861: Main loop entry logging
 2. Removed line 865: Per-connection check logging
 3. Removed lines 869, 877, 885: Connection state logging
@@ -976,6 +1065,7 @@ if (conn.acceptStream()) |stream| {
 ⏸️ **Stream handlers don't execute** - Discovered architectural issue (see Fix #4)
 
 Server output after fix:
+
 ```
 ✅ Accepted stream #1 from connection
 [P57-6-QUEUE] Stream 0 queued (101 bytes in inbox, 1 total in queue)
@@ -1008,6 +1098,7 @@ However, the `handleQuicStream` function is NEVER called. No `[STREAM-{x}] Strea
 Compared geode server implementation with the working echo_quic_server.zig example in vendor/quic/:
 
 **Current (Incorrect) Pattern in main.zig:880-891**:
+
 ```zig
 // Try to accept a stream (non-blocking)
 if (conn.acceptStream()) |stream| {
@@ -1026,6 +1117,7 @@ if (conn.acceptStream()) |stream| {
 ```
 
 **Correct Pattern from vendor/quic/echo_quic_server.zig:112-124**:
+
 ```zig
 // Try to handle multiple streams
 var stream_id: u64 = 0;
@@ -1049,6 +1141,7 @@ while (stream_id < 256) : (stream_id += 4) {  // Client-initiated bidirectional 
 The vendor/quic library does NOT use stream objects at all. It uses direct stream ID polling:
 
 **Key Differences**:
+
 1. **No `acceptStream()` method** - This doesn't work as expected
 2. **No stream objects** - Streams are managed internally by ID
 3. **Direct stream ID polling** - Must call `conn.readStream(stream_id, buffer)`
@@ -1056,6 +1149,7 @@ The vendor/quic library does NOT use stream objects at all. It uses direct strea
 5. **Direct writes** - Use `conn.writeStream(stream_id, data)` for responses
 
 **RFC 9000 Reference**: Section 2.1 defines stream IDs:
+
 - Client-initiated bidirectional streams: 0x00, 0x04, 0x08, 0x0C, ... (multiples of 4)
 - Server-initiated bidirectional streams: 0x01, 0x05, 0x09, 0x0D, ...
 - Client-initiated unidirectional streams: 0x02, 0x06, 0x0A, 0x0E, ...
@@ -1066,17 +1160,20 @@ The vendor/quic library does NOT use stream objects at all. It uses direct strea
 This is NOT a small bug fix - it requires significant architectural refactoring:
 
 **Phase 1: Replace Stream Acceptance Loop** (src/cli/main.zig:860-915)
+
 - Remove `acceptStream()` call
 - Add stream ID polling loop (0, 4, 8, 12...)
 - Use `conn.readStream(stream_id, buffer)` directly
 
 **Phase 2: Refactor Stream Handler** (src/cli/main.zig:268-700)
+
 - Remove stream parameter from `handleQuicStream`
 - Pass stream_id instead
 - Replace all `stream.read()` calls with `conn.readStream(stream_id, buffer)`
 - Replace all `stream.write()` calls with `conn.writeStream(stream_id, data)`
 
 **Phase 3: Remove Thread-Per-Stream Model**
+
 - Process streams in main event loop instead of spawning threads
 - Handle multiple streams per connection efficiently
 - Maintain per-stream state in connection-local storage
@@ -1094,4 +1191,3 @@ This is NOT a small bug fix - it requires significant architectural refactoring:
 
 **Current**: Phase 1 - Documenting issue and preparing refactor
 **Next**: Implement stream ID polling loop in main.zig
-

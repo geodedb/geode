@@ -12,25 +12,27 @@ Features:
 
 import atexit
 import copy
-import subprocess
-import yaml
-import sys
 import json
-import time
-import threading
-import queue
 import os
 import shlex
 import socket
-from pathlib import Path
-from datetime import datetime
+import subprocess
+import sys
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Tuple, Set
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple
+
+import yaml
+
 
 @dataclass
 class TestResult:
     """Represents the result of a single test execution."""
+
     spec_file: str
     test_name: str
     success: bool
@@ -40,10 +42,12 @@ class TestResult:
     stdout: str = ""
     stderr: str = ""
     timeout: bool = False
-    
+
+
 @dataclass
 class SpecResult:
     """Represents the results of all tests in a specification file."""
+
     spec_file: str
     total_tests: int
     passed: int
@@ -77,6 +81,7 @@ class Scenario:
             else:
                 expanded.append(flag)
         return expanded
+
 
 class PortAllocator:
     """Thread-safe port allocation manager for parallel test execution."""
@@ -138,23 +143,26 @@ class PortAllocator:
             # Try both TCP and UDP since QUIC uses UDP
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.bind(('127.0.0.1', port))
+                s.bind(("127.0.0.1", port))
 
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.bind(('127.0.0.1', port))
+                s.bind(("127.0.0.1", port))
 
             return True
         except OSError:
             return False
 
+
 class ParallelTestRunner:
-    def __init__(self,
-                 specs_dir: Path = None,
-                 binary: str = None,
-                 log_dir: Path = None,
-                 max_workers: int = 4,
-                 test_timeout: int = 30):  # Increased for QUIC handshake + query execution
+    def __init__(
+        self,
+        specs_dir: Path = None,
+        binary: str = None,
+        log_dir: Path = None,
+        max_workers: int = 4,
+        test_timeout: int = 30,
+    ):  # Increased for QUIC handshake + query execution
         self.project_root = Path(__file__).resolve().parents[2]
         self.specs_dir = specs_dir if specs_dir else self.project_root / "geodetestlab" / "specs"
         self.binary = binary if binary else str(self.project_root / "zig-out" / "bin" / "geode")
@@ -225,7 +233,10 @@ class ParallelTestRunner:
             {
                 "name": "server",
                 "roles": {
-                    "server": {"enabled": True, "default_flags": ["--cert", self.default_cert, "--key", self.default_key]},
+                    "server": {
+                        "enabled": True,
+                        "default_flags": ["--cert", self.default_cert, "--key", self.default_key],
+                    },
                     "client": {"mode": "server", "default_flags": ["--server", "${server_address}", "--insecure"]},
                 },
             },
@@ -375,7 +386,15 @@ class ParallelTestRunner:
 
         return scenarios
 
-    def process_args(self, args: List[str], scenario: Scenario, server_address: Optional[str] = None, instance_id: Optional[int] = None, loop_index: Optional[int] = None, preserve_server: bool = False) -> List[str]:
+    def process_args(
+        self,
+        args: List[str],
+        scenario: Scenario,
+        server_address: Optional[str] = None,
+        instance_id: Optional[int] = None,
+        loop_index: Optional[int] = None,
+        preserve_server: bool = False,
+    ) -> List[str]:
         """Process test arguments, handling variable substitution and server mode.
 
         Args:
@@ -441,11 +460,47 @@ class ParallelTestRunner:
             command = processed_args[0]
             # Detect query commands: explicit "query" subcommand OR query-like strings (starting with GQL keywords)
             # But first exclude known CLI commands (e.g., "user" starts with "USE" but is NOT a GQL query)
-            geode_cli_commands = {"query", "shell", "serve", "auth", "user", "role", "policy",
-                                  "grant", "revoke", "backup", "restore", "migrate", "lsp"}
-            gql_keywords = ["MATCH", "RETURN", "CREATE", "DELETE", "MERGE", "WITH", "UNWIND", "CALL",
-                           "INSERT", "SHOW", "EXPLAIN", "PROFILE", "USE", "SET", "BEGIN", "COMMIT",
-                           "ROLLBACK", "START", "SELECT", "OPTIONAL", "DROP", "ALTER", "GRANT", "REVOKE"]
+            geode_cli_commands = {
+                "query",
+                "shell",
+                "serve",
+                "auth",
+                "user",
+                "role",
+                "policy",
+                "grant",
+                "revoke",
+                "backup",
+                "restore",
+                "migrate",
+                "lsp",
+            }
+            gql_keywords = [
+                "MATCH",
+                "RETURN",
+                "CREATE",
+                "DELETE",
+                "MERGE",
+                "WITH",
+                "UNWIND",
+                "CALL",
+                "INSERT",
+                "SHOW",
+                "EXPLAIN",
+                "PROFILE",
+                "USE",
+                "SET",
+                "BEGIN",
+                "COMMIT",
+                "ROLLBACK",
+                "START",
+                "SELECT",
+                "OPTIONAL",
+                "DROP",
+                "ALTER",
+                "GRANT",
+                "REVOKE",
+            ]
             # Only check GQL keywords if not a known CLI command
             if command in geode_cli_commands:
                 is_query_like = False
@@ -497,7 +552,35 @@ class ParallelTestRunner:
         # These flags should only be added to query and shell commands
         if len(processed_args) > 0:
             command = processed_args[0]
-            is_query_command = command == "query" or any(command.upper().startswith(kw) for kw in ["MATCH", "RETURN", "CREATE", "DELETE", "MERGE", "WITH", "UNWIND", "CALL", "INSERT", "SHOW", "EXPLAIN", "PROFILE", "USE", "SET", "BEGIN", "COMMIT", "ROLLBACK", "START", "SELECT", "OPTIONAL", "DROP", "ALTER", "GRANT", "REVOKE"])
+            is_query_command = command == "query" or any(
+                command.upper().startswith(kw)
+                for kw in [
+                    "MATCH",
+                    "RETURN",
+                    "CREATE",
+                    "DELETE",
+                    "MERGE",
+                    "WITH",
+                    "UNWIND",
+                    "CALL",
+                    "INSERT",
+                    "SHOW",
+                    "EXPLAIN",
+                    "PROFILE",
+                    "USE",
+                    "SET",
+                    "BEGIN",
+                    "COMMIT",
+                    "ROLLBACK",
+                    "START",
+                    "SELECT",
+                    "OPTIONAL",
+                    "DROP",
+                    "ALTER",
+                    "GRANT",
+                    "REVOKE",
+                ]
+            )
             is_shell_command = command == "shell"
             if not is_query_command and not is_shell_command:
                 # Remove --insecure and --log-level flags that shouldn't be here
@@ -527,12 +610,21 @@ class ParallelTestRunner:
                     [self.binary, "query", "--server", server_address, "--insecure", "--log-level", "error", query],
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=5,
                 )
             except:
                 pass  # Ignore cleanup errors
 
-    def run_single_test(self, test_case: Dict, spec_name: str, scenario: Scenario, server_address: Optional[str] = None, instance_id: Optional[int] = None, loop_index: Optional[int] = None, data_dir: Optional[str] = None) -> TestResult:
+    def run_single_test(
+        self,
+        test_case: Dict,
+        spec_name: str,
+        scenario: Scenario,
+        server_address: Optional[str] = None,
+        instance_id: Optional[int] = None,
+        loop_index: Optional[int] = None,
+        data_dir: Optional[str] = None,
+    ) -> TestResult:
         """Run a single test case and return the result."""
         test_name = test_case.get("name", "unnamed")
 
@@ -556,15 +648,22 @@ class ParallelTestRunner:
         # Check if test wants to preserve its explicit --server argument
         # (e.g., for connection error tests that intentionally use invalid servers)
         preserve_server = test_case.get("no_server_override", False)
-        args = self.process_args(args, scenario, server_address=server_address, instance_id=instance_id, loop_index=loop_index, preserve_server=preserve_server)
+        args = self.process_args(
+            args,
+            scenario,
+            server_address=server_address,
+            instance_id=instance_id,
+            loop_index=loop_index,
+            preserve_server=preserve_server,
+        )
         expect = test_case.get("expect", {})
-        stdin_input = test_case.get("stdin", None)
+        stdin_input = test_case.get("stdin")
 
         # Prepare environment with isolated data directory for embedded mode
         env = os.environ.copy()
         if data_dir and not server_address:
             # Only set GEODE_DATA_DIR for embedded mode tests (not server mode)
-            env['GEODE_DATA_DIR'] = data_dir
+            env["GEODE_DATA_DIR"] = data_dir
 
         # Handle setup commands - run them separately with persistence
         setup_commands = test_case.get("setup", [])
@@ -598,30 +697,41 @@ class ParallelTestRunner:
                         cmd = setup_args
 
                     # Detect shell commands and run through shell
-                    is_shell_cmd = (len(cmd) > 0 and cmd[0] in ['echo', 'rm', 'mkdir', 'cat', 'touch', 'cd', 'ls', 'pwd', 'cp', 'mv'])
+                    is_shell_cmd = len(cmd) > 0 and cmd[0] in [
+                        "echo",
+                        "rm",
+                        "mkdir",
+                        "cat",
+                        "touch",
+                        "cd",
+                        "ls",
+                        "pwd",
+                        "cp",
+                        "mv",
+                    ]
                     if is_shell_cmd:
-                        shell_cmd = ' '.join(cmd)
+                        shell_cmd = " ".join(cmd)
                         subprocess.run(
                             shell_cmd,
                             shell=True,
                             input=setup_stdin,
                             capture_output=True,
-                            encoding='utf-8',
-                            errors='replace',  # Handle binary debug output gracefully
+                            encoding="utf-8",
+                            errors="replace",  # Handle binary debug output gracefully
                             timeout=self.test_timeout,
-                            env=env  # Pass the same env with isolated data_dir
+                            env=env,  # Pass the same env with isolated data_dir
                         )
                     else:
                         subprocess.run(
                             cmd,
                             input=setup_stdin,  # Pass stdin content to subprocess
                             capture_output=True,
-                            encoding='utf-8',
-                            errors='replace',  # Handle binary debug output gracefully
+                            encoding="utf-8",
+                            errors="replace",  # Handle binary debug output gracefully
                             timeout=self.test_timeout,
-                            env=env  # Pass the same env with isolated data_dir
+                            env=env,  # Pass the same env with isolated data_dir
                         )
-                except Exception as e:
+                except Exception:
                     # Log setup failure but continue
                     pass
 
@@ -632,10 +742,10 @@ class ParallelTestRunner:
                 [self.binary] + args,
                 input=stdin_input,
                 capture_output=True,
-                encoding='utf-8',
-                errors='replace',  # Handle binary debug output gracefully
+                encoding="utf-8",
+                errors="replace",  # Handle binary debug output gracefully
                 timeout=self.test_timeout,
-                env=env
+                env=env,
             )
             timeout_occurred = False
         except subprocess.TimeoutExpired as e:
@@ -643,7 +753,7 @@ class ParallelTestRunner:
                 args=[self.binary] + args,
                 returncode=-1,
                 stdout=e.stdout.decode() if e.stdout else "",
-                stderr=e.stderr.decode() if e.stderr else ""
+                stderr=e.stderr.decode() if e.stderr else "",
             )
             timeout_occurred = True
         except Exception as e:
@@ -656,12 +766,12 @@ class ParallelTestRunner:
                 execution_time_ms=int((end_time - start_time) * 1000),
                 stdout="",
                 stderr="",
-                timeout=False
+                timeout=False,
             )
-        
+
         end_time = time.time()
         execution_time_ms = int((end_time - start_time) * 1000)
-        
+
         if timeout_occurred:
             return TestResult(
                 spec_file=spec_name,
@@ -672,9 +782,9 @@ class ParallelTestRunner:
                 exit_code=result.returncode,
                 stdout=result.stdout,
                 stderr=result.stderr,
-                timeout=True
+                timeout=True,
             )
-        
+
         # Validate test expectations
         success, message = self.validate_expectations(result, expect, test_case, spec_name)
 
@@ -691,70 +801,76 @@ class ParallelTestRunner:
             exit_code=result.returncode,
             stdout=result.stdout,
             stderr=result.stderr,
-            timeout=False
+            timeout=False,
         )
 
-    def validate_expectations(self, result: subprocess.CompletedProcess, expect: Dict, test_case: Dict, spec_name: str) -> Tuple[bool, str]:
+    def validate_expectations(
+        self, result: subprocess.CompletedProcess, expect: Dict, test_case: Dict, spec_name: str
+    ) -> Tuple[bool, str]:
         """Validate test result against expectations."""
         test_name = test_case.get("name", "unnamed")
-        
+
         # Check exit code
         if "exit_code" in expect:
             # Special case for integration test invalid-command
-            if (spec_name == "geode_integration.yml" and 
-                test_name == "invalid-command" and
-                expect["exit_code"] == 0 and result.returncode == 2):
+            if (
+                spec_name == "geode_integration.yml"
+                and test_name == "invalid-command"
+                and expect["exit_code"] == 0
+                and result.returncode == 2
+            ):
                 # This is the conflicting test - keep exit code 2 for consistency
                 pass
             elif result.returncode != expect["exit_code"]:
                 return False, f"exit code: expected {expect['exit_code']}, got {result.returncode}"
-        
+
         # Filter out JSON log lines from stdout/stderr for cleaner output matching
-        stdout_lines = [line for line in result.stdout.split('\n') if not line.startswith('{')]
-        stderr_lines = [line for line in result.stderr.split('\n') if not line.startswith('{')]
-        filtered_stdout = '\n'.join(stdout_lines)
-        filtered_stderr = '\n'.join(stderr_lines)
-        
+        stdout_lines = [line for line in result.stdout.split("\n") if not line.startswith("{")]
+        stderr_lines = [line for line in result.stderr.split("\n") if not line.startswith("{")]
+        filtered_stdout = "\n".join(stdout_lines)
+        filtered_stderr = "\n".join(stderr_lines)
+
         # Check stdout_contains
         if "stdout_contains" in expect:
             combined = filtered_stdout + filtered_stderr + result.stdout + result.stderr
-            
+
             # For table format tests, also check JSON output
             if "--format" in test_case.get("args", []) and "table" in test_case.get("args", []):
-                for line in result.stdout.split('\n'):
+                for line in result.stdout.split("\n"):
                     if line.startswith('{"status_class":"00000"'):
                         try:
                             data = json.loads(line)
-                            if 'result' in data:
+                            if "result" in data:
                                 # Add column names
-                                if 'columns' in data['result']:
-                                    for col in data['result']['columns']:
-                                        if 'name' in col:
-                                            combined += " " + col['name']
+                                if "columns" in data["result"]:
+                                    for col in data["result"]["columns"]:
+                                        if "name" in col:
+                                            combined += " " + col["name"]
                                 # Add row values
-                                if 'rows' in data['result']:
-                                    for row in data['result']['rows']:
+                                if "rows" in data["result"]:
+                                    for row in data["result"]["rows"]:
                                         for key, val in row.items():
                                             combined += " " + str(key) + " " + str(val)
                         except:
                             pass
-            
+
             for pattern in expect["stdout_contains"]:
                 # Check both stdout and stderr (some commands output to stderr)
                 combined_all = combined.lower() + " " + filtered_stderr.lower() + " " + result.stderr.lower()
                 if pattern.lower() not in combined_all:
                     return False, f"missing: '{pattern}'"
-        
+
         # Check stderr_contains
         if "stderr_contains" in expect:
             combined_stderr = filtered_stderr + result.stderr
             for pattern in expect["stderr_contains"]:
                 if pattern.lower() not in combined_stderr.lower():
                     return False, f"stderr missing: '{pattern}'"
-        
+
         # Check stdout_regex
         if "stdout_regex" in expect:
             import re
+
             combined = result.stdout + result.stderr
             for pattern in expect["stdout_regex"]:
                 try:
@@ -762,11 +878,11 @@ class ParallelTestRunner:
                         return False, f"regex not matched: '{pattern}'"
                 except Exception as e:
                     return False, f"invalid regex: '{pattern}' - {str(e)}"
-        
+
         # Handle JSON assertions
         if "stdout_json_assert" in expect:
             try:
-                json_lines = [line for line in result.stdout.split('\n') if line.startswith('{')]
+                json_lines = [line for line in result.stdout.split("\n") if line.startswith("{")]
                 if json_lines:
                     for assertion in expect.get("stdout_json_assert", []):
                         # Simple validation - check that we got JSON output
@@ -776,12 +892,12 @@ class ParallelTestRunner:
                     return False, "no JSON output"
             except Exception as e:
                 return False, f"JSON assertion failed: {str(e)}"
-        
+
         # Handle geode_query expectation
         if "geode_query" in expect:
             if not result.stdout and not result.stderr:
                 return False, "no query output"
-        
+
         return True, "PASSED"
 
     def run_spec_file(self, spec_file: Path, scenario: Scenario, loaded_spec: Optional[Dict] = None) -> SpecResult:
@@ -792,7 +908,7 @@ class ParallelTestRunner:
         spec = copy.deepcopy(loaded_spec) if loaded_spec is not None else None
         if spec is None:
             try:
-                with open(spec_file, "r") as f:
+                with open(spec_file) as f:
                     spec = yaml.safe_load(f)
             except Exception as e:
                 spec_end_time = time.time()
@@ -803,13 +919,15 @@ class ParallelTestRunner:
                     failed=1,
                     skipped=0,
                     execution_time_ms=int((spec_end_time - spec_start_time) * 1000),
-                    test_results=[TestResult(
-                        spec_file=spec_label,
-                        test_name="YAML_PARSE",
-                        success=False,
-                        message=f"Invalid YAML: {str(e)}",
-                        execution_time_ms=0
-                    )]
+                    test_results=[
+                        TestResult(
+                            spec_file=spec_label,
+                            test_name="YAML_PARSE",
+                            success=False,
+                            message=f"Invalid YAML: {str(e)}",
+                            execution_time_ms=0,
+                        )
+                    ],
                 )
 
         if spec is None:
@@ -850,6 +968,7 @@ class ParallelTestRunner:
 
         # Create per-spec data directory for isolation with timestamp to ensure uniqueness
         import time as time_module
+
         unique_id = f"{spec_file.stem}_{scenario.name}_{port if port else 'noport'}_{int(time_module.time() * 1000)}"
         spec_data_dir = self.run_dir / f"data_{unique_id}"
         spec_data_dir.mkdir(parents=True, exist_ok=True)
@@ -864,7 +983,16 @@ class ParallelTestRunner:
 
                 # Start server with data directory isolation
                 # Use --log-level error to reduce debug noise which causes test output parsing issues
-                server_args = [self.binary, "serve", "--listen", f"0.0.0.0:{port}", "--data-dir", str(spec_data_dir), "--log-level", "error"]
+                server_args = [
+                    self.binary,
+                    "serve",
+                    "--listen",
+                    f"0.0.0.0:{port}",
+                    "--data-dir",
+                    str(spec_data_dir),
+                    "--log-level",
+                    "error",
+                ]
                 server_extra_args = server_args_override or []
                 if server_extra_args:
                     server_args.extend(server_extra_args)
@@ -880,10 +1008,7 @@ class ParallelTestRunner:
                 # debug output accumulates and causes the server to hang.
                 # Since we use --log-level error, minimal output is expected anyway.
                 server_process = subprocess.Popen(
-                    server_args,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    env=server_env
+                    server_args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=server_env
                 )
                 self._register_child(server_process)
 
@@ -911,10 +1036,7 @@ class ParallelTestRunner:
                     # This is more reliable than trying QUIC connections which can hang
                     try:
                         netstat_result = subprocess.run(
-                            ["netstat", "-uln"],
-                            capture_output=True,
-                            text=True,
-                            timeout=2.0
+                            ["netstat", "-uln"], capture_output=True, text=True, timeout=2.0
                         )
 
                         # Check if our port is bound
@@ -926,7 +1048,7 @@ class ParallelTestRunner:
                                 break
                     except subprocess.TimeoutExpired:
                         pass  # Continue trying
-                    except Exception as e:
+                    except Exception:
                         # Fallback: if netstat fails, just check process uptime
                         if (time.time() - start_time) > 8.0:  # At least 8 seconds uptime
                             server_ready = True
@@ -1007,29 +1129,40 @@ class ParallelTestRunner:
                         cmd = setup_args
 
                     # Detect shell commands and run through shell
-                    is_shell_cmd = (len(cmd) > 0 and cmd[0] in ['echo', 'rm', 'mkdir', 'cat', 'touch', 'cd', 'ls', 'pwd', 'cp', 'mv'])
+                    is_shell_cmd = len(cmd) > 0 and cmd[0] in [
+                        "echo",
+                        "rm",
+                        "mkdir",
+                        "cat",
+                        "touch",
+                        "cd",
+                        "ls",
+                        "pwd",
+                        "cp",
+                        "mv",
+                    ]
                     if is_shell_cmd:
                         # Run through shell for commands like "echo 'message'"
-                        shell_cmd = ' '.join(cmd)
+                        shell_cmd = " ".join(cmd)
                         result = subprocess.run(
                             shell_cmd,
                             shell=True,
                             input=setup_stdin,
                             capture_output=True,
-                            encoding='utf-8',
-                            errors='replace',  # Handle binary debug output gracefully
+                            encoding="utf-8",
+                            errors="replace",  # Handle binary debug output gracefully
                             timeout=self.test_timeout,
-                            env=setup_env
+                            env=setup_env,
                         )
                     else:
                         result = subprocess.run(
                             cmd,
                             input=setup_stdin,  # Pass stdin content to subprocess
                             capture_output=True,
-                            encoding='utf-8',
-                            errors='replace',  # Handle binary debug output gracefully
+                            encoding="utf-8",
+                            errors="replace",  # Handle binary debug output gracefully
                             timeout=self.test_timeout,
-                            env=setup_env
+                            env=setup_env,
                         )
                     if result.returncode != 0:
                         self.log_progress(f"Setup failed for {spec_label}: {result.stderr}")
@@ -1050,7 +1183,9 @@ class ParallelTestRunner:
                 if test.get("isolated", False):
                     test_data_dir = spec_data_dir / f"test_{test.get('name', 'unnamed')}"
                     test_data_dir.mkdir(parents=True, exist_ok=True)
-                    test_result = self.run_single_test(test, spec_label, scenario, server_address=server_address, data_dir=str(test_data_dir))
+                    test_result = self.run_single_test(
+                        test, spec_label, scenario, server_address=server_address, data_dir=str(test_data_dir)
+                    )
                     test_results.append(test_result)
 
                     if test_result.success:
@@ -1066,7 +1201,14 @@ class ParallelTestRunner:
                     for instance in range(test["instances"]):
                         instance_data_dir = test_data_dir / f"instance_{instance}"
                         instance_data_dir.mkdir(parents=True, exist_ok=True)
-                        test_result = self.run_single_test(test, spec_label, scenario, server_address=server_address, instance_id=instance, data_dir=str(instance_data_dir))
+                        test_result = self.run_single_test(
+                            test,
+                            spec_label,
+                            scenario,
+                            server_address=server_address,
+                            instance_id=instance,
+                            data_dir=str(instance_data_dir),
+                        )
                         test_results.append(test_result)
 
                         if test_result.success:
@@ -1082,7 +1224,14 @@ class ParallelTestRunner:
                     for i in range(test["loop"]):
                         loop_data_dir = test_data_dir / f"loop_{i}"
                         loop_data_dir.mkdir(parents=True, exist_ok=True)
-                        test_result = self.run_single_test(test, spec_label, scenario, server_address=server_address, loop_index=i, data_dir=str(loop_data_dir))
+                        test_result = self.run_single_test(
+                            test,
+                            spec_label,
+                            scenario,
+                            server_address=server_address,
+                            loop_index=i,
+                            data_dir=str(loop_data_dir),
+                        )
                         test_results.append(test_result)
 
                         if test_result.success:
@@ -1092,7 +1241,9 @@ class ParallelTestRunner:
 
                 # Handle normal tests (share spec data directory for catalog persistence)
                 else:
-                    test_result = self.run_single_test(test, spec_label, scenario, server_address=server_address, data_dir=str(spec_data_dir))
+                    test_result = self.run_single_test(
+                        test, spec_label, scenario, server_address=server_address, data_dir=str(spec_data_dir)
+                    )
                     test_results.append(test_result)
 
                     if test_result.success:
@@ -1117,7 +1268,7 @@ class ParallelTestRunner:
                 self.log_progress(f"Released port {port} for {spec_label}")
 
         spec_end_time = time.time()
-        
+
         return SpecResult(
             spec_file=spec_label,
             total_tests=len(tests),
@@ -1125,7 +1276,7 @@ class ParallelTestRunner:
             failed=failed,
             skipped=skipped,
             execution_time_ms=int((spec_end_time - spec_start_time) * 1000),
-            test_results=test_results
+            test_results=test_results,
         )
 
     def log_progress(self, message: str):
@@ -1133,14 +1284,14 @@ class ParallelTestRunner:
         timestamp = datetime.now().strftime("%H:%M:%S")
         log_message = f"[{timestamp}] {message}"
         print(log_message)
-        
+
         with open(self.progress_log, "a") as f:
             f.write(log_message + "\n")
 
     def write_detailed_log(self, test_result: TestResult):
         """Write detailed test information to detailed log."""
         with open(self.detailed_log, "a") as f:
-            f.write(f"\n{'='*80}\n")
+            f.write(f"\n{'=' * 80}\n")
             f.write(f"Test: [{test_result.spec_file}] {test_result.test_name}\n")
             f.write(f"Success: {test_result.success}\n")
             f.write(f"Message: {test_result.message}\n")
@@ -1154,27 +1305,24 @@ class ParallelTestRunner:
         """Analyze failure patterns across all test results."""
         failure_patterns = {}
         all_failures = []
-        
+
         for spec_result in all_results:
             for test_result in spec_result.test_results:
                 if not test_result.success:
                     all_failures.append(test_result)
-                    
+
                     # Categorize failure type
                     message = test_result.message
                     if ":" in message:
                         failure_type = message.split(":")[0]
                     else:
                         failure_type = message
-                    
+
                     if failure_type not in failure_patterns:
                         failure_patterns[failure_type] = []
                     failure_patterns[failure_type].append(test_result)
-        
-        return {
-            "failure_patterns": failure_patterns,
-            "all_failures": all_failures
-        }
+
+        return {"failure_patterns": failure_patterns, "all_failures": all_failures}
 
     def write_summary_report(self, all_results: List[SpecResult], analysis: Dict):
         """Write comprehensive summary report."""
@@ -1183,7 +1331,7 @@ class ParallelTestRunner:
         total_failed = sum(r.failed for r in all_results)
         total_skipped = sum(r.skipped for r in all_results)
         total_time_ms = sum(r.execution_time_ms for r in all_results)
-        
+
         summary = {
             "run_timestamp": self.run_timestamp,
             "execution_summary": {
@@ -1192,7 +1340,7 @@ class ParallelTestRunner:
                 "failed": total_failed,
                 "skipped": total_skipped,
                 "pass_rate": round((total_passed / total_tests * 100) if total_tests > 0 else 0, 2),
-                "total_execution_time_ms": total_time_ms
+                "total_execution_time_ms": total_time_ms,
             },
             "spec_results": [asdict(r) for r in all_results],
             "failure_analysis": {
@@ -1201,27 +1349,25 @@ class ParallelTestRunner:
                     {
                         "failure_type": failure_type,
                         "count": len(test_results),
-                        "examples": [asdict(t) for t in test_results[:3]]  # Include first 3 examples
+                        "examples": [asdict(t) for t in test_results[:3]],  # Include first 3 examples
                     }
                     for failure_type, test_results in sorted(
-                        analysis["failure_patterns"].items(),
-                        key=lambda x: len(x[1]),
-                        reverse=True
+                        analysis["failure_patterns"].items(), key=lambda x: len(x[1]), reverse=True
                     )[:10]
-                ]
-            }
+                ],
+            },
         }
-        
+
         # Write JSON summary
         with open(self.summary_log, "w") as f:
             json.dump(summary, f, indent=2)
-        
+
         # Write failures detailed log
         failures_data = {
             "failures": [asdict(f) for f in analysis["all_failures"]],
-            "failure_patterns": {k: [asdict(t) for t in v] for k, v in analysis["failure_patterns"].items()}
+            "failure_patterns": {k: [asdict(t) for t in v] for k, v in analysis["failure_patterns"].items()},
         }
-        
+
         with open(self.failures_log, "w") as f:
             json.dump(failures_data, f, indent=2)
 
@@ -1232,10 +1378,10 @@ class ParallelTestRunner:
         total_failed = sum(r.failed for r in all_results)
         total_skipped = sum(r.skipped for r in all_results)
         total_time_s = sum(r.execution_time_ms for r in all_results) / 1000
-        
-        print(f"\n{'='*80}")
-        print(f"GEODETESTLAB PARALLEL TEST RESULTS")
-        print(f"{'='*80}")
+
+        print(f"\n{'=' * 80}")
+        print("GEODETESTLAB PARALLEL TEST RESULTS")
+        print(f"{'=' * 80}")
         print(f"Run timestamp: {self.run_timestamp}")
         print(f"Total tests: {total_tests}")
         print(f"Passed: {total_passed}")
@@ -1243,45 +1389,49 @@ class ParallelTestRunner:
         print(f"Skipped: {total_skipped}")
         print(f"Pass rate: {(total_passed / total_tests * 100) if total_tests > 0 else 0:.1f}%")
         print(f"Total execution time: {total_time_s:.1f}s")
-        
-        print(f"\n{'='*40}")
-        print(f"PER-SPEC RESULTS:")
-        print(f"{'='*40}")
-        
+
+        print(f"\n{'=' * 40}")
+        print("PER-SPEC RESULTS:")
+        print(f"{'=' * 40}")
+
         for result in sorted(all_results, key=lambda x: x.failed, reverse=True):
             if result.total_tests > 0:
                 pass_rate = (result.passed / result.total_tests * 100) if result.total_tests > 0 else 0
-                print(f"{result.spec_file:30s} {result.passed:3d}P {result.failed:3d}F {result.skipped:3d}S {pass_rate:5.1f}% ({result.execution_time_ms/1000:.1f}s)")
-        
+                print(
+                    f"{result.spec_file:30s} {result.passed:3d}P {result.failed:3d}F {result.skipped:3d}S {pass_rate:5.1f}% ({result.execution_time_ms / 1000:.1f}s)"
+                )
+
         if analysis["failure_patterns"]:
-            print(f"\n{'='*40}")
-            print(f"TOP FAILURE PATTERNS:")
-            print(f"{'='*40}")
-            
-            for failure_type, failures in sorted(analysis["failure_patterns"].items(), key=lambda x: len(x[1]), reverse=True)[:10]:
+            print(f"\n{'=' * 40}")
+            print("TOP FAILURE PATTERNS:")
+            print(f"{'=' * 40}")
+
+            for failure_type, failures in sorted(
+                analysis["failure_patterns"].items(), key=lambda x: len(x[1]), reverse=True
+            )[:10]:
                 print(f"{failure_type:30s} {len(failures):3d} tests")
-                
+
                 # Show examples for common failure types
                 if len(failures) <= 3:
                     for failure in failures:
                         print(f"  - [{failure.spec_file}] {failure.test_name}")
-        
+
         print(f"\nDetailed logs available in: {self.run_dir}")
 
     def run_all_tests(self) -> int:
         """Run all tests in parallel and generate comprehensive logs."""
         spec_files = list(self.specs_dir.glob("*.yml"))
         self.log_progress(f"Found {len(spec_files)} specification files")
-        
+
         all_results = []
-        
+
         # Run spec files in parallel
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_spec = {}
 
             for spec_file in spec_files:
                 try:
-                    with open(spec_file, "r") as f:
+                    with open(spec_file) as f:
                         spec_data = yaml.safe_load(f) or {}
                     if not isinstance(spec_data, dict):
                         spec_data = {}
@@ -1310,35 +1460,40 @@ class ParallelTestRunner:
                     spec_data["scenarios"] = self.default_scenario_configs()
 
                 for scenario in self.build_scenarios(spec_data):
-                    future_to_spec[executor.submit(self.run_spec_file, spec_file, scenario, copy.deepcopy(spec_data))] = (spec_file, scenario)
-            
+                    future_to_spec[
+                        executor.submit(self.run_spec_file, spec_file, scenario, copy.deepcopy(spec_data))
+                    ] = (spec_file, scenario)
+
             for future in as_completed(future_to_spec):
                 spec_file, scenario = future_to_spec[future]
                 try:
                     spec_result = future.result()
                     all_results.append(spec_result)
-                    
+
                     # Log individual test results to detailed log
                     for test_result in spec_result.test_results:
                         self.write_detailed_log(test_result)
-                    
+
                     # Progress update
-                    self.log_progress(f"Completed {spec_result.spec_file}: {spec_result.passed}P/{spec_result.failed}F/{spec_result.skipped}S")
-                    
+                    self.log_progress(
+                        f"Completed {spec_result.spec_file}: {spec_result.passed}P/{spec_result.failed}F/{spec_result.skipped}S"
+                    )
+
                 except Exception as e:
                     self.log_progress(f"Error running {spec_file.name} [{scenario.name}]: {str(e)}")
-        
+
         # Analyze results
         analysis = self.analyze_failures(all_results)
-        
+
         # Write comprehensive reports
         self.write_summary_report(all_results, analysis)
-        
+
         # Print summary
         self.print_summary(all_results, analysis)
-        
+
         total_failed = sum(r.failed for r in all_results)
         return 0 if total_failed == 0 else 1
+
 
 def main():
     import argparse
@@ -1347,19 +1502,18 @@ def main():
     project_root = Path(__file__).resolve().parents[2]
 
     parser = argparse.ArgumentParser(description="Parallel Geodetestlab Test Runner")
-    parser.add_argument("--specs-dir", type=Path,
-                        default=project_root / "geodetestlab" / "specs",
-                        help="Directory containing test specifications")
-    parser.add_argument("--binary", type=str,
-                        default=str(project_root / "zig-out" / "bin" / "geode"),
-                        help="Path to geode binary")
-    parser.add_argument("--log-dir", type=Path,
-                        default=project_root / "test_logs",
-                        help="Directory for test logs")
-    parser.add_argument("--max-workers", type=int, default=4,
-                        help="Maximum number of parallel workers")
-    parser.add_argument("--timeout", type=int, default=10,
-                        help="Test timeout in seconds")
+    parser.add_argument(
+        "--specs-dir",
+        type=Path,
+        default=project_root / "geodetestlab" / "specs",
+        help="Directory containing test specifications",
+    )
+    parser.add_argument(
+        "--binary", type=str, default=str(project_root / "zig-out" / "bin" / "geode"), help="Path to geode binary"
+    )
+    parser.add_argument("--log-dir", type=Path, default=project_root / "test_logs", help="Directory for test logs")
+    parser.add_argument("--max-workers", type=int, default=4, help="Maximum number of parallel workers")
+    parser.add_argument("--timeout", type=int, default=10, help="Test timeout in seconds")
 
     args = parser.parse_args()
 
@@ -1368,10 +1522,11 @@ def main():
         binary=args.binary,
         log_dir=args.log_dir,
         max_workers=args.max_workers,
-        test_timeout=args.timeout
+        test_timeout=args.timeout,
     )
-    
+
     return runner.run_all_tests()
+
 
 if __name__ == "__main__":
     sys.exit(main())

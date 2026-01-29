@@ -1,7 +1,9 @@
 # Graph Algorithms Usage Guide
+
 ## Real GQL Queries and Data Examples
 
 ## Table of Contents
+
 1. [Social Network Example](#social-network-example)
 2. [Algorithm Usage Examples](#algorithm-usage-examples)
 3. [Real-World Use Cases](#real-world-use-cases)
@@ -56,6 +58,7 @@ CREATE (alice)-[:FRIENDS_WITH {since: 2021}]->(diana)
 ```
 
 **Network Structure:**
+
 ```
 Alice --- Bob
   |  \     |
@@ -81,6 +84,7 @@ LIMIT 5
 ```
 
 **Expected Results:**
+
 ```
 ┌────────┬────────────┐
 │ nodeId │ centrality │
@@ -110,6 +114,7 @@ LIMIT 5
 ```
 
 **Expected Results:**
+
 ```
 ┌────────┬────────────┐
 │ nodeId │ centrality │
@@ -141,6 +146,7 @@ LIMIT 5
 ```
 
 **Expected Results:**
+
 ```
 ┌────────┬────────────┐
 │ nodeId │ centrality │
@@ -172,6 +178,7 @@ LIMIT 5
 ```
 
 **Expected Results:**
+
 ```
 ┌────────┬────────────┐
 │ nodeId │ centrality │
@@ -203,6 +210,7 @@ ORDER BY size DESC
 ```
 
 **Expected Results:**
+
 ```
 ┌───────────┬─────────────────────────┬──────┐
 │ community │ members                 │ size │
@@ -213,6 +221,7 @@ ORDER BY size DESC
 ```
 
 **Interpretation**: The algorithm detected two main friend groups:
+
 - Alice's cluster: Alice, Bob, Charlie, Diana, Eve
 - Frank's cluster: Frank, Grace, Henry
 
@@ -233,6 +242,7 @@ ORDER BY size DESC
 ```
 
 **Expected Results:**
+
 ```
 ┌───────┬─────────────────────────┬──────┐
 │ label │ members                 │ size │
@@ -261,6 +271,7 @@ ORDER BY size DESC
 ```
 
 **Expected Results:**
+
 ```
 ┌───────────┬─────────────────────────────────┬──────┐
 │ component │ members                         │ size │
@@ -272,6 +283,7 @@ ORDER BY size DESC
 **Interpretation**: Everyone is in one connected component - there are no isolated groups.
 
 **With Isolation Example:**
+
 ```gql
 -- Add isolated group
 CREATE (ian:Person {name: 'Ian'})
@@ -288,6 +300,7 @@ ORDER BY size DESC
 ```
 
 **Results with Isolation:**
+
 ```
 ┌───────┬─────────────────────────────────┬──────┐
 │ setId │ members                         │ size │
@@ -314,6 +327,7 @@ ORDER BY size DESC
 ```
 
 **Expected Results (treating as undirected):**
+
 ```
 ┌───────────┬─────────────────────────────────┬──────┐
 │ partition │ members                         │ size │
@@ -323,6 +337,7 @@ ORDER BY size DESC
 ```
 
 **Directed Graph Example:**
+
 ```gql
 -- Create a directed citation network
 CREATE (paper1:Paper {title: 'Foundation'})
@@ -365,6 +380,7 @@ LIMIT 10
 ```
 
 **Business Value**:
+
 - Identify critical employees for knowledge transfer
 - Find collaboration bottlenecks
 - Plan redundancy for key positions
@@ -387,6 +403,7 @@ ORDER BY accountCount DESC
 ```
 
 **Business Value**:
+
 - Detect fraud rings
 - Identify money laundering networks
 - Find coordinated fake account creation
@@ -415,6 +432,7 @@ LIMIT 20
 ```
 
 **Business Value**:
+
 - Suggest connections based on community membership
 - Improve user engagement
 - Network growth through relevant recommendations
@@ -439,6 +457,7 @@ ORDER BY centrality DESC
 ```
 
 **Business Value**:
+
 - Identify single points of failure
 - Plan supply chain redundancy
 - Risk mitigation strategies
@@ -465,6 +484,7 @@ RETURN sum(centrality) AS viralPotential,
 ```
 
 **Business Value**:
+
 - Predict content virality
 - Identify optimal influencers for campaigns
 - Content strategy optimization
@@ -476,10 +496,12 @@ RETURN sum(centrality) AS viralPotential,
 ### 1. Use Appropriate Algorithms
 
 **For Large Networks (>100K nodes)**:
+
 - ❌ Avoid: Betweenness centrality (O(V*E) is expensive)
 - ✅ Use: Degree centrality, Label Propagation
 
 **For Small, Dense Networks**:
+
 - ✅ Use: Any algorithm
 - Best: Betweenness, Eigenvector for deep insights
 
@@ -601,6 +623,7 @@ All 8 implemented algorithms provide powerful graph analytics capabilities:
 | SCC | Directed connectivity | O(V+E) | Partition ID |
 
 **Choose based on**:
+
 - Network size (performance)
 - Directed vs undirected
 - Insight needed (centrality vs community)

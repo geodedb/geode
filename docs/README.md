@@ -26,21 +26,25 @@ docs/
 ## Quick Start
 
 ### Getting Started
+
 - **[Features Overview](FEATURES_OVERVIEW.md)** - Feature catalog
 - **[Quick Reference](QUICK_REFERENCE.md)** - Commands and syntax
 - **[Usage Guide](USAGE.md)** - How to use Geode
 
 ### Technical Reference
+
 - **[API Reference](API_REFERENCE.md)** - API documentation
 - **[Types & Functions](TYPES_AND_FUNCTIONS.md)** - 50+ data types
 - **[GQL Compliance](GQL_COMPLIANCE.md)** - ISO/IEC 39075:2024 conformance
 
 ### Enterprise Features
+
 - **[KMS Provider System](KMS_PROVIDER_SYSTEM.md)** - Key management
 - **[User Authentication](USER_AUTH.md)** - RBAC/ABAC with MFA
 - **[Audit Logging](AUDIT_LOGGING.md)** - Audit capabilities
 
 ### Advanced Features
+
 - **[ML Graph Embeddings](ML_GRAPH_EMBEDDINGS.md)** - Node2Vec, GraphSAGE, DeepWalk
 - **[Real-time Analytics](REAL_TIME_ANALYTICS.md)** - Streaming analytics
 - **[Materialized Views](MATERIALIZED_VIEWS.md)** - View management
@@ -48,21 +52,25 @@ docs/
 - **[Distributed Query Coordination](DISTRIBUTED_QUERY_COORDINATION.md)** - Federation
 
 ### Deployment
+
 - **[Docker Quickstart](docker/QUICKSTART_DOCKER.md)** - Docker setup
 - **[Deployment Guide](deployment/DEPLOYMENT.md)** - Production deployment
 - **[NixOS Deployment](NIX_DEPLOYMENT.md)** - NixOS configuration
 
 ### Client Libraries
+
 - **[Client Documentation](clients/)** - Multi-language clients
 - **[Go/Rust Client Plan](clients/GO_RUST_CLIENT_DEVELOPMENT_PLAN.md)** - Client roadmap
 
 ### Testing
+
 - **[Testing Guide](TESTING.md)** - Test execution
 - **[Known Issues](KNOWN_TEST_ISSUES.md)** - Current limitations
 
 ## Implementation Status
 
 ### Completed Features
+
 1. **S3 Cloud Backup** - Digital Ocean Spaces integration
 2. **REPL QUIC Integration** - Interactive shell
 3. **Vector Operations** - HNSW indexing with SIMD
@@ -75,12 +83,15 @@ docs/
 10. **Advanced Security** - Enhanced RLS with policy evaluation
 
 ### Quality Metrics
+
 - **97.4% Test Pass Rate** (1644/1688 tests passing)
 - **100% GQL Compliance** (70/70 ISO tests)
 - **1,735 CANARY Markers** tracking 2,190+ requirements
 
 ### Known Issues
+
 See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current test limitations:
+
 - Setup data persistence (34 tests affected)
 - WITH + aggregation + WHERE (server hang)
 - CASE expressions in MATCH context
@@ -89,6 +100,7 @@ See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current test limitations:
 ## Reference Documents
 
 ### Core
+
 | Document | Description |
 |----------|-------------|
 | [TODO.md](TODO.md) | Development status (all phases complete) |
@@ -96,6 +108,7 @@ See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current test limitations:
 | [CURRENT_ARCHITECTURE.md](CURRENT_ARCHITECTURE.md) | System architecture |
 
 ### Language
+
 | Document | Description |
 |----------|-------------|
 | [EXPRESSION_OPERATORS.md](EXPRESSION_OPERATORS.md) | Expression operators |
@@ -103,6 +116,7 @@ See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current test limitations:
 | [TYPE_QUICK_REFERENCE.md](TYPE_QUICK_REFERENCE.md) | Type reference |
 
 ### Operations
+
 | Document | Description |
 |----------|-------------|
 | [TRANSACTION_MANAGEMENT.md](TRANSACTION_MANAGEMENT.md) | Transaction handling |
@@ -110,6 +124,7 @@ See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current test limitations:
 | [EXPLAIN_PROFILE.md](EXPLAIN_PROFILE.md) | Query profiling |
 
 ### Security
+
 | Document | Description |
 |----------|-------------|
 | [ARGON2ID_IMPLEMENTATION.md](ARGON2ID_IMPLEMENTATION.md) | Password hashing |

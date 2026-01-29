@@ -4,17 +4,17 @@
 Unit tests for Geode Workload Pattern Definitions
 """
 
-import unittest
 import sys
+import unittest
 from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from benchmarks.workloads import (
-    WorkloadType,
-    WorkloadPattern,
     WORKLOAD_PATTERNS,
+    WorkloadPattern,
+    WorkloadType,
     get_workload,
     list_workloads,
 )
@@ -150,19 +150,13 @@ class TestWorkloadPatterns(unittest.TestCase):
         """Verify query mix ratios sum to approximately 1.0."""
         for name, pattern in WORKLOAD_PATTERNS.items():
             total = sum(pattern.query_mix.values())
-            self.assertAlmostEqual(
-                total, 1.0, places=2,
-                msg=f"Pattern {name} query_mix sums to {total}"
-            )
+            self.assertAlmostEqual(total, 1.0, places=2, msg=f"Pattern {name} query_mix sums to {total}")
 
     def test_read_write_ratios_sum_to_one(self):
         """Verify read/write ratios sum to 1.0."""
         for name, pattern in WORKLOAD_PATTERNS.items():
             total = pattern.read_ratio + pattern.write_ratio
-            self.assertAlmostEqual(
-                total, 1.0, places=2,
-                msg=f"Pattern {name} read/write ratios sum to {total}"
-            )
+            self.assertAlmostEqual(total, 1.0, places=2, msg=f"Pattern {name} read/write ratios sum to {total}")
 
 
 class TestGetWorkload(unittest.TestCase):

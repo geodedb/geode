@@ -43,7 +43,7 @@ class LLMProvider(Protocol):
 
     def supports_geode_patterns(self) -> bool:
         """Return whether this provider supports Geode-specific patterns.
-        
+
         Returns
         -------
         bool
@@ -52,13 +52,10 @@ class LLMProvider(Protocol):
         return False
 
     def generate_gql_queries(
-        self, 
-        max_queries: int, 
-        complexity: str = "simple",
-        seed: Optional[int] = None
+        self, max_queries: int, complexity: str = "simple", seed: Optional[int] = None
     ) -> List[str]:
         """Generate GQL queries for testing.
-        
+
         Parameters
         ----------
         max_queries:
@@ -67,7 +64,7 @@ class LLMProvider(Protocol):
             Complexity level: "simple", "medium", "complex".
         seed:
             Optional seed for deterministic generation.
-            
+
         Returns
         -------
         List[str]

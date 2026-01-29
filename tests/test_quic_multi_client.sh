@@ -13,10 +13,10 @@ run_query() {
     local query=$2
     local expected=$3
     local server_port=${4:-8443}
-    
+
     echo "Client $client_id: Executing query..."
     OUTPUT=$(./zig-out/bin/geode query --server 127.0.0.1:$server_port "$query" 2>&1 | grep -E "(SCHEMA|RESULT|STATUS|Error)" || true)
-    
+
     if echo "$OUTPUT" | grep -q "$expected"; then
         echo "Client $client_id: ✓ Query successful"
         return 0

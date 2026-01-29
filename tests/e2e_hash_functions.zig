@@ -235,7 +235,7 @@ test "e2e hash chain for audit log" {
         \\    action: "CREATE_USER",
         \\    timestamp: DateTime(),
         \\    previous_hash: $prev_hash,
-        \\    entry_hash: HashData("BLAKE2b-512", 
+        \\    entry_hash: HashData("BLAKE2b-512",
         \\        toString(1) + ":CREATE_USER:" + toString(DateTime()) + ":" + $prev_hash
         \\    )
         \\})
@@ -301,7 +301,7 @@ test "e2e hash with CASE expressions" {
     const query =
         \\MATCH (item:Item)
         \\RETURN item.id,
-        \\  CASE 
+        \\  CASE
         \\    WHEN hash_alg(item.hash) = "Argon2id" THEN "password"
         \\    WHEN hash_alg(item.hash) IN ["BLAKE2b-256", "BLAKE2b-512"] THEN "blake2b"
         \\    WHEN hash_alg(item.hash) = "BLAKE2s-256" THEN "blake2s"
@@ -324,11 +324,11 @@ test "e2e hash in MERGE statement" {
         \\MERGE (content:UniqueContent {
         \\    hash: HashData("BLAKE2b-256", $content)
         \\})
-        \\ON CREATE SET 
+        \\ON CREATE SET
         \\    content.created_at = DateTime(),
         \\    content.data = $content,
         \\    content.ref_count = 1
-        \\ON MATCH SET 
+        \\ON MATCH SET
         \\    content.ref_count = content.ref_count + 1,
         \\    content.last_accessed = DateTime()
         \\RETURN content.hash, content.ref_count

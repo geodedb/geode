@@ -13,6 +13,7 @@ This document describes the modularized architecture resulting from the systemat
 ### Key Achievements
 
 **Completed Phases** (as of 2025-11-14):
+
 - **Phase 0**: Foundation & Preparation (100%)
 - **Phase 1**: Mixed Concerns (100%)
 - **Phase 2**: Execution Module (100%)
@@ -25,6 +26,7 @@ This document describes the modularized architecture resulting from the systemat
 **Overall Progress**: 63% complete (19/30 milestones)
 
 **Code Reduction**:
+
 - `server/main.zig`: 7,039 → 3,484 lines (**50.5% reduction**)
 - `cli/main.zig`: 5,885 → reduced (Phase 4 complete)
 - `path_and_call_operations.zig`: 4,725 → split into focused modules (Phase 2 complete)
@@ -41,12 +43,14 @@ This document describes the modularized architecture resulting from the systemat
 #### Security Modules
 
 **Audit Module** (`src/security/audit.zig`):
+
 - **Before**: 1,701 lines (audit logic + file I/O + CEF formatting)
 - **After**: Separated into focused modules
 - **Extraction**: Audit formatting and sink abstraction extracted
 - **Boundaries**: Core audit logic | Formatting | I/O abstraction
 
 **TDE (Transparent Data Encryption)** (`src/security/tde.zig`):
+
 - **Before**: 1,482 lines (encryption + KMS + hierarchy)
 - **After**: Key management and nonce generation extracted
 - **Modules**:
@@ -58,6 +62,7 @@ This document describes the modularized architecture resulting from the systemat
 #### Streaming Modules
 
 **CDC Enhanced** (`src/streaming/cdc_enhanced.zig`):
+
 - **Before**: 1,390 lines (CDC logic + webhook sinks + Kafka adapters)
 - **After**: Sink adapters extracted
 - **Modules**:
@@ -74,6 +79,7 @@ This document describes the modularized architecture resulting from the systemat
 **Objective**: Split large execution module into focused components
 
 **Path and Call Operations** (`src/execution/path_and_call_operations.zig`):
+
 - **Before**: 4,725 lines (paths + calls + patterns + recursion)
 - **After**: Split into 4 focused modules
 - **Modules**:
@@ -136,6 +142,7 @@ This document describes the modularized architecture resulting from the systemat
    - **Boundary**: Backup protocol handling
 
 **Remaining Work**:
+
 - Extract QUIC connection setup logic
 - Extract message parsing wrapper functions
 - Add protocol tests
@@ -190,6 +197,7 @@ This document describes the modularized architecture resulting from the systemat
 **Reduction**: 6,271 → 3,484 lines (**50.5% reduction from baseline**, 2,787 lines extracted)
 
 **Current `server/main.zig` Contents** (3,484 lines):
+
 - Main entry point and CLI argument parsing (~450 lines)
 - QUIC connection handling (handleQuicConnection)
 - Message processing (processMessage)
@@ -202,6 +210,7 @@ This document describes the modularized architecture resulting from the systemat
 **Objective**: Decompose CLI into command-specific modules
 
 **CLI Main** (`src/cli/main.zig`):
+
 - **Before**: 5,885 lines (CLI + user mgmt + auth + backup)
 - **After**: Split into command modules (100% complete)
 - **Modules**:
@@ -221,6 +230,7 @@ This document describes the modularized architecture resulting from the systemat
 **Circular Dependency Resolved**: `execution.zig` ↔ `eval.zig`
 
 **Solution Architecture**:
+
 1. **Evaluator Adapter** (`src/execution/evaluator_adapter.zig`)
    - Bridge interface for execution → eval calls
    - Implements adapter pattern
@@ -242,6 +252,7 @@ This document describes the modularized architecture resulting from the systemat
 **Objective**: Further modularize eval.zig and extract type system logic
 
 **Eval Module** (`src/eval.zig`):
+
 - **Before**: 3,332 lines (evaluation + type coercion + function dispatch)
 - **After**: Modularized with extracted type system
 - **Extracted Modules**:
@@ -267,15 +278,18 @@ This document describes the modularized architecture resulting from the systemat
 #### M7.1: Schema Module (✅ COMPLETE)
 
 **Challenge Resolved**: Discovered naming conflict - two different `catalog.zig` files:
+
 1. Database metadata catalog (from execution/)
 2. FLE encryption metadata catalog (already in schema/)
 
 **Solution**:
+
 1. Renamed `schema/catalog.zig` → `schema/fle_catalog.zig` (clarifies FLE purpose)
 2. Moved `execution/catalog.zig` → `schema/catalog.zig` (database metadata)
 3. Created unified interface
 
 **Schema Module Structure** (`src/schema/`):
+
 - **`catalog.zig`** (562 lines)
   - Database metadata catalog (schemas, graphs, indexes)
   - IndexInfo, Catalog types
@@ -308,6 +322,7 @@ This document describes the modularized architecture resulting from the systemat
   - **Boundary**: Unified schema management facade
 
 **Import Updates**:
+
 - `src/execution.zig`: Now imports schema/fle_catalog.zig
 - `src/fle_integration.zig`: Now imports schema/fle_catalog.zig
 
@@ -316,6 +331,7 @@ This document describes the modularized architecture resulting from the systemat
 **Transaction Module Structure** (`src/transactions/`):
 
 **Moved Files** (from `src/txn/` via git mv - history preserved):
+
 - **`manager.zig`** (26,341 bytes)
   - TxnId, TxnState, Timestamp, Txn types
   - Manager, LockMode, LockEntry, ConflictType, ConflictMatrix
@@ -362,6 +378,7 @@ This document describes the modularized architecture resulting from the systemat
   - **Boundary**: Unified transaction management facade
 
 **Import Updates**:
+
 - **Source files**: src/gql/match.zig
 - **Test files**: 7 files updated (test_graph_mvcc.zig, test_canary_core.zig, canary_txn.zig, canary_mvcc_false_positive_reduction.zig, priority_implementations.zig, canary_predictive_skew_filter.zig, benchmark_predictive_skew_filter.zig)
 - **Build configuration**: build.zig (20+ references updated from src/txn/ to src/transactions/)
@@ -377,6 +394,7 @@ This document describes the modularized architecture resulting from the systemat
 **Purpose**: Provide single entry point for related functionality
 
 **Structure**:
+
 ```zig
 // Re-export core types
 pub const CoreType = submodule.CoreType;
@@ -400,6 +418,7 @@ pub fn createManager(...) !Manager { ... }
 ```
 
 **Benefits**:
+
 - Single import for users
 - Clear API surface
 - Internal flexibility
@@ -412,6 +431,7 @@ pub fn createManager(...) !Manager { ... }
 **Purpose**: Break circular dependencies while maintaining functionality
 
 **Structure**:
+
 ```zig
 pub const EvaluatorAdapter = struct {
     // Interface for calling evaluation logic
@@ -424,6 +444,7 @@ pub const EvaluatorAdapter = struct {
 ```
 
 **Benefits**:
+
 - Breaks circular dependencies
 - Supports dependency injection
 - Testable in isolation
@@ -436,6 +457,7 @@ pub const EvaluatorAdapter = struct {
 **Purpose**: Reduce file size while maintaining cohesive functionality
 
 **Structure**:
+
 ```zig
 // In main.zig
 const extracted_module = @import("extracted_module.zig");
@@ -447,6 +469,7 @@ pub fn operation(...) !void {
 ```
 
 **Benefits**:
+
 - Incremental refactoring
 - Preserves external API
 - Reduces cognitive load
@@ -459,6 +482,7 @@ pub fn operation(...) !void {
 **Purpose**: Enable runtime function registration and lookup
 
 **Structure**:
+
 ```zig
 pub const FunctionRegistry = struct {
     functions: HashMap([]const u8, Function),
@@ -470,6 +494,7 @@ pub const FunctionRegistry = struct {
 ```
 
 **Benefits**:
+
 - Runtime extensibility
 - Pluggable architecture
 - Easy testing
@@ -573,6 +598,7 @@ cli/main.zig (5,885 lines)
 ```
 
 **Key Improvements**:
+
 - ✅ Zero circular dependencies
 - ✅ Clear layered architecture
 - ✅ Explicit module boundaries
@@ -586,11 +612,13 @@ cli/main.zig (5,885 lines)
 ### Unit Testing
 
 **Isolated Module Testing**:
+
 - Each extracted module can be tested independently
 - Dependency injection enables mock testing
 - Clear interfaces simplify test setup
 
 **Examples**:
+
 ```zig
 // Test schema_manager in isolation
 test "schema_manager creates schema" {
@@ -616,6 +644,7 @@ test "transaction_manager begins and commits" {
 ### Integration Testing
 
 **Module Interaction Testing**:
+
 - Test coordination between modules
 - Verify interface contracts
 - Test error propagation
@@ -623,6 +652,7 @@ test "transaction_manager begins and commits" {
 ### End-to-End Testing
 
 **Full System Testing**:
+
 - Server startup and connection acceptance
 - Query execution through complete pipeline
 - CLI command execution
@@ -635,15 +665,18 @@ test "transaction_manager begins and commits" {
 ### Modularization Impact
 
 **Positive**:
+
 - ✅ Improved code locality (better cache performance)
 - ✅ Clearer hot paths (easier optimization)
 - ✅ Reduced compile times (smaller units)
 
 **Neutral**:
+
 - Module boundaries use interfaces (minimal overhead)
 - Function calls across modules (inlining still possible)
 
 **Monitoring**:
+
 - Baseline metrics established (Phase 0)
 - Performance testing required after each phase
 - No significant regressions detected in completed phases
@@ -655,6 +688,7 @@ test "transaction_manager begins and commits" {
 ### For Developers
 
 **Schema Operations**:
+
 ```zig
 // Old way
 const catalog = @import("execution/catalog.zig");
@@ -666,6 +700,7 @@ var manager = try schema.SchemaManager.init(allocator, data_dir);
 ```
 
 **Transaction Operations**:
+
 ```zig
 // Old way
 const txn = @import("txn/manager.zig");
@@ -678,6 +713,7 @@ var manager = try transactions.TransactionManager.init(allocator, false, false);
 ```
 
 **Server Functions**:
+
 ```zig
 // Old way (in server/main.zig)
 fn executeCreateStatement(...) !void { ... }
@@ -694,11 +730,13 @@ try query_executor.executeCreateStatement(...);
 ### Remaining Phases
 
 **Phase 3 (IN PROGRESS)**:
+
 - Complete M3.2: Extract remaining protocol handlers
 - Complete M3.3: Verify query executor functionality
 - Reduce main.zig to ~300 lines (coordination only)
 
 **Phase 8 (Documentation)**:
+
 - M8.1: Create module testing framework
 - M8.2: Update all documentation (IN PROGRESS)
 - M8.3: Final verification and metrics
@@ -735,14 +773,17 @@ try query_executor.executeCreateStatement(...);
 ### Target Metrics
 
 **Code Quality**:
+
 - Target: No file >1,500 lines
 - Current: server/main.zig at 3,484 lines (in progress)
 
 **Test Coverage**:
+
 - Target: ≥97.4% pass rate
 - Baseline: 1644/1688 passing (97.4%)
 
 **Documentation**:
+
 - Target: All modules documented
 - Current: Documentation in progress (Phase 8)
 
@@ -753,6 +794,7 @@ try query_executor.executeCreateStatement(...);
 ### Complete Module Listing
 
 **Schema (`src/schema/`)**:
+
 - catalog.zig (562 lines) - Database metadata
 - fle_catalog.zig (568 lines) - Encryption metadata
 - annotations.zig (13,917 bytes) - Type annotations
@@ -760,6 +802,7 @@ try query_executor.executeCreateStatement(...);
 - schema_manager.zig (308 lines) - Unified interface
 
 **Transactions (`src/transactions/`)**:
+
 - manager.zig (26,341 bytes) - MVCC core
 - commit_coordinator.zig (654 bytes) - WAL coordination
 - range_tracker.zig (3,045 bytes) - Range tracking
@@ -768,6 +811,7 @@ try query_executor.executeCreateStatement(...);
 - transaction_manager.zig (14,915 bytes) - Unified interface
 
 **Server (`src/server/`)**:
+
 - main.zig (3,484 lines) - Entry point
 - server_state.zig (202 lines) - State types
 - backup_manager.zig (158 lines) - Backup operations
@@ -778,6 +822,7 @@ try query_executor.executeCreateStatement(...);
 - query_executor.zig (2,942 lines) - Query execution
 
 **Execution (`src/execution/`)**:
+
 - path_operations.zig (~1,200 lines) - Path traversal
 - call_operations.zig (~1,300 lines) - Function calls
 - recursion_handler.zig (~225 lines) - Recursive queries
@@ -785,11 +830,13 @@ try query_executor.executeCreateStatement(...);
 - evaluator_adapter.zig - Dependency adapter
 
 **Evaluation (`src/eval/`)**:
+
 - eval.zig (~2,500 lines) - Core evaluation
 - type_promotion.zig (~800 lines) - Type system
 - builtin_dispatcher.zig (~800 lines) - Function dispatch
 
 **CLI (`src/cli/`)**:
+
 - main.zig (~400 lines) - Entry point
 - cli_dispatcher.zig (~2,000 lines) - Command routing
 - user_mgmt_cli.zig (~700 lines) - User commands
@@ -797,12 +844,14 @@ try query_executor.executeCreateStatement(...);
 - backup_cli.zig (~700 lines) - Backup commands
 
 **Security (`src/security/`)**:
+
 - audit.zig (modularized)
 - tde.zig (modularized)
 - tde_key_manager.zig
 - tde_nonce_gen.zig
 
 **Streaming (`src/streaming/`)**:
+
 - cdc_enhanced.zig (modularized)
 - cdc_sinks.zig
 - sinks/webhook_sink.zig

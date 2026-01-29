@@ -23,7 +23,7 @@ run_test() {
     local name="$1"
     local cmd="$2"
     local expected_pattern="$3"
-    
+
     echo -n "Testing $name... "
     if eval "$cmd" 2>&1 | grep -q "$expected_pattern"; then
         echo -e "${GREEN}PASS${NC}"

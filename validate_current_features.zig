@@ -50,7 +50,7 @@ fn testNetworkTypesCompilation() !void {
 
     // Verify types are available
     _ = IpAddr;
-    _ = Subnet; 
+    _ = Subnet;
     _ = Mac;
 }
 
@@ -63,7 +63,7 @@ fn testBasicNetworkOperations(allocator: std.mem.Allocator) !void {
     const ipv4 = try IpAddr.fromString("192.168.1.100");
     const ipv4_str = try ipv4.toString(allocator);
     defer allocator.free(ipv4_str);
-    
+
     if (!std.mem.eql(u8, ipv4_str, "192.168.1.100")) {
         return error.IPv4StringMismatch;
     }
@@ -72,7 +72,7 @@ fn testBasicNetworkOperations(allocator: std.mem.Allocator) !void {
     const ipv6 = try IpAddr.fromString("2001:db8::1");
     const ipv6_str = try ipv6.toString(allocator);
     defer allocator.free(ipv6_str);
-    
+
     if (!std.mem.eql(u8, ipv6_str, "2001:db8::1")) {
         return error.IPv6StringMismatch;
     }
@@ -81,7 +81,7 @@ fn testBasicNetworkOperations(allocator: std.mem.Allocator) !void {
     const subnet = try Subnet.fromString("192.168.1.0/24");
     const subnet_str = try subnet.toString(allocator);
     defer allocator.free(subnet_str);
-    
+
     if (!std.mem.eql(u8, subnet_str, "192.168.1.0/24")) {
         return error.SubnetStringMismatch;
     }
@@ -95,7 +95,7 @@ fn testBasicNetworkOperations(allocator: std.mem.Allocator) !void {
     const mac = try Mac.fromString("AA:BB:CC:DD:EE:FF");
     const mac_str = try mac.toString(allocator);
     defer allocator.free(mac_str);
-    
+
     if (!std.mem.eql(u8, mac_str, "aa:bb:cc:dd:ee:ff")) {
         return error.MacStringMismatch;
     }
@@ -161,7 +161,7 @@ fn testBinaryEncoding() !void {
     try ipv4.encode(fbs.writer());
     fbs.pos = 0;
     const decoded_ipv4 = try IpAddr.decode(fbs.reader());
-    
+
     if (decoded_ipv4 != .v4 or !std.mem.eql(u8, &ipv4.v4.octets, &decoded_ipv4.v4.octets)) {
         return error.IPv4EncodingFailed;
     }
@@ -172,7 +172,7 @@ fn testBinaryEncoding() !void {
     try subnet.encode(fbs.writer());
     fbs.pos = 0;
     const decoded_subnet = try Subnet.decode(fbs.reader());
-    
+
     if (decoded_subnet != .v4 or decoded_subnet.v4.network.octets[0] != 192) {
         return error.SubnetEncodingFailed;
     }
@@ -183,7 +183,7 @@ fn testBinaryEncoding() !void {
     try mac.encode(fbs.writer());
     fbs.pos = 0;
     const decoded_mac = try Mac.decode(fbs.reader());
-    
+
     if (!mac.eql(decoded_mac)) {
         return error.MacEncodingFailed;
     }
@@ -194,36 +194,36 @@ fn testPerformance(allocator: std.mem.Allocator) !void {
     const Mac = @import("src/types/network/mac.zig").Mac;
 
     const iterations = 1000;
-    
+
     // Test parsing performance
     var timer = try std.time.Timer.start();
-    
+
     for (0..iterations) |i| {
         const ip_str = try std.fmt.allocPrint(allocator, "192.168.1.{d}", .{i % 255 + 1});
         defer allocator.free(ip_str);
-        
+
         const ip = try IpAddr.fromString(ip_str);
         const result_str = try ip.toString(allocator);
         allocator.free(result_str);
     }
-    
+
     const ip_duration = timer.lap();
-    
+
     // Test MAC performance
     for (0..iterations) |i| {
         const mac_str = try std.fmt.allocPrint(allocator, "00:11:22:33:44:{x:0>2}", .{i % 255});
         defer allocator.free(mac_str);
-        
+
         const mac = try Mac.fromString(mac_str);
         const result_str = try mac.toString(allocator);
         allocator.free(result_str);
     }
-    
+
     const mac_duration = timer.read();
-    
+
     std.debug.print("   📊 Performance: {d} IP operations in {d}ns ({d}ns/op)\n", .{ iterations, ip_duration, ip_duration / iterations });
     std.debug.print("   📊 Performance: {d} MAC operations in {d}ns ({d}ns/op)\n", .{ iterations, mac_duration - ip_duration, (mac_duration - ip_duration) / iterations });
-    
+
     // Ensure performance is reasonable (< 10μs per operation)
     if (ip_duration / iterations > 10_000 or (mac_duration - ip_duration) / iterations > 10_000) {
         return error.PerformanceTooSlow;

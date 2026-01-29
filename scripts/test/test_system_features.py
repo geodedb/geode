@@ -2,8 +2,10 @@
 """Test system features (TDE, CDC, Audit, Auth)."""
 
 import subprocess
-import yaml
 from pathlib import Path
+
+import yaml
+
 
 def run_test(test_case, binary="./zig-out/bin/geode"):
     """Run a single test case."""
@@ -17,13 +19,7 @@ def run_test(test_case, binary="./zig-out/bin/geode"):
     cmd = [binary] + args
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            input=None
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, input=None)
     except subprocess.TimeoutExpired:
         return False, "timeout (30s)"
     except Exception as e:
@@ -51,13 +47,13 @@ def run_test(test_case, binary="./zig-out/bin/geode"):
 
 def test_spec(spec_path):
     """Test a single spec file."""
-    with open(spec_path, "r") as f:
+    with open(spec_path) as f:
         spec = yaml.safe_load(f)
 
     spec_name = Path(spec_path).name
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Testing: {spec_name}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     passed = 0
     failed = 0
@@ -114,12 +110,12 @@ def main():
         total_skipped += skipped
         all_failures.extend([(Path(spec_path).name, name, msg) for name, msg in failures])
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"TOTAL: {total_passed} passed, {total_failed} failed, {total_skipped} skipped")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     if all_failures:
-        print(f"\nFailed tests:")
+        print("\nFailed tests:")
         for spec, name, message in all_failures[:20]:  # Show first 20 failures
             print(f"  [{spec}] {name}: {message}")
         if len(all_failures) > 20:
@@ -130,4 +126,5 @@ def main():
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(main())

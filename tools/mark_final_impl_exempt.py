@@ -42,6 +42,7 @@ IMPL_TO_EXEMPT = [
     "REQ-REPL-QUIC-001",
 ]
 
+
 def main():
     print("GAP-0209 Final Resolution: Marking remaining IMPL entries as EXEMPT")
     print("=" * 70)
@@ -50,7 +51,7 @@ def main():
     converted_count = 0
     today = datetime.now().strftime("%Y-%m-%d")
 
-    with open(STATUS_FILE, 'r', newline='') as f:
+    with open(STATUS_FILE, newline="") as f:
         reader = csv.reader(f)
         for row in reader:
             if len(row) >= 4:
@@ -66,7 +67,7 @@ def main():
             rows.append(row)
 
     # Write back
-    with open(STATUS_FILE, 'w', newline='') as f:
+    with open(STATUS_FILE, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerows(rows)
 
@@ -76,7 +77,7 @@ def main():
 
     # Verify
     impl_count = 0
-    with open(STATUS_FILE, 'r', newline='') as f:
+    with open(STATUS_FILE, newline="") as f:
         reader = csv.reader(f)
         for row in reader:
             if len(row) >= 4 and row[3] == "IMPL":
@@ -89,6 +90,7 @@ def main():
     else:
         print(f"⚠ {impl_count} IMPL entries still remain")
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -49,7 +49,7 @@ echo "CREATE INDEX idx_test ON Person(name)" | ./zig-out/bin/geoded 2>&1 | grep 
 echo -n "  DROP INDEX:   "
 echo "DROP INDEX idx_test" | ./zig-out/bin/geoded 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
 
-# Test SET/DELETE operations  
+# Test SET/DELETE operations
 echo
 echo "Testing data modification operations..."
 echo -n "  SET property:    "

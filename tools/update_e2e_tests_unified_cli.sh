@@ -14,50 +14,50 @@ UPDATED_FILES=0
 update_e2e_file() {
     local file="$1"
     local backup_file="${file}.backup"
-    
+
     # Skip if file doesn't exist
     if [[ ! -f "$file" ]]; then
         return
     fi
-    
+
     # Check if file contains old binary references
     if ! grep -q "geodec\|geoded" "$file"; then
         return
     fi
-    
+
     echo "Updating: $file"
-    
+
     # Create backup
     cp "$file" "$backup_file"
-    
+
     # Update Zig files patterns:
     # Pattern: const exe = "./zig-out/bin/geodec";
     # Replace: const exe = "./zig-out/bin/geode";
     sed -i 's|"./zig-out/bin/geodec"|"./zig-out/bin/geode"|g' "$file"
     sed -i 's|"./zig-out/bin/geoded"|"./zig-out/bin/geode"|g' "$file"
-    
+
     # Pattern: &.{ exe, "QUERY" }
     # Replace: &.{ exe, "query", "QUERY" }
     # This is more complex - need to handle different patterns
-    
+
     # For files that have simple query patterns, add "query" subcommand
     # First, handle patterns like: run(&.{ exe, "RETURN ..." });
     # We need to insert "query" as the second argument
     sed -i 's|run(&\.{ exe, "\([^"]*\)" })|run(\&.{ exe, "query", "\1" })|g' "$file"
-    
+
     # Handle more complex patterns with multiple arguments
     # Pattern: &.{ exe, "QUERY", "--flag" }
     # Replace: &.{ exe, "query", "QUERY", "--flag" }
     sed -i 's|&\.{ exe, "\([^"]*\)", \([^}]*\)|&.{ exe, "query", "\1", \2|g' "$file"
-    
+
     # Handle patterns that might be using geoded with serve subcommand
     # Pattern: &.{ exe, "--data-dir" } (geoded usage)
     # Replace: &.{ exe, "serve", "--data-dir" }
     sed -i 's|&\.{ exe, "--\([^"]*\)"|&.{ exe, "serve", "--\1"|g' "$file"
-    
+
     # For any remaining standalone exe references in certain contexts
     # This is more complex and might need manual review
-    
+
     UPDATED_FILES=$((UPDATED_FILES + 1))
     echo "  -> Updated successfully"
 }

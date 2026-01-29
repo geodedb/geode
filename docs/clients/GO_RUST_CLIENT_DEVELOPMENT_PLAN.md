@@ -5,6 +5,7 @@
 ## Phase 1: Go Client (quic-go) - PRIORITY
 
 ### Current State
+
 - ✅ Basic structure exists (`clients/go/geode/`)
 - ✅ quic-go library integrated
 - ✅ SQL driver interface implemented
@@ -15,6 +16,7 @@
 ### Tasks
 
 #### 1.1 Test QUIC Connectivity
+
 - [ ] Build Go client example
 - [ ] Test connection to our QUIC server
 - [ ] Verify handshake completion
@@ -22,6 +24,7 @@
 - [ ] Validate message framing
 
 #### 1.2 Implement Missing Features
+
 - [ ] Connection pooling
 - [ ] Savepoint support
 - [ ] Transaction management
@@ -30,6 +33,7 @@
 - [ ] Error handling improvements
 
 #### 1.3 Create Examples
+
 - [ ] `examples/basic_query.go` - Simple SELECT
 - [ ] `examples/transactions.go` - BEGIN/COMMIT/ROLLBACK
 - [ ] `examples/parameters.go` - Parameterized queries
@@ -37,6 +41,7 @@
 - [ ] `examples/graph_traversal.go` - MATCH queries
 
 #### 1.4 Testing & Documentation
+
 - [ ] Unit tests for all components
 - [ ] Integration tests with QUIC server
 - [ ] Benchmark tests
@@ -46,6 +51,7 @@
 ## Phase 2: Rust Client (quiche) - PRIORITY
 
 ### Current State
+
 - ✅ Project structure exists (`clients/rust/`)
 - ✅ quiche (Cloudflare QUIC) integrated
 - ✅ Basic types defined
@@ -55,6 +61,7 @@
 ### Tasks
 
 #### 2.1 Implement QUIC Transport
+
 - [ ] QuicConnection struct
 - [ ] TLS configuration
 - [ ] Stream management
@@ -62,6 +69,7 @@
 - [ ] Error handling
 
 #### 2.2 Core Client Features
+
 - [ ] Connection establishment
 - [ ] Query execution
 - [ ] Result parsing
@@ -70,6 +78,7 @@
 - [ ] Connection pooling
 
 #### 2.3 Type System
+
 - [ ] Implement all GQL value types
 - [ ] Serde integration
 - [ ] Decimal/numeric handling
@@ -77,6 +86,7 @@
 - [ ] Binary data handling
 
 #### 2.4 Examples & Documentation
+
 - [ ] `examples/basic.rs` - Simple query
 - [ ] `examples/advanced.rs` - Complex queries
 - [ ] `examples/transactions.rs` - Transaction management
@@ -86,6 +96,7 @@
 ## Phase 3: Test Infrastructure Integration
 
 ### 3.1 Go Test Integration
+
 - [ ] Add Go client to test harness
 - [ ] Create test specifications
 - [ ] Run full test suite
@@ -93,6 +104,7 @@
 - [ ] Fix any failures
 
 ### 3.2 Rust Test Integration
+
 - [ ] Add Rust client to test harness
 - [ ] Create test specifications
 - [ ] Run full test suite
@@ -100,6 +112,7 @@
 - [ ] Fix any failures
 
 ### 3.3 Performance Testing
+
 - [ ] Benchmark Go client
 - [ ] Benchmark Rust client
 - [ ] Compare with Python client (TCP)
@@ -109,6 +122,7 @@
 ## Phase 4: Production Readiness
 
 ### 4.1 Go Client Polish
+
 - [ ] Connection retry logic
 - [ ] Graceful shutdown
 - [ ] Resource cleanup
@@ -117,6 +131,7 @@
 - [ ] CI/CD integration
 
 ### 4.2 Rust Client Polish
+
 - [ ] Connection retry logic
 - [ ] Async runtime optimization
 - [ ] Resource cleanup
@@ -125,6 +140,7 @@
 - [ ] CI/CD integration
 
 ### 4.3 Cross-Client Testing
+
 - [ ] Verify identical behavior across clients
 - [ ] Test interoperability
 - [ ] Stress testing
@@ -134,6 +150,7 @@
 ## Implementation Order
 
 ### Week 1: Go Client QUIC Testing & Core Features
+
 1. Test Go client QUIC connectivity
 2. Fix any connection issues
 3. Implement connection pooling
@@ -141,18 +158,21 @@
 5. Create basic examples
 
 ### Week 2: Go Client Polish & Rust Client Start
+
 1. Complete Go client feature parity
 2. Add comprehensive tests
 3. Start Rust QUIC implementation
 4. Implement core connection logic
 
 ### Week 3: Rust Client Features
+
 1. Complete Rust QUIC connectivity
 2. Implement all core features
 3. Add type system support
 4. Create examples
 
 ### Week 4: Testing & Integration
+
 1. Add both clients to test harness
 2. Run full test suites
 3. Fix any issues
@@ -162,6 +182,7 @@
 ## Success Criteria
 
 ### Go Client
+
 - ✅ Connects via QUIC successfully
 - ✅ All Python client features implemented
 - ✅ 90%+ test pass rate
@@ -169,6 +190,7 @@
 - ✅ Comprehensive documentation
 
 ### Rust Client
+
 - ✅ Connects via QUIC successfully
 - ✅ All Python client features implemented
 - ✅ 90%+ test pass rate
@@ -178,6 +200,7 @@
 - ✅ Comprehensive documentation
 
 ### Overall
+
 - ✅ Three working clients (Go, Rust, Python)
 - ✅ QUIC support in Go & Rust
 - ✅ TCP fallback in Python

@@ -23,7 +23,7 @@ tests:
 
   - name: "cdc-setup-test-data"
     description: "Create test data for CDC operations"
-    args: ["query", 
+    args: ["query",
            "CREATE (alice:Person {name: 'Alice', age: 30, department: 'Engineering'}), (bob:Person {name: 'Bob', age: 25, department: 'Marketing'}), (charlie:Person {name: 'Charlie', age: 35, department: 'Sales'}), (alice)-[:KNOWS {since: 2020, strength: 0.8}]->(bob), (alice)-[:KNOWS {since: 2018, strength: 0.9}]->(charlie) RETURN count(*) AS created"]
     expect:
       exit_code: 0
@@ -48,7 +48,7 @@ tests:
 
   - name: "cdc-capture-insert-events"
     description: "Test CDC capture of INSERT operations"
-    args: ["query", 
+    args: ["query",
            "CREATE (diana:Person {name: 'Diana', age: 28, department: 'HR'}) RETURN diana.name AS name"]
     expect:
       exit_code: 0
@@ -59,7 +59,7 @@ tests:
 
   - name: "cdc-capture-update-events"
     description: "Test CDC capture of UPDATE operations"
-    args: ["query", 
+    args: ["query",
            "MATCH (p:Person {name: 'Alice'}) SET p.age = 31, p.department = 'Senior Engineering' RETURN p.name AS name, p.age AS new_age"]
     expect:
       exit_code: 0
@@ -70,7 +70,7 @@ tests:
 
   - name: "cdc-capture-delete-events"
     description: "Test CDC capture of DELETE operations"
-    args: ["query", 
+    args: ["query",
            "MATCH (p:Person {name: 'Bob'}) DELETE p"]
     expect:
       exit_code: 0
@@ -78,7 +78,7 @@ tests:
 
   - name: "cdc-capture-relationship-events"
     description: "Test CDC capture of relationship operations"
-    args: ["query", 
+    args: ["query",
            "MATCH (alice:Person {name: 'Alice'}), (diana:Person {name: 'Diana'}) CREATE (alice)-[:KNOWS {since: 2024, strength: 0.7}]->(diana) RETURN alice.name AS from_name, diana.name AS to_name"]
     expect:
       exit_code: 0

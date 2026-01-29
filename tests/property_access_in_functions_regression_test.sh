@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Property Access in Functions Regression Test
-# Tests that property access within function calls works correctly 
+# Tests that property access within function calls works correctly
 # e.g., toString(n.name), type(n.property), toInteger(n.age)
 
 set -e

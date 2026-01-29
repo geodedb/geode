@@ -7,6 +7,7 @@ Guidelines for AI agents working in the Geode graph database codebase.
 **Geode** is an enterprise-ready graph database implementing ISO/IEC 39075:2024 (GQL standard) with 98.6% compliance. Written primarily in Zig 0.15.1+ with Python test tooling.
 
 **Key stats:**
+
 - 95%+ test coverage (geodetestlab)
 - 1016 CANARY governance markers
 - Unified CLI binary (`geode`) for server and client
@@ -136,7 +137,7 @@ pub fn processData(allocator: std.mem.Allocator, value: []const u8) !Result {
 pub const Processor = struct {
     allocator: std.mem.Allocator,
     data: std.ArrayList(u8),
-    
+
     pub fn init(allocator: std.mem.Allocator) !Processor { ... }
     pub fn deinit(self: *Processor) void {
         self.data.deinit(self.allocator);
@@ -162,10 +163,10 @@ pub const StructName = struct {
     allocator: std.mem.Allocator,
     field: Type,
     field2: Type = default_value,
-    
+
     pub fn init(allocator: std.mem.Allocator) !StructName { ... }
     pub fn deinit(self: *StructName) void { ... }
-    
+
     // Private helpers have no `pub`
     fn privateHelper(self: *StructName) void { ... }
 };
@@ -212,10 +213,10 @@ test "test_feature_name" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    
+
     var obj = try Module.init(allocator);
     defer obj.deinit();
-    
+
     const result = try obj.method();
     try std.testing.expect(result == expected);
     try std.testing.expectEqual(expected, actual);
@@ -270,6 +271,7 @@ Before making architectural changes, verify against the authoritative spec:
 ### Run Tests After Changes
 
 Always run tests immediately after modifications:
+
 ```bash
 zig build test           # Quick unit tests
 make test                # Full test suite
@@ -283,6 +285,7 @@ make geodetestlab-spec SPEC=<relevant_spec>  # Relevant integration tests
 ### Zig 0.15.1 API
 
 ArrayList/HashMap require explicit allocator parameters:
+
 ```zig
 var list = std.ArrayList(u8).init(allocator);
 try list.append(allocator, item);      // Allocator required
@@ -303,6 +306,7 @@ Geode uses QUIC+TLS exclusively. No TCP/plaintext transport. Server default port
 ### Cross-Compilation
 
 The build system supports multiple targets:
+
 ```bash
 make cross-linux-x86_64
 make cross-linux-arm64

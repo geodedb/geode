@@ -13,7 +13,8 @@ This document contains gaps that have been verified as resolved from previous ga
 **Summary**: Resolved GAP-0242 by adding server-side regression tests that reproduce actual bug conditions.
 
 ### GAP-0242: Bug #365/#366 regression tests do not reproduce bug conditions ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/geode/-/issues/376
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/geode/-/issues/376>
 - **Category:** Test
 - **Severity:** High
 - **Resolution Date:** January 25, 2026
@@ -49,7 +50,8 @@ This document contains gaps that have been verified as resolved from previous ga
 **Summary**: Resolved 9 gaps (GAP-0233 through GAP-0241) covering unit test coverage gaps and IMPL entry reduction.
 
 ### GAP-0233: Bug #366 migrate run segfault lacks regression test ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/geode/-/issues/367
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/geode/-/issues/367>
 - **Category:** Test
 - **Severity:** High
 - **Resolution Date:** January 25, 2026
@@ -66,7 +68,8 @@ This document contains gaps that have been verified as resolved from previous ga
   - Migration module now has comprehensive test coverage
 
 ### GAP-0234: Bug #365 server accepts invalid GQL syntax ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/geode/-/issues/368
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/geode/-/issues/368>
 - **Category:** Test
 - **Severity:** High
 - **Resolution Date:** January 25, 2026
@@ -80,7 +83,8 @@ This document contains gaps that have been verified as resolved from previous ga
   - New test file verifies parser error handling
 
 ### GAP-0235: 286 IMPL entries in status.csv require test verification ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/geode/-/issues/369
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/geode/-/issues/369>
 - **Category:** Test
 - **Severity:** Medium
 - **Resolution Date:** January 25, 2026
@@ -101,7 +105,8 @@ This document contains gaps that have been verified as resolved from previous ga
   - status.csv: IMPL reduced from 286 to 15 (all in test/CLI/build files)
 
 ### GAP-0236: Critical unit test gap - monitoring stack (0 tests) ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/geode/-/issues/370
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/geode/-/issues/370>
 - **Category:** Test
 - **Severity:** High
 - **Resolution Date:** January 25, 2026
@@ -117,7 +122,8 @@ This document contains gaps that have been verified as resolved from previous ga
   - `zig build test` includes monitoring tests
 
 ### GAP-0237: Critical unit test gap - advanced MVCC (1 test for 7 files) ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/geode/-/issues/371
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/geode/-/issues/371>
 - **Category:** Test
 - **Severity:** High
 - **Resolution Date:** January 25, 2026
@@ -129,7 +135,8 @@ This document contains gaps that have been verified as resolved from previous ga
   - 20 new tests across MVCC advanced modules
 
 ### GAP-0238: Critical unit test gap - query/runtime core (0 tests) ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/geode/-/issues/372
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/geode/-/issues/372>
 - **Category:** Test
 - **Severity:** Critical
 - **Resolution Date:** January 25, 2026
@@ -143,7 +150,8 @@ This document contains gaps that have been verified as resolved from previous ga
   - Runtime poller now has unit test coverage
 
 ### GAP-0239: Critical unit test gap - containers (0 tests) ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/geode/-/issues/373
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/geode/-/issues/373>
 - **Category:** Test
 - **Severity:** High
 - **Resolution Date:** January 25, 2026
@@ -156,7 +164,8 @@ This document contains gaps that have been verified as resolved from previous ga
   - 12 new tests for container data structures
 
 ### GAP-0240: Critical unit test gap - type promotion (0 tests) ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/geode/-/issues/374
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/geode/-/issues/374>
 - **Category:** Test
 - **Severity:** Critical
 - **Resolution Date:** January 25, 2026
@@ -174,7 +183,8 @@ This document contains gaps that have been verified as resolved from previous ga
   - Type promotion module has comprehensive test coverage
 
 ### GAP-0241: Unit test gap - CDC core (0 tests) ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/geode/-/issues/375
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/geode/-/issues/375>
 - **Category:** Test
 - **Severity:** Medium
 - **Resolution Date:** January 25, 2026
@@ -215,7 +225,8 @@ This document contains gaps that have been verified as resolved from previous ga
 **Summary**: Resolved 7 gaps related to CANARY marker governance and CI enforcement (GAP-0225 through GAP-0232, excluding GAP-0229).
 
 ### GAP-0225: CANARY markers outside src/ are malformed and omitted from status ledger ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/354
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/354>
 - **Category:** Code Quality
 - **Severity:** High
 - **Resolution Date:** January 17, 2026
@@ -233,7 +244,8 @@ This document contains gaps that have been verified as resolved from previous ga
 - **Regression Test:** CI job `governance-canary-lint` runs repo-wide
 
 ### GAP-0226: STATUS=IMPLEMENTED markers still present in docs ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/355
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/355>
 - **Category:** Code Quality
 - **Severity:** Medium
 - **Resolution Date:** January 17, 2026
@@ -247,7 +259,8 @@ This document contains gaps that have been verified as resolved from previous ga
   - `python3 tools/canary_lint.py --repo . --fail-on-issues` → passes
 
 ### GAP-0227: CI missing mandatory canaryscan verify step ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/356
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/356>
 - **Category:** CI-CD
 - **Severity:** Medium
 - **Resolution Date:** January 17, 2026
@@ -261,7 +274,8 @@ This document contains gaps that have been verified as resolved from previous ga
   - `rg "canaryscan" .gitlab-ci.yml` → matches job definition
 
 ### GAP-0228: Conformance sync scanner not enforced to fail on issues ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/357
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/357>
 - **Category:** CI-CD
 - **Severity:** Low
 - **Resolution Date:** January 17, 2026
@@ -273,7 +287,8 @@ This document contains gaps that have been verified as resolved from previous ga
   - `allow_failure: false` in job definition
 
 ### GAP-0230: REQ-GQL-TYPE-CONV-001 missing from status ledger ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/359
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/359>
 - **Category:** Requirement
 - **Severity:** Medium
 - **Resolution Date:** January 17, 2026
@@ -285,7 +300,8 @@ This document contains gaps that have been verified as resolved from previous ga
   - Both entries have STATUS=TESTED
 
 ### GAP-0231: REQ-GQL-VALUES-MATCH-001 still IMPL ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/360
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/360>
 - **Category:** Feature
 - **Severity:** Medium
 - **Resolution Date:** January 17, 2026
@@ -297,7 +313,8 @@ This document contains gaps that have been verified as resolved from previous ga
   - Test coverage in geodetestlab/specs/gap_0183_0185_ci_distributed_traceability.yml
 
 ### GAP-0232: REQ-PERF-PHASE5-003 STRING_CONCAT still IMPL ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/361
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/361>
 - **Category:** Performance
 - **Severity:** Medium
 - **Resolution Date:** January 17, 2026
@@ -309,7 +326,8 @@ This document contains gaps that have been verified as resolved from previous ga
   - Benchmark file validates 3-5x performance improvement
 
 ### GAP-0229: REQ-DOC issues missing requirement ID lists ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/358
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/358>
 - **Category:** Requirement
 - **Severity:** Medium
 - **Resolution Date:** January 17, 2026
@@ -337,7 +355,8 @@ This document contains gaps that have been verified as resolved from previous ga
 **Summary**: Resolved all 4 remaining open gaps (GAP-0209, GAP-0220, GAP-0222, GAP-0223).
 
 ### GAP-0209: status.csv contains IMPL entries ✅ FULLY RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/338 (CLOSED)
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/338> (CLOSED)
 - **Category:** Code Quality / Governance
 - **Severity:** Low (was Critical)
 - **Original Resolution Date:** January 16, 2026
@@ -360,7 +379,8 @@ This document contains gaps that have been verified as resolved from previous ga
 - **Regression Test:** `geodetestlab/specs/gap_0209_governance_regression.yml`
 
 ### GAP-0220: catch unreachable patterns ✅ SUBSTANTIALLY RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/349 (CLOSED)
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/349> (CLOSED)
 - **Category:** Code Quality
 - **Severity:** Low
 - **Resolution Date:** January 16, 2026
@@ -371,7 +391,8 @@ This document contains gaps that have been verified as resolved from previous ga
   - Remaining patterns in acceptable categories (Windows handles, CLI tools, benchmarks)
 
 ### GAP-0222: RSA key generation uses random bytes ✅ FULLY RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/351 (CLOSED)
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/351> (CLOSED)
 - **Category:** Security
 - **Severity:** Medium
 - **Resolution Date:** January 16, 2026
@@ -383,7 +404,8 @@ This document contains gaps that have been verified as resolved from previous ga
 - **Test Created:** `geodetestlab/specs/gap_0222_rsa_unsupported.yml`
 
 ### GAP-0223: Async I/O mock implementation ✅ FULLY RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/352 (CLOSED)
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/352> (CLOSED)
 - **Category:** Performance
 - **Severity:** Low
 - **Resolution Date:** January 16, 2026
@@ -394,6 +416,7 @@ This document contains gaps that have been verified as resolved from previous ga
   - Provides guidance for production alternatives (io_uring, IOCP, thread pools)
 
 ### Regression Tests Created
+
 - `geodetestlab/specs/gap_0209_0223_final_resolution.yml` - 12 tests covering all resolved gaps
 
 ---
@@ -403,6 +426,7 @@ This document contains gaps that have been verified as resolved from previous ga
 **Summary**: Resolved the last STUB entry (REQ-GQL-TDE-OVERHEAD-001), achieving 0 STUB entries.
 
 ### REQ-GQL-TDE-OVERHEAD-001: TDE Overhead Smoke Benchmark ✅ FULLY RESOLVED
+
 - **Requirement:** REQ-GQL-TDE-OVERHEAD-001
 - **Feature:** TDEOverheadSmoke
 - **Category:** Security / Performance
@@ -416,7 +440,9 @@ This document contains gaps that have been verified as resolved from previous ga
   - `grep -c ",TESTED," docs/status.csv` → **2837** (increased from 2836)
 
 ### Implementation Details
+
 The benchmark now:
+
 1. Uses real AES-GCM encryption via `page_encryption.encryptForWrite()`
 2. Compares encryption overhead against baseline memcpy
 3. Validates overhead ratio < 10x with TDE enabled, < 5x disabled
@@ -424,9 +450,11 @@ The benchmark now:
 5. Tests multiple page sizes (512, 1024, 4096, 8192, 16384 bytes)
 
 ### Regression Tests Created
+
 - `geodetestlab/specs/tde_overhead_benchmark.yml` - 10 tests covering TDE overhead benchmark
 
 ### Governance Status
+
 - **IMPL entries:** 0 (target achieved!)
 - **STUB entries:** 0 (target achieved!)
 - **TESTED entries:** 2839
@@ -437,7 +465,8 @@ The benchmark now:
 ## January 16, 2026 Gap Resolution Session 16 - Distributed RPC Implementation
 
 ### GAP-0210: Raft/2PC network RPC functions are stub placeholders ✅ RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/339 (CLOSED)
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/339> (CLOSED)
 - **Category:** Distributed
 - **Severity:** Critical (was)
 - **Resolution Date:** January 16, 2026
@@ -447,12 +476,14 @@ The benchmark now:
 ### Implementation Evidence
 
 **New RPC Transport Module** (`src/dist/rpc.zig`):
+
 - `RpcClient` with real QUIC network transport (488 lines)
 - Message types: RequestVote, AppendEntries, Prepare, Commit, Abort
 - Full serialization/deserialization for all message types
 - QUIC stream-based communication with timeout handling
 
 **Enhanced RaftNode** (`src/dist/scaffold.zig`):
+
 - Now imports and uses `rpc.zig` module
 - `RpcClient` field added to RaftNode struct
 - `registerNodeAddress()` for node discovery
@@ -500,17 +531,20 @@ ls geodetestlab/specs/gap_0210_distributed_rpc.yml  # 12 test cases
 | Circular Dependency Resolution | 20 | EXEMPT | Infrastructure code |
 
 **Tools Created:**
+
 - `tools/convert_multigraph_impl.py` - Batch converts MultiGraphIsolation IMPL to TESTED
 - `tools/convert_txn_undo_impl.py` - Batch converts TransactionUndoLog IMPL to TESTED
 - `tools/mark_infrastructure_exempt.py` - Marks infrastructure/refactoring code as EXEMPT
 
 **Verification:**
+
 - Build verified: **96.1% pass rate** (2687/2795 tests)
 - Regression test `gap_0209_0220_regression.yml`: **11/11 passing** (100%)
 - `multi_graph.yml`: **23/23 passing** (100%)
 - `transaction_state_basic.yml`: **6/6 passing** (100%)
 
 **Status After Session 12:**
+
 - IMPL: 719 (target: 0)
 - TESTED: 2362
 - EXEMPT: 75
@@ -556,13 +590,16 @@ ls geodetestlab/specs/gap_0210_distributed_rpc.yml  # 12 test cases
 | RLSExpressionCompilation | 5 | Security expression compiler |
 
 **New Test Spec Created:**
+
 - `geodetestlab/specs/gap_0209_batch3_coverage.yml` - 21 tests for converted features (100% pass)
 
 **Tools Created:**
+
 - `tools/convert_batch3_impl.py` - Batch converts 15 features with existing test coverage
 - `tools/mark_infrastructure_exempt_batch2.py` - Marks 11 internal features as EXEMPT
 
 **Status After Session 13:**
+
 - IMPL: 620 (target: 0, 27% total reduction from 859)
 - TESTED: 2424
 - EXEMPT: 118
@@ -598,7 +635,8 @@ The following GitLab issues were formally closed after verification of resolutio
 All 5 gaps identified in Session 10 have been fully implemented with production code fixes.
 
 ### GAP-0204: Fuzz harness is non-functional placeholder ✅ FULLY RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/333
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/333>
 - **Category:** Test/Security
 - **Severity:** Medium
 - **Fix:** Implemented functional fuzz harness that exercises the GQL parser
@@ -616,7 +654,8 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
   - libFuzzer entry point exported ✅
 
 ### GAP-0205: Spatial search uses placeholder coordinate calculation ✅ FULLY RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/334
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/334>
 - **Category:** Bug
 - **Severity:** Medium
 - **Fix:** Added `coordinate_map` to store actual coordinates alongside node IDs
@@ -631,7 +670,8 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
   - Distance calculations return correct values ✅
 
 ### GAP-0206: Network index subnet/prefix conversion uses placeholder implementation ✅ FULLY RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/335
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/335>
 - **Category:** Bug
 - **Severity:** Medium
 - **Fix:** Implemented proper subnet-to-key and subnet-to-prefix conversion
@@ -646,7 +686,8 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
   - `subnetToPrefix` returns correct prefix bits respecting CIDR mask ✅
 
 ### GAP-0207: FLE batch re-encryption is simulated ✅ FULLY RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/336
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/336>
 - **Category:** Security
 - **Severity:** Medium
 - **Fix:** Implemented StorageCallback interface for real batch re-encryption
@@ -668,7 +709,8 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
   - Progress tracking and failure recovery implemented ✅
 
 ### GAP-0208: Shard migration is simulated ✅ FULLY RESOLVED
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/337
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/337>
 - **Category:** Feature
 - **Severity:** High
 - **Fix:** Implemented TransportCallback interface for network-based shard migration
@@ -694,14 +736,16 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ## January 16, 2026 Gap Resolution Session 9 (GAP-0193) ⚠️ RESOLUTION CONTESTED
 
 > **WARNING (January 16, 2026 - Post-Audit)**: The resolution evidence documented below was found to be **INCORRECT** during a subsequent gap analysis. Verification commands show:
+>
 > - `rg -c ",IMPL," docs/status.csv` → **1019** (claimed: 0)
 > - `rg -c ",STUB," docs/status.csv` → **1** (claimed: 0)
 > - Even at commit 3be35c6b (which claimed resolution), there were 16 IMPL entries
 >
-> **New gap created**: GAP-0209 (https://gitlab.com/devnw/codepros/geode/-/issues/338) tracks this governance violation. The resolution below should be considered **invalid** until GAP-0209 is properly resolved.
+> **New gap created**: GAP-0209 (<https://gitlab.com/devnw/codepros/geode/-/issues/338>) tracks this governance violation. The resolution below should be considered **invalid** until GAP-0209 is properly resolved.
 
 ### GAP-0193: Governance policy target for 0 STUB/IMPL residuals not met ⚠️ RESOLUTION INVALID
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/322
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/322>
 - **Category:** Code Quality
 - **Severity:** Medium
 - **Fix:** Comprehensive IMPL to TESTED conversion across all 1000+ entries
@@ -735,6 +779,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 9 gaps resolved with comprehensive unit tests, integration tests, and status.csv updates:
 
 ### GAP-0172: Materialized view requirements missing traceability for REQ-MATVIEW-SYSTEM-002..008 ✅
+
 - **GitLab issue:** #297
 - **Category:** Test
 - **Severity:** Medium
@@ -747,6 +792,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Acceptance criteria met:** All REQ-MATVIEW-SYSTEM-002..008 have TESTED status with test references in status.csv
 
 ### GAP-0195: LSP implementation requirement lacks verified test evidence ✅
+
 - **GitLab issue:** #324
 - **Category:** Test
 - **Severity:** Medium
@@ -759,6 +805,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Acceptance criteria met:** REQ-LSP-001 has TESTED status with test references
 
 ### GAP-0196: Server features requirements lack verified traceability for S3 and txn isolation ✅
+
 - **GitLab issue:** #325
 - **Category:** Test
 - **Severity:** High
@@ -771,6 +818,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Acceptance criteria met:** REQ-GQL-S3-001 now in status.csv; all requirements have TESTED status
 
 ### GAP-0197: Rust client s2n-quic findings requirement lacks verification ✅
+
 - **GitLab issue:** #326
 - **Category:** Test
 - **Severity:** Medium
@@ -782,6 +830,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Acceptance criteria met:** REQ-CLIENT-INTEGRATION-001 has TESTED status
 
 ### GAP-0198: Algorithm performance requirement REQ-GQL-ALGO-PERF lacks verified benchmarks ✅
+
 - **GitLab issue:** #327
 - **Category:** Performance
 - **Severity:** Medium
@@ -793,6 +842,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Acceptance criteria met:** REQ-GQL-ALGO-PERF has TESTED status with test references
 
 ### GAP-0199: QUIC connection cleanup requirements lack verified tests ✅
+
 - **GitLab issue:** #328
 - **Category:** Test
 - **Severity:** Medium
@@ -804,6 +854,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Acceptance criteria met:** REQ-QUIC-CONN-CLEANUP-001..003 have TESTED status
 
 ### GAP-0201: Argon2id hashing requirement REQ-AUTH-002 lacks verified tests ✅
+
 - **GitLab issue:** #330
 - **Category:** Security
 - **Severity:** High
@@ -819,6 +870,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Acceptance criteria met:** REQ-AUTH-002 has TESTED status with comprehensive password security tests
 
 ### GAP-0202: User auth policy requirements lack verified test evidence ✅
+
 - **GitLab issue:** #331
 - **Category:** Security
 - **Severity:** High
@@ -830,6 +882,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Acceptance criteria met:** Auth policy requirements have TESTED status
 
 ### GAP-0203: Evaluation pipeline performance requirement REQ-PERF-PHASE5-003 lacks verification ✅
+
 - **GitLab issue:** #332
 - **Category:** Performance
 - **Severity:** Medium
@@ -841,6 +894,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Acceptance criteria met:** REQ-PERF-PHASE5-003 has TESTED status
 
 ### GAP-0200: Shell test requirement IDs remain unverified (IMPL only) ✅
+
 - **GitLab issue:** #329
 - **Category:** Test
 - **Severity:** Medium
@@ -864,6 +918,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Acceptance criteria met:** All shell test requirement IDs from docs/testing/SHELL_TEST_ISSUES.md now have TESTED status with test references
 
 ### GAP-0193: IMPL Entry Verification Progress ⏳ (Ongoing)
+
 - **GitLab issue:** #322
 - **Category:** Code Quality
 - **Severity:** Medium
@@ -900,6 +955,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Remaining work:** ~1012 IMPL entries still need verification or policy exceptions
 
 ### GAP-0193: High-Priority IMPL Verification ✅
+
 - **GitLab issue:** #322
 - **Category:** Code Quality
 - **Severity:** Medium
@@ -916,6 +972,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Current status:** TESTED count increased to 1277 (from ~1050)
 
 ### GAP-0193: IMPL Batch Promotion Session ✅
+
 - **GitLab issue:** #322
 - **Category:** Code Quality
 - **Severity:** Medium
@@ -952,6 +1009,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
   9. StringMinMax (6 entries)
 
 ### Summary of January 15, 2026 Resolution Session
+
 - **Tests added:** 250+ unit tests across 5 test files:
   - `test_gap_analysis_january_2026.zig` (33 tests)
   - `test_shell_requirements_verification.zig` (45 tests)
@@ -980,6 +1038,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 1 gap resolved with real LSN tracking for incremental backup chains:
 
 ### GAP-0181: Incremental backups ignore parent LSN metadata ✅
+
 - **GitLab issue:** #310
 - **Category:** Feature
 - **Severity:** High
@@ -1010,6 +1069,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 3 gaps resolved with CI enforcement, concurrent distributed execution, and real traceability verification:
 
 ### GAP-0183: CI does not enforce REQ-0008 Zig/ReleaseSafe build requirements ✅
+
 - **GitLab issue:** #312
 - **Category:** CI-CD
 - **Severity:** Medium
@@ -1021,6 +1081,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Acceptance criteria met:** CI now runs ReleaseSafe build as a required job; optimizer-only regressions will be caught
 
 ### GAP-0184: Distributed queries execute shards sequentially (simulated parallelism) ✅
+
 - **GitLab issue:** #313
 - **Category:** Feature
 - **Severity:** Medium
@@ -1035,6 +1096,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Acceptance criteria met:** scatterQuery runs fragments concurrently; tests verify parallel execution and correct merge results
 
 ### GAP-0185: Requirement traceability tests are non-verifying stubs ✅
+
 - **GitLab issue:** #314
 - **Category:** Test
 - **Severity:** Medium
@@ -1057,6 +1119,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 2 gaps verified and resolved with QUIC catalog singleton and complex path variable support:
 
 ### GAP-0180: QUIC execution uses catalog stub instead of global catalog ✅
+
 - **GitLab issue:** #309
 - **Fix:** Replaced `initCatalog` with `ensureCatalogInstance` in QUIC handler for shared catalog singleton
 - **Evidence:**
@@ -1066,6 +1129,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
   - `geodetestlab/specs/gap_0180_0182_fixes.yml` - Integration tests for catalog persistence
 
 ### GAP-0182: Complex path variable assignment fails (GQL compliance) ✅
+
 - **GitLab issue:** #311
 - **Fix:** Path variable binding already implemented correctly; added comprehensive tests to verify complex patterns work
 - **Evidence:**
@@ -1081,6 +1145,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 15 gaps verified and resolved with security wiring, CI fixes, traceability markers, and documentation:
 
 ### GAP-0164: Missing type:: label taxonomy ✅
+
 - **GitLab issue:** #255
 - **Fix:** Provisioned type:: label taxonomy in GitLab (in addition to the provisioning script).
 - **Evidence:**
@@ -1088,6 +1153,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
   - `glab api "projects/77156681/labels?search=type::"` — confirms type::feature, type::bug, type::enhancement, type::security, type::docs, type::test, type::refactor, type::ci-cd, type::performance
 
 ### GAP-0165: ABAC enforcement not wired into server execution ✅
+
 - **GitLab issue:** #256
 - **Fix:** Wired SecurityManager into server initialization and all execution paths
 - **Evidence:**
@@ -1099,6 +1165,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
   - CANARY markers: REQ-ABAC-WIRE-001 through REQ-ABAC-WIRE-016
 
 ### GAP-0167: GQL compliance CI ignores test failures ✅
+
 - **GitLab issue:** #258
 - **Fix:** Removed `|| true` from CI runners; compliance failures now fail the pipeline
 - **Evidence:**
@@ -1107,6 +1174,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
   - CANARY markers: REQ-GQL-CI-001, REQ-GQL-CI-002
 
 ### GAP-0168: Performance targets lack recorded benchmark evidence ✅
+
 - **GitLab issue:** #259
 - **Fix:** Updated BENCHMARK_REPORT.md with audit latency, WAL ordering, TDE, and ABAC benchmark documentation
 - **Evidence:**
@@ -1115,6 +1183,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
   - CANARY markers: REQ-BENCHMARK-AUDIT-001, REQ-BENCHMARK-AUDIT-002, REQ-BENCHMARK-TDE-001, REQ-BENCHMARK-ABAC-001
 
 ### GAP-0169: Unicode generator build step not enforced ✅
+
 - **GitLab issue:** #294
 - **Fix:** Added `zig build unicode-gen` step and verification warning
 - **Evidence:**
@@ -1123,48 +1192,56 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
   - CANARY markers: REQ-GQL-UNICODE-006, REQ-GQL-UNICODE-007, REQ-GQL-UNICODE-008
 
 ### GAP-0170: CLI subprocess elimination requirements missing traceability ✅
+
 - **GitLab issue:** #295
 - **Fix:** Added CANARY markers and tests for REQ-CLI-SUBPROCESS-ELIMINATION-002/003
 - **Evidence:**
   - `tests/test_requirement_traceability.zig` - Traceability tests
 
 ### GAP-0171: Field-level encryption requirement missing traceability ✅
+
 - **GitLab issue:** #296
 - **Fix:** Added CANARY marker and test for REQ-FLE-DOC-001
 - **Evidence:**
   - `tests/test_requirement_traceability.zig` - Traceability test
 
 ### GAP-0173: Security progress requirements missing traceability ✅
+
 - **GitLab issue:** #298
 - **Fix:** Added CANARY markers and tests for REQ-GQL-TDE-CORE-001, REQ-GQL-TDE-PERF-001, REQ-GQL-MFA-AUDIT-001
 - **Evidence:**
   - `tests/test_requirement_traceability.zig` - Traceability tests
 
 ### GAP-0174: User auth policy requirement missing traceability ✅
+
 - **GitLab issue:** #299
 - **Fix:** Added CANARY marker and test for REQ-AUTH-POLICY-011
 - **Evidence:**
   - `tests/test_requirement_traceability.zig` - Traceability test
 
 ### GAP-0175: Values->Match chaining requirement missing traceability ✅
+
 - **GitLab issue:** #300
 - **Fix:** Added CANARY marker and test for REQ-GQL-VALUES-MATCH-001
 - **Evidence:**
   - `tests/test_requirement_traceability.zig` - Traceability test
 
 ### GAP-0176: Zig client v2 requirement missing traceability ✅
+
 - **GitLab issue:** #301
 - **Fix:** Added CANARY marker and test for REQ-ZIG-CLIENT-002
 - **Evidence:**
   - `tests/test_requirement_traceability.zig` - Traceability test
 
 ### GAP-0177: REPL requirement IDs missing traceability ✅
+
 - **GitLab issue:** #302
 - **Fix:** Added CANARY markers and tests for REQ-REPL-ADVANCED-002, REQ-REPL-FORMAT-004
 - **Evidence:**
   - `tests/test_requirement_traceability.zig` - Traceability tests
 
 ### GAP-0178: Shell test requirement IDs missing traceability ✅
+
 - **GitLab issue:** #303
 - **Fix:** Added CANARY markers and tests for REQ-GQL-OPTIONAL-UNDIRECTED-001, REQ-GQL-ORDERBY-NULLS-001
 - **Evidence:**
@@ -1175,6 +1252,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ## January 14, 2026 Gap Resolution Session 4 (GAP-0179)
 
 ### GAP-0179: --no-quic flag referenced in docs/tests but not implemented ✅
+
 - **GitLab issue:** #304
 - **Fix:** Removed no-quic references and aligned docs/tests/scripts with QUIC-only behavior; `--insecure` is documented as TLS validation bypass only.
 - **Evidence:**
@@ -1186,6 +1264,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 **Full Audit Verification (January 14, 2026)**:
+
 - Gap-labeled issues reviewed against GitLab; open gaps tracked in docs/GAP_ANALYSIS.md.
 - Implementation verification: CDC sinks (Kafka/Webhook with DLQ, idempotency, retries), audit logging (Ed25519 signing, hash chains), RLS enforcement, transaction management all confirmed as real implementations.
 - Production guards verified in auth_state.zig, user_mgmt_cli.zig, external_kms_client.zig, kms.zig, tde_nonce_gen.zig, wal.zig.
@@ -1197,6 +1276,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 2 gaps verified and resolved with Prometheus metrics wiring and test runner documentation fixes:
 
 ### GAP-0166: Prometheus metrics exporter not wired to runtime endpoint ✅
+
 - **GitLab issue:** #257
 - **Fix:** Created MetricsServer HTTP endpoint and wired into server initialization
 - **Evidence:**
@@ -1206,6 +1286,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
   - CANARY markers: REQ-PROMETHEUS-WIRE-001 through REQ-PROMETHEUS-WIRE-004
 
 ### GAP-0157: geodetestlab test_runner.py reference is stale ✅
+
 - **GitLab issue:** #248
 - **Fix:** Updated docs/TESTING.md to use correct path scripts/test/extended_test_runner.py
 - **Evidence:**
@@ -1218,31 +1299,37 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 6 gaps identified and resolved with documentation updates, CI governance jobs, symlinks, and unit tests:
 
 ### GAP-0158: CI docs reference GitHub Actions instead of GitLab CI ✅
+
 - **GitLab issue:** #249
 - **Fix:** Replaced GitHub Actions YAML with GitLab CI examples in docs/TESTING.md
 - **Evidence:** docs/TESTING.md:166-183
 
 ### GAP-0159: Audit logging docs reference non-existent geode-audit binary ✅
+
 - **GitLab issue:** #250
 - **Fix:** Updated docs/AUDIT_LOGGING.md to use `geode audit verify` unified CLI
 - **Evidence:** docs/AUDIT_LOGGING.md:43-49
 
 ### GAP-0160: CI does not enforce governance/status checks ✅
+
 - **GitLab issue:** #251
 - **Fix:** Added governance stage to .gitlab-ci.yml with status-check, no-feature-flags, and CANARY drift jobs
 - **Evidence:** .gitlab-ci.yml:32-105, CANARY markers added
 
 ### GAP-0161: Pagination orderedness legality TODO ✅
+
 - **GitLab issue:** #252
 - **Fix:** Implementation already exists in planner.zig:222-225; added comprehensive unit tests
 - **Evidence:** src/gql.zig:211-340 (5 new tests), CANARY marker added
 
 ### GAP-0162: Distributed query fragment serialization stub ✅
+
 - **GitLab issue:** #253
 - **Fix:** Implemented full JSON serialization/deserialization in serializeFragment/deserializeFragment
 - **Evidence:** src/distributed/enhanced_query_transport.zig:459-514, 4 unit tests added
 
 ### GAP-0163: geoded references remain after server binary removal ✅
+
 - **GitLab issue:** #254
 - **Fix:** Added symlink creation in build.zig for backward compatibility
 - **Evidence:** build.zig:229-248, symlinks created at zig-out/bin/geoded and zig-out/bin/geodec
@@ -1251,10 +1338,12 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 
 **January 14, 2026 Security Gap Resolution Session**:
 2 gaps identified and resolved with CANARY markers, unit tests, and geodetestlab specs:
+
 - #237 (GAP-0155) - WAL Hex Key catch 0 → **parseWalHexKey() with proper error handling** ✅
 - #238 (GAP-0156) - MFA Hardcoded Secret → **Removed fake "123456" from MFA toggle output** ✅
 
 **Evidence**:
+
 - `src/wal/wal.zig`: Added `parseWalHexKey()` function with proper error handling (lines 10-35)
 - `src/wal/wal.zig`: Updated `loadEncConfig()` to use parseWalHexKey with error handling (lines 162-182)
 - `src/wal/wal.zig`: Added 11 unit tests for hex key parsing validation
@@ -1265,10 +1354,12 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 
 **January 13, 2026 Password Security Gap Resolution Session**:
 2 gaps identified and resolved with CANARY markers, production guards, and comprehensive geodetestlab tests:
+
 - #235 (GAP-0153) - auth_state.zig Hardcoded Passwords → **Production guard with std.crypto.random password generation** ✅
 - #236 (GAP-0154) - user_mgmt_cli.zig Default Passwords → **Require explicit --password or --generate-password** ✅
 
 **Evidence**:
+
 - `src/security/auth_state.zig`: Added `is_production_build` guard, generates random passwords in release builds
 - `src/cli/user_mgmt_cli.zig`: Removed hardcoded defaults, added `--generate-password` flag, require explicit passwords
 - `geodetestlab/specs/gap_153_154_password_security.yml`: 19 regression tests (all passing)
@@ -1276,18 +1367,21 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 
 **January 13, 2026 Authentication & Audit Gap Resolution Session (Final)**:
 3 gaps identified and resolved with CANARY markers, Ed25519 verification, and platform detection:
+
 - #232 (GAP-0150) - CLI Auth Simulated → **Real QUIC authentication with helloWithAuth() and server-side validation** ✅
 - #233 (GAP-0151) - Audit Verify Ed25519 → **Full signature verification + digest interval enforcement + require_digest** ✅
 - #234 (GAP-0152) - PowerShell Random Simulation → **Deterministic platform detection, Windows-only feature documented** ✅
 
 **January 13, 2026 Final Security Gap Resolution Session (Late PM)**:
 3 gaps identified and resolved with CANARY markers and unit tests:
+
 - #229 (GAP-0147) - FLE migrate-encrypt Stub → **Full implementation calling fle_commands.migrateEncrypt** ✅
 - #230 (GAP-0148) - Backup Hex Key catch 0 → **parseHexKey() with proper error handling** ✅
 - #231 (GAP-0149) - Risk Score catch 0 → **Fail-secure: invalid parses as 255 (max risk)** ✅
 
 **January 13, 2026 Security Gap Resolution Session (Late PM)**:
 7 gaps identified and resolved with CANARY markers and security guards:
+
 - #222 (GAP-0140) - SHOW Statement Protocol Blocking → **QUIC handler routes to executeShow()** ✅
 - #223 (GAP-0141) - Unsafe Hex Parsing catch 0 → **Proper error returns on invalid hex** ✅
 - #224 (GAP-0142) - Deterministic PRNG for Nonces → **std.crypto.random for all nonces** ✅
@@ -1298,6 +1392,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 
 **January 13, 2026 Gap Resolution Session (PM)**:
 3 gaps identified and resolved with CANARY markers and geodetestlab specs:
+
 - #219 (GAP-0137) - Backup/Migrate CLI TLS → **TlsConfig struct + CLI args + validation** ✅
 - #220 (GAP-0138) - Dead code removal → **runEmbeddedClient and ClientConfig removed** ✅
 - #221 (GAP-0139) - SHOW statement types → **executeShow() implements all SHOW types** ✅
@@ -1307,6 +1402,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 **Additional Gaps (January 11, 2026)**: GAP-0090 through GAP-0098 (9 gaps) identified through security and CLI command auditing.
 
 **January 13, 2026 Resolution Session**: 14 gaps (GAP-0123 through GAP-0136) resolved:
+
 - #216 (GAP-0134) - Shell REPL TLS → **ShellTlsConfig + quicConnect respects TLS flags** ✅
 - #205 (GAP-0123) - CSR Property Offset → **EdgeInput struct with properties_offset** ✅
 - #218 (GAP-0136) - CSR Duplicate Fix → **Merged with GAP-0123** ✅
@@ -1325,10 +1421,12 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 **January 12, 2026 AM Resolution Session**: All 9 security gaps resolved.
 
 **January 12, 2026 PM Resolution Session**: 2 additional gaps identified and ENHANCED:
+
 - #184 (GAP-0102) - Legacy XOR Encryption → **COMPLETELY REMOVED** (AES-256-GCM only) ✅
 - #185 (GAP-0103) - Syslog TLS Fallback → **Real TLS + Connection Pooling + Cert Pinning** ✅
 
 **January 12, 2026 Security Hardening Session**: 10 CRITICAL security gaps resolved:
+
 - #186 (GAP-0104) - Hardcoded admin:admin123 → **Removed, use env vars** ✅
 - #187 (GAP-0105) - Insecure TLS default → **allow_insecure=false by default** ✅
 - #188 (GAP-0106) - Auth disabled default → **Authentication enabled by default** ✅
@@ -1341,6 +1439,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - #199 (GAP-0117) - JSON no size limits → **10MB max size, 32 level depth limit** ✅
 
 **January 12, 2026 Feature Gap Resolution Session**: 9 remaining gaps verified as resolved:
+
 - #194 (GAP-0112) - Query Optimizer Left-Deep Only → **Full DP enumeration with left/right/bushy trees** ✅
 - #195 (GAP-0113) - CLI TLS Cert Verification → **--insecure, --ca-cert, --client-cert, --client-key flags** ✅
 - #196 (GAP-0114) - Federation Index Recommendations → **getFederationIndexRecommendations() with per-shard costs** ✅
@@ -1352,6 +1451,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - #204 (GAP-0122) - Library Mode Embedding → **Comprehensive embedding documentation** ✅
 
 **January 12, 2026 Original Resolution Session**: All 9 remaining gaps have been resolved:
+
 - #99 (GAP-0017) - XOR Key Wrapping → AES-256-GCM key wrapping ✅
 - #117 (GAP-0035) - 2PC Write Set → Real applyWriteSet implementation ✅
 - #144 (GAP-0062) - Disk Encryption → AES-256-GCM page/WAL encryption ✅
@@ -1367,6 +1467,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ## Latest Resolutions (January 13, 2026 Final PM Session)
 
 ### GAP-0147: FLE migrate-encrypt Command is Stub Implementation (Resolved January 13, 2026)
+
 - **Original Gap:** The `handleMigrateEncrypt()` function was a stub that ignored parameters and printed fake success messages
 - **Original Severity:** Medium (Implementation)
 - **GitLab Issue:** [#229](https://gitlab.com/devnw/codepros/geode/-/issues/229)
@@ -1378,6 +1479,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
   - CANARY marker: REQ=REQ-FLE-MIGRATE-CLI-001; STATUS=IMPL
 
 ### GAP-0148: Backup Encryption Key Hex Parsing Uses Silent catch 0 (Resolved January 13, 2026)
+
 - **Original Gap:** 6 instances of `catch 0` in hex parsing would corrupt encryption keys silently
 - **Original Severity:** High (Security)
 - **GitLab Issue:** [#230](https://gitlab.com/devnw/codepros/geode/-/issues/230)
@@ -1390,6 +1492,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
   - CANARY marker: REQ=REQ-BACKUP-HEX-001; STATUS=IMPL; TESTED
 
 ### GAP-0149: Risk Score Parsing Uses catch 0 Allowing MFA Bypass (Resolved January 13, 2026)
+
 - **Original Gap:** Invalid risk_score parsed as 0 (lowest risk) instead of failing securely
 - **Original Severity:** High (Security)
 - **GitLab Issue:** [#231](https://gitlab.com/devnw/codepros/geode/-/issues/231)
@@ -1404,6 +1507,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ## Previous Resolutions (January 13, 2026 Late PM Security Session)
 
 ### GAP-0140: SHOW Statement Protocol Layer Blocking (Resolved January 13, 2026)
+
 - **Original Gap:** QUIC connection handler returned NotImplemented for all SHOW types before reaching execution layer
 - **Original Severity:** Critical (GQL Compliance)
 - **GitLab Issue:** [#222](https://gitlab.com/devnw/codepros/geode/-/issues/222)
@@ -1417,6 +1521,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0141: Unsafe Hex Parsing catch 0 in Cryptographic Paths (Resolved January 13, 2026)
+
 - **Original Gap:** Multiple security files used `catch 0` for hex parsing, silently corrupting cryptographic data
 - **Original Severity:** High (Security)
 - **GitLab Issue:** [#223](https://gitlab.com/devnw/codepros/geode/-/issues/223)
@@ -1434,6 +1539,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0142: Deterministic PRNG for AES-GCM Nonces (Resolved January 13, 2026)
+
 - **Original Gap:** Custom xorshift128+ PRNG used for AES-GCM nonces was deterministic with fixed seed
 - **Original Severity:** High (Security)
 - **GitLab Issue:** [#224](https://gitlab.com/devnw/codepros/geode/-/issues/224)
@@ -1449,6 +1555,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0143: --disable-auth CLI Flag Bypass (Resolved January 13, 2026)
+
 - **Original Gap:** --disable-auth flag worked in all build modes, allowing authentication bypass in production
 - **Original Severity:** High (Security)
 - **GitLab Issue:** [#225](https://gitlab.com/devnw/codepros/geode/-/issues/225)
@@ -1463,6 +1570,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0144: Distributed Systems Insecure QUIC Connections (Resolved January 13, 2026)
+
 - **Original Gap:** All distributed/ components used connectInsecure() with skip_verify=true
 - **Original Severity:** High (Security)
 - **GitLab Issue:** [#226](https://gitlab.com/devnw/codepros/geode/-/issues/226)
@@ -1478,6 +1586,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0145: Weak JSON Parsing in KMS Remote Server (Resolved January 13, 2026)
+
 - **Original Gap:** JSON parsing in parseEnvelope lacked bounds checking, risking buffer overread
 - **Original Severity:** Medium (Security)
 - **GitLab Issue:** [#227](https://gitlab.com/devnw/codepros/geode/-/issues/227)
@@ -1493,6 +1602,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0146: Default Password Fallback to Hardcoded Value (Resolved January 13, 2026)
+
 - **Original Gap:** Default password "geodesic" was used if GEODE_DEFAULT_PASSWORD env var not set
 - **Original Severity:** Medium (Security)
 - **GitLab Issue:** [#228](https://gitlab.com/devnw/codepros/geode/-/issues/228)
@@ -1510,6 +1620,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ## Previous Resolutions (January 13, 2026 PM Session)
 
 ### GAP-0137: Backup/Migrate CLI TLS Certificate Verification (Resolved January 13, 2026)
+
 - **Original Gap:** Backup/Migrate CLI commands used `connectInsecure()` without TLS verification
 - **Original Severity:** Medium (Security)
 - **GitLab Issue:** [#219](https://gitlab.com/devnw/codepros/geode/-/issues/219)
@@ -1525,6 +1636,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0138: Dead Code Removal - runEmbeddedClient (Resolved January 13, 2026)
+
 - **Original Gap:** `runEmbeddedClient()` function and `ClientConfig` struct were dead code
 - **Original Severity:** Low (Code Quality)
 - **GitLab Issue:** [#220](https://gitlab.com/devnw/codepros/geode/-/issues/220)
@@ -1538,6 +1650,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0139: SHOW Statement Types Implementation (Resolved January 13, 2026)
+
 - **Original Gap:** SHOW INDEXES/CONSTRAINTS/TABLES/PROCEDURES/FUNCTIONS returned "NotImplemented"
 - **Original Severity:** Low (GQL Compliance)
 - **GitLab Issue:** [#221](https://gitlab.com/devnw/codepros/geode/-/issues/221)
@@ -1558,6 +1671,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ## Latest Resolutions (January 12, 2026)
 
 ### GAP-0017: XOR Key Wrapping → AES-256-GCM (Resolved January 12, 2026)
+
 - **Original Gap:** key_provider.zig used XOR (0xA5) for key wrapping
 - **Original Severity:** Critical (Security)
 - **GitLab Issue:** [#99](https://gitlab.com/devnw/codepros/geode/-/issues/99) (closed)
@@ -1572,6 +1686,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0035: 2PC applyWriteSet Stub → Real Implementation (Resolved January 12, 2026)
+
 - **Original Gap:** txn_coordinator.zig applyWriteSet was a stub that logged "stub" and ignored all data
 - **Original Severity:** Critical (Distributed)
 - **GitLab Issue:** [#117](https://gitlab.com/devnw/codepros/geode/-/issues/117) (closed)
@@ -1587,6 +1702,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0062: XOR Page/WAL Encryption → AES-256-GCM (Resolved January 12, 2026)
+
 - **Original Gap:** crypto_simple.zig used XOR (0x42) for page and WAL encryption
 - **Original Severity:** Medium (Security)
 - **GitLab Issue:** [#144](https://gitlab.com/devnw/codepros/geode/-/issues/144) (closed)
@@ -1604,6 +1720,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0066: local_dev Default → external_kms + Production Guard (Resolved January 12, 2026)
+
 - **Original Gap:** KMS defaulted to local_dev (XOR-based, insecure)
 - **Original Severity:** High (Security)
 - **GitLab Issue:** [#148](https://gitlab.com/devnw/codepros/geode/-/issues/148) (closed)
@@ -1616,6 +1733,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0069: Deterministic PRNG → std.crypto.random (Resolved January 12, 2026)
+
 - **Original Gap:** Key rotation used DefaultPrng seeded with XOR'd value, making keys predictable
 - **Original Severity:** High (Security)
 - **GitLab Issue:** [#151](https://gitlab.com/devnw/codepros/geode/-/issues/151) (closed)
@@ -1629,6 +1747,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0086: LocalSimulated Default → VaultTransit + Production Warning (Resolved January 12, 2026)
+
 - **Original Gap:** external_kms_client defaulted to LocalSimulated (development only)
 - **Original Severity:** Medium (Security)
 - **GitLab Issue:** [#168](https://gitlab.com/devnw/codepros/geode/-/issues/168) (closed)
@@ -1643,6 +1762,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0099: Empty Range Scan → Actual B-tree Traversal (Resolved January 12, 2026)
+
 - **Original Gap:** index_manager.zig rangeScan returned empty array instead of actual results
 - **Original Severity:** High (Query Engine)
 - **GitLab Issue:** [#181](https://gitlab.com/devnw/codepros/geode/-/issues/181) (closed)
@@ -1658,6 +1778,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0100: KMS wrapLocalDev XOR → AES-256-GCM (Resolved January 12, 2026)
+
 - **Original Gap:** kms.zig wrapLocalDev used XOR with CRC32-derived key
 - **Original Severity:** High (Security)
 - **GitLab Issue:** [#182](https://gitlab.com/devnw/codepros/geode/-/issues/182) (closed)
@@ -1673,6 +1794,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0101: CDC Sinks Verified as Real Implementations (Resolved January 12, 2026)
+
 - **Original Gap:** Misleading comment in kafka_sink.zig suggested placeholder implementation
 - **Original Severity:** Medium (Implementation)
 - **GitLab Issue:** [#183](https://gitlab.com/devnw/codepros/geode/-/issues/183) (closed)
@@ -1695,6 +1817,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ## Previous Resolutions (January 11, 2026)
 
 ### GAP-0090: ML GraphData.getNeighbors() Returns Empty Placeholder (Resolved January 11, 2026)
+
 - **Original Gap:** ML getNeighbors() function returned empty slice, breaking all random walk algorithms
 - **Original Severity:** Medium (Implementation)
 - **GitLab Issue:** [#172](https://gitlab.com/devnw/codepros/geode/-/issues/172) (closed)
@@ -1710,6 +1833,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0091: Cryptographic Key Generation Uses Non-Cryptographic PRNG (Resolved January 11, 2026)
+
 - **Original Gap:** Key generation used time-seeded DefaultPrng instead of cryptographically secure random
 - **Original Severity:** High (Security)
 - **GitLab Issue:** [#173](https://gitlab.com/devnw/codepros/geode/-/issues/173) (closed)
@@ -1727,6 +1851,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0092: CLI Query Execution is Simulated (Resolved January 11, 2026)
+
 - **Original Gap:** `geode query` command printed simulation message instead of executing queries
 - **Original Severity:** High (Implementation)
 - **GitLab Issue:** [#174](https://gitlab.com/devnw/codepros/geode/-/issues/174) (closed)
@@ -1742,6 +1867,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0093: CLI Backup List Returns Hardcoded Fake Data (Resolved January 11, 2026)
+
 - **Original Gap:** `geode backup list` returned hardcoded fake entries instead of real backups
 - **Original Severity:** Medium (Implementation)
 - **GitLab Issue:** [#175](https://gitlab.com/devnw/codepros/geode/-/issues/175) (closed)
@@ -1758,6 +1884,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0094: CLI Backup Info Returns Hardcoded Fake Data (Resolved January 11, 2026)
+
 - **Original Gap:** `geode backup info` returned hardcoded metadata instead of reading file
 - **Original Severity:** Medium (Implementation)
 - **GitLab Issue:** [#176](https://gitlab.com/devnw/codepros/geode/-/issues/176) (closed)
@@ -1774,6 +1901,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0095: CLI Migrate Status Returns Hardcoded Fake Data (Resolved January 11, 2026)
+
 - **Original Gap:** `geode migrate status` returned hardcoded counts instead of actual status
 - **Original Severity:** Medium (Implementation)
 - **GitLab Issue:** [#177](https://gitlab.com/devnw/codepros/geode/-/issues/177) (closed)
@@ -1791,6 +1919,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0096: CLI Migrate Run Prints Success Without Applying Migrations (Resolved January 11, 2026)
+
 - **Original Gap:** `geode migrate run` printed success without applying any migrations
 - **Original Severity:** High (Implementation)
 - **GitLab Issue:** [#178](https://gitlab.com/devnw/codepros/geode/-/issues/178) (closed)
@@ -1810,6 +1939,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0097: CLI Migrate Create Prints Success Without Creating File (Resolved January 11, 2026)
+
 - **Original Gap:** `geode migrate create` printed success without creating actual file
 - **Original Severity:** Medium (Implementation)
 - **GitLab Issue:** [#179](https://gitlab.com/devnw/codepros/geode/-/issues/179) (closed)
@@ -1826,6 +1956,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0098: Migration engine stub; CLI reported success without executing (Resolved January 11, 2026)
+
 - **Original Gap:** Migration engine was an in-memory stub; `geode migrate run/status` printed success without executing .gql migrations or persisting state.
 - **Original Severity:** High (Feature)
 - **GitLab Issue:** [#180](https://gitlab.com/devnw/codepros/geode/-/issues/180) (closed)
@@ -1853,6 +1984,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ## Previous Resolutions (January 10, 2026)
 
 ### GAP-0086: External KMS Integration (Resolved January 10, 2026)
+
 - **Original Gap:** VaultTransitClient and AwsKmsClient were stub implementations with local simulation
 - **Original Severity:** Medium (Security)
 - **Resolution Evidence:**
@@ -1878,6 +2010,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0056: LSP Go-To-Definition (Resolved January 10, 2026)
+
 - **Original Gap:** LSP go-to-definition returned null without implementation
 - **Original Severity:** Low (Feature)
 - **Resolution Evidence:**
@@ -1891,6 +2024,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0058: CTE Disk Spilling (Resolved January 10, 2026)
+
 - **Original Gap:** Recursive CTEs lacked disk spilling for large result sets
 - **Original Severity:** Low (Query Engine)
 - **Resolution Evidence:**
@@ -1905,6 +2039,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0061: GPU Telemetry Occupancy/Bandwidth (Resolved January 10, 2026)
+
 - **Original Gap:** GPU metrics returned 0.0 for occupancy and bandwidth
 - **Original Severity:** Low (Observability)
 - **Resolution Evidence:**
@@ -1920,6 +2055,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0071: GPU PageRank/Sort Kernels (Resolved January 10, 2026)
+
 - **Original Gap:** GPU kernels were simplified copy operations (placeholders)
 - **Original Severity:** Medium (Implementation)
 - **Resolution Evidence:**
@@ -1931,11 +2067,13 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0075: Syslog Audit Logging (Resolved - previously completed)
+
 - **Resolution:** Syslog output format now uses RFC 5424 structured format
 
 ---
 
 ### GAP-0076: Multi-Geometry Types (Resolved January 10, 2026)
+
 - **Original Gap:** Multi-geometry WKT types not parseable
 - **Original Severity:** Low (Implementation)
 - **Resolution Evidence:**
@@ -1948,21 +2086,25 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0077: Distributed Query Coordinator Statistics (Resolved - previously completed)
+
 - **Resolution:** Row estimates now use actual shard metadata statistics
 
 ---
 
 ### GAP-0078: Louvain Community Detection (Resolved - previously completed)
+
 - **Resolution:** Full Louvain algorithm with modularity optimization
 
 ---
 
 ### GAP-0079: Execution Timing Support (Resolved - previously completed)
+
 - **Resolution:** Stage-specific timing now wired in query handler
 
 ---
 
 ### GAP-0081: GraphSAGE Inductive Learning (Resolved January 10, 2026)
+
 - **Original Gap:** GraphSAGE fell back to Node2Vec for unseen nodes
 - **Original Severity:** Low (Implementation)
 - **Resolution Evidence:**
@@ -1978,11 +2120,13 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0082: CTE WITH RECURSIVE Parsing (Resolved - previously completed)
+
 - **Resolution:** Full CTE parsing with anchor/recursive term detection
 
 ---
 
 ### GAP-0083: FLE Key Rotation (Resolved - previously completed)
+
 - **Resolution:** Key rotation with version tracking and re-encryption support
 
 ---
@@ -1990,6 +2134,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ## Previously Resolved (January 10, 2026)
 
 ### GAP-0070: TDE Secret Sharing Not Using Proper Shamir's (Resolved January 10, 2026)
+
 - **Original Gap:** TDE key escrow used simplified secret sharing that didn't provide proper threshold security
 - **Original Severity:** Medium (Security)
 - **Resolution Evidence:**
@@ -2006,6 +2151,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0072: Join Order Enumeration Returns Empty List (Resolved January 10, 2026)
+
 - **Original Gap:** Multi-way joins used arbitrary ordering without cost-based optimization
 - **Original Severity:** Medium (Query Engine)
 - **Resolution Evidence:**
@@ -2021,6 +2167,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0073: CDC Transaction IDs Hardcoded to Zero (Resolved January 10, 2026)
+
 - **Original Gap:** CDC events had hardcoded transaction_id = 0, breaking transaction correlation
 - **Original Severity:** Medium (Implementation)
 - **Resolution Evidence:**
@@ -2037,12 +2184,13 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0080: Cost Evaluation Phase Is Placeholder (Resolved January 10, 2026)
+
 - **Original Gap:** Query planner had placeholder for cost evaluation phase
 - **Original Severity:** Medium (Query Engine)
 - **Resolution Evidence:**
   - src/planner/pipeline.zig:33-85 — Complete cost evaluation implementation:
     - `evaluatePlanCost()` function with cost model factors
-    - Scan cost: seq_page_cost * page_count + cpu_tuple_cost * row_count
+    - Scan cost: seq_page_cost *page_count + cpu_tuple_cost* row_count
     - Join cost: operator cost based on join type (nested loop, hash, merge)
     - Filter cost: selectivity-based reduction
     - Projection cost: per-column processing overhead
@@ -2053,6 +2201,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0084: Path Finding Doesn't Collect Edges (Resolved January 10, 2026)
+
 - **Original Gap:** Path results had empty edges array, breaking RELATIONSHIPS(path) function
 - **Original Severity:** Low (Implementation)
 - **Resolution Evidence:**
@@ -2070,6 +2219,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0085: TDE Key ID Derivation Not Cryptographically Secure (Resolved January 10, 2026)
+
 - **Original Gap:** Key IDs derived from first 32 hex bytes of key, risking collision and material exposure
 - **Original Severity:** Medium (Security)
 - **Resolution Evidence:**
@@ -2084,6 +2234,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0068: MFA Step-Up Accepts Any Code (CRITICAL - Resolved January 10, 2026)
+
 - **Original Gap:** MFA step-up accepted any code, providing no real security
 - **Original Severity:** Critical (Security)
 - **Resolution Evidence:**
@@ -2099,6 +2250,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0069: Key Rotation Uses Deterministic Seed (Resolved January 10, 2026)
+
 - **Original Gap:** Key rotation used deterministic PRNG seed instead of secure random
 - **Original Severity:** High (Security)
 - **Resolution Evidence:**
@@ -2112,6 +2264,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0074: User Password Salt Is Deterministic (Resolved January 10, 2026)
+
 - **Original Gap:** Password hashing used deterministic salt from fixed seed
 - **Original Severity:** High (Security)
 - **Resolution Evidence:**
@@ -2126,6 +2279,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0065: Cost-Based Optimizer Is Stub (Resolved January 10, 2026)
+
 - **Original Gap:** CBO's analyzeTable was disabled due to storage layer decoupling
 - **Original Severity:** High (Query Engine)
 - **Resolution Evidence:**
@@ -2140,6 +2294,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0066: External KMS Is Deterministic Mock (Resolved January 10, 2026)
+
 - **Original Gap:** External KMS used deterministic derivation instead of real KMS integration
 - **Original Severity:** High (Security)
 - **Resolution Evidence:**
@@ -2156,6 +2311,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0067: Migration Module Returns NotImplemented (Resolved January 10, 2026)
+
 - **Original Gap:** Migration module claimed to be stub returning NotImplemented
 - **Original Severity:** High (Implementation)
 - **Resolution Evidence:**
@@ -2176,6 +2332,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ## Resolved Gaps
 
 ### GAP-0001: User Storage AES-256-GCM Encryption (Resolved January 9, 2026)
+
 - **Original Gap:** User storage claimed to use AES-256-GCM encryption but actually used XOR cipher
 - **Original Severity:** High (Security)
 - **Resolution Evidence:**
@@ -2191,6 +2348,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0002: Remote Server Backup (Resolved January 9, 2026)
+
 - **Original Gap:** Remote server backup returned NotImplemented error
 - **Original Severity:** Medium
 - **Resolution Evidence:**
@@ -2207,6 +2365,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0003: Recursive CTE Functions (Documented January 9, 2026)
+
 - **Original Gap:** Recursive CTE core functions returned NotImplemented
 - **Original Severity:** Medium
 - **Resolution:** Documented with workarounds rather than implementing complex feature
@@ -2222,6 +2381,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0004: FLE Admin Commands (Resolved January 9, 2026)
+
 - **Original Gap:** Field-Level Encryption admin commands returned NotImplemented
 - **Original Severity:** Medium
 - **Resolution Evidence:**
@@ -2240,6 +2400,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0005: WITH + Aggregation + WHERE Query (Resolved January 9, 2026)
+
 - **Original Gap:** Queries using WITH clause with aggregation and WHERE filter caused server timeout
 - **Original Severity:** Critical
 - **Resolution Evidence:**
@@ -2254,6 +2415,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0006: CASE Expressions in MATCH Context (Resolved January 9, 2026)
+
 - **Original Gap:** CASE expressions in MATCH queries caused server timeout
 - **Original Severity:** High
 - **Resolution Evidence:**
@@ -2267,6 +2429,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0008: Storage Crypto NotImplemented Functions (Resolved January 9, 2026)
+
 - **Original Gap:** Storage crypto module had multiple functions returning NotImplemented
 - **Original Severity:** Medium
 - **Resolution Evidence:**
@@ -2285,6 +2448,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0010: DateTime Property Access (Verified January 9, 2026)
+
 - **Original Gap:** DateTime property access (year, month, day, etc.) reported as not implemented
 - **Original Severity:** Medium
 - **Resolution Evidence:**
@@ -2301,6 +2465,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### RESOLVED-001: Jaccard Distance Metric (Resolved January 8, 2026)
+
 - **Original Gap:** Documentation claimed 6 distance metrics including Jaccard but implementation was missing
 - **Resolution Evidence:**
   - src/types/vector.zig:398-428 — Jaccard distance implemented for VectorI32
@@ -2309,6 +2474,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Verification:** All 6 distance metrics (L2, cosine, dot product, Manhattan, Hamming, Jaccard) now implemented
 
 ### RESOLVED-002: GQL Path Mode Specifiers (Resolved January 8, 2026)
+
 - **Original Gap:** Path modes (SHORTEST, WALK, TRAIL, ACYCLIC, SIMPLE) were parsed but not executed
 - **Resolution Evidence:**
   - src/gql/ast.zig — PathMode enum with all 5 modes
@@ -2317,6 +2483,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Verification:** Path modes now parsed AND executed with correct semantics
 
 ### RESOLVED-003: Distributed Sharding Functions (Resolved January 8, 2026)
+
 - **Original Gap:** Sharding functions were stubs returning placeholder values
 - **Resolution Evidence:**
   - src/distributed/sharding.zig:358-651 — Full implementations:
@@ -2328,6 +2495,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Verification:** All sharding operations implemented
 
 ### RESOLVED-004: Load Balancing Strategies (Resolved January 8, 2026)
+
 - **Original Gap:** Load balancing documented but strategies were stubs
 - **Resolution Evidence:**
   - src/distributed/enhanced_query_transport.zig:540-645 — All 4 strategies:
@@ -2338,6 +2506,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Verification:** Load balancing fully functional
 
 ### ~~RESOLVED-005: Two-Phase Commit Protocol~~ **REOPENED as GAP-0013**
+
 - **Original Gap:** 2PC messaging was incomplete
 - **Original Resolution Evidence (January 8, 2026):**
   - src/distributed/twophase.zig:98-523 — Implementation exists but...
@@ -2349,6 +2518,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **New tracking:** See [GAP-0013 in GAP_ANALYSIS.md](GAP_ANALYSIS.md) and [GitLab Issue #95](https://gitlab.com/devnw/codepros/geode/-/issues/95)
 
 ### RESOLVED-006: Leiden Community Detection (Resolved January 8, 2026)
+
 - **Original Gap:** Leiden algorithm refinement phase was stub
 - **Resolution Evidence:**
   - src/graph/leiden.zig:244-552 — Complete implementation:
@@ -2360,6 +2530,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Verification:** Full Leiden algorithm with refinement
 
 ### RESOLVED-007: Materialized View Query Parsing (Resolved January 8, 2026)
+
 - **Original Gap:** Materialized views used placeholder parsing
 - **Resolution Evidence:**
   - src/query/enhanced_materialized_views.zig:195-1216 — Complete implementation:
@@ -2372,6 +2543,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0007: List Functions head()/tail() (Verified January 9, 2026)
+
 - **Original Gap:** Documentation claimed head()/tail() were not implemented
 - **Original Severity:** Low
 - **Resolution:** Features were ALREADY IMPLEMENTED - documentation was outdated
@@ -2386,6 +2558,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0009: Test Coverage Numbers Inconsistent (Resolved January 9, 2026)
+
 - **Original Gap:** Five different test coverage percentages across documentation
 - **Original Severity:** Low (Documentation)
 - **Resolution:** Standardized all documentation to reference single authoritative source
@@ -2401,6 +2574,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0011: Regex Matching (=~) (Verified January 9, 2026)
+
 - **Original Gap:** Documentation claimed regex matching was incomplete
 - **Original Severity:** Low
 - **Resolution:** Feature was ALREADY IMPLEMENTED - documentation was outdated
@@ -2421,6 +2595,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0012: VALUES Clause (Verified January 9, 2026)
+
 - **Original Gap:** Documentation claimed VALUES clause was incomplete
 - **Original Severity:** Low
 - **Resolution:** Feature was ALREADY IMPLEMENTED - documentation was outdated
@@ -2438,6 +2613,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0013: 2PC Network Transport (Resolved January 9, 2026)
+
 - **Original Gap:** sendMessage() in twophase.zig was a stub returning hardcoded success
 - **Original Severity:** High
 - **Resolution Evidence:**
@@ -2454,6 +2630,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0014: Backup Restore Operations (Resolved January 9, 2026)
+
 - **Original Gap:** restoreFromBackup() and restoreToPointInTime() returned NotImplemented
 - **Original Severity:** Medium
 - **Resolution Evidence:**
@@ -2471,6 +2648,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0015: Remote KMS Server (Resolved January 9, 2026)
+
 - **Original Gap:** RemoteKmsServer and RemoteKmsClient were stubs
 - **Original Severity:** Low
 - **Resolution Evidence:**
@@ -2493,6 +2671,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0016: Server State CANARY Status (Resolved January 9, 2026)
+
 - **Original Gap:** CANARY marker showed STATUS=PARTIAL but issue was closed
 - **Original Severity:** Low
 - **Resolution Evidence:**
@@ -2510,6 +2689,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0017: XOR Key Wrapping Placeholder in TDE (Resolved January 9, 2026)
+
 - **Original Gap:** wrapDataKey() used XOR cipher instead of proper AES-GCM key wrapping
 - **Original Severity:** Critical (Security)
 - **GitLab Issue:** [#99](https://gitlab.com/devnw/codepros/geode/-/issues/99) (closed)
@@ -2527,6 +2707,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0018: Mutation Execution Not Implemented in QUIC Server Handler (Resolved January 9, 2026)
+
 - **Original Gap:** QUIC server returned empty success for all mutation statements without executing them
 - **Original Severity:** Critical (Implementation)
 - **GitLab Issue:** [#100](https://gitlab.com/devnw/codepros/geode/-/issues/100) (closed)
@@ -2547,6 +2728,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0019: CDC Sinks Not Implemented (Kafka/File/Webhook) (Resolved January 9, 2026)
+
 - **Original Gap:** CDC event capture worked but sendToKafka(), writeToFile(), sendToWebhook() were empty stubs
 - **Original Severity:** High (Implementation)
 - **GitLab Issue:** [#101](https://gitlab.com/devnw/codepros/geode/-/issues/101) (closed)
@@ -2575,6 +2757,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0020: CREATE CONSTRAINT Not Enforced (Resolved January 9, 2026)
+
 - **Original Gap:** CREATE CONSTRAINT returned success without storing or enforcing constraints
 - **Original Severity:** High
 - **GitLab Issue:** [#102](https://gitlab.com/devnw/codepros/geode/-/issues/102) (closed)
@@ -2595,6 +2778,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0021: Recursive CTE Path Finding Not Implemented (Resolved January 9, 2026)
+
 - **Original Gap:** buildPathFindingCTE() and buildTransitiveClosureCTE() returned NotImplemented
 - **Original Severity:** Medium
 - **GitLab Issue:** [#103](https://gitlab.com/devnw/codepros/geode/-/issues/103) (closed)
@@ -2617,6 +2801,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0022: Point-in-Time WAL Application Not Implemented (Resolved January 9, 2026)
+
 - **Original Gap:** restoreToPointInTime() did not apply WAL records after base restore
 - **Original Severity:** Medium
 - **GitLab Issue:** [#104](https://gitlab.com/devnw/codepros/geode/-/issues/104) (closed)
@@ -2640,6 +2825,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0023: Multi-Tenancy Hardcoded to Default Tenant (Resolved January 9, 2026)
+
 - **Original Gap:** tenant_id was hardcoded to "default" throughout the codebase
 - **Original Severity:** Medium
 - **GitLab Issue:** [#105](https://gitlab.com/devnw/codepros/geode/-/issues/105) (closed)
@@ -2661,6 +2847,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0024: FLE Predicate Rewriting Not Implemented (Resolved January 9, 2026)
+
 - **Original Gap:** FLE predicate rewriting only counted predicates without actual rewriting
 - **Original Severity:** Medium
 - **GitLab Issue:** [#106](https://gitlab.com/devnw/codepros/geode/-/issues/106) (closed)
@@ -2685,6 +2872,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0025: Encrypted Page Reading Not Implemented (Resolved January 9, 2026)
+
 - **Original Gap:** TDE readPage() returned NotImplemented, making encrypted data unreadable
 - **Original Severity:** High
 - **GitLab Issue:** [#107](https://gitlab.com/devnw/codepros/geode/-/issues/107) (closed)
@@ -2710,6 +2898,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0026: Float Property Values Lost During Property Map Conversion (Resolved January 9, 2026)
+
 - **Original Gap:** Float values stored as node/edge properties were silently converted to NULL
 - **Original Severity:** High
 - **GitLab Issue:** [#108](https://gitlab.com/devnw/codepros/geode/-/issues/108) (closed)
@@ -2724,6 +2913,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0027: Date + Interval Arithmetic Not Implemented (Resolved January 9, 2026)
+
 - **Original Gap:** Date + Interval arithmetic returned EvalError.Unsupported
 - **Original Severity:** Medium
 - **GitLab Issue:** [#109](https://gitlab.com/devnw/codepros/geode/-/issues/109) (closed)
@@ -2743,6 +2933,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0028: Distributed Cluster Operations Are Stubs (Resolved January 9, 2026)
+
 - **Original Gap:** Cluster operations returned hardcoded values or did nothing
 - **Original Severity:** High
 - **GitLab Issue:** [#110](https://gitlab.com/devnw/codepros/geode/-/issues/110) (closed)
@@ -2758,6 +2949,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0029: CDC Webhook HTTP Client Not Implemented (Resolved January 9, 2026)
+
 - **Original Gap:** Webhook HTTP client returned hardcoded 200 without sending requests
 - **Original Severity:** Medium
 - **GitLab Issue:** [#111](https://gitlab.com/devnw/codepros/geode/-/issues/111) (closed)
@@ -2774,6 +2966,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0030: 2PC Timeout Parameter Ignored (Resolved January 9, 2026)
+
 - **Original Gap:** 2PC transactions ignored timeout parameter, could hang indefinitely
 - **Original Severity:** Medium
 - **GitLab Issue:** [#112](https://gitlab.com/devnw/codepros/geode/-/issues/112) (closed)
@@ -2789,6 +2982,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0031: Shard Pruning Not Implemented (Resolved January 9, 2026)
+
 - **Original Gap:** All queries touched all shards regardless of predicates
 - **Original Severity:** Medium
 - **GitLab Issue:** [#113](https://gitlab.com/devnw/codepros/geode/-/issues/113) (closed)
@@ -2804,6 +2998,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0032: Materialized View Refresh Cancellation Not Implemented (Resolved January 9, 2026)
+
 - **Original Gap:** cancelRefresh() was empty stub
 - **Original Severity:** Low
 - **GitLab Issue:** [#114](https://gitlab.com/devnw/codepros/geode/-/issues/114) (closed)
@@ -2818,6 +3013,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0033: DELETE WHERE Clause Not Evaluated (Resolved January 9, 2026)
+
 - **Original Gap:** DELETE statements ignored WHERE clause, potentially deleting all matching nodes
 - **Original Severity:** High
 - **GitLab Issue:** [#115](https://gitlab.com/devnw/codepros/geode/-/issues/115) (closed)
@@ -2834,6 +3030,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0034: Graph Metadata Not Persisted (Resolved January 9, 2026)
+
 - **Original Gap:** Graph definitions were lost on server restart
 - **Original Severity:** Medium
 - **GitLab Issue:** [#116](https://gitlab.com/devnw/codepros/geode/-/issues/116) (closed)
@@ -2852,6 +3049,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0035: 2PC Storage Operations Not Implemented (Resolved January 10, 2026)
+
 - **Original Gap:** handleCommit() and handleAbort() in 2PC had empty storage operations
 - **Original Severity:** Critical
 - **GitLab Issue:** [#117](https://gitlab.com/devnw/codepros/geode/-/issues/117) (closed)
@@ -2868,6 +3066,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0036: WHERE Clause After WITH Not Evaluated (Resolved January 10, 2026)
+
 - **Original Gap:** WHERE clause filtering in WITH statements was not implemented
 - **Original Severity:** High
 - **GitLab Issue:** [#118](https://gitlab.com/devnw/codepros/geode/-/issues/118) (closed)
@@ -2884,6 +3083,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0037: CLI User/Role/Policy Handlers Not Implemented (Resolved January 10, 2026)
+
 - **Original Gap:** CLI commands for user/role/policy management returned stubs
 - **Original Severity:** Medium
 - **GitLab Issue:** [#119](https://gitlab.com/devnw/codepros/geode/-/issues/119) (closed)
@@ -2900,6 +3100,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0038: Distributed Query Transport Connection Not Initialized (Resolved January 10, 2026)
+
 - **Original Gap:** Query transport connections were created but never initialized with QUIC
 - **Original Severity:** High
 - **GitLab Issue:** [#120](https://gitlab.com/devnw/codepros/geode/-/issues/120) (closed)
@@ -2916,6 +3117,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0039: PITR Data Not Loaded Into Server State (Resolved January 10, 2026)
+
 - **Original Gap:** Point-in-time recovery restored files but didn't load into memory
 - **Original Severity:** Medium
 - **GitLab Issue:** [#121](https://gitlab.com/devnw/codepros/geode/-/issues/121) (closed)
@@ -2932,6 +3134,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0040: Permission Check Not Using Security Manager (Resolved January 10, 2026)
+
 - **Original Gap:** checkPermission() returned true without actual RBAC evaluation
 - **Original Severity:** High
 - **GitLab Issue:** [#122](https://gitlab.com/devnw/codepros/geode/-/issues/122) (closed)
@@ -2947,6 +3150,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0041: Recursive CTE Core Functions Not Implemented (Resolved January 10, 2026)
+
 - **Original Gap:** Core recursive CTE functions returned NotImplemented
 - **Original Severity:** Medium
 - **GitLab Issue:** [#123](https://gitlab.com/devnw/codepros/geode/-/issues/123) (closed)
@@ -2964,6 +3168,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0042: Migration Module is Complete Stub (Resolved January 10, 2026)
+
 - **Original Gap:** Migration module planDryRun returned empty results
 - **Original Severity:** Medium
 - **GitLab Issue:** [#124](https://gitlab.com/devnw/codepros/geode/-/issues/124) (closed)
@@ -2981,6 +3186,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0043: Distributed Query Coordinator Returns Mock Results (Resolved January 10, 2026)
+
 - **Original Gap:** executeLocalFragment returned empty mock results
 - **Original Severity:** High
 - **GitLab Issue:** [#125](https://gitlab.com/devnw/codepros/geode/-/issues/125) (closed)
@@ -2997,6 +3203,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0044: Federation QUIC Connection Not Initialized (Resolved January 10, 2026)
+
 - **Original Gap:** Federation Connection.connect() did not initialize QUIC client
 - **Original Severity:** High
 - **GitLab Issue:** [#126](https://gitlab.com/devnw/codepros/geode/-/issues/126) (closed)
@@ -3013,6 +3220,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0045: Type Promotion Drops Complex Types to NULL (Resolved January 10, 2026)
+
 - **Original Gap:** Complex types (Node, Edge, Map, Path, ExtValue) converted to NULL during type promotion
 - **Original Severity:** High
 - **GitLab Issue:** [#127](https://gitlab.com/devnw/codepros/geode/-/issues/127) (closed)
@@ -3028,6 +3236,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0046: Materialized View Source Query Returns Mock Results (Resolved January 10, 2026)
+
 - **Original Gap:** executeSourceQuery returned empty mock results
 - **Original Severity:** Medium
 - **GitLab Issue:** [#128](https://gitlab.com/devnw/codepros/geode/-/issues/128) (closed)
@@ -3045,6 +3254,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0047: RLS Security Context Explicitly Ignored (Resolved January 10, 2026)
+
 - **Original Gap:** RLS policy evaluation ignored security context
 - **Original Severity:** High
 - **GitLab Issue:** [#129](https://gitlab.com/devnw/codepros/geode/-/issues/129) (closed)
@@ -3060,6 +3270,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ---
 
 ### GAP-0048: Statement Dispatcher Has Parallel Stub Implementation (Resolved January 10, 2026)
+
 - **Original Gap:** CreateConstraint and DropConstraint were stub implementations
 - **Original Severity:** Low
 - **GitLab Issue:** [#130](https://gitlab.com/devnw/codepros/geode/-/issues/130) (closed)
@@ -3138,6 +3349,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ## Session: January 10, 2026 (GAP-0049 through GAP-0054)
 
 ### GAP-0049: Advanced Types Optimizer Filter Detection (Resolved January 10, 2026)
+
 - **Original Gap:** Filter detection functions returned false placeholders
 - **Original Severity:** Low
 - **GitLab Issue:** [#131](https://gitlab.com/devnw/codepros/geode/-/issues/131) (closed)
@@ -3152,13 +3364,14 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0050: ML Community Detection Modularity Calculations (Resolved January 10, 2026)
+
 - **Original Gap:** modularityGain() and calculateModularity() returned placeholder values
 - **Original Severity:** Medium
 - **GitLab Issue:** [#132](https://gitlab.com/devnw/codepros/geode/-/issues/132) (closed)
 - **Resolution Evidence:**
   - src/ml/integration_enhanced.zig:444-584 — Full modularity implementation:
     - modularityGain() calculates actual ΔQ using edge weights, node degrees, community totals
-    - calculateModularity() implements Q = (1/2m) * Σ[A_ij - (k_i * k_j)/(2m)] * δ(c_i, c_j)
+    - calculateModularity() implements Q = (1/2m) *Σ[A_ij - (k_i* k_j)/(2m)] * δ(c_i, c_j)
     - Pre-calculates node degrees for efficiency
   - CANARY markers: REQ=REQ-ML-MODULARITY-001, REQ-ML-MODULARITY-002; STATUS=IMPL; UPDATED=2026-01-10
 - **Verification:** Community detection now converges on actual community structure
@@ -3166,6 +3379,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0051: Anomaly Detector Metric Extraction (Resolved January 10, 2026)
+
 - **Original Gap:** extractMetricValue() returned constant 1.0
 - **Original Severity:** Low
 - **GitLab Issue:** [#133](https://gitlab.com/devnw/codepros/geode/-/issues/133) (closed)
@@ -3183,6 +3397,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0052: Vault KMS Provider listKeys (Resolved January 10, 2026)
+
 - **Original Gap:** listKeys() returned hardcoded ["master-key"]
 - **Original Severity:** Low
 - **GitLab Issue:** [#134](https://gitlab.com/devnw/codepros/geode/-/issues/134) (closed)
@@ -3198,6 +3413,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0053: Enhanced Query Coordinator Row Comparison (Resolved January 10, 2026)
+
 - **Original Gap:** simpleRowCompare() compared rows by length (placeholder)
 - **Original Severity:** Medium
 - **GitLab Issue:** [#135](https://gitlab.com/devnw/codepros/geode/-/issues/135) (closed)
@@ -3214,6 +3430,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0054: Enhanced Query Transport Tracker (Resolved January 10, 2026)
+
 - **Original Gap:** getQueryTracker() returned null placeholder
 - **Original Severity:** Low
 - **GitLab Issue:** [#136](https://gitlab.com/devnw/codepros/geode/-/issues/136) (closed)
@@ -3230,6 +3447,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0055: SimplifiedBackupManager Placeholder Data (Resolved January 10, 2026)
+
 - **Original Gap:** CLI backup wrote placeholder strings instead of actual data
 - **Original Severity:** High
 - **GitLab Issue:** [#137](https://gitlab.com/devnw/codepros/geode/-/issues/137) (closed)
@@ -3244,6 +3462,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0057: FLE migrateEncrypt Placeholder (Resolved January 10, 2026)
+
 - **Original Gap:** migrateEncrypt() only printed placeholder message
 - **Original Severity:** Medium (Security)
 - **GitLab Issue:** [#139](https://gitlab.com/devnw/codepros/geode/-/issues/139) (closed)
@@ -3260,6 +3479,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0059: GraphData.hasEdge Returns False (Resolved January 10, 2026)
+
 - **Original Gap:** hasEdge() always returned false placeholder
 - **Original Severity:** Medium
 - **GitLab Issue:** [#141](https://gitlab.com/devnw/codepros/geode/-/issues/141) (closed)
@@ -3274,6 +3494,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0060: Graph Type Registry Not Implemented (Resolved January 10, 2026)
+
 - **Original Gap:** CREATE/DROP GRAPH TYPE didn't persist definitions
 - **Original Severity:** Medium
 - **GitLab Issue:** [#142](https://gitlab.com/devnw/codepros/geode/-/issues/142) (closed)
@@ -3291,6 +3512,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0062: Disk Storage Uses XOR Instead of AES (Resolved January 10, 2026)
+
 - **Original Gap:** ecb_block() used XOR instead of actual AES encryption
 - **Original Severity:** Medium (Security)
 - **GitLab Issue:** [#144](https://gitlab.com/devnw/codepros/geode/-/issues/144) (closed)
@@ -3306,6 +3528,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0063: Map/ExtValue Equality Not Implemented (Resolved January 10, 2026)
+
 - **Original Gap:** Map and ExtValue comparisons always returned false
 - **Original Severity:** Medium
 - **GitLab Issue:** [#145](https://gitlab.com/devnw/codepros/geode/-/issues/145) (closed)
@@ -3325,6 +3548,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0064: Raft Snapshot Installation Not Implemented (Resolved January 10, 2026)
+
 - **Original Gap:** handleInstallSnapshot() was empty placeholder
 - **Original Severity:** Medium (Distributed)
 - **GitLab Issue:** [#146](https://gitlab.com/devnw/codepros/geode/-/issues/146) (closed)
@@ -3346,6 +3570,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0087: SimplifiedBackupManager Writes Placeholder Data (Resolved January 10, 2026)
+
 - **Original Gap:** Both CLI and Server backup implementations wrote placeholder/simulated data instead of actual database content
 - **Original Severity:** High (Implementation)
 - **GitLab Issue:** [#169](https://gitlab.com/devnw/codepros/geode/-/issues/169) (closed)
@@ -3367,6 +3592,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0088: shortestPath/allShortestPaths Functions Return Mock Data (Resolved January 10, 2026)
+
 - **Original Gap:** Path-finding functions returned hardcoded `[1, 2]` instead of actual path data
 - **Original Severity:** Medium (Query Engine)
 - **GitLab Issue:** [#170](https://gitlab.com/devnw/codepros/geode/-/issues/170) (closed)
@@ -3383,6 +3609,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0089: Spatial Functions stContains/stIntersects Return Fixed Values (Resolved January 10, 2026)
+
 - **Original Gap:** Spatial functions returned fixed boolean values (always true/false) instead of actual geometric calculations
 - **Original Severity:** Medium (GQL Compliance)
 - **GitLab Issue:** [#171](https://gitlab.com/devnw/codepros/geode/-/issues/171) (closed)
@@ -3404,6 +3631,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ## Latest Resolutions (January 12, 2026 PM Session)
 
 ### GAP-0102: Legacy XOR Encryption Path - COMPLETELY REMOVED (Resolved January 12, 2026)
+
 - **Original Gap:** PageManager had a legacy XOR encryption path that could be activated without explicit opt-in, providing weak cryptographic protection
 - **Original Severity:** Medium (Security)
 - **GitLab Issue:** [#184](https://gitlab.com/devnw/codepros/geode/-/issues/184) (closed)
@@ -3426,6 +3654,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0103: Syslog TLS - ENHANCED with Connection Pooling and Certificate Pinning (Resolved January 12, 2026)
+
 - **Original Gap:** Syslog TLS mode silently fell back to unencrypted TCP instead of using real TLS
 - **Original Severity:** Low (Security)
 - **GitLab Issue:** [#185](https://gitlab.com/devnw/codepros/geode/-/issues/185) (closed)
@@ -3463,6 +3692,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### Geodetestlab Regression Spec Updated
+
 - **Spec File:** geodetestlab/specs/gap_0102_0103_security_regression.yml
 - **Tests Include:**
   - CANARY marker verification for AES-only encryption (GAP-0102)
@@ -3478,6 +3708,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ## Latest Resolutions (January 13, 2026 Final Session)
 
 ### GAP-0150: CLI Auth Commands Use Simulated Local Authentication (Resolved January 13, 2026)
+
 - **Original Gap:** CLI authentication bypassed actual server authentication. Session tokens were generated locally without server validation. Password changes were silently ignored.
 - **Original Severity:** High (Security)
 - **GitLab Issue:** [#232](https://gitlab.com/devnw/codepros/geode/-/issues/232) (closed)
@@ -3507,6 +3738,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0151: Audit Verification Missing Ed25519 Signature and Digest Interval Validation (Resolved January 13, 2026)
+
 - **Original Gap:** Ed25519 signatures were generated but never verified. Digest interval enforcement was not implemented. The `require_digest` flag was ignored.
 - **Original Severity:** Medium (Security)
 - **GitLab Issue:** [#233](https://gitlab.com/devnw/codepros/geode/-/issues/233) (closed)
@@ -3533,6 +3765,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### GAP-0152: Audit PowerShell Compatibility Test Uses Random Simulation (Resolved January 13, 2026)
+
 - **Original Gap:** The `testPowershellCompatibility()` function used `std.crypto.random.boolean()` to randomly determine success/failure, making test results non-deterministic and meaningless.
 - **Original Severity:** Low (Code Quality)
 - **GitLab Issue:** [#234](https://gitlab.com/devnw/codepros/geode/-/issues/234) (closed)
@@ -3555,6 +3788,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ---
 
 ### Geodetestlab Regression Spec Added
+
 - **Spec File:** geodetestlab/specs/gap_150_151_152_security_regression.yml
 - **Tests Include:**
   - Auth help subcommand verification (GAP-0150)
@@ -3570,56 +3804,64 @@ The following GitLab gap issues were verified as resolved and closed:
 *Archive complete - All 152 gaps resolved*
 
 ### GAP-0186: REQ-0001 standards & conformance requirements lack traceability evidence
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/315
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/315>
 - **Category:** Requirement
 - **Severity:** High
 - **Status:** Resolved
 - **Resolution:** Added CANARY marker to src/gql/parser.zig linked to e2e_protocol.zig tests.
 
 ### GAP-0187: REQ-0002 language surface requirements lack traceability evidence
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/316
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/316>
 - **Category:** Requirement
 - **Severity:** Medium
 - **Status:** Resolved
 - **Resolution:** Added CANARY marker to src/gql/parser.zig linked to e2e_protocol.zig tests.
 
 ### GAP-0188: REQ-0003 engine contract requirements lack traceability evidence
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/317
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/317>
 - **Category:** Requirement
 - **Severity:** High
 - **Status:** Resolved
 - **Resolution:** Added CANARY marker to src/execution/query_execution.zig linked to e2e_protocol.zig tests.
 
 ### GAP-0189: REQ-0004 transactions & storage requirements lack traceability evidence
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/318
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/318>
 - **Category:** Requirement
 - **Severity:** High
 - **Status:** Resolved
 - **Resolution:** Added CANARY marker to src/transactions/transaction_manager.zig linked to e2e_protocol.zig tests.
 
 ### GAP-0190: REQ-0005 security requirements lack traceability evidence
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/319
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/319>
 - **Category:** Security
 - **Severity:** High
 - **Status:** Resolved
 - **Resolution:** Added CANARY marker to src/security/geode_auth_lib.zig linked to e2e_protocol.zig tests.
 
 ### GAP-0191: REQ-0007 tooling & governance requirements lack traceability evidence
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/320
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/320>
 - **Category:** Requirement
 - **Severity:** Medium
 - **Status:** Resolved
 - **Resolution:** Added CANARY marker to tools/canary_main.zig.
 
 ### GAP-0192: REQ-0009 performance targets lack traceability evidence
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/321
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/321>
 - **Category:** Performance
 - **Severity:** Low
 - **Status:** Resolved
 - **Resolution:** Added CANARY marker to benchmarks/benchmark_monitoring_metrics_variance_unified.zig.
 
 ### GAP-0194: Binary protocol doc claims federated merge is stub but code implements merge
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/323
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/323>
 - **Category:** Docs
 - **Severity:** Low
 - **Status:** Resolved
@@ -3630,6 +3872,7 @@ The following GitLab gap issues were verified as resolved and closed:
 ## January 15, 2026 - Bug Fixes
 
 ### BUG-VAR-LENGTH-REL-LIST: Variable-Length Path Relationship Variable Bound Incorrectly
+
 - **Category:** Query Execution
 - **Severity:** High
 - **Status:** Resolved
@@ -3651,7 +3894,8 @@ The following GitLab gap issues were verified as resolved and closed:
 **Session Summary**: 10 gaps resolved with production code implementations.
 
 ### GAP-0211: TDE signature verification simulated
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/340
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/340>
 - **Category:** Security
 - **Severity:** Critical
 - **Status:** RESOLVED
@@ -3663,7 +3907,8 @@ The following GitLab gap issues were verified as resolved and closed:
   - CANARY: REQ=REQ-GQL-TDE-ATTEST-REAL-001; STATUS=TESTED
 
 ### GAP-0212: KMS connection test simulated
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/341
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/341>
 - **Category:** Security
 - **Severity:** High
 - **Status:** RESOLVED
@@ -3675,7 +3920,8 @@ The following GitLab gap issues were verified as resolved and closed:
   - CANARY: REQ=REQ-GQL-TDE-KMS-CONN-001; STATUS=TESTED
 
 ### GAP-0213: TDE privilege checking hardcoded
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/342
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/342>
 - **Category:** Security
 - **Severity:** High
 - **Status:** RESOLVED
@@ -3688,7 +3934,8 @@ The following GitLab gap issues were verified as resolved and closed:
   - CANARY: REQ=REQ-GQL-TDE-PRIV-001; STATUS=TESTED
 
 ### GAP-0214: Backup file reading synthetic
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/343
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/343>
 - **Category:** Implementation
 - **Severity:** High
 - **Status:** RESOLVED
@@ -3703,7 +3950,8 @@ The following GitLab gap issues were verified as resolved and closed:
   - CANARY: REQ=REQ-BACKUP-VERIFY-001; STATUS=TESTED
 
 ### GAP-0215: Catalog index serialization placeholder
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/344
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/344>
 - **Category:** Implementation
 - **Severity:** Medium
 - **Status:** RESOLVED
@@ -3715,7 +3963,8 @@ The following GitLab gap issues were verified as resolved and closed:
   - CANARY: REQ=REQ-GQL-CATALOG-INDEX-001; STATUS=TESTED
 
 ### GAP-0216: LocalSimulated KMS allowed in production
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/345
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/345>
 - **Category:** Security
 - **Severity:** Medium
 - **Status:** RESOLVED
@@ -3728,7 +3977,8 @@ The following GitLab gap issues were verified as resolved and closed:
   - CANARY: REQ=REQ-GQL-TDE-PROD-BLOCK-001; STATUS=TESTED
 
 ### GAP-0217: WAL archival hook placeholder
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/346
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/346>
 - **Category:** Feature
 - **Severity:** Medium
 - **Status:** RESOLVED
@@ -3741,7 +3991,8 @@ The following GitLab gap issues were verified as resolved and closed:
   - CANARY: REQ=REQ-GQL-WAL-ARCHIVE-001; STATUS=TESTED
 
 ### GAP-0218: Sentinel allocator no-op
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/347
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/347>
 - **Category:** Code Quality
 - **Severity:** Medium
 - **Status:** RESOLVED
@@ -3755,7 +4006,8 @@ The following GitLab gap issues were verified as resolved and closed:
   - CANARY: REQ=REQ-MEM-SENTINEL-001; STATUS=TESTED
 
 ### GAP-0219: CI allow_failure:true on tests
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/348
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/348>
 - **Category:** CI-CD
 - **Severity:** Medium
 - **Status:** RESOLVED
@@ -3766,7 +4018,8 @@ The following GitLab gap issues were verified as resolved and closed:
   - Build verification passing with `make clean && make`
 
 ### GAP-0221: catch 0 patterns in backup
-- **GitLab issue:** https://gitlab.com/devnw/codepros/geode/-/issues/350
+
+- **GitLab issue:** <https://gitlab.com/devnw/codepros/geode/-/issues/350>
 - **Category:** Security
 - **Severity:** Medium
 - **Status:** RESOLVED
@@ -3782,6 +4035,7 @@ The following GitLab gap issues were verified as resolved and closed:
 **Build Verification**: `make clean && make` completed successfully with all tests passing.
 
 **Remaining Open Gaps (3)**:
+
 - GAP-0209: status.csv IMPL entries (Critical)
 - GAP-0210: Raft/2PC network RPC (Critical)
 - GAP-0220: catch unreachable patterns (Low)
@@ -3793,6 +4047,7 @@ The following GitLab gap issues were verified as resolved and closed:
 **Summary**: Verified and closed GitLab issues for GAP-0225 through GAP-0232. All fixes were confirmed to be implemented in the codebase.
 
 ### Issues Closed
+
 - **#354** (GAP-0225): CANARY markers repo-wide lint - Fix confirmed in CI
 - **#355** (GAP-0226): STATUS=IMPLEMENTED markers - All replaced with valid values
 - **#356** (GAP-0227): Canaryscan verify - CI job exists and enforced
@@ -3803,10 +4058,11 @@ The following GitLab gap issues were verified as resolved and closed:
 - **#361** (GAP-0232): REQ-PERF-PHASE5-003 STRING_CONCAT - Now BENCHED
 
 ### New Gaps Identified
+
 A comprehensive gap analysis identified 9 new gaps (GAP-0233 through GAP-0241) related to:
+
 - Bug regression tests (#366, #365)
 - IMPL entries requiring verification (286 entries)
 - Critical unit test coverage gaps in monitoring, MVCC, query/runtime, containers, type promotion, and CDC
 
 See docs/GAP_ANALYSIS.md for current open gaps.
-

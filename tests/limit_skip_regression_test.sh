@@ -29,12 +29,12 @@ run_test() {
     local test_name="$1"
     local query="$2"
     local should_succeed="$3"  # true or false
-    
+
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     echo -n "Test $TOTAL_TESTS: $test_name... "
-    
+
     OUTPUT=$(timeout 3 ./zig-out/bin/geodec "$query" --insecure 2>&1 || true)
-    
+
     if [ "$should_succeed" = "true" ]; then
         # Should succeed - check for SCHEMA or valid result
         if echo "$OUTPUT" | grep -q '"type":"SCHEMA"\|"type":"BINDINGS"'; then

@@ -5,6 +5,7 @@ This directory contains comprehensive examples demonstrating the new cryptograph
 ## Hash Algorithms Supported
 
 ### General Purpose Hashing
+
 - **SHA3-256**: NIST standard, 256-bit output
 - **SHA3-512**: NIST standard, 512-bit output  
 - **BLAKE3**: Modern, fast, parallelizable
@@ -13,6 +14,7 @@ This directory contains comprehensive examples demonstrating the new cryptograph
 - **BLAKE2s-256**: Optimized for 32-bit platforms
 
 ### Password Hashing
+
 - **Argon2id**: Memory-hard, resistant to GPU/ASIC attacks
   - Configurable iterations (time cost)
   - Configurable memory usage
@@ -22,7 +24,9 @@ This directory contains comprehensive examples demonstrating the new cryptograph
 ## Example Files
 
 ### 1. `gql_hash_examples.gql`
+
 Comprehensive examples covering:
+
 - Basic hash creation and comparison
 - Password hashing with Argon2id
 - Key derivation functions (KDF)
@@ -35,7 +39,9 @@ Comprehensive examples covering:
 - Data privacy and anonymization
 
 ### 2. `hash_user_auth_example.gql`
+
 Complete user authentication system including:
+
 - User registration with secure password storage
 - Login with brute-force protection
 - Password reset flow
@@ -48,7 +54,9 @@ Complete user authentication system including:
 - Security monitoring
 
 ### 3. `hash_data_integrity_example.gql`
+
 Data integrity and verification patterns:
+
 - Content-addressable storage
 - Deduplication systems
 - Merkle trees for verification
@@ -63,6 +71,7 @@ Data integrity and verification patterns:
 ## Constructor Functions
 
 ### Basic Hash Creation
+
 ```gql
 -- Create hash from hex string
 Hash("BLAKE2b-256", "4B7F8E...")
@@ -72,6 +81,7 @@ HashData("BLAKE2b-256", "my data")
 ```
 
 ### Password Hashing
+
 ```gql
 -- With explicit parameters
 Argon2idHash(password, salt, iterations, memory_kb, parallelism)
@@ -81,6 +91,7 @@ Argon2idHash("SecurePass123", "random_salt_16b", 4, 65536, 1)
 ```
 
 ### Key Derivation
+
 ```gql
 -- Blake2b KDF (variable output length)
 Blake2bKdf(32, "context-string", "master-key")
@@ -92,30 +103,35 @@ Blake2sKdf(16, "auth-context", "secret-key")
 ## Built-in Functions
 
 ### Hash Operations
+
 - `hash_equals(a, b)` - Constant-time comparison (prevents timing attacks)
 - `hash_alg(hash)` - Get algorithm name as string
 
 ## Security Presets for Argon2id
 
 ### Interactive (Fast)
+
 - Iterations: 4
 - Memory: 64 MB
 - Parallelism: 1
 - Use case: User-facing web applications
 
 ### Moderate (Balanced)
+
 - Iterations: 6
 - Memory: 256 MB
 - Parallelism: 1
 - Use case: Standard security requirements
 
 ### Sensitive (High Security)
+
 - Iterations: 8
 - Memory: 1 GB
 - Parallelism: 1
 - Use case: High-value targets
 
 ### OWASP Recommended
+
 - Iterations: 2
 - Memory: 19 MB
 - Parallelism: 1
@@ -124,6 +140,7 @@ Blake2sKdf(16, "auth-context", "secret-key")
 ## Best Practices
 
 ### Password Storage
+
 1. Always use Argon2id for passwords
 2. Generate random salts (16+ bytes)
 3. Store salt with the hash
@@ -131,12 +148,14 @@ Blake2sKdf(16, "auth-context", "secret-key")
 5. Plan for parameter upgrades
 
 ### Data Integrity
+
 1. Use BLAKE3 or BLAKE2b for speed
 2. Use BLAKE2b-512 for maximum security
 3. Implement hash chains for audit logs
 4. Use constant-time comparison
 
 ### Key Derivation
+
 1. Use unique contexts for each purpose
 2. Never reuse contexts across applications
 3. Derive keys from a master secret
@@ -158,6 +177,7 @@ Blake2sKdf(16, "auth-context", "secret-key")
 ## Migration Guide
 
 ### From SHA3 to BLAKE2
+
 ```gql
 -- Add new hash while keeping old
 MATCH (doc:Document)
@@ -166,6 +186,7 @@ SET doc.blake2b_hash = HashData("BLAKE2b-256", doc.content)
 ```
 
 ### Password Hash Upgrade
+
 ```gql
 -- Upgrade on next login
 MATCH (user:User {username: $username})

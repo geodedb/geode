@@ -83,7 +83,7 @@ check_health() {
     local service=$1
     local max_wait=60
     local elapsed=0
-    
+
     echo -n "Waiting for $service to be healthy..."
     while [[ $elapsed -lt $max_wait ]]; do
         if docker-compose -f "$COMPOSE_FILE" ps "$service" 2>/dev/null | grep -q "healthy"; then
@@ -116,19 +116,19 @@ generate_certs() {
 case $ACTION in
     up)
         echo -e "${GREEN}Starting Geode in $MODE mode...${NC}"
-        
+
         # Generate certs if needed
         generate_certs
-        
+
         # Build if requested
         if [[ "$BUILD_FRESH" == true ]]; then
             echo -e "${YELLOW}Building fresh images...${NC}"
             docker-compose -f "$COMPOSE_FILE" build --no-cache
         fi
-        
+
         # Start containers
         docker-compose -f "$COMPOSE_FILE" $COMPOSE_PROFILES up -d
-        
+
         # Check health
         if [[ "$MODE" == "singleton" ]]; then
             check_health "geode"
@@ -137,9 +137,9 @@ case $ACTION in
             check_health "geode-follower-1"
             check_health "geode-follower-2"
         fi
-        
+
         echo -e "${GREEN}Geode is running in $MODE mode${NC}"
-        
+
         # Display access information
         echo ""
         echo "Access points:"
@@ -152,34 +152,34 @@ case $ACTION in
             echo "  - Follower-2 QUIC: localhost:7571"
             echo "  - Load Balancer: QUIC-aware balancer required (see docs)"
         fi
-        
+
         if [[ "$MONITORING" == true ]]; then
             echo "  - Prometheus: http://localhost:9091"
             echo "  - Grafana: http://localhost:3000 (admin/admin)"
         fi
         ;;
-        
+
     down)
         echo -e "${YELLOW}Stopping Geode...${NC}"
         docker-compose -f "$COMPOSE_FILE" $COMPOSE_PROFILES down
         echo -e "${GREEN}Geode stopped${NC}"
         ;;
-        
+
     restart)
         echo -e "${YELLOW}Restarting Geode...${NC}"
         docker-compose -f "$COMPOSE_FILE" $COMPOSE_PROFILES restart
         echo -e "${GREEN}Geode restarted${NC}"
         ;;
-        
+
     status)
         echo -e "${YELLOW}Geode status:${NC}"
         docker-compose -f "$COMPOSE_FILE" ps
         ;;
-        
+
     logs)
         docker-compose -f "$COMPOSE_FILE" logs -f
         ;;
-        
+
     *)
         echo -e "${RED}Invalid action: $ACTION${NC}"
         usage

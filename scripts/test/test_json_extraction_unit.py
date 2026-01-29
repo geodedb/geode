@@ -3,16 +3,17 @@
 
 import json
 
+
 def extract_json_values(output):
     """Extract values from JSON output (mimics test runner logic)"""
     json_values = []
-    for line in output.split('\n'):
-        if line.startswith('{'):
+    for line in output.split("\n"):
+        if line.startswith("{"):
             try:
                 data = json.loads(line)
                 # Extract values from JSON structure
-                if 'rows' in data:
-                    for row in data['rows']:
+                if "rows" in data:
+                    for row in data["rows"]:
                         if isinstance(row, list):
                             for val in row:
                                 json_values.append(str(val))
@@ -21,9 +22,9 @@ def extract_json_values(output):
                                 json_values.append(str(val))
 
                 # Also extract from legacy 'result' structure
-                if 'result' in data:
-                    if 'rows' in data['result']:
-                        for row in data['result']['rows']:
+                if "result" in data:
+                    if "rows" in data["result"]:
+                        for row in data["result"]["rows"]:
                             if isinstance(row, dict):
                                 for val in row.values():
                                     json_values.append(str(val))
@@ -61,53 +62,43 @@ def test_extraction(name, output, expected_values, expected_patterns):
 
 
 def main():
-    print("="*60)
+    print("=" * 60)
     print("JSON Value Extraction Unit Tests")
-    print("="*60)
+    print("=" * 60)
     print()
 
     tests = [
-        (
-            "Simple count",
-            '{"status_class":"00000","columns":["count"],"rows":[[1]]}',
-            ['1'],
-            ['1']
-        ),
+        ("Simple count", '{"status_class":"00000","columns":["count"],"rows":[[1]]}', ["1"], ["1"]),
         (
             "Multiple values in row",
             '{"status_class":"00000","columns":["a","b","c"],"rows":[[1,2,3]]}',
-            ['1', '2', '3'],
-            ['1', '2', '3']
+            ["1", "2", "3"],
+            ["1", "2", "3"],
         ),
         (
             "String and numeric",
             '{"status_class":"00000","columns":["name","age"],"rows":[["Alice",30]]}',
-            ['Alice', '30'],
-            ['Alice', '30']
+            ["Alice", "30"],
+            ["Alice", "30"],
         ),
         (
             "Multiple rows",
             '{"status_class":"00000","columns":["name","age"],"rows":[["Bob",25],["Alice",0]]}',
-            ['Bob', '25', 'Alice', '0'],
-            ['Bob', '25', 'Alice', '0']
+            ["Bob", "25", "Alice", "0"],
+            ["Bob", "25", "Alice", "0"],
         ),
-        (
-            "Empty result",
-            '{"status_class":"00000","columns":[],"rows":[]}',
-            [],
-            []
-        ),
+        ("Empty result", '{"status_class":"00000","columns":[],"rows":[]}', [], []),
         (
             "Dict rows (legacy format)",
             '{"result":{"columns":["id","name"],"rows":[{"id":1,"name":"Alice"}]}}',
-            ['1', 'Alice'],
-            ['1', 'Alice']
+            ["1", "Alice"],
+            ["1", "Alice"],
         ),
         (
             "batch-update-properties output",
             '{"status_class":"00000","columns":["count"],"rows":[[1]],"flagger_findings":[]}',
-            ['1'],
-            ['1']
+            ["1"],
+            ["1"],
         ),
     ]
 
@@ -117,7 +108,7 @@ def main():
             all_passed = False
         print()
 
-    print("="*60)
+    print("=" * 60)
     if all_passed:
         print("✓ All tests passed!")
         return 0
@@ -128,4 +119,5 @@ def main():
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(main())

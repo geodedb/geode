@@ -13,11 +13,13 @@ Geode supports explicit transaction control through SQL-style transaction comman
 Begins a new transaction.
 
 **Syntax:**
+
 ```gql
 START TRANSACTION
 ```
 
 **Example:**
+
 ```gql
 START TRANSACTION
 CREATE (p:Person {name: 'Alice'})
@@ -27,6 +29,7 @@ COMMIT
 ```
 
 **Behavior:**
+
 - Initiates a new transaction context
 - Subsequent operations execute within the transaction
 - Transaction state persists across separate CLI invocations within a session
@@ -37,11 +40,13 @@ COMMIT
 Commits the current transaction, making all changes permanent.
 
 **Syntax:**
+
 ```gql
 COMMIT
 ```
 
 **Example:**
+
 ```gql
 START TRANSACTION
 CREATE (n:Node {value: 123})
@@ -49,6 +54,7 @@ COMMIT
 ```
 
 **Behavior:**
+
 - Persists all changes made during the transaction
 - Clears transaction state
 - Returns error if no transaction is active
@@ -58,11 +64,13 @@ COMMIT
 Rolls back the current transaction, discarding all changes.
 
 **Syntax:**
+
 ```gql
 ROLLBACK
 ```
 
 **Example:**
+
 ```gql
 START TRANSACTION
 CREATE (n:TempNode {data: 'temporary'})
@@ -71,6 +79,7 @@ ROLLBACK
 ```
 
 **Behavior:**
+
 - Discards all changes made during the transaction
 - Clears transaction state
 - Returns error if no transaction is active
@@ -100,6 +109,7 @@ Transaction state is persisted across CLI invocations to support multi-command t
 ```
 
 **Implementation:**
+
 - Transaction state saved to disk in session file
 - Loaded before query execution (if not starting new transaction)
 - Cleared after COMMIT or ROLLBACK
@@ -114,6 +124,7 @@ Transaction session is NOT loaded when executing START TRANSACTION, ensuring a c
 
 **Code Location:**
 `src/test_harness.zig:50-56`
+
 ```zig
 // Check if starting new transaction BEFORE loading session
 const is_start_transaction = parse_result.program.statements.len > 0
@@ -244,6 +255,7 @@ pub const TransactionSession = struct {
 ```
 
 **Files:**
+
 - `src/txn_session.zig`: Load/save transaction session
 - `src/test_harness.zig:50-130`: Transaction session lifecycle
 - `src/execution.zig:474-551`: Transaction command execution
@@ -251,10 +263,12 @@ pub const TransactionSession = struct {
 ## Testing
 
 Comprehensive unit tests are available in:
+
 - `geodetestlab/specs/transaction_state_unit_tests.yml`
 - `geodetestlab/specs/session_transaction_fixes.yml`
 
 Test coverage includes:
+
 - START TRANSACTION, COMMIT, ROLLBACK lifecycle
 - Multiple operations within transactions
 - Error handling (no active transaction, already active)
@@ -265,6 +279,7 @@ Test coverage includes:
 ## GQL Compliance
 
 These features implement ISO/IEC 39075:2024 GQL standard:
+
 - START TRANSACTION statement (§19.1)
 - COMMIT statement (§19.2)
 - ROLLBACK statement (§19.3)

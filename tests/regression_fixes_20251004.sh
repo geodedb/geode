@@ -15,15 +15,15 @@ test_case() {
     local expected_exit="$2"
     shift 2
     local cmd=("$@")
-    
+
     echo -n "Testing $test_name... "
-    
+
     if "${cmd[@]}" >/dev/null 2>&1; then
         actual_exit=0
     else
         actual_exit=$?
     fi
-    
+
     if [ "$actual_exit" -eq "$expected_exit" ]; then
         echo "PASS"
         ((PASSED++))
@@ -38,12 +38,12 @@ test_output_contains() {
     local expected_pattern="$2"
     shift 2
     local cmd=("$@")
-    
+
     echo -n "Testing $test_name... "
-    
+
     local output
     output=$("${cmd[@]}" 2>&1)
-    
+
     if echo "$output" | grep -q "$expected_pattern"; then
         echo "PASS"
         ((PASSED++))
@@ -61,7 +61,7 @@ echo
 echo "--- Fix 1: Auth Sessions JSON Output ---"
 test_output_contains "auth-sessions-json" '{"sessions"' "$GEODE_BIN" auth sessions
 
-# Fix 2: GQL parser keyword aliases  
+# Fix 2: GQL parser keyword aliases
 echo "--- Fix 2: GQL Parser Keyword Aliases ---"
 test_case "keyword-alias-from" 0 "$GEODE_BIN" query "RETURN 'test' AS from" --insecure
 test_case "keyword-alias-to" 0 "$GEODE_BIN" query "RETURN 'test' AS to" --insecure

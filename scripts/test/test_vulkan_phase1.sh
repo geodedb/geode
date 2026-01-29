@@ -22,7 +22,7 @@ const vk_loader_mod = @import("$SCRIPT_DIR/src/gpu/vulkan_loader.zig");
 
 test "Vulkan compute - device initialization" {
     const allocator = testing.allocator;
-    
+
     var compute = vk_compute_mod.VulkanCompute.init(allocator) catch |err| {
         if (err == vk_compute_mod.VulkanError.InstanceCreationFailed) {
             std.debug.print("⚠️  Vulkan not available, skipping test\n", .{});
@@ -31,16 +31,16 @@ test "Vulkan compute - device initialization" {
         return err;
     };
     defer compute.deinit();
-    
+
     const device_name = compute.getDeviceName();
     std.debug.print("✅ Vulkan device found: {s}\n", .{device_name});
-    
+
     try testing.expect(device_name.len > 0);
 }
 
 test "Vulkan compute - buffer creation" {
     const allocator = testing.allocator;
-    
+
     var compute = vk_compute_mod.VulkanCompute.init(allocator) catch |err| {
         if (err == vk_compute_mod.VulkanError.InstanceCreationFailed) {
             return error.SkipZigTest;
@@ -48,7 +48,7 @@ test "Vulkan compute - buffer creation" {
         return err;
     };
     defer compute.deinit();
-    
+
     var buffer = try vk_compute_mod.VulkanBuffer.create(
         &compute,
         1024,
@@ -56,19 +56,19 @@ test "Vulkan compute - buffer creation" {
         true,
     );
     defer buffer.destroy();
-    
+
     var test_data: [256]u8 = undefined;
     for (&test_data, 0..) |*byte, i| {
         byte.* = @intCast(i & 0xFF);
     }
-    
+
     try buffer.copyFromHost(&test_data);
-    
+
     var read_data: [256]u8 = undefined;
     try buffer.copyToHost(&read_data);
-    
+
     try testing.expectEqualSlices(u8, &test_data, &read_data);
-    
+
     std.debug.print("✅ Buffer memory round-trip successful\n", .{});
 }
 EOF

@@ -2,9 +2,8 @@
 """Debug why geode hangs in subprocess."""
 
 import subprocess
-import sys
 
-binary = '/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode'
+binary = "/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode"
 
 print("Test 1: Run with shell=True")
 try:
@@ -13,57 +12,52 @@ try:
         shell=True,
         capture_output=True,
         text=True,
-        timeout=2
+        timeout=2,
     )
     print(f"✓ Success: exit={result.returncode}")
     print(f"  Output: {result.stdout[:50]}")
 except subprocess.TimeoutExpired:
-    print(f"✗ TIMEOUT")
+    print("✗ TIMEOUT")
 except Exception as e:
     print(f"✗ Error: {e}")
 
 print("\nTest 2: Run with shell=False")
 try:
     result = subprocess.run(
-        [binary, 'query', '--server 127.0.0.1:3141 --insecure', 'RETURN 1 AS x'],
+        [binary, "query", "--server 127.0.0.1:3141 --insecure", "RETURN 1 AS x"],
         capture_output=True,
         text=True,
-        timeout=2
+        timeout=2,
     )
     print(f"✓ Success: exit={result.returncode}")
     print(f"  Output: {result.stdout[:50]}")
 except subprocess.TimeoutExpired:
-    print(f"✗ TIMEOUT")
+    print("✗ TIMEOUT")
 except Exception as e:
     print(f"✗ Error: {e}")
 
 print("\nTest 3: Run with shell=False and input=''")
 try:
     result = subprocess.run(
-        [binary, 'query', '--server 127.0.0.1:3141 --insecure', 'RETURN 1 AS x'],
-        input='',
+        [binary, "query", "--server 127.0.0.1:3141 --insecure", "RETURN 1 AS x"],
+        input="",
         capture_output=True,
         text=True,
-        timeout=2
+        timeout=2,
     )
     print(f"✓ Success: exit={result.returncode}")
     print(f"  Output: {result.stdout[:50]}")
 except subprocess.TimeoutExpired:
-    print(f"✗ TIMEOUT")
+    print("✗ TIMEOUT")
 except Exception as e:
     print(f"✗ Error: {e}")
 
 print("\nTest 4: Check if geode --help works")
 try:
-    result = subprocess.run(
-        [binary, '--help'],
-        capture_output=True,
-        text=True,
-        timeout=2
-    )
+    result = subprocess.run([binary, "--help"], capture_output=True, text=True, timeout=2)
     print(f"✓ Success: exit={result.returncode}")
     print(f"  Output: {result.stdout[:50]}")
 except subprocess.TimeoutExpired:
-    print(f"✗ TIMEOUT")
+    print("✗ TIMEOUT")
 except Exception as e:
     print(f"✗ Error: {e}")

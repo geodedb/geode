@@ -75,7 +75,7 @@ tests:
       - output_contains_all: true
 
   # Test 4: Dot Product Operations
-  - name: "vector_dot_product_operations" 
+  - name: "vector_dot_product_operations"
     description: "Test dot product calculations for unnormalized similarity"
     command: ["geode", "query"]
     input: |
@@ -185,7 +185,7 @@ tests:
         sparse_features: vectori32('[1, 0, 1, 0, 1, 1, 0]')
       })
       MATCH (i:Item)
-      RETURN 
+      RETURN
         i.name,
         vector_l2(i.dense_features, vectorf32('[0.5, 0.8, 0.3, 0.9]')) AS l2_dist,
         vector_cosine(i.dense_features, vectorf32('[0.5, 0.8, 0.3, 0.9]')) AS cosine_sim,
@@ -194,7 +194,7 @@ tests:
     expected_patterns:
       - "Test Item"
       - "l2_dist"
-      - "cosine_sim" 
+      - "cosine_sim"
       - "manhattan_dist"
       - "hamming_dist"
     success_criteria:
@@ -240,7 +240,7 @@ tests:
       CREATE (doc2:Document {title: 'Stats Paper 1', embedding: vectorf32('[0.1, 0.8, 0.1]'), category: 'Statistics'})
       CREATE (doc3:Document {title: 'ML Paper 2', embedding: vectorf32('[0.7, 0.3, 0.0]'), category: 'AI'})
       MATCH (d:Document)
-      WHERE d.category = 'AI' 
+      WHERE d.category = 'AI'
         AND vector_cosine(d.embedding, vectorf32('[1.0, 0.0, 0.0]')) > 0.7
       WITH d, vector_cosine(d.embedding, vectorf32('[1.0, 0.0, 0.0]')) AS similarity
       RETURN d.title, similarity
@@ -263,7 +263,7 @@ tests:
       CREATE (p3:Point {location: vectorf32('[5.0, 5.0]'), cluster: 'B'})
       CREATE (p4:Point {location: vectorf32('[5.1, 4.9]'), cluster: 'B'})
       MATCH (p:Point)
-      WITH p.cluster AS cluster, 
+      WITH p.cluster AS cluster,
            AVG(vector_l2(p.location, vectorf32('[0.0, 0.0]'))) AS avg_distance
       RETURN cluster, avg_distance
       ORDER BY cluster
@@ -293,21 +293,21 @@ summary:
   total_tests: 15
   categories:
     - basic_operations: 4
-    - distance_metrics: 6  
+    - distance_metrics: 6
     - index_management: 3
     - advanced_queries: 2
   estimated_runtime: "5-8 minutes"
-  
+
 # Performance benchmarks
 benchmarks:
   - name: "vector_l2_performance"
     description: "L2 distance calculation performance"
     target_time_ms: 100
-    
-  - name: "vector_cosine_performance" 
+
+  - name: "vector_cosine_performance"
     description: "Cosine similarity calculation performance"
     target_time_ms: 120
-    
+
   - name: "vector_index_creation_performance"
     description: "Vector index creation performance"
     target_time_ms: 500

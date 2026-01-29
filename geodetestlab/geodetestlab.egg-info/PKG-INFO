@@ -47,7 +47,7 @@ Requires-Dist: flake8>=6.1.0; extra == "dev"
 The system provides end-to-end testing capabilities for Geode's CLI interface, including:
 
 - **Server Management**: Automatic startup/shutdown of Geode server instances for testing
-- **GQL Query Testing**: Specialized assertions for Graph Query Language results  
+- **GQL Query Testing**: Specialized assertions for Graph Query Language results
 - **Authentication Testing**: User management, role-based access control, and security validation
 - **Intelligent Fuzzing**: LLM-powered test case generation with Geode-specific patterns
 - **Secret Management**: Secure handling of credentials and API tokens
@@ -56,7 +56,7 @@ The system provides end-to-end testing capabilities for Geode's CLI interface, i
 ```
 spec ──► resolver ──► server ──► runner ──► asserter ──► reporter
 │            │           │          │           └─► JSON summary
-│            │           │          └─► JSONL logs  
+│            │           │          └─► JSONL logs
 │            │           └─► managed Geode server
 │            └─► resolves secrets from env/keyring
 └─► YAML specification with Geode-specific features
@@ -139,7 +139,7 @@ tests:
 Three LLM providers for sophisticated test generation:
 
 - **`mock`**: Deterministic, offline patterns for CI/CD
-- **`openai`**: OpenAI-compatible API integration  
+- **`openai`**: OpenAI-compatible API integration
 - **`geode-ai`**: Specialized Geode database patterns
 
 ```yaml
@@ -163,7 +163,7 @@ secrets:
     key: "GEODE_ADMIN_TOKEN"
     required: true
   api_key:
-    source: "keyring" 
+    source: "keyring"
     service: "geodetestlab"
     key: "production_api_key"
     required: false
@@ -196,7 +196,7 @@ geodetestlab run --spec <path> [options]
 geodetestlab secrets check --spec <path>
 geodetestlab secrets list --spec <path> [--show]
 
-# Manage server instances  
+# Manage server instances
 geodetestlab server start [--port 3141] [--background]
 geodetestlab server stop [--port 3141] [--force]
 geodetestlab server status [--port 3141]
@@ -268,21 +268,21 @@ tests:
   - name: "comprehensive-test"
     description: "Multi-faceted test with setup/cleanup"
     args: ["query", "MATCH (n) RETURN count(n)"]
-    
+
     # Pre-test setup
     setup:
       - "query \"CREATE (n:Test)\""
-      
-    # Post-test cleanup  
+
+    # Post-test cleanup
     cleanup:
       - "query \"MATCH (n:Test) DELETE n\""
-      
+
     # Custom timeout
     timeout_ms: 60000
-    
+
     # Test categorization
     tags: ["query", "performance"]
-    
+
     expect:
       exit_code: 0
       stdout_json_assert:
@@ -303,16 +303,16 @@ expect:
   stdout_contains: ["substring1", "substring2"]
   stdout_regex: ["pattern1", "pattern2"]
   stderr_contains: ["error_text"]
-  
+
   # JSON path assertions
   stdout_json_assert:
     - expression: "results[0].name"
       equals: "Alice"
-    - expression: "status" 
+    - expression: "status"
       not_equals: "error"
     - expression: "message"
       matches_regex: "completed in \\d+ms"
-  
+
   # Geode-specific assertions
   geode_query:
     row_count: 5               # Exact row count
@@ -320,7 +320,7 @@ expect:
     max_rows: 100              # Maximum rows
     columns: ["id", "name"]    # Expected columns
     execution_time_ms: 1000    # Max execution time
-    
+
     # Content validation
     contains_node:
       name: "Alice"
@@ -328,7 +328,7 @@ expect:
     contains_edge:
       type: "KNOWS"
       since: 2020
-      
+
   # Server health
   server_responsive: true
 ```
@@ -362,7 +362,7 @@ tests:
       geode_query:
         row_count: 1
         columns: ["result"]
-        
+
   - name: "create-node"
     args: ["query", "CREATE (n:Person {name: 'Alice'}) RETURN n"]
     expect:
@@ -410,24 +410,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-          
+
       - name: Install geodetestlab
         run: |
           cd geodetestlab
           pip install -e .
-          
+
       - name: Build Geode
         run: make build
-        
+
       - name: Run basic tests
         run: |
           geodetestlab run --spec geodetestlab/specs/geode_basic.yml --ci
-          
+
       - name: Run fuzzing tests
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

@@ -25,7 +25,7 @@ test_query() {
     local name="$1"
     local query="$2"
     local timeout_duration="${3:-3}"
-    
+
     echo -n "Testing $name: "
     local output
     if output=$(timeout "$timeout_duration" ./zig-out/bin/geodec "$query" --insecure 2>&1); then

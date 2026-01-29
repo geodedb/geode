@@ -117,7 +117,7 @@ echo
 echo "=== Regression Test Summary ==="
 echo "✓ All 10 regression tests passed!"
 echo "✓ CREATE statement execution working correctly"
-echo "✓ Node ID collision fix working correctly" 
+echo "✓ Node ID collision fix working correctly"
 echo "✓ Basic query functionality working correctly"
 echo "✓ String literal handling working correctly"
 echo

@@ -303,4 +303,3 @@ tests:
       exit_code: 0
       stdout_contains: ["Los Angeles"]
     tags: ["location"]
-

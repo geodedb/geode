@@ -20,7 +20,7 @@ tests:
   # ===============================
   # SCHEMA OPERATIONS
   # ===============================
-  
+
   - name: "create-schema-basic"
     description: "Test basic CREATE SCHEMA command"
     args: ["query", "CREATE SCHEMA IF NOT EXISTS test_schema"]
@@ -79,7 +79,7 @@ tests:
   # ===============================
   # GRAPH OPERATIONS
   # ===============================
-  
+
   - name: "create-graph-basic"
     description: "Test basic CREATE GRAPH command"
     args: ["query", "CREATE GRAPH IF NOT EXISTS test_graph ANY"]
@@ -203,7 +203,7 @@ tests:
   # ===============================
   # GRAPH TYPE OPERATIONS
   # ===============================
-  
+
   - name: "create-graph-type-basic"
     description: "Test basic CREATE GRAPH TYPE command"
     args: ["query", "CREATE GRAPH TYPE test_graph_type AS { }"]
@@ -311,7 +311,7 @@ tests:
   # ===============================
   # WORKFLOW TESTS
   # ===============================
-  
+
   - name: "catalog-workflow-schema-graph"
     description: "Complete workflow: create schema, create graph, use graph, drop"
     args:
@@ -341,7 +341,7 @@ tests:
   # ===============================
   # ERROR SCENARIOS
   # ===============================
-  
+
   - name: "create-duplicate-schema-error"
     description: "Test creating duplicate schema without IF NOT EXISTS (should error)"
     skip: true  # Geode returns status codes via response, not exit codes - test runner limitation
@@ -401,7 +401,7 @@ tests:
   # ===============================
   # CLEANUP
   # ===============================
-  
+
   - name: "cleanup-catalog-objects"
     description: "Clean up all catalog objects created during tests"
     args:

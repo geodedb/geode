@@ -1,5 +1,5 @@
 -- Migration: Advanced Types Extension
--- Version: 005  
+-- Version: 005
 -- Description: Extends the social network schema with advanced data types
 -- Author: Geode Team
 -- Date: 2025-09-27
@@ -86,15 +86,15 @@ SET c.website_url = Url('https://globalfinance.example.com'),
 RETURN c.id;
 
 -- Sample data update for existing companies
-MATCH (c:Company {id: 'COMP-001'}) 
-SET c.website_url = Url('https://example.com'), 
-    c.domain = Domain('example.com'), 
+MATCH (c:Company {id: 'COMP-001'})
+SET c.website_url = Url('https://example.com'),
+    c.domain = Domain('example.com'),
     c.revenue_range = Range('int4', 1000000, 5000000, '[)')
 RETURN c.id;
 
--- Sample data update for existing users  
-MATCH (u:User {id: 'USER-001'}) 
-SET u.homepage = Url('https://users.example.com/u1'), 
-    u.profile_jsonb = Jsonb('{"theme":"dark","lang":"en-US"}'), 
+-- Sample data update for existing users
+MATCH (u:User {id: 'USER-001'})
+SET u.homepage = Url('https://users.example.com/u1'),
+    u.profile_jsonb = Jsonb('{"theme":"dark","lang":"en-US"}'),
     u.avatar = Bytea('\\x89504E470D0A1A0A')
 RETURN u.id;

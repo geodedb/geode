@@ -2,7 +2,7 @@
 
 This subpackage exposes a single helper, :func:`get_provider`, which
 returns an instance of the requested LLM provider. Available providers
-include ``mock`` (deterministic and offline), ``openai`` (which connects 
+include ``mock`` (deterministic and offline), ``openai`` (which connects
 to an OpenAI‑compatible API), and ``geode-ai`` (which provides Geode-specific
 fuzzing patterns).
 """
@@ -12,9 +12,9 @@ from __future__ import annotations
 from typing import Optional
 
 from .base import LLMProvider
+from .geode_ai import GeodeAIProvider
 from .mock import MockProvider
 from .openai_compat import OpenAICompatProvider
-from .geode_ai import GeodeAIProvider
 
 
 def get_provider(name: str, model: Optional[str] = None) -> LLMProvider:

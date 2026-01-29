@@ -55,59 +55,59 @@ declare -A SUITE_TIMES
 run_test_suite() {
     local suite_name="$1"
     local suite_path="$TESTS_DIR/$suite_name"
-    
+
     echo -e "${CYAN}================================================${NC}"
     echo -e "${BOLD}Running: $suite_name${NC}"
     echo -e "${CYAN}================================================${NC}"
-    
+
     if [ ! -f "$suite_path" ]; then
         echo -e "${RED}ERROR: Test suite not found: $suite_path${NC}"
         SKIPPED_SUITES=$((SKIPPED_SUITES + 1))
         SUITE_RESULTS["$suite_name"]="SKIPPED"
         return 1
     fi
-    
+
     if [ ! -x "$suite_path" ]; then
         echo "Making test suite executable..."
         chmod +x "$suite_path"
     fi
-    
+
     local start_time=$(date +%s)
     local output_file="/tmp/geode_test_output_$$_$(echo $suite_name | tr '.' '_')"
-    
+
     # Run the test suite and capture output
     if timeout 600 bash "$suite_path" > "$output_file" 2>&1; then
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         SUITE_TIMES["$suite_name"]="${duration}s"
-        
+
         echo -e "${GREEN}✓ $suite_name completed successfully${NC}"
         PASSED_SUITES=$((PASSED_SUITES + 1))
         SUITE_RESULTS["$suite_name"]="PASSED"
-        
+
         # Extract statistics from output
         extract_suite_stats "$suite_name" "$output_file"
-        
+
     else
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         SUITE_TIMES["$suite_name"]="${duration}s (failed)"
-        
+
         echo -e "${RED}✗ $suite_name failed${NC}"
         FAILED_SUITES=$((FAILED_SUITES + 1))
         SUITE_RESULTS["$suite_name"]="FAILED"
-        
+
         # Show last few lines of output for debugging
         echo -e "${YELLOW}Last 10 lines of output:${NC}"
         tail -10 "$output_file" | sed 's/^/  /'
     fi
-    
+
     # Always show the summary section if present
     if grep -q "Summary\|Results\|Score" "$output_file"; then
         echo -e "${BLUE}Suite Summary:${NC}"
         grep -A 20 -E "Summary|Results.*Summary|=== .*Results|Score.*:" "$output_file" | head -20 | sed 's/^/  /'
     fi
-    
+
     echo
     rm -f "$output_file"
 }
@@ -116,29 +116,29 @@ run_test_suite() {
 extract_suite_stats() {
     local suite_name="$1"
     local output_file="$2"
-    
+
     # Try to extract test counts and scores
     local passed=$(grep -o "passed: [0-9]*\|PASS.*[0-9]*\|✓.*[0-9]*" "$output_file" | grep -o "[0-9]*" | tail -1)
     local failed=$(grep -o "failed: [0-9]*\|FAIL.*[0-9]*\|✗.*[0-9]*" "$output_file" | grep -o "[0-9]*" | tail -1)
     local error_handled=$(grep -o "correctly handled: [0-9]*\|handled: [0-9]*" "$output_file" | grep -o "[0-9]*" | tail -1)
     local score=$(grep -o "[0-9]*%" "$output_file" | tail -1 | tr -d '%')
-    
+
     # Update totals if we found numbers
     if [[ "$passed" =~ ^[0-9]+$ ]]; then
         TOTAL_PASSED=$((TOTAL_PASSED + passed))
         TOTAL_TESTS=$((TOTAL_TESTS + passed))
     fi
-    
+
     if [[ "$failed" =~ ^[0-9]+$ ]]; then
         TOTAL_FAILED=$((TOTAL_FAILED + failed))
         TOTAL_TESTS=$((TOTAL_TESTS + failed))
     fi
-    
+
     if [[ "$error_handled" =~ ^[0-9]+$ ]]; then
         TOTAL_ERRORS_HANDLED=$((TOTAL_ERRORS_HANDLED + error_handled))
         TOTAL_TESTS=$((TOTAL_TESTS + error_handled))
     fi
-    
+
     if [[ "$score" =~ ^[0-9]+$ ]]; then
         SUITE_SCORES["$suite_name"]="${score}%"
     else
@@ -158,7 +158,7 @@ echo
 # Run all test suites
 for suite in "${TEST_SUITES[@]}"; do
     run_test_suite "$suite"
-    
+
     # Brief pause between suites
     sleep 2
 done
@@ -179,7 +179,7 @@ for suite in "${TEST_SUITES[@]}"; do
     local status="${SUITE_RESULTS[$suite]:-UNKNOWN}"
     local score="${SUITE_SCORES[$suite]:-N/A}"
     local time="${SUITE_TIMES[$suite]:-N/A}"
-    
+
     # Color code the status
     local status_colored
     case "$status" in
@@ -188,7 +188,7 @@ for suite in "${TEST_SUITES[@]}"; do
         "SKIPPED") status_colored="${YELLOW}SKIPPED${NC}" ;;
         *) status_colored="$status" ;;
     esac
-    
+
     printf "│ %-43s │ %-15s │ %-7s │ %-8s │\n" "$suite" "$status_colored" "$score" "$time"
 done
 
@@ -276,7 +276,7 @@ echo "├───────────────────────�
 for area in "${!coverage_areas[@]}"; do
     local suite="${coverage_areas[$area]}"
     local status="${SUITE_RESULTS[$suite]:-UNKNOWN}"
-    
+
     local status_icon
     case "$status" in
         "PASSED") status_icon="${GREEN}✓ Covered${NC}" ;;
@@ -284,7 +284,7 @@ for area in "${!coverage_areas[@]}"; do
         "SKIPPED") status_icon="${YELLOW}○ Skipped${NC}" ;;
         *) status_icon="? Unknown" ;;
     esac
-    
+
     printf "│ %-31s │ %-23s │\n" "$area" "$status_icon"
 done
 

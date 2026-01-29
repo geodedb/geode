@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Test a specific suite to identify failures."""
 
-import subprocess
-import yaml
-import sys
-from pathlib import Path
-import uuid
-import time
 import os
+import subprocess
+import sys
+import time
+import uuid
+from pathlib import Path
+
+import yaml
+
 
 def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode", spec_name=""):
     """Run a single test case."""
@@ -29,16 +31,16 @@ def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/
 
     # Clear persistence files
     try:
-        os.remove('/tmp/geode_graph_store.dat')
+        os.remove("/tmp/geode_graph_store.dat")
     except FileNotFoundError:
         pass
 
     if not skip_isolation:
-        home_dir = os.path.expanduser('~')
+        home_dir = os.path.expanduser("~")
         catalog_paths = [
-            f'{home_dir}/.geode/catalog.json',
-            f'{home_dir}/.geode/catalog_indexes.json',
-            f'{home_dir}/.geode/catalog_schemas.json',
+            f"{home_dir}/.geode/catalog.json",
+            f"{home_dir}/.geode/catalog_indexes.json",
+            f"{home_dir}/.geode/catalog_schemas.json",
         ]
         for catalog_path in catalog_paths:
             try:
@@ -50,6 +52,7 @@ def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/
     setup_commands = test_case.get("setup", [])
     if setup_commands:
         import shlex
+
         for cmd_item in setup_commands:
             try:
                 if isinstance(cmd_item, dict):
@@ -60,11 +63,7 @@ def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/
                     setup_stdin = None
 
                 setup_result = subprocess.run(
-                    [binary] + setup_args,
-                    input=setup_stdin,
-                    capture_output=True,
-                    text=True,
-                    timeout=5
+                    [binary] + setup_args, input=setup_stdin, capture_output=True, text=True, timeout=5
                 )
                 if setup_result.returncode != 0:
                     error_msg = f"setup command failed (exit {setup_result.returncode})"
@@ -78,13 +77,7 @@ def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/
     stdin_content = test_case.get("stdin", None)
 
     try:
-        result = subprocess.run(
-            [binary] + args,
-            input=stdin_content,
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
+        result = subprocess.run([binary] + args, input=stdin_content, capture_output=True, text=True, timeout=5)
     except subprocess.TimeoutExpired:
         return False, "timeout"
     except Exception as e:
@@ -111,6 +104,7 @@ def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/
 
     return True, "PASSED"
 
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 test_specific_suite.py <spec_file.yml>")
@@ -121,7 +115,7 @@ def main():
         print(f"Error: {spec_file} not found")
         sys.exit(1)
 
-    with open(spec_file, "r") as f:
+    with open(spec_file) as f:
         spec = yaml.safe_load(f)
 
     total_passed = 0
@@ -148,16 +142,17 @@ def main():
             total_failed += 1
             all_failures.append((spec_file.name, name, message))
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"{spec_file.name}: {total_passed} passed, {total_failed} failed, {total_skipped} skipped")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     if all_failures:
-        print(f"\nFailures:")
+        print("\nFailures:")
         for spec_file, name, message in all_failures:
             print(f"  [{spec_file}] {name}: {message}")
 
     return 0 if total_failed == 0 else 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

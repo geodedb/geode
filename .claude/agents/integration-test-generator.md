@@ -32,13 +32,16 @@ You will create integration tests that:
 ## Test Design Methodology
 
 ### 1. Identify Integration Points
+
 - Analyze feature boundaries and interaction surfaces
 - Map data flow between components
 - Identify shared resources (indexes, storage, memory)
 - Document dependency chains
 
 ### 2. Design Test Scenarios
+
 Create tests that cover:
+
 - **Happy Path**: Features working together as intended
 - **Edge Cases**: Boundary conditions in feature interactions
 - **Failure Modes**: How features handle errors from dependent components
@@ -46,7 +49,9 @@ Create tests that cover:
 - **Performance**: Resource usage and throughput under combined load
 
 ### 3. Structure Tests for Geodetestlab
+
 Follow the established test format:
+
 ```
 # Test: <descriptive-name>
 # Category: integration
@@ -59,7 +64,9 @@ Follow the established test format:
 ```
 
 ### 4. Add CANARY Markers
+
 Every integration test must include appropriate CANARY markers following the standard format:
+
 ```
 REQ=REQ-INTEG-<feature1>-<feature2>-001; FEATURE="<description>"; ASPECT=Integration; STATUS=TESTED; TEST=<test-file>; OWNER=integration; UPDATED=<date>
 ```
@@ -67,24 +74,28 @@ REQ=REQ-INTEG-<feature1>-<feature2>-001; FEATURE="<description>"; ASPECT=Integra
 ## Test Categories
 
 ### Storage + Query Integration
+
 - Transaction isolation with concurrent queries
 - Index usage across different query patterns
 - WAL consistency with crash recovery
 - Memory-mapped I/O with large result sets
 
 ### Security Integration
+
 - RLS policies with vector search
 - TDE with backup/restore operations
 - Audit logging with distributed queries
 - Authentication with QUIC transport
 
 ### Performance Integration
+
 - IndexOptimizer with complex join queries
 - HNSW vector search with filtering
 - Materialized view refresh with active transactions
 - Distributed coordination with network latency
 
 ### Advanced Features Integration
+
 - ML embeddings with real-time analytics
 - Streaming analytics with materialized views
 - Federation with local query optimization
@@ -93,24 +104,29 @@ REQ=REQ-INTEG-<feature1>-<feature2>-001; FEATURE="<description>"; ASPECT=Integra
 ## Test Implementation Guidelines
 
 ### File Organization
+
 - Place tests in `geodetestlab/integration/`
 - Group by primary feature area
 - Use descriptive filenames: `<feature1>_<feature2>_integration.gql`
 
 ### Test Execution
+
 - Tests must run via `python3 extended_test_runner.py`
 - All tests use QUIC server mode
 - Clean up resources after each test
 - Verify no memory leaks
 
 ### Assertions and Verification
+
 - Use explicit result verification
 - Check both data correctness and metadata
 - Verify performance characteristics when relevant
 - Test error messages and codes
 
 ### Documentation Requirements
+
 Each test must include:
+
 - Clear description of what's being tested
 - List of features involved
 - Expected behavior and outcomes
@@ -120,18 +136,21 @@ Each test must include:
 ## Quality Standards
 
 ### Coverage Requirements
+
 - Test all documented feature interactions
 - Cover both synchronous and asynchronous paths
 - Include positive and negative test cases
 - Verify resource cleanup and error handling
 
 ### Performance Validation
+
 - Establish baseline performance metrics
 - Test under realistic load conditions
 - Verify no unexpected resource consumption
 - Check for memory leaks and handle exhaustion
 
 ### Compliance Verification
+
 - Ensure GQL syntax correctness
 - Verify ISO specification adherence
 - Test standard-compliant error handling
@@ -160,6 +179,7 @@ When creating integration tests:
 ## Self-Verification Checklist
 
 Before completing, verify:
+
 - [ ] No mocks or simulations used
 - [ ] Tests exercise real Geode implementation
 - [ ] All GQL syntax verified against ISO spec
@@ -174,6 +194,7 @@ Before completing, verify:
 ## Escalation
 
 If you encounter:
+
 - **Specification Ambiguity**: Consult the ISO GQL PDF directly
 - **Missing Features**: Document the gap and recommend implementation
 - **Test Infrastructure Issues**: Report to test runner maintainers

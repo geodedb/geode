@@ -47,10 +47,10 @@ PIDS=()
 for ((i=1; i<=CLUSTER_SIZE; i++)); do
     NODE_DIR="$BASE_DIR/node${i}"
     PORT=$((BASE_PORT + i - 1))
-    
+
     # Create node directory
     mkdir -p "$NODE_DIR"
-    
+
     # Generate node-specific config
     cat > "$NODE_DIR/config.yaml" <<EOF
 node_id: $i
@@ -61,18 +61,18 @@ cluster: $CLUSTER_CONFIG
 election_timeout_ms: $((150 + RANDOM % 150))
 heartbeat_interval_ms: 50
 EOF
-    
+
     # Start the node
     echo -e "${YELLOW}Starting node ${i} on port ${PORT}...${NC}"
-    
+
     GEODE_NODE_ID=$i \
     GEODE_DATA_DIR="$NODE_DIR/data" \
     GEODE_QUIC_PORT=$PORT \
     GEODE_CLUSTER="$CLUSTER_CONFIG" \
     $BINARY --config "$NODE_DIR/config.yaml" 2>&1 | sed "s/^/[node${i}] /" &
-    
+
     PIDS+=($!)
-    
+
     # Wait a bit between starts to avoid race conditions
     sleep 0.5
 done
@@ -94,11 +94,11 @@ for ((retry=0; retry<10; retry++)); do
             fi
         fi
     done
-    
+
     if [ "$LEADER_FOUND" = true ]; then
         break
     fi
-    
+
     sleep 1
 done
 

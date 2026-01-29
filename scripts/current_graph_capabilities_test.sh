@@ -23,7 +23,7 @@ test_working_feature() {
     local name="$1"
     local cmd="$2"
     local expected_pattern="$3"
-    
+
     echo -n "✓ Testing $name... "
     if eval "$cmd" 2>&1 | grep -q "$expected_pattern"; then
         echo -e "${GREEN}WORKING${NC}"
@@ -42,11 +42,11 @@ test_working_feature() {
 test_not_implemented() {
     local name="$1"
     local cmd="$2"
-    
+
     echo -n "? Testing $name... "
     local output
     output=$(eval "$cmd" 2>&1)
-    
+
     if echo "$output" | grep -q "ParseError\|SyntaxError\|not.*implement\|unsupported"; then
         echo -e "${YELLOW}NOT IMPLEMENTED${NC}"
         ((NOT_WORKING_FEATURES++))

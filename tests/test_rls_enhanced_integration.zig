@@ -282,9 +282,9 @@ test "test_complex_query_rewriting" {
 
     // Complex query with joins
     const complex_query =
-        \\SELECT u.name, t.amount, t.date 
-        \\FROM users u 
-        \\JOIN transactions t ON u.id = t.user_id 
+        \\SELECT u.name, t.amount, t.date
+        \\FROM users u
+        \\JOIN transactions t ON u.id = t.user_id
         \\WHERE t.status = 'completed'
     ;
     const rewritten_complex = try engine.rewriteQueryEnhanced(complex_query, &context, "financial_db");
@@ -297,7 +297,7 @@ test "test_complex_query_rewriting" {
 
     // Query with subselects
     const subquery =
-        \\SELECT * FROM reports 
+        \\SELECT * FROM reports
         \\WHERE id IN (SELECT report_id FROM permissions WHERE user_id = 42)
     ;
     const rewritten_subquery = try engine.rewriteQueryEnhanced(subquery, &context, "financial_db");

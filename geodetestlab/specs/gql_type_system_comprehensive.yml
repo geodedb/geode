@@ -20,7 +20,7 @@ tests:
   # ===============================
   # BASIC SCALAR TYPES
   # ===============================
-  
+
   - name: "type-boolean-true"
     description: "Test boolean true literal"
     args: ["query", "RETURN true AS bool_value"]
@@ -63,7 +63,7 @@ tests:
   # ===============================
   # INTEGER TYPES
   # ===============================
-  
+
   - name: "type-integer-positive"
     description: "Test positive integer literal"
     args: ["query", "RETURN 42 AS int_value"]
@@ -116,7 +116,7 @@ tests:
   # ===============================
   # DECIMAL/FLOAT TYPES
   # ===============================
-  
+
   - name: "type-decimal-positive"
     description: "Test positive decimal literal"
     args: ["query", "RETURN 3.14159 AS decimal_value"]
@@ -172,7 +172,7 @@ tests:
   # ===============================
   # STRING TYPES
   # ===============================
-  
+
   - name: "type-string-simple"
     description: "Test simple string literal"
     args: ["query", "RETURN 'Hello World' AS string_value"]
@@ -238,7 +238,7 @@ tests:
   # ===============================
   # LIST TYPES
   # ===============================
-  
+
   - name: "type-list-integers"
     description: "Test list of integers"
     args: ["query", "RETURN [1, 2, 3, 4, 5] AS int_list"]
@@ -292,7 +292,7 @@ tests:
   # ===============================
   # MAP TYPES
   # ===============================
-  
+
   - name: "type-map-simple"
     description: "Test simple map literal"
     args: ["query", "RETURN {name: 'Alice', age: 30, active: true} AS person_map"]
@@ -336,7 +336,7 @@ tests:
   # ===============================
   # DATE AND TIME TYPES
   # ===============================
-  
+
   - name: "type-date-literal"
     description: "Test date literal"
     args: ["query", "RETURN date('2024-01-15') AS date_value"]
@@ -380,7 +380,7 @@ tests:
   # ===============================
   # TYPE OPERATIONS
   # ===============================
-  
+
   - name: "type-function-type-of"
     description: "Test type() function"
     args: ["query", "RETURN type(42) AS int_type, type('text') AS string_type, type(true) AS bool_type, type([1,2,3]) AS list_type"]
@@ -413,7 +413,7 @@ tests:
   # ===============================
   # TYPE CONVERSION FUNCTIONS
   # ===============================
-  
+
   - name: "type-conversion-to-string"
     description: "Test toString() function"
     args: ["query", "RETURN toString(42) AS int_to_string, toString(3.14) AS float_to_string, toString(true) AS bool_to_string"]
@@ -483,7 +483,7 @@ tests:
   # ===============================
   # LIST OPERATIONS
   # ===============================
-  
+
   - name: "type-list-size"
     description: "Test size() function on lists"
     args: ["query", "RETURN size([1, 2, 3, 4, 5]) AS list_size, size([]) AS empty_size, size('hello') AS string_size"]
@@ -540,7 +540,7 @@ tests:
   # ===============================
   # MAP OPERATIONS
   # ===============================
-  
+
   - name: "type-map-keys"
     description: "Test keys() function on maps"
     args: ["query", "RETURN keys({name: 'Alice', age: 30, active: true}) AS map_keys"]
@@ -577,7 +577,7 @@ tests:
   # ===============================
   # TYPE COERCION AND COMPATIBILITY
   # ===============================
-  
+
   - name: "type-coercion-arithmetic"
     description: "Test type coercion in arithmetic operations"
     args: ["query", "RETURN 5 + 3.14 AS int_plus_float, 2 * 1.5 AS int_times_float"]
@@ -626,7 +626,7 @@ tests:
   # ===============================
   # PROPERTY ACCESS WITH TYPES
   # ===============================
-  
+
   - name: "type-property-access-mixed"
     description: "Test property access with mixed types"
     setup:
@@ -644,7 +644,7 @@ tests:
   # ===============================
   # ERROR SCENARIOS
   # ===============================
-  
+
   - name: "type-error-invalid-conversion"
     description: "Test invalid type conversion (should error)"
     skip: true  # Geode returns status codes via response, not exit codes - test runner limitation
@@ -681,7 +681,7 @@ tests:
   # ===============================
   # COMPLEX TYPE COMBINATIONS
   # ===============================
-  
+
   - name: "type-complex-nested-structures"
     description: "Test complex nested type structures"
     args:
@@ -725,13 +725,13 @@ tests:
   # ===============================
   # CLEANUP
   # ===============================
-  
+
   - name: "cleanup-type-test-data"
     description: "Clean up all test data created during type system tests"
     args:
       - "query"
       - |
-        MATCH (n) WHERE 
+        MATCH (n) WHERE
           n:TypeTest OR n:TypeNode OR n:DynamicTest
         DETACH DELETE n
     expect:

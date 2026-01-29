@@ -43,6 +43,12 @@ const tde_mod = @import("../security/tde.zig");
 const cdc_mod = @import("../streaming/cdc_enhanced.zig");
 const rls = @import("rls");
 
+// Import FLE modules for field-level encryption procedures
+// CANARY: REQ=REQ-FLE-PROC-001; FEATURE="FLEProcedures"; ASPECT=Import; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+const fle_catalog = @import("../schema/fle_catalog.zig");
+const fle_annotations = @import("../schema/annotations.zig");
+const fle_integration = @import("../fle_integration.zig");
+
 // CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=PROCEDURE_REGISTRY; STATUS=TESTED; TEST=tests/test_performance_integration.zig; OWNER=refactor; UPDATED=2026-01-15
 
 // CANARY: REQ=REQ-AUDIT-PROC-001; FEATURE="AuditProcedures"; ASPECT=EventID; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
@@ -4259,6 +4265,177 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
+    }
+    // ===========================================================================
+    // FLE (Field-Level Encryption) Procedures
+    // ===========================================================================
+    // CANARY: REQ=REQ-FLE-PROC-002; FEATURE="FLEProcedures"; ASPECT=ConfigureField; STATUS=TESTED; TEST=geodetestlab/specs/fle_plaintext_verification_basic.yml; OWNER=security; UPDATED=2026-01-28
+    else if (std.mem.eql(u8, proc_name, "geode.fle.configureField")) {
+        // geode.fle.configureField(type_name, field_name, config) -> status
+        // Configures a field for encryption in the FLE catalog
+        //
+        // Example: CALL geode.fle.configureField('User', 'ssn', {algorithm: 'AES-256-GCM', keyVersion: 1, visibility: ['admin']})
+
+        // Extract arguments
+        var type_name: []const u8 = "unknown";
+        var field_name: []const u8 = "unknown";
+        var algorithm: fle_annotations.EncryptionConfig.Algorithm = .aes256_gcm;
+        var visibility_roles: [][]const u8 = &.{};
+
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 2) {
+                // First argument: type_name (string literal)
+                if (args[0].* == .String) {
+                    type_name = args[0].String;
+                }
+                // Second argument: field_name (string literal)
+                if (args[1].* == .String) {
+                    field_name = args[1].String;
+                }
+                // Third argument: config map (optional)
+                if (args.len >= 3) {
+                    if (args[2].* == .Map) {
+                        for (args[2].Map) |prop| {
+                            if (std.mem.eql(u8, prop.key, "algorithm")) {
+                                if (prop.value.* == .String) {
+                                    algorithm = fle_annotations.EncryptionConfig.Algorithm.fromString(prop.value.String) catch .aes256_gcm;
+                                }
+                            } else if (std.mem.eql(u8, prop.key, "visibility")) {
+                                if (prop.value.* == .List) {
+                                    const list = prop.value.List;
+                                    visibility_roles = try allocator.alloc([]const u8, list.len);
+                                    for (list, 0..) |item, i| {
+                                        if (item.* == .String) {
+                                            visibility_roles[i] = item.String;
+                                        } else {
+                                            visibility_roles[i] = "";
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Get the FLE catalog
+        const catalog = try fle_catalog.globalCatalog(allocator);
+
+        // Create field metadata with encryption enabled
+        const field_meta = fle_annotations.FieldMetadata{
+            .field_name = field_name,
+            .encryption = .{
+                .enabled = true,
+                .algorithm = algorithm,
+                .key_scope = .field,
+            },
+            .search = .{ .enabled = false },
+            .visibility = .{ .to_roles = visibility_roles },
+            .classification = .{},
+        };
+
+        // Configure the field in the catalog (creates type if needed, updates if exists)
+        try catalog.configureField(type_name, field_meta);
+
+        // Mark that encrypted fields exist
+        fle_integration.setHasEncryptedFields(true);
+
+        log.info("FLE field configured", &.{
+            Attr.string("type", type_name),
+            Attr.string("field", field_name),
+            Attr.string("algorithm", @tagName(algorithm)),
+        });
+
+        const columns = try allocator.alloc([]const u8, 1);
+        columns[0] = try allocator.dupe(u8, "status");
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = "configured" };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
+    } else if (std.mem.eql(u8, proc_name, "geode.fle.getFieldConfig")) {
+        // geode.fle.getFieldConfig(type_name, field_name) -> encrypted, algorithm, searchable
+        // CANARY: REQ=REQ-FLE-PROC-003; FEATURE="FLEProcedures"; ASPECT=GetFieldConfig; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+
+        var type_name: []const u8 = "unknown";
+        var field_name: []const u8 = "unknown";
+
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 2) {
+                if (args[0].* == .String) {
+                    type_name = args[0].String;
+                }
+                if (args[1].* == .String) {
+                    field_name = args[1].String;
+                }
+            }
+        }
+
+        const catalog = try fle_catalog.globalCatalog(allocator);
+        var encrypted = false;
+        var algorithm_str: []const u8 = "none";
+        var searchable = false;
+
+        if (catalog.getFieldMetadata(type_name, field_name)) |field_meta| {
+            encrypted = field_meta.isEncrypted();
+            if (field_meta.algorithm()) |alg| {
+                algorithm_str = @tagName(alg);
+            }
+            searchable = field_meta.isSearchable();
+        }
+
+        const columns = try allocator.alloc([]const u8, 3);
+        columns[0] = try allocator.dupe(u8, "encrypted");
+        columns[1] = try allocator.dupe(u8, "algorithm");
+        columns[2] = try allocator.dupe(u8, "searchable");
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Bool = encrypted };
+        row[1] = Value{ .Str = algorithm_str };
+        row[2] = Value{ .Bool = searchable };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
+    } else if (std.mem.eql(u8, proc_name, "geode.fle.listEncryptedFields")) {
+        // geode.fle.listEncryptedFields(type_name) -> field_name, algorithm, searchable
+        // CANARY: REQ=REQ-FLE-PROC-004; FEATURE="FLEProcedures"; ASPECT=ListEncryptedFields; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+
+        var type_name: []const u8 = "unknown";
+
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1) {
+                if (args[0].* == .String) {
+                    type_name = args[0].String;
+                }
+            }
+        }
+
+        const catalog = try fle_catalog.globalCatalog(allocator);
+        const columns = try allocator.alloc([]const u8, 3);
+        columns[0] = try allocator.dupe(u8, "field_name");
+        columns[1] = try allocator.dupe(u8, "algorithm");
+        columns[2] = try allocator.dupe(u8, "searchable");
+
+        var rows_list = try std.ArrayList([]Value).initCapacity(allocator, 0);
+
+        if (catalog.getType(type_name)) |type_meta| {
+            var it = type_meta.fields.iterator();
+            while (it.next()) |entry| {
+                const field_meta = entry.value_ptr.*;
+                if (field_meta.isEncrypted()) {
+                    const row = try allocator.alloc(Value, 3);
+                    row[0] = Value{ .Str = field_meta.field_name };
+                    row[1] = Value{ .Str = if (field_meta.algorithm()) |alg| @tagName(alg) else "none" };
+                    row[2] = Value{ .Bool = field_meta.isSearchable() };
+                    try rows_list.append(allocator, row);
+                }
+            }
+        }
+
+        return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0) };
     } else {
         // Unknown procedure - return error
         log.warn("Unknown procedure", &.{

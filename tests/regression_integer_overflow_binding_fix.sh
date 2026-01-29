@@ -23,7 +23,7 @@ else
 fi
 
 # Test 2: Multiple property access
-echo "Test 2: Multiple property access - MATCH (n) RETURN n.name, n.age"  
+echo "Test 2: Multiple property access - MATCH (n) RETURN n.name, n.age"
 RESULT2=$($BINARY query "MATCH (n:Person) RETURN n.name, n.age LIMIT 2" --insecure 2>/dev/null | grep '"name"' || echo "no results")
 
 if [[ "$RESULT2" == "no results" ]]; then
@@ -39,7 +39,7 @@ RESULT3=$($BINARY query "MATCH (n:Person) WHERE n.name = 'Alice' RETURN count(n)
 
 if [[ "$RESULT3" == "no results" ]]; then
     echo "❌ Test 3 FAILED: Property filtering failed"
-    exit 1  
+    exit 1
 else
     echo "✅ Test 3 PASSED: Property filtering successful"
 fi

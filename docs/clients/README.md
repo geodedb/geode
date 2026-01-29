@@ -21,15 +21,18 @@ Documentation for Geode client libraries across multiple languages.
 ## Client Implementation
 
 ### Go Client
+
 - **[CLIENT_ENHANCEMENTS_OCT_2025.md](CLIENT_ENHANCEMENTS_OCT_2025.md)** - Recent enhancements
 
 ### Rust Client
+
 - **[QUICHE_COMPLETION.md](QUICHE_COMPLETION.md)** - Quiche migration completion
 - **[QUICHE_MIGRATION_REPORT.md](QUICHE_MIGRATION_REPORT.md)** - Migration details
 - **[QUINN_MIGRATION_PLAN.md](QUINN_MIGRATION_PLAN.md)** - Quinn migration plan
 - **[RUST_CLIENT_S2N_QUIC_FINDINGS.md](RUST_CLIENT_S2N_QUIC_FINDINGS.md)** - S2N-QUIC findings
 
 ### Zig Client
+
 - **[ZIG_CLIENT_V2_COMPLETION_REPORT.md](ZIG_CLIENT_V2_COMPLETION_REPORT.md)** - V2 completion report
 
 ## Fixes and Issues

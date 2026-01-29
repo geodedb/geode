@@ -22,11 +22,11 @@ declare -a FAILED_SUITES
 run_suite() {
     local suite_name="$1"
     local suite_script="$2"
-    
+
     echo -e "\n${BLUE}===============================================${NC}"
     echo -e "${BLUE}Running: $suite_name${NC}"
     echo -e "${BLUE}===============================================${NC}\n"
-    
+
     if [ -f "$suite_script" ]; then
         if bash "$suite_script"; then
             echo -e "\n${GREEN}✓ $suite_name completed successfully${NC}"

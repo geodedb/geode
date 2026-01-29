@@ -10,7 +10,7 @@
 
 Meta commands start with a backslash (`\`), NOT a forward slash (`/`).
 
-### Available Meta Commands:
+### Available Meta Commands
 
 - `\help` or `\h` or `\?` - Show help for meta commands
 - `\quit` or `\q` - Exit the shell
@@ -32,7 +32,7 @@ Meta commands start with a backslash (`\`), NOT a forward slash (`/`).
 Type GQL queries directly. For single-line queries, press Enter to execute.
 For multi-line queries, end with a semicolon (`;`).
 
-### Examples:
+### Examples
 
 ```gql
 geode> RETURN 1 AS x;
@@ -45,7 +45,8 @@ geode> LIMIT 10;
 
 ## Keyboard Shortcuts
 
-### Emacs Mode (default):
+### Emacs Mode (default)
+
 - `Ctrl+A` - Move to beginning of line
 - `Ctrl+E` - Move to end of line
 - `Ctrl+K` - Kill to end of line
@@ -59,12 +60,14 @@ geode> LIMIT 10;
 - `Ctrl+C` - Cancel current input
 - `Ctrl+D` - Delete character or exit on empty line
 
-### Vi Mode:
+### Vi Mode
+
 Switch with `\set keymap vi`
 
 ## Configuration
 
 History is saved to:
+
 - Linux: `~/.local/share/geode/history`
 - macOS: `~/Library/Application Support/geode/history`
 - Windows: `%APPDATA%\geode\history`

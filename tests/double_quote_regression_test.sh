@@ -19,15 +19,15 @@ test_quotes() {
     local name="$1"
     local input="$2"
     local timeout_sec="${3:-2}"
-    
+
     echo -n "Testing $name... "
-    
+
     local output
     local exit_code=0
-    
+
     # Use timeout to prevent hangs
     output=$(echo "$input" | timeout $timeout_sec ./zig-out/bin/geoded 2>&1) || exit_code=$?
-    
+
     if [ $exit_code -eq 124 ]; then
         # Timeout occurred
         echo -e "${RED}HANG DETECTED${NC}"

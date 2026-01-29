@@ -15,7 +15,7 @@
 --
 -- CONSTRAINTS:
 --   - UNIQUE constraint on User.email
---   - UNIQUE constraint on Company.ticker  
+--   - UNIQUE constraint on Company.ticker
 --   - NOT NULL constraints on id fields
 --   - CHECK constraints on numeric ranges (e.g., rating 0-5)
 --

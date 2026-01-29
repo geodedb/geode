@@ -110,7 +110,7 @@ fi
 echo
 echo "=== Performance Benchmarks ==="
 echo "• Node counting: ${DURATION1}ms"
-echo "• Edge traversal: ${DURATION2}ms" 
+echo "• Edge traversal: ${DURATION2}ms"
 echo "• Batch CREATE: ${DURATION3}ms (10 nodes)"
 echo "• Large ordering: ${DURATION4}ms"
 echo "• Aggregation: ${DURATION5}ms"

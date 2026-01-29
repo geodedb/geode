@@ -22,11 +22,11 @@ run_test() {
     local test_name="$1"
     local query="$2"
     local expected_pattern="$3"
-    
+
     echo -n "Testing: $test_name... "
-    
+
     result=$(./zig-out/bin/geodec "$query" --insecure 2>&1)
-    
+
     if echo "$result" | grep -q "$expected_pattern"; then
         echo -e "${GREEN}PASSED${NC}"
         return 0

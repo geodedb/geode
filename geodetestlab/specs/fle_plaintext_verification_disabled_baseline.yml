@@ -35,6 +35,10 @@ env:
   # GEODE_TDE_KEY: "..." # Intentionally not set - TDE would encrypt all data
   GEODE_FLE_ENABLED: "false"  # Explicitly disabled
 
+# Skip isolation suffix for FLE tests - the CALL geode.fle.configureField
+# must match the exact label names used in CREATE statements
+skip_isolation: true
+
 tests:
   # ===============================
   # PHASE 1: WRITE PLAINTEXT DATA (FLE DISABLED)

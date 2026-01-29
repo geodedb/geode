@@ -33,12 +33,14 @@ The Enhanced Transaction Isolation System provides comprehensive ACID compliance
 The system supports the following enhanced isolation levels:
 
 #### Standard ANSI SQL Levels
+
 - **Read Uncommitted**: No isolation guarantees, allows dirty reads
 - **Read Committed**: Prevents dirty reads, allows non-repeatable reads
 - **Repeatable Read**: Prevents dirty and non-repeatable reads, allows phantom reads
 - **Serializable**: Full serializability with phantom read prevention
 
 #### Extended Levels
+
 - **Snapshot Isolation** (Default): MVCC-based snapshot isolation for high concurrency
 - **Serializable Snapshot**: Hybrid approach combining snapshot isolation with serializable validation
 
@@ -62,6 +64,7 @@ try phantom_prevention.acquirePredicateLock(txn.id, "Person", "age", range);
 ```
 
 **Features:**
+
 - Property range locks for numeric and string comparisons
 - Label-based locks for structural queries
 - Overlap detection between predicate locks
@@ -79,6 +82,7 @@ if (try dependency_tracker.checkDangerousStructure(txn.id)) {
 ```
 
 **Implementation:**
+
 - RW and WR dependency tracking
 - Cycle detection in dependency graphs
 - First-committer-wins conflict resolution
@@ -97,6 +101,7 @@ const victim = selectVictim(cycle_transactions);
 ```
 
 **Features:**
+
 - Wait-for graph construction and cycle detection
 - Configurable detection intervals (default: 1 second)
 - Priority-based victim selection
@@ -131,8 +136,8 @@ defer ServerIntegration.deinitializeServerIsolation(allocator, server_isolation)
 
 // Handle BEGIN TRANSACTION with isolation level
 const txn = try ServerIntegration.handleBeginTransaction(
-    server_isolation, 
-    "SERIALIZABLE_SNAPSHOT", 
+    server_isolation,
+    "SERIALIZABLE_SNAPSHOT",
     100 // priority
 );
 

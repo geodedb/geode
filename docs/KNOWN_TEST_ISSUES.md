@@ -16,28 +16,34 @@ This document tracks tests that are skipped in the geodetestlab test suite due t
 ## Recently Fixed Issues
 
 ### WITH + Aggregation + WHERE ✅ FIXED (January 2026)
+
 - `with-aggregation`: WITH clause with aggregation and WHERE filter now works correctly
 - Test verified: `MATCH (n:Person) WITH n.age AS age, count(*) AS count WHERE count > 0 RETURN age, count`
 
 ### CASE Expressions in MATCH ✅ FIXED (January 2026)
+
 - `case-when-then`, `case-with-default`: CASE expressions now work in MATCH context
 - Test verified: `MATCH (n:Person) RETURN n.name, CASE WHEN n.age < 30 THEN 'young' ELSE 'senior' END AS category`
 
 ### DateTime Property Access ✅ FIXED (January 2026)
+
 - `datetime-operations`: DateTime property access now works
 - Test verified: `RETURN datetime('2024-01-15T14:30:00').year AS year, datetime('2024-01-15T14:30:00').month AS month`
 
 ### List Functions head()/tail() ✅ FIXED (January 2026)
+
 - `list-functions`: head(), tail(), last() list functions now work correctly
 - Test verified: `WITH [1, 2, 3, 4, 5] AS list RETURN head(list) AS first, tail(list) AS rest, size(list) AS length`
 - Returns: `{"first":1,"rest":[2,3,4,5],"length":5}`
 
 ### Regex Matching (=~) ✅ FIXED (January 2026)
+
 - `where-with-regex`: Regex matching with =~ operator now works
 - Test verified: `MATCH (n:Person) WHERE n.name =~ 'A.*' RETURN n.name`
 - Supports: anchors (^, $), wildcards (., .*), character classes ([...]), optional (?), escapes (\)
 
 ### VALUES Clause ✅ FIXED (January 2026)
+
 - `values-list`, `values-with-match`: VALUES clause now fully implemented
 - Test verified: `VALUES (1), (2), (3), (4), (5) AS (number) RETURN number * 2 AS doubled`
 - Returns: `{"doubled":2},{"doubled":4},{"doubled":6},{"doubled":8},{"doubled":10}`
@@ -45,6 +51,7 @@ This document tracks tests that are skipped in the geodetestlab test suite due t
 ### Setup Data Persistence ✅ FIXED (December 2025)
 
 The test harness was modified to ensure setup data persists across all tests within a spec file:
+
 - Persistence files are now cleared once at the start of each spec (before spec-level setup)
 - Setup data created in spec-level setup is now available to all tests within that spec
 - **34 tests re-enabled** across `nested_queries_basic.yml`, `nested_queries_advanced.yml`, and `recursive_and_cte.yml`
@@ -56,6 +63,7 @@ The test harness was modified to ensure setup data persists across all tests wit
 The following features are skipped because they are not yet implemented:
 
 #### geode_regression_tests.yml (3 tests skipped)
+
 - `pattern-comprehension`: Pattern comprehension list syntax `[(p)-[:KNOWS]->(friend) | friend.name]` not implemented (Cypher extension, not ISO GQL)
 - `map-projection`: Map projection syntax `n {.name, .age}` not implemented (Cypher extension, not ISO GQL)
 - `path-node-update`: Variable-length path with SET not fully implemented
@@ -65,11 +73,13 @@ The following features are skipped because they are not yet implemented:
 Recursive Common Table Expressions are **not currently supported**. The syntax is recognized by the parser but execution is not implemented.
 
 **Workarounds:**
+
 - Use variable-length path patterns: `MATCH (a)-[*1..10]->(b) RETURN a, b`
 - Use SHORTEST path mode: `MATCH SHORTEST (a)-[:KNOWS*]->(b) RETURN a, b`
 - For hierarchical data, use multiple MATCH patterns with explicit depth limits
 
 **Affected operations:**
+
 - Transitive closure queries
 - Hierarchical queries with arbitrary depth
 - Path finding with complex conditions
@@ -97,6 +107,7 @@ The remaining failures are in these spec files:
 ## Priority for Fixes
 
 ### Completed ✅
+
 1. **WITH + aggregation + WHERE** - Fixed January 2026
 2. **CASE expressions in MATCH** - Fixed January 2026
 3. **DateTime property access** - Fixed January 2026
@@ -105,11 +116,13 @@ The remaining failures are in these spec files:
 6. **VALUES clause** - Fixed January 2026
 
 ### Medium Priority (Remaining)
+
 1. **Recursive CTEs** - Complex feature, use workarounds documented above
 
 ### Low Priority (Cypher extensions, not ISO GQL)
-2. Pattern comprehension (Cypher syntax)
-3. Map projection (Cypher syntax)
+
+1. Pattern comprehension (Cypher syntax)
+2. Map projection (Cypher syntax)
 
 ## Notes
 
@@ -120,6 +133,7 @@ The remaining failures are in these spec files:
 ## Updating This Document
 
 When fixing a feature, update this document by:
+
 1. Removing the skip marker from the test
 2. Running `make geodetestlab-comprehensive` to verify the fix
 3. Removing the entry from this document

@@ -1,9 +1,11 @@
 # VALUES → MATCH Chaining Technical Specification
 
 ## Overview
+
 Enable GQL queries to chain VALUES clauses with MATCH clauses, allowing bindings from VALUES to be used in subsequent MATCH pattern matching.
 
 ## Current Status
+
 - ✅ VALUES statements work independently
 - ✅ MATCH statements work independently
 - ❌ VALUES → MATCH chaining not supported
@@ -12,6 +14,7 @@ Enable GQL queries to chain VALUES clauses with MATCH clauses, allowing bindings
 ## Syntax Examples
 
 ### Basic Chaining
+
 ```gql
 VALUES (1 AS x, 'test' AS name)
 MATCH (n:Person {id: x})
@@ -19,6 +22,7 @@ RETURN n, x, name
 ```
 
 ### Multiple Rows
+
 ```gql
 VALUES
   (1 AS id, 'Alice' AS name),
@@ -28,6 +32,7 @@ RETURN n.name, name
 ```
 
 ### Complex Expressions
+
 ```gql
 VALUES (10 AS threshold)
 MATCH (n:Product)
@@ -40,6 +45,7 @@ RETURN n
 ### 1. Parser Modifications (`src/gql/parser.zig`)
 
 #### Current Implementation
+
 - `parseValuesStatement()` returns `ast.Statement`
 - VALUES is parsed as a top-level statement
 - No integration with query parsing
@@ -47,6 +53,7 @@ RETURN n
 #### Required Changes
 
 **A. Extend Query AST to Support VALUES**
+
 ```zig
 // In ast.zig
 pub const Query = struct {
@@ -61,6 +68,7 @@ pub const ValuesClause = struct {
 ```
 
 **B. Modify Query Parser**
+
 ```zig
 fn parseQuery(self: *Parser) ParserError!ast.Query {
     var values_clause: ?ast.ValuesClause = null;
@@ -149,6 +157,7 @@ fn parseValuesClause(self: *Parser) ParserError!ast.ValuesClause {
 ### 2. Execution Engine Modifications (`src/execution.zig`)
 
 #### Current Implementation
+
 - `executeValues()` returns result directly
 - No binding context propagation
 - No integration with MATCH execution
@@ -156,6 +165,7 @@ fn parseValuesClause(self: *Parser) ParserError!ast.ValuesClause {
 #### Required Changes
 
 **A. Extend ExecutionContext**
+
 ```zig
 pub const ExecutionContext = struct {
     // ... existing fields ...
@@ -164,6 +174,7 @@ pub const ExecutionContext = struct {
 ```
 
 **B. Modify Query Execution**
+
 ```zig
 fn executeQueryStatement(
     allocator: std.mem.Allocator,
@@ -237,6 +248,7 @@ fn evaluateValuesBindings(
 ```
 
 **C. Modify MATCH Execution to Use VALUES Bindings**
+
 ```zig
 fn executeMatch(
     allocator: std.mem.Allocator,
@@ -299,6 +311,7 @@ RETURN n, x
 Should return results for both x=1 and x=2.
 
 **Implementation Approach:**
+
 1. Execute MATCH once per VALUES row
 2. Collect all results
 3. Combine into single result set
@@ -361,6 +374,7 @@ fn executeValuesMatchCartesian(
 ### Unit Tests
 
 **Test 1: Single Row VALUES → MATCH**
+
 ```zig
 test "VALUES single row with MATCH" {
     const query = "VALUES (1 AS x) MATCH (n:Person {id: x}) RETURN n, x";
@@ -373,6 +387,7 @@ test "VALUES single row with MATCH" {
 ```
 
 **Test 2: VALUES Binding in WHERE**
+
 ```zig
 test "VALUES binding in WHERE clause" {
     const query =
@@ -386,6 +401,7 @@ test "VALUES binding in WHERE clause" {
 ```
 
 **Test 3: Multi-Row VALUES**
+
 ```zig
 test "VALUES multiple rows with MATCH" {
     const query =
@@ -398,6 +414,7 @@ test "VALUES multiple rows with MATCH" {
 ```
 
 **Test 4: Complex Expressions in VALUES**
+
 ```zig
 test "VALUES with expressions" {
     const query =
@@ -451,6 +468,7 @@ tests:
 ## Implementation Checklist
 
 ### Phase 1: Parser (2-3 hours)
+
 - [ ] Add `ValuesClause` to AST
 - [ ] Extend `Query` struct with `values_clause` field
 - [ ] Implement `parseValuesClause()` function
@@ -458,6 +476,7 @@ tests:
 - [ ] Add unit tests for parser
 
 ### Phase 2: Execution Engine (2-3 hours)
+
 - [ ] Extend `ExecutionContext` with `values_bindings`
 - [ ] Implement `evaluateValuesBindings()` function
 - [ ] Modify `executeQueryStatement()` to handle VALUES → MATCH
@@ -465,12 +484,14 @@ tests:
 - [ ] Add error handling for unsupported cases
 
 ### Phase 3: Testing (1-2 hours)
+
 - [ ] Add unit tests for single-row VALUES → MATCH
 - [ ] Add unit tests for bindings in WHERE clauses
 - [ ] Add geodetestlab integration tests
 - [ ] Test edge cases (empty VALUES, no aliases, etc.)
 
 ### Phase 4: Multi-Row Support (Optional, 2-3 hours)
+
 - [ ] Implement cartesian product for multi-row VALUES
 - [ ] Add tests for multi-row scenarios
 - [ ] Document performance considerations
@@ -478,15 +499,18 @@ tests:
 ## Performance Considerations
 
 ### Memory
+
 - VALUES bindings stored in ExecutionContext (small overhead)
 - Single-row: O(n) where n = number of columns
 - Multi-row: O(n × m) where m = number of MATCH results per row
 
 ### Execution Time
+
 - Single-row: Negligible overhead (one-time binding evaluation)
 - Multi-row: O(m) where m = number of VALUES rows (MATCH executed m times)
 
 ### Optimization Opportunities
+
 1. **Binding Cache**: For repeated VALUES expressions, cache evaluated values
 2. **Push-down**: If MATCH pattern directly uses VALUES binding, push filter to node scan
 3. **Batch Execution**: For multi-row, batch MATCH executions if possible
@@ -494,12 +518,15 @@ tests:
 ## Standards Compliance
 
 ### ISO/IEC 39075:2024 (GQL)
+
 Section covering VALUES in query composition:
+
 - VALUES must support aliasing (AS keyword)
 - Bindings must be accessible in subsequent clauses
 - Multi-row VALUES should behave as table constructor
 
 ### Compatibility Notes
+
 - Neo4j doesn't directly support VALUES → MATCH but has similar WITH clause behavior
 - This implementation follows GQL standard more closely than Neo4j
 - Syntax is compatible with RETURN clause patterns
@@ -507,10 +534,12 @@ Section covering VALUES in query composition:
 ## Error Handling
 
 ### Parse Errors
+
 - `error.UnexpectedToken` - Malformed VALUES syntax
 - `error.MissingAlias` - VALUES expression without AS in chaining context
 
 ### Execution Errors
+
 - `error.MultiRowValuesNotSupportedInChaining` - Multi-row with MATCH (phase 1)
 - `error.BindingConflict` - VALUES alias conflicts with MATCH variable
 - `error.UnresolvedBinding` - MATCH references undefined VALUES binding
@@ -518,18 +547,21 @@ Section covering VALUES in query composition:
 ## Future Enhancements
 
 1. **VALUES with CREATE**
+
    ```gql
    VALUES (1 AS id, 'Alice' AS name)
    CREATE (p:Person {id: id, name: name})
    ```
 
 2. **Nested VALUES in Subqueries**
+
    ```gql
    MATCH (n)
    WHERE n.id IN (VALUES (1), (2), (3))
    ```
 
 3. **VALUES in UNION**
+
    ```gql
    VALUES (1 AS x) MATCH (n {id: x})
    UNION

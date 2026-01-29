@@ -90,6 +90,7 @@ The `docker-compose.override.yml` file automatically sets `LOG_LEVEL=debug` for 
 ## Log Levels
 
 From least to most verbose:
+
 - `error` - Only errors and critical issues (production default)
 - `warn` - Warnings and errors
 - `info` - General informational messages

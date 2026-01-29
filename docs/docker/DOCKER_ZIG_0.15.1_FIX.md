@@ -67,6 +67,7 @@ docker exec geode-test geodec "RETURN 1 AS x" --server 127.0.0.1:7567
 ## Verification
 
 The `make docker-ci` command now:
+
 1. Builds with Zig 0.15.1 ✓
 2. Creates the Docker image ✓  
 3. Runs a smoke test ✓
@@ -75,6 +76,7 @@ The `make docker-ci` command now:
 ## Community Mirrors
 
 The installation scripts also support community mirrors with proper filename format:
+
 - Primary: `https://ziglang.org/download/0.15.1/`
 - GitHub: `https://github.com/ziglang/zig/releases/download/0.15.1/`
 - Bazel: `https://mirror.bazel.build/ziglang.org/download/0.15.1/`
@@ -82,6 +84,7 @@ The installation scripts also support community mirrors with proper filename for
 ## Signature Verification
 
 All scripts maintain support for minisign verification using the official public key:
+
 ```
 RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 ```
@@ -89,6 +92,7 @@ RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 ## Build Compatibility
 
 The build system now correctly handles:
+
 - Zig 0.15.1 API changes
 - Different optimization flags (`-Drelease-safe` vs `-Doptimize=ReleaseSafe`)
 - Optional tool builds that may fail without breaking the main build

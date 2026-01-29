@@ -7,6 +7,7 @@ A full Language Server Protocol implementation for GQL/Geode has been created to
 ## Status: ✅ 100% COMPLETE AND TESTED
 
 **What's Implemented:**
+
 - ✅ LSP protocol structures (JSON-RPC 2.0)
 - ✅ Transport layer (Content-Length headers over stdio)
 - ✅ Document state management
@@ -22,6 +23,7 @@ A full Language Server Protocol implementation for GQL/Geode has been created to
 - ✅ Manual testing completed (initialize handshake confirmed)
 
 **Testing Status:**
+
 - ✅ Build successful: `zig-out/bin/geode` (18MB)
 - ✅ Help command works: `geode lsp --help`
 - ✅ Initialize request/response verified via manual JSON-RPC test
@@ -31,6 +33,7 @@ A full Language Server Protocol implementation for GQL/Geode has been created to
 ## Architecture
 
 ### Directory Structure
+
 ```
 src/cli/lsp/
 ├── protocol.zig    # LSP protocol types and JSON-RPC structures
@@ -43,42 +46,50 @@ src/cli/lsp/
 ### Key Components
 
 #### 1. Protocol (protocol.zig)
+
 - JSON-RPC 2.0 message types (Request, Response, Notification)
 - LSP data structures (Position, Range, Location, Diagnostic, etc.)
 - Completion and hover types
 - Error codes and response errors
 
 #### 2. Transport (transport.zig)
+
 - Reads/writes messages with Content-Length headers
 - Stdin/stdout communication
 - Message framing per LSP specification
 - Error logging to stderr
 
 #### 3. Document Management (document.zig)
+
 - `Document`: Represents open .gql files
 - `DocumentStore`: Manages all open documents
 - Helper methods for line/column to offset conversion
 - Word-at-position extraction for features
 
 #### 4. Language Features (features.zig)
+
 **Diagnostics:**
+
 - Uses Geode's GQL parser to detect syntax errors
 - Reports errors with line/column positions
 - Integrates with `parseGql()` from the main library
 
 **Hover:**
+
 - Documentation for 40+ GQL keywords (MATCH, CREATE, RETURN, etc.)
 - Documentation for 50+ GQL functions (count, sum, distance, similarity, etc.)
 - Documentation for 15+ GQL types (INTEGER, VECTOR, UUID, DATETIME, etc.)
 - Returns formatted markdown documentation
 
 **Completion:**
+
 - Auto-complete for all GQL keywords
 - Function suggestions with `()` insertion
 - Type suggestions
 - Triggered by typing or specific characters (`.`, `:`, `$`)
 
 #### 5. Main Server (server.zig)
+
 - Manages LSP lifecycle
 - Routes requests to appropriate handlers
 - Manages client/server capabilities negotiation
@@ -87,6 +98,7 @@ src/cli/lsp/
 ## Usage
 
 ### Starting the LSP Server
+
 ```bash
 geode lsp
 ```
@@ -96,6 +108,7 @@ The server communicates via JSON-RPC 2.0 over stdin/stdout.
 ### Editor Integration
 
 #### Visual Studio Code
+
 Add to your `settings.json` or create a VS Code extension:
 
 ```json
@@ -106,6 +119,7 @@ Add to your `settings.json` or create a VS Code extension:
 ```
 
 #### Neovim (with nvim-lspconfig)
+
 ```lua
 require'lspconfig'.geode.setup{
   cmd = {"/path/to/geode", "lsp"},
@@ -117,6 +131,7 @@ require'lspconfig'.geode.setup{
 ```
 
 #### Vim (with vim-lsp)
+
 ```vim
 if executable('geode')
   au User lsp_setup call lsp#register_server({
@@ -128,6 +143,7 @@ endif
 ```
 
 #### Emacs (with lsp-mode)
+
 ```elisp
 (add-to-list 'lsp-language-id-configuration '(gql-mode . "gql"))
 (lsp-register-client
@@ -139,9 +155,11 @@ endif
 ## Language Features Reference
 
 ### Supported GQL Keywords (40+)
+
 MATCH, CREATE, DELETE, MERGE, SET, REMOVE, RETURN, WHERE, ORDER BY, LIMIT, OFFSET, SKIP, WITH, UNWIND, CALL, YIELD, UNION, OPTIONAL, AS, DISTINCT, AND, OR, NOT, XOR, IN, IS, NULL, TRUE, FALSE, CASE, WHEN, THEN, ELSE, END, ASC, DESC, GROUP BY, HAVING, INTERSECT, EXCEPT, INSERT, UPDATE, DROP, USE, GRAPH, CATALOG, SCHEMA, TABLE, VIEW, INDEX, CONSTRAINT, EXISTS, IF NOT, SHOW, DESCRIBE, EXPLAIN
 
 ### Supported GQL Functions (50+)
+
 **Aggregation:** count, sum, avg, min, max, collect
 **List:** size, length, head, last, tail, reverse, range
 **String:** split, substring, replace, toLower, toUpper, trim, lTrim, rTrim, left, right, startsWith, endsWith, contains
@@ -153,23 +171,28 @@ MATCH, CREATE, DELETE, MERGE, SET, REMOVE, RETURN, WHERE, ORDER BY, LIMIT, OFFSE
 **Misc:** coalesce, nullIf
 
 ### Supported GQL Types (15+)
+
 INTEGER, FLOAT, STRING, BOOLEAN, DATE, TIME, DATETIME, DURATION, POINT, VECTOR, UUID, BYTES, JSON, LIST, MAP, NODE, RELATIONSHIP, PATH, GRAPH, ANY
 
 ## Implementation Details
 
 ### Parser Integration
+
 The LSP server uses Geode's existing GQL parser (`parseGql` from `src/lib.zig`) to:
+
 - Detect syntax errors in real-time
 - Generate accurate diagnostics with line/column information
 - Leverage the 100% ISO/IEC 39075:2024 compliant parser (70/70 tests)
 
 ### Performance
+
 - Incremental document updates supported
 - Efficient document storage with hash map lookups
 - Minimal memory overhead for document state
 - Parser runs on-demand for diagnostics
 
 ### Protocol Compliance
+
 - Implements LSP 3.17 specification
 - JSON-RPC 2.0 transport
 - Supports both Full and Incremental text synchronization
@@ -178,12 +201,15 @@ The LSP server uses Geode's existing GQL parser (`parseGql` from `src/lib.zig`) 
 ## Testing
 
 ### Manual Testing
+
 1. Start the LSP server:
+
    ```bash
    geode lsp
    ```
 
 2. Send an initialize request (JSON-RPC):
+
    ```json
    Content-Length: 250\r\n\r\n
    {
@@ -201,13 +227,16 @@ The LSP server uses Geode's existing GQL parser (`parseGql` from `src/lib.zig`) 
 3. The server should respond with its capabilities.
 
 ### Integration Testing
+
 Create a sample `.gql` file and use it with an LSP-enabled editor to test:
+
 - Syntax error highlighting
 - Hover documentation
 - Code completion
 - Go-to-definition (when implemented)
 
 ## Example .gql File for Testing
+
 ```gql
 // Sample GQL query for testing LSP features
 MATCH (p:Person)-[:KNOWS]->(f:Person)
@@ -220,12 +249,14 @@ LIMIT 10
 ## Future Enhancements
 
 ### Short-term
+
 1. Fix remaining Zig 0.15 API compatibility issues
 2. Add integration tests
 3. Implement document formatting
 4. Implement go-to-definition for variables
 
 ### Long-term
+
 1. Semantic highlighting (textDocument/semanticTokens)
 2. Symbol outline (textDocument/documentSymbol)
 3. Find references (textDocument/references)
@@ -243,6 +274,7 @@ LIMIT 10
 All Zig 0.15 compatibility issues were successfully fixed:
 
 1. **Stdio Handling** - Used cross-platform pattern from main.zig:
+
    ```zig
    fn getStdinHandle() std.fs.File.Handle {
        if (builtin.os.tag == .windows) {
@@ -256,6 +288,7 @@ All Zig 0.15 compatibility issues were successfully fixed:
    ```
 
 2. **ArrayList Initialization** - Changed to `initCapacity()`:
+
    ```zig
    // Before: std.ArrayList(T).init(allocator)
    // After:
@@ -263,6 +296,7 @@ All Zig 0.15 compatibility issues were successfully fixed:
    ```
 
 3. **ArrayList.append()** - Added allocator parameter:
+
    ```zig
    // Before: try items.append(item)
    // After:
@@ -270,6 +304,7 @@ All Zig 0.15 compatibility issues were successfully fixed:
    ```
 
 4. **ArrayList.toOwnedSlice()** - Added allocator parameter:
+
    ```zig
    // Before: items.toOwnedSlice()
    // After:
@@ -277,6 +312,7 @@ All Zig 0.15 compatibility issues were successfully fixed:
    ```
 
 5. **ArrayList.deinit()** - Added allocator parameter:
+
    ```zig
    // Before: items.deinit()
    // After:
@@ -284,6 +320,7 @@ All Zig 0.15 compatibility issues were successfully fixed:
    ```
 
 6. **JSON Serialization** - Changed to `Stringify.valueAlloc()`:
+
    ```zig
    // Before: std.json.stringifyAlloc(allocator, value, .{})
    // After:
@@ -291,6 +328,7 @@ All Zig 0.15 compatibility issues were successfully fixed:
    ```
 
 7. **Compile-time Maps** - Changed to `StaticStringMap().initComptime()`:
+
    ```zig
    // Before: std.ComptimeStringMap(T, entries)
    // After:
@@ -298,6 +336,7 @@ All Zig 0.15 compatibility issues were successfully fixed:
    ```
 
 8. **ParseResult.last_error** - Fixed type understanding:
+
    ```zig
    // last_error is ?[]const u8 (optional string), not a struct
    if (result.last_error) |last_err| {
@@ -307,6 +346,7 @@ All Zig 0.15 compatibility issues were successfully fixed:
    ```
 
 9. **parseGql() Parameter Order** - Fixed call signature:
+
    ```zig
    // Before: parseGql(allocator, doc.text)
    // After:
@@ -314,6 +354,7 @@ All Zig 0.15 compatibility issues were successfully fixed:
    ```
 
 10. **Mutable ParseResult** - Changed from const to var for deinit():
+
     ```zig
     // Before: const result = parseGql(...)
     // After:
@@ -323,6 +364,7 @@ All Zig 0.15 compatibility issues were successfully fixed:
 ## Documentation
 
 ### Help Text
+
 ```
 geode lsp - Language Server Protocol server for GQL/Geode
 
@@ -347,6 +389,7 @@ Examples:
 ## CANARY Markers
 
 All LSP implementation files include appropriate CANARY markers:
+
 - `REQ-LSP-001` - LSP server subcommand implementation
 - `LSP_PROTOCOL_IMPLEMENTATION` - Protocol structures
 - `LSP_TRANSPORT_IMPLEMENTATION` - Transport layer
@@ -366,7 +409,9 @@ All LSP implementation files include appropriate CANARY markers:
 Complete editor integration packages are available in the repository:
 
 ### Claude Code Plugin
+
 Located in `claude-code-lsp-plugin/`:
+
 ```bash
 # Install plugin
 claude /plugin install /path/to/claude-code-lsp-plugin
@@ -376,12 +421,15 @@ claude /plugin install geode-lsp@claude-code-lsps
 ```
 
 Features:
+
 - Automatic LSP integration for Claude Code
 - File extension mapping for .gql, .gcypher, .cypher, .pgql
 - Auto-installation hooks
 
 ### VS Code Extension
+
 Located in `editors/vscode/`:
+
 ```bash
 cd editors/vscode
 npm install
@@ -391,12 +439,15 @@ npx vsce package
 ```
 
 Features:
+
 - Full syntax highlighting with TextMate grammar
 - LSP integration via vscode-languageclient
 - Configurable settings for LSP path and args
 
 ### Neovim Configuration
+
 Located in `editors/neovim/`:
+
 - `gql.lua` - Full nvim-lspconfig setup with key mappings
 - `gql.vim` - Vim-style syntax highlighting
 

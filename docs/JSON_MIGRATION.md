@@ -12,9 +12,10 @@
 > **Phase 5 Completed**: Supporting Systems (5 files: logger.zig, file_sink.zig, audit.zig, external_kms_client.zig, twophase.zig)
 > **Phase 6 Completed**: Testing & Validation (wire protocol tests, streaming encoder fixes, API corrections)
 > **Phase 7 Completed**: Final Cleanup - Core Server Files
->   - `transaction_handlers.zig` - 8 patterns migrated (TXN_BEGIN, TXN_COMMIT, TXN_ROLLBACK)
->   - `query_executor.zig` - 70+ patterns migrated (index ops, backup, schema, graph, session)
->   - `cli/main.zig` - 6 patterns migrated (error responses, column defs)
+>
+> - `transaction_handlers.zig` - 8 patterns migrated (TXN_BEGIN, TXN_COMMIT, TXN_ROLLBACK)
+> - `query_executor.zig` - 70+ patterns migrated (index ops, backup, schema, graph, session)
+> - `cli/main.zig` - 6 patterns migrated (error responses, column defs)
 > **Remaining**: 10 files with low-priority patterns (test harness, tools, client, distributed)
 
 ## Executive Summary
@@ -26,6 +27,7 @@ This document outlines the migration plan for replacing manual JSON string compo
 ### Manual JSON Composition Locations
 
 **69 files** currently contain manual JSON string composition using patterns such as:
+
 - `writer.writeAll("{\"key\":...")` - Direct string concatenation
 - `fmt.allocPrint(..., "{{\"key\":\"{s}\"}}", ...)` - Format string templates
 - `ArrayList.append('{')` / `ArrayList.appendSlice("\"key\":")` - Character-by-character building
@@ -64,6 +66,7 @@ This document outlines the migration plan for replacing manual JSON string compo
 ## Available JSON Library
 
 ### Library Location
+
 ```zig
 // build.zig.zon
 .json = .{
@@ -72,6 +75,7 @@ This document outlines the migration plan for replacing manual JSON string compo
 ```
 
 ### Import
+
 ```zig
 const json = @import("json");
 ```
@@ -79,6 +83,7 @@ const json = @import("json");
 ### Core Capabilities
 
 #### Encoding (Zig -> JSON)
+
 ```zig
 // Encode any Zig type to JSON string
 const json_str = try json.encode(allocator, value, .{});
@@ -92,6 +97,7 @@ const json_value = try json.toValue(allocator, zig_value, .{});
 ```
 
 #### Decoding (JSON -> Zig)
+
 ```zig
 // Parse JSON and unmarshal to Zig type
 const result = try json.unmarshal(MyStruct, allocator, json_input);
@@ -103,6 +109,7 @@ defer doc.deinit();
 ```
 
 #### Streaming API
+
 ```zig
 // For large documents or real-time output
 var encoder = json.streamingEncoder(allocator, writer, .{});
@@ -186,6 +193,7 @@ pub const ErrorResponse = struct {
 #### 1.2 Replace Frame Builders
 
 **Before** (`buildSchemaLine`):
+
 ```zig
 pub fn buildSchemaLine(allocator: std.mem.Allocator, cols: []const SchemaCol, additional: []const []const u8, flags: []const []const u8) ![]u8 {
     var buf = std.ArrayList(u8).initCapacity(allocator, 16) catch return error.OutOfMemory;
@@ -203,6 +211,7 @@ pub fn buildSchemaLine(allocator: std.mem.Allocator, cols: []const SchemaCol, ad
 ```
 
 **After**:
+
 ```zig
 pub fn buildSchemaLine(allocator: std.mem.Allocator, cols: []const SchemaCol, additional: []const []const u8, flags: []const []const u8) ![]u8 {
     const response = SchemaResponse{
@@ -235,6 +244,7 @@ pub fn buildSchemaLine(allocator: std.mem.Allocator, cols: []const SchemaCol, ad
 **Goal**: Replace value serialization in execution paths.
 
 **Status**: COMPLETE (2026-01-24)
+
 - `src/execution/crud_operations.zig` - Migrated `valueMapToJson`, `encodeValueToStream`, `formatDecimalForJson`
 - `src/execution/value_utilities.zig` - Added JSON library import, `writeJsonEscapedString` helper
 - `src/execution.zig` - Migrated `toJsonWithFlags` to use streaming encoder
@@ -244,6 +254,7 @@ pub fn buildSchemaLine(allocator: std.mem.Allocator, cols: []const SchemaCol, ad
 #### 2.1 Value Type Encoding
 
 **Before** (`src/execution/crud_operations.zig`):
+
 ```zig
 fn valueToJsonAppend(allocator: std.mem.Allocator, value: Value, output: *std.ArrayList(u8)) !void {
     switch (value) {
@@ -270,6 +281,7 @@ fn valueToJsonAppend(allocator: std.mem.Allocator, value: Value, output: *std.Ar
 ```
 
 **After**:
+
 ```zig
 fn valueToJson(allocator: std.mem.Allocator, value: Value) ![]const u8 {
     // Convert Value to json.Value tree
@@ -308,6 +320,7 @@ fn valueToJsonValue(allocator: std.mem.Allocator, value: Value) !json.Value {
 **Goal**: Replace manual JSON in CLI handlers.
 
 **Status**: COMPLETE (2026-01-24)
+
 - `src/cli/main.zig` - Added json_lib import, CliHelloMessage/CliRunGqlMessage/CliErrorResponse structs
   - Migrated HELLO message encoding (2 locations)
   - Migrated RUN_GQL message encoding
@@ -357,6 +370,7 @@ pub const CliResult = struct {
 **Goal**: Migrate MCP protocol and CDC streaming.
 
 **Status**: COMPLETE (2026-01-24)
+
 - `src/mcp/tools.zig` - Migrated formatToolResult, formatErrorResponse
 - `src/mcp/resources.zig` - Migrated formatResourceResponse, formatResourceError
 - `src/mcp/client.zig` - Migrated query() with streaming encoder, explain()
@@ -415,6 +429,7 @@ pub const CdcEvent = struct {
 **Goal**: Complete migration of remaining systems.
 
 #### 5.1 Audit & Security
+
 - `src/audit/logger.zig`
 - `src/audit/file_sink.zig`
 - `src/security/audit.zig`
@@ -422,20 +437,24 @@ pub const CdcEvent = struct {
 - `src/security/external_kms_client.zig`
 
 #### 5.2 Distributed Systems
+
 - `src/distributed/twophase.zig`
 - `src/distributed/raft.zig`
 - `src/distributed/cluster.zig`
 
 #### 5.3 Monitoring & Diagnostics
+
 - `src/monitoring/tracing.zig`
 - `src/monitoring/metrics.zig`
 - `src/gpu/telemetry.zig`
 
 #### 5.4 Storage & Backup
+
 - `src/storage/s3_backup.zig`
 - `src/cli/backup_cli.zig`
 
 #### 5.5 Types & Utilities
+
 - `src/types/extended_functions.zig`
 - `src/types/uuid.zig`
 - `src/types/datetime.zig`
@@ -472,6 +491,7 @@ test "wire protocol JSON compatibility" {
 #### 6.2 Client Compatibility Matrix
 
 Test with all client libraries:
+
 - [ ] `geode-client-go` - All operations
 - [ ] `geode-client-python` - All operations
 - [ ] `geode-client-rust` - All operations
@@ -491,11 +511,13 @@ make geodetestlab-comprehensive
 ### Pattern 1: Simple Object Encoding
 
 **Before**:
+
 ```zig
 try fmt.allocPrint(allocator, "{{\"status\":\"{s}\",\"message\":\"{s}\"}}", .{status, message});
 ```
 
 **After**:
+
 ```zig
 const Response = struct { status: []const u8, message: []const u8 };
 try json.encode(allocator, Response{ .status = status, .message = message }, .{});
@@ -504,6 +526,7 @@ try json.encode(allocator, Response{ .status = status, .message = message }, .{}
 ### Pattern 2: Writer-Based Building
 
 **Before**:
+
 ```zig
 try writer.writeAll("{\"type\":\"");
 try writer.writeAll(type_name);
@@ -513,6 +536,7 @@ try writer.writeAll("}");
 ```
 
 **After**:
+
 ```zig
 var encoder = json.streamingEncoder(allocator, writer, .{});
 try encoder.beginObject();
@@ -526,6 +550,7 @@ try encoder.endObject();
 ### Pattern 3: ArrayList Building
 
 **Before**:
+
 ```zig
 var result = std.ArrayList(u8).init(allocator);
 try result.append('{');
@@ -534,6 +559,7 @@ try result.appendSlice("\"key\":");
 ```
 
 **After**:
+
 ```zig
 const obj = MyStruct{ .key = value };
 const json_str = try json.encode(allocator, obj, .{});
@@ -542,6 +568,7 @@ const json_str = try json.encode(allocator, obj, .{});
 ### Pattern 4: Conditional Fields
 
 **Before**:
+
 ```zig
 try writer.writeAll("{\"status\":\"ok\"");
 if (has_data) {
@@ -552,6 +579,7 @@ try writer.writeAll("}");
 ```
 
 **After**:
+
 ```zig
 const Response = struct {
     status: []const u8 = "ok",
@@ -563,17 +591,20 @@ try json.encode(allocator, Response{ .data = if (has_data) data else null }, .{}
 ## Testing Requirements
 
 ### Unit Tests
+
 - [ ] Each migrated function has before/after comparison test
 - [ ] Edge cases: empty arrays, null values, Unicode strings, special characters
 - [ ] Error handling: allocation failures, invalid inputs
 
 ### Integration Tests
+
 - [ ] Wire protocol round-trip with all client libraries
 - [ ] CDC event parsing by consumers
 - [ ] Audit log parsing by log aggregators
 - [ ] MCP protocol compliance
 
 ### Performance Tests
+
 - [ ] Encoding throughput comparison (before/after)
 - [ ] Memory allocation patterns
 - [ ] No performance regression in hot paths
@@ -601,18 +632,21 @@ pub fn buildSchemaLine(...) ![]u8 {
 ## Success Criteria
 
 ### Functional
+
 - [ ] All 69 files migrated to use JSON library
 - [ ] Zero wire protocol changes (byte-level compatibility)
 - [ ] All client libraries pass existing tests
 - [ ] Geodetestlab pass rate maintained at 97.4%+
 
 ### Quality
+
 - [ ] No manual string escaping in codebase
 - [ ] No `writeAll("{\"` patterns remain
 - [ ] No `allocPrint(..., "{{\"` patterns remain
 - [ ] All JSON encoding uses type-safe structs
 
 ### Performance
+
 - [ ] No measurable latency increase in query path
 - [ ] Memory allocation patterns similar or improved
 - [ ] SIMD acceleration utilized where beneficial
@@ -633,6 +667,7 @@ Add tracking markers for migration progress:
 ## File Inventory
 
 ### Priority 1 - Critical (5 files) - Phase 1 Complete
+
 - [x] `src/protocol.zig` - **COMPLETED** (12 frame builders migrated)
 - [x] `src/server/query_executor.zig` - **COMPLETED** (bindingValueRowToJson, writeJsonValue)
 - [ ] `src/execution/crud_operations.zig`
@@ -640,6 +675,7 @@ Add tracking markers for migration progress:
 - [x] `src/server/stdio_message_handler.zig` - **COMPLETED** (error response encoding)
 
 ### Priority 2 - High Impact (11 files) - Phase 4 Complete
+
 - [x] `src/mcp/tools.zig` - **COMPLETED** (formatToolResult, formatErrorResponse)
 - [x] `src/mcp/resources.zig` - **COMPLETED** (formatResourceResponse, formatResourceError)
 - [x] `src/mcp/client.zig` - **COMPLETED** (query, explain - streaming encoder)
@@ -653,6 +689,7 @@ Add tracking markers for migration progress:
 - [ ] `src/server/transaction_handlers.zig`
 
 ### Priority 3 - Supporting (53 files)
+
 <details>
 <summary>Full list of remaining files</summary>
 
@@ -715,6 +752,7 @@ Add tracking markers for migration progress:
 ## Appendix A: JSON Library Quick Reference
 
 ### Encoding
+
 ```zig
 const json = @import("json");
 
@@ -730,6 +768,7 @@ const pretty = try json.encode(allocator, my_struct, .{ .indent = 2 });
 ```
 
 ### Decoding
+
 ```zig
 // Unmarshal to struct
 const result = try json.unmarshal(MyStruct, allocator, json_input);
@@ -741,6 +780,7 @@ defer doc.deinit();
 ```
 
 ### Streaming Encoder
+
 ```zig
 var encoder = json.streamingEncoder(allocator, writer, .{});
 try encoder.beginObject();
@@ -756,6 +796,7 @@ try encoder.endObject();
 ## Phase 1 Completion Summary (2026-01-24)
 
 ### Files Migrated
+
 1. **`src/protocol.zig`** - Core wire protocol frame builders
    - `buildSchemaLine()` - Uses `json.encode()` with `SchemaResponse` struct
    - `buildBindingsLine()` - Uses streaming encoder for raw JSON embedding
@@ -778,6 +819,7 @@ try encoder.endObject();
    - Added `json_lib` import
 
 ### Response Type Structs Added
+
 - `SchemaResponse` - SCHEMA frame encoding
 - `BindingsResponse` - BINDINGS frame encoding
 - `ExplainResponse` - EXPLAIN frame encoding
@@ -788,9 +830,11 @@ try encoder.endObject();
 - `StdioErrorResponse` - STDIO error encoding
 
 ### CANARY Markers Added
+
 - REQ-LIB-MIGRATION-JSON-002 through REQ-LIB-MIGRATION-JSON-014
 
 ### Tests Added
+
 - `TestCANARY_REQ_LIB_MIGRATION_JSON_002_SchemaLineFormat`
 - `TestCANARY_REQ_LIB_MIGRATION_JSON_003_BindingsLineFormat`
 - `TestCANARY_REQ_LIB_MIGRATION_JSON_007_CdcControlLineFormat`
@@ -798,6 +842,7 @@ try encoder.endObject();
 - `TestCANARY_REQ_LIB_MIGRATION_JSON_009_ErrorLineWithFlagsFormat`
 
 ### Verification
+
 - Build: **PASSED**
 - Unit Tests: **PASSED**
 - Wire protocol compatibility: **MAINTAINED**
@@ -807,6 +852,7 @@ try encoder.endObject();
 ## Phase 4 Completion Summary (2026-01-24)
 
 ### Files Migrated
+
 1. **`src/mcp/tools.zig`** - MCP tool responses
    - Added `json_lib` import and `McpToolContent`/`McpToolResult` structs
    - Migrated `formatToolResult()` to use `json.encode()`
@@ -848,16 +894,20 @@ try encoder.endObject();
    - Removed `MalformedRing.writeJson()` and `MalformedHashStore.writeJson()` methods
 
 ### Build Configuration Updated
+
 - Added `json` module to `mcp_cli_mod` in `build.zig`
 
 ### CANARY Markers Added
+
 - REQ-LIB-MIGRATION-JSON-042 through REQ-LIB-MIGRATION-JSON-055
 
 ### Tests Updated
+
 - Replaced `escapeJsonString` tests with JSON library escaping verification tests
 - Updated `appendEscaped` test to verify JSON library handles special characters
 
 ### Verification
+
 - Build: **PASSED**
 - All migrations use type-safe struct encoding
 - Manual JSON string composition eliminated in migrated files
@@ -898,15 +948,18 @@ try encoder.endObject();
    - All CLI error responses now use type-safe struct encoding
 
 ### CANARY Markers Added
+
 - REQ-LIB-MIGRATION-JSON-056 (TransactionHandlers)
 - REQ-LIB-MIGRATION-JSON-057 (QueryExecutorResponses)
 - REQ-LIB-MIGRATION-JSON-058 (CLIErrorTypes)
 
 ### Pattern Migration Summary
+
 - **Total patterns migrated in Phase 7**: ~84 patterns
 - **Remaining files with patterns**: 10 files (low-priority: test harness, tools, client, distributed)
 
 ### Verification
+
 - Build: **PASSED**
 - All migrations use type-safe struct encoding
 - Proper memory management with `defer allocator.free()`

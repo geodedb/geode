@@ -20,7 +20,7 @@ TESTS_FAILED=0
 test_feature() {
     local name="$1"
     local cmd="$2"
-    
+
     echo -n "Testing $name... "
     if eval "$cmd" > /dev/null 2>&1; then
         echo -e "${GREEN}PASS${NC}"
@@ -29,7 +29,7 @@ test_feature() {
         echo -e "${RED}FAIL${NC}"
         TESTS_FAILED=$((TESTS_FAILED + 1))
         echo "  Command: $cmd"
-        echo "  Output:" 
+        echo "  Output:"
         eval "$cmd" 2>&1 | head -3 | sed 's/^/    /'
     fi
 }
@@ -129,7 +129,7 @@ else
     echo -e "Success rate: ${YELLOW}$(( TESTS_PASSED * 100 / (TESTS_PASSED + TESTS_FAILED) ))%${NC}"
     echo "Some advanced features may not be fully implemented yet."
     echo "This is normal for a database in development."
-    
+
     if [ $TESTS_FAILED -le 10 ]; then
         echo -e "${GREEN}Failure count is acceptable for advanced features.${NC}"
         exit 0

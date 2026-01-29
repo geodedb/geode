@@ -33,26 +33,26 @@ layout(push_constant) uniform PushConstants {
 
 void main() {
     uint node_id = gl_GlobalInvocationID.x;
-    
+
     if (node_id >= pc.num_nodes) {
         return;
     }
-    
+
     // Calculate incoming rank contribution
     float incoming_rank = 0.0;
-    
+
     uint start = row_offsets[node_id];
     uint end = row_offsets[node_id + 1];
-    
+
     for (uint i = start; i < end; i++) {
         uint neighbor = col_indices[i];
         uint neighbor_degree = out_degrees[neighbor];
-        
+
         if (neighbor_degree > 0) {
             incoming_rank += ranks_in[neighbor] / float(neighbor_degree);
         }
     }
-    
+
     // Apply PageRank formula: (1-d)/N + d * incoming_rank
     ranks_out[node_id] = pc.base_rank + pc.damping_factor * incoming_rank;
 }

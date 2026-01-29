@@ -24,15 +24,15 @@ EXEMPT_FEATURES = [
     "RLSExpressionCompilation",
 ]
 
+
 def make_pattern(feature):
-    return re.compile(
-        rf'(CANARY:.*?FEATURE="{re.escape(feature)}".*?)STATUS=IMPL(.*?)(?=;|\n|$)'
-    )
+    return re.compile(rf'(CANARY:.*?FEATURE="{re.escape(feature)}".*?)STATUS=IMPL(.*?)(?=;|\n|$)')
+
 
 def process_file(file_path: Path, feature: str, pattern: re.Pattern) -> tuple[int, list[str]]:
     """Process a single file and mark IMPL as EXEMPT."""
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, encoding="utf-8") as f:
             content = f.read()
     except (UnicodeDecodeError, PermissionError):
         return 0, []
@@ -46,12 +46,12 @@ def process_file(file_path: Path, feature: str, pattern: re.Pattern) -> tuple[in
         suffix = match.group(2) if match.group(2) else ""
         if "TEST=" in prefix + suffix or "EXEMPT" in prefix:
             return match.group(0)
-        return f'{prefix}STATUS=EXEMPT; OWNER='
+        return f"{prefix}STATUS=EXEMPT; OWNER="
 
     new_content = pattern.sub(replace_func, content)
 
     if new_content != content:
-        with open(file_path, 'w', encoding='utf-8') as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             f.write(new_content)
 
         changes = []
@@ -62,10 +62,11 @@ def process_file(file_path: Path, feature: str, pattern: re.Pattern) -> tuple[in
 
     return 0, []
 
+
 def main():
-    repo_root = Path('/home/benji/src/gl/devnw/codepros/geode')
-    src_path = repo_root / 'src'
-    extensions = {'.zig'}
+    repo_root = Path("/home/benji/src/gl/devnw/codepros/geode")
+    src_path = repo_root / "src"
+    extensions = {".zig"}
 
     total_converted = 0
     files_modified = 0
@@ -79,7 +80,7 @@ def main():
         feature_count = 0
 
         for root, _, files in os.walk(src_path):
-            if '/.git' in root or '/vendor' in root or '/zig-cache' in root:
+            if "/.git" in root or "/vendor" in root or "/zig-cache" in root:
                 continue
 
             for file in files:
@@ -104,5 +105,6 @@ def main():
 
     return 0
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     exit(main())

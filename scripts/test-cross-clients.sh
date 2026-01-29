@@ -23,14 +23,14 @@ test_binary() {
     local binary="$1"
     local emulator="$2"
     local platform="$3"
-    
+
     if [ ! -f "$binary" ]; then
         echo -e "${YELLOW}⚠ $platform binary not found: $binary${NC}"
         return 1
     fi
-    
+
     echo -e "${GREEN}Testing $platform: $(basename $binary)${NC}"
-    
+
     if [ -n "$emulator" ]; then
         if command -v "$emulator" >/dev/null 2>&1; then
             case "$emulator" in
@@ -53,7 +53,7 @@ test_binary() {
                             LIB_PATH=""
                             ;;
                     esac
-                    
+
                     if [ -n "$LIB_PATH" ] && [ -d "$LIB_PATH" ]; then
                         $emulator -L "$LIB_PATH" "$binary" 2>&1 | head -5 || true
                     else

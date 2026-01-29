@@ -22,14 +22,14 @@ test_handshake() {
     local test_name="$1"
     local test_cmd="$2"
     local expect_success="$3"
-    
+
     echo -n "Testing $test_name... "
-    
+
     # Run test with timeout
     local output
     local exit_code=0
     output=$(timeout 10 eval "$test_cmd" 2>&1) || exit_code=$?
-    
+
     if [ "$expect_success" = "true" ]; then
         if [ $exit_code -eq 0 ]; then
             echo -e "${GREEN}PASS${NC}"
