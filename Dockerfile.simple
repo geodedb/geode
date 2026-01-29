@@ -110,12 +110,12 @@ WORKDIR /home/geode
 ENV LOG_LEVEL=error
 
 # Expose ports (QUIC-only + metrics)
-EXPOSE 8443/udp 9090/tcp
+EXPOSE 3141/udp 9090/tcp
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:8443"]
+    CMD ["geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:3141", "--insecure"]
 
 # Default entrypoint and command
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]
-CMD ["--data-dir", "/data", "--listen", "0.0.0.0:8443"]
+CMD ["--data-dir", "/data", "--listen", "0.0.0.0:3141"]

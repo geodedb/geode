@@ -77,7 +77,7 @@ USER geode
 WORKDIR /benchmarks
 
 # Expose ports (QUIC + metrics)
-EXPOSE 8443/udp 9091/tcp
+EXPOSE 3141/udp 9091/tcp
 
 # Default command runs GPU benchmarks
 CMD ["sh", "-c", "echo '=== GPU Acceleration Benchmarks ===' && \

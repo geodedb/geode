@@ -78,7 +78,7 @@ services:
     ports:
       # Geode server ports
       - "3141:3141/udp"   # QUIC
-      - "8443:8443/udp"   # QUIC TLS
+      - "3141:3141/udp"   # QUIC TLS
       - "9091:9091/tcp"   # Metrics
       # Debug ports
       - "9999:9999/tcp"   # Debug port

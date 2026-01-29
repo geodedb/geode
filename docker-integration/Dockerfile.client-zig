@@ -99,7 +99,7 @@ USER tester
 WORKDIR /app
 
 # Default environment
-ENV GEODE_SERVER=geode-server:8443 \
+ENV GEODE_SERVER=geode-server:3141 \
     TEST_MODE=standard
 
 CMD ["/app/scripts/run_zig_tests.sh"]

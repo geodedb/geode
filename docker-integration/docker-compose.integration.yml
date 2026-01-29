@@ -43,7 +43,7 @@ services:
       geode-integration-network:
         ipv4_address: 172.29.1.1
     ports:
-    - 8443:8443/udp       # QUIC+TLS
+    - 3141:3141/udp       # QUIC+TLS
     - 19090:9090/tcp      # Metrics (host:19090 -> container:9090)
     volumes:
     - geode-data:/data
@@ -52,9 +52,9 @@ services:
     environment:
     - GEODE_LOG_LEVEL=${GEODE_LOG_LEVEL:-info}
     - GEODE_DATA_DIR=/data
-    - GEODE_LISTEN=0.0.0.0:8443
+    - GEODE_LISTEN=0.0.0.0:3141
     healthcheck:
-      test: [CMD, /usr/local/bin/geode, query, --server, 127.0.0.1:8443, --insecure, RETURN 1 AS health]
+      test: [CMD, /usr/local/bin/geode, query, --server, 127.0.0.1:3141, --insecure, RETURN 1 AS health]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -127,7 +127,7 @@ services:
               echo "  [$$STATEMENT_COUNT] Executing: $$PREVIEW..." | tee -a /logs/migration-runner/migration.log
 
               # Execute the statement
-              if echo "$$CLEAN_STATEMENT" | /usr/local/bin/geode query --server geode-server:8443 --insecure - 2>&1 | tee -a /logs/migration-runner/migration.log | grep -qiE "error|failed|exception"; then
+              if echo "$$CLEAN_STATEMENT" | /usr/local/bin/geode query --server geode-server:3141 --insecure - 2>&1 | tee -a /logs/migration-runner/migration.log | grep -qiE "error|failed|exception"; then
                 echo "  ✗ Statement $$STATEMENT_COUNT failed" | tee -a /logs/migration-runner/migration.log
               else
                 echo "  ✓ Statement $$STATEMENT_COUNT succeeded" | tee -a /logs/migration-runner/migration.log
@@ -161,7 +161,7 @@ services:
     - integration-results:/results
     - ../geodetestlab:/geodetestlab:ro
     environment:
-    - GEODE_SERVER=geode-server:8443
+    - GEODE_SERVER=geode-server:3141
     - TEST_MODE=${TEST_MODE:-standard}
     - PYTHONUNBUFFERED=1
     - PYTHONPATH=/geodetestlab
@@ -192,7 +192,7 @@ services:
     - integration-results:/results
     - ../clients/go:/app/clients/go:ro
     environment:
-    - GEODE_SERVER=geode-server:8443
+    - GEODE_SERVER=geode-server:3141
     - TEST_MODE=${TEST_MODE:-standard}
     depends_on:
       migration-runner:
@@ -221,7 +221,7 @@ services:
     - integration-results:/results
     - ../clients/python:/app/clients/python:ro
     environment:
-    - GEODE_SERVER=geode-server:8443
+    - GEODE_SERVER=geode-server:3141
     - TEST_MODE=${TEST_MODE:-standard}
     - PYTHONUNBUFFERED=1
     depends_on:
@@ -250,7 +250,7 @@ services:
     - integration-logs:/logs
     - integration-results:/results
     environment:
-    - GEODE_SERVER=geode-server:8443
+    - GEODE_SERVER=geode-server:3141
     - TEST_MODE=${TEST_MODE:-standard}
     - RUST_LOG=info
     depends_on:
@@ -280,7 +280,7 @@ services:
     - integration-results:/results
     - ../clients/zig:/app/clients/zig:ro
     environment:
-    - GEODE_SERVER=geode-server:8443
+    - GEODE_SERVER=geode-server:3141
     - TEST_MODE=${TEST_MODE:-standard}
     depends_on:
       migration-runner:

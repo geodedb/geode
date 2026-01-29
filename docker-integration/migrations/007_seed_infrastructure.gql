@@ -70,7 +70,7 @@ CREATE (:Database {
   engine: 'Geode',
   size_gb: 2048,
   replica_count: 3,
-  connection_string: 'quic://db-prod-001:8443'
+  connection_string: 'quic://db-prod-001:3141'
 });
 
 CREATE (:Database {

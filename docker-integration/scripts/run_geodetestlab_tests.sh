@@ -4,7 +4,7 @@
 set -e
 
 GEODE_HOST="${GEODE_HOST:-geode-server}"
-GEODE_PORT="${GEODE_PORT:-8443}"
+GEODE_PORT="${GEODE_PORT:-3141}"
 LOG_DIR="${LOG_DIR:-/logs}"
 RESULTS_DIR="${RESULTS_DIR:-/results}"
 SPECS_DIR="${SPECS_DIR:-/geodetestlab/specs}"

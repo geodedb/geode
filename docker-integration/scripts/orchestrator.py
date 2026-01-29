@@ -7,6 +7,7 @@ Runs for a configurable duration with randomized query patterns.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import random
@@ -40,7 +41,7 @@ log = structlog.get_logger()
 
 # Configuration
 GEODE_HOST = os.environ.get("GEODE_HOST", "geode-server")
-GEODE_PORT = int(os.environ.get("GEODE_PORT", "8443"))
+GEODE_PORT = int(os.environ.get("GEODE_PORT", "3141"))
 TEST_DURATION_MINUTES = int(os.environ.get("TEST_DURATION_MINUTES", "30"))
 CONCURRENT_WORKERS = int(os.environ.get("CONCURRENT_WORKERS", "10"))
 RESULTS_DIR = Path(os.environ.get("RESULTS_DIR", "/results"))
@@ -409,10 +410,8 @@ class TestOrchestrator:
         tasks.append(asyncio.create_task(self.progress_reporter()))
 
         # Run for specified duration
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await asyncio.sleep(TEST_DURATION_MINUTES * 60)
-        except asyncio.CancelledError:
-            pass
 
         # Stop workers
         self.running = False

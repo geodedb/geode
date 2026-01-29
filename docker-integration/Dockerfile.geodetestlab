@@ -45,7 +45,7 @@ USER tester
 WORKDIR /app
 
 # Default environment
-ENV GEODE_SERVER=geode-server:8443 \
+ENV GEODE_SERVER=geode-server:3141 \
     TEST_MODE=standard
 
 CMD ["python3", "/app/scripts/orchestrator.py", "--mode", "standard", "--client", "geodetestlab"]

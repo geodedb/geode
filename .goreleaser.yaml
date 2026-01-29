@@ -592,19 +592,19 @@ release:
     **Docker (Docker Hub)**
     ```bash
     docker pull geodedb/geode:{{ .Version }}
-    docker run -p 8443:8443/udp geodedb/geode:{{ .Version }}
+    docker run -p 3141:3141/udp geodedb/geode:{{ .Version }}
     ```
 
     **Docker (GPU-enabled)**
     ```bash
     docker pull geodedb/geode:{{ .Version }}-gpu
-    docker run --gpus all -p 8443:8443/udp geodedb/geode:{{ .Version }}-gpu
+    docker run --gpus all -p 3141:3141/udp geodedb/geode:{{ .Version }}-gpu
     ```
 
     **Docker (GitLab Registry)**
     ```bash
     docker pull {{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}
-    docker run -p 8443:8443/udp {{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}
+    docker run -p 3141:3141/udp {{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}
     ```
 
     **macOS (Homebrew)**

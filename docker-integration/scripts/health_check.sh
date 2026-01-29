@@ -4,7 +4,7 @@
 set -e
 
 GEODE_HOST="${GEODE_HOST:-127.0.0.1}"
-GEODE_PORT="${GEODE_PORT:-8443}"
+GEODE_PORT="${GEODE_PORT:-3141}"
 TIMEOUT="${HEALTH_CHECK_TIMEOUT:-10}"
 
 # Check if geode binary exists

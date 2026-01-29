@@ -4,7 +4,7 @@
 set -e
 
 GEODE_HOST="${GEODE_HOST:-geode-server}"
-GEODE_PORT="${GEODE_PORT:-8443}"
+GEODE_PORT="${GEODE_PORT:-3141}"
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-/migrations}"
 LOG_DIR="${LOG_DIR:-/logs}"
 

@@ -16,7 +16,7 @@ services:
     - GEODE_DISTRIBUTED=true
     command: >
       --listen 0.0.0.0:3141
-      --listen-quic 0.0.0.0:8443
+      --listen-quic 0.0.0.0:3141
       --data-dir /data
       --node-id node-1
       --raft-bind 0.0.0.0:6282

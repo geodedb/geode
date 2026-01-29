@@ -23,11 +23,11 @@ USER geode
 WORKDIR /home/geode
 
 # Expose ports (QUIC + metrics)
-EXPOSE 8443/udp 9090/tcp
+EXPOSE 3141/udp 9090/tcp
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:8443", "--insecure"]
+    CMD ["geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:3141", "--insecure"]
 
 # Default entrypoint
 # Production default: error-level logging only
