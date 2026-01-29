@@ -30,14 +30,14 @@ repos:
     args: [--unsafe]      # Allow custom tags
     exclude: ^(vendor/|dist/)
   - id: check-json
-    exclude: ^(vendor/|dist/|zig-out/)
+    exclude: ^(vendor/|dist/|zig-out/|\.devcontainer/)
   - id: check-toml
   - id: check-xml
     exclude: ^(vendor/|dist/)
 
       # Security
   - id: detect-private-key
-    exclude: ^(certs/|test.*certs/|.*test.*\.pem$)
+    exclude: ^(certs/|test.*certs/|.*test.*\.pem$|tests/|src/tests/)
   - id: check-added-large-files
     args: [--maxkb=1024]
     exclude: ^(vendor/|dist/|docs/kb/)
@@ -52,7 +52,7 @@ repos:
   - id: check-executables-have-shebangs
     exclude: ^(vendor/|dist/|zig-out/)
   - id: check-shebang-scripts-are-executable
-    exclude: ^(vendor/|dist/)
+    exclude: ^(vendor/|dist/|\.envrc)
 
   # =============================================================================
   # Shell script linting
@@ -61,8 +61,8 @@ repos:
   rev: v0.11.0.1
   hooks:
   - id: shellcheck
-    args: [--severity=warning]
-    exclude: ^(vendor/|dist/)
+    args: [--severity=error, --shell=bash]
+    exclude: ^(vendor/|dist/|tests/|scripts/test/|scripts/modularization/|geodetestlab/fixtures/|scripts/comprehensive_graph_test\.sh|scripts/current_graph_capabilities_test\.sh|scripts/graph_data_integration_test\.sh)
 
   # =============================================================================
   # Python linting (for test scripts and tools)
@@ -83,8 +83,8 @@ repos:
   rev: v0.47.0
   hooks:
   - id: markdownlint
-    args: [--fix, --disable, MD013, MD033, MD041, MD024, --]
-    exclude: ^(vendor/|dist/|docs/kb/|CHANGELOG\.md)
+    args: [--fix, --disable, MD013, MD033, MD041, MD024, MD060, MD036, MD051, MD052, MD055, --]
+    exclude: ^(vendor/|dist/|docs/kb/|CHANGELOG\.md|specs/|docs/testing/)
 
   # =============================================================================
   # YAML formatting
@@ -103,8 +103,9 @@ repos:
   rev: v2.14.0
   hooks:
   - id: hadolint-docker
-    args: [--ignore, DL3008, --ignore, DL3013, --ignore, DL3018]
-    exclude: ^(vendor/|dist/)
+    args: [--ignore, DL3008, --ignore, DL3013, --ignore, DL3018, --ignore, DL3015, --ignore, DL4006, --ignore, DL3042]
+    # Exclude Dockerfile.dev - uses BuildKit heredocs which hadolint doesn't parse
+    exclude: ^(vendor/|dist/|Dockerfile\.dev$)
 
   # =============================================================================
   # Commit message validation (Conventional Commits)

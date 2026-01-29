@@ -1859,10 +1859,10 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
         if (node_pattern.labels.len > 0) {
             // Get candidate nodes from label index
             var candidates = store.getNodesByLabels(target_graph, node_pattern.labels) catch blk: {
-                // Fallback to empty if index lookup fails
-                break :blk std.ArrayList(u64).initCapacity(allocator, 0) catch unreachable;
+                // Fallback to empty if index lookup fails - use store.allocator for consistency
+                break :blk std.ArrayList(u64).initCapacity(store.allocator, 0) catch unreachable;
             };
-            defer candidates.deinit(allocator);
+            defer candidates.deinit(store.allocator);
 
             // Check candidates for property match
             for (candidates.items) |node_id| {
@@ -1875,7 +1875,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                         var props_match = true;
                         for (node_pattern.props.?) |prop| {
                             // For MERGE, we need to evaluate the property value
-                            // This is simplified - just check for string literals for now
+                            // Handle String properties
                             if (prop.value.* == .String) {
                                 const expected_val = prop.value.String;
                                 if (node.properties.get(prop.key)) |actual_val| {
@@ -1892,6 +1892,44 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                                     props_match = false;
                                     break;
                                 }
+                            } else if (prop.value.* == .Int) {
+                                // Handle Integer properties
+                                const expected_val = prop.value.Int;
+                                if (node.properties.get(prop.key)) |actual_val| {
+                                    if (actual_val == .Int) {
+                                        if (actual_val.Int != expected_val) {
+                                            props_match = false;
+                                            break;
+                                        }
+                                    } else {
+                                        props_match = false;
+                                        break;
+                                    }
+                                } else {
+                                    props_match = false;
+                                    break;
+                                }
+                            } else if (prop.value.* == .Bool) {
+                                // Handle Boolean properties
+                                const expected_val = prop.value.Bool;
+                                if (node.properties.get(prop.key)) |actual_val| {
+                                    if (actual_val == .Bool) {
+                                        if (actual_val.Bool != expected_val) {
+                                            props_match = false;
+                                            break;
+                                        }
+                                    } else {
+                                        props_match = false;
+                                        break;
+                                    }
+                                } else {
+                                    props_match = false;
+                                    break;
+                                }
+                            } else {
+                                // For other types, property doesn't match (conservative)
+                                props_match = false;
+                                break;
                             }
                         }
                         if (props_match) {

@@ -31,6 +31,8 @@ cli:
     format: "json"
 
 env:
+  # TDE is NOT set here - we want plaintext data files for this baseline test
+  # GEODE_TDE_KEY: "..." # Intentionally not set - TDE would encrypt all data
   GEODE_FLE_ENABLED: "false"  # Explicitly disabled
 
 tests:
