@@ -646,7 +646,7 @@ brews:
   homepage: https://gitlab.com/devnw/codepros/geode/geode
   description: ISO/IEC 39075:2024 GQL-compliant property-graph database
   license: Apache-2.0
-  skip_upload: auto
+  skip_upload: false
   test: |
     system "#{bin}/geode", "--version"
   install: |
