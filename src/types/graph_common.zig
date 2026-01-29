@@ -321,10 +321,12 @@ pub const GraphStorage = struct {
 
     // Set a property on an edge
     pub fn setEdgeProperty(self: *GraphStorage, allocator: std.mem.Allocator, edge_id: EdgeId, key: []const u8, value: PropertyValue) !void {
-        if (edge_id < self.edges.items.len) {
+        // Cast edge_id to usize for array indexing (safe on 32-bit platforms as long as edge count fits in usize)
+        const idx: usize = @intCast(edge_id);
+        if (idx < self.edges.items.len) {
             // Deep copy the key to ensure it remains valid after AST is freed
             const owned_key = try allocator.dupe(u8, key);
-            try self.edges.items[edge_id].properties.put(owned_key, value);
+            try self.edges.items[idx].properties.put(owned_key, value);
 
             if (self.audit_logger) |logger| {
                 var details = std.StringHashMap([]const u8).init(allocator);
@@ -357,8 +359,9 @@ pub const GraphStorage = struct {
 
     // Get a property from an edge
     pub fn getEdgeProperty(self: *const GraphStorage, edge_id: EdgeId, key: []const u8) ?PropertyValue {
-        if (edge_id < self.edges.items.len) {
-            return self.edges.items[edge_id].properties.get(key);
+        const idx: usize = @intCast(edge_id);
+        if (idx < self.edges.items.len) {
+            return self.edges.items[idx].properties.get(key);
         }
         return null;
     }
@@ -396,8 +399,9 @@ pub const GraphStorage = struct {
 
     // Remove a property from an edge
     pub fn removeEdgeProperty(self: *GraphStorage, edge_id: EdgeId, key: []const u8) !void {
-        if (edge_id < self.edges.items.len) {
-            _ = self.edges.items[edge_id].properties.remove(key);
+        const idx: usize = @intCast(edge_id);
+        if (idx < self.edges.items.len) {
+            _ = self.edges.items[idx].properties.remove(key);
             if (self.audit_logger) |logger| {
                 var details = std.StringHashMap([]const u8).init(self.allocator);
                 try details.put("key", try self.allocator.dupe(u8, key));
@@ -458,8 +462,9 @@ pub const GraphStorage = struct {
             var i: usize = 0;
             while (i < entry.value_ptr.items.len) {
                 const edge_id = entry.value_ptr.items[i];
-                if (edge_id < self.edges.items.len) {
-                    const edge = &self.edges.items[edge_id];
+                const edge_idx: usize = @intCast(edge_id);
+                if (edge_idx < self.edges.items.len) {
+                    const edge = &self.edges.items[edge_idx];
                     if (edge.target == node_id) {
                         _ = entry.value_ptr.orderedRemove(i);
                         continue;
@@ -473,8 +478,9 @@ pub const GraphStorage = struct {
             var i: usize = 0;
             while (i < entry.value_ptr.items.len) {
                 const edge_id = entry.value_ptr.items[i];
-                if (edge_id < self.edges.items.len) {
-                    const edge = &self.edges.items[edge_id];
+                const edge_idx: usize = @intCast(edge_id);
+                if (edge_idx < self.edges.items.len) {
+                    const edge = &self.edges.items[edge_idx];
                     if (edge.source == node_id) {
                         _ = entry.value_ptr.orderedRemove(i);
                         continue;
@@ -506,8 +512,9 @@ pub const GraphStorage = struct {
             logger.appendAuditEvent(&ev) catch {};
         }
 
-        if (edge_id < self.edges.items.len) {
-            const edge = &self.edges.items[edge_id];
+        const idx: usize = @intCast(edge_id);
+        if (idx < self.edges.items.len) {
+            const edge = &self.edges.items[idx];
             const source = edge.source;
             const target = edge.target;
             // Mark as deleted
