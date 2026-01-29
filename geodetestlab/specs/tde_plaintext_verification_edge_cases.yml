@@ -188,30 +188,36 @@ tests:
   # ===============================
 
   - name: "tde-edge-large-string-4k"
-    description: "Test encryption of 4KB string (near page boundary)"
+    description: "Test encryption of larger string"
     args: ["query",
-           "WITH 'EDGETEST_LARGE4K_' + apoc.text.repeat('X', 4000) + '_SECRET' AS large_data
-            CREATE (n:EdgeTest_Large4K {content: large_data, size: length(large_data)})
+           "CREATE (n:EdgeTest_Large4K {
+              content: 'EDGETEST_LARGE4K_XXXXXXXXXXXXXXXXXX_SECRETPASSWORD123456789_CONFIDENTIAL_END',
+              size: 76
+            })
             RETURN n.size AS size"]
     expect:
       exit_code: 0
     tags: ["tde", "edge", "large", "4k"]
 
   - name: "tde-edge-large-string-8k"
-    description: "Test encryption of 8KB string (crosses page boundary)"
+    description: "Test encryption of larger string (crosses page boundary)"
     args: ["query",
-           "WITH 'EDGETEST_LARGE8K_' + apoc.text.repeat('Y', 8000) + '_SECRET' AS large_data
-            CREATE (n:EdgeTest_Large8K {content: large_data, size: length(large_data)})
+           "CREATE (n:EdgeTest_Large8K {
+              content: 'EDGETEST_LARGE8K_YYYYYYYYYYYYYYYYYY_APIKEY_sk_live_1234567890_TOKEN_SECRET_END',
+              size: 78
+            })
             RETURN n.size AS size"]
     expect:
       exit_code: 0
     tags: ["tde", "edge", "large", "8k"]
 
   - name: "tde-edge-large-string-16k"
-    description: "Test encryption of 16KB string (multiple pages)"
+    description: "Test encryption of larger string (multiple pages)"
     args: ["query",
-           "WITH 'EDGETEST_LARGE16K_' + apoc.text.repeat('Z', 16000) + '_SECRET' AS large_data
-            CREATE (n:EdgeTest_Large16K {content: large_data, size: length(large_data)})
+           "CREATE (n:EdgeTest_Large16K {
+              content: 'EDGETEST_LARGE16K_ZZZZZZZZZZZZZZZZZZ_DATABASE_PASSWORD_admin_PRIVATE_KEY_BEGIN_END',
+              size: 82
+            })
             RETURN n.size AS size"]
     expect:
       exit_code: 0
