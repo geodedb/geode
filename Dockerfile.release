@@ -27,9 +27,10 @@ WORKDIR /home/geode
 # Expose ports (QUIC + metrics)
 EXPOSE 3141/udp 9090/tcp
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["/usr/local/bin/geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:3141", "--insecure"]
+# Health check - uses GEODE_USERNAME/GEODE_PASSWORD env vars if auth is enabled
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD /usr/local/bin/geode query "RETURN 1 AS health" --server 127.0.0.1:3141 --insecure \
+        ${GEODE_USERNAME:+--username "$GEODE_USERNAME"} ${GEODE_PASSWORD:+--password "$GEODE_PASSWORD"}
 
 # Default entrypoint
 ENTRYPOINT ["/usr/local/bin/geode"]
