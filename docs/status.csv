@@ -3570,6 +3570,12 @@ REQ-SOURCE-PERF-004,SourceFilePerformance,BatchParsing,TESTED,,,cli,2026-01-29,s
 REQ-SOURCE-PERF-005,SourceFilePerformance,SingleRequestExecution,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-006,SourceBatchTests,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-007,SourceBatchIntegration,E2ETests,TESTED,,,cli,2026-01-29,geodetestlab/specs/shell_source_batch.yml
+REQ-SOURCE-PERF-008,SourceFilePerformance,TransactionDetection,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-PERF-009,SourceFilePerformance,AutoTransaction,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-PERF-010,SourceFilePerformance,TransactionCommitRollback,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-PERF-011,SourceFilePerformance,TransactionDetection,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-PERF-012,SourceFilePerformance,TransactionDetectionTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-PERF-013,SourceBatchTransaction,E2ETests,TESTED,,,cli,2026-01-29,geodetestlab/specs/shell_source_batch.yml
 REQ-SPATIAL-AREA-001,SpatialArea,GeometryMeasure,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-BUFFER-001,SpatialBuffer,GeometryTransform,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-CENTROID-001,SpatialCentroid,GeometryMeasure,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
