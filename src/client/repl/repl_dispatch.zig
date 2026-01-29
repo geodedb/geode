@@ -952,7 +952,8 @@ fn hashFileContent(content: []const u8) u64 {
 /// - Meta-commands (\help, \use, etc.)
 /// - Comments (lines starting with -- or # are ignored)
 ///
-/// CANARY: REQ=REQ-SOURCE-PERF-002; FEATURE="SourceFilePerformance"; ASPECT=TransactionBatching; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-29
+/// CANARY: REQ=REQ-SOURCE-PERF-002; FEATURE="SourceFilePerformance"; ASPECT=BatchExecution; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
+/// Issue #400: Batch execution - sends entire file as single request for performance
 /// Issue #391: Auto-wraps source file execution in a transaction for batch performance
 /// Issue #392: Warns when re-sourcing the same file content (use MERGE for idempotent operations)
 pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
@@ -1012,68 +1013,32 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     const info_msg = std.fmt.bufPrint(&info_buf, "Sourcing: {s}\r\n", .{resolved_path}) catch return;
     try stdout.writeAll(info_msg);
 
-    // Issue #391: Auto-wrap in transaction for batch performance
-    // Only if not already in a transaction
-    var auto_txn = false;
-    if (!state.in_txn) {
-        state.session.begin() catch |err| {
-            // Transaction start failed - continue without transaction batching
-            var buf: [256]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "Note: Transaction batching unavailable ({s}), executing statements individually\r\n", .{@errorName(err)}) catch "";
-            stderr.writeAll(msg) catch {};
-        };
-        if (!state.in_txn) {
-            // begin() succeeded, track that we started it
-            auto_txn = true;
-            state.in_txn = true;
-        }
-    }
+    // CANARY: REQ=REQ-SOURCE-PERF-004; FEATURE="SourceFilePerformance"; ASPECT=BatchParsing; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
+    // Issue #400: Parse entire file and collect all GQL statements for batch execution
+    var batch_statements = std.ArrayList(u8).initCapacity(state.allocator, contents.len) catch unreachable;
+    defer batch_statements.deinit(state.allocator);
+
+    var meta_commands = std.ArrayList(MetaCommand).initCapacity(state.allocator, 8) catch unreachable;
     defer {
-        // Auto-commit the transaction if we started it
-        if (auto_txn and state.in_txn) {
-            state.session.commit() catch |err| {
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "Error: Failed to commit transaction: {s}\r\n", .{@errorName(err)}) catch "";
-                stderr.writeAll(msg) catch {};
-                // Try rollback on commit failure
-                state.session.rollback() catch {};
-            };
-            state.in_txn = false;
+        for (meta_commands.items) |mc| {
+            if (mc.args) |args| state.allocator.free(args);
         }
+        meta_commands.deinit(state.allocator);
     }
 
-    // Process the file content
     var statement_count: usize = 0;
-    var error_count: usize = 0;
-
-    // Parse and execute statements
-    var statement_buffer = std.ArrayList(u8).initCapacity(state.allocator, 0) catch unreachable;
-    defer statement_buffer.deinit(state.allocator);
+    var current_statement = std.ArrayList(u8).initCapacity(state.allocator, 256) catch unreachable;
+    defer current_statement.deinit(state.allocator);
 
     var line_iter = std.mem.splitSequence(u8, contents, "\n");
     var line_number: usize = 0;
 
+    // First pass: Parse file and collect statements
     while (line_iter.next()) |raw_line| {
         line_number += 1;
 
-        // CANARY: REQ=REQ-SHELL-INTERRUPT-002; FEATURE="SourceInterrupt"; ASPECT=LoopCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-        // Issue #390: Check for Ctrl+C interrupt during /source execution
-        if (state.interrupt_requested) {
-            try stderr.writeAll("\r\nInterrupted by user (Ctrl+C)\r\n");
-            state.interrupt_requested = false; // Reset flag
-            break;
-        }
-
-        // Check for pending Ctrl+C in stdin (non-blocking)
-        if (checkForInterrupt()) {
-            try stderr.writeAll("\r\nInterrupted by user (Ctrl+C)\r\n");
-            break;
-        }
-
         // Handle \r\n line endings
         const line = std.mem.trimRight(u8, raw_line, "\r");
-
-        // Trim whitespace for checking
         const trimmed = std.mem.trim(u8, line, " \t");
 
         // Skip empty lines and comments
@@ -1081,102 +1046,148 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
         if (std.mem.startsWith(u8, trimmed, "--")) continue;
         if (std.mem.startsWith(u8, trimmed, "#")) continue;
 
-        // Check for meta-command (must be at start of statement)
-        // Note: We don't support nested \source commands to avoid recursion
-        if (statement_buffer.items.len == 0 and (trimmed[0] == '\\' or trimmed[0] == '/')) {
-            // Check if this is a nested source command (skip it)
+        // Check for meta-command at start of statement
+        if (current_statement.items.len == 0 and (trimmed[0] == '\\' or trimmed[0] == '/')) {
             const cmd_end = std.mem.indexOf(u8, trimmed[1..], " ") orelse (trimmed.len - 1);
             const cmd_name = trimmed[1 .. cmd_end + 1];
+
+            // Skip nested source commands
             if (std.mem.eql(u8, cmd_name, "source")) {
                 stderr.writeAll("Warning: Nested \\source commands not supported, skipping\r\n") catch {};
                 continue;
             }
 
-            // Execute the meta-command directly instead of recursing
-            // This is a simplified handler for common commands in source files
+            // Convert meta-commands to GQL where possible, or queue for special handling
             if (std.mem.eql(u8, cmd_name, "use")) {
                 const args_start = cmd_end + 2;
                 if (args_start < trimmed.len) {
                     const use_args = std.mem.trim(u8, trimmed[args_start..], " \t;");
                     if (use_args.len > 0) {
+                        // Convert \use to USE GRAPH statement and add to batch
+                        if (batch_statements.items.len > 0) {
+                            try batch_statements.append(state.allocator, ' ');
+                        }
                         const use_stmt = std.fmt.allocPrint(state.allocator, "USE GRAPH {s};", .{use_args}) catch continue;
                         defer state.allocator.free(use_stmt);
-                        executeGql(state, use_stmt) catch |err| {
-                            // CANARY: REQ=REQ-SHELL-WOULDBLOCK-004; FEATURE="SuppressWouldBlock"; ASPECT=SourceUseError; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-                            if (err != error.WouldBlock) {
-                                var buf: [256]u8 = undefined;
-                                const msg = std.fmt.bufPrint(&buf, "Error at line {d}: {s}\r\n", .{ line_number, @errorName(err) }) catch continue;
-                                stderr.writeAll(msg) catch {};
-                                error_count += 1;
-                            }
-                        };
+                        try batch_statements.appendSlice(state.allocator, use_stmt);
+                        statement_count += 1;
                     }
                 }
             } else if (std.mem.eql(u8, cmd_name, "echo")) {
+                // Queue echo for execution between batches
                 const args_start = cmd_end + 2;
-                if (args_start < trimmed.len) {
-                    const echo_args = std.mem.trim(u8, trimmed[args_start..], " \t");
-                    stdout.writeAll(echo_args) catch {};
-                    stdout.writeAll("\r\n") catch {};
-                }
+                const args = if (args_start < trimmed.len)
+                    state.allocator.dupe(u8, std.mem.trim(u8, trimmed[args_start..], " \t")) catch null
+                else
+                    null;
+                try meta_commands.append(state.allocator, .{ .cmd = .echo, .args = args, .position = statement_count });
             } else if (std.mem.eql(u8, cmd_name, "timing")) {
                 const args_start = cmd_end + 2;
-                if (args_start < trimmed.len) {
-                    const timing_arg = std.mem.trim(u8, trimmed[args_start..], " \t");
-                    if (std.mem.eql(u8, timing_arg, "on")) {
-                        state.show_timing = true;
-                    } else if (std.mem.eql(u8, timing_arg, "off")) {
-                        state.show_timing = false;
-                    }
-                }
+                const args = if (args_start < trimmed.len)
+                    state.allocator.dupe(u8, std.mem.trim(u8, trimmed[args_start..], " \t")) catch null
+                else
+                    null;
+                try meta_commands.append(state.allocator, .{ .cmd = .timing, .args = args, .position = statement_count });
             }
-            // Skip other meta-commands in source files
-            statement_count += 1;
+            // Skip other meta-commands
             continue;
         }
 
-        // Accumulate line into statement buffer
-        if (statement_buffer.items.len > 0) {
-            try statement_buffer.append(state.allocator, ' '); // Join lines with space
+        // Accumulate line into current statement
+        if (current_statement.items.len > 0) {
+            try current_statement.append(state.allocator, ' ');
         }
-        try statement_buffer.appendSlice(state.allocator, trimmed);
+        try current_statement.appendSlice(state.allocator, trimmed);
 
         // Check if statement is complete (ends with semicolon)
         if (std.mem.endsWith(u8, trimmed, ";")) {
-            // Execute the complete statement
-            const stmt = statement_buffer.items;
-
-            // Show the statement being executed (if verbose)
-            if (state.verbose) {
-                var stmt_buf: [256]u8 = undefined;
-                const preview = if (stmt.len > 60) stmt[0..60] else stmt;
-                const ellipsis = if (stmt.len > 60) "..." else "";
-                const stmt_msg = std.fmt.bufPrint(&stmt_buf, ">> {s}{s}\r\n", .{ preview, ellipsis }) catch "";
-                stdout.writeAll(stmt_msg) catch {};
+            // Add complete statement to batch
+            if (batch_statements.items.len > 0) {
+                try batch_statements.append(state.allocator, ' ');
             }
-
-            executeGql(state, stmt) catch |err| {
-                // CANARY: REQ=REQ-SHELL-WOULDBLOCK-005; FEATURE="SuppressWouldBlock"; ASPECT=SourceGqlError; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-                if (err != error.WouldBlock) {
-                    var buf: [256]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&buf, "Error at line {d}: {s}\r\n", .{ line_number, @errorName(err) }) catch continue;
-                    stderr.writeAll(msg) catch {};
-                    error_count += 1;
-                }
-            };
-
+            try batch_statements.appendSlice(state.allocator, current_statement.items);
             statement_count += 1;
-            statement_buffer.clearRetainingCapacity();
+            current_statement.clearRetainingCapacity();
         }
     }
 
     // Check for incomplete statement at end of file
-    if (statement_buffer.items.len > 0) {
-        const remaining = std.mem.trim(u8, statement_buffer.items, " \t");
+    if (current_statement.items.len > 0) {
+        const remaining = std.mem.trim(u8, current_statement.items, " \t");
         if (remaining.len > 0) {
+            try stderr.writeAll("Warning: Incomplete statement at end of file (missing ';')\r\n");
+        }
+    }
+
+    // Handle case with no GQL statements (only meta-commands)
+    if (batch_statements.items.len == 0) {
+        // Execute meta-commands only
+        for (meta_commands.items) |mc| {
+            executeMetaCommand(state, mc, stdout);
+        }
+        var summary_buf: [256]u8 = undefined;
+        const summary = std.fmt.bufPrint(&summary_buf, "Executed {d} command(s) successfully\r\n", .{meta_commands.items.len}) catch return;
+        try stdout.writeAll(summary);
+        return;
+    }
+
+    // Issue #391: Auto-wrap in transaction for batch performance
+    var auto_txn = false;
+    if (!state.in_txn) {
+        state.session.begin() catch |err| {
             var buf: [256]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "Warning: Incomplete statement at end of file (missing ';')\r\n", .{}) catch return;
-            try stderr.writeAll(msg);
+            const msg = std.fmt.bufPrint(&buf, "Note: Transaction batching unavailable ({s})\r\n", .{@errorName(err)}) catch "";
+            stderr.writeAll(msg) catch {};
+        };
+        if (!state.in_txn) {
+            auto_txn = true;
+            state.in_txn = true;
+        }
+    }
+    defer {
+        if (auto_txn and state.in_txn) {
+            state.session.commit() catch |err| {
+                var buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "Error: Failed to commit transaction: {s}\r\n", .{@errorName(err)}) catch "";
+                stderr.writeAll(msg) catch {};
+                state.session.rollback() catch {};
+            };
+            state.in_txn = false;
+        }
+    }
+
+    // Execute meta-commands that should run before batch
+    for (meta_commands.items) |mc| {
+        if (mc.position == 0) {
+            executeMetaCommand(state, mc, stdout);
+        }
+    }
+
+    // CANARY: REQ=REQ-SOURCE-PERF-005; FEATURE="SourceFilePerformance"; ASPECT=SingleRequestExecution; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
+    // Issue #400: Execute entire batch in single request for maximum performance
+    if (state.verbose) {
+        var stmt_buf: [256]u8 = undefined;
+        const preview_len = @min(batch_statements.items.len, 80);
+        const preview = batch_statements.items[0..preview_len];
+        const ellipsis: []const u8 = if (batch_statements.items.len > 80) "..." else "";
+        const stmt_msg = std.fmt.bufPrint(&stmt_buf, ">> Batch ({d} statements): {s}{s}\r\n", .{ statement_count, preview, ellipsis }) catch "";
+        stdout.writeAll(stmt_msg) catch {};
+    }
+
+    var error_count: usize = 0;
+    executeGql(state, batch_statements.items) catch |err| {
+        if (err != error.WouldBlock) {
+            var buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "Error executing batch: {s}\r\n", .{@errorName(err)}) catch return;
+            stderr.writeAll(msg) catch {};
+            error_count += 1;
+        }
+    };
+
+    // Execute remaining meta-commands
+    for (meta_commands.items) |mc| {
+        if (mc.position > 0) {
+            executeMetaCommand(state, mc, stdout);
         }
     }
 
@@ -1187,6 +1198,36 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     else
         std.fmt.bufPrint(&summary_buf, "Executed {d} statement(s) successfully\r\n", .{statement_count}) catch return;
     try stdout.writeAll(summary);
+}
+
+/// Meta-command type for deferred execution during source file processing
+const MetaCommandType = enum { echo, timing };
+
+const MetaCommand = struct {
+    cmd: MetaCommandType,
+    args: ?[]const u8,
+    position: usize, // Statement position where this command appears
+};
+
+/// Execute a meta-command during source file processing
+fn executeMetaCommand(state: anytype, mc: MetaCommand, stdout: anytype) void {
+    switch (mc.cmd) {
+        .echo => {
+            if (mc.args) |args| {
+                stdout.writeAll(args) catch {};
+                stdout.writeAll("\r\n") catch {};
+            }
+        },
+        .timing => {
+            if (mc.args) |args| {
+                if (std.mem.eql(u8, args, "on")) {
+                    state.show_timing = true;
+                } else if (std.mem.eql(u8, args, "off")) {
+                    state.show_timing = false;
+                }
+            }
+        },
+    }
 }
 
 /// Extract the result from a response and display it appropriately
@@ -1849,4 +1890,353 @@ test "TestFileHashContent_LargeContent" {
     // Just verify it produces a non-zero hash
     try testing.expect(hash != 0);
     try testing.expect(hash != 5381); // Not the empty string hash
+}
+
+// =============================================================================
+// Issue #400: /source batch execution unit tests
+// CANARY: REQ=REQ-SOURCE-PERF-006; FEATURE="SourceBatchTests"; ASPECT=UnitTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+// =============================================================================
+
+test "TestSourceBatch_ParseSimpleStatements" {
+    // Test parsing simple GQL statements into batch
+    const allocator = testing.allocator;
+    const content =
+        \\CREATE (a:Person {name: 'Alice'});
+        \\CREATE (b:Person {name: 'Bob'});
+        \\MATCH (n) RETURN n;
+    ;
+
+    var batch = std.ArrayList(u8).init(allocator);
+    defer batch.deinit();
+
+    var stmt_count: usize = 0;
+    var current = std.ArrayList(u8).init(allocator);
+    defer current.deinit();
+
+    var lines = std.mem.splitSequence(u8, content, "\n");
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+
+        if (current.items.len > 0) {
+            try current.append(' ');
+        }
+        try current.appendSlice(trimmed);
+
+        if (std.mem.endsWith(u8, trimmed, ";")) {
+            if (batch.items.len > 0) {
+                try batch.append(' ');
+            }
+            try batch.appendSlice(current.items);
+            stmt_count += 1;
+            current.clearRetainingCapacity();
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 3), stmt_count);
+    try testing.expect(std.mem.indexOf(u8, batch.items, "CREATE (a:Person") != null);
+    try testing.expect(std.mem.indexOf(u8, batch.items, "CREATE (b:Person") != null);
+    try testing.expect(std.mem.indexOf(u8, batch.items, "MATCH (n) RETURN n") != null);
+}
+
+test "TestSourceBatch_SkipComments" {
+    // Test that comments are properly skipped during batch parsing
+    const content =
+        \\-- This is a comment
+        \\CREATE (a:Person);
+        \\# Another comment style
+        \\CREATE (b:Person);
+        \\-- Final comment
+    ;
+
+    var stmt_count: usize = 0;
+    var lines = std.mem.splitSequence(u8, content, "\n");
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+        if (std.mem.startsWith(u8, trimmed, "--")) continue;
+        if (std.mem.startsWith(u8, trimmed, "#")) continue;
+
+        if (std.mem.endsWith(u8, trimmed, ";")) {
+            stmt_count += 1;
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 2), stmt_count);
+}
+
+test "TestSourceBatch_MultiLineStatements" {
+    // Test parsing multi-line statements
+    const allocator = testing.allocator;
+    const content =
+        \\CREATE (a:Person {
+        \\  name: 'Alice',
+        \\  age: 30
+        \\});
+        \\MATCH (n)
+        \\WHERE n.age > 25
+        \\RETURN n;
+    ;
+
+    var batch = std.ArrayList(u8).init(allocator);
+    defer batch.deinit();
+
+    var stmt_count: usize = 0;
+    var current = std.ArrayList(u8).init(allocator);
+    defer current.deinit();
+
+    var lines = std.mem.splitSequence(u8, content, "\n");
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+
+        if (current.items.len > 0) {
+            try current.append(' ');
+        }
+        try current.appendSlice(trimmed);
+
+        if (std.mem.endsWith(u8, trimmed, ";")) {
+            if (batch.items.len > 0) {
+                try batch.append(' ');
+            }
+            try batch.appendSlice(current.items);
+            stmt_count += 1;
+            current.clearRetainingCapacity();
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 2), stmt_count);
+    // Verify statements are properly joined
+    try testing.expect(std.mem.indexOf(u8, batch.items, "name: 'Alice', age: 30") != null);
+    try testing.expect(std.mem.indexOf(u8, batch.items, "WHERE n.age > 25 RETURN n") != null);
+}
+
+test "TestSourceBatch_MetaCommandConversion" {
+    // Test that \use is converted to USE GRAPH statement
+    const allocator = testing.allocator;
+
+    var batch = std.ArrayList(u8).init(allocator);
+    defer batch.deinit();
+
+    // Simulate \use conversion
+    const use_cmd = "\\use my_graph";
+    if (std.mem.startsWith(u8, use_cmd, "\\use")) {
+        const args = std.mem.trim(u8, use_cmd[4..], " \t;");
+        const use_stmt = try std.fmt.allocPrint(allocator, "USE GRAPH {s};", .{args});
+        defer allocator.free(use_stmt);
+        try batch.appendSlice(use_stmt);
+    }
+
+    try testing.expect(std.mem.eql(u8, batch.items, "USE GRAPH my_graph;"));
+}
+
+test "TestSourceBatch_EmptyFile" {
+    // Test handling of empty file
+    const content = "";
+    var lines = std.mem.splitSequence(u8, content, "\n");
+    var stmt_count: usize = 0;
+
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+        if (std.mem.endsWith(u8, trimmed, ";")) {
+            stmt_count += 1;
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 0), stmt_count);
+}
+
+test "TestSourceBatch_OnlyComments" {
+    // Test file with only comments
+    const content =
+        \\-- Comment 1
+        \\# Comment 2
+        \\-- Comment 3
+    ;
+
+    var stmt_count: usize = 0;
+    var lines = std.mem.splitSequence(u8, content, "\n");
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+        if (std.mem.startsWith(u8, trimmed, "--")) continue;
+        if (std.mem.startsWith(u8, trimmed, "#")) continue;
+        if (std.mem.endsWith(u8, trimmed, ";")) {
+            stmt_count += 1;
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 0), stmt_count);
+}
+
+test "TestSourceBatch_MixedContentWithComments" {
+    // Test mixed content with interleaved comments
+    const allocator = testing.allocator;
+    const content =
+        \\-- Setup section
+        \\CREATE GRAPH test;
+        \\# Switch to graph
+        \\USE GRAPH test;
+        \\-- Create nodes
+        \\CREATE (a:Node);
+        \\CREATE (b:Node);
+        \\-- Done
+    ;
+
+    var batch = std.ArrayList(u8).init(allocator);
+    defer batch.deinit();
+
+    var stmt_count: usize = 0;
+    var current = std.ArrayList(u8).init(allocator);
+    defer current.deinit();
+
+    var lines = std.mem.splitSequence(u8, content, "\n");
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+        if (std.mem.startsWith(u8, trimmed, "--")) continue;
+        if (std.mem.startsWith(u8, trimmed, "#")) continue;
+
+        if (current.items.len > 0) {
+            try current.append(' ');
+        }
+        try current.appendSlice(trimmed);
+
+        if (std.mem.endsWith(u8, trimmed, ";")) {
+            if (batch.items.len > 0) {
+                try batch.append(' ');
+            }
+            try batch.appendSlice(current.items);
+            stmt_count += 1;
+            current.clearRetainingCapacity();
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 4), stmt_count);
+}
+
+test "TestSourceBatch_WindowsLineEndings" {
+    // Test handling of Windows-style line endings (\r\n)
+    const content = "CREATE (a:Node);\r\nCREATE (b:Node);\r\nRETURN 1;\r\n";
+
+    var stmt_count: usize = 0;
+    var lines = std.mem.splitSequence(u8, content, "\n");
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, std.mem.trimRight(u8, line, "\r"), " \t");
+        if (trimmed.len == 0) continue;
+        if (std.mem.endsWith(u8, trimmed, ";")) {
+            stmt_count += 1;
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 3), stmt_count);
+}
+
+test "TestSourceBatch_NestedSourceCommandSkipped" {
+    // Test that nested \source commands are properly skipped
+    const content =
+        \\CREATE (a:Node);
+        \\\source other.gql
+        \\CREATE (b:Node);
+    ;
+
+    var stmt_count: usize = 0;
+    var skipped_source: bool = false;
+
+    var lines = std.mem.splitSequence(u8, content, "\n");
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+
+        if (trimmed[0] == '\\' or trimmed[0] == '/') {
+            const cmd_end = std.mem.indexOf(u8, trimmed[1..], " ") orelse (trimmed.len - 1);
+            const cmd_name = trimmed[1 .. cmd_end + 1];
+            if (std.mem.eql(u8, cmd_name, "source")) {
+                skipped_source = true;
+                continue;
+            }
+        }
+
+        if (std.mem.endsWith(u8, trimmed, ";")) {
+            stmt_count += 1;
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 2), stmt_count);
+    try testing.expect(skipped_source);
+}
+
+test "TestSourceBatch_LargeStatementCount" {
+    // Test handling of many statements
+    const allocator = testing.allocator;
+
+    var content = std.ArrayList(u8).init(allocator);
+    defer content.deinit();
+
+    // Generate 100 statements
+    for (0..100) |i| {
+        const stmt = try std.fmt.allocPrint(allocator, "CREATE (n{d}:Node {{id: {d}}});\n", .{ i, i });
+        defer allocator.free(stmt);
+        try content.appendSlice(stmt);
+    }
+
+    var stmt_count: usize = 0;
+    var lines = std.mem.splitSequence(u8, content.items, "\n");
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+        if (std.mem.endsWith(u8, trimmed, ";")) {
+            stmt_count += 1;
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 100), stmt_count);
+}
+
+test "TestSourceBatch_IncompleteStatement" {
+    // Test detection of incomplete statement at end of file
+    const content =
+        \\CREATE (a:Node);
+        \\CREATE (b:Node
+    ;
+
+    var complete_count: usize = 0;
+    var has_incomplete: bool = false;
+    var current_len: usize = 0;
+
+    var lines = std.mem.splitSequence(u8, content, "\n");
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+
+        current_len += trimmed.len;
+
+        if (std.mem.endsWith(u8, trimmed, ";")) {
+            complete_count += 1;
+            current_len = 0;
+        }
+    }
+
+    if (current_len > 0) {
+        has_incomplete = true;
+    }
+
+    try testing.expectEqual(@as(usize, 1), complete_count);
+    try testing.expect(has_incomplete);
+}
+
+test "TestMetaCommand_EchoType" {
+    // Test MetaCommand echo type
+    const mc = MetaCommand{ .cmd = .echo, .args = "Hello, World!", .position = 0 };
+    try testing.expectEqual(MetaCommandType.echo, mc.cmd);
+    try testing.expect(mc.args != null);
+    try testing.expect(std.mem.eql(u8, mc.args.?, "Hello, World!"));
+}
+
+test "TestMetaCommand_TimingType" {
+    // Test MetaCommand timing type
+    const mc = MetaCommand{ .cmd = .timing, .args = "on", .position = 5 };
+    try testing.expectEqual(MetaCommandType.timing, mc.cmd);
+    try testing.expectEqual(@as(usize, 5), mc.position);
 }

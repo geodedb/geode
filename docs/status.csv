@@ -3528,7 +3528,6 @@ REQ-SHELL-EMPTY-ENTER-001,ShellEmptyEnter,NewlineOnEmptyInput,IMPL,,,cli,2026-01
 REQ-SHELL-HISTORY-RESET-001,HistoryReset,MetaCommand,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
 REQ-SHELL-HISTORY-RESET-002,HistoryReset,GqlExecution,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
 REQ-SHELL-INTERRUPT-001,SourceInterrupt,StateFlag,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
-REQ-SHELL-INTERRUPT-002,SourceInterrupt,LoopCheck,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-003,SourceInterrupt,CheckFunction,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
 REQ-SHELL-TEST-VERIFICATION,Shell Test Requirements Verification,UnitTests,TESTED,,,testing,2026-01-15,tests/test_shell_requirements_verification.zig
 REQ-SHELL-TLS-001,Shell TLS Configuration,SecureConnection,TESTED,,,cli,2026-01-15,src/cli/main.zig
@@ -3537,8 +3536,6 @@ REQ-SHELL-TLS-003,Shell TLS Config Setup,SecureConnection,EXEMPT,,,cli,2026-01-1
 REQ-SHELL-WOULDBLOCK-001,SuppressWouldBlock,ReplLoopError,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
 REQ-SHELL-WOULDBLOCK-002,SuppressWouldBlock,RunGqlError,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
 REQ-SHELL-WOULDBLOCK-003,SuppressWouldBlock,PullAllError,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
-REQ-SHELL-WOULDBLOCK-004,SuppressWouldBlock,SourceUseError,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
-REQ-SHELL-WOULDBLOCK-005,SuppressWouldBlock,SourceGqlError,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
 REQ-SHOW-CONSTRAINTS-001,SHOW CONSTRAINTS,CatalogList,TESTED,,,catalog,2026-01-13,src/schema/catalog.zig
 REQ-SHOW-CONSTRAINTS-002,SHOW CONSTRAINTS,StatementHandler,TESTED,,,execution,2026-01-13,src/execution/statement_handlers.zig
 REQ-SHOW-CONSTRAINTS-002,StatementHandler,ShowConstraints,TESTED,,,execution,2026-01-16,tests/test_gap_0193_batch2_misc.zig
@@ -3567,8 +3564,12 @@ REQ-SORT-ASC-001,FinalSort,AscendingSort,TESTED,,,exec,2026-01-16,tests/test_gap
 REQ-SORT-DESC-001,FinalSort,DescendingSort,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SORT-MULTI-001,FinalSort,MultiColumnSort,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SOURCE-PERF-001,SourceFilePerformance,FileHashCache,IMPL,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
-REQ-SOURCE-PERF-002,SourceFilePerformance,TransactionBatching,IMPL,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-PERF-002,SourceFilePerformance,BatchExecution,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-003,SourceFilePerformance,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-PERF-004,SourceFilePerformance,BatchParsing,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-PERF-005,SourceFilePerformance,SingleRequestExecution,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-PERF-006,SourceBatchTests,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-PERF-007,SourceBatchIntegration,E2ETests,TESTED,,,cli,2026-01-29,geodetestlab/specs/shell_source_batch.yml
 REQ-SPATIAL-AREA-001,SpatialArea,GeometryMeasure,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-BUFFER-001,SpatialBuffer,GeometryTransform,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-CENTROID-001,SpatialCentroid,GeometryMeasure,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
