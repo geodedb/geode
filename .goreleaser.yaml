@@ -59,6 +59,7 @@ archives:
   - docs/QUICK_REFERENCE.md
   - docs/API_REFERENCE.md
 
+
 # =============================================================================
 # Checksums
 # =============================================================================
@@ -612,31 +613,33 @@ release:
 # =============================================================================
 # Homebrew Tap
 # =============================================================================
-# Temporarily disabled - Zig builder produces multiple archives per platform
-# (gnu/musl variants) which confuses Homebrew formula generation.
-# TODO: Create separate archive IDs for Homebrew with macOS-only targets
-# brews:
-#   - name: geode
-#     ids:
-#       - geode-archives
-#     repository:
-#       owner: devnw
-#       name: homebrew-geode
-#       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-#     url_template: "https://gitlab.com/devnw/codepros/geode/geode/-/releases/{{ .Tag }}/downloads/{{ .ArtifactName }}"
-#     commit_author:
-#       name: geode-bot
-#       email: geode-bot@devnw.com
-#     commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
-#     directory: Formula
-#     homepage: "https://gitlab.com/devnw/codepros/geode/geode"
-#     description: "ISO/IEC 39075:2024 GQL-compliant property-graph database"
-#     license: "MIT"
-#     skip_upload: auto
-#     test: |
-#       system "#{bin}/geode", "--version"
-#     install: |
-#       bin.install "geode"
+# Publishes to geodedb/homebrew-geode on GitHub.
+# Requires HOMEBREW_TAP_TOKEN (GitHub PAT) with write access to the repo.
+# Note: Uses the macOS universal binary created by universal_binaries section.
+
+brews:
+- name: geode
+  ids:
+  - geode-universal
+  repository:
+    owner: geodedb
+    name: homebrew-geode
+    token: '{{ .Env.HOMEBREW_TAP_TOKEN }}'
+  url_template: https://gitlab.com/devnw/codepros/geode/geode/-/releases/{{ .Tag }}/downloads/{{ .ArtifactName }}
+  download_strategy: CurlDownloadStrategy
+  commit_author:
+    name: geode-bot
+    email: geode-bot@codepros.dev
+  commit_msg_template: Brew formula update for {{ .ProjectName }} version {{ .Tag }}
+  directory: Formula
+  homepage: https://gitlab.com/devnw/codepros/geode/geode
+  description: ISO/IEC 39075:2024 GQL-compliant property-graph database
+  license: Apache-2.0
+  skip_upload: auto
+  test: |
+    system "#{bin}/geode", "--version"
+  install: |
+    bin.install "geode"
 
 # =============================================================================
 # Universal Binaries (macOS)
