@@ -262,7 +262,7 @@ repos:
       echo "Verifying GAP_ANALYSIS.md against CANARY markers..."
       if command -v go &> /dev/null; then
         cd tools/canaryscan && go build -o /tmp/canaryscan . 2>/dev/null
-        /tmp/canaryscan --root ../.. --verify ../../docs/GAP_ANALYSIS.md || {
+        /tmp/canaryscan --root ../.. --verify ../../docs/GAP_ANALYSIS.md --out /tmp/canaryscan_status.json || {
           echo "✗ GAP_ANALYSIS.md contains claims that don't match CANARY markers"
           exit 1
         }
