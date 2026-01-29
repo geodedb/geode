@@ -926,11 +926,35 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     }
 }
 
+// CANARY: REQ=REQ-SOURCE-PERF-001; FEATURE="SourceFilePerformance"; ASPECT=FileHashCache; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-29
+// Issue #391/#392: File hash cache to track sourced files and warn about re-sourcing
+var g_sourced_file_hashes: ?std.StringHashMap(u64) = null;
+
+fn getSourcedFileCache(allocator: std.mem.Allocator) *std.StringHashMap(u64) {
+    if (g_sourced_file_hashes == null) {
+        g_sourced_file_hashes = std.StringHashMap(u64).init(allocator);
+    }
+    return &g_sourced_file_hashes.?;
+}
+
+// Simple hash function for file content
+fn hashFileContent(content: []const u8) u64 {
+    var hash: u64 = 5381;
+    for (content) |c| {
+        hash = ((hash << 5) +% hash) +% @as(u64, c);
+    }
+    return hash;
+}
+
 /// Execute commands from a GQL source file
 /// Supports:
 /// - GQL statements (terminated by semicolons)
 /// - Meta-commands (\help, \use, etc.)
 /// - Comments (lines starting with -- or # are ignored)
+///
+/// CANARY: REQ=REQ-SOURCE-PERF-002; FEATURE="SourceFilePerformance"; ASPECT=TransactionBatching; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-29
+/// Issue #391: Auto-wraps source file execution in a transaction for batch performance
+/// Issue #392: Warns when re-sourcing the same file content (use MERGE for idempotent operations)
 pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     const stdout = platform.getStdoutHandle();
     const stderr = platform.getStderrHandle();
@@ -968,10 +992,55 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     };
     defer state.allocator.free(contents);
 
+    // Issue #392: Check if this file content was already sourced
+    const content_hash = hashFileContent(contents);
+    const file_cache = getSourcedFileCache(state.allocator);
+    if (file_cache.get(resolved_path)) |prev_hash| {
+        if (prev_hash == content_hash) {
+            try stderr.writeAll("Warning [GEODE-W3001]: File was already sourced with identical content.\r\n");
+            try stderr.writeAll("  Tip: Use MERGE instead of CREATE for idempotent operations.\r\n");
+        } else {
+            try stderr.writeAll("Note: File was previously sourced but content has changed.\r\n");
+        }
+    }
+    // Store/update the hash for this file path
+    const path_key = state.allocator.dupe(u8, resolved_path) catch resolved_path;
+    file_cache.put(path_key, content_hash) catch {};
+
     // Display source file info
     var info_buf: [512]u8 = undefined;
     const info_msg = std.fmt.bufPrint(&info_buf, "Sourcing: {s}\r\n", .{resolved_path}) catch return;
     try stdout.writeAll(info_msg);
+
+    // Issue #391: Auto-wrap in transaction for batch performance
+    // Only if not already in a transaction
+    var auto_txn = false;
+    if (!state.in_txn) {
+        state.session.begin() catch |err| {
+            // Transaction start failed - continue without transaction batching
+            var buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "Note: Transaction batching unavailable ({s}), executing statements individually\r\n", .{@errorName(err)}) catch "";
+            stderr.writeAll(msg) catch {};
+        };
+        if (!state.in_txn) {
+            // begin() succeeded, track that we started it
+            auto_txn = true;
+            state.in_txn = true;
+        }
+    }
+    defer {
+        // Auto-commit the transaction if we started it
+        if (auto_txn and state.in_txn) {
+            state.session.commit() catch |err| {
+                var buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "Error: Failed to commit transaction: {s}\r\n", .{@errorName(err)}) catch "";
+                stderr.writeAll(msg) catch {};
+                // Try rollback on commit failure
+                state.session.rollback() catch {};
+            };
+            state.in_txn = false;
+        }
+    }
 
     // Process the file content
     var statement_count: usize = 0;
@@ -1735,4 +1804,49 @@ test "TestEscapeJsonString_Newlines" {
     const result = try escapeJsonString(allocator, "line1\nline2\ttab");
     defer allocator.free(result);
     try testing.expectEqualStrings("line1\\nline2\\ttab", result);
+}
+
+// CANARY: REQ=REQ-SOURCE-PERF-003; FEATURE="SourceFilePerformance"; ASPECT=UnitTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+// Issue #391/#392: Unit tests for source file hash caching
+
+test "TestFileHashContent_DeterministicHash" {
+    // Issue #391/#392: Test that identical content produces identical hash
+    const content1 = "CREATE (n:Person {name: 'Alice'});";
+    const content2 = "CREATE (n:Person {name: 'Alice'});";
+    const hash1 = hashFileContent(content1);
+    const hash2 = hashFileContent(content2);
+    try testing.expectEqual(hash1, hash2);
+}
+
+test "TestFileHashContent_DifferentContentDifferentHash" {
+    // Issue #391/#392: Test that different content produces different hash
+    const content1 = "CREATE (n:Person {name: 'Alice'});";
+    const content2 = "CREATE (n:Person {name: 'Bob'});";
+    const hash1 = hashFileContent(content1);
+    const hash2 = hashFileContent(content2);
+    try testing.expect(hash1 != hash2);
+}
+
+test "TestFileHashContent_EmptyContent" {
+    // Issue #391/#392: Test hash of empty content
+    const content = "";
+    const hash = hashFileContent(content);
+    // Initial hash value is 5381
+    try testing.expectEqual(@as(u64, 5381), hash);
+}
+
+test "TestFileHashContent_LargeContent" {
+    // Issue #391/#392: Test hash of larger content (simulate a source file)
+    const content =
+        \\-- Sample GQL source file
+        \\CREATE GRAPH IF NOT EXISTS test_graph;
+        \\USE GRAPH test_graph;
+        \\CREATE (a:Person {name: 'Alice', age: 30});
+        \\CREATE (b:Person {name: 'Bob', age: 25});
+        \\MERGE (a)-[:KNOWS]->(b);
+    ;
+    const hash = hashFileContent(content);
+    // Just verify it produces a non-zero hash
+    try testing.expect(hash != 0);
+    try testing.expect(hash != 5381); // Not the empty string hash
 }

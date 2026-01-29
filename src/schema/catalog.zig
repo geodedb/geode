@@ -848,7 +848,11 @@ pub fn loadCatalog() !void {
         try catalog.schemas.put(name, {});
     }
 
-    // Read graphs
+    // Read graphs - collect names first, then load data
+    // CANARY: REQ=REQ-GRAPH-PERSIST-002; FEATURE="NamedGraphPersistence"; ASPECT=CatalogLoad; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-29
+    var graph_names = std.ArrayList([]const u8).initCapacity(allocator, graph_count) catch unreachable;
+    defer graph_names.deinit(allocator);
+
     i = 0;
     while (i < graph_count) : (i += 1) {
         var len_buf: [4]u8 = undefined;
@@ -859,12 +863,12 @@ pub fn loadCatalog() !void {
         if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
 
         try catalog.graphs.put(name, {});
-
-        // CRITICAL: Also register with graph storage manager so DROP GRAPH works
-        _ = graph_storage_manager.createGraphStorage(allocator, name) catch {
-            // If storage creation fails (e.g., already exists), that's OK
-        };
+        try graph_names.append(allocator, name);
     }
+
+    // GAP-384 FIX: Load all named graph data from their respective directories
+    // This ensures graphs persist across server restarts
+    graph_storage_manager.loadAllNamedGraphs(allocator, graph_names.items);
 
     // Read indexes
     i = 0;
@@ -919,4 +923,98 @@ pub fn loadCatalog() !void {
         const scoped_key = try getScopedIndexKey(allocator, table_name, name);
         try catalog.indexes.put(scoped_key, index_info);
     }
+}
+
+// ============================================================================
+// Unit Tests
+// ============================================================================
+
+// CANARY: REQ=REQ-GRAPH-PERSIST-005; FEATURE="NamedGraphPersistence"; ASPECT=CatalogTests; STATUS=TESTED; OWNER=schema; UPDATED=2026-01-29
+
+const testing = std.testing;
+
+test "GAP384_Catalog_init_creates_empty_catalog" {
+    // Issue #384: Test that Catalog initializes with empty graphs map
+    const allocator = testing.allocator;
+
+    const cat = try Catalog.init(allocator);
+    defer cat.deinit();
+
+    try testing.expectEqual(@as(usize, 0), cat.graphs.count());
+    try testing.expectEqual(@as(usize, 0), cat.tables.count());
+    try testing.expectEqual(@as(usize, 0), cat.indexes.count());
+    try testing.expectEqual(@as(usize, 0), cat.constraints.count());
+}
+
+test "GAP384_Catalog_register_graph_works" {
+    // Issue #384: Test that registerGraph adds a graph to the catalog
+    const allocator = testing.allocator;
+
+    var cat = try Catalog.init(allocator);
+    defer cat.deinit();
+
+    try cat.registerGraph("test_graph");
+
+    try testing.expectEqual(@as(usize, 1), cat.graphs.count());
+    try testing.expect(cat.graphs.contains("test_graph"));
+}
+
+test "GAP384_Catalog_register_multiple_graphs" {
+    // Issue #384: Test multiple graph registration
+    const allocator = testing.allocator;
+
+    var cat = try Catalog.init(allocator);
+    defer cat.deinit();
+
+    try cat.registerGraph("graph1");
+    try cat.registerGraph("graph2");
+    try cat.registerGraph("graph3");
+
+    try testing.expectEqual(@as(usize, 3), cat.graphs.count());
+    try testing.expect(cat.graphs.contains("graph1"));
+    try testing.expect(cat.graphs.contains("graph2"));
+    try testing.expect(cat.graphs.contains("graph3"));
+}
+
+test "GAP384_Catalog_drop_graph_works" {
+    // Issue #384: Test that dropGraph removes a graph from the catalog
+    const allocator = testing.allocator;
+
+    var cat = try Catalog.init(allocator);
+    defer cat.deinit();
+
+    try cat.registerGraph("temp_graph");
+    try testing.expect(cat.graphs.contains("temp_graph"));
+
+    const dropped = cat.dropGraph("temp_graph");
+    try testing.expect(dropped);
+    try testing.expect(!cat.graphs.contains("temp_graph"));
+}
+
+test "GAP384_Catalog_drop_nonexistent_graph_returns_false" {
+    // Issue #384: Test that dropping non-existent graph returns false
+    const allocator = testing.allocator;
+
+    var cat = try Catalog.init(allocator);
+    defer cat.deinit();
+
+    const dropped = cat.dropGraph("nonexistent_graph");
+    try testing.expect(!dropped);
+}
+
+test "GAP384_Catalog_list_graphs_returns_all_graphs" {
+    // Issue #384: Test that listGraphs returns all registered graphs
+    const allocator = testing.allocator;
+
+    var cat = try Catalog.init(allocator);
+    defer cat.deinit();
+
+    try cat.registerGraph("alpha");
+    try cat.registerGraph("beta");
+
+    const graphs = try cat.listGraphs(allocator);
+    defer allocator.free(graphs);
+
+    try testing.expectEqual(@as(usize, 2), graphs.len);
+    // Note: Order may vary due to hash map iteration
 }

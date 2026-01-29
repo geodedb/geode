@@ -146,11 +146,11 @@ pub const GraphStorage = struct {
             var details = std.StringHashMap([]const u8).init(allocator);
             // Construct label string
             if (labels.len > 0) {
-                var buf = std.ArrayList(u8).init(allocator);
-                defer buf.deinit();
+                var buf = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
+                defer buf.deinit(allocator);
                 for (labels, 0..) |l, i| {
-                    if (i > 0) try buf.appendSlice(",");
-                    try buf.appendSlice(l);
+                    if (i > 0) buf.appendSlice(allocator, ",") catch {};
+                    buf.appendSlice(allocator, l) catch {};
                 }
                 try details.put("labels", try allocator.dupe(u8, buf.items));
             }
@@ -161,7 +161,7 @@ pub const GraphStorage = struct {
                 .timestamp = std.time.milliTimestamp(),
                 .event_type = .data_modification,
                 .severity = .info,
-                .user_id = .system, // Or context? GraphStorage doesn't have ctx
+                .user_id = 0, // System user ID (GraphStorage doesn't have ctx)
                 .session_id = "",
                 .resource = .{ .type = "graph_node", .id = rid, .name = rid, .graph = null, .table = null },
                 .action = "create",
@@ -221,7 +221,7 @@ pub const GraphStorage = struct {
                 .timestamp = std.time.milliTimestamp(),
                 .event_type = .data_modification,
                 .severity = .info,
-                .user_id = .system,
+                .user_id = 0, // System user ID (GraphStorage doesn't have ctx)
                 .session_id = "",
                 .resource = .{ .type = "graph_edge", .id = rid, .name = rid, .graph = null, .table = null },
                 .action = "create",
@@ -287,6 +287,9 @@ pub const GraphStorage = struct {
                 var ev = audit.AuditEvent{
                     .timestamp = std.time.milliTimestamp(),
                     .event_type = .data_modification,
+                    .severity = .info,
+                    .user_id = 0, // System user ID (GraphStorage doesn't have ctx)
+                    .session_id = "",
                     .resource = .{ .type = "graph_node", .id = rid, .name = rid, .graph = null, .table = null },
                     .action = "update_property",
                     .result = .success,
@@ -334,6 +337,9 @@ pub const GraphStorage = struct {
                 var ev = audit.AuditEvent{
                     .timestamp = std.time.milliTimestamp(),
                     .event_type = .data_modification,
+                    .severity = .info,
+                    .user_id = 0,
+                    .session_id = "",
                     .resource = .{ .type = "graph_edge", .id = rid, .name = rid, .graph = null, .table = null },
                     .action = "update_property",
                     .result = .success,
@@ -370,6 +376,9 @@ pub const GraphStorage = struct {
                 var ev = audit.AuditEvent{
                     .timestamp = std.time.milliTimestamp(),
                     .event_type = .data_modification,
+                    .severity = .info,
+                    .user_id = 0,
+                    .session_id = "",
                     .resource = .{ .type = "graph_node", .id = rid, .name = rid, .graph = null, .table = null },
                     .action = "delete_property",
                     .result = .success,
@@ -397,6 +406,9 @@ pub const GraphStorage = struct {
                 var ev = audit.AuditEvent{
                     .timestamp = std.time.milliTimestamp(),
                     .event_type = .data_modification,
+                    .severity = .info,
+                    .user_id = 0,
+                    .session_id = "",
                     .resource = .{ .type = "graph_edge", .id = rid, .name = rid, .graph = null, .table = null },
                     .action = "delete_property",
                     .result = .success,

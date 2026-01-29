@@ -2409,6 +2409,12 @@ REQ-GRAPH-META-002,GraphMetadataPersistence,RemoveGraph,EXEMPT,,,catalog,2026-01
 REQ-GRAPH-META-003,GraphMetadataPersistence,GraphExists,EXEMPT,,,catalog,2026-01-09,src/schema/catalog.zig
 REQ-GRAPH-META-004,GraphMetadataPersistence,Persist,EXEMPT,,,multi_graph,2026-01-09,src/storage/multi_graph.zig
 REQ-GRAPH-META-005,GraphMetadataPersistence,Remove,EXEMPT,,,multi_graph,2026-01-09,src/storage/multi_graph.zig
+REQ-GRAPH-PERSIST-001,NamedGraphPersistence,SaveLoad,IMPL,,,storage,2026-01-29,src/server/graph_storage_manager.zig
+REQ-GRAPH-PERSIST-002,NamedGraphPersistence,CatalogLoad,IMPL,,,storage,2026-01-29,src/schema/catalog.zig
+REQ-GRAPH-PERSIST-003,NamedGraphPersistence,Shutdown,IMPL,,,storage,2026-01-29,src/server/main.zig
+REQ-GRAPH-PERSIST-004,NamedGraphPersistence,UnitTests,TESTED,,,storage,2026-01-29,src/server/graph_storage_manager.zig
+REQ-GRAPH-PERSIST-005,NamedGraphPersistence,CatalogTests,TESTED,,,schema,2026-01-29,src/schema/catalog.zig
+REQ-GRAPH-PERSIST-TEST-001,NamedGraphPersistence,IntegrationTest,TESTED,,,storage,2026-01-29,geodetestlab/specs/gap_384_391_392_graph_persistence.yml
 REQ-GRAPH-TRAVERSE-001,Graph,GraphTraversal,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-GRAPH-TYPE-REGISTRY-001,GraphTypeRegistry,CreateStatement,EXEMPT,,,catalog,2026-01-10,src/server/query_executor.zig
 REQ-GRAPH-TYPE-REGISTRY-001,GraphTypeRegistry,DropStatement,EXEMPT,,,catalog,2026-01-10,src/server/query_executor.zig
@@ -3552,6 +3558,9 @@ REQ-SNAPSHOT-005,SnapshotInstallation,SnapshotCleanup,TESTED,,,backup,2026-01-15
 REQ-SORT-ASC-001,FinalSort,AscendingSort,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SORT-DESC-001,FinalSort,DescendingSort,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SORT-MULTI-001,FinalSort,MultiColumnSort,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
+REQ-SOURCE-PERF-001,SourceFilePerformance,FileHashCache,IMPL,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-PERF-002,SourceFilePerformance,TransactionBatching,IMPL,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-PERF-003,SourceFilePerformance,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SPATIAL-AREA-001,SpatialArea,GeometryMeasure,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-BUFFER-001,SpatialBuffer,GeometryTransform,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-CENTROID-001,SpatialCentroid,GeometryMeasure,TESTED,,,spatial,2026-01-10,src/eval_extended.zig

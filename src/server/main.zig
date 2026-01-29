@@ -756,8 +756,13 @@ pub fn main() !void {
         );
         if (!should_continue) break;
     }
-    // Graceful shutdown: persist graph if data_dir provided and in-memory graph exists
+    // Graceful shutdown: persist all graphs if data_dir provided
+    // CANARY: REQ=REQ-GRAPH-PERSIST-003; FEATURE="NamedGraphPersistence"; ASPECT=Shutdown; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-29
     if (data_dir) |ddir| {
+        // GAP-384 FIX: Save all named graphs to their respective directories
+        graph_storage_mgr.saveAllNamedGraphs(gpa);
+
+        // Also save the default graph to the root data directory (backward compatibility)
         if (graph_storage_mgr.getCurrentGraphStorage()) |gg| {
             // Save to JSONL files
             saveGraphToDir(gpa, gg, ddir);

@@ -85,7 +85,7 @@ pub fn tryLoadGraphFromDir(allocator: std.mem.Allocator, dir_path: []const u8) !
     defer dir.close();
     // nodes.jsonl and edges.jsonl simple line-delimited json
     // GAP-0117 SECURITY FIX: JSON parsing with proper limits and error logging
-    const json_max_depth: usize = 32;
+    // Note: max_depth is controlled via Scanner, not ParseOptions in std.json
 
     if (dir.openFile("nodes.jsonl", .{})) |nf| {
         defer nf.close();
@@ -93,10 +93,8 @@ pub fn tryLoadGraphFromDir(allocator: std.mem.Allocator, dir_path: []const u8) !
         defer allocator.free(content);
         var lines = std.mem.tokenizeScalar(u8, content, '\n');
         while (lines.next()) |line| {
-            // GAP-0117: Add depth limit and log parse errors instead of silent continue
-            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{
-                .max_depth = json_max_depth,
-            }) catch |err| {
+            // GAP-0117: Add error logging instead of silent continue
+            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch |err| {
                 log.warn("JSON parse error in nodes.jsonl", &.{Attr.string("error", @errorName(err))});
                 continue;
             };
@@ -546,4 +544,237 @@ pub fn dropGraphStorage(name: []const u8) !void {
         log.debug("dropGraphStorage: g_graph_storages is null", &.{});
         return error.GraphNotFound;
     }
+}
+
+// ============================================================================
+// GAP-384: Named Graph Persistence
+// ============================================================================
+
+// CANARY: REQ=REQ-GRAPH-PERSIST-001; FEATURE="NamedGraphPersistence"; ASPECT=SaveLoad; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-29
+
+/// Get the directory path for a named graph's data
+/// Returns: {data_dir}/graphs/{graph_name}/
+pub fn getGraphDataDir(allocator: std.mem.Allocator, graph_name: []const u8) ![]const u8 {
+    const data_dir = g_data_dir orelse return error.NoDataDirectory;
+    return std.fmt.allocPrint(allocator, "{s}/graphs/{s}", .{ data_dir, graph_name });
+}
+
+/// Save a named graph's data to its specific directory
+/// Creates {data_dir}/graphs/{graph_name}/nodes.jsonl and edges.jsonl
+pub fn saveNamedGraph(allocator: std.mem.Allocator, graph_name: []const u8) !void {
+    log.debug("saveNamedGraph called", &.{Attr.string("name", graph_name)});
+
+    // Get the graph storage
+    const storage = getGraphStorageByName(graph_name) orelse return error.GraphNotFound;
+
+    // Get the graph-specific directory
+    const graph_dir = try getGraphDataDir(allocator, graph_name);
+    defer allocator.free(graph_dir);
+
+    // Save the graph data to the directory
+    saveGraphToDir(allocator, storage, graph_dir);
+
+    log.info("Saved named graph", &.{
+        Attr.string("name", graph_name),
+        Attr.string("dir", graph_dir),
+        Attr.int("nodes", @intCast(storage.nodes.count())),
+        Attr.int("edges", @intCast(storage.edges.items.len)),
+    });
+}
+
+/// Load a named graph's data from its specific directory
+/// Reads from {data_dir}/graphs/{graph_name}/nodes.jsonl and edges.jsonl
+pub fn loadNamedGraph(allocator: std.mem.Allocator, graph_name: []const u8) !*graph_exec.GraphStorage {
+    log.debug("loadNamedGraph called", &.{Attr.string("name", graph_name)});
+
+    // Get the graph-specific directory
+    const graph_dir = try getGraphDataDir(allocator, graph_name);
+    defer allocator.free(graph_dir);
+
+    // Check if directory exists
+    std.fs.cwd().access(graph_dir, .{}) catch |err| {
+        if (err == error.FileNotFound) {
+            log.debug("No persistent data for graph", &.{Attr.string("name", graph_name)});
+            return error.GraphNotFound;
+        }
+        return err;
+    };
+
+    // Load the graph data from the directory
+    const storage = try tryLoadGraphFromDir(allocator, graph_dir);
+
+    log.info("Loaded named graph from disk", &.{
+        Attr.string("name", graph_name),
+        Attr.string("dir", graph_dir),
+        Attr.int("nodes", @intCast(storage.nodes.count())),
+        Attr.int("edges", @intCast(storage.edges.items.len)),
+    });
+
+    return storage;
+}
+
+/// Save all named graphs to their respective directories
+/// Called on server shutdown to persist all graph data
+pub fn saveAllNamedGraphs(allocator: std.mem.Allocator) void {
+    log.info("Saving all named graphs to disk", &.{});
+
+    if (g_graph_storages) |storages| {
+        var it = storages.iterator();
+        while (it.next()) |entry| {
+            const name = entry.key_ptr.*;
+            saveNamedGraph(allocator, name) catch |err| {
+                log.err("Failed to save named graph", &.{
+                    Attr.string("name", name),
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+        }
+    }
+
+    // Also save the default graph if it exists
+    if (g_graph_storage) |default_storage| {
+        if (g_data_dir) |data_dir| {
+            saveGraphToDir(allocator, default_storage, data_dir);
+            log.info("Saved default graph", &.{
+                Attr.string("dir", data_dir),
+                Attr.int("nodes", @intCast(default_storage.nodes.count())),
+                Attr.int("edges", @intCast(default_storage.edges.items.len)),
+            });
+        }
+    }
+}
+
+/// Load all named graphs that are registered in the catalog
+/// Called during server startup after catalog is loaded
+pub fn loadAllNamedGraphs(allocator: std.mem.Allocator, graph_names: []const []const u8) void {
+    log.info("Loading named graphs from disk", &.{Attr.int("count", @intCast(graph_names.len))});
+
+    // Initialize multi-graph storage if needed
+    if (g_graph_storages == null) {
+        initMultiGraphStorage(allocator);
+    }
+
+    for (graph_names) |name| {
+        // Skip the default graph (handled separately)
+        if (std.mem.eql(u8, name, DEFAULT_GRAPH_NAME)) continue;
+
+        // Try to load the graph data
+        const storage = loadNamedGraph(allocator, name) catch |err| {
+            // If no persistent data exists, create an empty storage
+            if (err == error.GraphNotFound or err == error.FileNotFound) {
+                log.debug("No persistent data for graph, creating empty", &.{Attr.string("name", name)});
+                _ = createGraphStorage(allocator, name) catch |create_err| {
+                    if (create_err != error.GraphAlreadyExists) {
+                        log.err("Failed to create empty graph storage", &.{
+                            Attr.string("name", name),
+                            Attr.string("error", @errorName(create_err)),
+                        });
+                    }
+                };
+            } else {
+                log.err("Failed to load named graph", &.{
+                    Attr.string("name", name),
+                    Attr.string("error", @errorName(err)),
+                });
+            }
+            continue;
+        };
+
+        // Register the loaded storage in the multi-graph map
+        if (g_graph_storages) |*storages| {
+            const name_copy = allocator.dupe(u8, name) catch continue;
+            storages.put(name_copy, storage) catch {
+                allocator.free(name_copy);
+                continue;
+            };
+            log.debug("Registered loaded graph in storage map", &.{
+                Attr.string("name", name),
+                Attr.int("nodes", @intCast(storage.nodes.count())),
+            });
+        }
+    }
+}
+
+// ============================================================================
+// Unit Tests
+// ============================================================================
+
+// CANARY: REQ=REQ-GRAPH-PERSIST-004; FEATURE="NamedGraphPersistence"; ASPECT=UnitTests; STATUS=TESTED; OWNER=storage; UPDATED=2026-01-29
+
+const testing = std.testing;
+
+test "GAP384_getGraphDataDir_constructs_correct_path" {
+    // Issue #384: Test that graph data directory path is correctly constructed
+    const allocator = testing.allocator;
+
+    // Set up test data directory
+    const test_data_dir = "/tmp/geode_test_data";
+    g_data_dir = test_data_dir;
+    defer g_data_dir = null;
+
+    // Test path construction
+    const path = try getGraphDataDir(allocator, "my_test_graph");
+    defer allocator.free(path);
+
+    try testing.expectEqualStrings("/tmp/geode_test_data/graphs/my_test_graph", path);
+}
+
+test "GAP384_getGraphDataDir_errors_without_data_dir" {
+    // Issue #384: Test that getGraphDataDir returns error when data dir not set
+    const allocator = testing.allocator;
+
+    // Ensure no data directory is set
+    g_data_dir = null;
+
+    // Should return NoDataDirectory error
+    const result = getGraphDataDir(allocator, "test_graph");
+    try testing.expectError(error.NoDataDirectory, result);
+}
+
+test "GAP384_getGraphDataDir_handles_special_graph_names" {
+    // Issue #384: Test path construction with special graph names
+    const allocator = testing.allocator;
+
+    g_data_dir = "/data";
+    defer g_data_dir = null;
+
+    // Test default graph name
+    const default_path = try getGraphDataDir(allocator, DEFAULT_GRAPH_NAME);
+    defer allocator.free(default_path);
+    try testing.expectEqualStrings("/data/graphs/default", default_path);
+
+    // Test graph with underscores
+    const underscore_path = try getGraphDataDir(allocator, "my_graph_v2");
+    defer allocator.free(underscore_path);
+    try testing.expectEqualStrings("/data/graphs/my_graph_v2", underscore_path);
+}
+
+test "GAP384_saveNamedGraph_errors_for_nonexistent_graph" {
+    // Issue #384: Test that saveNamedGraph returns error for non-existent graph
+    const allocator = testing.allocator;
+
+    g_data_dir = "/tmp/test_persist";
+    defer g_data_dir = null;
+
+    // Attempt to save a graph that doesn't exist
+    const result = saveNamedGraph(allocator, "nonexistent_graph_xyz123");
+    try testing.expectError(error.GraphNotFound, result);
+}
+
+test "GAP384_loadNamedGraph_errors_for_missing_directory" {
+    // Issue #384: Test that loadNamedGraph returns error when directory doesn't exist
+    const allocator = testing.allocator;
+
+    g_data_dir = "/tmp/geode_nonexistent_test_dir_xyz789";
+    defer g_data_dir = null;
+
+    // Attempt to load a graph that doesn't have persistent data
+    const result = loadNamedGraph(allocator, "missing_graph");
+    // Should return either GraphNotFound or FileNotFound
+    try testing.expect(result == error.GraphNotFound or result == error.FileNotFound);
+}
+
+test "GAP384_DEFAULT_GRAPH_NAME_is_default" {
+    // Issue #384: Verify the default graph name constant
+    try testing.expectEqualStrings("default", DEFAULT_GRAPH_NAME);
 }
