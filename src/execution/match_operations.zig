@@ -3983,10 +3983,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
 
                         // Build environment with matched elements
+                        // CANARY: REQ=REQ-GQL-WITH-REL-VARS-002; FEATURE="WithClauseRelationshipVars"; ASPECT=ValueOrder; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-29
+                        // Order must match column order: left, rel, right
                         var env_count: usize = 0;
                         if (left_node_var != null) env_count += 1;
-                        if (right_node_var != null) env_count += 1;
                         if (rel_var != null) env_count += 1;
+                        if (right_node_var != null) env_count += 1;
 
                         const env_names = try allocator.alloc([]const u8, env_count);
                         const env_values = try allocator.alloc(Value, env_count);
@@ -3997,11 +3999,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             env_values[env_idx] = Value{ .Node = left_node };
                             env_idx += 1;
                         }
-                        if (right_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = right_node_ptr };
-                            env_idx += 1;
-                        }
                         if (rel_var) |var_name| {
                             env_names[env_idx] = var_name;
                             const edge_ptr = store.edges.getPtr(edge.id) orelse {
@@ -4010,6 +4007,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 continue;
                             };
                             env_values[env_idx] = Value{ .Edge = edge_ptr };
+                            env_idx += 1;
+                        }
+                        if (right_node_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            env_values[env_idx] = Value{ .Node = right_node_ptr };
                             env_idx += 1;
                         }
 
@@ -4434,10 +4436,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
 
                         // Build environment with matched elements
+                        // CANARY: REQ=REQ-GQL-WITH-REL-VARS-002; FEATURE="WithClauseRelationshipVars"; ASPECT=ValueOrder; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-29
+                        // Order must match column order: left, rel, right
                         var env_count: usize = 0;
                         if (left_node_var != null) env_count += 1;
-                        if (right_node_var != null) env_count += 1;
                         if (rel_var != null) env_count += 1;
+                        if (right_node_var != null) env_count += 1;
 
                         const env_names = try allocator.alloc([]const u8, env_count);
                         const env_values = try allocator.alloc(Value, env_count);
@@ -4448,11 +4452,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             env_values[env_idx] = Value{ .Node = left_node };
                             env_idx += 1;
                         }
-                        if (right_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = right_node_ptr };
-                            env_idx += 1;
-                        }
                         if (rel_var) |var_name| {
                             env_names[env_idx] = var_name;
                             const edge_ptr = store.edges.getPtr(edge.id) orelse {
@@ -4461,6 +4460,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 continue;
                             };
                             env_values[env_idx] = Value{ .Edge = edge_ptr };
+                            env_idx += 1;
+                        }
+                        if (right_node_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            env_values[env_idx] = Value{ .Node = right_node_ptr };
                             env_idx += 1;
                         }
 
@@ -5916,10 +5920,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
 
                         // Create environment with all matched elements
+                        // CANARY: REQ=REQ-GQL-WITH-REL-VARS-002; FEATURE="WithClauseRelationshipVars"; ASPECT=ValueOrder; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-29
+                        // Order must match column order in lines 6463-6466: left, rel, right
                         var env_count: usize = 0;
                         if (left_node_var != null) env_count += 1;
-                        if (right_node_var != null) env_count += 1;
                         if (rel_var != null) env_count += 1;
+                        if (right_node_var != null) env_count += 1;
 
                         const env_names = try allocator.alloc([]const u8, env_count);
                         const env_values = try allocator.alloc(Value, env_count);
@@ -5928,11 +5934,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (left_node_var) |var_name| {
                             env_names[env_idx] = var_name;
                             env_values[env_idx] = Value{ .Node = left_node };
-                            env_idx += 1;
-                        }
-                        if (right_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = right_node_ptr };
                             env_idx += 1;
                         }
                         if (rel_var) |var_name| {
@@ -5944,6 +5945,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 continue;
                             };
                             env_values[env_idx] = Value{ .Edge = edge_ptr };
+                            env_idx += 1;
+                        }
+                        if (right_node_var) |var_name| {
+                            env_names[env_idx] = var_name;
+                            env_values[env_idx] = Value{ .Node = right_node_ptr };
                             env_idx += 1;
                         }
 

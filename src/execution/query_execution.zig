@@ -401,12 +401,52 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                     // We need to return the raw matched nodes so we can aggregate over them later
                     var modified_query = q.*;
 
-                    // Build RETURN items for each match variable in the query's MATCH pattern
+                    // CANARY: REQ=REQ-GQL-WITH-REL-VARS-001; FEATURE="WithClauseRelationshipVars"; ASPECT=VariableCollection; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-29
+                    // Build RETURN items for ALL match variables in the query's MATCH pattern
+                    // This includes: head nodes (standalone), hop left nodes, hop relationships, hop right nodes
                     // GAP-0220 FIX: Use try for proper error propagation
-                    var return_items = try std.ArrayList(ast.ReturnItem).initCapacity(allocator, q.match.chains.len);
+                    var return_items = try std.ArrayList(ast.ReturnItem).initCapacity(allocator, q.match.chains.len * 3);
                     for (q.match.chains) |chain| {
+                        // Handle standalone node patterns (single node, no relationship)
                         if (chain.head) |node_pattern| {
                             if (node_pattern.name) |var_name| {
+                                try return_items.append(allocator, ast.ReturnItem{
+                                    .expr = ast.Expr{ .Ident = .{ .orig = var_name, .cnf = var_name } },
+                                    .alias = var_name,
+                                });
+                            }
+                        }
+                        // Handle relationship patterns: (a)-[r]->(b)
+                        // Extract left node, relationship, and right node variables from each hop
+                        for (chain.hops) |hop| {
+                            // Left node variable (e.g., 'a' in (a)-[r]->(b))
+                            if (hop.left.name) |var_name| {
+                                // Check if already added (avoid duplicates)
+                                var already_added = false;
+                                for (return_items.items) |item| {
+                                    if (item.alias) |alias| {
+                                        if (std.mem.eql(u8, alias, var_name)) {
+                                            already_added = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (!already_added) {
+                                    try return_items.append(allocator, ast.ReturnItem{
+                                        .expr = ast.Expr{ .Ident = .{ .orig = var_name, .cnf = var_name } },
+                                        .alias = var_name,
+                                    });
+                                }
+                            }
+                            // Relationship variable (e.g., 'r' in (a)-[r]->(b))
+                            if (hop.rel.name) |var_name| {
+                                try return_items.append(allocator, ast.ReturnItem{
+                                    .expr = ast.Expr{ .Ident = .{ .orig = var_name, .cnf = var_name } },
+                                    .alias = var_name,
+                                });
+                            }
+                            // Right node variable (e.g., 'b' in (a)-[r]->(b))
+                            if (hop.right.name) |var_name| {
                                 try return_items.append(allocator, ast.ReturnItem{
                                     .expr = ast.Expr{ .Ident = .{ .orig = var_name, .cnf = var_name } },
                                     .alias = var_name,
