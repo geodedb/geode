@@ -16,7 +16,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Dict
 
 
 class DeploymentMode(Enum):
@@ -45,7 +44,7 @@ class ClusterNode:
     port: int
     role: NodeRole
     status: str = "unknown"
-    metrics: Dict = field(default_factory=dict)
+    metrics: dict = field(default_factory=dict)
     last_heartbeat: float = 0
 
 
@@ -68,7 +67,7 @@ class ClusterOrchestrator:
 
     def __init__(self, config: ClusterConfig):
         self.config = config
-        self.nodes: Dict[str, ClusterNode] = {}
+        self.nodes: dict[str, ClusterNode] = {}
         self.lock = threading.Lock()
 
     def deploy(self) -> bool:
@@ -232,7 +231,7 @@ class ClusterOrchestrator:
 
         return True
 
-    def _generate_k8s_manifests(self) -> Dict[str, str]:
+    def _generate_k8s_manifests(self) -> dict[str, str]:
         """Generate Kubernetes manifests."""
         return {
             "namespace": f"""
@@ -349,7 +348,7 @@ spec:
 
     def run_load_test(
         self, workload: str, target_nodes: int = 1_000_000, target_edges: int = 10_000_000, duration_seconds: int = 300
-    ) -> Dict:
+    ) -> dict:
         """Run distributed load test."""
         print(f"\nStarting load test: {workload}")
         print(f"  Targets: {target_nodes:,} nodes, {target_edges:,} edges")
@@ -409,7 +408,7 @@ spec:
         target_nodes: int,
         target_edges: int,
         duration_seconds: int,
-    ) -> Dict:
+    ) -> dict:
         """Run load generation on a single generator node."""
         start_time = time.time()
 
@@ -431,8 +430,7 @@ spec:
             ]
         else:
             # Local execution
-            server_node = next((n for n in self.nodes.values() if n.role == NodeRole.SERVER), None)
-            server_host = f"localhost:{server_node.port}" if server_node else "localhost:3141"
+            next((n for n in self.nodes.values() if n.role == NodeRole.SERVER), None)
 
             cmd = [
                 "./zig-out/bin/geode-loadgen",
@@ -484,7 +482,7 @@ spec:
         self.nodes.clear()
         return True
 
-    def status(self) -> Dict:
+    def status(self) -> dict:
         """Get cluster status."""
         status = {"name": self.config.name, "deployment_mode": self.config.deployment_mode.value, "nodes": {}}
 

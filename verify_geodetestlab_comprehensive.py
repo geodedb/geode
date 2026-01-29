@@ -16,9 +16,8 @@ def run_test(test_case):
     )
 
     # Check exit code
-    if "exit_code" in expect:
-        if result.returncode != expect["exit_code"]:
-            return False, f"Expected exit code {expect['exit_code']}, got {result.returncode}"
+    if "exit_code" in expect and result.returncode != expect["exit_code"]:
+        return False, f"Expected exit code {expect['exit_code']}, got {result.returncode}"
 
     # Check stdout_contains (geodetestlab checks both stdout and stderr)
     if "stdout_contains" in expect:

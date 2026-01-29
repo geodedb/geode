@@ -57,7 +57,7 @@ def main():
             if len(row) >= 4:
                 req_id = row[0]
                 if row[3] == "IMPL" and req_id in IMPL_TO_EXEMPT:
-                    old_status = row[3]
+                    row[3]
                     row[3] = "EXEMPT"
                     # Update date if column exists
                     if len(row) >= 8:

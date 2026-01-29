@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Test a specific suite to identify failures."""
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -20,8 +21,8 @@ def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/
     expect = test_case.get("expect", {})
 
     # Generate unique test ID for isolation
-    test_id = str(uuid.uuid4())[:8]
-    test_timestamp = int(time.time() * 1000)
+    str(uuid.uuid4())[:8]
+    int(time.time() * 1000)
 
     # Check if this test should skip isolation
     skip_isolation = False
@@ -30,10 +31,8 @@ def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/
         skip_isolation = True
 
     # Clear persistence files
-    try:
+    with contextlib.suppress(FileNotFoundError):
         os.remove("/tmp/geode_graph_store.dat")
-    except FileNotFoundError:
-        pass
 
     if not skip_isolation:
         home_dir = os.path.expanduser("~")
@@ -43,10 +42,8 @@ def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/
             f"{home_dir}/.geode/catalog_schemas.json",
         ]
         for catalog_path in catalog_paths:
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 os.remove(catalog_path)
-            except FileNotFoundError:
-                pass
 
     # Execute setup commands if present
     setup_commands = test_case.get("setup", [])
@@ -84,9 +81,8 @@ def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/
         return False, str(e)
 
     # Check exit code
-    if "exit_code" in expect:
-        if result.returncode != expect["exit_code"]:
-            return False, f"exit code: expected {expect['exit_code']}, got {result.returncode}"
+    if "exit_code" in expect and result.returncode != expect["exit_code"]:
+        return False, f"exit code: expected {expect['exit_code']}, got {result.returncode}"
 
     # Check stdout_contains
     if "stdout_contains" in expect:

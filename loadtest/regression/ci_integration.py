@@ -65,7 +65,6 @@ def generate_github_annotations(report: RegressionReport) -> list:
 
 def main():
     """Run regression test in CI environment."""
-    ci_env = os.environ.get("CI", "").lower() == "true"
     gitlab_ci = os.environ.get("GITLAB_CI", "").lower() == "true"
     github_actions = os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
 

@@ -19,7 +19,6 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 # Valid status values per AGENTS.md
 VALID_STATUSES = {"STUB", "IMPL", "TESTED", "BENCHED", "COMPLETE", "EXEMPT"}
@@ -54,7 +53,7 @@ CANARY_LOOSE_PATTERN = re.compile(
 FIELD_PATTERN = re.compile(r"(?P<key>\w+)=(?P<value>[^;]+);?\s*")
 
 
-def extract_fields(rest: str) -> Dict[str, str]:
+def extract_fields(rest: str) -> dict[str, str]:
     """Extract key=value fields from the middle portion of a CANARY marker."""
     fields = {}
     for match in FIELD_PATTERN.finditer(rest):
@@ -70,7 +69,7 @@ def infer_aspect(feature: str, req: str) -> str:
     """Infer ASPECT from FEATURE or REQ ID."""
     # Common aspect mappings based on feature/req patterns
     feature_lower = feature.lower()
-    req_lower = req.lower()
+    req.lower()
 
     if "security" in feature_lower or "auth" in feature_lower or "encrypt" in feature_lower:
         return "Security"
@@ -155,7 +154,7 @@ def infer_owner(req: str, filepath: str) -> str:
     return "core"
 
 
-def normalize_canary_line(line: str, filepath: str, dry_run: bool = True) -> Tuple[str, bool, List[str]]:
+def normalize_canary_line(line: str, filepath: str, dry_run: bool = True) -> tuple[str, bool, list[str]]:
     """
     Normalize a single CANARY marker line.
 
@@ -229,7 +228,7 @@ def normalize_canary_line(line: str, filepath: str, dry_run: bool = True) -> Tup
     return leading_ws + normalized, modified, issues
 
 
-def process_file(filepath: Path, dry_run: bool = True) -> Tuple[int, int, List[Tuple[int, str, List[str]]]]:
+def process_file(filepath: Path, dry_run: bool = True) -> tuple[int, int, list[tuple[int, str, list[str]]]]:
     """
     Process a single file, normalizing all CANARY markers.
 
