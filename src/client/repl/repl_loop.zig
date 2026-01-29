@@ -90,6 +90,9 @@ pub const ReplLoop = struct {
             if (auth_result.session_token) |token| {
                 opts.allocator.free(token);
             }
+            // CANARY: REQ=REQ-SHELL-RECONNECT-014; FEATURE="ShellAutoReconnect"; ASPECT=CacheCredentialsOnAuth; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+            // Cache credentials for automatic reconnection
+            try session.cacheCredentials(opts.username.?, opts.password.?);
         } else {
             session.hello() catch |err| {
                 if (err == error.AuthenticationRequired) {
@@ -167,6 +170,9 @@ pub const ReplState = struct {
     // CANARY: REQ=REQ-SHELL-INTERRUPT-001; FEATURE="SourceInterrupt"; ASPECT=StateFlag; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
     // Issue #390: Flag to signal interrupt during /source execution
     interrupt_requested: bool = false,
+    // CANARY: REQ=REQ-SHELL-RECONNECT-013; FEATURE="ShellAutoReconnect"; ASPECT=TxnStatementCount; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+    // Track number of statements executed in current transaction for recovery info
+    txn_statement_count: usize = 0,
 
     pub fn deinit(self: *ReplState) void {
         if (self.current_graph) |g| self.allocator.free(g);

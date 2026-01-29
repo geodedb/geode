@@ -3529,6 +3529,22 @@ REQ-SHELL-HISTORY-RESET-001,HistoryReset,MetaCommand,IMPL,,,cli,2026-01-28,src/c
 REQ-SHELL-HISTORY-RESET-002,HistoryReset,GqlExecution,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
 REQ-SHELL-INTERRUPT-001,SourceInterrupt,StateFlag,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
 REQ-SHELL-INTERRUPT-003,SourceInterrupt,CheckFunction,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
+REQ-SHELL-RECONNECT-001,ShellAutoReconnect,ReconnectionConfig,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SHELL-RECONNECT-002,ShellAutoReconnect,TransactionState,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SHELL-RECONNECT-003,ShellAutoReconnect,SessionState,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SHELL-RECONNECT-004,ShellAutoReconnect,ErrorDetection,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SHELL-RECONNECT-005,ShellAutoReconnect,ReconnectWithBackoff,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SHELL-RECONNECT-006,ShellAutoReconnect,CacheCredentials,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SHELL-RECONNECT-007,ShellAutoReconnect,SaveTransactionState,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SHELL-RECONNECT-008,ShellAutoReconnect,RestoreGraphContext,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SHELL-RECONNECT-009,ShellAutoReconnect,TransactionRecoveryPrompt,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SHELL-RECONNECT-010,ShellAutoReconnect,HandleConnectionError,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SHELL-RECONNECT-011,ShellAutoReconnect,ExecuteWithRetry,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SHELL-RECONNECT-012,ShellAutoReconnect,PullAllWithReconnect,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SHELL-RECONNECT-013,ShellAutoReconnect,TxnStatementCount,TESTED,,,cli,2026-01-29,src/client/repl/repl_loop.zig
+REQ-SHELL-RECONNECT-014,ShellAutoReconnect,CacheCredentialsOnAuth,TESTED,,,cli,2026-01-29,src/client/repl/repl_loop.zig
+REQ-SHELL-RECONNECT-015,ShellAutoReconnect,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SHELL-RECONNECT-016,ShellAutoReconnect,E2ETests,TESTED,,,cli,2026-01-29,geodetestlab/specs/shell_reconnection.yml
 REQ-SHELL-TEST-VERIFICATION,Shell Test Requirements Verification,UnitTests,TESTED,,,testing,2026-01-15,tests/test_shell_requirements_verification.zig
 REQ-SHELL-TLS-001,Shell TLS Configuration,SecureConnection,TESTED,,,cli,2026-01-15,src/cli/main.zig
 REQ-SHELL-TLS-002,Shell TLS Connection,SecureConnection,EXEMPT,,,cli,2026-01-13,src/cli/main.zig

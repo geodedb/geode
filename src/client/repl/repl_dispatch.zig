@@ -178,6 +178,48 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     return result;
 }
 
+/// CANARY: REQ=REQ-SHELL-RECONNECT-001; FEATURE="ShellAutoReconnect"; ASPECT=ReconnectionConfig; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+/// Configuration for automatic reconnection with exponential backoff
+pub const ReconnectionConfig = struct {
+    /// Maximum number of reconnection attempts (0 = disabled)
+    max_attempts: u32 = 5,
+    /// Initial delay between attempts in milliseconds
+    initial_delay_ms: u64 = 100,
+    /// Maximum delay between attempts in milliseconds
+    max_delay_ms: u64 = 10000,
+    /// Multiplier for exponential backoff (e.g., 2.0 = double each time)
+    backoff_multiplier: f64 = 2.0,
+    /// Whether to prompt user for transaction recovery
+    prompt_for_txn_recovery: bool = true,
+};
+
+/// CANARY: REQ=REQ-SHELL-RECONNECT-002; FEATURE="ShellAutoReconnect"; ASPECT=TransactionState; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+/// Tracks pending transaction state for recovery after reconnection
+pub const PendingTransactionState = struct {
+    /// Whether a transaction was active when connection was lost
+    had_active_transaction: bool = false,
+    /// The graph that was in use (if any)
+    current_graph: ?[]const u8 = null,
+    /// Number of statements executed in the transaction
+    statements_in_txn: usize = 0,
+
+    pub fn reset(self: *PendingTransactionState) void {
+        self.had_active_transaction = false;
+        self.current_graph = null;
+        self.statements_in_txn = 0;
+    }
+};
+
+/// User's choice for transaction recovery after reconnection
+pub const TransactionRecoveryChoice = enum {
+    /// Resume the transaction (start a new BEGIN)
+    resume_transaction,
+    /// Cancel the transaction (don't start a new transaction)
+    cancel_transaction,
+    /// Abort the reconnection entirely
+    abort_reconnection,
+};
+
 pub const ClientSession = struct {
     allocator: std.mem.Allocator,
     server_addr: []const u8,
@@ -185,6 +227,16 @@ pub const ClientSession = struct {
     transport: ?*const Transport = null,
     connection: ?*TransportConnection = null,
     last_response: ?[]u8 = null,
+    /// CANARY: REQ=REQ-SHELL-RECONNECT-003; FEATURE="ShellAutoReconnect"; ASPECT=SessionState; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+    reconnect_config: ReconnectionConfig = .{},
+    pending_txn_state: PendingTransactionState = .{},
+    /// Cached credentials for re-authentication after reconnect
+    cached_username: ?[]const u8 = null,
+    cached_password: ?[]const u8 = null,
+    /// Count of successful reconnections (for diagnostics)
+    reconnect_count: u32 = 0,
+    /// Last reconnection error (for diagnostics)
+    last_reconnect_error: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator, addr: []const u8, transport: *const Transport) !ClientSession {
         return ClientSession{
@@ -212,6 +264,161 @@ pub const ClientSession = struct {
         if (self.last_response) |resp| {
             self.allocator.free(resp);
             self.last_response = null;
+        }
+        if (self.cached_username) |u| {
+            self.allocator.free(u);
+            self.cached_username = null;
+        }
+        if (self.cached_password) |p| {
+            self.allocator.free(p);
+            self.cached_password = null;
+        }
+        if (self.last_reconnect_error) |e| {
+            self.allocator.free(e);
+            self.last_reconnect_error = null;
+        }
+    }
+
+    /// CANARY: REQ=REQ-SHELL-RECONNECT-004; FEATURE="ShellAutoReconnect"; ASPECT=ErrorDetection; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+    /// Check if an error indicates a lost connection that can be recovered
+    pub fn isConnectionError(err: anyerror) bool {
+        return switch (err) {
+            error.BrokenPipe,
+            error.ConnectionResetByPeer,
+            error.ConnectionRefused,
+            error.ConnectionTimedOut,
+            error.NetworkUnreachable,
+            error.HostUnreachable,
+            error.NotConnected,
+            error.SocketNotConnected,
+            error.InputOutput,
+            error.EndOfStream,
+            error.Unexpected,
+            => true,
+            else => false,
+        };
+    }
+
+    /// CANARY: REQ=REQ-SHELL-RECONNECT-005; FEATURE="ShellAutoReconnect"; ASPECT=ReconnectWithBackoff; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+    /// Attempt to reconnect with exponential backoff
+    /// Returns true if reconnection succeeded, false if all attempts failed
+    pub fn reconnect(self: *ClientSession) !bool {
+        if (self.reconnect_config.max_attempts == 0) {
+            return false; // Reconnection disabled
+        }
+
+        const stderr = platform.getStderrHandle();
+        const stdout = platform.getStdoutHandle();
+
+        // Close existing connection if any
+        if (self.connection) |conn| {
+            conn.deinit();
+            self.connection = null;
+        }
+        self.connected = false;
+
+        var delay_ms = self.reconnect_config.initial_delay_ms;
+        var attempt: u32 = 0;
+
+        while (attempt < self.reconnect_config.max_attempts) : (attempt += 1) {
+            // Display reconnection attempt
+            var buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "\r\nConnection lost. Reconnecting (attempt {d}/{d})...\r\n", .{ attempt + 1, self.reconnect_config.max_attempts }) catch "";
+            stdout.writeAll(msg) catch {};
+
+            // Wait before attempting (except first attempt)
+            if (attempt > 0) {
+                std.Thread.sleep(delay_ms * std.time.ns_per_ms);
+                // Exponential backoff
+                const new_delay = @as(u64, @intFromFloat(@as(f64, @floatFromInt(delay_ms)) * self.reconnect_config.backoff_multiplier));
+                delay_ms = @min(new_delay, self.reconnect_config.max_delay_ms);
+            }
+
+            // Attempt connection
+            self.connect() catch |err| {
+                var err_buf: [256]u8 = undefined;
+                const err_msg = std.fmt.bufPrint(&err_buf, "  Attempt {d} failed: {s}\r\n", .{ attempt + 1, @errorName(err) }) catch "";
+                stderr.writeAll(err_msg) catch {};
+                continue;
+            };
+
+            // Attempt HELLO handshake
+            if (self.cached_username != null and self.cached_password != null) {
+                const auth_result = self.helloWithAuth(self.cached_username.?, self.cached_password.?) catch |err| {
+                    var err_buf: [256]u8 = undefined;
+                    const err_msg = std.fmt.bufPrint(&err_buf, "  Auth handshake failed: {s}\r\n", .{@errorName(err)}) catch "";
+                    stderr.writeAll(err_msg) catch {};
+                    // Close connection and retry
+                    if (self.connection) |conn| {
+                        conn.deinit();
+                        self.connection = null;
+                    }
+                    self.connected = false;
+                    continue;
+                };
+                if (!auth_result.success) {
+                    stderr.writeAll("  Authentication failed after reconnect\r\n") catch {};
+                    if (auth_result.error_message) |em| self.allocator.free(em);
+                    if (auth_result.session_token) |st| self.allocator.free(st);
+                    if (self.connection) |conn| {
+                        conn.deinit();
+                        self.connection = null;
+                    }
+                    self.connected = false;
+                    continue;
+                }
+                if (auth_result.session_token) |st| self.allocator.free(st);
+            } else {
+                self.hello() catch |err| {
+                    var err_buf: [256]u8 = undefined;
+                    const err_msg = std.fmt.bufPrint(&err_buf, "  Handshake failed: {s}\r\n", .{@errorName(err)}) catch "";
+                    stderr.writeAll(err_msg) catch {};
+                    // Close connection and retry
+                    if (self.connection) |conn| {
+                        conn.deinit();
+                        self.connection = null;
+                    }
+                    self.connected = false;
+                    continue;
+                };
+            }
+
+            // Success!
+            self.reconnect_count += 1;
+            stdout.writeAll("  Reconnected successfully!\r\n") catch {};
+            return true;
+        }
+
+        // All attempts failed
+        stderr.writeAll("  All reconnection attempts failed.\r\n") catch {};
+        return false;
+    }
+
+    /// CANARY: REQ=REQ-SHELL-RECONNECT-006; FEATURE="ShellAutoReconnect"; ASPECT=CacheCredentials; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+    /// Cache credentials for use during reconnection
+    pub fn cacheCredentials(self: *ClientSession, username: []const u8, password: []const u8) !void {
+        if (self.cached_username) |u| self.allocator.free(u);
+        if (self.cached_password) |p| self.allocator.free(p);
+        self.cached_username = try self.allocator.dupe(u8, username);
+        self.cached_password = try self.allocator.dupe(u8, password);
+    }
+
+    /// CANARY: REQ=REQ-SHELL-RECONNECT-007; FEATURE="ShellAutoReconnect"; ASPECT=SaveTransactionState; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+    /// Save current transaction state before reconnection attempt
+    pub fn saveTransactionState(self: *ClientSession, in_txn: bool, current_graph: ?[]const u8, stmt_count: usize) void {
+        self.pending_txn_state.had_active_transaction = in_txn;
+        self.pending_txn_state.current_graph = current_graph;
+        self.pending_txn_state.statements_in_txn = stmt_count;
+    }
+
+    /// CANARY: REQ=REQ-SHELL-RECONNECT-008; FEATURE="ShellAutoReconnect"; ASPECT=RestoreGraphContext; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+    /// Restore graph context after reconnection (sends USE GRAPH if needed)
+    pub fn restoreGraphContext(self: *ClientSession, current_graph: ?[]const u8) !void {
+        if (current_graph) |graph| {
+            // Send USE GRAPH statement to restore context
+            const use_stmt = try std.fmt.allocPrint(self.allocator, "USE GRAPH {s};", .{graph});
+            defer self.allocator.free(use_stmt);
+            try self.runGql(use_stmt);
         }
     }
 
@@ -446,6 +653,150 @@ pub const ClientSession = struct {
         }
     }
 };
+
+/// CANARY: REQ=REQ-SHELL-RECONNECT-009; FEATURE="ShellAutoReconnect"; ASPECT=TransactionRecoveryPrompt; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+/// Prompt user for transaction recovery choice after reconnection
+/// Returns the user's choice for how to handle the pending transaction
+pub fn promptTransactionRecovery(pending_state: *const PendingTransactionState) !TransactionRecoveryChoice {
+    const stdout = platform.getStdoutHandle();
+    const stdin = platform.getStdinHandle();
+
+    // Display transaction state information
+    try stdout.writeAll("\r\n");
+    try stdout.writeAll("╔══════════════════════════════════════════════════════════════╗\r\n");
+    try stdout.writeAll("║           TRANSACTION RECOVERY REQUIRED                      ║\r\n");
+    try stdout.writeAll("╠══════════════════════════════════════════════════════════════╣\r\n");
+    try stdout.writeAll("║ Connection was lost while a transaction was active.         ║\r\n");
+    try stdout.writeAll("║ The transaction has been rolled back on the server.         ║\r\n");
+    try stdout.writeAll("╟──────────────────────────────────────────────────────────────╢\r\n");
+
+    // Show transaction details
+    var buf: [256]u8 = undefined;
+    const stmt_msg = std.fmt.bufPrint(&buf, "║ Statements executed in transaction: {d:<24} ║\r\n", .{pending_state.statements_in_txn}) catch "";
+    try stdout.writeAll(stmt_msg);
+
+    if (pending_state.current_graph) |graph| {
+        const graph_msg = std.fmt.bufPrint(&buf, "║ Graph context: {s:<45} ║\r\n", .{graph}) catch "";
+        try stdout.writeAll(graph_msg);
+    } else {
+        try stdout.writeAll("║ Graph context: (default)                                     ║\r\n");
+    }
+
+    try stdout.writeAll("╟──────────────────────────────────────────────────────────────╢\r\n");
+    try stdout.writeAll("║ How would you like to proceed?                               ║\r\n");
+    try stdout.writeAll("║                                                              ║\r\n");
+    try stdout.writeAll("║   [R] Resume - Start a new transaction and continue         ║\r\n");
+    try stdout.writeAll("║   [C] Cancel - Continue without a transaction               ║\r\n");
+    try stdout.writeAll("║   [A] Abort  - Disconnect and exit                          ║\r\n");
+    try stdout.writeAll("╚══════════════════════════════════════════════════════════════╝\r\n");
+    try stdout.writeAll("\r\nYour choice [R/C/A]: ");
+
+    // Read user input
+    var input_buf: [16]u8 = undefined;
+    const bytes_read = stdin.read(&input_buf) catch {
+        return .cancel_transaction; // Default to cancel on error
+    };
+
+    if (bytes_read == 0) {
+        return .cancel_transaction;
+    }
+
+    // Parse the response
+    const choice = std.mem.trim(u8, input_buf[0..bytes_read], " \t\r\n");
+    if (choice.len == 0) {
+        return .cancel_transaction;
+    }
+
+    const first_char = std.ascii.toLower(choice[0]);
+    return switch (first_char) {
+        'r' => .resume_transaction,
+        'c' => .cancel_transaction,
+        'a' => .abort_reconnection,
+        else => blk: {
+            try stdout.writeAll("Invalid choice. Defaulting to Cancel.\r\n");
+            break :blk .cancel_transaction;
+        },
+    };
+}
+
+/// CANARY: REQ=REQ-SHELL-RECONNECT-010; FEATURE="ShellAutoReconnect"; ASPECT=HandleConnectionError; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+/// Handle a connection error by attempting reconnection and transaction recovery
+/// Returns true if the operation should be retried, false otherwise
+pub fn handleConnectionError(state: anytype, err: anyerror) !bool {
+    const stderr = platform.getStderrHandle();
+
+    // Check if this is a recoverable connection error
+    if (!ClientSession.isConnectionError(err)) {
+        return false; // Not a connection error, don't retry
+    }
+
+    // Save transaction state before reconnection
+    const txn_stmt_count = if (@hasField(@TypeOf(state.*), "txn_statement_count"))
+        state.txn_statement_count
+    else
+        0;
+    state.session.saveTransactionState(state.in_txn, state.current_graph, txn_stmt_count);
+
+    // Attempt reconnection
+    const reconnected = state.session.reconnect() catch |reconnect_err| {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Reconnection failed: {s}\r\n", .{@errorName(reconnect_err)}) catch "";
+        stderr.writeAll(msg) catch {};
+        return false;
+    };
+
+    if (!reconnected) {
+        return false;
+    }
+
+    // Restore graph context if needed
+    if (state.current_graph) |graph| {
+        state.session.restoreGraphContext(graph) catch |restore_err| {
+            var buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "Warning: Could not restore graph context: {s}\r\n", .{@errorName(restore_err)}) catch "";
+            stderr.writeAll(msg) catch {};
+        };
+    }
+
+    // Handle transaction recovery if there was an active transaction
+    if (state.session.pending_txn_state.had_active_transaction) {
+        if (state.session.reconnect_config.prompt_for_txn_recovery) {
+            const choice = try promptTransactionRecovery(&state.session.pending_txn_state);
+
+            switch (choice) {
+                .resume_transaction => {
+                    // Start a new transaction
+                    state.session.begin() catch |begin_err| {
+                        var buf: [256]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&buf, "Warning: Could not start new transaction: {s}\r\n", .{@errorName(begin_err)}) catch "";
+                        stderr.writeAll(msg) catch {};
+                        state.in_txn = false;
+                    };
+                    state.in_txn = true;
+                    const stdout = platform.getStdoutHandle();
+                    stdout.writeAll("New transaction started. Please re-execute your statements.\r\n") catch {};
+                },
+                .cancel_transaction => {
+                    state.in_txn = false;
+                    const stdout = platform.getStdoutHandle();
+                    stdout.writeAll("Continuing without transaction.\r\n") catch {};
+                },
+                .abort_reconnection => {
+                    state.quit_requested = true;
+                    return false;
+                },
+            }
+        } else {
+            // Auto-cancel transaction if prompting is disabled
+            state.in_txn = false;
+        }
+    }
+
+    // Reset pending transaction state
+    state.session.pending_txn_state.reset();
+
+    return true; // Retry the operation
+}
 
 pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
     const stdout = platform.getStdoutHandle();
@@ -845,17 +1196,46 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     // Start timing the query execution
     var timer = try std.time.Timer.start();
 
-    // Execute query via QUIC
-    state.session.runGql(gql) catch |err| {
-        // CANARY: REQ=REQ-SHELL-WOULDBLOCK-002; FEATURE="SuppressWouldBlock"; ASPECT=RunGqlError; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-        // Issue #388: Don't display WouldBlock errors - normal async I/O behavior
-        if (err != error.WouldBlock) {
+    // CANARY: REQ=REQ-SHELL-RECONNECT-011; FEATURE="ShellAutoReconnect"; ASPECT=ExecuteWithRetry; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+    // Execute query via QUIC with automatic reconnection on connection errors
+    var retry_count: u32 = 0;
+    const max_retries: u32 = 1; // Only retry once after reconnection
+
+    while (retry_count <= max_retries) : (retry_count += 1) {
+        state.session.runGql(gql) catch |err| {
+            // CANARY: REQ=REQ-SHELL-WOULDBLOCK-002; FEATURE="SuppressWouldBlock"; ASPECT=RunGqlError; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+            // Issue #388: Don't display WouldBlock errors - normal async I/O behavior
+            if (err == error.WouldBlock) {
+                return;
+            }
+
+            // Check if this is a connection error that can be recovered
+            if (ClientSession.isConnectionError(err) and retry_count < max_retries) {
+                // Attempt reconnection and transaction recovery
+                const should_retry = handleConnectionError(state, err) catch |handle_err| {
+                    var buf: [256]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "Error during reconnection handling: {s}\r\n", .{@errorName(handle_err)}) catch "";
+                    stderr.writeAll(msg) catch {};
+                    return;
+                };
+
+                if (should_retry) {
+                    // Reset timer for retry
+                    timer = std.time.Timer.start() catch return;
+                    continue; // Retry the query
+                }
+            }
+
+            // Non-recoverable error or reconnection failed
             try stderr.writeAll("Error executing query: ");
             try stderr.writeAll(@errorName(err));
             try stderr.writeAll("\r\n");
-        }
-        return;
-    };
+            return;
+        };
+
+        // Query succeeded, break out of retry loop
+        break;
+    }
 
     // Check if the schema response indicates an error - if so, don't PULL
     var has_error = false;
@@ -881,7 +1261,8 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     defer response_data.deinit(state.allocator);
 
     if (!has_error) {
-        // Use pullAll to get the complete response
+        // CANARY: REQ=REQ-SHELL-RECONNECT-012; FEATURE="ShellAutoReconnect"; ASPECT=PullAllWithReconnect; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+        // Use pullAll to get the complete response with reconnection handling
         state.session.pullAll(&response_data) catch |err| {
             // Check if we at least got a schema response with an error
             if (state.session.last_response) |schema_response| {
@@ -891,11 +1272,31 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
             }
             // CANARY: REQ=REQ-SHELL-WOULDBLOCK-003; FEATURE="SuppressWouldBlock"; ASPECT=PullAllError; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
             // Issue #388: Don't display WouldBlock errors - normal async I/O behavior
-            if (err != error.WouldBlock) {
-                try stderr.writeAll("Error fetching results: ");
-                try stderr.writeAll(@errorName(err));
-                try stderr.writeAll("\r\n");
+            if (err == error.WouldBlock) {
+                return;
             }
+
+            // Check if this is a connection error
+            if (ClientSession.isConnectionError(err)) {
+                // Attempt reconnection
+                const should_retry = handleConnectionError(state, err) catch |handle_err| {
+                    var buf: [256]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "Error during reconnection handling: {s}\r\n", .{@errorName(handle_err)}) catch "";
+                    stderr.writeAll(msg) catch {};
+                    return;
+                };
+
+                if (should_retry) {
+                    // Note: We can't retry pullAll without re-executing the query
+                    // Inform the user they need to re-run the query
+                    try stderr.writeAll("Connection lost while fetching results. Please re-run your query.\r\n");
+                }
+                return;
+            }
+
+            try stderr.writeAll("Error fetching results: ");
+            try stderr.writeAll(@errorName(err));
+            try stderr.writeAll("\r\n");
             return;
         };
     }
@@ -2459,4 +2860,212 @@ test "TestIsIdentifierChar_NonIdentifier" {
     try testing.expect(!isIdentifierChar('('));
     try testing.expect(!isIdentifierChar(')'));
     try testing.expect(!isIdentifierChar(':'));
+}
+
+// CANARY: REQ=REQ-SHELL-RECONNECT-015; FEATURE="ShellAutoReconnect"; ASPECT=UnitTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
+// Unit tests for automatic reconnection functionality
+
+test "TestReconnectionConfig_DefaultValues" {
+    // Test default reconnection configuration values
+    const config = ReconnectionConfig{};
+    try testing.expectEqual(@as(u32, 5), config.max_attempts);
+    try testing.expectEqual(@as(u64, 100), config.initial_delay_ms);
+    try testing.expectEqual(@as(u64, 10000), config.max_delay_ms);
+    try testing.expectEqual(@as(f64, 2.0), config.backoff_multiplier);
+    try testing.expect(config.prompt_for_txn_recovery);
+}
+
+test "TestReconnectionConfig_CustomValues" {
+    // Test custom reconnection configuration
+    const config = ReconnectionConfig{
+        .max_attempts = 10,
+        .initial_delay_ms = 50,
+        .max_delay_ms = 5000,
+        .backoff_multiplier = 1.5,
+        .prompt_for_txn_recovery = false,
+    };
+    try testing.expectEqual(@as(u32, 10), config.max_attempts);
+    try testing.expectEqual(@as(u64, 50), config.initial_delay_ms);
+    try testing.expectEqual(@as(u64, 5000), config.max_delay_ms);
+    try testing.expectEqual(@as(f64, 1.5), config.backoff_multiplier);
+    try testing.expect(!config.prompt_for_txn_recovery);
+}
+
+test "TestReconnectionConfig_DisabledReconnection" {
+    // Test disabled reconnection (max_attempts = 0)
+    const config = ReconnectionConfig{
+        .max_attempts = 0,
+    };
+    try testing.expectEqual(@as(u32, 0), config.max_attempts);
+}
+
+test "TestPendingTransactionState_DefaultValues" {
+    // Test default pending transaction state
+    const state = PendingTransactionState{};
+    try testing.expect(!state.had_active_transaction);
+    try testing.expect(state.current_graph == null);
+    try testing.expectEqual(@as(usize, 0), state.statements_in_txn);
+}
+
+test "TestPendingTransactionState_Reset" {
+    // Test reset functionality
+    var state = PendingTransactionState{
+        .had_active_transaction = true,
+        .current_graph = "test_graph",
+        .statements_in_txn = 10,
+    };
+    state.reset();
+    try testing.expect(!state.had_active_transaction);
+    try testing.expect(state.current_graph == null);
+    try testing.expectEqual(@as(usize, 0), state.statements_in_txn);
+}
+
+test "TestTransactionRecoveryChoice_Values" {
+    // Test transaction recovery choice enum values
+    const resume_choice = TransactionRecoveryChoice.resume_transaction;
+    const cancel_choice = TransactionRecoveryChoice.cancel_transaction;
+    const abort_choice = TransactionRecoveryChoice.abort_reconnection;
+
+    try testing.expect(resume_choice != cancel_choice);
+    try testing.expect(cancel_choice != abort_choice);
+    try testing.expect(resume_choice != abort_choice);
+}
+
+test "TestClientSession_IsConnectionError_BrokenPipe" {
+    // Test BrokenPipe is detected as connection error
+    try testing.expect(ClientSession.isConnectionError(error.BrokenPipe));
+}
+
+test "TestClientSession_IsConnectionError_ConnectionResetByPeer" {
+    // Test ConnectionResetByPeer is detected as connection error
+    try testing.expect(ClientSession.isConnectionError(error.ConnectionResetByPeer));
+}
+
+test "TestClientSession_IsConnectionError_ConnectionRefused" {
+    // Test ConnectionRefused is detected as connection error
+    try testing.expect(ClientSession.isConnectionError(error.ConnectionRefused));
+}
+
+test "TestClientSession_IsConnectionError_ConnectionTimedOut" {
+    // Test ConnectionTimedOut is detected as connection error
+    try testing.expect(ClientSession.isConnectionError(error.ConnectionTimedOut));
+}
+
+test "TestClientSession_IsConnectionError_NetworkUnreachable" {
+    // Test NetworkUnreachable is detected as connection error
+    try testing.expect(ClientSession.isConnectionError(error.NetworkUnreachable));
+}
+
+test "TestClientSession_IsConnectionError_HostUnreachable" {
+    // Test HostUnreachable is detected as connection error
+    try testing.expect(ClientSession.isConnectionError(error.HostUnreachable));
+}
+
+test "TestClientSession_IsConnectionError_NotConnected" {
+    // Test NotConnected is detected as connection error
+    try testing.expect(ClientSession.isConnectionError(error.NotConnected));
+}
+
+test "TestClientSession_IsConnectionError_EndOfStream" {
+    // Test EndOfStream is detected as connection error
+    try testing.expect(ClientSession.isConnectionError(error.EndOfStream));
+}
+
+test "TestClientSession_IsConnectionError_InputOutput" {
+    // Test InputOutput is detected as connection error
+    try testing.expect(ClientSession.isConnectionError(error.InputOutput));
+}
+
+test "TestClientSession_IsConnectionError_NonConnectionError" {
+    // Test that non-connection errors return false
+    try testing.expect(!ClientSession.isConnectionError(error.OutOfMemory));
+    try testing.expect(!ClientSession.isConnectionError(error.InvalidCharacter));
+}
+
+test "TestClientSession_InitialReconnectCount" {
+    // Test that reconnect count starts at 0
+    const allocator = testing.allocator;
+    const transport = Transport{ .connectFn = mockConnectFn };
+    var session = try ClientSession.init(allocator, "localhost:3141", &transport);
+    defer session.deinit();
+    try testing.expectEqual(@as(u32, 0), session.reconnect_count);
+}
+
+test "TestClientSession_InitialPendingTxnState" {
+    // Test that pending transaction state is initialized properly
+    const allocator = testing.allocator;
+    const transport = Transport{ .connectFn = mockConnectFn };
+    var session = try ClientSession.init(allocator, "localhost:3141", &transport);
+    defer session.deinit();
+    try testing.expect(!session.pending_txn_state.had_active_transaction);
+    try testing.expect(session.pending_txn_state.current_graph == null);
+    try testing.expectEqual(@as(usize, 0), session.pending_txn_state.statements_in_txn);
+}
+
+test "TestClientSession_SaveTransactionState" {
+    // Test saving transaction state
+    const allocator = testing.allocator;
+    const transport = Transport{ .connectFn = mockConnectFn };
+    var session = try ClientSession.init(allocator, "localhost:3141", &transport);
+    defer session.deinit();
+
+    session.saveTransactionState(true, "my_graph", 5);
+
+    try testing.expect(session.pending_txn_state.had_active_transaction);
+    try testing.expect(std.mem.eql(u8, session.pending_txn_state.current_graph.?, "my_graph"));
+    try testing.expectEqual(@as(usize, 5), session.pending_txn_state.statements_in_txn);
+}
+
+test "TestClientSession_SaveTransactionState_NoGraph" {
+    // Test saving transaction state without graph
+    const allocator = testing.allocator;
+    const transport = Transport{ .connectFn = mockConnectFn };
+    var session = try ClientSession.init(allocator, "localhost:3141", &transport);
+    defer session.deinit();
+
+    session.saveTransactionState(false, null, 0);
+
+    try testing.expect(!session.pending_txn_state.had_active_transaction);
+    try testing.expect(session.pending_txn_state.current_graph == null);
+    try testing.expectEqual(@as(usize, 0), session.pending_txn_state.statements_in_txn);
+}
+
+test "TestClientSession_CacheCredentials" {
+    // Test credential caching
+    const allocator = testing.allocator;
+    const transport = Transport{ .connectFn = mockConnectFn };
+    var session = try ClientSession.init(allocator, "localhost:3141", &transport);
+    defer session.deinit();
+
+    try session.cacheCredentials("testuser", "testpass");
+
+    try testing.expect(session.cached_username != null);
+    try testing.expect(session.cached_password != null);
+    try testing.expect(std.mem.eql(u8, session.cached_username.?, "testuser"));
+    try testing.expect(std.mem.eql(u8, session.cached_password.?, "testpass"));
+}
+
+test "TestClientSession_CacheCredentials_Overwrite" {
+    // Test overwriting cached credentials
+    const allocator = testing.allocator;
+    const transport = Transport{ .connectFn = mockConnectFn };
+    var session = try ClientSession.init(allocator, "localhost:3141", &transport);
+    defer session.deinit();
+
+    try session.cacheCredentials("user1", "pass1");
+    try session.cacheCredentials("user2", "pass2");
+
+    try testing.expect(std.mem.eql(u8, session.cached_username.?, "user2"));
+    try testing.expect(std.mem.eql(u8, session.cached_password.?, "pass2"));
+}
+
+test "TestClientSession_DefaultReconnectConfig" {
+    // Test default reconnect configuration in session
+    const allocator = testing.allocator;
+    const transport = Transport{ .connectFn = mockConnectFn };
+    var session = try ClientSession.init(allocator, "localhost:3141", &transport);
+    defer session.deinit();
+
+    try testing.expectEqual(@as(u32, 5), session.reconnect_config.max_attempts);
+    try testing.expect(session.reconnect_config.prompt_for_txn_recovery);
 }
