@@ -67,6 +67,10 @@ pub const ReplLoop = struct {
         defer session.deinit();
         try session.connect();
 
+        // Print connected message after successful connection (we're in raw mode so use stderr writeAll)
+        const stdout_file = platform.getStdoutHandle();
+        try stdout_file.writeAll("Connected!\r\n");
+
         // CANARY: REQ=REQ-SHELL-AUTH-003; FEATURE="ShellAuthHandshake"; ASPECT=HelloWithCredentials; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
         // Issue #387: Use authenticated hello if credentials are provided, otherwise standard hello
         if (opts.username != null and opts.password != null) {

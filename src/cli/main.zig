@@ -4168,15 +4168,16 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // For testing - simulate a simple shell without full REPL
     std.debug.print("Geode Shell v0.1.0\n", .{});
     // GAP-0113: Display TLS certificate status
+    // Note: Print "Connecting to..." here since actual connection happens in REPL loop
     if (insecure) {
-        std.debug.print("Connected to {s} (insecure mode - TLS verification disabled)\n", .{server});
+        std.debug.print("Connecting to {s} (insecure mode - TLS verification disabled)\n", .{server});
     } else if (ca_cert_path != null or client_cert_path != null) {
-        std.debug.print("Connected to {s} (TLS with custom certificates)\n", .{server});
+        std.debug.print("Connecting to {s} (TLS with custom certificates)\n", .{server});
         if (ca_cert_path) |ca| std.debug.print("  CA cert: {s}\n", .{ca});
         if (client_cert_path) |cert| std.debug.print("  Client cert: {s}\n", .{cert});
         if (client_key_path) |key| std.debug.print("  Client key: {s}\n", .{key});
     } else {
-        std.debug.print("Connected to {s} (TLS enabled)\n", .{server});
+        std.debug.print("Connecting to {s} (TLS enabled)\n", .{server});
     }
     std.debug.print("Type 'help' for help, 'exit' to quit.\n", .{});
 
