@@ -59,6 +59,17 @@ archives:
   - docs/QUICK_REFERENCE.md
   - docs/API_REFERENCE.md
 
+  # Archive for macOS universal binary (used by Homebrew)
+- id: geode-universal-archive
+  ids:
+  - geode-universal
+  name_template: '{{ .ProjectName }}_{{ .Version }}_darwin_universal'
+  files:
+  - README.md
+  - LICENSE
+  - docs/QUICK_REFERENCE.md
+  - docs/API_REFERENCE.md
+
 
 # =============================================================================
 # Checksums
@@ -620,7 +631,7 @@ release:
 brews:
 - name: geode
   ids:
-  - geode-universal
+  - geode-universal-archive
   repository:
     owner: geodedb
     name: homebrew-geode
