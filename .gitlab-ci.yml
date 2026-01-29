@@ -797,8 +797,8 @@ publish-release:
       **macOS**
       \`\`\`bash
       # Download Universal binary (Intel + Apple Silicon)
-      curl -LO ${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_darwin_all.tar.gz?job=build-release
-      tar xzf geode_${VERSION}_darwin_all.tar.gz
+      curl -LO ${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_darwin_universal.tar.gz?job=build-release
+      tar xzf geode_${VERSION}_darwin_universal.tar.gz
       sudo mv geode /usr/local/bin/
       \`\`\`
 
@@ -815,7 +815,7 @@ publish-release:
         --name "Geode ${CI_COMMIT_TAG}" \
         --tag-name "${CI_COMMIT_TAG}" \
         --description "${DESCRIPTION}" \
-        --assets-link "{\"name\":\"macOS Universal (Intel + Apple Silicon)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_darwin_all.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"macOS Universal (Intel + Apple Silicon)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_darwin_universal.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"macOS Intel (x86_64)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_x86_64-macos.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"macOS Apple Silicon (ARM64)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_aarch64-macos.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
         --assets-link "{\"name\":\"Linux x86_64 (glibc)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_x86_64-linux-gnu.tar.gz?job=build-release\",\"link_type\":\"package\"}" \

@@ -1,6 +1,6 @@
 # Gap Analysis
 
-**Last Updated**: January 26, 2026
+**Last Updated**: January 29, 2026
 **Verified By**: Requirements-to-Unit-Test Gap Analysis Audit
 **GitLab Source of Truth**: <https://gitlab.com/devnw/codepros/geode/geode/-/issues?label_name=gap>
 
@@ -10,7 +10,8 @@
 |----------|-----------|----------|
 | Test | 1 | Medium |
 | CI-CD | 1 | Medium |
-| **Total Open Gaps** | **2** | |
+| Documentation | 4 | High |
+| **Total Open Gaps** | **6** | |
 
 ## Open Gaps
 
@@ -50,6 +51,84 @@
 - **Impact/Risk:** Performance regressions can be merged silently without detection
 - **Recommended fix:** Add dedicated CI job `test-performance-benchmarks` with `allow_failure: false`
 - **Acceptance criteria:** CI job runs benchmarks on MRs; enforces latency budgets; blocks merge on regression
+
+---
+
+### GAP-0245: API Keys authentication documented but not implemented
+
+- **GitLab issue:** [#396](https://gitlab.com/devnw/codepros/geode/geode/-/issues/396)
+- **Category:** Documentation
+- **Severity:** High
+- **Requirement source:** `docs/USER_AUTH.md` authentication methods table
+- **Current state (evidence):**
+  - Documentation claims: "API Keys - Service accounts, automation - Medium-High security"
+  - `grep -r "api_key\|ApiKey\|API_KEY" src/security/` → No production implementation
+  - `geodetestlab/specs/geode_auth.yml:28-32` → Placeholder "api_token" in test spec, marked optional
+  - No API key generation, validation, storage, or revocation mechanisms in codebase
+  - No dedicated API key data structures or endpoints
+- **Why this is a gap:** Documentation advertises API key authentication as available, but zero production code exists
+- **Impact/Risk:** Users expecting API key auth for service accounts will find feature unavailable; misleading documentation
+- **Recommended fix:** Either implement API key authentication or remove/qualify claim in documentation
+- **Acceptance criteria:** Either (a) API key generation/validation implemented with tests, or (b) documentation updated to mark as "Planned"
+
+---
+
+### GAP-0246: LDAP/Active Directory authentication documented but not implemented
+
+- **GitLab issue:** [#397](https://gitlab.com/devnw/codepros/geode/geode/-/issues/397)
+- **Category:** Documentation
+- **Severity:** High
+- **Requirement source:** `docs/USER_AUTH.md` authentication methods table
+- **Current state (evidence):**
+  - Documentation claims: "LDAP/Active Directory - Enterprise environments - High security"
+  - `grep -ri "ldap\|active_directory\|activedirectory" src/` → Zero matches
+  - No LDAP client library integration
+  - No LDAP bind, search, or authentication flow implementations
+  - No AD-specific configuration or schema mapping
+- **Why this is a gap:** Documentation advertises enterprise LDAP/AD integration, but no implementation exists
+- **Impact/Risk:** Enterprise customers expecting AD integration will be unable to use it; critical for enterprise adoption
+- **Recommended fix:** Either implement LDAP/AD authentication backend or remove/qualify claim in documentation
+- **Acceptance criteria:** Either (a) LDAP authentication backend with bind/search/auth implemented, or (b) documentation updated to mark as "Planned"
+
+---
+
+### GAP-0247: OAuth2/OIDC authentication documented but not implemented
+
+- **GitLab issue:** [#398](https://gitlab.com/devnw/codepros/geode/geode/-/issues/398)
+- **Category:** Documentation
+- **Severity:** High
+- **Requirement source:** `docs/USER_AUTH.md` authentication methods table
+- **Current state (evidence):**
+  - Documentation claims: "OAuth2/OIDC - SSO integration, cloud-native - High security"
+  - `grep -ri "oauth\|oidc\|openid" src/` → Zero matches
+  - No OAuth2 client or provider implementation
+  - No OpenID Connect discovery, token exchange, or ID token validation
+  - No authorization server integration
+- **Why this is a gap:** Documentation advertises OAuth2/OIDC for SSO, but no implementation exists
+- **Impact/Risk:** Cloud-native deployments expecting SSO integration will find feature unavailable
+- **Recommended fix:** Either implement OAuth2/OIDC client support or remove/qualify claim in documentation
+- **Acceptance criteria:** Either (a) OAuth2/OIDC client with token validation implemented, or (b) documentation updated to mark as "Planned"
+
+---
+
+### GAP-0248: mTLS authentication documented as "Very High" security but only transport-level implemented
+
+- **GitLab issue:** [#399](https://gitlab.com/devnw/codepros/geode/geode/-/issues/399)
+- **Category:** Documentation
+- **Severity:** High
+- **Requirement source:** `docs/USER_AUTH.md` authentication methods table
+- **Current state (evidence):**
+  - Documentation claims: "mTLS (Mutual TLS) - Zero-trust, service mesh - Very High security"
+  - `src/transport/quic.zig:507-549` → `connectEx()` accepts `client_cert_path` and `client_key_path`
+  - Transport layer supports TLS 1.3 with client certificate presentation
+  - **However:** No application-level client certificate authentication exists
+  - Certificates are used for transport security, NOT as a primary authentication mechanism
+  - No certificate-to-user mapping, no cert-based session establishment, no cert DN extraction for auth
+  - Users cannot authenticate using client certificates instead of username/password
+- **Why this is a gap:** mTLS transport security ≠ mTLS authentication; documentation implies cert-based user auth
+- **Impact/Risk:** Zero-trust deployments expecting cert-based auth will find only transport-level mTLS
+- **Recommended fix:** Either implement application-level cert authentication or clarify documentation to distinguish transport mTLS from auth mTLS
+- **Acceptance criteria:** Either (a) Certificate-based user authentication implemented (cert DN → user mapping), or (b) documentation clarified: "mTLS transport security" vs "mTLS authentication"
 
 ---
 

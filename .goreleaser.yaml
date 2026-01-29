@@ -610,7 +610,7 @@ release:
     **macOS (Homebrew)**
     ```bash
     brew tap geodedb/geode
-    brew install geode
+    brew install geodedb  # Named 'geodedb' to avoid collision with Apache Geode
     ```
 
     **Binary Download**
@@ -629,14 +629,16 @@ release:
 # Note: Uses the macOS universal binary created by universal_binaries section.
 
 brews:
-- name: geode
+  # Named 'geodedb' to avoid collision with Apache Geode in homebrew/core
+- name: geodedb
   ids:
   - geode-universal-archive
   repository:
     owner: geodedb
     name: homebrew-geode
     token: '{{ .Env.HOMEBREW_TAP_TOKEN }}'
-  url_template: https://gitlab.com/devnw/codepros/geode/geode/-/releases/{{ .Tag }}/downloads/{{ .ArtifactName }}
+  # URL points to GitLab job artifacts (job artifacts are publicly accessible)
+  url_template: https://gitlab.com/devnw/codepros/geode/geode/-/jobs/artifacts/{{ .Tag }}/raw/dist/{{ .ArtifactName }}?job=build-release
   download_strategy: CurlDownloadStrategy
   commit_author:
     name: geode-bot
@@ -647,6 +649,18 @@ brews:
   description: ISO/IEC 39075:2024 GQL-compliant property-graph database
   license: Apache-2.0
   skip_upload: auto
+  caveats: |
+    Geode has been installed!
+
+    Note: This is 'geodedb' (GQL graph database), not Apache Geode.
+
+    To start the server:
+      geode serve --listen 0.0.0.0:3141
+
+    To use the interactive shell:
+      geode shell
+
+    Documentation: https://gitlab.com/devnw/codepros/geode/geode/-/tree/main/docs
   test: |
     system "#{bin}/geode", "--version"
   install: |
