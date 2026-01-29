@@ -11,6 +11,7 @@ Features:
 """
 
 import atexit
+import contextlib
 import copy
 import json
 import os
@@ -24,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Optional
 
 import yaml
 
@@ -54,7 +55,7 @@ class SpecResult:
     failed: int
     skipped: int
     execution_time_ms: int
-    test_results: List[TestResult]
+    test_results: list[TestResult]
 
 
 @dataclass
@@ -64,12 +65,12 @@ class Scenario:
     name: str
     server_enabled: bool
     client_mode: str  # "embedded" or "server"
-    client_default_flags: List[str]
-    server_default_flags: Optional[List[str]] = None
+    client_default_flags: list[str]
+    server_default_flags: Optional[list[str]] = None
 
-    def expanded_client_flags(self, server_address: Optional[str]) -> List[str]:
+    def expanded_client_flags(self, server_address: Optional[str]) -> list[str]:
         """Expand default client flags with server address placeholders."""
-        expanded: List[str] = []
+        expanded: list[str] = []
         for flag in self.client_default_flags or []:
             if "${server_address}" in flag:
                 if server_address:
@@ -90,7 +91,7 @@ class PortAllocator:
         """Initialize the port allocator with a range of available ports."""
         self.start_port = start_port
         self.end_port = end_port
-        self.allocated_ports: Set[int] = set()
+        self.allocated_ports: set[int] = set()
         self.lock = threading.Lock()
 
     def allocate_port(self) -> Optional[int]:
@@ -171,7 +172,7 @@ class ParallelTestRunner:
         self.test_timeout = test_timeout
         self.default_cert = str(self.project_root / "certs" / "server.crt")
         self.default_key = str(self.project_root / "certs" / "server.key")
-        self.child_procs: List[subprocess.Popen] = []
+        self.child_procs: list[subprocess.Popen] = []
         self.child_lock = threading.Lock()
         atexit.register(self._cleanup_children)
 
@@ -204,11 +205,8 @@ class ParallelTestRunner:
         """Remove a child process from tracking."""
         if proc is None:
             return
-        with self.child_lock:
-            try:
-                self.child_procs.remove(proc)
-            except ValueError:
-                pass
+        with self.child_lock, contextlib.suppress(ValueError):
+            self.child_procs.remove(proc)
 
     def _cleanup_children(self) -> None:
         """Best-effort cleanup of any lingering child servers."""
@@ -222,12 +220,10 @@ class ParallelTestRunner:
                     proc.terminate()
                     proc.wait(timeout=5)
                 except Exception:
-                    try:
+                    with contextlib.suppress(Exception):
                         proc.kill()
-                    except Exception:
-                        pass
 
-    def default_scenario_configs(self) -> List[Dict]:
+    def default_scenario_configs(self) -> list[dict]:
         """Default scenarios - server mode only."""
         return [
             {
@@ -242,7 +238,66 @@ class ParallelTestRunner:
             },
         ]
 
-    def is_geode_command(self, args: List[str]) -> bool:
+    def _fix_surrogate_pairs(self, s: str) -> str:
+        """Fix UTF-16 surrogate pairs in a string by converting to proper Unicode.
+
+        YAML may load strings containing raw surrogate pairs (e.g., \\ud83d\\udd10)
+        which Python can't encode as UTF-8. This function converts surrogate pairs
+        to their proper Unicode code points.
+        """
+        if not isinstance(s, str):
+            return s
+        try:
+            # Encode with surrogatepass to handle surrogate pairs, then decode back
+            return s.encode("utf-16", "surrogatepass").decode("utf-16")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            try:
+                return s.encode("utf-8", "replace").decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                return s
+
+    def _substitute_variables(
+        self,
+        args: list[str],
+        data_dir: Optional[str],
+        server_address: Optional[str],
+        instance_id: Optional[int],
+        loop_index: Optional[int],
+    ) -> list[str]:
+        """Substitute variables like ${data_dir} in arguments for external commands."""
+        processed = []
+        for arg in args:
+            if not isinstance(arg, str):
+                processed.append(arg)
+                continue
+
+            # Fix surrogate pairs first
+            arg = self._fix_surrogate_pairs(arg)
+
+            # Substitute ${data_dir} with actual data directory
+            if "${data_dir}" in arg:
+                if data_dir:
+                    arg = arg.replace("${data_dir}", data_dir)
+                else:
+                    arg = arg.replace("${data_dir}", "/tmp/geodetestlab_default")
+
+            # Substitute ${server_address} and related variables
+            if server_address:
+                arg = arg.replace("${server_address}", server_address)
+                host, _, port = server_address.partition(":")
+                arg = arg.replace("${server:host}", host)
+                arg = arg.replace("${server:port}", port)
+
+            # Substitute instance_id and loop_index
+            if instance_id is not None:
+                arg = arg.replace("${instance_id}", str(instance_id))
+            if loop_index is not None:
+                arg = arg.replace("${loop_index}", str(loop_index))
+
+            processed.append(arg)
+        return processed
+
+    def is_geode_command(self, args: list[str]) -> bool:
         """Heuristic to decide whether a command should be run via the geode binary."""
         if not args:
             return False
@@ -305,7 +360,7 @@ class ParallelTestRunner:
 
         return False
 
-    def build_scenarios(self, spec: Dict) -> List[Scenario]:
+    def build_scenarios(self, spec: dict) -> list[Scenario]:
         """Build execution scenarios from a spec, falling back to defaults."""
         scenarios_config = spec.get("scenarios")
 
@@ -327,7 +382,7 @@ class ParallelTestRunner:
                 ]
             scenarios_config = self.default_scenario_configs()
 
-        scenarios: List[Scenario] = []
+        scenarios: list[Scenario] = []
         for entry in scenarios_config:
             if not isinstance(entry, dict):
                 continue
@@ -388,13 +443,13 @@ class ParallelTestRunner:
 
     def process_args(
         self,
-        args: List[str],
+        args: list[str],
         scenario: Scenario,
         server_address: Optional[str] = None,
         instance_id: Optional[int] = None,
         loop_index: Optional[int] = None,
         preserve_server: bool = False,
-    ) -> List[str]:
+    ) -> list[str]:
         """Process test arguments, handling variable substitution and server mode.
 
         Args:
@@ -541,12 +596,17 @@ class ParallelTestRunner:
                 # Only "auth login" command supports --server for authentication
                 # Other management commands (user, role, etc.) are local operations
                 # that don't connect to a server
-                if command == "auth" and len(processed_args) > 1 and processed_args[1] == "login":
-                    if server_address and "--server" not in processed_args:
-                        # For "auth login -U alice", we want ["auth", "login", "--server", "addr", "-U", "alice"]
-                        insert_pos = 2
-                        processed_args.insert(insert_pos, "--server")
-                        processed_args.insert(insert_pos + 1, server_address)
+                if (
+                    command == "auth"
+                    and len(processed_args) > 1
+                    and processed_args[1] == "login"
+                    and server_address
+                    and "--server" not in processed_args
+                ):
+                    # For "auth login -U alice", we want ["auth", "login", "--server", "addr", "-U", "alice"]
+                    insert_pos = 2
+                    processed_args.insert(insert_pos, "--server")
+                    processed_args.insert(insert_pos + 1, server_address)
 
         # Final cleanup: remove any --insecure or --log-level flags from non-query/shell commands
         # These flags should only be added to query and shell commands
@@ -604,20 +664,20 @@ class ParallelTestRunner:
             "MATCH (n) DETACH DELETE n",
         ]
 
+        import contextlib
+
         for query in cleanup_queries:
-            try:
+            with contextlib.suppress(Exception):
                 subprocess.run(
                     [self.binary, "query", "--server", server_address, "--insecure", "--log-level", "error", query],
                     capture_output=True,
                     text=True,
                     timeout=5,
                 )
-            except:
-                pass  # Ignore cleanup errors
 
     def run_single_test(
         self,
-        test_case: Dict,
+        test_case: dict,
         spec_name: str,
         scenario: Scenario,
         server_address: Optional[str] = None,
@@ -628,36 +688,78 @@ class ParallelTestRunner:
         """Run a single test case and return the result."""
         test_name = test_case.get("name", "unnamed")
 
+        # Define external commands that should be run directly (not via geode binary)
+        external_commands = {
+            "grep",
+            "ls",
+            "cat",
+            "head",
+            "tail",
+            "find",
+            "wc",
+            "diff",
+            "xxd",
+            "hexdump",
+            "strings",
+            "file",
+            "stat",
+            "sh",
+            "bash",
+        }
+
+        # Check if test specifies an external command
+        test_command = test_case.get("command")
+        is_external_command = isinstance(test_command, str) and test_command in external_commands
+
         # Handle both args format and command/query format
         if "args" in test_case:
             args = test_case.get("args", [])
         elif "command" in test_case or "query" in test_case:
-            # Construct args from command and query
-            args = ["query"]
-            if "query" in test_case:
-                args.append(test_case["query"])
-            if "command" in test_case:
-                command = test_case["command"]
-                if isinstance(command, list):
-                    args.extend(command)
-                else:
-                    args.append(command)
+            if is_external_command:
+                # External command - args stay as-is (will be passed to external command directly)
+                args = test_case.get("args", [])
+            else:
+                # Construct args from command and query
+                args = ["query"]
+                if "query" in test_case:
+                    args.append(test_case["query"])
+                if "command" in test_case:
+                    command = test_case["command"]
+                    if isinstance(command, list):
+                        args.extend(command)
+                    else:
+                        args.append(command)
         else:
             args = []
 
         # Check if test wants to preserve its explicit --server argument
         # (e.g., for connection error tests that intentionally use invalid servers)
         preserve_server = test_case.get("no_server_override", False)
-        args = self.process_args(
-            args,
-            scenario,
-            server_address=server_address,
-            instance_id=instance_id,
-            loop_index=loop_index,
-            preserve_server=preserve_server,
-        )
+
+        # For external commands, skip process_args as they don't need server injection
+        if not is_external_command:
+            args = self.process_args(
+                args,
+                scenario,
+                server_address=server_address,
+                instance_id=instance_id,
+                loop_index=loop_index,
+                preserve_server=preserve_server,
+            )
+        else:
+            # For external commands, do variable substitution on args
+            args = self._substitute_variables(args, data_dir, server_address, instance_id, loop_index)
+
         expect = test_case.get("expect", {})
         stdin_input = test_case.get("stdin")
+
+        # Fix surrogate pairs in stdin_input
+        if stdin_input and isinstance(stdin_input, str):
+            stdin_input = self._fix_surrogate_pairs(stdin_input)
+
+        # Fix surrogate pairs in args (for non-external commands not yet processed)
+        if not is_external_command:
+            args = [self._fix_surrogate_pairs(arg) if isinstance(arg, str) else arg for arg in args]
 
         # Prepare environment with isolated data directory for embedded mode
         env = os.environ.copy()
@@ -737,9 +839,15 @@ class ParallelTestRunner:
 
         start_time = time.time()
 
+        # Build the command - external commands run directly, geode commands use binary
+        if is_external_command:
+            command = [test_command] + args
+        else:
+            command = [self.binary] + args
+
         try:
             result = subprocess.run(
-                [self.binary] + args,
+                command,
                 input=stdin_input,
                 capture_output=True,
                 encoding="utf-8",
@@ -750,7 +858,7 @@ class ParallelTestRunner:
             timeout_occurred = False
         except subprocess.TimeoutExpired as e:
             result = subprocess.CompletedProcess(
-                args=[self.binary] + args,
+                args=command,
                 returncode=-1,
                 stdout=e.stdout.decode() if e.stdout else "",
                 stderr=e.stderr.decode() if e.stderr else "",
@@ -805,8 +913,8 @@ class ParallelTestRunner:
         )
 
     def validate_expectations(
-        self, result: subprocess.CompletedProcess, expect: Dict, test_case: Dict, spec_name: str
-    ) -> Tuple[bool, str]:
+        self, result: subprocess.CompletedProcess, expect: dict, test_case: dict, spec_name: str
+    ) -> tuple[bool, str]:
         """Validate test result against expectations."""
         test_name = test_case.get("name", "unnamed")
 
@@ -851,7 +959,7 @@ class ParallelTestRunner:
                                     for row in data["result"]["rows"]:
                                         for key, val in row.items():
                                             combined += " " + str(key) + " " + str(val)
-                        except:
+                        except Exception:
                             pass
 
             for pattern in expect["stdout_contains"]:
@@ -884,7 +992,7 @@ class ParallelTestRunner:
             try:
                 json_lines = [line for line in result.stdout.split("\n") if line.startswith("{")]
                 if json_lines:
-                    for assertion in expect.get("stdout_json_assert", []):
+                    for _assertion in expect.get("stdout_json_assert", []):
                         # Simple validation - check that we got JSON output
                         if not json_lines:
                             return False, "no JSON output for assertion"
@@ -894,13 +1002,12 @@ class ParallelTestRunner:
                 return False, f"JSON assertion failed: {str(e)}"
 
         # Handle geode_query expectation
-        if "geode_query" in expect:
-            if not result.stdout and not result.stderr:
-                return False, "no query output"
+        if "geode_query" in expect and not result.stdout and not result.stderr:
+            return False, "no query output"
 
         return True, "PASSED"
 
-    def run_spec_file(self, spec_file: Path, scenario: Scenario, loaded_spec: Optional[Dict] = None) -> SpecResult:
+    def run_spec_file(self, spec_file: Path, scenario: Scenario, loaded_spec: Optional[dict] = None) -> SpecResult:
         """Run all tests in a specification file for a specific scenario."""
         spec_start_time = time.time()
         spec_label = f"{spec_file.name} [{scenario.name}]"
@@ -949,7 +1056,12 @@ class ParallelTestRunner:
         has_auth_flag = "--disable-auth" in server_args_override or "--enable-auth" in server_args_override
         if server_enabled and not has_auth_flag and not server_config.get("auth", False):
             server_args_override = ["--disable-auth"] + server_args_override
-        server_env_overrides = server_config.get("env", {}) or {}
+        # Merge environment overrides: top-level env first, then cli.server.env overrides
+        # This ensures top-level env vars (like GEODE_TDE_KEY) are passed to the server
+        top_level_env = spec.get("env", {}) or {}
+        server_specific_env = server_config.get("env", {}) or {}
+        server_env_overrides = {**top_level_env, **server_specific_env}  # server-specific takes precedence
+
         # If auth is enabled, set test credentials so tests can authenticate
         # These must match the ${secret:*} substitutions in build_command (admin123, password123)
         if "--enable-auth" in server_args_override:
@@ -1039,13 +1151,15 @@ class ParallelTestRunner:
                             ["netstat", "-uln"], capture_output=True, text=True, timeout=2.0
                         )
 
-                        # Check if our port is bound
-                        if netstat_result.returncode == 0 and f":{port}" in netstat_result.stdout:
-                            # Port is bound, give server a bit more time to fully initialize
-                            if (time.time() - start_time) > 5.0:  # At least 5 seconds uptime
-                                server_ready = True
-                                self.log_progress(f"Server ready for {spec_label} on port {port}")
-                                break
+                        # Check if our port is bound and server has had time to initialize
+                        if (
+                            netstat_result.returncode == 0
+                            and f":{port}" in netstat_result.stdout
+                            and (time.time() - start_time) > 5.0  # At least 5 seconds uptime
+                        ):
+                            server_ready = True
+                            self.log_progress(f"Server ready for {spec_label} on port {port}")
+                            break
                     except subprocess.TimeoutExpired:
                         pass  # Continue trying
                     except Exception:
@@ -1068,7 +1182,7 @@ class ParallelTestRunner:
                         server_process.terminate()
                         try:
                             server_process.wait(timeout=5)
-                        except:
+                        except Exception:
                             server_process.kill()
                         server_process = None
                     server_enabled = False
@@ -1301,7 +1415,7 @@ class ParallelTestRunner:
             f.write(f"STDOUT:\n{test_result.stdout}\n")
             f.write(f"STDERR:\n{test_result.stderr}\n")
 
-    def analyze_failures(self, all_results: List[SpecResult]) -> Dict:
+    def analyze_failures(self, all_results: list[SpecResult]) -> dict:
         """Analyze failure patterns across all test results."""
         failure_patterns = {}
         all_failures = []
@@ -1324,7 +1438,7 @@ class ParallelTestRunner:
 
         return {"failure_patterns": failure_patterns, "all_failures": all_failures}
 
-    def write_summary_report(self, all_results: List[SpecResult], analysis: Dict):
+    def write_summary_report(self, all_results: list[SpecResult], analysis: dict):
         """Write comprehensive summary report."""
         total_tests = sum(r.total_tests for r in all_results)
         total_passed = sum(r.passed for r in all_results)
@@ -1371,7 +1485,7 @@ class ParallelTestRunner:
         with open(self.failures_log, "w") as f:
             json.dump(failures_data, f, indent=2)
 
-    def print_summary(self, all_results: List[SpecResult], analysis: Dict):
+    def print_summary(self, all_results: list[SpecResult], analysis: dict):
         """Print human-readable summary to console."""
         total_tests = sum(r.total_tests for r in all_results)
         total_passed = sum(r.passed for r in all_results)
