@@ -2927,9 +2927,10 @@ REQ-META-VALIDATE-002,MetadataValidation,BuildTarget,TESTED,,,tooling,2026-01-03
 REQ-METADATA-001,MetadataDerived,LabelMetadata,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-METADATA-001,UnifiedLanguageMetadata,SingleSourceOfTruth,TESTED,,,api,2026-01-03,src/gql/language_metadata.zig
 REQ-METADATA-LIB-001,MetadataIntegration,LibExport,EXEMPT,,,lib,2026-01-03,src/lib.zig
-REQ-MFA-ENFORCE-001,MFA Enforcement,Security,TESTED,,,security,2026-01-29,geodetestlab/specs/mfa_comprehensive_security.yml
+REQ-MFA-CODE-VALIDATION-001,MFACodeValidation,Security,TESTED,,,cli,2026-01-29,src/cli/user_mgmt_cli.zig
 REQ-MFA-ENROLL-001,MFA Enrollment,Security,TESTED,,,security,2026-01-29,geodetestlab/specs/mfa_comprehensive_security.yml
 REQ-MFA-OUTPUT-001,MFASecureOutput,Security,TESTED,,,cli,2026-01-14,src/cli/user_mgmt_cli.zig
+REQ-MFA-SETUP-REAL-001,MFARealEnrollment,Security,TESTED,,,cli,2026-01-29,src/cli/user_mgmt_cli.zig
 REQ-MFA-TEST-COMPREHENSIVE,MFA Enforcement Verification,SECURITY,TESTED,,,security,2026-01-29,tests/test_mfa_enforcement_comprehensive.zig
 REQ-MFA-TEST-COMPREHENSIVE,MFA Security Testing,Security,TESTED,,,security,2026-01-29,geodetestlab/specs/mfa_comprehensive_security.yml
 REQ-MFA-TOGGLE-001,MFAToggleSecure,Security,TESTED,,,cli,2026-01-14,src/cli/user_mgmt_cli.zig

@@ -107,7 +107,7 @@ tests:
     args: ["user", "mfa-setup", "mfasetupuser156"]
     expect:
       exit_code: 0
-      stdout_contains: ["MFA setup complete"]
+      stdout_contains: ["MFA secret:"]
     tags: ["mfa-setup"]
 
   - name: "mfa-setup-cleanup"

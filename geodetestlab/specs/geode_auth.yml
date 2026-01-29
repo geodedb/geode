@@ -205,7 +205,7 @@ tests:
     args: ["user", "mfa", "enable", "mfauser"]
     expect:
       exit_code: 0
-      stdout_contains: ["MFA", "enabled", "secret"]
+      stdout_contains: ["MFA", "enabled"]
     cleanup:
       - "user delete mfauser --yes"
     tags: ["mfa", "security", "2fa"]

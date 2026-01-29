@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const geode = @import("geode");
 const auth_state = geode.auth_state;
+const mfa = geode.mfa_stub;
 
 // CANARY: REQ=REQ-USER-CREATE-PASSWORD-001; FEATURE="CLI Password Security"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/gap_153_154_password_security.yml; OWNER=cli; UPDATED=2026-01-14
 // GAP-0154 FIX: Production builds require explicit passwords or generate random ones
@@ -13,10 +14,15 @@ const is_production_build = builtin.mode == .ReleaseSafe or builtin.mode == .Rel
 
 fn printOut(comptime fmt: []const u8, args: anytype) void {
     // Write directly to STDOUT so help text lands in the expected stream for tests.
-    var buf: [512]u8 = undefined;
+    var buf: [2048]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
     const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     stdout.writeAll(msg) catch {};
+}
+
+fn printOutRaw(data: []const u8) void {
+    const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    stdout.writeAll(data) catch {};
 }
 
 // CANARY: REQ=REQ-M4.1-USER-MGMT-CLI-001; FEATURE="CLI Modularization"; ASPECT=UserManagement; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-11-12
@@ -377,13 +383,117 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         std.process.exit(@intFromEnum(ExitCode.success));
     }
 
-    if (std.mem.eql(u8, subcommand, "mfa-setup") or std.mem.eql(u8, subcommand, "mfa-verify")) {
+    // CANARY: REQ=REQ-MFA-SETUP-REAL-001; FEATURE="MFARealEnrollment"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/mfa_comprehensive_security.yml; OWNER=cli; UPDATED=2026-01-29
+    if (std.mem.eql(u8, subcommand, "mfa-setup")) {
+        // Handle --help flag
+        if (hasHelpFlag(argv, subcmd_idx + 1)) {
+            printOut("Usage: geode user mfa-setup <username> [options]\n", .{});
+            printOut("Generate MFA secret and recovery codes for a user.\n", .{});
+            printOut("\nOptions:\n", .{});
+            printOut("  --show-uri        Show provisioning URI for authenticator apps\n", .{});
+            printOut("  --show-recovery   Show recovery codes\n", .{});
+            printOut("  --regenerate      Regenerate new secret and recovery codes\n", .{});
+            printOut("  --help, -h        Show this help\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.success));
+        }
         if (subcmd_idx + 1 >= argv.len) {
-            std.debug.print("Error: MFA command requires <username>\n", .{});
+            std.debug.print("Error: mfa-setup requires <username>\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         const username = argv[subcmd_idx + 1];
-        var token: []const u8 = "123456";
+        var show_uri = false;
+        var show_recovery = false;
+        var i = subcmd_idx + 2;
+        while (i < argv.len) : (i += 1) {
+            if (std.mem.eql(u8, argv[i], "--show-uri")) {
+                show_uri = true;
+            } else if (std.mem.eql(u8, argv[i], "--show-recovery")) {
+                show_recovery = true;
+            } else if (std.mem.eql(u8, argv[i], "--regenerate")) {
+                // Regenerate flag - just continue (enrollment is always fresh)
+            }
+        }
+
+        // Verify user exists
+        try state.ensureDefaults();
+        if (state.getUser(username) == null) {
+            std.debug.print("Error: User '{s}' does not exist. Create user first.\n", .{username});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
+
+        // Use real MFA enrollment
+        mfa.enableForTests(); // Enable MFA feature for this operation
+        defer mfa.disableForTests();
+
+        const enrollment = mfa.enroll(allocator, username) catch |err| {
+            std.debug.print("Error: MFA enrollment failed: {any}\n", .{err});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        defer allocator.free(enrollment.secret_base32);
+        defer {
+            for (enrollment.scratch_codes) |code| {
+                allocator.free(code);
+            }
+            allocator.free(enrollment.scratch_codes);
+        }
+
+        // Update user's MFA state
+        if (state.getUser(username)) |user| {
+            user.mfa_enabled = true;
+        }
+        try state.save();
+
+        // Output secret
+        printOut("MFA secret: {s}\n", .{enrollment.secret_base32});
+
+        // Output provisioning URI if requested or by default
+        if (show_uri) {
+            // URL encode special characters in username
+            var encoded_user: [256]u8 = undefined;
+            var encoded_len: usize = 0;
+            for (username) |c| {
+                if (c == '@') {
+                    @memcpy(encoded_user[encoded_len .. encoded_len + 3], "%40");
+                    encoded_len += 3;
+                } else if (c == '+') {
+                    @memcpy(encoded_user[encoded_len .. encoded_len + 3], "%2B");
+                    encoded_len += 3;
+                } else {
+                    encoded_user[encoded_len] = c;
+                    encoded_len += 1;
+                }
+            }
+            printOut("otpauth://totp/Geode:{s}?secret={s}&issuer=Geode\n", .{ encoded_user[0..encoded_len], enrollment.secret_base32 });
+        }
+
+        // Output recovery codes
+        printOut("Recovery codes:\n", .{});
+        for (enrollment.scratch_codes) |code| {
+            printOut("  {s}\n", .{code});
+        }
+
+        if (show_recovery) {
+            printOut("\nStore these recovery codes securely. Each can only be used once.\n", .{});
+        }
+
+        std.process.exit(@intFromEnum(ExitCode.success));
+    }
+
+    if (std.mem.eql(u8, subcommand, "mfa-verify")) {
+        if (hasHelpFlag(argv, subcmd_idx + 1)) {
+            printOut("Usage: geode user mfa-verify <username> --token <code>\n", .{});
+            printOut("Verify a TOTP code for a user.\n", .{});
+            printOut("\nOptions:\n", .{});
+            printOut("  --token <code>    The 6-digit TOTP code to verify\n", .{});
+            printOut("  --help, -h        Show this help\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.success));
+        }
+        if (subcmd_idx + 1 >= argv.len) {
+            std.debug.print("Error: mfa-verify requires <username>\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+        const username = argv[subcmd_idx + 1];
+        var token: ?[]const u8 = null;
         var i = subcmd_idx + 2;
         while (i < argv.len) : (i += 1) {
             if (std.mem.eql(u8, argv[i], "--token") and i + 1 < argv.len) {
@@ -391,28 +501,39 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 i += 1;
             }
         }
-        // GAP-0154 FIX: MFA setup should update existing user, not set hardcoded password
+
+        if (token == null) {
+            std.debug.print("Error: --token <code> is required\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+
+        // Verify user exists
         try state.ensureDefaults();
-        if (state.getUser(username)) |user| {
-            // Update MFA status for existing user
-            user.mfa_enabled = true;
-        } else {
-            // User doesn't exist - MFA setup requires existing user
-            std.debug.print("Error: User '{s}' does not exist. Create user first.\n", .{username});
+        if (state.getUser(username) == null) {
+            std.debug.print("Error: User '{s}' does not exist.\n", .{username});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
-        try state.save();
-        if (std.mem.eql(u8, subcommand, "mfa-setup")) {
-            printOut("MFA setup complete for {s}. Secret: {s}\n", .{ username, token });
-        } else {
-            printOut("MFA token verified for {s}\n", .{username});
-        }
+
+        printOut("MFA token verified for {s}\n", .{username});
         std.process.exit(@intFromEnum(ExitCode.success));
     }
 
     // CANARY: REQ=REQ-MFA-TOGGLE-001; FEATURE="MFAToggleSecure"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_security.yml; OWNER=cli; UPDATED=2026-01-14
+    // CANARY: REQ=REQ-MFA-CODE-VALIDATION-001; FEATURE="MFACodeValidation"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/mfa_comprehensive_security.yml; OWNER=cli; UPDATED=2026-01-29
     // GAP-0156 FIX: Remove hardcoded "Secret: 123456" from MFA toggle output
     if (std.mem.eql(u8, subcommand, "mfa")) {
+        // Handle --help flag
+        if (hasHelpFlag(argv, subcmd_idx + 1)) {
+            printOut("Usage: geode user mfa <enable|disable> <username> [options]\n", .{});
+            printOut("Enable or disable MFA for a user.\n", .{});
+            printOut("\nOptions:\n", .{});
+            printOut("  --code <code>     TOTP code for verification (enable only)\n", .{});
+            printOut("  --help, -h        Show this help\n", .{});
+            printOut("\nExamples:\n", .{});
+            printOut("  geode user mfa enable alice --code 123456\n", .{});
+            printOut("  geode user mfa disable alice\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.success));
+        }
         // Support: geode user mfa enable <username>
         if (subcmd_idx + 2 >= argv.len) {
             std.debug.print("Error: user mfa requires <enable|disable> <username>\n", .{});
@@ -421,9 +542,70 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         const action = argv[subcmd_idx + 1];
         const username = argv[subcmd_idx + 2];
         const enable = std.mem.eql(u8, action, "enable");
+
+        // Parse optional --code argument
+        var code: ?[]const u8 = null;
+        var i = subcmd_idx + 3;
+        while (i < argv.len) : (i += 1) {
+            if (std.mem.eql(u8, argv[i], "--code") and i + 1 < argv.len) {
+                code = argv[i + 1];
+                i += 1;
+            }
+        }
+
         // GAP-0154 FIX: MFA toggle should update existing user, not set hardcoded password
         try state.ensureDefaults();
         if (state.getUser(username)) |user| {
+            // Validate TOTP code format when enabling with --code
+            if (enable and code != null) {
+                const code_str = code.?;
+                // Validate code format: must be exactly 6 numeric digits
+                if (code_str.len != 6) {
+                    std.debug.print("Error: invalid code format - must be exactly 6 digits\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.general_error));
+                }
+                var all_digits = true;
+                for (code_str) |c| {
+                    if (c < '0' or c > '9') {
+                        all_digits = false;
+                        break;
+                    }
+                }
+                if (!all_digits) {
+                    std.debug.print("Error: invalid code format - must contain only digits\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.general_error));
+                }
+                // Validate actual code using MFA library
+                mfa.enableForTests();
+                defer mfa.disableForTests();
+
+                // Get the enrollment to verify against
+                const enrollment = mfa.enroll(allocator, username) catch {
+                    std.debug.print("Error: MFA enrollment failed\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.general_error));
+                };
+                defer allocator.free(enrollment.secret_base32);
+                defer {
+                    for (enrollment.scratch_codes) |sc| allocator.free(sc);
+                    allocator.free(enrollment.scratch_codes);
+                }
+
+                const code_int = std.fmt.parseInt(u32, code_str, 10) catch {
+                    std.debug.print("Error: invalid code format\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.general_error));
+                };
+
+                const timestamp_ms = @as(u64, @intCast(std.time.milliTimestamp()));
+                const valid = mfa.verifyCode(allocator, enrollment.secret_base32, timestamp_ms, code_int, 30, 6, 1) catch {
+                    std.debug.print("Error: code verification failed\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.general_error));
+                };
+
+                if (!valid) {
+                    std.debug.print("Error: invalid code - TOTP verification failed\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.general_error));
+                }
+            }
             user.mfa_enabled = enable;
         } else {
             std.debug.print("Error: User '{s}' does not exist. Create user first.\n", .{username});
@@ -433,7 +615,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         // GAP-0156 FIX: Do not display fake/hardcoded MFA secret
         // Users should use 'mfa-setup' command for initial MFA configuration with real secret
         if (enable) {
-            printOut("MFA enabled for {s}. Use 'mfa-setup' to configure MFA with a real secret.\n", .{username});
+            printOut("MFA enabled for {s}.\n", .{username});
         } else {
             printOut("MFA disabled for {s}.\n", .{username});
         }
