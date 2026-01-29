@@ -30,7 +30,7 @@ class TestLoadStatusCSV(unittest.TestCase):
 
     def setUp(self):
         """Create a temporary test CSV file."""
-        self.test_csv = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".csv")
+        self.test_csv = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".csv")  # noqa: SIM115
         writer = csv.DictWriter(
             self.test_csv,
             fieldnames=["REQ", "Feature", "Aspect", "Status", "Test", "Bench", "Owner", "Updated", "File"],

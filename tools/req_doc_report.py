@@ -19,7 +19,6 @@ import os
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List
 
 # Mapping of REQ-DOC issues to their requirement prefixes/patterns
 REQ_DOC_ISSUE_MAPPING = {
@@ -64,7 +63,7 @@ REQ_DOC_ISSUE_MAPPING = {
 }
 
 
-def load_status_csv(path: Path) -> List[Dict]:
+def load_status_csv(path: Path) -> list[dict]:
     """Load status.csv and return list of requirement entries."""
     entries = []
     with open(path, newline="") as f:
@@ -74,7 +73,7 @@ def load_status_csv(path: Path) -> List[Dict]:
     return entries
 
 
-def extract_requirement_ids(entries: List[Dict]) -> Dict[str, List[Dict]]:
+def extract_requirement_ids(entries: list[dict]) -> dict[str, list[dict]]:
     """Extract unique requirement IDs grouped by prefix."""
     by_prefix = defaultdict(list)
     seen = set()
@@ -94,7 +93,7 @@ def extract_requirement_ids(entries: List[Dict]) -> Dict[str, List[Dict]]:
     return dict(by_prefix)
 
 
-def filter_by_patterns(entries: List[Dict], patterns: List[str]) -> List[Dict]:
+def filter_by_patterns(entries: list[dict], patterns: list[str]) -> list[dict]:
     """Filter entries by requirement ID patterns."""
     result = []
     seen = set()
@@ -112,7 +111,7 @@ def filter_by_patterns(entries: List[Dict], patterns: List[str]) -> List[Dict]:
     return result
 
 
-def generate_markdown_report(entries: List[Dict], issue_info: Dict = None) -> str:
+def generate_markdown_report(entries: list[dict], issue_info: dict = None) -> str:
     """Generate markdown report for requirements."""
     lines = []
 
@@ -161,7 +160,7 @@ def generate_markdown_report(entries: List[Dict], issue_info: Dict = None) -> st
     return "\n".join(lines)
 
 
-def generate_json_report(entries: List[Dict], issue_info: Dict = None) -> str:
+def generate_json_report(entries: list[dict], issue_info: dict = None) -> str:
     """Generate JSON report for requirements."""
     # Group by status
     by_status = defaultdict(list)
@@ -174,13 +173,13 @@ def generate_json_report(entries: List[Dict], issue_info: Dict = None) -> str:
         "issue": issue_info,
         "total": len(entries),
         "by_status": {k: sorted(v) for k, v in by_status.items()},
-        "requirement_ids": sorted(set(e.get("REQ", "") for e in entries)),
+        "requirement_ids": sorted({e.get("REQ", "") for e in entries}),
     }
 
     return json.dumps(result, indent=2)
 
 
-def generate_gitlab_snippet(entries: List[Dict], issue_info: Dict) -> str:
+def generate_gitlab_snippet(entries: list[dict], issue_info: dict) -> str:
     """Generate a snippet suitable for pasting into GitLab issue."""
     lines = []
 

@@ -22,16 +22,15 @@ def extract_json_values(output):
                                 json_values.append(str(val))
 
                 # Also extract from legacy 'result' structure
-                if "result" in data:
-                    if "rows" in data["result"]:
-                        for row in data["result"]["rows"]:
-                            if isinstance(row, dict):
-                                for val in row.values():
-                                    json_values.append(str(val))
-                            elif isinstance(row, list):
-                                for val in row:
-                                    json_values.append(str(val))
-            except:
+                if "result" in data and "rows" in data["result"]:
+                    for row in data["result"]["rows"]:
+                        if isinstance(row, dict):
+                            for val in row.values():
+                                json_values.append(str(val))
+                        elif isinstance(row, list):
+                            for val in row:
+                                json_values.append(str(val))
+            except Exception:
                 pass
     return json_values
 

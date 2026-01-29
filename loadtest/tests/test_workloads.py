@@ -188,7 +188,7 @@ class TestListWorkloads(unittest.TestCase):
         """Test list_workloads contains all defined patterns."""
         workloads = list_workloads()
         self.assertEqual(len(workloads), len(WORKLOAD_PATTERNS))
-        for name in WORKLOAD_PATTERNS.keys():
+        for name in WORKLOAD_PATTERNS:
             self.assertIn(name, workloads)
 
 

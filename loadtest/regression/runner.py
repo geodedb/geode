@@ -15,7 +15,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 
 @dataclass
@@ -25,7 +25,7 @@ class Baseline:
     name: str
     version: str
     timestamp: str
-    metrics: Dict[str, float]
+    metrics: dict[str, float]
 
 
 @dataclass
@@ -50,9 +50,9 @@ class RegressionReport:
     timestamp: str
     baseline_version: str
     total_benchmarks: int
-    regressions: List[RegressionResult]
-    improvements: List[RegressionResult]
-    stable: List[RegressionResult]
+    regressions: list[RegressionResult]
+    improvements: list[RegressionResult]
+    stable: list[RegressionResult]
     overall_status: str  # "pass", "warning", "fail"
 
 
@@ -84,7 +84,7 @@ class RegressionRunner:
         try:
             result = subprocess.run([self.geode_path, "--version"], capture_output=True, text=True)
             return result.stdout.strip().split()[-1] if result.returncode == 0 else "unknown"
-        except:
+        except Exception:
             return "unknown"
 
     def load_baseline(self, name: str = "latest") -> Optional[Baseline]:
@@ -109,7 +109,7 @@ class RegressionRunner:
         with open(latest_file, "w") as f:
             json.dump(asdict(baseline), f, indent=2)
 
-    def run_benchmarks(self) -> Dict[str, float]:
+    def run_benchmarks(self) -> dict[str, float]:
         """Run benchmark suite and return metrics."""
         print("Running benchmark suite...")
 
@@ -143,7 +143,7 @@ class RegressionRunner:
 
         return metrics
 
-    def _run_single_benchmark(self, name: str, runs: int = 5) -> Tuple[float, bool]:
+    def _run_single_benchmark(self, name: str, runs: int = 5) -> tuple[float, bool]:
         """Run a single benchmark and return average latency."""
         latencies = []
 
@@ -154,14 +154,14 @@ class RegressionRunner:
                 elapsed = (time.perf_counter() - start) * 1000
                 if result.returncode == 0:
                     latencies.append(elapsed)
-            except:
+            except Exception:
                 pass
 
         if latencies:
             return statistics.mean(latencies), True
         return 0, False
 
-    def _run_throughput_test(self) -> Dict[str, float]:
+    def _run_throughput_test(self) -> dict[str, float]:
         """Run throughput test."""
         try:
             start = time.perf_counter()
@@ -175,18 +175,18 @@ class RegressionRunner:
 
             if result.returncode == 0:
                 return {"nodes_per_sec": 1000 / elapsed, "edges_per_sec": 5000 / elapsed}
-        except:
+        except Exception:
             pass
         return {"nodes_per_sec": 0, "edges_per_sec": 0}
 
-    def _collect_memory_metrics(self) -> Dict[str, float]:
+    def _collect_memory_metrics(self) -> dict[str, float]:
         """Collect memory metrics from server."""
         # In production, this would query the server's metrics endpoint
         return {"peak_mb": 0}
 
     def compare_to_baseline(
-        self, current_metrics: Dict[str, float], baseline: Baseline, thresholds: Dict[str, float] = None
-    ) -> List[RegressionResult]:
+        self, current_metrics: dict[str, float], baseline: Baseline, thresholds: dict[str, float] = None
+    ) -> list[RegressionResult]:
         """Compare current metrics to baseline."""
         thresholds = thresholds or self.DEFAULT_THRESHOLDS
         results = []

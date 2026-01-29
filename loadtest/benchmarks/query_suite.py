@@ -16,7 +16,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List
 
 
 @dataclass
@@ -26,7 +25,7 @@ class QueryBenchmark:
     name: str
     category: str
     query: str
-    params: Dict = field(default_factory=dict)
+    params: dict = field(default_factory=dict)
     description: str = ""
     expected_complexity: str = "O(n)"  # Estimated complexity
     warmup_runs: int = 3
@@ -39,11 +38,11 @@ class BenchmarkResult:
 
     benchmark_name: str
     category: str
-    latencies_ms: List[float]
-    rows_returned: List[int]
+    latencies_ms: list[float]
+    rows_returned: list[int]
     success_count: int
     error_count: int
-    errors: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
 
     @property
     def avg_latency_ms(self) -> float:
@@ -325,7 +324,7 @@ class BenchmarkRunner:
         self.geode_path = geode_path
         self.parallel = parallel
 
-    def execute_query(self, query: str, params: Dict = None) -> tuple:
+    def execute_query(self, query: str, params: dict = None) -> tuple:
         """Execute a query and return (latency_ms, row_count, error)."""
         # Build the query with parameters substituted
         final_query = query
@@ -396,7 +395,7 @@ class BenchmarkRunner:
             errors=errors[:5],  # Keep first 5 errors
         )
 
-    def run_all(self, benchmarks: List[QueryBenchmark] = None) -> List[BenchmarkResult]:
+    def run_all(self, benchmarks: list[QueryBenchmark] = None) -> list[BenchmarkResult]:
         """Run all benchmarks."""
         benchmarks = benchmarks or ALL_BENCHMARKS
         results = []
@@ -421,7 +420,7 @@ class BenchmarkRunner:
 # ============================================================================
 
 
-def generate_report(results: List[BenchmarkResult], output_format: str = "text") -> str:
+def generate_report(results: list[BenchmarkResult], output_format: str = "text") -> str:
     """Generate benchmark report."""
     if output_format == "json":
         return json.dumps(

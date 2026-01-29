@@ -114,7 +114,7 @@ class UnionPropertyAccessTester:
             if isinstance(row, list) and len(row) > 0:
                 for item in row:
                     if isinstance(item, dict):
-                        for key, value in item.items():
+                        for _key, value in item.items():
                             if value is not None and value != "":
                                 return True
         return False
@@ -128,7 +128,7 @@ class UnionPropertyAccessTester:
             if isinstance(row, list) and len(row) > 0:
                 for item in row:
                     if isinstance(item, dict):
-                        for key, value in item.items():
+                        for _key, value in item.items():
                             if isinstance(value, str) and value in ["Alice", "Bob"]:
                                 found_names.add(value)
 
@@ -142,7 +142,7 @@ class UnionPropertyAccessTester:
             if isinstance(row, list) and len(row) > 0:
                 for item in row:
                     if isinstance(item, dict):
-                        for key, value in item.items():
+                        for _key, value in item.items():
                             if isinstance(value, dict) and "properties" in value:
                                 return True
         return False

@@ -5,12 +5,12 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import yaml
 
 
-def run_command(args: List[str], binary: str = "./zig-out/bin/geode") -> tuple[int, str, str]:
+def run_command(args: list[str], binary: str = "./zig-out/bin/geode") -> tuple[int, str, str]:
     """Run a command and return exit code, stdout, and stderr."""
     try:
         # Prepare the command
@@ -29,33 +29,30 @@ def run_command(args: List[str], binary: str = "./zig-out/bin/geode") -> tuple[i
         return -1, "", str(e)
 
 
-def check_expectation(expect: Dict[str, Any], exit_code: int, stdout: str, stderr: str) -> tuple[bool, str]:
+def check_expectation(expect: dict[str, Any], exit_code: int, stdout: str, stderr: str) -> tuple[bool, str]:
     """Check if the command output meets expectations."""
     # Check exit code
-    if "exit_code" in expect:
-        if exit_code != expect["exit_code"]:
-            return False, f"Exit code mismatch: expected {expect['exit_code']}, got {exit_code}"
+    if "exit_code" in expect and exit_code != expect["exit_code"]:
+        return False, f"Exit code mismatch: expected {expect['exit_code']}, got {exit_code}"
 
     # Check stdout contains
     if "stdout_contains" in expect:
         combined = stdout + stderr  # Check both stdout and stderr
         for pattern in expect["stdout_contains"]:
-            if pattern not in combined:
-                # Try case-insensitive match
-                if pattern.lower() not in combined.lower():
-                    return False, f"Pattern not found: '{pattern}'"
+            # Try exact match first, then case-insensitive match
+            if pattern not in combined and pattern.lower() not in combined.lower():
+                return False, f"Pattern not found: '{pattern}'"
 
     # Check stderr contains
     if "stderr_contains" in expect:
         for pattern in expect["stderr_contains"]:
-            if pattern not in stderr:
-                if pattern.lower() not in stderr.lower():
-                    return False, f"Stderr pattern not found: '{pattern}'"
+            if pattern not in stderr and pattern.lower() not in stderr.lower():
+                return False, f"Stderr pattern not found: '{pattern}'"
 
     return True, "Passed"
 
 
-def run_test_suite(spec_file: Path) -> Dict[str, Any]:
+def run_test_suite(spec_file: Path) -> dict[str, Any]:
     """Run a test suite from a YAML specification file."""
     with open(spec_file) as f:
         spec = yaml.safe_load(f)

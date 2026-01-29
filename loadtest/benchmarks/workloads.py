@@ -8,7 +8,6 @@ Defines realistic workload patterns for internet-scale graph testing.
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List
 
 
 class WorkloadType(Enum):
@@ -31,7 +30,7 @@ class WorkloadPattern:
     description: str
     read_ratio: float  # 0.0 - 1.0
     write_ratio: float  # 0.0 - 1.0
-    query_mix: Dict[str, float]  # Query category -> ratio
+    query_mix: dict[str, float]  # Query category -> ratio
     target_qps: int
     duration_seconds: int
     ramp_up_seconds: int = 30
@@ -139,7 +138,7 @@ def get_workload(name: str) -> WorkloadPattern:
     return WORKLOAD_PATTERNS[name]
 
 
-def list_workloads() -> List[str]:
+def list_workloads() -> list[str]:
     """List all available workload patterns."""
     return list(WORKLOAD_PATTERNS.keys())
 

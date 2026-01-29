@@ -12,12 +12,12 @@ Valid STATUS values: STUB, IMPL, TESTED, BENCHED, COMPLETE, EXEMPT
 """
 
 import argparse
+import contextlib
 import json
 import os
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List
 
 # Valid status values per AGENTS.md
 VALID_STATUSES = {"STUB", "IMPL", "TESTED", "BENCHED", "COMPLETE", "EXEMPT"}
@@ -53,7 +53,7 @@ CANARY_EXAMPLE_PATTERN = re.compile(
 )
 
 
-def lint_file(filepath: Path) -> List[Dict]:
+def lint_file(filepath: Path) -> list[dict]:
     """
     Lint a single file for CANARY marker issues.
 
@@ -132,10 +132,8 @@ def main():
             if issues:
                 # Convert paths to relative
                 for issue in issues:
-                    try:
+                    with contextlib.suppress(ValueError):
                         issue["file"] = str(Path(issue["file"]).relative_to(args.repo))
-                    except ValueError:
-                        pass
                 all_issues.extend(issues)
 
     # Count by type

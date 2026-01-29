@@ -67,7 +67,7 @@ def run_test(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig-out/
                             elif isinstance(row, dict):
                                 for val in row.values():
                                     json_values.append(str(val))
-                except:
+                except Exception:
                     pass
 
         # Build combined output
