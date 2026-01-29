@@ -489,6 +489,72 @@ tests:
         columns: ["name", "car_brand"]
     tags: ["pattern-matching", "optional", "where"]
 
+  # CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-HOP-006; FEATURE="OptionalMatchWithHops"; ASPECT=RegressionTest; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2026-01-29
+  # Simple test without WHERE - just verify first chain hop + OPTIONAL MATCH works
+  - name: "optional-match-after-relationship-simple"
+    description: "Test basic OPTIONAL MATCH after first chain relationship traversal"
+    setup:
+      - args: ["query", "CREATE (a:ParentNode {name: 'A'})-[:LINK]->(b:ChildNode {name: 'B'})-[:HAS_DATA]->(d:DataNode {value: 123})"]
+        expect:
+          exit_code: 0
+    args: ["query", "MATCH (a:ParentNode)-[r:LINK]->(b:ChildNode) OPTIONAL MATCH (b)-[r2:HAS_DATA]->(d) RETURN a.name AS parent, b.name AS child, d.value AS data_val"]
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+        columns: ["parent", "child", "data_val"]
+      stdout_json_assert:
+        - expression: "results[0].parent"
+          equals: "A"
+        - expression: "results[0].child"
+          equals: "B"
+        - expression: "results[0].data_val"
+          equals: 123
+    tags: ["pattern-matching", "optional", "hop-traversal", "regression"]
+
+  - name: "optional-match-after-relationship-traversal"
+    description: "Test OPTIONAL MATCH referencing variable from first chain's relationship traversal with WHERE (bug fix regression test)"
+    setup:
+      - args: ["query", "CREATE (acl:AccessList {name: 'ACL1'})-[:HAS_RULE]->(rule:Rule {action: 'permit'})-[:SOURCED_FROM]->(src:Network {cidr: '10.0.0.0/8'})"]
+        expect:
+          exit_code: 0
+      - args: ["query", "CREATE (acl2:AccessList {name: 'ACL2'})-[:HAS_RULE]->(rule2:Rule {action: 'deny'})"]
+        expect:
+          exit_code: 0
+    args: ["query", "MATCH (acl:AccessList)-[r:HAS_RULE]->(rule:Rule) WHERE rule.action = 'permit' OPTIONAL MATCH (rule)-[r1:SOURCED_FROM]->(src) RETURN acl.name AS acl_name, rule.action AS rule_action, src.cidr AS src_cidr ORDER BY acl_name"]
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+        columns: ["acl_name", "rule_action", "src_cidr"]
+      stdout_json_assert:
+        - expression: "results[0].acl_name"
+          equals: "ACL1"
+        - expression: "results[0].rule_action"
+          equals: "permit"
+        - expression: "results[0].src_cidr"
+          equals: "10.0.0.0/8"
+    tags: ["pattern-matching", "optional", "hop-traversal", "regression"]
+
+  - name: "optional-match-after-relationship-no-match"
+    description: "Test OPTIONAL MATCH after hop returns NULL when no relationship exists"
+    setup:
+      - args: ["query", "CREATE (a:A)-[:R1]->(b:B), (c:C)"]
+        expect:
+          exit_code: 0
+    args: ["query", "MATCH (a:A)-[r1:R1]->(b:B) OPTIONAL MATCH (b)-[r2:R2]->(c:C) RETURN a, b, r2, c"]
+    expect:
+      exit_code: 0
+      geode_query:
+        row_count: 1
+        columns: ["a", "b", "r2", "c"]
+      stdout_json_assert:
+        - expression: "results[0].r2"
+          is_null: true
+        - expression: "results[0].c"
+          is_null: true
+    tags: ["pattern-matching", "optional", "hop-traversal", "null-handling"]
+
   # ===============================
   # PATTERN COMPREHENSIONS
   # ===============================

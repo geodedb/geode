@@ -1656,13 +1656,28 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     const store = graph_store.getGlobalStore(allocator);
     const filter_graph = current_graph orelse "default";
 
-    // Step 1: Execute required chain (first chain) to get base nodes
+    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-HOP-002; FEATURE="OptionalMatchWithHops"; ASPECT=FirstChainExecution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2026-01-29
+    // Step 1: Execute required chain (first chain) to get base bindings
+    // The first chain may be a simple node (head != null) or have hops (head == null)
     const required_chain = q.match.chains[0];
-    const required_pattern = required_chain.head.?;
+    const first_chain_has_hops = required_chain.hops.len > 0;
+
+    // Determine the left node pattern (either from head or from hops[0].left)
+    const required_pattern = if (first_chain_has_hops) required_chain.hops[0].left else required_chain.head.?;
     const required_var = required_pattern.name;
     const required_labels = required_pattern.labels;
 
-    // Find all nodes matching the required pattern
+    // Collect first chain variable names for later lookup by OPTIONAL MATCH
+    var first_chain_vars = try std.ArrayList([]const u8).initCapacity(allocator, 8);
+    defer first_chain_vars.deinit(allocator);
+    if (required_var) |v| try first_chain_vars.append(allocator, v);
+    if (first_chain_has_hops) {
+        const hop = required_chain.hops[0];
+        if (hop.rel.name) |v| try first_chain_vars.append(allocator, v);
+        if (hop.right.name) |v| try first_chain_vars.append(allocator, v);
+    }
+
+    // Find all nodes matching the required left pattern
     // GAP-0220 FIX: Use try for proper error propagation
     var base_nodes = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
     defer base_nodes.deinit(allocator);
@@ -1733,7 +1748,11 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         // Apply WHERE clause to filter base nodes before optional matching
         // BUT ONLY if WHERE doesn't reference optional variables
         // E30/E31 Fix: Skip pre-filter when WHERE uses optional variables like "m IS NULL"
-        if (q.where_clause) |where_expr| {
+        // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-HOP-008; FEATURE="OptionalMatchWithHops"; ASPECT=DeferWhereForHops; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2026-01-29
+        // When first chain has hops, defer WHERE filtering until after first chain traversal
+        // because WHERE may reference variables from the hops (e.g., rule.action)
+        if (!first_chain_has_hops and q.where_clause != null) {
+            const where_expr = q.where_clause.?;
             // Check if WHERE references any optional match variables
             var where_uses_optional = false;
             for (q.match.chains[1..]) |chain| {
@@ -1793,9 +1812,17 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     var all_vars = try std.ArrayList([]const u8).initCapacity(allocator, 0);
     defer all_vars.deinit(allocator);
 
-    // Add required variable
+    // Add required variable (left node of first chain)
     if (required_var) |v| {
         try all_vars.append(allocator, v);
+    }
+
+    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-HOP-003; FEATURE="OptionalMatchWithHops"; ASPECT=FirstChainVars; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2026-01-29
+    // Add first chain's hop variables (relationship and right node)
+    if (first_chain_has_hops) {
+        const hop = required_chain.hops[0];
+        if (hop.rel.name) |v| try all_vars.append(allocator, v);
+        if (hop.right.name) |v| try all_vars.append(allocator, v);
     }
 
     // Add optional chain variables
@@ -1860,7 +1887,13 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     defer chain_var_info.deinit(allocator);
 
     // Calculate positions for each optional chain's variables
+    // Start position accounts for first chain variables: left node + optional rel + optional right node
     var current_pos: usize = if (required_var != null) 1 else 0;
+    if (first_chain_has_hops) {
+        const hop = required_chain.hops[0];
+        if (hop.rel.name != null) current_pos += 1;
+        if (hop.right.name != null) current_pos += 1;
+    }
     for (q.match.chains[1..], 1..) |chain, chain_idx| {
         if (!chain.is_optional) continue;
 
@@ -1889,21 +1922,282 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         try chain_var_info.append(allocator, info);
     }
 
-    for (base_nodes.items) |base_node| {
-        // Start with a single row containing just the base node and NULLs
+    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-HOP-004; FEATURE="OptionalMatchWithHops"; ASPECT=FirstChainTraversal; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2026-01-29
+    // Process first chain fully before OPTIONAL MATCH processing
+    // For chains with hops, we need to traverse the relationship and get all matching bindings
+    var first_chain_bindings = try std.ArrayList([]Value).initCapacity(allocator, 0);
+    defer {
+        for (first_chain_bindings.items) |row| {
+            allocator.free(row);
+        }
+        first_chain_bindings.deinit(allocator);
+    }
+
+    if (first_chain_has_hops) {
+        const hop = required_chain.hops[0];
+        const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
+        const right_labels = hop.right.labels;
+        const rel_direction = hop.rel.dir;
+
+        // For each left node, find matching relationships and right nodes
+        for (base_nodes.items) |left_node| {
+            const outgoing_edges = if (rel_direction == .right or rel_direction == .undirected) store.getEdgesFrom(left_node.id) else &[_]graph_store.Edge{};
+            const incoming_edges = if (rel_direction == .left or rel_direction == .undirected) store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
+
+            // Process outgoing edges
+            for (outgoing_edges) |edge| {
+                if (rel_type) |rt| {
+                    if (!std.mem.eql(u8, edge.label, rt)) continue;
+                }
+                const right_node = store.nodes.getPtr(edge.to_id) orelse continue;
+
+                // Filter right node by graph
+                if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+
+                // Filter by right node labels
+                if (right_labels.len > 0) {
+                    var has_all_labels = true;
+                    for (right_labels) |required_label| {
+                        var found = false;
+                        for (right_node.labels) |node_label| {
+                            if (std.mem.eql(u8, required_label, node_label)) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            has_all_labels = false;
+                            break;
+                        }
+                    }
+                    if (!has_all_labels) continue;
+                }
+
+                // Filter by right node properties
+                if (hop.right.props) |properties| {
+                    var matches_props = true;
+                    const prop_env = Env{
+                        .names = &.{},
+                        .values = &.{},
+                        .param_names = param_names,
+                        .param_values = param_values,
+                        .allocator = allocator,
+                    };
+                    for (properties) |prop| {
+                        if (right_node.properties.get(prop.key)) |node_prop_val| {
+                            const node_val = switch (node_prop_val) {
+                                .Null => Value{ .Null = {} },
+                                .Bool => |b| Value{ .Bool = b },
+                                .Int => |i| Value{ .Int = i },
+                                .String => |s| Value{ .Str = s },
+                                .Float => |f| Value{ .Double = f },
+                                .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
+                                .ExtValue => |ext| Value{ .ExtValue = ext },
+                            };
+                            const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch Value{ .Null = {} };
+                            if (!valuesEqual(node_val, prop_val)) {
+                                matches_props = false;
+                                break;
+                            }
+                        } else {
+                            matches_props = false;
+                            break;
+                        }
+                    }
+                    if (!matches_props) continue;
+                }
+
+                // Create binding row for this first chain match
+                var binding_row = try allocator.alloc(Value, all_vars.items.len);
+                // Initialize all to NULL
+                for (binding_row) |*v| v.* = Value{ .Null = {} };
+
+                var pos: usize = 0;
+                if (required_var != null) {
+                    binding_row[pos] = Value{ .Node = left_node };
+                    pos += 1;
+                }
+                if (hop.rel.name != null) {
+                    const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
+                    binding_row[pos] = Value{ .Edge = edge_ptr };
+                    pos += 1;
+                }
+                if (hop.right.name != null) {
+                    binding_row[pos] = Value{ .Node = right_node };
+                }
+
+                try first_chain_bindings.append(allocator, binding_row);
+            }
+
+            // Process incoming edges
+            for (incoming_edges) |edge| {
+                if (rel_type) |rt| {
+                    if (!std.mem.eql(u8, edge.label, rt)) continue;
+                }
+                const right_node = store.nodes.getPtr(edge.from_id) orelse continue;
+
+                // Filter right node by graph
+                if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+
+                // Filter by right node labels
+                if (right_labels.len > 0) {
+                    var has_all_labels = true;
+                    for (right_labels) |required_label| {
+                        var found = false;
+                        for (right_node.labels) |node_label| {
+                            if (std.mem.eql(u8, required_label, node_label)) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            has_all_labels = false;
+                            break;
+                        }
+                    }
+                    if (!has_all_labels) continue;
+                }
+
+                // Filter by right node properties
+                if (hop.right.props) |properties| {
+                    var matches_props = true;
+                    const prop_env = Env{
+                        .names = &.{},
+                        .values = &.{},
+                        .param_names = param_names,
+                        .param_values = param_values,
+                        .allocator = allocator,
+                    };
+                    for (properties) |prop| {
+                        if (right_node.properties.get(prop.key)) |node_prop_val| {
+                            const node_val = switch (node_prop_val) {
+                                .Null => Value{ .Null = {} },
+                                .Bool => |b| Value{ .Bool = b },
+                                .Int => |i| Value{ .Int = i },
+                                .String => |s| Value{ .Str = s },
+                                .Float => |f| Value{ .Double = f },
+                                .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
+                                .ExtValue => |ext| Value{ .ExtValue = ext },
+                            };
+                            const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch Value{ .Null = {} };
+                            if (!valuesEqual(node_val, prop_val)) {
+                                matches_props = false;
+                                break;
+                            }
+                        } else {
+                            matches_props = false;
+                            break;
+                        }
+                    }
+                    if (!matches_props) continue;
+                }
+
+                // Create binding row for this first chain match
+                var binding_row = try allocator.alloc(Value, all_vars.items.len);
+                // Initialize all to NULL
+                for (binding_row) |*v| v.* = Value{ .Null = {} };
+
+                var pos: usize = 0;
+                if (required_var != null) {
+                    binding_row[pos] = Value{ .Node = left_node };
+                    pos += 1;
+                }
+                if (hop.rel.name != null) {
+                    const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
+                    binding_row[pos] = Value{ .Edge = edge_ptr };
+                    pos += 1;
+                }
+                if (hop.right.name != null) {
+                    binding_row[pos] = Value{ .Node = right_node };
+                }
+
+                try first_chain_bindings.append(allocator, binding_row);
+            }
+        }
+    } else {
+        // Simple first chain - just create rows with base nodes
+        for (base_nodes.items) |base_node| {
+            var binding_row = try allocator.alloc(Value, all_vars.items.len);
+            // Initialize all to NULL
+            for (binding_row) |*v| v.* = Value{ .Null = {} };
+
+            if (required_var != null) {
+                binding_row[0] = Value{ .Node = base_node };
+            }
+            try first_chain_bindings.append(allocator, binding_row);
+        }
+    }
+
+    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-HOP-007; FEATURE="OptionalMatchWithHops"; ASPECT=WhereFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2026-01-29
+    // Apply WHERE clause filtering to first chain bindings before OPTIONAL MATCH processing
+    // Only filter if WHERE doesn't reference optional variables
+    if (first_chain_has_hops and q.where_clause != null) {
+        const where_expr = q.where_clause.?;
+
+        // Check if WHERE references any optional match variables
+        var where_uses_optional = false;
+        for (q.match.chains[1..]) |chain| {
+            if (chain.is_optional and chain.hops.len > 0) {
+                const hop = chain.hops[0];
+                if (hop.rel.name) |rel_var| {
+                    if (whereExprReferencesVar(where_expr, rel_var)) {
+                        where_uses_optional = true;
+                        break;
+                    }
+                }
+                if (hop.right.name) |right_var| {
+                    if (whereExprReferencesVar(where_expr, right_var)) {
+                        where_uses_optional = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Only apply WHERE filter if it doesn't use optional vars
+        if (!where_uses_optional) {
+            // Filter first_chain_bindings using WHERE clause
+            var filtered_bindings = try std.ArrayList([]Value).initCapacity(allocator, first_chain_bindings.items.len);
+            for (first_chain_bindings.items) |binding_row| {
+                const env = Env{
+                    .names = all_vars.items,
+                    .values = binding_row,
+                    .param_names = param_names,
+                    .param_values = param_values,
+                    .allocator = allocator,
+                };
+                const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Null = {} };
+                const passes_where = switch (where_result) {
+                    .Bool => |b| b,
+                    .Null => false,
+                    .Int => |i| i != 0,
+                    else => false,
+                };
+                if (passes_where) {
+                    try filtered_bindings.append(allocator, binding_row);
+                } else {
+                    allocator.free(binding_row);
+                }
+            }
+            // Replace first_chain_bindings with filtered version
+            first_chain_bindings.clearRetainingCapacity();
+            for (filtered_bindings.items) |row| {
+                try first_chain_bindings.append(allocator, row);
+            }
+            filtered_bindings.deinit(allocator);
+        }
+    }
+
+    // Now process each first chain binding and extend with optional chains
+    for (first_chain_bindings.items) |first_chain_row| {
+        // Start with the first chain binding as the base row
         // GAP-0220 FIX: Use try for proper error propagation
         var current_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
         defer current_rows.deinit(allocator);
 
-        // Initialize with base row
-        var base_row = try allocator.alloc(Value, all_vars.items.len);
-        if (required_var != null) {
-            base_row[0] = Value{ .Node = base_node };
-        }
-        // Initialize all optional variables to NULL
-        for (base_row[if (required_var != null) @as(usize, 1) else 0..]) |*v| {
-            v.* = Value{ .Null = {} };
-        }
+        // Copy the first chain row as the initial base row
+        const base_row = try allocator.alloc(Value, all_vars.items.len);
+        @memcpy(base_row, first_chain_row);
         try current_rows.append(allocator, base_row);
 
         // Process each optional chain SEQUENTIALLY, extending current_rows
@@ -2003,9 +2297,32 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 } else if (chain.hops.len > 0) {
                     const hop = chain.hops[0];
 
-                    // Check if this optional chain references the base variable
+                    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-HOP-005; FEATURE="OptionalMatchWithHops"; ASPECT=LeftVarLookup; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2026-01-29
+                    // Check if this optional chain references any variable from the first chain
                     const left_var = hop.left.name;
-                    if (left_var == null or (required_var != null and !std.mem.eql(u8, left_var.?, required_var.?))) {
+                    var left_var_matches_first_chain = false;
+                    var source_node: ?*const graph_store.Node = null;
+
+                    if (left_var) |lv| {
+                        // Look up the source node from existing_row using the left_var name
+                        for (all_vars.items, 0..) |var_name, i| {
+                            if (std.mem.eql(u8, var_name, lv)) {
+                                // Found the variable - check if it's a first chain variable and get the node
+                                for (first_chain_vars.items) |fcv| {
+                                    if (std.mem.eql(u8, fcv, lv)) {
+                                        left_var_matches_first_chain = true;
+                                        break;
+                                    }
+                                }
+                                if (existing_row[i] == .Node) {
+                                    source_node = existing_row[i].Node;
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!left_var_matches_first_chain or source_node == null) {
                         // No match possible, keep existing row
                         const new_row = try allocator.alloc(Value, all_vars.items.len);
                         @memcpy(new_row, existing_row);
@@ -2016,8 +2333,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                     const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
                     const right_labels = hop.right.labels;
                     const rel_direction = hop.rel.dir;
-                    const outgoing_edges = if (rel_direction == .right or rel_direction == .undirected) store.getEdgesFrom(base_node.id) else &[_]graph_store.Edge{};
-                    const incoming_edges = if (rel_direction == .left or rel_direction == .undirected) store.getEdgesTo(base_node.id) else &[_]graph_store.Edge{};
+                    const outgoing_edges = if (rel_direction == .right or rel_direction == .undirected) store.getEdgesFrom(source_node.?.id) else &[_]graph_store.Edge{};
+                    const incoming_edges = if (rel_direction == .left or rel_direction == .undirected) store.getEdgesTo(source_node.?.id) else &[_]graph_store.Edge{};
 
                     // Process outgoing edges
                     const right_props = hop.right.props;
@@ -3112,6 +3429,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // Multiple required chains with relationships - use join logic
             return executeMultiChainRelationshipMatch(allocator, q, param_names, param_values, current_graph);
         }
+        // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-HOP-001; FEATURE="OptionalMatchWithHops"; ASPECT=Dispatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2026-01-29
+        // When first chain has hops and there are optional chains, use executeMatchWithOptionalPatterns
+        // This handles: MATCH (a)-[r]->(b) OPTIONAL MATCH (b)-[r2]->(c)
+        return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
     }
 
     // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchExecution"; ASPECT=LeftOuterJoin; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
