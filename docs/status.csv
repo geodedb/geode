@@ -442,7 +442,7 @@ REQ-CLI-MIGRATE-STATUS-001,CLIMigrateStatus,MigrationModule,TESTED,,,cli,2026-01
 REQ-CLI-MOD-001,CLI Modularization,SubcommandParsing,TESTED,,,cli,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-CLI-PASSWORD-PROMPT-001,PasswordPrompt,QueryCommand,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-POLICY-CMD-001,Policy CLI Commands,PolicyManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig
-REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,TODO,,,cli,2026-01-28,src/cli/main.zig
+REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig
 REQ-CLI-ROUTE-001,Query Option Auto-routing,CommandDispatch,TESTED,,,cli,2025-10-04,tests/query_option_autorouting_regression_test.sh
 REQ-CLI-SUBPROCESS-ELIMINATION-001,CLI Subprocess Elimination,UnifiedBinary,TESTED,,,cli,2026-01-15,src/cli/main.zig
@@ -729,13 +729,56 @@ REQ-FLE-CATALOG-001,FieldLevelEncryption,SCHEMA,TESTED,,,security,2026-01-15,src
 REQ-FLE-DOC-001,Field-Level Encryption,Implementation,TESTED,,,security,2026-01-15,tests/test_requirement_traceability.zig
 REQ-FLE-DOC-001,FieldLevelEncryption,DOCUMENTATION,TESTED,,,security,2025-10-15,docs/FIELD_LEVEL_ENCRYPTION.md
 REQ-FLE-DOC-001,FieldLevelEncryption,Documentation,TESTED,,,security,2026-01-15,tests/test_gap_0193_high_priority.zig
+REQ-FLE-ENFORCE-001,FLEEnforcement,SecurityTests,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-002,FLEEnforcement,EncryptionAlwaysApplied,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-003,FLEEnforcement,NoPlaintextOnDisk,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-004,FLEEnforcement,EnvelopeFormatValidation,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-005,FLEEnforcement,AADBinding,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-006,FLEEnforcement,RBACEnforcement,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-007,FLEEnforcement,RedactionOnDenial,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-008,FLEEnforcement,NoRoleBypasses,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-009,FLEEnforcement,UnicodeRoleValidation,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-010,FLEEnforcement,ControlCharRoleValidation,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-011,FLEEnforcement,FailSecureOnCatalogError,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-012,FLEEnforcement,FailSecureOnKeyError,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-013,FLEEnforcement,NoPlaintextFallback,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-014,FLEEnforcement,DecryptionFailureReturnsRedacted,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-015,FLEEnforcement,MasterKeyRequired,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-016,FLEEnforcement,KeySecureZeroing,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-017,FLEEnforcement,KeyVersionTracking,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-018,FLEEnforcement,CatalogPermissionsPersisted,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-019,FLEEnforcement,CatalogIntegrityCheck,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-020,FLEEnforcement,EnvVarRoleOverride,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-021,FLEEnforcement,BlindIndexDeterministic,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-022,FLEEnforcement,BlindIndexNotReversible,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-023,FLEEnforcement,BlindIndexAccessControl,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-024,FLEEnforcement,AESGCMParameters,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-025,FLEEnforcement,ChaCha20Parameters,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-026,FLEEnforcement,NonceRandomness,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-027,FLEEnforcement,HKDFKeyDerivation,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-028,FLEEnforcement,PlaintextSizeLimit,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-029,FLEEnforcement,KeySizeValidation,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-030,FLEEnforcement,GlobalFlagSkipDisabled,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-EXECUTION-001,FieldLevelEncryption,EXECUTION,TESTED,,,security,2025-10-15,src/execution.zig
-REQ-FLE-EXECUTION-001,FieldLevelEncryption,EXECUTION,TESTED,,,security,2026-01-15,src/execution/fle_hooks.zig
+REQ-FLE-EXECUTION-001,FieldLevelEncryption,EXECUTION,TESTED,,,security,2026-01-28,src/execution/fle_hooks.zig
 REQ-FLE-EXECUTION-001,FieldLevelEncryption,Execution,TESTED,,,security,2026-01-15,tests/test_gap_0193_impl_verification.zig
+REQ-FLE-FAILSECURE-001,FLEFailSecure,EncryptionFailureError,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-FAILSECURE-001,FLEFailSecure,SECURITY,TESTED,,,security,2026-01-28,src/execution/fle_hooks.zig
+REQ-FLE-FAILSECURE-002,FLEFailSecure,CatalogErrorDenyAccess,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-FAILSECURE-002,FLEFailSecure,EncryptionRequired,TESTED,,,security,2026-01-28,src/execution/fle_hooks.zig
+REQ-FLE-FAILSECURE-003,FLEFailSecure,EdgeEncryptionRequired,TESTED,,,security,2026-01-28,src/execution/fle_hooks.zig
+REQ-FLE-FAILSECURE-003,FLEFailSecure,MasterKeyRequired,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-FAILSECURE-004,FLEFailSecure,EncryptionCheck,TESTED,,,security,2026-01-28,src/fle_integration.zig
+REQ-FLE-FAILSECURE-004,FLEFailSecure,FieldRequiresEncryptionCheck,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-FAILSECURE-005,FLEFailSecure,CatalogErrorDenyAccess,TESTED,,,security,2026-01-28,src/fle_integration.zig
+REQ-FLE-FAILSECURE-005,FLEFailSecure,EdgePropertyEncryption,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-FAILSECURE-006,FLEFailSecure,AllErrorsDeny,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-FAILSECURE-006,FLEFailSecure,MasterKeyRequired,TESTED,,,security,2026-01-28,src/keys/manager.zig
+REQ-FLE-FAILSECURE-007,FLEFailSecure,AuditTrail,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-HKDF-001,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-15,src/crypto/hkdf.zig
 REQ-FLE-INTEGRATION-001,FieldLevelEncryption,INTEGRATION,TESTED,,,security,2026-01-15,src/fle_integration.zig
 REQ-FLE-KEY-001,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-15,src/keys/types.zig
-REQ-FLE-KEY-002,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-15,src/keys/manager.zig
+REQ-FLE-KEY-002,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-28,src/keys/manager.zig
 REQ-FLE-MIGRATE-001,FieldLevelEncryption,Migration,TESTED,,,security,2026-01-16,src/admin/fle_commands.zig
 REQ-FLE-MIGRATE-001,FieldLevelEncryption,Migration,TESTED,,,security,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-FLE-MIGRATE-CLI-001,FLEMigrateCLI,CLI,TESTED,,,security,2026-01-15,src/cli/fle_cli.zig
@@ -743,6 +786,8 @@ REQ-FLE-PARSER-001,FieldLevelEncryption,PARSER,TESTED,,,security,2026-01-15,src/
 REQ-FLE-PLANNER-001,FieldLevelEncryption,PLANNER,TESTED,,,security,2026-01-15,src/planner/rewrite.zig
 REQ-FLE-PREDICATE-HELPERS-001,FLE Predicate Rewriting,Helpers,TESTED,,,security,2026-01-09,src/fle_integration.zig
 REQ-FLE-PREDICATE-REWRITE-001,FLE Predicate Rewriting,BlindIndex,TESTED,,,security,2026-01-09,src/planner/rewrite.zig
+REQ-FLE-PRODMODE-001,FLEProductionMode,BuildModeDetection,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-PRODMODE-002,FLEProductionMode,TestModeFlag,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ROTATION-001,FLEKeyRotation,Encryption,TESTED,,,security,2026-01-10,src/fle_integration.zig
 REQ-FLE-ROTATION-002,FLEKeyRotation,KeyManagement,TESTED,,,security,2026-01-10,src/fle_integration.zig
 REQ-FLE-SCHEMA-001,FieldLevelEncryption,SCHEMA,TESTED,,,security,2026-01-15,src/schema/annotations.zig
@@ -2547,6 +2592,7 @@ REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Storage,EXEMPT,,,storage,2026-01-2
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Storage,EXEMPT,,,storage,2026-01-24,src/storage/wal_compactor.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Streaming,EXEMPT,,,streaming,2026-01-24,src/streaming/cdc.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Streaming,EXEMPT,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,TDE,EXEMPT,,,security,2026-01-28,src/storage/tde_file_encryption.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Tools,EXEMPT,,,tools,2026-01-24,src/tools/bench_regress.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Tools,EXEMPT,,,tools,2026-01-24,src/tools/fed_latency_governance.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,ValueTypes,EXEMPT,,,value_types,2026-01-24,src/value_types.zig
@@ -3600,6 +3646,18 @@ REQ-TDE-ENFORCE-012,TDEEnforcement,MemorySecurity,TESTED,,,security,2026-01-28,s
 REQ-TDE-ENFORCE-013,TDEEnforcement,Verification,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
 REQ-TDE-ENFORCE-014,TDEEnforcement,PerformanceThreshold,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig
 REQ-TDE-ENFORCE-015,TDEEnforcement,BuildIntegration,TESTED,,,security,2026-01-28,build.zig
+REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,<Component>,TESTED,,,security,2026-01-28,docs/TDE_FILE_LEVEL_ENCRYPTION.md
+REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,DomainTrie,TESTED,,,security,2026-01-28,src/index/domain_trie_persist.zig
+REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,FLECatalog,TESTED,,,security,2026-01-28,src/schema/fle_catalog.zig
+REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,,,security,2026-01-28,src/index/hnsw_persist.zig
+REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,IntervalTree,TESTED,,,security,2026-01-28,src/index/interval_persist.zig
+REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,JSONBIndex,TESTED,,,security,2026-01-28,src/index/jsonb_inverted_persist.zig
+REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,PatriciaTrie,TESTED,,,security,2026-01-28,src/index/patricia_persist.zig
+REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,RTreeIndex,TESTED,,,security,2026-01-28,src/index/rtree_persist.zig
+REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,RaftState,TESTED,,,security,2026-01-28,src/distributed/raft_persistent.zig
+REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SECURITY,TESTED,,,security,2026-01-28,docs/SECURITY_PROGRESS.md
+REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SchemaCatalog,TESTED,,,security,2026-01-28,src/schema/catalog.zig
+REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SharedUtility,TESTED,,,security,2026-01-28,src/storage/tde_file_encryption.zig
 REQ-TDE-KEYUNWRAP-001,AES-GCM Key Unwrapping,SECURITY,TESTED,,,security,2026-01-15,src/storage/crypto_enhanced.zig
 REQ-TDE-KEYWRAP-001,AES-GCM Key Wrapping,SECURITY,TESTED,,,security,2026-01-15,src/storage/crypto_enhanced.zig
 REQ-TDE-KMS-001,KMSIntegration,AWS,TESTED,,,security,2026-01-15,src/storage/crypto.zig
