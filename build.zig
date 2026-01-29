@@ -911,7 +911,11 @@ pub fn build(b: *std.Build) void {
         const hnsw_snapshot_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/hnsw_snapshot_fuzz.zig"), .target = target, .optimize = .Debug }) });
         const hnsw_persist_mod = b.createModule(.{ .root_source_file = b.path("src/index/hnsw_persist.zig"), .target = target, .optimize = optimize });
         const hnsw_mod = b.createModule(.{ .root_source_file = b.path("src/index/hnsw.zig"), .target = target, .optimize = optimize });
+        // TDE module for file-level encryption (REQ-TDE-FILELEVEL-001)
+        const tde_fuzz_mod = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize });
+        tde_fuzz_mod.addImport("logging", logging_mod);
         hnsw_persist_mod.addImport("hnsw", hnsw_mod);
+        hnsw_persist_mod.addImport("tde", tde_fuzz_mod);
         hnsw_snapshot_fuzz_tests.root_module.addImport("hnsw_persist", hnsw_persist_mod);
         hnsw_snapshot_fuzz_tests.root_module.addImport("hnsw", hnsw_mod);
         const run_hnsw_snapshot_fuzz = b.addRunArtifact(hnsw_snapshot_fuzz_tests);

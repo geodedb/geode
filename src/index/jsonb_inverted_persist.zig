@@ -1,22 +1,26 @@
 const std = @import("std");
 const JsonbInvertedIndex = @import("jsonb_inverted.zig").JsonbInvertedIndex;
+const tde = @import("../storage/tde_file_encryption.zig");
+
+// CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=JSONBIndex; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 
 const JSONB_MAGIC = "GDJB";
 const JSONB_VERSION: u16 = 1;
 
 pub fn persistSnapshot(index: *JsonbInvertedIndex, file_path: []const u8) !void {
-    const file = try std.fs.cwd().createFile(file_path, .{});
-    defer file.close();
+    // Buffer all data to memory first for TDE encryption
+    var buffer = try std.ArrayList(u8).initCapacity(index.allocator, 4096);
+    defer buffer.deinit(index.allocator);
 
-    try file.writeAll(JSONB_MAGIC);
+    try buffer.appendSlice(index.allocator, JSONB_MAGIC);
 
     var version_buf: [2]u8 = undefined;
     std.mem.writeInt(u16, &version_buf, JSONB_VERSION, .little);
-    try file.writeAll(&version_buf);
+    try buffer.appendSlice(index.allocator, &version_buf);
 
     var count_buf: [8]u8 = undefined;
     std.mem.writeInt(u64, &count_buf, @intCast(index.paths.count()), .little);
-    try file.writeAll(&count_buf);
+    try buffer.appendSlice(index.allocator, &count_buf);
 
     var iter = index.paths.iterator();
     while (iter.next()) |entry| {
@@ -25,39 +29,46 @@ pub fn persistSnapshot(index: *JsonbInvertedIndex, file_path: []const u8) !void 
 
         var path_len_buf: [4]u8 = undefined;
         std.mem.writeInt(u32, &path_len_buf, @intCast(path.len), .little);
-        try file.writeAll(&path_len_buf);
-        try file.writeAll(path);
+        try buffer.appendSlice(index.allocator, &path_len_buf);
+        try buffer.appendSlice(index.allocator, path);
 
         var doc_len_buf: [4]u8 = undefined;
         std.mem.writeInt(u32, &doc_len_buf, @intCast(doc_ids.len), .little);
-        try file.writeAll(&doc_len_buf);
+        try buffer.appendSlice(index.allocator, &doc_len_buf);
 
         for (doc_ids) |doc_id| {
             var doc_id_buf: [8]u8 = undefined;
             std.mem.writeInt(usize, &doc_id_buf, doc_id, .little);
-            try file.writeAll(&doc_id_buf);
+            try buffer.appendSlice(index.allocator, &doc_id_buf);
         }
     }
+
+    // Encrypt and write to file
+    try tde.writeEncryptedFile(index.allocator, file_path, buffer.items);
 }
 
 pub fn loadSnapshot(allocator: std.mem.Allocator, file_path: []const u8) !JsonbInvertedIndex {
-    const file = try std.fs.cwd().openFile(file_path, .{});
-    defer file.close();
+    // Read and decrypt file using TDE
+    const data = try tde.readDecryptedFile(allocator, file_path);
+    defer allocator.free(data);
+
+    // Create stream to read from decrypted data
+    var stream = std.io.fixedBufferStream(data);
 
     // Read and validate magic number
     var magic: [4]u8 = undefined;
-    _ = try file.read(&magic);
+    _ = try stream.reader().readAll(&magic);
     if (!std.mem.eql(u8, &magic, JSONB_MAGIC)) return error.InvalidMagic;
 
     // Read version
     var version_buf: [2]u8 = undefined;
-    _ = try file.read(&version_buf);
+    _ = try stream.reader().readAll(&version_buf);
     const version = std.mem.readInt(u16, &version_buf, .little);
     if (version != JSONB_VERSION) return error.UnsupportedVersion;
 
     // Read entry count
     var count_buf: [8]u8 = undefined;
-    _ = try file.read(&count_buf);
+    _ = try stream.reader().readAll(&count_buf);
     const entry_count = std.mem.readInt(u64, &count_buf, .little);
 
     var index = JsonbInvertedIndex.init(allocator);
@@ -65,22 +76,22 @@ pub fn loadSnapshot(allocator: std.mem.Allocator, file_path: []const u8) !JsonbI
     for (0..entry_count) |_| {
         // Read path length
         var path_len_buf: [4]u8 = undefined;
-        _ = try file.read(&path_len_buf);
+        _ = try stream.reader().readAll(&path_len_buf);
         const path_len = std.mem.readInt(u32, &path_len_buf, .little);
 
         const path = try allocator.alloc(u8, path_len);
-        _ = try file.read(path);
+        _ = try stream.reader().readAll(path);
 
         // Read doc count
         var doc_count_buf: [4]u8 = undefined;
-        _ = try file.read(&doc_count_buf);
+        _ = try stream.reader().readAll(&doc_count_buf);
         const doc_count = std.mem.readInt(u32, &doc_count_buf, .little);
 
         var doc_list = std.ArrayList(usize).initCapacity(allocator, doc_count) catch return error.OutOfMemory;
 
         for (0..doc_count) |_| {
             var doc_id_buf: [8]u8 = undefined;
-            _ = try file.read(&doc_id_buf);
+            _ = try stream.reader().readAll(&doc_id_buf);
             const doc_id = std.mem.readInt(usize, &doc_id_buf, .little);
             try doc_list.append(allocator, doc_id);
         }

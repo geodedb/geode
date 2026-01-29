@@ -1,10 +1,13 @@
 const std = @import("std");
 const graph_storage_manager = @import("../server/graph_storage_manager.zig");
+const tde = @import("../storage/tde_file_encryption.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Schema; STATUS=EXEMPT; OWNER=schema; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("schema");
 const Attr = logging.Attr;
+
+// CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=SchemaCatalog; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 
 // PERF: PHASE3_RWLOCK - RwLock for concurrent catalog access
 // CANARY: REQ=REQ-PERF-PHASE3-001; FEATURE="ConcurrencyOptimization"; ASPECT=CATALOG_LOCK; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-17
@@ -152,8 +155,9 @@ pub const Catalog = struct {
         const catalog_path = try std.fmt.allocPrint(self.allocator, "{s}/geode_catalog.dat", .{self.data_dir});
         defer self.allocator.free(catalog_path);
 
-        const file = try std.fs.cwd().createFile(catalog_path, .{});
-        defer file.close();
+        // Buffer all data to memory first for TDE encryption
+        var buffer = try std.ArrayList(u8).initCapacity(self.allocator, 4096);
+        defer buffer.deinit(self.allocator);
 
         // Write header: schema_count, graph_count, index_count, constraint_count
         var header: [16]u8 = undefined;
@@ -161,7 +165,7 @@ pub const Catalog = struct {
         std.mem.writeInt(u32, header[4..8], @intCast(self.graphs.count()), .little);
         std.mem.writeInt(u32, header[8..12], @intCast(self.indexes.count()), .little);
         std.mem.writeInt(u32, header[12..16], @intCast(self.constraints.count()), .little);
-        _ = try file.write(&header);
+        try buffer.appendSlice(self.allocator, &header);
 
         // Write schemas (just names)
         var schema_iter = self.schemas.iterator();
@@ -169,8 +173,8 @@ pub const Catalog = struct {
             const name = entry.key_ptr.*;
             var len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &len_buf, @intCast(name.len), .little);
-            _ = try file.write(&len_buf);
-            _ = try file.write(name);
+            try buffer.appendSlice(self.allocator, &len_buf);
+            try buffer.appendSlice(self.allocator, name);
         }
 
         // Write graphs (just names)
@@ -179,8 +183,8 @@ pub const Catalog = struct {
             const name = entry.key_ptr.*;
             var len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &len_buf, @intCast(name.len), .little);
-            _ = try file.write(&len_buf);
-            _ = try file.write(name);
+            try buffer.appendSlice(self.allocator, &len_buf);
+            try buffer.appendSlice(self.allocator, name);
         }
 
         // Write indexes
@@ -191,31 +195,31 @@ pub const Catalog = struct {
             // Write index name
             var name_len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &name_len_buf, @intCast(index_info.name.len), .little);
-            _ = try file.write(&name_len_buf);
-            _ = try file.write(index_info.name);
+            try buffer.appendSlice(self.allocator, &name_len_buf);
+            try buffer.appendSlice(self.allocator, index_info.name);
 
             // Write index type
             var type_len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &type_len_buf, @intCast(index_info.index_type.len), .little);
-            _ = try file.write(&type_len_buf);
-            _ = try file.write(index_info.index_type);
+            try buffer.appendSlice(self.allocator, &type_len_buf);
+            try buffer.appendSlice(self.allocator, index_info.index_type);
 
             // Write table name
             var table_len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &table_len_buf, @intCast(index_info.table_name.len), .little);
-            _ = try file.write(&table_len_buf);
-            _ = try file.write(index_info.table_name);
+            try buffer.appendSlice(self.allocator, &table_len_buf);
+            try buffer.appendSlice(self.allocator, index_info.table_name);
 
             // Write column count and columns
             var col_count_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &col_count_buf, @intCast(index_info.columns.len), .little);
-            _ = try file.write(&col_count_buf);
+            try buffer.appendSlice(self.allocator, &col_count_buf);
 
             for (index_info.columns) |col| {
                 var col_len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &col_len_buf, @intCast(col.len), .little);
-                _ = try file.write(&col_len_buf);
-                _ = try file.write(col);
+                try buffer.appendSlice(self.allocator, &col_len_buf);
+                try buffer.appendSlice(self.allocator, col);
             }
         }
 
@@ -227,35 +231,38 @@ pub const Catalog = struct {
             // Write constraint name
             var name_len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &name_len_buf, @intCast(constraint_info.name.len), .little);
-            _ = try file.write(&name_len_buf);
-            _ = try file.write(constraint_info.name);
+            try buffer.appendSlice(self.allocator, &name_len_buf);
+            try buffer.appendSlice(self.allocator, constraint_info.name);
 
             // Write constraint type (as u8)
             const type_byte: [1]u8 = .{@intFromEnum(constraint_info.constraint_type)};
-            _ = try file.write(&type_byte);
+            try buffer.appendSlice(self.allocator, &type_byte);
 
             // Write label
             var label_len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &label_len_buf, @intCast(constraint_info.label.len), .little);
-            _ = try file.write(&label_len_buf);
-            _ = try file.write(constraint_info.label);
+            try buffer.appendSlice(self.allocator, &label_len_buf);
+            try buffer.appendSlice(self.allocator, constraint_info.label);
 
             // Write is_enforced flag
             const enforced_byte: [1]u8 = .{if (constraint_info.is_enforced) 1 else 0};
-            _ = try file.write(&enforced_byte);
+            try buffer.appendSlice(self.allocator, &enforced_byte);
 
             // Write property count and properties
             var prop_count_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &prop_count_buf, @intCast(constraint_info.properties.len), .little);
-            _ = try file.write(&prop_count_buf);
+            try buffer.appendSlice(self.allocator, &prop_count_buf);
 
             for (constraint_info.properties) |prop| {
                 var prop_len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &prop_len_buf, @intCast(prop.len), .little);
-                _ = try file.write(&prop_len_buf);
-                _ = try file.write(prop);
+                try buffer.appendSlice(self.allocator, &prop_len_buf);
+                try buffer.appendSlice(self.allocator, prop);
             }
         }
+
+        // Encrypt and write to file
+        try tde.writeEncryptedFile(self.allocator, catalog_path, buffer.items);
     }
 
     /// Load catalog from disk
@@ -263,19 +270,27 @@ pub const Catalog = struct {
         const catalog_path = try std.fmt.allocPrint(self.allocator, "{s}/geode_catalog.dat", .{self.data_dir});
         defer self.allocator.free(catalog_path);
 
-        const file = std.fs.cwd().openFile(catalog_path, .{}) catch |err| {
+        // Check if file exists first
+        std.fs.cwd().access(catalog_path, .{}) catch |err| {
             if (err == error.FileNotFound) return;
             return err;
         };
-        defer file.close();
+
+        // Read and decrypt file using TDE
+        const data = try tde.readDecryptedFile(self.allocator, catalog_path);
+        defer self.allocator.free(data);
 
         // Lock for modifying catalog state
         self.rwlock.lock();
         defer self.rwlock.unlock();
 
+        // Create stream to read from decrypted data
+        var stream = std.io.fixedBufferStream(data);
+        var reader = stream.reader();
+
         // Read header (supports both old 12-byte and new 16-byte format)
         var header: [16]u8 = undefined;
-        const bytes_read = try file.read(&header);
+        const bytes_read = reader.readAll(&header) catch 0;
         if (bytes_read < 12) return error.InvalidCatalogFile;
 
         const schema_count = std.mem.readInt(u32, header[0..4], .little);
@@ -288,12 +303,12 @@ pub const Catalog = struct {
         var i: u32 = 0;
         while (i < schema_count) : (i += 1) {
             var len_buf: [4]u8 = undefined;
-            if ((try file.read(&len_buf)) < 4) return error.InvalidCatalogFile;
+            if ((try reader.readAll(&len_buf)) < 4) return error.InvalidCatalogFile;
             const name_len = std.mem.readInt(u32, &len_buf, .little);
 
             const name = try self.allocator.alloc(u8, name_len);
             errdefer self.allocator.free(name);
-            if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
+            if ((try reader.readAll(name)) < name_len) return error.InvalidCatalogFile;
 
             try self.schemas.put(name, {});
         }
@@ -302,12 +317,12 @@ pub const Catalog = struct {
         i = 0;
         while (i < graph_count) : (i += 1) {
             var len_buf: [4]u8 = undefined;
-            if ((try file.read(&len_buf)) < 4) return error.InvalidCatalogFile;
+            if ((try reader.readAll(&len_buf)) < 4) return error.InvalidCatalogFile;
             const name_len = std.mem.readInt(u32, &len_buf, .little);
 
             const name = try self.allocator.alloc(u8, name_len);
             errdefer self.allocator.free(name);
-            if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
+            if ((try reader.readAll(name)) < name_len) return error.InvalidCatalogFile;
 
             try self.graphs.put(name, {});
         }
@@ -317,31 +332,31 @@ pub const Catalog = struct {
         while (i < index_count) : (i += 1) {
             // Read index name
             var name_len_buf: [4]u8 = undefined;
-            if ((try file.read(&name_len_buf)) < 4) return error.InvalidCatalogFile;
+            if ((try reader.readAll(&name_len_buf)) < 4) return error.InvalidCatalogFile;
             const name_len = std.mem.readInt(u32, &name_len_buf, .little);
             const name = try self.allocator.alloc(u8, name_len);
             errdefer self.allocator.free(name);
-            if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
+            if ((try reader.readAll(name)) < name_len) return error.InvalidCatalogFile;
 
             // Read index type
             var type_len_buf: [4]u8 = undefined;
-            if ((try file.read(&type_len_buf)) < 4) return error.InvalidCatalogFile;
+            if ((try reader.readAll(&type_len_buf)) < 4) return error.InvalidCatalogFile;
             const type_len = std.mem.readInt(u32, &type_len_buf, .little);
             const index_type = try self.allocator.alloc(u8, type_len);
             errdefer self.allocator.free(index_type);
-            if ((try file.read(index_type)) < type_len) return error.InvalidCatalogFile;
+            if ((try reader.readAll(index_type)) < type_len) return error.InvalidCatalogFile;
 
             // Read table name
             var table_len_buf: [4]u8 = undefined;
-            if ((try file.read(&table_len_buf)) < 4) return error.InvalidCatalogFile;
+            if ((try reader.readAll(&table_len_buf)) < 4) return error.InvalidCatalogFile;
             const table_len = std.mem.readInt(u32, &table_len_buf, .little);
             const table_name = try self.allocator.alloc(u8, table_len);
             errdefer self.allocator.free(table_name);
-            if ((try file.read(table_name)) < table_len) return error.InvalidCatalogFile;
+            if ((try reader.readAll(table_name)) < table_len) return error.InvalidCatalogFile;
 
             // Read column count
             var col_count_buf: [4]u8 = undefined;
-            if ((try file.read(&col_count_buf)) < 4) return error.InvalidCatalogFile;
+            if ((try reader.readAll(&col_count_buf)) < 4) return error.InvalidCatalogFile;
             const col_count = std.mem.readInt(u32, &col_count_buf, .little);
 
             // Read columns
@@ -350,11 +365,11 @@ pub const Catalog = struct {
             var col_idx: u32 = 0;
             while (col_idx < col_count) : (col_idx += 1) {
                 var col_len_buf: [4]u8 = undefined;
-                if ((try file.read(&col_len_buf)) < 4) return error.InvalidCatalogFile;
+                if ((try reader.readAll(&col_len_buf)) < 4) return error.InvalidCatalogFile;
                 const col_len = std.mem.readInt(u32, &col_len_buf, .little);
                 const col = try self.allocator.alloc(u8, col_len);
                 errdefer self.allocator.free(col);
-                if ((try file.read(col)) < col_len) return error.InvalidCatalogFile;
+                if ((try reader.readAll(col)) < col_len) return error.InvalidCatalogFile;
                 columns[col_idx] = col;
             }
 
@@ -376,33 +391,33 @@ pub const Catalog = struct {
         while (i < constraint_count) : (i += 1) {
             // Read constraint name
             var name_len_buf: [4]u8 = undefined;
-            if ((try file.read(&name_len_buf)) < 4) return error.InvalidCatalogFile;
+            if ((try reader.readAll(&name_len_buf)) < 4) return error.InvalidCatalogFile;
             const name_len = std.mem.readInt(u32, &name_len_buf, .little);
             const name = try self.allocator.alloc(u8, name_len);
             errdefer self.allocator.free(name);
-            if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
+            if ((try reader.readAll(name)) < name_len) return error.InvalidCatalogFile;
 
             // Read constraint type
             var type_byte: [1]u8 = undefined;
-            if ((try file.read(&type_byte)) < 1) return error.InvalidCatalogFile;
+            if ((try reader.readAll(&type_byte)) < 1) return error.InvalidCatalogFile;
             const constraint_type: ConstraintInfo.ConstraintType = @enumFromInt(type_byte[0]);
 
             // Read label
             var label_len_buf: [4]u8 = undefined;
-            if ((try file.read(&label_len_buf)) < 4) return error.InvalidCatalogFile;
+            if ((try reader.readAll(&label_len_buf)) < 4) return error.InvalidCatalogFile;
             const label_len = std.mem.readInt(u32, &label_len_buf, .little);
             const label = try self.allocator.alloc(u8, label_len);
             errdefer self.allocator.free(label);
-            if ((try file.read(label)) < label_len) return error.InvalidCatalogFile;
+            if ((try reader.readAll(label)) < label_len) return error.InvalidCatalogFile;
 
             // Read is_enforced flag
             var enforced_byte: [1]u8 = undefined;
-            if ((try file.read(&enforced_byte)) < 1) return error.InvalidCatalogFile;
+            if ((try reader.readAll(&enforced_byte)) < 1) return error.InvalidCatalogFile;
             const is_enforced = enforced_byte[0] != 0;
 
             // Read property count
             var prop_count_buf: [4]u8 = undefined;
-            if ((try file.read(&prop_count_buf)) < 4) return error.InvalidCatalogFile;
+            if ((try reader.readAll(&prop_count_buf)) < 4) return error.InvalidCatalogFile;
             const prop_count = std.mem.readInt(u32, &prop_count_buf, .little);
 
             // Read properties
@@ -411,11 +426,11 @@ pub const Catalog = struct {
             var prop_idx: u32 = 0;
             while (prop_idx < prop_count) : (prop_idx += 1) {
                 var prop_len_buf: [4]u8 = undefined;
-                if ((try file.read(&prop_len_buf)) < 4) return error.InvalidCatalogFile;
+                if ((try reader.readAll(&prop_len_buf)) < 4) return error.InvalidCatalogFile;
                 const prop_len = std.mem.readInt(u32, &prop_len_buf, .little);
                 const prop = try self.allocator.alloc(u8, prop_len);
                 errdefer self.allocator.free(prop);
-                if ((try file.read(prop)) < prop_len) return error.InvalidCatalogFile;
+                if ((try reader.readAll(prop)) < prop_len) return error.InvalidCatalogFile;
                 properties[prop_idx] = prop;
             }
 

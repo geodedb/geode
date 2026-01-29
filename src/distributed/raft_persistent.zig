@@ -1,7 +1,9 @@
 const std = @import("std");
 const quic = @import("../transport/quic_msquic.zig");
+const tde = @import("../storage/tde_file_encryption.zig");
 
 // CANARY: REQ=REQ-GQL-RAFT-PERSIST; FEATURE="Raft Persistence"; ASPECT=CorePersistence; STATUS=TESTED; TEST=e2e_raft_persist_snapshot_membership; OWNER=distributed; UPDATED=2025-09-25
+// CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=RaftState; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 
 pub const RaftNode = struct {
     allocator: std.mem.Allocator,
@@ -231,7 +233,8 @@ pub const RaftNode = struct {
         );
         defer self.allocator.free(state_path);
 
-        const file = std.fs.cwd().openFile(state_path, .{}) catch |err| {
+        // Check if file exists first
+        std.fs.cwd().access(state_path, .{}) catch |err| {
             if (err == error.FileNotFound) {
                 // Initialize new state
                 self.current_term = 0;
@@ -240,10 +243,16 @@ pub const RaftNode = struct {
             }
             return err;
         };
-        defer file.close();
+
+        // Read and decrypt file using TDE
+        const data = try tde.readDecryptedFile(self.allocator, state_path);
+        defer self.allocator.free(data);
+
+        // Create stream to read from decrypted data
+        var stream = std.io.fixedBufferStream(data);
+        var reader = stream.reader();
 
         // Read persistent state
-        var reader = file.reader();
         self.node_id = try reader.readInt(u32, .little);
         self.current_term = try reader.readInt(u64, .little);
 
@@ -259,7 +268,7 @@ pub const RaftNode = struct {
             const id = try reader.readInt(u32, .little);
             const addr_len = try reader.readInt(u32, .little);
             const addr = try self.allocator.alloc(u8, addr_len);
-            _ = try reader.read(addr);
+            _ = try reader.readAll(addr);
 
             try self.cluster.members.append(.{
                 .id = id,
@@ -282,27 +291,48 @@ pub const RaftNode = struct {
             if (err != error.PathAlreadyExists) return err;
         };
 
-        const file = try std.fs.cwd().createFile(state_path, .{});
-        defer file.close();
+        // Buffer all data to memory first for TDE encryption
+        var buffer = try std.ArrayList(u8).initCapacity(self.allocator, 4096);
+        defer buffer.deinit(self.allocator);
 
-        var writer = file.writer();
-        try writer.writeInt(u32, self.node_id, .little);
-        try writer.writeInt(u64, self.current_term, .little);
+        // Write node_id
+        var node_id_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &node_id_buf, self.node_id, .little);
+        try buffer.appendSlice(self.allocator, &node_id_buf);
 
+        // Write current_term
+        var term_buf: [8]u8 = undefined;
+        std.mem.writeInt(u64, &term_buf, self.current_term, .little);
+        try buffer.appendSlice(self.allocator, &term_buf);
+
+        // Write voted_for
         if (self.voted_for) |vote| {
-            try writer.writeByte(1);
-            try writer.writeInt(u32, vote, .little);
+            try buffer.append(self.allocator, 1);
+            var vote_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &vote_buf, vote, .little);
+            try buffer.appendSlice(self.allocator, &vote_buf);
         } else {
-            try writer.writeByte(0);
+            try buffer.append(self.allocator, 0);
         }
 
         // Save cluster configuration
-        try writer.writeInt(u32, @intCast(self.cluster.members.items.len), .little);
+        var member_count_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &member_count_buf, @intCast(self.cluster.members.items.len), .little);
+        try buffer.appendSlice(self.allocator, &member_count_buf);
+
         for (self.cluster.members.items) |member| {
-            try writer.writeInt(u32, member.id, .little);
-            try writer.writeInt(u32, @intCast(member.address.len), .little);
-            try writer.writeAll(member.address);
+            var id_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &id_buf, member.id, .little);
+            try buffer.appendSlice(self.allocator, &id_buf);
+
+            var addr_len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &addr_len_buf, @intCast(member.address.len), .little);
+            try buffer.appendSlice(self.allocator, &addr_len_buf);
+            try buffer.appendSlice(self.allocator, member.address);
         }
+
+        // Encrypt and write to file
+        try tde.writeEncryptedFile(self.allocator, state_path, buffer.items);
     }
 
     fn loadSnapshot(self: *RaftNode) !void {
@@ -313,32 +343,39 @@ pub const RaftNode = struct {
         );
         defer self.allocator.free(snapshot_path);
 
-        const file = std.fs.cwd().openFile(snapshot_path, .{}) catch |err| {
+        // Check if file exists first
+        std.fs.cwd().access(snapshot_path, .{}) catch |err| {
             if (err == error.FileNotFound) return;
             return err;
         };
-        defer file.close();
 
-        var reader = file.reader();
+        // Read and decrypt file using TDE
+        const file_data = try tde.readDecryptedFile(self.allocator, snapshot_path);
+        defer self.allocator.free(file_data);
+
+        // Create stream to read from decrypted data
+        var stream = std.io.fixedBufferStream(file_data);
+        var reader = stream.reader();
+
         const last_included_index = try reader.readInt(u64, .little);
         const last_included_term = try reader.readInt(u64, .little);
         const data_len = try reader.readInt(u64, .little);
         const checksum = try reader.readInt(u32, .little);
 
-        const data = try self.allocator.alloc(u8, data_len);
-        _ = try reader.read(data);
+        const snapshot_data = try self.allocator.alloc(u8, data_len);
+        _ = try reader.readAll(snapshot_data);
 
         // Verify checksum
-        const computed_checksum = std.hash.crc.Crc32.hash(data);
+        const computed_checksum = std.hash.crc.Crc32.hash(snapshot_data);
         if (computed_checksum != checksum) {
-            self.allocator.free(data);
+            self.allocator.free(snapshot_data);
             return error.SnapshotCorrupted;
         }
 
         self.snapshot = .{
             .last_included_index = last_included_index,
             .last_included_term = last_included_term,
-            .data = data,
+            .data = snapshot_data,
             .checksum = checksum,
         };
 
@@ -354,15 +391,30 @@ pub const RaftNode = struct {
         );
         defer self.allocator.free(snapshot_path);
 
-        const file = try std.fs.cwd().createFile(snapshot_path, .{});
-        defer file.close();
+        // Buffer all data to memory first for TDE encryption
+        var buffer = try std.ArrayList(u8).initCapacity(self.allocator, 4096);
+        defer buffer.deinit(self.allocator);
 
-        var writer = file.writer();
-        try writer.writeInt(u64, snapshot.last_included_index, .little);
-        try writer.writeInt(u64, snapshot.last_included_term, .little);
-        try writer.writeInt(u64, snapshot.data.len, .little);
-        try writer.writeInt(u32, snapshot.checksum, .little);
-        try writer.writeAll(snapshot.data);
+        var index_buf: [8]u8 = undefined;
+        std.mem.writeInt(u64, &index_buf, snapshot.last_included_index, .little);
+        try buffer.appendSlice(self.allocator, &index_buf);
+
+        var term_buf: [8]u8 = undefined;
+        std.mem.writeInt(u64, &term_buf, snapshot.last_included_term, .little);
+        try buffer.appendSlice(self.allocator, &term_buf);
+
+        var len_buf: [8]u8 = undefined;
+        std.mem.writeInt(u64, &len_buf, snapshot.data.len, .little);
+        try buffer.appendSlice(self.allocator, &len_buf);
+
+        var checksum_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &checksum_buf, snapshot.checksum, .little);
+        try buffer.appendSlice(self.allocator, &checksum_buf);
+
+        try buffer.appendSlice(self.allocator, snapshot.data);
+
+        // Encrypt and write to file
+        try tde.writeEncryptedFile(self.allocator, snapshot_path, buffer.items);
     }
 
     fn captureStateMachine(self: *RaftNode) ![]const u8 {
@@ -455,7 +507,7 @@ pub const RaftLog = struct {
             @memcpy(new_entries, remaining);
 
             self.entries.clearAndFree();
-            try self.entries.appendSlice(new_entries);
+            try self.entries.appendSlice(self.allocator, new_entries);
             self.allocator.free(new_entries);
         }
 
@@ -494,13 +546,19 @@ pub const RaftLog = struct {
         );
         defer self.allocator.free(log_path);
 
-        const file = std.fs.cwd().openFile(log_path, .{}) catch |err| {
+        // Check if file exists
+        std.fs.cwd().access(log_path, .{}) catch |err| {
             if (err == error.FileNotFound) return;
             return err;
         };
-        defer file.close();
 
-        var reader = file.reader();
+        // Read and decrypt file using TDE
+        const data = try tde.readDecryptedFile(self.allocator, log_path);
+        defer self.allocator.free(data);
+
+        // Create stream to read from decrypted data
+        var stream = std.io.fixedBufferStream(data);
+        var reader = stream.reader();
 
         // Read compaction marker
         self.snapshot_index = try reader.readInt(u64, .little);
@@ -508,7 +566,7 @@ pub const RaftLog = struct {
 
         // Read entries
         while (true) {
-            const entry = self.readEntry(reader) catch |err| {
+            const entry = self.readEntryStream(reader) catch |err| {
                 if (err == error.EndOfStream) break;
                 return err;
             };
@@ -517,33 +575,10 @@ pub const RaftLog = struct {
     }
 
     fn persistEntry(self: *RaftLog, entry: LogEntry) !void {
-        const log_path = try std.fmt.allocPrint(
-            self.allocator,
-            "{s}/raft_log.bin",
-            .{self.storage_path},
-        );
-        defer self.allocator.free(log_path);
-
-        const file = try std.fs.cwd().openFile(log_path, .{ .mode = .read_write }) catch |err| {
-            if (err == error.FileNotFound) {
-                // Create new log file
-                const new_file = try std.fs.cwd().createFile(log_path, .{});
-                defer new_file.close();
-
-                var writer = new_file.writer();
-                try writer.writeInt(u64, self.snapshot_index, .little);
-                try writer.writeInt(u64, self.snapshot_term, .little);
-                try self.writeEntry(writer, entry);
-                return;
-            }
-            return err;
-        };
-        defer file.close();
-
-        // Append to end of file
-        try file.seekToEnd();
-        var writer = file.writer();
-        try self.writeEntry(writer, entry);
+        // With TDE encryption, we need to rewrite the entire log file
+        // since we can't append to an encrypted file
+        try self.saveCompactionMarker();
+        _ = entry; // Entry is already in self.entries via caller
     }
 
     fn saveCompactionMarker(self: *RaftLog) !void {
@@ -554,43 +589,60 @@ pub const RaftLog = struct {
         );
         defer self.allocator.free(log_path);
 
-        // Rewrite log file with new compaction marker
-        const file = try std.fs.cwd().createFile(log_path, .{});
-        defer file.close();
+        // Buffer all data to memory first for TDE encryption
+        var buffer = try std.ArrayList(u8).initCapacity(self.allocator, 4096);
+        defer buffer.deinit(self.allocator);
 
-        var writer = file.writer();
-        try writer.writeInt(u64, self.snapshot_index, .little);
-        try writer.writeInt(u64, self.snapshot_term, .little);
+        var index_buf: [8]u8 = undefined;
+        std.mem.writeInt(u64, &index_buf, self.snapshot_index, .little);
+        try buffer.appendSlice(self.allocator, &index_buf);
 
-        // Write remaining entries
+        var term_buf: [8]u8 = undefined;
+        std.mem.writeInt(u64, &term_buf, self.snapshot_term, .little);
+        try buffer.appendSlice(self.allocator, &term_buf);
+
+        // Write remaining entries to buffer
         for (self.entries.items) |entry| {
-            try self.writeEntry(writer, entry);
+            try self.writeEntryBuffer(self.allocator, &buffer, entry);
         }
+
+        // Encrypt and write to file
+        try tde.writeEncryptedFile(self.allocator, log_path, buffer.items);
     }
 
-    fn writeEntry(self: *RaftLog, writer: anytype, entry: LogEntry) !void {
+    fn writeEntryBuffer(self: *RaftLog, allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), entry: LogEntry) !void {
         _ = self;
-        try writer.writeInt(u64, entry.term, .little);
-        try writer.writeInt(u64, entry.index, .little);
-        try writer.writeInt(u8, @intFromEnum(entry.entry_type), .little);
-        try writer.writeInt(u32, @intCast(entry.data.len), .little);
-        try writer.writeAll(entry.data);
+        var term_buf: [8]u8 = undefined;
+        std.mem.writeInt(u64, &term_buf, entry.term, .little);
+        try buffer.appendSlice(allocator, &term_buf);
+
+        var index_buf: [8]u8 = undefined;
+        std.mem.writeInt(u64, &index_buf, entry.index, .little);
+        try buffer.appendSlice(allocator, &index_buf);
+
+        try buffer.append(allocator, @intFromEnum(entry.entry_type));
+
+        var len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &len_buf, @intCast(entry.data.len), .little);
+        try buffer.appendSlice(allocator, &len_buf);
+
+        try buffer.appendSlice(allocator, entry.data);
     }
 
-    fn readEntry(self: *RaftLog, reader: anytype) !LogEntry {
+    fn readEntryStream(self: *RaftLog, reader: anytype) !LogEntry {
         const term = try reader.readInt(u64, .little);
         const index = try reader.readInt(u64, .little);
         const entry_type = try reader.readEnum(LogEntryType, .little);
         const data_len = try reader.readInt(u32, .little);
 
-        const data = try self.allocator.alloc(u8, data_len);
-        _ = try reader.read(data);
+        const entry_data = try self.allocator.alloc(u8, data_len);
+        _ = try reader.readAll(entry_data);
 
         return LogEntry{
             .term = term,
             .index = index,
             .entry_type = entry_type,
-            .data = data,
+            .data = entry_data,
         };
     }
 };

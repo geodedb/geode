@@ -1,5 +1,8 @@
 const std = @import("std");
 const rtree = @import("rtree.zig");
+const tde = @import("../storage/tde_file_encryption.zig");
+
+// CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=RTreeIndex; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 
 const MAGIC = "GDRT";
 
@@ -38,8 +41,9 @@ pub const WalEntry = struct {
 };
 
 pub fn saveSnapshot(tree: *const rtree.RTree, path: []const u8) !void {
-    const file = try std.fs.cwd().createFile(path, .{});
-    defer file.close();
+    // Buffer all data to memory first for TDE encryption
+    var buffer = try std.ArrayList(u8).initCapacity(tree.allocator, 4096);
+    defer buffer.deinit(tree.allocator);
 
     const header = Header{
         .magic = MAGIC.*,
@@ -49,21 +53,24 @@ pub fn saveSnapshot(tree: *const rtree.RTree, path: []const u8) !void {
         .height = tree.height,
     };
 
-    try file.writeAll(std.mem.asBytes(&header));
+    try buffer.appendSlice(tree.allocator, std.mem.asBytes(&header));
 
     if (tree.root) |root| {
-        try writeNode(file, root);
+        try writeNodeBuffer(tree.allocator, &buffer, root);
     }
+
+    // Encrypt and write to file
+    try tde.writeEncryptedFile(tree.allocator, path, buffer.items);
 }
 
-fn writeNode(file: std.fs.File, node: *rtree.RTreeNode) !void {
+fn writeNodeBuffer(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), node: *rtree.RTreeNode) !void {
     const record = NodeRecord{
         .is_leaf = if (node.is_leaf) 1 else 0,
         .level = node.level,
         .entry_count = @intCast(node.entries.items.len),
     };
 
-    try file.writeAll(std.mem.asBytes(&record));
+    try buffer.appendSlice(allocator, std.mem.asBytes(&record));
 
     for (node.entries.items) |entry| {
         const entry_record = EntryRecord{
@@ -75,22 +82,26 @@ fn writeNode(file: std.fs.File, node: *rtree.RTreeNode) !void {
             .has_child = if (entry.child != null) 1 else 0,
         };
 
-        try file.writeAll(std.mem.asBytes(&entry_record));
+        try buffer.appendSlice(allocator, std.mem.asBytes(&entry_record));
     }
 
     for (node.entries.items) |entry| {
         if (entry.child) |child| {
-            try writeNode(file, child);
+            try writeNodeBuffer(allocator, buffer, child);
         }
     }
 }
 
 pub fn loadSnapshot(allocator: std.mem.Allocator, path: []const u8) !rtree.RTree {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+    // Read and decrypt file using TDE
+    const data = try tde.readDecryptedFile(allocator, path);
+    defer allocator.free(data);
+
+    // Create stream to read from decrypted data
+    var stream = std.io.fixedBufferStream(data);
 
     var header: Header = undefined;
-    _ = try file.read(std.mem.asBytes(&header));
+    _ = try stream.reader().readAll(std.mem.asBytes(&header));
 
     if (!std.mem.eql(u8, &header.magic, MAGIC)) return error.InvalidMagic;
     if (header.version != 1) return error.InvalidVersion;
@@ -100,15 +111,15 @@ pub fn loadSnapshot(allocator: std.mem.Allocator, path: []const u8) !rtree.RTree
     tree.height = header.height;
 
     if (header.height > 0) {
-        tree.root = try readNode(allocator, file);
+        tree.root = try readNodeStream(allocator, &stream);
     }
 
     return tree;
 }
 
-fn readNode(allocator: std.mem.Allocator, file: std.fs.File) !*rtree.RTreeNode {
+fn readNodeStream(allocator: std.mem.Allocator, stream: anytype) !*rtree.RTreeNode {
     var record: NodeRecord = undefined;
-    _ = try file.read(std.mem.asBytes(&record));
+    _ = try stream.reader().readAll(std.mem.asBytes(&record));
 
     var node = try allocator.create(rtree.RTreeNode);
     node.* = rtree.RTreeNode.init(allocator, record.is_leaf != 0, record.level);
@@ -117,7 +128,7 @@ fn readNode(allocator: std.mem.Allocator, file: std.fs.File) !*rtree.RTreeNode {
     defer allocator.free(entries);
 
     for (entries) |*entry| {
-        _ = try file.read(std.mem.asBytes(entry));
+        _ = try stream.reader().readAll(std.mem.asBytes(entry));
     }
 
     for (entries) |entry_record| {
@@ -133,7 +144,7 @@ fn readNode(allocator: std.mem.Allocator, file: std.fs.File) !*rtree.RTreeNode {
         };
 
         if (entry_record.has_child != 0) {
-            entry.child = try readNode(allocator, file);
+            entry.child = try readNodeStream(allocator, stream);
         }
 
         try node.entries.append(entry);

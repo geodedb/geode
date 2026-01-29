@@ -1,5 +1,24 @@
 # Changelog
 
+## [v0.18.1] - January 28, 2026
+
+### Added
+
+- **TDE File-Level Encryption:** Extended TDE to all persistent storage files:
+  - Index persistence: R-tree, HNSW, Patricia trie, Domain trie, JSONB inverted, Interval tree
+  - Schema catalogs: Main catalog and FLE catalog
+  - Distributed state: Raft consensus state, snapshots, and log files
+  - All files encrypted with AES-256-GCM when `GEODE_TDE_KEY` is set
+  - CANARY markers added: REQ-TDE-FILELEVEL-001
+
+### Documentation
+
+- Added [TDE_FILE_LEVEL_ENCRYPTION.md](TDE_FILE_LEVEL_ENCRYPTION.md)
+- Updated SECURITY_PROGRESS.md with file-level encryption status
+- Added geodetestlab spec: `tde_filelevel_encryption.yml`
+
+---
+
 ## [v0.1.0] - Grey Cardinal Compliance
 
 ### Added

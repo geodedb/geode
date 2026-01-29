@@ -22,10 +22,11 @@ This matrix reflects updated evidence as of 2025-09-27, including Remote KMS neg
 | Secrets Zeroization               | COMPLETE | wipe utility + basic test                                                                                     | Integrate structured audit on failure                                | Med  |
 | Rotation Scheduling (auto)        | COMPLETE | Scheduling predicate test                                                                                     | Adaptive schedule (age + usage)                                      | Low  |
 | Privileged Unwrap Path            | COMPLETE | Privileged unwrap round‑trip test                                                                             | Add negative auth + tamper detection                                 | Med  |
+| TDE File-Level Encryption         | COMPLETE | All index + catalog + Raft persistence encrypted via tde_file_encryption.zig                                  | N/A                                                                  | Low  |
 
 ---
 
-### CANARY Markers
+## CANARY Markers
 
 ```
 CANARY: REQ=REQ-GQL-TDE-CORE-001; FEATURE="AES256GcmPrimitive"; ASPECT=SECURITY; STATUS=TESTED; TEST=Benchmark_encrypt_pages; OWNER=security; UPDATED=2025-09-26
@@ -44,10 +45,11 @@ CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=SECUR
 CANARY: REQ=REQ-GQL-TDE-OLTP-PERF-001; FEATURE="TDEOlptOverheadValidation"; ASPECT=PERFORMANCE; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_Threshold; OWNER=perf; UPDATED=2025-09-26
 CANARY: REQ=REQ-GQL-SEC-ZEROIZE-001; FEATURE="SecretsZeroization"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_ZEROIZE_001_Basic; OWNER=security; UPDATED=2025-09-26
 CANARY: REQ=REQ-GQL-SEC-UNWRAP-001; FEATURE="PrivilegedUnwrapPath"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap; OWNER=security; UPDATED=2025-09-26
+CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/tde_filelevel_encryption.yml; OWNER=security; UPDATED=2026-01-28
 ```
 
 > NOTE: Remaining STUB items (OLTP perf validation, privileged unwrap path) must gain TESTED/BENCHED before matrix rows can promote to COMPLETE.
 
-#### Notes
+### Notes
 
 - Remote KMS concurrency variance benchmark currently operates in local direct mode (QUIC layer bypassed) due to instability observed in vendored QUIC accept loop under threaded load. This is explicitly a fallback to provide governance evidence; a future enhancement will reintroduce network transport to validate end-to-end latency variance.

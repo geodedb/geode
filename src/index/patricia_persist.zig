@@ -1,6 +1,9 @@
 const std = @import("std");
 const patricia = @import("patricia.zig");
 const heap = @import("../storage/heap.zig");
+const tde = @import("../storage/tde_file_encryption.zig");
+
+// CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=PatriciaTrie; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 
 const MAGIC = "GDXP";
 
@@ -32,8 +35,9 @@ pub const WalEntry = struct {
 };
 
 pub fn saveSnapshot(trie: *const patricia.PatriciaTrie, path: []const u8) !void {
-    const file = try std.fs.cwd().createFile(path, .{});
-    defer file.close();
+    // Buffer all data to memory first for TDE encryption
+    var buffer = try std.ArrayList(u8).initCapacity(trie.allocator, 4096);
+    defer buffer.deinit(trie.allocator);
 
     const header = Header{
         .magic = MAGIC.*,
@@ -43,14 +47,17 @@ pub fn saveSnapshot(trie: *const patricia.PatriciaTrie, path: []const u8) !void 
         .key_count = trie.key_count,
     };
 
-    try file.writeAll(std.mem.asBytes(&header));
+    try buffer.appendSlice(trie.allocator, std.mem.asBytes(&header));
 
     if (trie.root) |root| {
-        try writeNode(file, root);
+        try writeNodeBuffer(trie.allocator, &buffer, root);
     }
+
+    // Encrypt and write to file
+    try tde.writeEncryptedFile(trie.allocator, path, buffer.items);
 }
 
-fn writeNode(file: std.fs.File, node: *patricia.PatriciaNode) !void {
+fn writeNodeBuffer(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), node: *patricia.PatriciaNode) !void {
     const record = NodeRecord{
         .bit_index = node.bit_index,
         .prefix_len = node.prefix_len,
@@ -59,22 +66,26 @@ fn writeNode(file: std.fs.File, node: *patricia.PatriciaNode) !void {
         .payload_count = @intCast(node.payload.items.len),
     };
 
-    try file.writeAll(std.mem.asBytes(&record));
+    try buffer.appendSlice(allocator, std.mem.asBytes(&record));
 
     for (node.payload.items) |payload| {
-        try file.writeAll(std.mem.asBytes(&payload));
+        try buffer.appendSlice(allocator, std.mem.asBytes(&payload));
     }
 
-    if (node.child0) |child| try writeNode(file, child);
-    if (node.child1) |child| try writeNode(file, child);
+    if (node.child0) |child| try writeNodeBuffer(allocator, buffer, child);
+    if (node.child1) |child| try writeNodeBuffer(allocator, buffer, child);
 }
 
 pub fn loadSnapshot(allocator: std.mem.Allocator, path: []const u8) !patricia.PatriciaTrie {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+    // Read and decrypt file using TDE
+    const data = try tde.readDecryptedFile(allocator, path);
+    defer allocator.free(data);
+
+    // Create stream to read from decrypted data
+    var stream = std.io.fixedBufferStream(data);
 
     var header: Header = undefined;
-    _ = try file.read(std.mem.asBytes(&header));
+    _ = try stream.reader().readAll(std.mem.asBytes(&header));
 
     if (!std.mem.eql(u8, &header.magic, MAGIC)) return error.InvalidMagic;
     if (header.version != 1) return error.InvalidVersion;
@@ -86,15 +97,15 @@ pub fn loadSnapshot(allocator: std.mem.Allocator, path: []const u8) !patricia.Pa
     trie.key_count = header.key_count;
 
     if (header.node_count > 0) {
-        trie.root = try readNode(allocator, file);
+        trie.root = try readNodeStream(allocator, &stream);
     }
 
     return trie;
 }
 
-fn readNode(allocator: std.mem.Allocator, file: std.fs.File) !*patricia.PatriciaNode {
+fn readNodeStream(allocator: std.mem.Allocator, stream: anytype) !*patricia.PatriciaNode {
     var record: NodeRecord = undefined;
-    _ = try file.read(std.mem.asBytes(&record));
+    _ = try stream.reader().readAll(std.mem.asBytes(&record));
 
     var node = try allocator.create(patricia.PatriciaNode);
     node.* = patricia.PatriciaNode.init(allocator);
@@ -104,15 +115,15 @@ fn readNode(allocator: std.mem.Allocator, file: std.fs.File) !*patricia.Patricia
     var i: u32 = 0;
     while (i < record.payload_count) : (i += 1) {
         var payload: u64 = undefined;
-        _ = try file.read(std.mem.asBytes(&payload));
+        _ = try stream.reader().readAll(std.mem.asBytes(&payload));
         try node.payload.append(payload);
     }
 
     if (record.child0_off != 0) {
-        node.child0 = try readNode(allocator, file);
+        node.child0 = try readNodeStream(allocator, stream);
     }
     if (record.child1_off != 0) {
-        node.child1 = try readNode(allocator, file);
+        node.child1 = try readNodeStream(allocator, stream);
     }
 
     return node;

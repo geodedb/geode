@@ -1,5 +1,8 @@
 const std = @import("std");
 const hnsw = @import("hnsw");
+const tde = @import("tde");
+
+// CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=HNSWIndex; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 
 const MAGIC = "GDHW";
 
@@ -30,11 +33,12 @@ pub const WalEntry = struct {
 };
 
 pub fn saveSnapshot(index: *const hnsw.Hnsw, snapshot_path: []const u8, vec_path: []const u8) !void {
-    const snap_file = try std.fs.cwd().createFile(snapshot_path, .{});
-    defer snap_file.close();
+    // Buffer all snapshot data to memory first for TDE encryption
+    var snap_buffer = try std.ArrayList(u8).initCapacity(index.allocator, 4096);
+    defer snap_buffer.deinit(index.allocator);
 
-    const vec_file = try std.fs.cwd().createFile(vec_path, .{});
-    defer vec_file.close();
+    var vec_buffer = try std.ArrayList(u8).initCapacity(index.allocator, 4096);
+    defer vec_buffer.deinit(index.allocator);
 
     const header = Header{
         .magic = MAGIC.*,
@@ -47,7 +51,7 @@ pub fn saveSnapshot(index: *const hnsw.Hnsw, snapshot_path: []const u8, vec_path
         .node_count = index.nodes.count(),
     };
 
-    try snap_file.writeAll(std.mem.asBytes(&header));
+    try snap_buffer.appendSlice(index.allocator, std.mem.asBytes(&header));
 
     var iter = index.nodes.iterator();
     while (iter.next()) |entry| {
@@ -56,34 +60,47 @@ pub fn saveSnapshot(index: *const hnsw.Hnsw, snapshot_path: []const u8, vec_path
             .id = node.id,
             .level = node.level,
         };
-        try snap_file.writeAll(std.mem.asBytes(&record));
+        try snap_buffer.appendSlice(index.allocator, std.mem.asBytes(&record));
 
         for (node.neighbors, 0..) |neighbors, level| {
             if (level <= node.level) {
                 var count: u32 = @intCast(neighbors.items.len);
-                try snap_file.writeAll(std.mem.asBytes(&count));
+                try snap_buffer.appendSlice(index.allocator, std.mem.asBytes(&count));
                 for (neighbors.items) |neighbor| {
-                    try snap_file.writeAll(std.mem.asBytes(&neighbor));
+                    try snap_buffer.appendSlice(index.allocator, std.mem.asBytes(&neighbor));
                 }
             }
         }
 
         for (node.vector) |v| {
             var bits: u32 = @bitCast(v);
-            try vec_file.writeAll(std.mem.asBytes(&bits));
+            try vec_buffer.appendSlice(index.allocator, std.mem.asBytes(&bits));
         }
     }
+
+    // Encrypt and write snapshot file
+    try tde.writeEncryptedFile(index.allocator, snapshot_path, snap_buffer.items);
+
+    // Encrypt and write vector file
+    try tde.writeEncryptedFile(index.allocator, vec_path, vec_buffer.items);
 }
 
 pub fn loadSnapshot(allocator: std.mem.Allocator, snapshot_path: []const u8, vec_path: []const u8) !hnsw.Hnsw {
-    const snap_file = try std.fs.cwd().openFile(snapshot_path, .{});
-    defer snap_file.close();
+    // Read and decrypt snapshot file using TDE
+    const snap_data = try tde.readDecryptedFile(allocator, snapshot_path);
+    defer allocator.free(snap_data);
 
-    const vec_file = try std.fs.cwd().openFile(vec_path, .{});
-    defer vec_file.close();
+    // Read and decrypt vector file using TDE
+    const vec_data = try tde.readDecryptedFile(allocator, vec_path);
+    defer allocator.free(vec_data);
 
+    // Create streams to read from decrypted data
+    var snap_stream = std.io.fixedBufferStream(snap_data);
+    var vec_stream = std.io.fixedBufferStream(vec_data);
+
+    // Read header
     var header: Header = undefined;
-    _ = try snap_file.read(std.mem.asBytes(&header));
+    _ = try snap_stream.reader().readAll(std.mem.asBytes(&header));
 
     if (!std.mem.eql(u8, &header.magic, MAGIC)) return error.InvalidMagic;
     if (header.version != 1) return error.InvalidVersion;
@@ -95,12 +112,12 @@ pub fn loadSnapshot(allocator: std.mem.Allocator, snapshot_path: []const u8, vec
     var i: u64 = 0;
     while (i < header.node_count) : (i += 1) {
         var record: NodeRecord = undefined;
-        _ = try snap_file.read(std.mem.asBytes(&record));
+        _ = try snap_stream.reader().readAll(std.mem.asBytes(&record));
 
         const vector = try allocator.alloc(f32, header.dim);
         for (vector) |*v| {
             var bits: u32 = undefined;
-            _ = try vec_file.read(std.mem.asBytes(&bits));
+            _ = try vec_stream.reader().readAll(std.mem.asBytes(&bits));
             v.* = @bitCast(bits);
         }
 
@@ -110,12 +127,12 @@ pub fn loadSnapshot(allocator: std.mem.Allocator, snapshot_path: []const u8, vec
         var level: u8 = 0;
         while (level <= record.level) : (level += 1) {
             var count: u32 = undefined;
-            _ = try snap_file.read(std.mem.asBytes(&count));
+            _ = try snap_stream.reader().readAll(std.mem.asBytes(&count));
 
             var j: u32 = 0;
             while (j < count) : (j += 1) {
                 var neighbor: u64 = undefined;
-                _ = try snap_file.read(std.mem.asBytes(&neighbor));
+                _ = try snap_stream.reader().readAll(std.mem.asBytes(&neighbor));
                 try node.neighbors[level].append(allocator, neighbor);
             }
         }

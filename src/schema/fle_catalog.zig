@@ -1,10 +1,13 @@
 const std = @import("std");
 const annotations = @import("annotations.zig");
+const tde = @import("../storage/tde_file_encryption.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Schema; STATUS=EXEMPT; OWNER=schema; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("schema");
 const Attr = logging.Attr;
+
+// CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=FLECatalog; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 
 // Global Schema Metadata Catalog
 // CANARY: REQ=REQ-FLE-CATALOG-001; FEATURE="FieldLevelEncryption"; ASPECT=SCHEMA; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
@@ -301,7 +304,7 @@ pub fn resetGlobalCatalog(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Save catalog to disk
+/// Save catalog to disk with TDE encryption
 pub fn saveCatalog(catalog: *SchemaCatalog) !void {
     const allocator = catalog.allocator;
 
@@ -317,13 +320,14 @@ pub fn saveCatalog(catalog: *SchemaCatalog) !void {
     const catalog_path = try std.fmt.allocPrint(allocator, "{s}/geode_fle_catalog.dat", .{data_dir});
     defer allocator.free(catalog_path);
 
-    const file = try std.fs.cwd().createFile(catalog_path, .{});
-    defer file.close();
+    // Buffer all data to memory first for TDE encryption
+    var buffer = try std.ArrayList(u8).initCapacity(allocator, 4096);
+    defer buffer.deinit(allocator);
 
     // Write type count
     var type_count_buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &type_count_buf, @intCast(catalog.schemas.count()), .little);
-    _ = try file.write(&type_count_buf);
+    try buffer.appendSlice(allocator, &type_count_buf);
 
     // Write each type
     var type_iter = catalog.schemas.iterator();
@@ -334,13 +338,13 @@ pub fn saveCatalog(catalog: *SchemaCatalog) !void {
         // Write type name
         var type_name_len_buf: [4]u8 = undefined;
         std.mem.writeInt(u32, &type_name_len_buf, @intCast(type_name.len), .little);
-        _ = try file.write(&type_name_len_buf);
-        _ = try file.write(type_name);
+        try buffer.appendSlice(allocator, &type_name_len_buf);
+        try buffer.appendSlice(allocator, type_name);
 
         // Write field count
         var field_count_buf: [4]u8 = undefined;
         std.mem.writeInt(u32, &field_count_buf, @intCast(type_meta.fields.count()), .little);
-        _ = try file.write(&field_count_buf);
+        try buffer.appendSlice(allocator, &field_count_buf);
 
         // Write each field
         var field_iter = type_meta.fields.iterator();
@@ -351,38 +355,41 @@ pub fn saveCatalog(catalog: *SchemaCatalog) !void {
             // Write field name
             var field_name_len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &field_name_len_buf, @intCast(field_name.len), .little);
-            _ = try file.write(&field_name_len_buf);
-            _ = try file.write(field_name);
+            try buffer.appendSlice(allocator, &field_name_len_buf);
+            try buffer.appendSlice(allocator, field_name);
 
             // Write encryption config
-            _ = try file.write(&[_]u8{@intFromBool(field_meta.encryption.enabled)});
+            try buffer.appendSlice(allocator, &[_]u8{@intFromBool(field_meta.encryption.enabled)});
             if (field_meta.encryption.enabled) {
-                _ = try file.write(&[_]u8{@intFromEnum(field_meta.encryption.algorithm)});
-                _ = try file.write(&[_]u8{@intFromEnum(field_meta.encryption.key_scope)});
+                try buffer.appendSlice(allocator, &[_]u8{@intFromEnum(field_meta.encryption.algorithm)});
+                try buffer.appendSlice(allocator, &[_]u8{@intFromEnum(field_meta.encryption.key_scope)});
             }
 
             // Write search config
-            _ = try file.write(&[_]u8{@intFromBool(field_meta.search.enabled)});
+            try buffer.appendSlice(allocator, &[_]u8{@intFromBool(field_meta.search.enabled)});
             if (field_meta.search.enabled) {
-                _ = try file.write(&[_]u8{@intFromEnum(field_meta.search.index_type)});
+                try buffer.appendSlice(allocator, &[_]u8{@intFromEnum(field_meta.search.index_type)});
             }
 
             // Write visibility config (role count and roles)
             var role_count_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &role_count_buf, @intCast(field_meta.visibility.to_roles.len), .little);
-            _ = try file.write(&role_count_buf);
+            try buffer.appendSlice(allocator, &role_count_buf);
 
             for (field_meta.visibility.to_roles) |role| {
                 var role_len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &role_len_buf, @intCast(role.len), .little);
-                _ = try file.write(&role_len_buf);
-                _ = try file.write(role);
+                try buffer.appendSlice(allocator, &role_len_buf);
+                try buffer.appendSlice(allocator, role);
             }
         }
     }
+
+    // Encrypt and write to file
+    try tde.writeEncryptedFile(allocator, catalog_path, buffer.items);
 }
 
-/// Load catalog from disk
+/// Load catalog from disk with TDE decryption
 pub fn loadCatalog(catalog: *SchemaCatalog) !void {
     const allocator = catalog.allocator;
 
@@ -398,15 +405,23 @@ pub fn loadCatalog(catalog: *SchemaCatalog) !void {
     const catalog_path = try std.fmt.allocPrint(allocator, "{s}/geode_fle_catalog.dat", .{data_dir});
     defer allocator.free(catalog_path);
 
-    const file = std.fs.cwd().openFile(catalog_path, .{}) catch |err| {
+    // Check if file exists first
+    std.fs.cwd().access(catalog_path, .{}) catch |err| {
         if (err == error.FileNotFound) return; // No catalog file yet
         return err;
     };
-    defer file.close();
+
+    // Read and decrypt file using TDE
+    const data = try tde.readDecryptedFile(allocator, catalog_path);
+    defer allocator.free(data);
+
+    // Create stream to read from decrypted data
+    var stream = std.io.fixedBufferStream(data);
+    var reader = stream.reader();
 
     // Read type count
     var type_count_buf: [4]u8 = undefined;
-    const bytes_read = try file.readAll(&type_count_buf);
+    const bytes_read = try reader.readAll(&type_count_buf);
     if (bytes_read != 4) return error.CorruptedCatalog;
     const type_count = std.mem.readInt(u32, &type_count_buf, .little);
     if (type_count > 10000) return error.CorruptedCatalog; // Sanity check
@@ -416,13 +431,13 @@ pub fn loadCatalog(catalog: *SchemaCatalog) !void {
     while (i < type_count) : (i += 1) {
         // Read type name
         var type_name_len_buf: [4]u8 = undefined;
-        const name_len_bytes = try file.readAll(&type_name_len_buf);
+        const name_len_bytes = try reader.readAll(&type_name_len_buf);
         if (name_len_bytes != 4) return error.CorruptedCatalog;
         const type_name_len = std.mem.readInt(u32, &type_name_len_buf, .little);
         if (type_name_len > 1024) return error.CorruptedCatalog; // Sanity check
 
         const type_name = try allocator.alloc(u8, type_name_len);
-        const name_bytes = try file.readAll(type_name);
+        const name_bytes = try reader.readAll(type_name);
         if (name_bytes != type_name_len) return error.CorruptedCatalog;
 
         // Create type metadata
@@ -430,7 +445,7 @@ pub fn loadCatalog(catalog: *SchemaCatalog) !void {
 
         // Read field count
         var field_count_buf: [4]u8 = undefined;
-        const field_count_bytes = try file.readAll(&field_count_buf);
+        const field_count_bytes = try reader.readAll(&field_count_buf);
         if (field_count_bytes != 4) return error.CorruptedCatalog;
         const field_count = std.mem.readInt(u32, &field_count_buf, .little);
         if (field_count > 1000) return error.CorruptedCatalog; // Sanity check
@@ -440,13 +455,13 @@ pub fn loadCatalog(catalog: *SchemaCatalog) !void {
         while (j < field_count) : (j += 1) {
             // Read field name
             var field_name_len_buf: [4]u8 = undefined;
-            const fname_len_bytes = try file.readAll(&field_name_len_buf);
+            const fname_len_bytes = try reader.readAll(&field_name_len_buf);
             if (fname_len_bytes != 4) return error.CorruptedCatalog;
             const field_name_len = std.mem.readInt(u32, &field_name_len_buf, .little);
             if (field_name_len > 1024) return error.CorruptedCatalog; // Sanity check
 
             const field_name = try allocator.alloc(u8, field_name_len);
-            const fname_bytes = try file.readAll(field_name);
+            const fname_bytes = try reader.readAll(field_name);
             if (fname_bytes != field_name_len) return error.CorruptedCatalog;
 
             var field_meta = annotations.FieldMetadata{
@@ -455,33 +470,33 @@ pub fn loadCatalog(catalog: *SchemaCatalog) !void {
 
             // Read encryption config
             var enc_enabled_buf: [1]u8 = undefined;
-            _ = try file.readAll(&enc_enabled_buf);
+            _ = try reader.readAll(&enc_enabled_buf);
             field_meta.encryption.enabled = enc_enabled_buf[0] != 0;
 
             if (field_meta.encryption.enabled) {
                 var alg_buf: [1]u8 = undefined;
-                _ = try file.readAll(&alg_buf);
+                _ = try reader.readAll(&alg_buf);
                 field_meta.encryption.algorithm = @enumFromInt(alg_buf[0]);
 
                 var scope_buf: [1]u8 = undefined;
-                _ = try file.readAll(&scope_buf);
+                _ = try reader.readAll(&scope_buf);
                 field_meta.encryption.key_scope = @enumFromInt(scope_buf[0]);
             }
 
             // Read search config
             var search_enabled_buf: [1]u8 = undefined;
-            _ = try file.readAll(&search_enabled_buf);
+            _ = try reader.readAll(&search_enabled_buf);
             field_meta.search.enabled = search_enabled_buf[0] != 0;
 
             if (field_meta.search.enabled) {
                 var idx_type_buf: [1]u8 = undefined;
-                _ = try file.readAll(&idx_type_buf);
+                _ = try reader.readAll(&idx_type_buf);
                 field_meta.search.index_type = @enumFromInt(idx_type_buf[0]);
             }
 
             // Read visibility config
             var role_count_buf: [4]u8 = undefined;
-            const role_count_bytes = try file.readAll(&role_count_buf);
+            const role_count_bytes = try reader.readAll(&role_count_buf);
             if (role_count_bytes != 4) return error.CorruptedCatalog;
             const role_count = std.mem.readInt(u32, &role_count_buf, .little);
             if (role_count > 100) return error.CorruptedCatalog; // Sanity check
@@ -491,13 +506,13 @@ pub fn loadCatalog(catalog: *SchemaCatalog) !void {
                 var k: usize = 0;
                 while (k < role_count) : (k += 1) {
                     var role_len_buf: [4]u8 = undefined;
-                    const rlen_bytes = try file.readAll(&role_len_buf);
+                    const rlen_bytes = try reader.readAll(&role_len_buf);
                     if (rlen_bytes != 4) return error.CorruptedCatalog;
                     const role_len = std.mem.readInt(u32, &role_len_buf, .little);
                     if (role_len > 256) return error.CorruptedCatalog; // Sanity check
 
                     const role = try allocator.alloc(u8, role_len);
-                    const role_bytes = try file.readAll(role);
+                    const role_bytes = try reader.readAll(role);
                     if (role_bytes != role_len) return error.CorruptedCatalog;
                     roles[k] = role;
                 }
