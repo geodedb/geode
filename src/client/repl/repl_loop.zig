@@ -51,10 +51,8 @@ pub const ReplLoop = struct {
         const original_termios = try enterRawMode();
         defer restoreTerminalMode(original_termios) catch {};
 
-        // CANARY: REQ=REQ-SHELL-INTERRUPT-011; FEATURE="SourceInterrupt"; ASPECT=SignalSetup; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
-        // Install signal handlers for Ctrl+C during blocking operations
-        platform.installSignalHandlers();
-        defer platform.restoreSignalHandlers();
+        // Note: Signal handlers are not installed here as they can interfere with terminal mode.
+        // Interrupt checking is done via polling stdin for Ctrl+C (ASCII 3) in blocking loops.
 
         // Initialize components
         const history_path = if (opts.history_enabled) try repl_config.getHistoryPath(opts.allocator) else null;

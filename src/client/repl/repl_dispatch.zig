@@ -9,17 +9,10 @@ const spinner_mod = @import("spinner.zig");
 const json_lib = @import("json");
 
 // CANARY: REQ=REQ-SHELL-INTERRUPT-003; FEATURE="SourceInterrupt"; ASPECT=CheckFunction; STATUS=TESTED; TEST=tests/test_repl.zig; OWNER=cli; UPDATED=2026-01-30
-// Issue #390: Helper function to check for Ctrl+C (SIGINT) using signal handler
+// Issue #390: Helper function to check for Ctrl+C (ASCII 3) in stdin without blocking
 // Made public so it can be used by other modules for interrupt handling
-// This uses signal-based detection which works during blocking operations
+// In raw terminal mode, Ctrl+C generates ASCII 3 which we poll for
 pub fn checkForInterrupt() bool {
-    // Check the signal handler flag first (works during blocking operations)
-    if (platform.checkAndClearSigint()) {
-        return true;
-    }
-
-    // Also check stdin for ASCII 3 (Ctrl+C) in case signal wasn't delivered
-    // (e.g., when terminal is in raw mode)
     if (builtin.os.tag == .windows) {
         // Windows: Check console input for Ctrl+C
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return false;
@@ -618,10 +611,29 @@ pub const ClientSession = struct {
             self.last_response = null;
         }
 
-        // Read the response - server returns exactly one response per RUN_GQL
-        // (either SCHEMA on success or error response)
-        const response = try self.connection.?.readLine(self.allocator, 1 << 16);
-        self.last_response = response;
+        // Read the response with interrupt checking
+        // CANARY: REQ=REQ-SHELL-INTERRUPT-012; FEATURE="SourceInterrupt"; ASPECT=RunGqlInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+        var retry_count: usize = 0;
+        const max_retries: usize = 6000; // ~5 minutes with 50ms sleep for large batch operations
+        while (retry_count < max_retries) : (retry_count += 1) {
+            // Check for Ctrl+C interrupt
+            if (checkForInterrupt()) {
+                return error.Interrupted;
+            }
+
+            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+                if (err == error.WouldBlock) {
+                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    continue;
+                }
+                return err;
+            };
+            self.last_response = response;
+            return;
+        }
+
+        // Timeout waiting for response
+        return error.WouldBlock;
     }
 
     pub fn begin(self: *ClientSession) !void {
@@ -629,13 +641,31 @@ pub const ClientSession = struct {
 
         try self.connection.?.writeAll("{\"type\":\"BEGIN\"}\n");
 
-        // Read and check response
-        const response = try self.connection.?.readLine(self.allocator, 1 << 16);
-        defer self.allocator.free(response);
+        // Read and check response with interrupt checking
+        // CANARY: REQ=REQ-SHELL-INTERRUPT-013; FEATURE="SourceInterrupt"; ASPECT=BeginInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+        var retry_count: usize = 0;
+        const max_retries: usize = 100; // ~5 seconds with 50ms sleep
+        while (retry_count < max_retries) : (retry_count += 1) {
+            if (checkForInterrupt()) {
+                return error.Interrupted;
+            }
 
-        if (std.mem.indexOf(u8, response, "\"type\":\"ERROR\"") != null) {
-            return error.TransactionError;
+            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+                if (err == error.WouldBlock) {
+                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    continue;
+                }
+                return err;
+            };
+            defer self.allocator.free(response);
+
+            if (std.mem.indexOf(u8, response, "\"type\":\"ERROR\"") != null) {
+                return error.TransactionError;
+            }
+            return;
         }
+
+        return error.WouldBlock;
     }
 
     /// CANARY: REQ=REQ-SHELL-TXN-ERROR-002; FEATURE="TransactionErrorDetails"; ASPECT=CommitWithRetry; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
