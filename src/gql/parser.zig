@@ -293,6 +293,40 @@ pub const Parser = struct {
         return result[0..write_idx];
     }
 
+    /// Result of parsing ORDER BY key modifiers (ASC/DESC, NULLS FIRST/LAST)
+    const OrderKeyModifiers = struct {
+        desc: bool,
+        nulls: ast.OrderBy.NullsPolicy,
+    };
+
+    // CANARY: REQ=REQ-NESTING-REFACTOR-025; FEATURE="NestingReduction"; ASPECT=OrderByParsing; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+    /// Parses ORDER BY key modifiers (ASC/DESC and NULLS FIRST/LAST).
+    /// Extracted to reduce code duplication and nesting in ORDER BY parsing.
+    fn parseOrderKeyModifiers(self: *Parser) ParserError!OrderKeyModifiers {
+        var desc = false;
+        if (self.cur.kind == .ASC) {
+            desc = false;
+            self.advance();
+        } else if (self.cur.kind == .DESC) {
+            desc = true;
+            self.advance();
+        }
+
+        var nulls: ast.OrderBy.NullsPolicy = .default;
+        if (self.cur.kind == .NULLS) {
+            self.advance();
+            if (self.cur.kind == .FIRST) {
+                nulls = .first;
+                self.advance();
+            } else if (self.cur.kind == .LAST) {
+                nulls = .last;
+                self.advance();
+            } else return self.unexpected("expected FIRST/LAST after NULLS");
+        }
+
+        return .{ .desc = desc, .nulls = nulls };
+    }
+
     pub fn parseProgram(self: *Parser) ParserError!ast.Program {
         // initialize alias set arraylist
         self.path_aliases = std.ArrayList([]const u8).empty;
@@ -763,27 +797,8 @@ pub const Parser = struct {
                         var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
                         while (true) {
                             const key_expr = try self.parseOrExpr();
-                            var desc = false;
-                            var nulls: ast.OrderBy.NullsPolicy = .default;
-                            if (self.cur.kind == .DESC) {
-                                desc = true;
-                                self.advance();
-                            } else if (self.cur.kind == .ASC) {
-                                self.advance();
-                            }
-                            if (self.cur.kind == .NULLS) {
-                                self.advance();
-                                if (self.cur.kind == .FIRST) {
-                                    nulls = .first;
-                                    self.advance();
-                                } else if (self.cur.kind == .LAST) {
-                                    nulls = .last;
-                                    self.advance();
-                                } else {
-                                    return self.unexpected("FIRST or LAST expected after NULLS");
-                                }
-                            }
-                            try keys.append(self.arena.allocator(), .{ .expr = key_expr, .desc = desc, .nulls = nulls });
+                            const mods = try self.parseOrderKeyModifiers();
+                            try keys.append(self.arena.allocator(), .{ .expr = key_expr, .desc = mods.desc, .nulls = mods.nulls });
                             if (self.cur.kind != .comma) break;
                             self.advance();
                         }
@@ -905,27 +920,8 @@ pub const Parser = struct {
                         var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
                         while (true) {
                             const key_expr = try self.parseOrExpr();
-                            var desc = false;
-                            var nulls: ast.OrderBy.NullsPolicy = .default;
-                            if (self.cur.kind == .DESC) {
-                                desc = true;
-                                self.advance();
-                            } else if (self.cur.kind == .ASC) {
-                                self.advance();
-                            }
-                            if (self.cur.kind == .NULLS) {
-                                self.advance();
-                                if (self.cur.kind == .FIRST) {
-                                    nulls = .first;
-                                    self.advance();
-                                } else if (self.cur.kind == .LAST) {
-                                    nulls = .last;
-                                    self.advance();
-                                } else {
-                                    return self.unexpected("expected FIRST or LAST after NULLS");
-                                }
-                            }
-                            try keys.append(self.arena.allocator(), .{ .expr = key_expr, .desc = desc, .nulls = nulls });
+                            const mods = try self.parseOrderKeyModifiers();
+                            try keys.append(self.arena.allocator(), .{ .expr = key_expr, .desc = mods.desc, .nulls = mods.nulls });
                             if (self.cur.kind != .comma) break;
                             self.advance();
                         }
@@ -1288,47 +1284,13 @@ pub const Parser = struct {
                         _ = try self.expect(.BY);
                         var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
                         const expr1 = try self.parseOrExpr();
-                        var desc1 = false;
-                        var nulls1: ast.OrderBy.NullsPolicy = .default;
-                        if (self.cur.kind == .DESC) {
-                            desc1 = true;
-                            self.advance();
-                        } else if (self.cur.kind == .ASC) {
-                            self.advance();
-                        }
-                        if (self.cur.kind == .NULLS) {
-                            self.advance();
-                            if (self.cur.kind == .FIRST) {
-                                nulls1 = .first;
-                                self.advance();
-                            } else if (self.cur.kind == .LAST) {
-                                nulls1 = .last;
-                                self.advance();
-                            }
-                        }
-                        try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = desc1, .nulls = nulls1 });
+                        const mods1 = try self.parseOrderKeyModifiers();
+                        try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = mods1.desc, .nulls = mods1.nulls });
                         while (self.cur.kind == .comma) {
                             self.advance();
                             const exprk = try self.parseOrExpr();
-                            var desk = false;
-                            var nullsk: ast.OrderBy.NullsPolicy = .default;
-                            if (self.cur.kind == .DESC) {
-                                desk = true;
-                                self.advance();
-                            } else if (self.cur.kind == .ASC) {
-                                self.advance();
-                            }
-                            if (self.cur.kind == .NULLS) {
-                                self.advance();
-                                if (self.cur.kind == .FIRST) {
-                                    nullsk = .first;
-                                    self.advance();
-                                } else if (self.cur.kind == .LAST) {
-                                    nullsk = .last;
-                                    self.advance();
-                                }
-                            }
-                            try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = desk, .nulls = nullsk });
+                            const modsk = try self.parseOrderKeyModifiers();
+                            try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = modsk.desc, .nulls = modsk.nulls });
                         }
                         order_by = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
                     }
@@ -1496,27 +1458,8 @@ pub const Parser = struct {
                 var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
                 while (true) {
                     const key_expr = try self.parseOrExpr();
-                    var desc = false;
-                    var nulls: ast.OrderBy.NullsPolicy = .default;
-                    if (self.cur.kind == .DESC) {
-                        desc = true;
-                        self.advance();
-                    } else if (self.cur.kind == .ASC) {
-                        self.advance();
-                    }
-                    if (self.cur.kind == .NULLS) {
-                        self.advance();
-                        if (self.cur.kind == .FIRST) {
-                            nulls = .first;
-                            self.advance();
-                        } else if (self.cur.kind == .LAST) {
-                            nulls = .last;
-                            self.advance();
-                        } else {
-                            return self.unexpected("expected FIRST or LAST after NULLS");
-                        }
-                    }
-                    try keys.append(self.arena.allocator(), .{ .expr = key_expr, .desc = desc, .nulls = nulls });
+                    const mods = try self.parseOrderKeyModifiers();
+                    try keys.append(self.arena.allocator(), .{ .expr = key_expr, .desc = mods.desc, .nulls = mods.nulls });
                     if (self.cur.kind != .comma) break;
                     self.advance();
                 }
@@ -1598,27 +1541,8 @@ pub const Parser = struct {
                 var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
                 while (true) {
                     const key_expr = try self.parseOrExpr();
-                    var desc = false;
-                    var nulls: ast.OrderBy.NullsPolicy = .default;
-                    if (self.cur.kind == .DESC) {
-                        desc = true;
-                        self.advance();
-                    } else if (self.cur.kind == .ASC) {
-                        self.advance();
-                    }
-                    if (self.cur.kind == .NULLS) {
-                        self.advance();
-                        if (self.cur.kind == .FIRST) {
-                            nulls = .first;
-                            self.advance();
-                        } else if (self.cur.kind == .LAST) {
-                            nulls = .last;
-                            self.advance();
-                        } else {
-                            return self.unexpected("expected FIRST or LAST after NULLS");
-                        }
-                    }
-                    try keys.append(self.arena.allocator(), .{ .expr = key_expr, .desc = desc, .nulls = nulls });
+                    const mods = try self.parseOrderKeyModifiers();
+                    try keys.append(self.arena.allocator(), .{ .expr = key_expr, .desc = mods.desc, .nulls = mods.nulls });
                     if (self.cur.kind != .comma) break;
                     self.advance();
                 }
@@ -2104,27 +2028,8 @@ pub const Parser = struct {
                 var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
                 while (true) {
                     const key_expr = try self.parseOrExpr();
-                    var desc = false;
-                    var nulls: ast.OrderBy.NullsPolicy = .default;
-                    if (self.cur.kind == .DESC) {
-                        desc = true;
-                        self.advance();
-                    } else if (self.cur.kind == .ASC) {
-                        self.advance();
-                    }
-                    if (self.cur.kind == .NULLS) {
-                        self.advance();
-                        if (self.cur.kind == .FIRST) {
-                            nulls = .first;
-                            self.advance();
-                        } else if (self.cur.kind == .LAST) {
-                            nulls = .last;
-                            self.advance();
-                        } else {
-                            return self.unexpected("expected FIRST or LAST after NULLS");
-                        }
-                    }
-                    try keys.append(self.arena.allocator(), .{ .expr = key_expr, .desc = desc, .nulls = nulls });
+                    const mods = try self.parseOrderKeyModifiers();
+                    try keys.append(self.arena.allocator(), .{ .expr = key_expr, .desc = mods.desc, .nulls = mods.nulls });
                     if (self.cur.kind != .comma) break;
                     self.advance();
                 }
@@ -2350,26 +2255,8 @@ pub const Parser = struct {
             if (expr1 == .Int and self.isValidOrdinal(expr1.Int, return_clause.items.len)) {
                 self.has_ordinal_sort_key = true;
             }
-            var desc1 = false;
-            if (self.cur.kind == .ASC) {
-                desc1 = false;
-                self.advance();
-            } else if (self.cur.kind == .DESC) {
-                desc1 = true;
-                self.advance();
-            }
-            var nulls1: ast.OrderBy.NullsPolicy = .default;
-            if (self.cur.kind == .NULLS) {
-                self.advance();
-                if (self.cur.kind == .FIRST) {
-                    nulls1 = .first;
-                    self.advance();
-                } else if (self.cur.kind == .LAST) {
-                    nulls1 = .last;
-                    self.advance();
-                } else return self.unexpected("expected FIRST/LAST after NULLS");
-            }
-            try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = desc1, .nulls = nulls1 });
+            const mods1 = try self.parseOrderKeyModifiers();
+            try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = mods1.desc, .nulls = mods1.nulls });
             while (self.cur.kind == .comma) {
                 self.advance();
                 const exprk = try self.parseOrExpr();
@@ -2381,26 +2268,8 @@ pub const Parser = struct {
                 if (exprk == .Int and self.isValidOrdinal(exprk.Int, return_clause.items.len)) {
                     self.has_ordinal_sort_key = true;
                 }
-                var d = false;
-                if (self.cur.kind == .ASC) {
-                    d = false;
-                    self.advance();
-                } else if (self.cur.kind == .DESC) {
-                    d = true;
-                    self.advance();
-                }
-                var np: ast.OrderBy.NullsPolicy = .default;
-                if (self.cur.kind == .NULLS) {
-                    self.advance();
-                    if (self.cur.kind == .FIRST) {
-                        np = .first;
-                        self.advance();
-                    } else if (self.cur.kind == .LAST) {
-                        np = .last;
-                        self.advance();
-                    } else return self.unexpected("expected FIRST/LAST after NULLS");
-                }
-                try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = d, .nulls = np });
+                const modsk = try self.parseOrderKeyModifiers();
+                try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = modsk.desc, .nulls = modsk.nulls });
             }
             ord = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
         }
@@ -4217,27 +4086,8 @@ pub const Parser = struct {
                     var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
                     while (true) {
                         const key_expr = try self.parseOrExpr();
-                        var desc = false;
-                        var nulls: ast.OrderBy.NullsPolicy = .default;
-                        if (self.cur.kind == .DESC) {
-                            desc = true;
-                            self.advance();
-                        } else if (self.cur.kind == .ASC) {
-                            self.advance();
-                        }
-                        if (self.cur.kind == .NULLS) {
-                            self.advance();
-                            if (self.cur.kind == .FIRST) {
-                                nulls = .first;
-                                self.advance();
-                            } else if (self.cur.kind == .LAST) {
-                                nulls = .last;
-                                self.advance();
-                            } else {
-                                return self.unexpected("expected FIRST or LAST after NULLS");
-                            }
-                        }
-                        try keys.append(self.arena.allocator(), .{ .expr = key_expr, .desc = desc, .nulls = nulls });
+                        const mods = try self.parseOrderKeyModifiers();
+                        try keys.append(self.arena.allocator(), .{ .expr = key_expr, .desc = mods.desc, .nulls = mods.nulls });
                         if (self.cur.kind != .comma) break;
                         self.advance();
                     }
@@ -5391,51 +5241,15 @@ pub const Parser = struct {
 
             // Parse first key
             const expr1 = try self.parseOrExpr();
-            var desc1 = false;
-            if (self.cur.kind == .ASC) {
-                desc1 = false;
-                self.advance();
-            } else if (self.cur.kind == .DESC) {
-                desc1 = true;
-                self.advance();
-            }
-            var nulls1: ast.OrderBy.NullsPolicy = .default;
-            if (self.cur.kind == .NULLS) {
-                self.advance();
-                if (self.cur.kind == .FIRST) {
-                    nulls1 = .first;
-                    self.advance();
-                } else if (self.cur.kind == .LAST) {
-                    nulls1 = .last;
-                    self.advance();
-                } else return self.unexpected("expected FIRST/LAST after NULLS");
-            }
-            try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = desc1, .nulls = nulls1 });
+            const mods1 = try self.parseOrderKeyModifiers();
+            try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = mods1.desc, .nulls = mods1.nulls });
 
             // Parse additional keys
             while (self.cur.kind == .comma) {
                 self.advance();
                 const exprk = try self.parseOrExpr();
-                var d = false;
-                if (self.cur.kind == .ASC) {
-                    d = false;
-                    self.advance();
-                } else if (self.cur.kind == .DESC) {
-                    d = true;
-                    self.advance();
-                }
-                var np: ast.OrderBy.NullsPolicy = .default;
-                if (self.cur.kind == .NULLS) {
-                    self.advance();
-                    if (self.cur.kind == .FIRST) {
-                        np = .first;
-                        self.advance();
-                    } else if (self.cur.kind == .LAST) {
-                        np = .last;
-                        self.advance();
-                    } else return self.unexpected("expected FIRST/LAST after NULLS");
-                }
-                try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = d, .nulls = np });
+                const modsk = try self.parseOrderKeyModifiers();
+                try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = modsk.desc, .nulls = modsk.nulls });
             }
             order_by = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
         }

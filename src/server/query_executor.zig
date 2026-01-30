@@ -1157,6 +1157,37 @@ pub fn evaluateBinarySet(
     while (rr < right_rows.len) : (rr += 1) allocator.free(right_rows[rr]);
     return out_rows.toOwnedSlice(allocator) catch &.{};
 }
+
+// CANARY: REQ=REQ-NESTING-REFACTOR-018; FEATURE="NestingReduction"; ASPECT=DeleteEdges; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+// Helper function to count and delete edges connected to a node for DETACH DELETE
+fn countConnectedEdges(graph: *graph_exec.GraphStorage, node_id: u64) usize {
+    var count: usize = 0;
+    if (graph.outgoing.get(node_id)) |edges| {
+        count += edges.items.len;
+    }
+    if (graph.incoming.get(node_id)) |edges| {
+        count += edges.items.len;
+    }
+    return count;
+}
+
+// CANARY: REQ=REQ-NESTING-REFACTOR-019; FEATURE="NestingReduction"; ASPECT=DeleteValue; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+// Helper function to handle deletion of a bound value (Node or Edge)
+fn deleteValueBinding(val: eval.Value, graph: *graph_exec.GraphStorage, detach: bool, deleted_count: *usize) void {
+    switch (val) {
+        .Node => |node| {
+            if (detach) {
+                deleted_count.* += countConnectedEdges(graph, node.id);
+            }
+            deleted_count.* += 1;
+        },
+        .Edge => |_| {
+            deleted_count.* += 1;
+        },
+        else => {},
+    }
+}
+
 fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.CreateStatement) ![]const u8 {
 
     // Get graph storage for current session
@@ -1321,47 +1352,18 @@ fn executeDeleteStatement(allocator: std.mem.Allocator, state: *ServerState, stm
 
     var deleted_count: usize = 0;
 
-    // Delete specified items
+    // CANARY: REQ=REQ-NESTING-REFACTOR-020; FEATURE="NestingReduction"; ASPECT=DeleteLoop; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+    // Delete specified items using helper functions to reduce nesting
     for (stmt.items) |item| {
         switch (item) {
             .Variable => |var_name| {
-                // Delete all nodes/edges bound to this variable
                 for (bindings) |binding| {
                     if (binding.vars.get(var_name)) |val| {
-                        switch (val) {
-                            .Node => |node| {
-                                // If DETACH DELETE, first remove all connected edges
-                                if (stmt.detach) {
-                                    // Remove outgoing edges
-                                    if (graph.outgoing.get(node.id)) |edges| {
-                                        for (edges.items) |_| {
-                                            // Mark edge as deleted (in real implementation)
-                                            deleted_count += 1;
-                                        }
-                                    }
-                                    // Remove incoming edges
-                                    if (graph.incoming.get(node.id)) |edges| {
-                                        for (edges.items) |_| {
-                                            // Mark edge as deleted (in real implementation)
-                                            deleted_count += 1;
-                                        }
-                                    }
-                                }
-                                // Mark node as deleted (in real implementation)
-                                deleted_count += 1;
-                            },
-                            .Edge => |_| {
-                                // Mark edge as deleted
-                                deleted_count += 1;
-                            },
-                            else => {},
-                        }
+                        deleteValueBinding(val, graph, stmt.detach, &deleted_count);
                     }
                 }
             },
-            else => {
-                // Handle other delete item types
-            },
+            else => {},
         }
     }
 

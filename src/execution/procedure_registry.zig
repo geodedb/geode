@@ -66,6 +66,49 @@ var global_tde_mutex: std.Thread.Mutex = .{};
 var global_cdc_engine: ?*cdc_mod.CDCEngine = null;
 var global_cdc_mutex: std.Thread.Mutex = .{};
 
+// ===========================================================================
+// FLE Config Parsing Helper Functions
+// ===========================================================================
+
+// CANARY: REQ=REQ-NESTING-REFACTOR-023; FEATURE="NestingReduction"; ASPECT=FLEVisibility; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+/// Parses visibility roles from an AST List expression.
+/// Reduces nesting in FLE config parsing from 9 to 5 levels.
+fn parseVisibilityList(allocator: std.mem.Allocator, list: []const *const ast.Expr) ![][]const u8 {
+    const visibility_roles = try allocator.alloc([]const u8, list.len);
+    for (list, 0..) |item, i| {
+        visibility_roles[i] = if (item.* == .String) item.String else "";
+    }
+    return visibility_roles;
+}
+
+/// FLE configuration result structure
+const FLEConfigResult = struct {
+    algorithm: fle_annotations.EncryptionConfig.Algorithm,
+    visibility_roles: [][]const u8,
+};
+
+// CANARY: REQ=REQ-NESTING-REFACTOR-024; FEATURE="NestingReduction"; ASPECT=FLEConfigParsing; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+/// Parses FLE config map from an AST Map expression.
+/// Returns algorithm and visibility_roles, reducing nesting from 9 to 5 levels.
+fn parseFLEConfigMap(allocator: std.mem.Allocator, map_props: []const ast.Property) !FLEConfigResult {
+    var algorithm: fle_annotations.EncryptionConfig.Algorithm = .aes256_gcm;
+    var visibility_roles: [][]const u8 = &.{};
+
+    for (map_props) |prop| {
+        if (std.mem.eql(u8, prop.key, "algorithm")) {
+            if (prop.value.* == .String) {
+                algorithm = fle_annotations.EncryptionConfig.Algorithm.fromString(prop.value.String) catch .aes256_gcm;
+            }
+        } else if (std.mem.eql(u8, prop.key, "visibility")) {
+            if (prop.value.* == .List) {
+                visibility_roles = try parseVisibilityList(allocator, prop.value.List);
+            }
+        }
+    }
+
+    return .{ .algorithm = algorithm, .visibility_roles = visibility_roles };
+}
+
 pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: ExecutionContext) !ExecutionResult {
 
     // Get the procedure name from the Call expression
@@ -4293,29 +4336,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
                 if (args[1].* == .String) {
                     field_name = args[1].String;
                 }
-                // Third argument: config map (optional)
-                if (args.len >= 3) {
-                    if (args[2].* == .Map) {
-                        for (args[2].Map) |prop| {
-                            if (std.mem.eql(u8, prop.key, "algorithm")) {
-                                if (prop.value.* == .String) {
-                                    algorithm = fle_annotations.EncryptionConfig.Algorithm.fromString(prop.value.String) catch .aes256_gcm;
-                                }
-                            } else if (std.mem.eql(u8, prop.key, "visibility")) {
-                                if (prop.value.* == .List) {
-                                    const list = prop.value.List;
-                                    visibility_roles = try allocator.alloc([]const u8, list.len);
-                                    for (list, 0..) |item, i| {
-                                        if (item.* == .String) {
-                                            visibility_roles[i] = item.String;
-                                        } else {
-                                            visibility_roles[i] = "";
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                // Third argument: config map (optional) - uses helper to reduce nesting
+                if (args.len >= 3 and args[2].* == .Map) {
+                    const config = try parseFLEConfigMap(allocator, args[2].Map);
+                    algorithm = config.algorithm;
+                    visibility_roles = config.visibility_roles;
                 }
             }
         }
