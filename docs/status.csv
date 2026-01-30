@@ -3647,7 +3647,8 @@ REQ-SHELL-INTERRUPT-006,SourceInterrupt,RollbackInterrupt,TESTED,,,cli,2026-01-3
 REQ-SHELL-INTERRUPT-007,SourceInterrupt,CommitInterrupt,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-008,SourceInterrupt,UnitTests,TESTED,,,cli,2026-01-30,tests/test_repl.zig
 REQ-SHELL-INTERRUPT-010,SourceInterrupt,SignalHandler,IMPL,,,cli,2026-01-30,src/client/repl/platform.zig
-REQ-SHELL-INTERRUPT-011,SourceInterrupt,SignalSetup,IMPL,,,cli,2026-01-30,src/client/repl/repl_loop.zig
+REQ-SHELL-INTERRUPT-012,SourceInterrupt,RunGqlInterrupt,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-INTERRUPT-013,SourceInterrupt,BeginInterrupt,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-001,ShellAutoReconnect,ReconnectionConfig,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-002,ShellAutoReconnect,TransactionState,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-003,ShellAutoReconnect,SessionState,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig

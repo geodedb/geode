@@ -463,6 +463,7 @@ pub const ClientSession = struct {
     }
 
     // CANARY: REQ=REQ-SHELL-AUTH-001; FEATURE="ShellAuthRequired"; ASPECT=HelloAuthCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+    // CANARY: REQ=REQ-SHELL-INTERRUPT-016; FEATURE="SourceInterrupt"; ASPECT=HelloInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
     // Issue #387: HELLO handshake that checks if authentication is required
     pub fn hello(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
@@ -471,14 +472,31 @@ pub const ClientSession = struct {
         const hello_msg = "{\"type\":\"HELLO\",\"client_name\":\"geode-repl\",\"client_ver\":\"0.18.0\",\"wanted_conformance\":\"min\"}\n";
         try self.connection.?.writeAll(hello_msg);
 
-        // Read HELLO acknowledgment and check for auth requirement
-        const hello_ack = try self.connection.?.readLine(self.allocator, 1 << 16);
-        defer self.allocator.free(hello_ack);
+        // Read HELLO acknowledgment with interrupt checking
+        var retry_count: usize = 0;
+        const max_retries: usize = 100; // ~5 seconds with 50ms sleep
+        while (retry_count < max_retries) : (retry_count += 1) {
+            if (checkForInterrupt()) {
+                return error.Interrupted;
+            }
 
-        // Check if server requires authentication
-        if (std.mem.indexOf(u8, hello_ack, "Authentication required") != null) {
-            return error.AuthenticationRequired;
+            const hello_ack = self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+                if (err == error.WouldBlock) {
+                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    continue;
+                }
+                return err;
+            };
+            defer self.allocator.free(hello_ack);
+
+            // Check if server requires authentication
+            if (std.mem.indexOf(u8, hello_ack, "Authentication required") != null) {
+                return error.AuthenticationRequired;
+            }
+            return;
         }
+
+        return error.WouldBlock;
     }
 
     /// GAP-0150: Authenticated HELLO handshake for CLI authentication
@@ -490,6 +508,7 @@ pub const ClientSession = struct {
         error_message: ?[]const u8,
     };
 
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-017; FEATURE="SourceInterrupt"; ASPECT=HelloAuthInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
     pub fn helloWithAuth(self: *ClientSession, username: []const u8, password: []const u8) !AuthHelloResult {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
@@ -508,8 +527,34 @@ pub const ClientSession = struct {
         defer self.allocator.free(hello_msg);
         try self.connection.?.writeAll(hello_msg);
 
-        // Read HELLO response
-        const response = try self.connection.?.readLine(self.allocator, 1 << 16);
+        // Read HELLO response with interrupt checking
+        var retry_count: usize = 0;
+        const max_retries: usize = 100; // ~5 seconds with 50ms sleep
+        const response = while (retry_count < max_retries) : (retry_count += 1) {
+            if (checkForInterrupt()) {
+                return AuthHelloResult{
+                    .success = false,
+                    .session_token = null,
+                    .requires_password_reset = false,
+                    .error_message = try self.allocator.dupe(u8, "Connection interrupted by user"),
+                };
+            }
+
+            break self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+                if (err == error.WouldBlock) {
+                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    continue;
+                }
+                return err;
+            };
+        } else {
+            return AuthHelloResult{
+                .success = false,
+                .session_token = null,
+                .requires_password_reset = false,
+                .error_message = try self.allocator.dupe(u8, "Server did not respond to authentication"),
+            };
+        };
         defer self.allocator.free(response);
 
         // Parse response
@@ -704,9 +749,12 @@ pub const ClientSession = struct {
 
     /// CANARY: REQ=REQ-SHELL-TXN-ERROR-003; FEATURE="TransactionErrorDetails"; ASPECT=RollbackWithRetry; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
     /// Rollback transaction with retry logic for WouldBlock and detailed error extraction
-    /// Returns error.Interrupted if user pressed Ctrl+C during the operation
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-014; FEATURE="SourceInterrupt"; ASPECT=RollbackDoubleInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// Requires TWO Ctrl+C presses to cancel - first shows warning about data corruption
     pub fn rollback(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
+
+        const stderr = platform.getStderrHandle();
 
         // Clear previous transaction error
         if (self.last_txn_error) |e| {
@@ -716,24 +764,57 @@ pub const ClientSession = struct {
 
         try self.connection.?.writeAll("{\"type\":\"ROLLBACK\"}\n");
 
-        // Read response with retry logic for WouldBlock
-        const response = self.readTransactionResponse() catch |err| {
-            if (err == error.Interrupted) {
-                self.last_txn_error = self.allocator.dupe(u8, "Operation cancelled by user (Ctrl+C)") catch null;
-                return err;
-            }
-            if (err == error.WouldBlock) {
-                self.last_txn_error = self.allocator.dupe(u8, "Server did not respond to ROLLBACK (connection may be stale)") catch null;
-            }
-            return err;
-        };
-        defer self.allocator.free(response);
+        // Read response with retry logic - special handling for rollback interrupts
+        // Rollback requires TWO Ctrl+C presses to cancel, with a warning after the first
+        var retry_count: usize = 0;
+        const max_retries: usize = 200; // ~10 seconds with 50ms sleep for rollback
+        var first_interrupt_received = false;
 
-        // Check for error response and extract details
-        if (std.mem.indexOf(u8, response, "\"type\":\"ERROR\"") != null) {
-            self.extractTransactionError(response);
-            return error.TransactionError;
+        while (retry_count < max_retries) : (retry_count += 1) {
+            // Check for Ctrl+C interrupt - rollback needs special handling
+            if (checkForInterrupt()) {
+                if (!first_interrupt_received) {
+                    // First Ctrl+C - warn user about data corruption risk
+                    first_interrupt_received = true;
+                    stderr.writeAll("\r\n") catch {};
+                    stderr.writeAll("╔══════════════════════════════════════════════════════════════╗\r\n") catch {};
+                    stderr.writeAll("║  ⚠️  WARNING: CANCELLING ROLLBACK MAY CAUSE DATA CORRUPTION  ║\r\n") catch {};
+                    stderr.writeAll("╠══════════════════════════════════════════════════════════════╣\r\n") catch {};
+                    stderr.writeAll("║  The transaction rollback is in progress.                    ║\r\n") catch {};
+                    stderr.writeAll("║  Interrupting now may leave the database in an inconsistent  ║\r\n") catch {};
+                    stderr.writeAll("║  state with partial changes applied.                         ║\r\n") catch {};
+                    stderr.writeAll("╟──────────────────────────────────────────────────────────────╢\r\n") catch {};
+                    stderr.writeAll("║  Press Ctrl+C again to force cancel (NOT RECOMMENDED)        ║\r\n") catch {};
+                    stderr.writeAll("║  Or wait for rollback to complete safely.                   ║\r\n") catch {};
+                    stderr.writeAll("╚══════════════════════════════════════════════════════════════╝\r\n") catch {};
+                    continue; // Keep waiting for rollback
+                } else {
+                    // Second Ctrl+C - user really wants to cancel
+                    self.last_txn_error = self.allocator.dupe(u8, "Rollback forcefully cancelled - database may be in inconsistent state") catch null;
+                    return error.Interrupted;
+                }
+            }
+
+            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+                if (err == error.WouldBlock) {
+                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    continue;
+                }
+                return err;
+            };
+            defer self.allocator.free(response);
+
+            // Check for error response and extract details
+            if (std.mem.indexOf(u8, response, "\"type\":\"ERROR\"") != null) {
+                self.extractTransactionError(response);
+                return error.TransactionError;
+            }
+            return; // Success
         }
+
+        // Timeout waiting for response
+        self.last_txn_error = self.allocator.dupe(u8, "Server did not respond to ROLLBACK (connection may be stale)") catch null;
+        return error.WouldBlock;
     }
 
     /// CANARY: REQ=REQ-SHELL-INTERRUPT-004; FEATURE="SourceInterrupt"; ASPECT=TransactionResponseInterrupt; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
@@ -807,6 +888,7 @@ pub const ClientSession = struct {
         self.last_txn_error = self.allocator.dupe(u8, "Transaction failed (unknown error)") catch null;
     }
 
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-015; FEATURE="SourceInterrupt"; ASPECT=PullAllInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
     pub fn pullAll(self: *ClientSession, sink: anytype) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
@@ -815,15 +897,30 @@ pub const ClientSession = struct {
         const pull_msg = "{\"type\":\"PULL\",\"request_id\":1,\"page_size\":-1}\n";
         try self.connection.?.writeAll(pull_msg);
 
-        // Read the single response containing all results
-        // Note: Server strips "final":true from responses for compatibility,
-        // so we can't rely on that marker. With page_size:-1, we get exactly one response.
-        const response = try self.connection.?.readLine(self.allocator, 1 << 20); // 1MB max
-        defer self.allocator.free(response);
+        // Read the single response with interrupt checking
+        var retry_count: usize = 0;
+        const max_retries: usize = 6000; // ~5 minutes with 50ms sleep for large results
+        while (retry_count < max_retries) : (retry_count += 1) {
+            if (checkForInterrupt()) {
+                return error.Interrupted;
+            }
 
-        if (response.len > 0) {
-            try sink.appendSlice(self.allocator, response);
+            const response = self.connection.?.readLine(self.allocator, 1 << 20) catch |err| { // 1MB max
+                if (err == error.WouldBlock) {
+                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    continue;
+                }
+                return err;
+            };
+            defer self.allocator.free(response);
+
+            if (response.len > 0) {
+                try sink.appendSlice(self.allocator, response);
+            }
+            return;
         }
+
+        return error.WouldBlock;
     }
 
     /// Drain any pending responses from the connection (cleanup after errors)
