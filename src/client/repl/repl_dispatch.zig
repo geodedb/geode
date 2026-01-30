@@ -1762,8 +1762,20 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     var line_number: usize = 0;
 
     // First pass: Parse file and collect statements
+    // CANARY: REQ=REQ-SHELL-INTERRUPT-018; FEATURE="SourceInterrupt"; ASPECT=ParsingInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
     while (line_iter.next()) |raw_line| {
         line_number += 1;
+
+        // Check for interrupt every 100 lines to allow cancellation during parsing
+        if (line_number % 100 == 0) {
+            _ = progress_spinner.tick(); // Update spinner animation
+            if (checkForInterrupt()) {
+                interrupted = true;
+                progress_spinner.stop(null);
+                try stderr.writeAll("\r\nParsing cancelled by user (Ctrl+C)\r\n");
+                return;
+            }
+        }
 
         // Handle \r\n line endings
         const line = std.mem.trimRight(u8, raw_line, "\r");
@@ -1883,15 +1895,23 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     var auto_txn = false;
     var begin_succeeded = false;
     if (!state.in_txn and !has_explicit_txn) {
-        state.session.begin() catch |err| {
+        if (state.session.begin()) {
+            begin_succeeded = true;
+            auto_txn = true;
+            state.in_txn = true;
+        } else |err| {
+            // BEGIN failed - handle error
+            if (err == error.Interrupted) {
+                interrupted = true;
+                progress_spinner.stop(null);
+                try stderr.writeAll("\r\nOperation cancelled by user (Ctrl+C)\r\n");
+                return;
+            }
             var buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "Note: Transaction batching unavailable ({s})\r\n", .{@errorName(err)}) catch "";
             stderr.writeAll(msg) catch {};
-        };
-        // begin() doesn't throw on success, so if we get here without error, it succeeded
-        begin_succeeded = true;
-        auto_txn = true;
-        state.in_txn = true;
+            // Don't auto-wrap if BEGIN failed - proceed without transaction
+        }
     } else if (has_explicit_txn and state.verbose) {
         try stdout.writeAll("Note: File contains explicit transaction commands, skipping auto-wrap\r\n");
     }

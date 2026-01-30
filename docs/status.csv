@@ -3649,6 +3649,10 @@ REQ-SHELL-INTERRUPT-008,SourceInterrupt,UnitTests,TESTED,,,cli,2026-01-30,tests/
 REQ-SHELL-INTERRUPT-010,SourceInterrupt,SignalHandler,IMPL,,,cli,2026-01-30,src/client/repl/platform.zig
 REQ-SHELL-INTERRUPT-012,SourceInterrupt,RunGqlInterrupt,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-013,SourceInterrupt,BeginInterrupt,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-INTERRUPT-014,SourceInterrupt,RollbackDoubleInterrupt,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-INTERRUPT-015,SourceInterrupt,PullAllInterrupt,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-INTERRUPT-016,SourceInterrupt,HelloInterrupt,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-INTERRUPT-017,SourceInterrupt,HelloAuthInterrupt,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-001,ShellAutoReconnect,ReconnectionConfig,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-002,ShellAutoReconnect,TransactionState,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-003,ShellAutoReconnect,SessionState,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig

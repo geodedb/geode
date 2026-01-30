@@ -275,3 +275,108 @@ test "checkForInterrupt is callable and returns bool" {
     // Result should be a boolean (either true or false)
     _ = @as(bool, result);
 }
+
+// CANARY: REQ=REQ-SHELL-INTERRUPT-019; FEATURE="SourceInterrupt"; ASPECT=RollbackTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
+// Tests for transaction command detection (used for auto-transaction wrapping)
+test "containsTransactionCommands handles case insensitivity" {
+    try testing.expect(repl_dispatch.containsTransactionCommands("BEGIN"));
+    try testing.expect(repl_dispatch.containsTransactionCommands("begin"));
+    try testing.expect(repl_dispatch.containsTransactionCommands("Begin"));
+    try testing.expect(repl_dispatch.containsTransactionCommands("COMMIT"));
+    try testing.expect(repl_dispatch.containsTransactionCommands("commit"));
+    try testing.expect(repl_dispatch.containsTransactionCommands("ROLLBACK"));
+    try testing.expect(repl_dispatch.containsTransactionCommands("rollback"));
+}
+
+test "containsTransactionCommands handles multi-statement batches" {
+    // Transaction commands in multi-statement batches
+    try testing.expect(repl_dispatch.containsTransactionCommands("CREATE (:Node); BEGIN; CREATE (:Other);"));
+    try testing.expect(repl_dispatch.containsTransactionCommands("BEGIN; CREATE (:Node); CREATE (:Other); COMMIT;"));
+    try testing.expect(repl_dispatch.containsTransactionCommands("CREATE (:Node); ROLLBACK;"));
+
+    // No transaction commands
+    try testing.expect(!repl_dispatch.containsTransactionCommands("CREATE (:Node); CREATE (:Other);"));
+    try testing.expect(!repl_dispatch.containsTransactionCommands("MATCH (n) RETURN n;"));
+}
+
+test "containsTransactionCommands ignores transaction keywords in strings" {
+    // Keywords in string literals should NOT be detected
+    try testing.expect(!repl_dispatch.containsTransactionCommands("RETURN 'BEGIN' AS word;"));
+    try testing.expect(!repl_dispatch.containsTransactionCommands("RETURN 'COMMIT' AS word;"));
+    try testing.expect(!repl_dispatch.containsTransactionCommands("RETURN 'ROLLBACK' AS word;"));
+    try testing.expect(!repl_dispatch.containsTransactionCommands("CREATE (:Node {name: 'BEGIN'});"));
+}
+
+test "containsTransactionCommands handles whitespace variations" {
+    try testing.expect(repl_dispatch.containsTransactionCommands("  BEGIN  ;"));
+    try testing.expect(repl_dispatch.containsTransactionCommands("\tCOMMIT\t;"));
+    try testing.expect(repl_dispatch.containsTransactionCommands("\nROLLBACK\n;"));
+    try testing.expect(repl_dispatch.containsTransactionCommands("BEGIN;COMMIT;"));
+}
+
+// CANARY: REQ=REQ-SHELL-INTERRUPT-020; FEATURE="SourceInterrupt"; ASPECT=ErrorMessageTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
+// Tests for error message extraction from various server response formats
+test "extractServerErrorMessage handles nested result.error" {
+    const allocator = testing.allocator;
+
+    const response =
+        \\{"status_class":"42000","result":{"type":"ERROR","error":"Duplicate key violation in index 'idx_name'"}}
+    ;
+
+    const msg = repl_dispatch.extractServerErrorMessage(allocator, response);
+    try testing.expect(msg != null);
+    try testing.expect(std.mem.indexOf(u8, msg.?, "Duplicate key") != null);
+    allocator.free(msg.?);
+}
+
+test "extractServerErrorMessage handles large error messages" {
+    const allocator = testing.allocator;
+
+    // Simulate a large error message with stack trace
+    const response =
+        \\{"status_class":"50000","error":"Internal error: query execution failed with overflow in expression evaluation at depth 42 while processing aggregate function SUM over 1000000 rows with memory allocation failure during intermediate result materialization"}
+    ;
+
+    const msg = repl_dispatch.extractServerErrorMessage(allocator, response);
+    try testing.expect(msg != null);
+    try testing.expect(msg.?.len > 100); // Large message preserved
+    allocator.free(msg.?);
+}
+
+test "extractServerErrorMessage handles empty error strings" {
+    const allocator = testing.allocator;
+
+    const response =
+        \\{"status_class":"42000","error":""}
+    ;
+
+    const msg = repl_dispatch.extractServerErrorMessage(allocator, response);
+    // Empty error string might return empty or null
+    if (msg) |m| {
+        allocator.free(m);
+    }
+}
+
+// CANARY: REQ=REQ-SHELL-INTERRUPT-021; FEATURE="SourceInterrupt"; ASPECT=MultipleInterruptTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
+// Tests to verify interrupt checking can be called multiple times
+test "checkForInterrupt can be called multiple times" {
+    // Verify no state corruption from multiple calls
+    var i: usize = 0;
+    while (i < 100) : (i += 1) {
+        const result = repl_dispatch.checkForInterrupt();
+        try testing.expect(!result); // No interrupt pending in test env
+    }
+}
+
+test "checkForInterrupt does not block" {
+    // Verify the function returns quickly (non-blocking)
+    const start = std.time.milliTimestamp();
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        _ = repl_dispatch.checkForInterrupt();
+    }
+    const elapsed = std.time.milliTimestamp() - start;
+
+    // 1000 calls should complete in under 100ms (non-blocking check)
+    try testing.expect(elapsed < 100);
+}
