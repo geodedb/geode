@@ -332,11 +332,13 @@ pub const Spinner = struct {
             return;
         }
 
-        // Clear the spinner line
+        // Clear the spinner line by overwriting with spaces
+        stdout.writeAll("\r") catch {};
         var clear_buf: [256]u8 = undefined;
         @memset(&clear_buf, ' ');
-        const clear_line = std.fmt.bufPrint(&clear_buf, "\r{s}\r", .{clear_buf[0..@min(self.last_line_width + 5, 250)]}) catch "\r";
-        stdout.writeAll(clear_line) catch {};
+        const clear_len = @min(self.last_line_width + 5, 250);
+        stdout.writeAll(clear_buf[0..clear_len]) catch {};
+        stdout.writeAll("\r") catch {};
 
         // Print final message if provided
         if (final_message) |msg| {
