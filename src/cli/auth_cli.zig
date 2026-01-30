@@ -158,7 +158,7 @@ pub fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     var target: ?[]const u8 = null;
     var resource: []const u8 = "";
     var i = perm_idx + 1;
-    var positional = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+    var positional = std.ArrayList([]const u8).empty;
     defer positional.deinit(allocator);
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--to") and i + 1 < argv.len) {
@@ -227,7 +227,7 @@ pub fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     var target: ?[]const u8 = null;
     var resource: []const u8 = "";
     var i = perm_idx + 1;
-    var positional = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+    var positional = std.ArrayList([]const u8).empty;
     defer positional.deinit(allocator);
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--from") and i + 1 < argv.len) {

@@ -113,7 +113,7 @@ pub const UserManager = struct {
         try self.persistUser(user_ptr2.*);
 
         // Build response
-        var response_roles = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+        var response_roles = std.ArrayList([]const u8).empty;
         if (self.security_manager.rbac.user_roles.get(user_id)) |user_roles| {
             for (user_roles.items) |role_id| {
                 if (self.security_manager.roles.get(role_id)) |role| {
@@ -213,7 +213,7 @@ pub const UserManager = struct {
     }
 
     pub fn listUsers(self: *Self, filter: ?UserFilter) ![]auth.User {
-        var users = std.ArrayList(auth.User).initCapacity(self.allocator, 0) catch unreachable;
+        var users = std.ArrayList(auth.User).empty;
 
         var it = self.security_manager.users.iterator();
         while (it.next()) |entry| {
@@ -415,7 +415,7 @@ pub const UserManager = struct {
 
     pub fn createPolicy(self: *Self, request: CreatePolicyRequest) !u64 {
         // Convert role names to IDs
-        var role_ids = std.ArrayList(auth.RoleId).initCapacity(self.allocator, 0) catch unreachable;
+        var role_ids = std.ArrayList(auth.RoleId).empty;
         for (request.roles) |role_name| {
             var it = self.security_manager.roles.iterator();
             while (it.next()) |entry| {

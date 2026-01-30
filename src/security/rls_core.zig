@@ -242,7 +242,7 @@ pub const RLSEngine = struct {
 
         const result = try self.policies.getOrPut(key);
         if (!result.found_existing) {
-            result.value_ptr.* = std.ArrayList(Policy).initCapacity(self.allocator, 0) catch unreachable;
+            result.value_ptr.* = std.ArrayList(Policy).empty;
         }
 
         // Compile expressions if provided
@@ -402,7 +402,7 @@ pub const RLSEngine = struct {
         _: auth.UserId,
         roles: []const auth.Role,
     ) !std.ArrayList(Policy) {
-        var result = std.ArrayList(Policy).initCapacity(self.allocator, 0) catch unreachable;
+        var result = std.ArrayList(Policy).empty;
 
         var it = self.policies.iterator();
         while (it.next()) |entry| {
@@ -434,9 +434,9 @@ pub const RLSEngine = struct {
     // CANARY: REQ=REQ-RLS-EXPR-003; FEATURE="RLSExpressionCompilation"; ASPECT=ExpressionCompiler; STATUS=EXEMPT; OWNER=security; UPDATED=2025-12-30
     fn compileExpression(self: *Self, expr: []const u8) !*CompiledExpression {
         const Opcode = CompiledExpression.Opcode;
-        var bytecode = std.ArrayList(u8).initCapacity(self.allocator, 0) catch unreachable;
-        var constants = std.ArrayList(Value).initCapacity(self.allocator, 0) catch unreachable;
-        var jump_table = std.ArrayList(usize).initCapacity(self.allocator, 0) catch unreachable;
+        var bytecode = std.ArrayList(u8).empty;
+        var constants = std.ArrayList(Value).empty;
+        var jump_table = std.ArrayList(usize).empty;
 
         // Simple expression parser supporting:
         // - row.field_name = 'value'
@@ -966,7 +966,7 @@ pub const PolicyCache = struct {
     }
 
     pub fn invalidate(self: *PolicyCache, policy_key: RLSEngine.PolicyKey) !void {
-        var to_remove = std.ArrayList(CacheKey).initCapacity(self.allocator, 0) catch unreachable;
+        var to_remove = std.ArrayList(CacheKey).empty;
         defer to_remove.deinit(self.allocator);
 
         var it = self.cache.iterator();

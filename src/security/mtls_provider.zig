@@ -67,7 +67,7 @@ pub const MtlsProvider = struct {
     pub fn init(allocator: Allocator) Self {
         return .{
             .allocator = allocator,
-            .mappings = std.ArrayList(CertificateMapping).initCapacity(allocator, 0) catch unreachable,
+            .mappings = std.ArrayList(CertificateMapping).empty,
             .fingerprint_cache = std.StringHashMap(u64).init(allocator),
             .mutex = std.Thread.Mutex{},
             .default_method = .fingerprint,

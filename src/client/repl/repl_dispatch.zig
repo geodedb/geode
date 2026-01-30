@@ -1257,7 +1257,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     }
 
     // Get response data from QUIC client (only if no error in schema)
-    var response_data = std.ArrayList(u8).initCapacity(state.allocator, 0) catch unreachable;
+    var response_data = std.ArrayList(u8).empty;
     defer response_data.deinit(state.allocator);
 
     if (!has_error) {
@@ -1416,10 +1416,10 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
 
     // CANARY: REQ=REQ-SOURCE-PERF-004; FEATURE="SourceFilePerformance"; ASPECT=BatchParsing; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
     // Issue #400: Parse entire file and collect all GQL statements for batch execution
-    var batch_statements = std.ArrayList(u8).initCapacity(state.allocator, contents.len) catch unreachable;
+    var batch_statements = try std.ArrayList(u8).initCapacity(state.allocator, contents.len);
     defer batch_statements.deinit(state.allocator);
 
-    var meta_commands = std.ArrayList(MetaCommand).initCapacity(state.allocator, 8) catch unreachable;
+    var meta_commands = try std.ArrayList(MetaCommand).initCapacity(state.allocator, 8);
     defer {
         for (meta_commands.items) |mc| {
             if (mc.args) |args| state.allocator.free(args);
@@ -1428,7 +1428,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     }
 
     var statement_count: usize = 0;
-    var current_statement = std.ArrayList(u8).initCapacity(state.allocator, 256) catch unreachable;
+    var current_statement = try std.ArrayList(u8).initCapacity(state.allocator, 256);
     defer current_statement.deinit(state.allocator);
 
     var line_iter = std.mem.splitSequence(u8, contents, "\n");

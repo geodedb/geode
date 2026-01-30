@@ -140,7 +140,7 @@ pub const CredentialStore = struct {
         }
 
         // Write JSON
-        var buf = std.ArrayList(u8).initCapacity(self.allocator, 256) catch unreachable;
+        var buf = try std.ArrayList(u8).initCapacity(self.allocator, 256);
         defer buf.deinit(self.allocator);
 
         const writer = buf.writer(self.allocator);
@@ -300,7 +300,7 @@ pub const SessionRegistry = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        var to_remove = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+        var to_remove = std.ArrayList([]const u8).empty;
         defer to_remove.deinit(self.allocator);
 
         var iter = self.sessions.iterator();

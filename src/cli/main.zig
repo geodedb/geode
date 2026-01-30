@@ -874,12 +874,12 @@ fn processProtocolMessage(
         const query_text = query_text_value.string;
         if (HOT_PATH_LOGGING) log.debug("Query text received", &.{Attr.string("query", query_text)});
 
-        var param_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+        var param_names = std.ArrayList([]const u8).empty;
         defer {
             for (param_names.items) |pname| allocator.free(pname);
             param_names.deinit(allocator);
         }
-        var param_values = std.ArrayList(Value).initCapacity(allocator, 0) catch unreachable;
+        var param_values = std.ArrayList(Value).empty;
         defer {
             for (param_values.items) |pval| freeParamValue(allocator, pval);
             param_values.deinit(allocator);
@@ -1353,12 +1353,12 @@ fn handleQuicStream(allocator: std.mem.Allocator, _: anytype, stream: anytype) !
             const query_text = query_text_value.string;
             log.debug("Query text received", &.{Attr.string("query", query_text)});
 
-            var param_names = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+            var param_names = std.ArrayList([]const u8).empty;
             defer {
                 for (param_names.items) |pname| allocator.free(pname);
                 param_names.deinit(allocator);
             }
-            var param_values = std.ArrayList(Value).initCapacity(allocator, 0) catch unreachable;
+            var param_values = std.ArrayList(Value).empty;
             defer {
                 for (param_values.items) |pval| freeParamValue(allocator, pval);
                 param_values.deinit(allocator);
@@ -2525,7 +2525,7 @@ fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 };
 
                 // Check if query has ORDER BY clause and extract order keys
-                var order_keys_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+                var order_keys_list = std.ArrayList([]const u8).empty;
                 defer {
                     for (order_keys_list.items) |key| allocator.free(key);
                     order_keys_list.deinit(allocator);

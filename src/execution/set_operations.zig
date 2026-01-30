@@ -50,7 +50,7 @@ pub fn executeIntersect(allocator: std.mem.Allocator, intersect_query: ast.Binar
         return error.UnionColumnCountMismatch;
     }
 
-    var new_rows = std.ArrayList([]Value).initCapacity(allocator, left_result.rows.len) catch unreachable;
+    var new_rows = try std.ArrayList([]Value).initCapacity(allocator, left_result.rows.len);
 
     if (intersect_query.all) {
         // INTERSECT ALL - keep minimum occurrence count for each row
@@ -136,7 +136,7 @@ pub fn executeExcept(allocator: std.mem.Allocator, except_query: ast.BinarySet) 
         return error.UnionColumnCountMismatch;
     }
 
-    var new_rows = std.ArrayList([]Value).initCapacity(allocator, left_result.rows.len) catch unreachable;
+    var new_rows = try std.ArrayList([]Value).initCapacity(allocator, left_result.rows.len);
 
     if (except_query.all) {
         // EXCEPT ALL - remove one occurrence for each match in right
@@ -273,7 +273,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                 }
 
                 // Build a combined result with deduplication
-                var new_rows = std.ArrayList([]Value).initCapacity(allocator, result.rows.len + part_result.rows.len) catch unreachable;
+                var new_rows = try std.ArrayList([]Value).initCapacity(allocator, result.rows.len + part_result.rows.len);
 
                 // Add existing rows
                 for (result.rows) |row| {
@@ -341,7 +341,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                 return error.UnionColumnCountMismatch;
             }
 
-            var new_rows = std.ArrayList([]Value).initCapacity(allocator, result.rows.len) catch unreachable;
+            var new_rows = try std.ArrayList([]Value).initCapacity(allocator, result.rows.len);
 
             if (part.all) {
                 // INTERSECT ALL - keep minimum occurrence count for each row
@@ -426,7 +426,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                 return error.UnionColumnCountMismatch;
             }
 
-            var new_rows = std.ArrayList([]Value).initCapacity(allocator, result.rows.len) catch unreachable;
+            var new_rows = try std.ArrayList([]Value).initCapacity(allocator, result.rows.len);
 
             if (part.all) {
                 // EXCEPT ALL - remove one occurrence for each match in right

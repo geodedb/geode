@@ -1291,7 +1291,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                     // B02 Fix: COLLECT should skip NULL values and return [] when all values are NULL
                     // COLLECT aggregation - collect non-NULL values into a list
                     if (call.args.len == 1) {
-                        var list = std.ArrayList(Value).initCapacity(allocator, bindings.len) catch unreachable;
+                        var list = try std.ArrayList(Value).initCapacity(allocator, bindings.len);
                         for (bindings) |binding| {
                             const env = Env{
                                 .names = binding.env_names,

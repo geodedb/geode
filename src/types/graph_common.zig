@@ -100,7 +100,7 @@ pub const GraphStorage = struct {
         return .{
             .allocator = allocator,
             .nodes = std.AutoHashMap(NodeId, Node).init(allocator),
-            .edges = std.ArrayList(Edge).initCapacity(allocator, 0) catch unreachable,
+            .edges = std.ArrayList(Edge).empty,
             .outgoing = std.AutoHashMap(NodeId, std.ArrayList(EdgeId)).init(allocator),
             .incoming = std.AutoHashMap(NodeId, std.ArrayList(EdgeId)).init(allocator),
             .csr = null,
@@ -146,7 +146,7 @@ pub const GraphStorage = struct {
             var details = std.StringHashMap([]const u8).init(allocator);
             // Construct label string
             if (labels.len > 0) {
-                var buf = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
+                var buf = try std.ArrayList(u8).initCapacity(allocator, 64);
                 defer buf.deinit(allocator);
                 for (labels, 0..) |l, i| {
                     if (i > 0) buf.appendSlice(allocator, ",") catch {};
@@ -194,13 +194,13 @@ pub const GraphStorage = struct {
         // Update adjacency lists
         var result = self.outgoing.getOrPut(source) catch unreachable;
         if (!result.found_existing) {
-            result.value_ptr.* = std.ArrayList(EdgeId).initCapacity(allocator, 0) catch unreachable;
+            result.value_ptr.* = std.ArrayList(EdgeId).empty;
         }
         try result.value_ptr.append(allocator, edge_id);
 
         var target_result = self.incoming.getOrPut(target) catch unreachable;
         if (!target_result.found_existing) {
-            target_result.value_ptr.* = std.ArrayList(EdgeId).initCapacity(allocator, 0) catch unreachable;
+            target_result.value_ptr.* = std.ArrayList(EdgeId).empty;
         }
         try target_result.value_ptr.append(allocator, edge_id);
 

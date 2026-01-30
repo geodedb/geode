@@ -850,7 +850,7 @@ pub fn loadCatalog() !void {
 
     // Read graphs - collect names first, then load data
     // CANARY: REQ=REQ-GRAPH-PERSIST-002; FEATURE="NamedGraphPersistence"; ASPECT=CatalogLoad; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-29
-    var graph_names = std.ArrayList([]const u8).initCapacity(allocator, graph_count) catch unreachable;
+    var graph_names = try std.ArrayList([]const u8).initCapacity(allocator, graph_count);
     defer graph_names.deinit(allocator);
 
     i = 0;

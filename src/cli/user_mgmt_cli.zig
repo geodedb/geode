@@ -758,7 +758,7 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         const rolename = argv[start_idx + 2];
         var description: []const u8 = "Role created via CLI";
         var description_is_default = true;
-        var parsed_permissions = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+        var parsed_permissions = std.ArrayList([]const u8).empty;
         defer parsed_permissions.deinit(allocator);
 
         var i = start_idx + 3;

@@ -108,7 +108,7 @@ pub const ReplLoop = struct {
 
         var state = ReplState{
             .allocator = opts.allocator,
-            .buffer = std.ArrayList(u8).initCapacity(opts.allocator, 0) catch unreachable,
+            .buffer = std.ArrayList(u8).empty,
             .cursor = 0,
             .history = &history,
             .history_index = null,
@@ -120,12 +120,12 @@ pub const ReplLoop = struct {
             .session = &session,
             .in_txn = false,
             .quit_requested = false,
-            .kill_ring = std.ArrayList(u8).initCapacity(opts.allocator, 0) catch unreachable,
+            .kill_ring = std.ArrayList(u8).empty,
             .last_was_kill = false,
-            .search_buffer = std.ArrayList(u8).initCapacity(opts.allocator, 0) catch unreachable,
+            .search_buffer = std.ArrayList(u8).empty,
             .searching = false,
             .completion_ctx = repl_complete.CompletionContext.init(opts.allocator),
-            .multi_line_buffer = std.ArrayList(u8).initCapacity(opts.allocator, 0) catch unreachable,
+            .multi_line_buffer = std.ArrayList(u8).empty,
             .is_continuation = false,
         };
         defer state.deinit();

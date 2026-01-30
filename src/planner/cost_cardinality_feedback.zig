@@ -22,7 +22,7 @@ pub const Registry = struct {
     entries: std.ArrayList(Entry),
 
     pub fn init(allocator: std.mem.Allocator) Registry {
-        return .{ .allocator = allocator, .entries = std.ArrayList(Entry).initCapacity(allocator, 0) catch unreachable };
+        return .{ .allocator = allocator, .entries = std.ArrayList(Entry).empty };
     }
 
     pub fn deinit(self: *Registry) void {

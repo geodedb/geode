@@ -88,10 +88,10 @@ pub const Transaction = struct {
             .start_timestamp = timestamp,
             .commit_timestamp = null,
             .snapshot_timestamp = timestamp,
-            .locks_held = std.ArrayList(LockRequest).initCapacity(allocator, 0) catch unreachable,
-            .write_set = std.ArrayList(WriteOp).initCapacity(allocator, 0) catch unreachable,
-            .read_set = std.ArrayList(u64).initCapacity(allocator, 0) catch unreachable,
-            .conflicts_detected = std.ArrayList(ConflictInfo).initCapacity(allocator, 0) catch unreachable,
+            .locks_held = std.ArrayList(LockRequest).empty,
+            .write_set = std.ArrayList(WriteOp).empty,
+            .read_set = std.ArrayList(u64).empty,
+            .conflicts_detected = std.ArrayList(ConflictInfo).empty,
         };
     }
 
@@ -151,7 +151,7 @@ pub const LockManager = struct {
     pub fn requestLock(self: *LockManager, txn: *Transaction, resource_id: u64, mode: LockMode) !bool {
         // Check for lock compatibility
         var requests = self.lock_table.get(resource_id) orelse blk: {
-            const list = std.ArrayList(LockRequest).initCapacity(self.allocator, 0) catch unreachable;
+            const list = std.ArrayList(LockRequest).empty;
             try self.lock_table.put(resource_id, list);
             break :blk self.lock_table.get(resource_id).?;
         };
@@ -483,7 +483,7 @@ pub const MVCCManager = struct {
 
         for (txn.write_set.items) |write_op| {
             var version_chain = self.versions.get(write_op.resource_id) orelse blk: {
-                const chain = std.ArrayList(Version).initCapacity(self.allocator, 0) catch unreachable;
+                const chain = std.ArrayList(Version).empty;
                 try self.versions.put(write_op.resource_id, chain);
                 break :blk self.versions.get(write_op.resource_id).?;
             };

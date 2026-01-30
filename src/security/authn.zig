@@ -414,7 +414,7 @@ pub const AuthProvider = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        var to_remove = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+        var to_remove = std.ArrayList([]const u8).empty;
         defer to_remove.deinit(self.allocator);
 
         var it = self.sessions.iterator();
@@ -441,7 +441,7 @@ pub const AuthProvider = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        var to_remove = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+        var to_remove = std.ArrayList([]const u8).empty;
         defer to_remove.deinit(self.allocator);
 
         var it = self.sessions.iterator();

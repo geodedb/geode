@@ -397,7 +397,7 @@ pub const State = struct {
     }
 
     pub fn listPermissionsForUser(self: *State, username: []const u8) std.ArrayList([]const u8) {
-        var perms = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch unreachable;
+        var perms = std.ArrayList([]const u8).empty;
 
         const user_role = blk: {
             if (self.findUserIndex(username)) |idx| {

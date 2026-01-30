@@ -1860,7 +1860,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
             // Get candidate nodes from label index
             var candidates = store.getNodesByLabels(target_graph, node_pattern.labels) catch blk: {
                 // Fallback to empty if index lookup fails - use store.allocator for consistency
-                break :blk std.ArrayList(u64).initCapacity(store.allocator, 0) catch unreachable;
+                break :blk std.ArrayList(u64).empty;
             };
             defer candidates.deinit(store.allocator);
 
@@ -2326,7 +2326,7 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
             // If DETACH DELETE, also delete associated edges
             if (d.detach) {
                 // Delete edges where this node is the source or target
-                var edges_to_delete = std.ArrayList(u64).initCapacity(allocator, 0) catch unreachable;
+                var edges_to_delete = std.ArrayList(u64).empty;
                 defer edges_to_delete.deinit(allocator);
 
                 var edge_iter = store.edges.iterator();

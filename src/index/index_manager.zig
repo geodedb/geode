@@ -606,7 +606,7 @@ pub const IndexManager = struct {
         const buckets = try self.allocator.alloc(HashIndex.Bucket, bucket_count);
         for (buckets) |*bucket| {
             bucket.* = HashIndex.Bucket{
-                .entries = std.ArrayList(HashIndex.Entry).initCapacity(self.allocator, 0) catch unreachable,
+                .entries = std.ArrayList(HashIndex.Entry).empty,
             };
         }
 

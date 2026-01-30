@@ -13,7 +13,7 @@ pub const CompletionContext = struct {
     pub fn init(allocator: std.mem.Allocator) CompletionContext {
         return .{
             .allocator = allocator,
-            .candidates = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable,
+            .candidates = std.ArrayList([]const u8).empty,
         };
     }
 

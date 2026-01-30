@@ -373,7 +373,7 @@ pub const GraphStore = struct {
 
         const result = try self.label_index.getOrPut(key);
         if (!result.found_existing) {
-            result.value_ptr.* = std.ArrayList(u64).initCapacity(self.allocator, 0) catch unreachable;
+            result.value_ptr.* = std.ArrayList(u64).empty;
         } else {
             // Key already exists, free the newly allocated one
             self.allocator.free(key);
@@ -396,7 +396,7 @@ pub const GraphStore = struct {
 
     // Issue #391: Get nodes that have ALL specified labels in a graph
     pub fn getNodesByLabels(self: *const GraphStore, graph_name: []const u8, labels: []const []const u8) !std.ArrayList(u64) {
-        var result = std.ArrayList(u64).initCapacity(self.allocator, 0) catch unreachable;
+        var result = std.ArrayList(u64).empty;
 
         if (labels.len == 0) {
             return result;
@@ -651,14 +651,14 @@ pub const GraphStore = struct {
         // Add to outgoing edges for from_id
         const out_result = try self.outgoing_edges.getOrPut(from_id);
         if (!out_result.found_existing) {
-            out_result.value_ptr.* = std.ArrayList(u64).initCapacity(self.allocator, 0) catch unreachable;
+            out_result.value_ptr.* = std.ArrayList(u64).empty;
         }
         try out_result.value_ptr.append(self.allocator, edge_id);
 
         // Add to incoming edges for to_id
         const in_result = try self.incoming_edges.getOrPut(to_id);
         if (!in_result.found_existing) {
-            in_result.value_ptr.* = std.ArrayList(u64).initCapacity(self.allocator, 0) catch unreachable;
+            in_result.value_ptr.* = std.ArrayList(u64).empty;
         }
         try in_result.value_ptr.append(self.allocator, edge_id);
     }
@@ -666,7 +666,7 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-PERF-EDGE-ADJ-003; FEATURE="EdgeAdjacencyIndex"; ASPECT=EdgeLookup; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
     // Issue #392: Get all edges connected to a node (O(1) lookup instead of O(edges) scan)
     pub fn getEdgesForNode(self: *const GraphStore, node_id: u64) std.ArrayList(u64) {
-        var result = std.ArrayList(u64).initCapacity(self.allocator, 0) catch unreachable;
+        var result = std.ArrayList(u64).empty;
 
         // Get outgoing edges
         if (self.outgoing_edges.get(node_id)) |outgoing| {

@@ -22,7 +22,7 @@ pub const Graph = struct {
     index: std.AutoHashMap(u32, struct { start: usize, end: usize }),
 
     pub fn init(allocator: std.mem.Allocator) Graph {
-        return .{ .allocator = allocator, .nodes = std.AutoHashMap(u32, void).init(allocator), .edges = std.ArrayList(Edge).initCapacity(allocator, 0) catch unreachable, .index = std.AutoHashMap(u32, struct { start: usize, end: usize }).init(allocator) };
+        return .{ .allocator = allocator, .nodes = std.AutoHashMap(u32, void).init(allocator), .edges = std.ArrayList(Edge).empty, .index = std.AutoHashMap(u32, struct { start: usize, end: usize }).init(allocator) };
     }
 
     pub fn deinit(self: *Graph) void {
@@ -57,7 +57,7 @@ pub const Graph = struct {
         while (i < es.len) : (i += 1) {
             const e = es[i];
             var gop = try temp.getOrPut(e.src);
-            if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(Edge).initCapacity(self.allocator, 0) catch unreachable;
+            if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(Edge).empty;
             try gop.value_ptr.append(e);
         }
         // Rebuild index with sequential ordering per node (source-based)

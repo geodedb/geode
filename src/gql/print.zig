@@ -479,7 +479,7 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         } else {
             // P2-3: Use provided allocator instead of page_allocator
             const alloc = opts.allocator orelse return error.AllocatorRequired;
-            var buf = std.ArrayList(u8).initCapacity(alloc, 0) catch unreachable;
+            var buf = std.ArrayList(u8).empty;
             defer buf.deinit(alloc);
             try temporal.formatDate(buf.writer(alloc), d.parsed);
             try w.print("DATE\"{s}\"", .{buf.items});
@@ -489,7 +489,7 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         } else {
             // P2-3: Use provided allocator instead of page_allocator
             const alloc = opts.allocator orelse return error.AllocatorRequired;
-            var buf = std.ArrayList(u8).initCapacity(alloc, 0) catch unreachable;
+            var buf = std.ArrayList(u8).empty;
             defer buf.deinit(alloc);
             try temporal.formatDateTime(buf.writer(alloc), dt.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
             try w.print("DATETIME\"{s}\"", .{buf.items});
@@ -499,7 +499,7 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         } else {
             // P2-3: Use provided allocator instead of page_allocator
             const alloc = opts.allocator orelse return error.AllocatorRequired;
-            var buf = std.ArrayList(u8).initCapacity(alloc, 0) catch unreachable;
+            var buf = std.ArrayList(u8).empty;
             defer buf.deinit(alloc);
             try temporal.formatTime(buf.writer(alloc), t.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
             try w.print("TIME\"{s}\"", .{buf.items});
@@ -509,7 +509,7 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         } else {
             // P2-3: Use provided allocator instead of page_allocator
             const alloc = opts.allocator orelse return error.AllocatorRequired;
-            var buf = std.ArrayList(u8).initCapacity(alloc, 0) catch unreachable;
+            var buf = std.ArrayList(u8).empty;
             defer buf.deinit(alloc);
             try temporal.formatDateTime(buf.writer(alloc), ldt.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
             try w.print("LOCAL DATETIME\"{s}\"", .{buf.items});

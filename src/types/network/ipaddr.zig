@@ -140,7 +140,7 @@ pub const IpAddr = union(enum) {
                 best_len = current_len;
             }
 
-            var result = std.ArrayList(u8).initCapacity(allocator, 39) catch unreachable; // IPv6 max length
+            var result = try std.ArrayList(u8).initCapacity(allocator, 39); // IPv6 max length
             defer result.deinit(allocator);
 
             var i: usize = 0;

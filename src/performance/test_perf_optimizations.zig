@@ -183,7 +183,7 @@ test "GAP-0203 Fix #3: BINDINGS response format" {
     const expected_suffix = "]}}\n";
 
     // Build a sample response matching the pre-build logic
-    var buf = std.ArrayList(u8).initCapacity(testing.allocator, 512) catch unreachable;
+    var buf = try std.ArrayList(u8).initCapacity(testing.allocator, 512);
     defer buf.deinit(testing.allocator);
     const writer = buf.writer(testing.allocator);
 
@@ -198,7 +198,7 @@ test "GAP-0203 Fix #3: BINDINGS response format" {
 }
 
 test "GAP-0203 Fix #3: RESULT response format for error/status" {
-    var buf = std.ArrayList(u8).initCapacity(testing.allocator, 512) catch unreachable;
+    var buf = try std.ArrayList(u8).initCapacity(testing.allocator, 512);
     defer buf.deinit(testing.allocator);
     const writer = buf.writer(testing.allocator);
 

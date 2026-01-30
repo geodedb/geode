@@ -187,7 +187,7 @@ fn escapeString(s: []const u8) []const u8 {
 }
 
 fn stripAnsi(text: []const u8, allocator: std.mem.Allocator) ![]u8 {
-    var result = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+    var result = std.ArrayList(u8).empty;
     defer result.deinit(allocator);
 
     var in_escape = false;
@@ -208,7 +208,7 @@ fn stripAnsi(text: []const u8, allocator: std.mem.Allocator) ![]u8 {
 
 test "renderer JSON mode" {
     const allocator = std.testing.allocator;
-    var output = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
+    var output = std.ArrayList(u8).empty;
     defer output.deinit(allocator);
 
     var sink = RenderSink{
