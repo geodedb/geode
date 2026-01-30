@@ -263,14 +263,15 @@ pub fn filterAndRedactMetadata(
                 const key = entry.key_ptr.*;
                 const value = entry.value_ptr.*;
 
-                const filter_result = shouldFilterField(key, value, filters);
+                // CANARY: REQ=REQ-QUALITY-GAP-413-012; FEATURE="OrphanedTestRemediation"; ASPECT=AllocatorPassing; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+                const filter_result = shouldFilterField(allocator, key, value, filters);
                 switch (filter_result) {
                     .allow => {
                         const cloned_value = try cloneJsonValue(allocator, value);
                         try filtered_map.put(try allocator.dupe(u8, key), cloned_value);
                     },
                     .redact => {
-                        if (isSensitiveKey(key)) |token| {
+                        if (isSensitiveKey(allocator, key)) |token| {
                             const redacted = std.json.Value{ .string = token.toString() };
                             try filtered_map.put(try allocator.dupe(u8, key), redacted);
                         }
@@ -290,7 +291,7 @@ pub fn filterAndRedactMetadata(
     };
 }
 
-fn shouldFilterField(key: []const u8, value: std.json.Value, filters: *const config.FiltersConfig) FilterResult {
+fn shouldFilterField(allocator: std.mem.Allocator, key: []const u8, value: std.json.Value, filters: *const config.FiltersConfig) FilterResult {
     // Check if field is in allowlist
     const is_allowed = for (filters.allow_fields) |allowed_field| {
         if (std.mem.eql(u8, key, allowed_field)) break true;
@@ -302,7 +303,7 @@ fn shouldFilterField(key: []const u8, value: std.json.Value, filters: *const con
     } else false;
 
     // Check if key is a recognized sensitive key
-    const sensitive_token = isSensitiveKey(key);
+    const sensitive_token = isSensitiveKey(allocator, key);
 
     if (is_denied or sensitive_token != null) {
         // Check if value contains unredactable sensitive data

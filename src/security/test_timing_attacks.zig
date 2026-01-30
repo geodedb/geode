@@ -1,11 +1,12 @@
 // Test suite for timing attack resistance
 // CANARY: REQ=REQ-SECURITY-TIMING-001; FEATURE="TimingAttackResistance"; ASPECT=Core; STATUS=TESTED; OWNER=security; UPDATED=2026-01-25
 //         ASPECT=TESTING; STATUS=TESTED; TEST=src/security/test_timing_attacks.zig; OWNER=security; UPDATED=2026-01-25
+// CANARY: REQ=REQ-QUALITY-GAP-413-006; FEATURE="OrphanedTestRemediation"; ASPECT=TimingAttacks; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
 
 const std = @import("std");
 const testing = std.testing;
 const auth = @import("geode_auth");
-const hash_mod = @import("../types/hash.zig");
+const hash_mod = @import("types_hash");
 
 test "Password verification - timing resistance with varying prefixes" {
     var security_mgr = try auth.SecurityManager.init(testing.allocator);

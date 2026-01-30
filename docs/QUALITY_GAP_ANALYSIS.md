@@ -21,7 +21,7 @@
 1. **[#400](https://gitlab.com/devnw/codepros/geode/geode/-/issues/400)** - ~~Remove 92MB backup file~~ **VERIFIED FIXED** (file deleted from repo)
 2. **[#401](https://gitlab.com/devnw/codepros/geode/geode/-/issues/401)** - Refactor 3,839-line monster function - **BLOCKED** (requires dedicated sprint)
 3. **[#409](https://gitlab.com/devnw/codepros/geode/geode/-/issues/409)** - Split eval.zig 2,043-line function - **BLOCKED** (requires dedicated sprint)
-4. **[#413](https://gitlab.com/devnw/codepros/geode/geode/-/issues/413)** - Orphaned test files in src/ - **PARTIAL** (11 of 66 tests now running)
+4. **[#413](https://gitlab.com/devnw/codepros/geode/geode/-/issues/413)** - Orphaned test files in src/ - **PARTIAL** (32 of 66 tests now running)
 5. **[#406](https://gitlab.com/devnw/codepros/geode/geode/-/issues/406)** - Replace catch unreachable patterns - **PARTIAL** (reduced from 130 to 75)
 
 ---
@@ -172,40 +172,42 @@ These items require significant planning and coordination. **Status: BLOCKED** -
 
 **Conclusion**: No sleep calls need removal. All serve legitimate distributed systems purposes.
 
-### Orphaned Test Files Audit (#413) - BLOCKED
+### Orphaned Test Files Audit (#413) - PARTIAL
 
 **Audit Date**: 2026-01-30
-**Finding**: 9 test files containing 66 test blocks are NOT running in CI.
+**Finding**: 9 test files containing 66 test blocks identified. **32 tests now running in CI**.
 
-**Category 1: Parent directory imports (need module restructuring)**
+**FIXED (32 tests now running):**
 
-| File | Test Count | Import Issue |
-|------|------------|--------------|
-| src/security/test_timing_attacks.zig | 6 | `@import("../types/hash.zig")` |
-| src/tests/test_filters.zig | 10 | `@import("../audit/*.zig")` |
-| src/tests/test_transports.zig | 7 | `@import("../audit/*.zig")` |
-| src/tests/test_cef.zig | 4 | `@import("../audit/*.zig")` |
+| File | Test Count | Fix Applied |
+|------|------------|-------------|
+| src/performance/test_json_optimization.zig | 11 | Updated to Zig 0.15 ArrayList API |
+| src/tests/test_filters.zig | 10 | Created audit_bundle module, fixed const issues |
+| src/tests/test_transports.zig | 7 | Created audit_bundle module, fixed file access API |
+| src/tests/test_cef.zig | 4 | Created audit_bundle module, fixed format strings |
 
-**Category 2: Missing/changed APIs**
+**BLOCKED (34 tests still need work):**
 
-| File | Test Count | API Issue |
-|------|------------|-----------|
+| File | Test Count | Blocking Issue |
+|------|------------|----------------|
+| src/security/test_timing_attacks.zig | 6 | hash.zig imports storage/heap.zig outside module path |
 | src/security/test_argon2id_hashing.zig | 9 | References non-existent `Auth` struct |
 | src/server/test_abac_enforcement.zig | 8 | References non-existent `server_init` |
 | src/server/test_async_connection.zig | 5 | Module path mismatch |
-
-**Category 3: Deprecated APIs**
-
-| File | Test Count | API Issue |
-|------|------------|-----------|
-| src/performance/test_json_optimization.zig | 11 | Uses Zig 0.14 `ArrayList.init()` |
 | src/security/test_tde_nonce.zig | 6 | Uses deprecated TDE APIs |
 
-**Total**: 66 test blocks across 9 files NOT running in CI
+**Zig 0.15 API Changes Applied:**
 
-**Documented in**: `build.zig` CANARY marker REQ-QUALITY-GAP-413-001
+- `ArrayList.init(allocator)` → `ArrayList.initCapacity(allocator, capacity)`
+- `ArrayList.deinit()` → `ArrayList.deinit(allocator)`
+- `ArrayList.writer()` → `ArrayList.writer(allocator)`
+- `std.json.stringifyAlloc` → `std.json.Stringify.valueAlloc`
+- Clock vtable pattern updated with context pointer
+- Format string fixes for fixed-size arrays and integers
 
-**Remediation**: Requires dedicated sprint to modernize these tests or delete obsolete ones.
+**Progress**: 32/66 tests (48.5%) now running in CI
+
+**Documented in**: `build.zig` CANARY markers REQ-QUALITY-GAP-413-001 through REQ-QUALITY-GAP-413-016
 
 ---
 

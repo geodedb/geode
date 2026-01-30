@@ -148,7 +148,8 @@ pub const FileSink = struct {
         }
 
         const json_value = std.json.Value{ .object = json_obj };
-        return std.json.stringifyAlloc(self.allocator, json_value, .{});
+        // CANARY: REQ=REQ-QUALITY-GAP-413-010; FEATURE="OrphanedTestRemediation"; ASPECT=Zig015API; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+        return std.json.Stringify.valueAlloc(self.allocator, json_value, .{});
     }
 
     fn cloneJsonValue(self: *FileSink, value: std.json.Value) !std.json.Value {

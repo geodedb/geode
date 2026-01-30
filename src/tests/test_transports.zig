@@ -1,10 +1,12 @@
 const std = @import("std");
 const testing = std.testing;
-const events = @import("../audit/events.zig");
-const config = @import("../audit/config.zig");
-const syslog = @import("../audit/syslog.zig");
-const file_sink = @import("../audit/file_sink.zig");
-const time = @import("../audit/time.zig");
+// CANARY: REQ=REQ-QUALITY-GAP-413-004; FEATURE="OrphanedTestRemediation"; ASPECT=AuditTransports; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+const audit = @import("audit_bundle");
+const events = audit.events;
+const config = audit.config;
+const syslog = audit.syslog;
+const file_sink = audit.file_sink;
+const time = audit.time;
 
 test "syslog RFC5424 formatting" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -205,9 +207,18 @@ test "file rotation" {
         try sink.write(&event, null);
     }
 
-    // Check that backup files exist
-    try testing.expect(std.fs.cwd().access(test_dir ++ "/rotate.log", .{}) catch false);
-    try testing.expect(std.fs.cwd().access(test_dir ++ "/rotate.log.1", .{}) catch false);
+    // Check that backup files exist (Zig 0.15 access returns void on success, error on failure)
+    // CANARY: REQ=REQ-QUALITY-GAP-413-015; FEATURE="OrphanedTestRemediation"; ASPECT=FileAccessAPI; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+    const file_exists = blk: {
+        std.fs.cwd().access(test_dir ++ "/rotate.log", .{}) catch break :blk false;
+        break :blk true;
+    };
+    try testing.expect(file_exists);
+    const backup_exists = blk: {
+        std.fs.cwd().access(test_dir ++ "/rotate.log.1", .{}) catch break :blk false;
+        break :blk true;
+    };
+    try testing.expect(backup_exists);
     // rotate.log.2 may or may not exist depending on how many rotations occurred
 }
 

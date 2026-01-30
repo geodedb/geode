@@ -1,9 +1,11 @@
 const std = @import("std");
 const testing = std.testing;
-const events = @import("../audit/events.zig");
-const config = @import("../audit/config.zig");
-const cef = @import("../audit/cef.zig");
-const time = @import("../audit/time.zig");
+// CANARY: REQ=REQ-QUALITY-GAP-413-005; FEATURE="OrphanedTestRemediation"; ASPECT=AuditCef; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+const audit = @import("audit_bundle");
+const events = audit.events;
+const config = audit.config;
+const cef = audit.cef;
+const time = audit.time;
 
 test "CEF formatting basic structure" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -156,7 +158,8 @@ test "CEF event name mapping" {
         const cef_msg = try cef.formatCef(allocator, &event, &identity, clock);
         defer allocator.free(cef_msg);
 
-        const expected_pattern = try std.fmt.allocPrint(allocator, "|{s}|{s}|", .{ test_case.expected_name, event.severity.toCefSeverity() });
+        // CANARY: REQ=REQ-QUALITY-GAP-413-016; FEATURE="OrphanedTestRemediation"; ASPECT=FormatString; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+        const expected_pattern = try std.fmt.allocPrint(allocator, "|{s}|{d}|", .{ test_case.expected_name, event.severity.toCefSeverity() });
         defer allocator.free(expected_pattern);
 
         try testing.expect(std.mem.indexOf(u8, cef_msg, expected_pattern) != null);

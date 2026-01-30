@@ -1,7 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
-const filters = @import("../audit/filters.zig");
-const config = @import("../audit/config.zig");
+// CANARY: REQ=REQ-QUALITY-GAP-413-003; FEATURE="OrphanedTestRemediation"; ASPECT=AuditFilters; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+const audit = @import("audit_bundle");
+const filters = audit.filters;
+const config = audit.config;
 
 test "sensitive key detection" {
     // Test password-related keys
@@ -161,15 +163,17 @@ test "metadata filtering and redaction" {
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
-    const filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    // CANARY: REQ=REQ-QUALITY-GAP-413-013; FEATURE="OrphanedTestRemediation"; ASPECT=ConstCorrectness; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
     defer if (filtered) |*f| {
         if (f.* == .object) {
-            var iter = f.object.iterator();
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
             while (iter.next()) |entry| {
                 allocator.free(entry.key_ptr.*);
                 freeJsonValue(allocator, entry.value_ptr.*);
             }
-            f.object.deinit();
+            obj_mut.deinit();
         }
     };
 
@@ -192,16 +196,21 @@ test "metadata filtering and redaction" {
 }
 
 fn freeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) void {
-    switch (value) {
+    // CANARY: REQ=REQ-QUALITY-GAP-413-014; FEATURE="OrphanedTestRemediation"; ASPECT=ConstCorrectness; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+    // Note: In Zig 0.15, ArrayHashMap.deinit requires mutable self, but Value fields are const when captured.
+    // We copy to var to get mutability. This is safe because we own the values being freed.
+    var val = value;
+    switch (val) {
         .number_string => |ns| allocator.free(ns),
         .string => |s| allocator.free(s),
-        .array => |arr| {
+        .array => |*arr| {
             for (arr.items) |item| {
                 freeJsonValue(allocator, item);
             }
+            // Array in json.Value doesn't have managed allocator in Zig 0.15
             arr.deinit();
         },
-        .object => |obj| {
+        .object => |*obj| {
             var iter = obj.iterator();
             while (iter.next()) |entry| {
                 allocator.free(entry.key_ptr.*);

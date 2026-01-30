@@ -17,56 +17,59 @@ pub fn formatCef(
     const severity = event.severity.toCefSeverity();
 
     // Build extension fields
-    var extension = std.ArrayList(u8).init(allocator);
-    defer extension.deinit();
+    // CANARY: REQ=REQ-QUALITY-GAP-413-008; FEATURE="OrphanedTestRemediation"; ASPECT=Zig015API; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+    var extension = try std.ArrayList(u8).initCapacity(allocator, 256);
+    defer extension.deinit(allocator);
 
     // Timestamp
     var ts_buf: [64]u8 = undefined;
     const ts_str = clock.nowRfc3339(&ts_buf);
-    try extension.writer().print("rt={s}", .{ts_str});
+    try extension.writer(allocator).print("rt={s}", .{ts_str});
 
     // Core fields
-    try extension.writer().print(" act={s}", .{escapeValue(event.action)});
-    try extension.writer().print(" outcome={s}", .{event.outcome.toString()});
+    try extension.writer(allocator).print(" act={s}", .{escapeValue(event.action)});
+    try extension.writer(allocator).print(" outcome={s}", .{event.outcome.toString()});
 
     if (event.actor_id.len > 0) {
-        try extension.writer().print(" suser={s}", .{escapeValue(event.actor_id)});
+        try extension.writer(allocator).print(" suser={s}", .{escapeValue(event.actor_id)});
     }
 
     if (event.subject_id) |subject_id| {
-        try extension.writer().print(" duser={s}", .{escapeValue(subject_id)});
+        try extension.writer(allocator).print(" duser={s}", .{escapeValue(subject_id)});
     }
 
     if (event.source_ip) |source_ip| {
-        try extension.writer().print(" src={s}", .{escapeValue(source_ip)});
+        try extension.writer(allocator).print(" src={s}", .{escapeValue(source_ip)});
     }
 
     if (event.request_id) |request_id| {
-        try extension.writer().print(" requestId={s}", .{escapeValue(request_id)});
+        try extension.writer(allocator).print(" requestId={s}", .{escapeValue(request_id)});
     }
 
     if (event.trace_id) |trace_id| {
-        try extension.writer().print(" traceId={s}", .{trace_id});
+        // Convert fixed array to slice for format string compatibility
+        try extension.writer(allocator).print(" traceId={s}", .{@as([]const u8, &trace_id)});
     }
 
     if (event.span_id) |span_id| {
-        try extension.writer().print(" spanId={s}", .{span_id});
+        // Convert fixed array to slice for format string compatibility
+        try extension.writer(allocator).print(" spanId={s}", .{@as([]const u8, &span_id)});
     }
 
     // Custom signature fields
-    try extension.writer().print(" cs1Label=actorId cs1={s}", .{escapeValue(event.actor_id)});
+    try extension.writer(allocator).print(" cs1Label=actorId cs1={s}", .{escapeValue(event.actor_id)});
 
     if (event.session_id) |session_id| {
-        try extension.writer().print(" cs2Label=sessionId cs2={s}", .{escapeValue(session_id)});
+        try extension.writer(allocator).print(" cs2Label=sessionId cs2={s}", .{escapeValue(session_id)});
     }
 
     if (event.request_id) |request_id| {
-        try extension.writer().print(" deviceExternalId={s}", .{escapeValue(request_id)});
+        try extension.writer(allocator).print(" deviceExternalId={s}", .{escapeValue(request_id)});
     }
 
     // Add metadata fields if present
     if (event.metadata) |metadata| {
-        try addMetadataExtensions(&extension, metadata);
+        try addMetadataExtensions(allocator, &extension, metadata);
     }
 
     // Format final CEF message
@@ -101,7 +104,7 @@ fn getEventName(category: []const u8, action: []const u8) []const u8 {
     return "Audit event";
 }
 
-fn addMetadataExtensions(extension: *std.ArrayList(u8), metadata: std.json.Value) !void {
+fn addMetadataExtensions(allocator: std.mem.Allocator, extension: *std.ArrayList(u8), metadata: std.json.Value) !void {
     if (metadata != .object) return;
 
     const obj = metadata.object;
@@ -113,37 +116,37 @@ fn addMetadataExtensions(extension: *std.ArrayList(u8), metadata: std.json.Value
 
         if (std.mem.eql(u8, key, "db.operation")) {
             if (value == .string) {
-                try extension.writer().print(" cs3Label=dbOperation cs3={s}", .{escapeValue(value.string)});
+                try extension.writer(allocator).print(" cs3Label=dbOperation cs3={s}", .{escapeValue(value.string)});
             }
         } else if (std.mem.eql(u8, key, "db.table")) {
             if (value == .string) {
-                try extension.writer().print(" cs4Label=dbTable cs4={s}", .{escapeValue(value.string)});
+                try extension.writer(allocator).print(" cs4Label=dbTable cs4={s}", .{escapeValue(value.string)});
             }
         } else if (std.mem.eql(u8, key, "db.rowCount")) {
             if (value == .integer) {
-                try extension.writer().print(" cn1Label=rowCount cn1={d}", .{value.integer});
+                try extension.writer(allocator).print(" cn1Label=rowCount cn1={d}", .{value.integer});
             }
         } else if (std.mem.eql(u8, key, "duration_ms")) {
             if (value == .integer) {
-                try extension.writer().print(" cn2Label=durationMs cn2={d}", .{value.integer});
+                try extension.writer(allocator).print(" cn2Label=durationMs cn2={d}", .{value.integer});
             }
         } else {
             // Add as generic extension field if it's a simple value
-            try addGenericExtension(extension, key, value);
+            try addGenericExtension(allocator, extension, key, value);
         }
     }
 }
 
-fn addGenericExtension(extension: *std.ArrayList(u8), key: []const u8, value: std.json.Value) !void {
+fn addGenericExtension(allocator: std.mem.Allocator, extension: *std.ArrayList(u8), key: []const u8, value: std.json.Value) !void {
     switch (value) {
         .string => |s| {
-            try extension.writer().print(" {s}={s}", .{ escapeKey(key), escapeValue(s) });
+            try extension.writer(allocator).print(" {s}={s}", .{ escapeKey(key), escapeValue(s) });
         },
         .integer => |i| {
-            try extension.writer().print(" {s}={d}", .{ escapeKey(key), i });
+            try extension.writer(allocator).print(" {s}={d}", .{ escapeKey(key), i });
         },
         .bool => |b| {
-            try extension.writer().print(" {s}={s}", .{ escapeKey(key), if (b) "true" else "false" });
+            try extension.writer(allocator).print(" {s}={s}", .{ escapeKey(key), if (b) "true" else "false" });
         },
         else => {
             // Skip complex types
@@ -171,21 +174,21 @@ fn escapeKey(s: []const u8) []const u8 {
 }
 
 pub fn escapeCefString(allocator: std.mem.Allocator, input: []const u8, is_header: bool) ![]const u8 {
-    var result = std.ArrayList(u8).init(allocator);
-    defer result.deinit();
+    var result = try std.ArrayList(u8).initCapacity(allocator, input.len + 16);
+    errdefer result.deinit(allocator);
 
     for (input) |c| {
         switch (c) {
-            '\\' => try result.appendSlice("\\\\"),
-            '|' => if (is_header) try result.appendSlice("\\|") else try result.append(c),
-            '=' => if (is_header) try result.appendSlice("\\=") else try result.appendSlice("\\="),
-            '\n' => if (!is_header) try result.appendSlice("\\n") else try result.append(' '),
-            '\r' => if (!is_header) try result.appendSlice("\\r") else try result.append(' '),
-            else => try result.append(c),
+            '\\' => try result.appendSlice(allocator, "\\\\"),
+            '|' => if (is_header) try result.appendSlice(allocator, "\\|") else try result.append(allocator, c),
+            '=' => if (is_header) try result.appendSlice(allocator, "\\=") else try result.appendSlice(allocator, "\\="),
+            '\n' => if (!is_header) try result.appendSlice(allocator, "\\n") else try result.append(allocator, ' '),
+            '\r' => if (!is_header) try result.appendSlice(allocator, "\\r") else try result.append(allocator, ' '),
+            else => try result.append(allocator, c),
         }
     }
 
-    return result.toOwnedSlice();
+    return result.toOwnedSlice(allocator);
 }
 
 test "CEF formatting" {

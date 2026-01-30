@@ -450,10 +450,11 @@ pub const MockSyslogSender = struct {
     captured_messages: std.ArrayList([]const u8),
     mutex: std.Thread.Mutex,
 
+    // CANARY: REQ=REQ-QUALITY-GAP-413-009; FEATURE="OrphanedTestRemediation"; ASPECT=Zig015API; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
     pub fn init(allocator: std.mem.Allocator) MockSyslogSender {
         return MockSyslogSender{
             .allocator = allocator,
-            .captured_messages = std.ArrayList([]const u8).init(allocator),
+            .captured_messages = std.ArrayList([]const u8).initCapacity(allocator, 16) catch @panic("MockSyslogSender init failed"),
             .mutex = std.Thread.Mutex{},
         };
     }
@@ -462,7 +463,7 @@ pub const MockSyslogSender = struct {
         for (self.captured_messages.items) |msg| {
             self.allocator.free(msg);
         }
-        self.captured_messages.deinit();
+        self.captured_messages.deinit(self.allocator);
     }
 
     pub fn send(self: *MockSyslogSender, event: *const events.AuditEvent, identity: *const config.CefIdentityConfig, service: *const config.ServiceConfig, syslog_config: *const config.SyslogSinkConfig, clock: time.Clock) !void {
@@ -487,7 +488,7 @@ pub const MockSyslogSender = struct {
 
         self.mutex.lock();
         defer self.mutex.unlock();
-        try self.captured_messages.append(syslog_line);
+        try self.captured_messages.append(self.allocator, syslog_line);
     }
 
     pub fn getMessages(self: *MockSyslogSender) []const []const u8 {

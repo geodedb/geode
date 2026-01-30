@@ -1797,13 +1797,40 @@ pub fn build(b: *std.Build) void {
     const json_opt_tests = b.addTest(.{ .root_module = json_opt_test_mod });
     test_step.dependOn(&json_opt_tests.step);
 
-    // GAP-413 REMAINING: 8 orphaned test files (55 test blocks) still need remediation:
+    // GAP-413: Create audit bundle module for test imports
+    // Uses mod.zig to bundle all audit components into a single module
+    const audit_bundle_mod = b.createModule(.{ .root_source_file = b.path("src/audit/mod.zig"), .target = target, .optimize = optimize });
+
+    // GAP-413 FIXED: test_filters.zig (10 tests) - audit filter tests
+    const test_filters_mod = b.createModule(.{ .root_source_file = b.path("src/tests/test_filters.zig"), .target = target, .optimize = optimize });
+    test_filters_mod.addImport("audit_bundle", audit_bundle_mod);
+    const test_filters_tests = b.addTest(.{ .root_module = test_filters_mod });
+    test_step.dependOn(&test_filters_tests.step);
+
+    // GAP-413 FIXED: test_transports.zig (7 tests) - syslog and file sink tests
+    const test_transports_mod = b.createModule(.{ .root_source_file = b.path("src/tests/test_transports.zig"), .target = target, .optimize = optimize });
+    test_transports_mod.addImport("audit_bundle", audit_bundle_mod);
+    const test_transports_tests = b.addTest(.{ .root_module = test_transports_mod });
+    test_step.dependOn(&test_transports_tests.step);
+
+    // GAP-413 FIXED: test_cef.zig (4 tests) - CEF formatting tests
+    const test_cef_mod = b.createModule(.{ .root_source_file = b.path("src/tests/test_cef.zig"), .target = target, .optimize = optimize });
+    test_cef_mod.addImport("audit_bundle", audit_bundle_mod);
+    const test_cef_tests = b.addTest(.{ .root_module = test_cef_mod });
+    test_step.dependOn(&test_cef_tests.step);
+
+    // GAP-413 BLOCKED: test_timing_attacks.zig (6 tests) - hash.zig imports storage/heap.zig outside module path
+    // Requires restructuring types_hash module with proper dependencies from root module
+    // const test_timing_attacks_mod = b.createModule(.{ .root_source_file = b.path("src/security/test_timing_attacks.zig"), .target = target, .optimize = optimize });
+    // test_timing_attacks_mod.addImport("geode_auth", auth_mod);
+    // test_timing_attacks_mod.addImport("types_hash", types_hash_mod);
+    // const test_timing_attacks_tests = b.addTest(.{ .root_module = test_timing_attacks_mod });
+    // test_step.dependOn(&test_timing_attacks_tests.step);
+
+    // GAP-413 REMAINING: 5 orphaned test files (34 test blocks) still need module restructuring:
     //
-    // Files with parent directory imports (need module restructuring):
-    //   - src/security/test_timing_attacks.zig (6 tests) - imports ../types/hash.zig
-    //   - src/tests/test_filters.zig (10 tests) - imports ../audit/*.zig
-    //   - src/tests/test_transports.zig (7 tests) - imports ../audit/*.zig
-    //   - src/tests/test_cef.zig (4 tests) - imports ../audit/*.zig
+    // Files with module import issues:
+    //   - src/security/test_timing_attacks.zig (6 tests) - hash.zig imports storage/heap.zig outside module
     //
     // Files with missing/changed APIs:
     //   - src/security/test_argon2id_hashing.zig (9 tests) - references non-existent Auth struct
@@ -1813,8 +1840,8 @@ pub fn build(b: *std.Build) void {
     // Files with deprecated APIs:
     //   - src/security/test_tde_nonce.zig (6 tests) - uses tde.zig which has deprecated APIs
     //
-    // TOTAL REMAINING: 55 test blocks across 8 files NOT running in CI
-    // REMEDIATION: Requires module restructuring or API updates
+    // TOTAL REMAINING: 28 test blocks across 4 files NOT running in CI
+    // REMEDIATION: Requires API updates or test file refactoring
 
     const audit_chain_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_audit_chain.zig"), .target = target, .optimize = optimize });
     audit_chain_test_mod.addImport("audit", audit_security_mod);

@@ -1,30 +1,32 @@
 const std = @import("std");
 
+// CANARY: REQ=REQ-QUALITY-GAP-413-011; FEATURE="OrphanedTestRemediation"; ASPECT=Zig015API; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
 pub const Clock = struct {
+    context: *anyopaque,
     vtable: *const VTable,
 
     const VTable = struct {
-        nowMs: *const fn (ptr: *anyopaque) i128,
-        nowRfc3339: *const fn (ptr: *anyopaque, buf: []u8) []const u8,
+        nowMs: *const fn (context: *anyopaque) i128,
+        nowRfc3339: *const fn (context: *anyopaque, buf: []u8) []const u8,
     };
 
     pub fn nowMs(self: Clock) i128 {
-        return self.vtable.nowMs(self.vtable);
+        return self.vtable.nowMs(self.context);
     }
 
     pub fn nowRfc3339(self: Clock, buf: []u8) []const u8 {
-        return self.vtable.nowRfc3339(self.vtable, buf);
+        return self.vtable.nowRfc3339(self.context, buf);
     }
 };
 
 pub const SystemClock = struct {
-    vtable: Clock.VTable = Clock.VTable{
+    const vtable = Clock.VTable{
         .nowMs = nowMsImpl,
         .nowRfc3339 = nowRfc3339Impl,
-    },
+    };
 
     pub fn clock(self: *SystemClock) Clock {
-        return Clock{ .vtable = &self.vtable };
+        return Clock{ .context = @ptrCast(self), .vtable = &vtable };
     }
 
     fn nowMsImpl(_: *anyopaque) i128 {
@@ -55,26 +57,27 @@ pub const SystemClock = struct {
 
 pub const FixedClock = struct {
     fixed_time_ms: i128,
-    vtable: Clock.VTable = Clock.VTable{
+
+    const vtable = Clock.VTable{
         .nowMs = nowMsImpl,
         .nowRfc3339 = nowRfc3339Impl,
-    },
+    };
 
     pub fn init(time_ms: i128) FixedClock {
         return FixedClock{ .fixed_time_ms = time_ms };
     }
 
     pub fn clock(self: *FixedClock) Clock {
-        return Clock{ .vtable = &self.vtable };
+        return Clock{ .context = @ptrCast(self), .vtable = &vtable };
     }
 
-    fn nowMsImpl(ptr: *anyopaque) i128 {
-        const self: *FixedClock = @ptrCast(@alignCast(ptr));
+    fn nowMsImpl(context: *anyopaque) i128 {
+        const self: *FixedClock = @ptrCast(@alignCast(context));
         return self.fixed_time_ms;
     }
 
-    fn nowRfc3339Impl(ptr: *anyopaque, buf: []u8) []const u8 {
-        const self: *FixedClock = @ptrCast(@alignCast(ptr));
+    fn nowRfc3339Impl(context: *anyopaque, buf: []u8) []const u8 {
+        const self: *FixedClock = @ptrCast(@alignCast(context));
         const ts = self.fixed_time_ms;
         const seconds = @divTrunc(ts, 1000);
         const millis = @mod(ts, 1000);
