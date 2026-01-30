@@ -157,3 +157,106 @@ test "Ctrl+C semantics" {
     try testing.expect(buffer.items.len == 0);
     // Would continue to next prompt
 }
+
+// CANARY: REQ=REQ-SHELL-SOURCE-ERROR-004; FEATURE="SourceFileErrorDetails"; ASPECT=UnitTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
+// Tests for extractServerErrorMessage helper function
+test "extractServerErrorMessage extracts error from result.error" {
+    const allocator = testing.allocator;
+
+    const response =
+        \\{"status_class":"42000","result":{"type":"ERROR","error":"Syntax error at line 15: unexpected token"}}
+    ;
+
+    const msg = repl_dispatch.extractServerErrorMessage(allocator, response);
+    try testing.expect(msg != null);
+    try testing.expectEqualStrings("Syntax error at line 15: unexpected token", msg.?);
+    allocator.free(msg.?);
+}
+
+test "extractServerErrorMessage extracts from top-level error" {
+    const allocator = testing.allocator;
+
+    const response =
+        \\{"status_class":"50000","error":"Internal server error"}
+    ;
+
+    const msg = repl_dispatch.extractServerErrorMessage(allocator, response);
+    try testing.expect(msg != null);
+    try testing.expectEqualStrings("Internal server error", msg.?);
+    allocator.free(msg.?);
+}
+
+test "extractServerErrorMessage extracts from message field" {
+    const allocator = testing.allocator;
+
+    const response =
+        \\{"status_class":"40000","message":"Transaction rollback due to conflict"}
+    ;
+
+    const msg = repl_dispatch.extractServerErrorMessage(allocator, response);
+    try testing.expect(msg != null);
+    try testing.expectEqualStrings("Transaction rollback due to conflict", msg.?);
+    allocator.free(msg.?);
+}
+
+test "extractServerErrorMessage generates message from status_class" {
+    const allocator = testing.allocator;
+
+    // Test syntax error category
+    const syntax_response =
+        \\{"status_class":"42000"}
+    ;
+    const syntax_msg = repl_dispatch.extractServerErrorMessage(allocator, syntax_response);
+    try testing.expect(syntax_msg != null);
+    try testing.expect(std.mem.indexOf(u8, syntax_msg.?, "Syntax error") != null);
+    allocator.free(syntax_msg.?);
+
+    // Test data exception category
+    const data_response =
+        \\{"status_class":"22000"}
+    ;
+    const data_msg = repl_dispatch.extractServerErrorMessage(allocator, data_response);
+    try testing.expect(data_msg != null);
+    try testing.expect(std.mem.indexOf(u8, data_msg.?, "Data exception") != null);
+    allocator.free(data_msg.?);
+
+    // Test integrity constraint category
+    const constraint_response =
+        \\{"status_class":"23000"}
+    ;
+    const constraint_msg = repl_dispatch.extractServerErrorMessage(allocator, constraint_response);
+    try testing.expect(constraint_msg != null);
+    try testing.expect(std.mem.indexOf(u8, constraint_msg.?, "Integrity constraint") != null);
+    allocator.free(constraint_msg.?);
+}
+
+test "extractServerErrorMessage returns null for malformed JSON" {
+    const allocator = testing.allocator;
+
+    const response = "not valid json {{{";
+
+    const msg = repl_dispatch.extractServerErrorMessage(allocator, response);
+    try testing.expect(msg == null);
+}
+
+test "extractServerErrorMessage returns null for success response" {
+    const allocator = testing.allocator;
+
+    const response =
+        \\{"status_class":"00000","result":{"type":"BINDINGS","rows":[]}}
+    ;
+
+    // This function is only called when status indicates error, but test edge case
+    const msg = repl_dispatch.extractServerErrorMessage(allocator, response);
+    // No error field, no message field, status starts with 00 so no category lookup
+    try testing.expect(msg == null);
+}
+
+test "containsTransactionCommands detects BEGIN" {
+    try testing.expect(repl_dispatch.containsTransactionCommands("BEGIN; CREATE (:Node);"));
+    try testing.expect(repl_dispatch.containsTransactionCommands("begin; CREATE (:Node);"));
+    try testing.expect(repl_dispatch.containsTransactionCommands("CREATE (:Node); COMMIT;"));
+    try testing.expect(repl_dispatch.containsTransactionCommands("ROLLBACK"));
+    try testing.expect(!repl_dispatch.containsTransactionCommands("CREATE (:Node);"));
+    try testing.expect(!repl_dispatch.containsTransactionCommands("RETURN 'BEGIN' AS word;"));
+}

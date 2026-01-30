@@ -3657,10 +3657,17 @@ REQ-SHELL-RECONNECT-013,ShellAutoReconnect,TxnStatementCount,TESTED,,,cli,2026-0
 REQ-SHELL-RECONNECT-014,ShellAutoReconnect,CacheCredentialsOnAuth,TESTED,,,cli,2026-01-29,src/client/repl/repl_loop.zig
 REQ-SHELL-RECONNECT-015,ShellAutoReconnect,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-016,ShellAutoReconnect,E2ETests,TESTED,,,cli,2026-01-29,geodetestlab/specs/shell_reconnection.yml
+REQ-SHELL-SOURCE-ERROR-001,SourceFileErrorDetails,BatchErrorExtraction,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-SOURCE-ERROR-002,SourceFileErrorDetails,CommitErrorMessage,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-SOURCE-ERROR-003,SourceFileErrorDetails,ErrorExtraction,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-SOURCE-ERROR-004,SourceFileErrorDetails,UnitTests,TESTED,,,cli,2026-01-30,tests/test_repl.zig
 REQ-SHELL-TEST-VERIFICATION,Shell Test Requirements Verification,UnitTests,TESTED,,,testing,2026-01-15,tests/test_shell_requirements_verification.zig
 REQ-SHELL-TLS-001,Shell TLS Configuration,SecureConnection,TESTED,,,cli,2026-01-15,src/cli/main.zig
 REQ-SHELL-TLS-002,Shell TLS Connection,SecureConnection,EXEMPT,,,cli,2026-01-13,src/cli/main.zig
 REQ-SHELL-TLS-003,Shell TLS Config Setup,SecureConnection,EXEMPT,,,cli,2026-01-13,src/cli/main.zig
+REQ-SHELL-TXN-ERROR-001,TransactionErrorDetails,ErrorMessage,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-TXN-ERROR-002,TransactionErrorDetails,CommitWithRetry,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-TXN-ERROR-003,TransactionErrorDetails,RollbackWithRetry,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-WOULDBLOCK-001,SuppressWouldBlock,ReplLoopError,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
 REQ-SHELL-WOULDBLOCK-002,SuppressWouldBlock,RunGqlError,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
 REQ-SHELL-WOULDBLOCK-003,SuppressWouldBlock,PullAllError,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig

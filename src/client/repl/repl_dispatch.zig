@@ -237,6 +237,9 @@ pub const ClientSession = struct {
     reconnect_count: u32 = 0,
     /// Last reconnection error (for diagnostics)
     last_reconnect_error: ?[]const u8 = null,
+    /// CANARY: REQ=REQ-SHELL-TXN-ERROR-001; FEATURE="TransactionErrorDetails"; ASPECT=ErrorMessage; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// Last transaction error message for better user feedback
+    last_txn_error: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator, addr: []const u8, transport: *const Transport) !ClientSession {
         return ClientSession{
@@ -276,6 +279,10 @@ pub const ClientSession = struct {
         if (self.last_reconnect_error) |e| {
             self.allocator.free(e);
             self.last_reconnect_error = null;
+        }
+        if (self.last_txn_error) |e| {
+            self.allocator.free(e);
+            self.last_txn_error = null;
         }
         // CANARY: REQ=REQ-SOURCE-PERF-003; FEATURE="SourceFilePerformance"; ASPECT=CacheCleanupOnExit; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
         // Issue #413: Clean up global file hash cache to prevent memory leaks on exit
@@ -594,32 +601,126 @@ pub const ClientSession = struct {
         }
     }
 
+    /// CANARY: REQ=REQ-SHELL-TXN-ERROR-002; FEATURE="TransactionErrorDetails"; ASPECT=CommitWithRetry; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// Commit transaction with retry logic for WouldBlock and detailed error extraction
     pub fn commit(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
+        // Clear previous transaction error
+        if (self.last_txn_error) |e| {
+            self.allocator.free(e);
+            self.last_txn_error = null;
+        }
+
         try self.connection.?.writeAll("{\"type\":\"COMMIT\"}\n");
 
-        // Read and check response
-        const response = try self.connection.?.readLine(self.allocator, 1 << 16);
+        // Read response with retry logic for WouldBlock
+        const response = self.readTransactionResponse() catch |err| {
+            if (err == error.WouldBlock) {
+                self.last_txn_error = self.allocator.dupe(u8, "Server did not respond to COMMIT (connection may be stale)") catch null;
+            }
+            return err;
+        };
         defer self.allocator.free(response);
 
+        // Check for error response and extract details
         if (std.mem.indexOf(u8, response, "\"type\":\"ERROR\"") != null) {
+            self.extractTransactionError(response);
             return error.TransactionError;
         }
     }
 
+    /// CANARY: REQ=REQ-SHELL-TXN-ERROR-003; FEATURE="TransactionErrorDetails"; ASPECT=RollbackWithRetry; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// Rollback transaction with retry logic for WouldBlock and detailed error extraction
     pub fn rollback(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
+        // Clear previous transaction error
+        if (self.last_txn_error) |e| {
+            self.allocator.free(e);
+            self.last_txn_error = null;
+        }
+
         try self.connection.?.writeAll("{\"type\":\"ROLLBACK\"}\n");
 
-        // Read and check response
-        const response = try self.connection.?.readLine(self.allocator, 1 << 16);
+        // Read response with retry logic for WouldBlock
+        const response = self.readTransactionResponse() catch |err| {
+            if (err == error.WouldBlock) {
+                self.last_txn_error = self.allocator.dupe(u8, "Server did not respond to ROLLBACK (connection may be stale)") catch null;
+            }
+            return err;
+        };
         defer self.allocator.free(response);
 
+        // Check for error response and extract details
         if (std.mem.indexOf(u8, response, "\"type\":\"ERROR\"") != null) {
+            self.extractTransactionError(response);
             return error.TransactionError;
         }
+    }
+
+    /// Read a transaction response with retry logic for WouldBlock
+    /// This is needed because commit/rollback are synchronous operations
+    /// but the transport may return WouldBlock for async I/O
+    fn readTransactionResponse(self: *ClientSession) ![]u8 {
+        var retry_count: usize = 0;
+        const max_retries: usize = 100; // ~5 seconds with 50ms sleep
+
+        while (retry_count < max_retries) : (retry_count += 1) {
+            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+                if (err == error.WouldBlock) {
+                    // Poll and wait before retrying
+                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    continue;
+                }
+                return err;
+            };
+            return response;
+        }
+
+        // Timeout waiting for response
+        return error.WouldBlock;
+    }
+
+    /// Extract error message from a transaction error response
+    fn extractTransactionError(self: *ClientSession, response: []const u8) void {
+        // Try to parse JSON and extract error message
+        const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, response, .{}) catch {
+            self.last_txn_error = self.allocator.dupe(u8, "Transaction failed (could not parse error response)") catch null;
+            return;
+        };
+        defer parsed.deinit();
+
+        const obj = parsed.value.object;
+
+        // Try to get the error message from various possible fields
+        if (obj.get("error")) |error_val| {
+            if (error_val == .string) {
+                self.last_txn_error = self.allocator.dupe(u8, error_val.string) catch null;
+                return;
+            }
+        }
+
+        if (obj.get("message")) |msg_val| {
+            if (msg_val == .string) {
+                self.last_txn_error = self.allocator.dupe(u8, msg_val.string) catch null;
+                return;
+            }
+        }
+
+        if (obj.get("result")) |result_val| {
+            if (result_val == .object) {
+                if (result_val.object.get("error")) |err_val| {
+                    if (err_val == .string) {
+                        self.last_txn_error = self.allocator.dupe(u8, err_val.string) catch null;
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Fallback: couldn't find specific error message
+        self.last_txn_error = self.allocator.dupe(u8, "Transaction failed (unknown error)") catch null;
     }
 
     pub fn pullAll(self: *ClientSession, sink: anytype) !void {
@@ -1591,32 +1692,79 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     }
 
     var error_count: usize = 0;
+    var batch_error_msg: ?[]const u8 = null;
+
     executeGql(state, batch_statements.items) catch |err| {
         if (err != error.WouldBlock) {
-            var buf: [256]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "Error executing batch: {s}\r\n", .{@errorName(err)}) catch return;
-            stderr.writeAll(msg) catch {};
             error_count += 1;
         }
     };
+
+    // CANARY: REQ=REQ-SHELL-SOURCE-ERROR-001; FEATURE="SourceFileErrorDetails"; ASPECT=BatchErrorExtraction; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    // Check the server response for actual error details
+    if (state.session.last_response) |response| {
+        // Check for error status codes (4xxxx or 5xxxx)
+        if (std.mem.indexOf(u8, response, "\"status_class\":\"4") != null or
+            std.mem.indexOf(u8, response, "\"status_class\":\"5") != null)
+        {
+            error_count = @max(error_count, 1);
+            // Extract the actual error message from the response
+            batch_error_msg = extractServerErrorMessage(state.allocator, response);
+        }
+    }
+
+    // Display batch execution error with details
+    if (error_count > 0 and batch_error_msg != null) {
+        try stderr.writeAll("\r\nError in source file:\r\n");
+        try stderr.writeAll("  ");
+        try stderr.writeAll(batch_error_msg.?);
+        try stderr.writeAll("\r\n");
+        state.allocator.free(batch_error_msg.?);
+        batch_error_msg = null;
+    }
 
     // CANARY: REQ=REQ-SOURCE-PERF-010; FEATURE="SourceFilePerformance"; ASPECT=TransactionCommitRollback; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
     // Issue #391: Commit on success, rollback on error for atomicity
     if (auto_txn and begin_succeeded) {
         if (error_count > 0) {
             // Rollback on error - ensure atomicity
-            state.session.rollback() catch |err| {
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "Error: Failed to rollback transaction: {s}\r\n", .{@errorName(err)}) catch "";
-                stderr.writeAll(msg) catch {};
+            state.session.rollback() catch |rollback_err| {
+                try stderr.writeAll("Error: Failed to rollback transaction");
+                if (state.session.last_txn_error) |txn_err| {
+                    try stderr.writeAll(": ");
+                    try stderr.writeAll(txn_err);
+                } else {
+                    var buf: [64]u8 = undefined;
+                    const err_name = std.fmt.bufPrint(&buf, ": {s}", .{@errorName(rollback_err)}) catch "";
+                    try stderr.writeAll(err_name);
+                }
+                try stderr.writeAll("\r\n");
             };
             try stderr.writeAll("Transaction rolled back due to errors\r\n");
         } else {
             // Commit on success
-            state.session.commit() catch |err| {
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "Error: Failed to commit transaction: {s}\r\n", .{@errorName(err)}) catch "";
-                stderr.writeAll(msg) catch {};
+            state.session.commit() catch |commit_err| {
+                // CANARY: REQ=REQ-SHELL-SOURCE-ERROR-002; FEATURE="SourceFileErrorDetails"; ASPECT=CommitErrorMessage; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+                // Display detailed commit error message instead of just "WouldBlock"
+                try stderr.writeAll("\r\nError: Failed to commit transaction");
+                if (state.session.last_txn_error) |txn_err| {
+                    try stderr.writeAll(":\r\n  ");
+                    try stderr.writeAll(txn_err);
+                } else if (commit_err != error.WouldBlock) {
+                    var buf: [64]u8 = undefined;
+                    const err_name = std.fmt.bufPrint(&buf, ": {s}", .{@errorName(commit_err)}) catch "";
+                    try stderr.writeAll(err_name);
+                } else {
+                    try stderr.writeAll(":\r\n  Server did not respond (connection may be stale or overloaded)");
+                }
+                try stderr.writeAll("\r\n");
+
+                // Try to provide hints for common issues
+                try stderr.writeAll("  Hint: Large files may require more time. Try:\r\n");
+                try stderr.writeAll("    - Splitting the file into smaller batches\r\n");
+                try stderr.writeAll("    - Checking server logs for detailed errors\r\n");
+                try stderr.writeAll("    - Using explicit transactions with COMMIT statements\r\n");
+
                 state.session.rollback() catch {};
                 error_count += 1;
             };
@@ -1648,6 +1796,70 @@ const MetaCommand = struct {
     args: ?[]const u8,
     position: usize, // Statement position where this command appears
 };
+
+/// CANARY: REQ=REQ-SHELL-SOURCE-ERROR-003; FEATURE="SourceFileErrorDetails"; ASPECT=ErrorExtraction; STATUS=TESTED; TEST=tests/test_repl.zig; OWNER=cli; UPDATED=2026-01-30
+/// Extract the error message from a server response for user-friendly display
+pub fn extractServerErrorMessage(allocator: std.mem.Allocator, response: []const u8) ?[]const u8 {
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{}) catch {
+        return null;
+    };
+    defer parsed.deinit();
+
+    const obj = parsed.value.object;
+
+    // Try to extract error from result.error
+    if (obj.get("result")) |result_val| {
+        if (result_val == .object) {
+            if (result_val.object.get("error")) |err_val| {
+                if (err_val == .string) {
+                    return allocator.dupe(u8, err_val.string) catch null;
+                }
+            }
+        }
+    }
+
+    // Try to extract from top-level error field
+    if (obj.get("error")) |err_val| {
+        if (err_val == .string) {
+            return allocator.dupe(u8, err_val.string) catch null;
+        }
+    }
+
+    // Try to extract from message field
+    if (obj.get("message")) |msg_val| {
+        if (msg_val == .string) {
+            return allocator.dupe(u8, msg_val.string) catch null;
+        }
+    }
+
+    // Try to build a message from status_class if nothing else available
+    if (obj.get("status_class")) |status_val| {
+        if (status_val == .string) {
+            const status = status_val.string;
+            if (status.len >= 2) {
+                const prefix = status[0..2];
+                const category: []const u8 = if (std.mem.eql(u8, prefix, "42"))
+                    "Syntax error in GQL statement"
+                else if (std.mem.eql(u8, prefix, "22"))
+                    "Data exception (invalid value or type)"
+                else if (std.mem.eql(u8, prefix, "23"))
+                    "Integrity constraint violation"
+                else if (std.mem.eql(u8, prefix, "40"))
+                    "Transaction rollback"
+                else if (std.mem.eql(u8, prefix, "50"))
+                    "Server error"
+                else
+                    "Query execution failed";
+
+                var buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "{s} (status: {s})", .{ category, status }) catch return null;
+                return allocator.dupe(u8, msg) catch null;
+            }
+        }
+    }
+
+    return null;
+}
 
 /// Execute a meta-command during source file processing
 fn executeMetaCommand(state: anytype, mc: MetaCommand, stdout: anytype) void {
