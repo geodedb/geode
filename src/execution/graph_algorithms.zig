@@ -89,6 +89,41 @@ fn findBoundNode(name: []const u8, env: Env) ?*const graph_store.Node {
     return null;
 }
 
+/// CANARY: REQ=REQ-NESTING-REFACTOR-005; FEATURE="NestingReduction"; ASPECT=NodePatternMatch; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+/// Find the first node matching a given pattern in the store
+fn findFirstMatchingNode(
+    store: *graph_store.GraphStore,
+    node_pattern: ast.NodePattern,
+    env: Env,
+    allocator: std.mem.Allocator,
+) ?u64 {
+    var node_iter = store.nodes.iterator();
+    while (node_iter.next()) |entry| {
+        const node = entry.value_ptr.*;
+        if (nodeMatchesPattern(node, node_pattern, env, allocator)) {
+            return node.id;
+        }
+    }
+    return null;
+}
+
+/// Check if a node matches a full pattern (labels + properties)
+fn nodeMatchesPattern(
+    node: graph_store.Node,
+    pattern: ast.NodePattern,
+    env: Env,
+    allocator: std.mem.Allocator,
+) bool {
+    // Check labels
+    if (!nodeHasAllLabels(node.labels, pattern.labels)) return false;
+
+    // Check properties if present
+    if (pattern.props) |props| {
+        if (!nodeMatchesProperties(node.properties, props, env, allocator)) return false;
+    }
+    return true;
+}
+
 /// Evaluate a WHERE filter against an extended environment
 fn evaluateWhereFilter(
     where_filter: *ast.Expr,
@@ -588,109 +623,16 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         }
     }
 
-    // If not found in env, try pattern matching
+    // CANARY: REQ=REQ-NESTING-REFACTOR-006; FEATURE="NestingReduction"; ASPECT=ShortestPathStart; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+    // If not found in env, try pattern matching using helper
     if (start_id == null) {
-        var start_iter = store.nodes.iterator();
-        while (start_iter.next()) |entry| {
-            const node = entry.value_ptr.*;
-            var matches = true;
-
-            for (hop.left.labels) |required_label| {
-                var has_label = false;
-                for (node.labels) |node_label| {
-                    if (std.mem.eql(u8, required_label, node_label)) {
-                        has_label = true;
-                        break;
-                    }
-                }
-                if (!has_label) {
-                    matches = false;
-                    break;
-                }
-            }
-
-            // Check properties
-            if (matches and hop.left.props != null) {
-                for (hop.left.props.?) |prop| {
-                    const expected = try eval.evalExpr(allocator, prop.value.*, env);
-                    if (node.properties.get(prop.key)) |node_prop_val| {
-                        const node_val = switch (node_prop_val) {
-                            .String => |s| Value{ .Str = s },
-                            .Int => |i| Value{ .Int = i },
-                            .Bool => |b| Value{ .Bool = b },
-                            .Float => |f| Value{ .Double = f },
-                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-                            .Null => Value{ .Null = {} },
-                            .ExtValue => |ext| Value{ .ExtValue = ext },
-                        };
-                        if (!valuesEqual(node_val, expected)) {
-                            matches = false;
-                            break;
-                        }
-                    } else {
-                        matches = false;
-                        break;
-                    }
-                }
-            }
-
-            if (matches) {
-                start_id = node.id;
-                break;
-            }
-        }
+        start_id = findFirstMatchingNode(store, hop.left, env, allocator);
     }
 
+    // CANARY: REQ=REQ-NESTING-REFACTOR-007; FEATURE="NestingReduction"; ASPECT=ShortestPathEnd; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+    // Use helper for end node matching
     if (end_id == null) {
-        var end_iter = store.nodes.iterator();
-        while (end_iter.next()) |entry| {
-            const node = entry.value_ptr.*;
-            var matches = true;
-
-            for (hop.right.labels) |required_label| {
-                var has_label = false;
-                for (node.labels) |node_label| {
-                    if (std.mem.eql(u8, required_label, node_label)) {
-                        has_label = true;
-                        break;
-                    }
-                }
-                if (!has_label) {
-                    matches = false;
-                    break;
-                }
-            }
-
-            // Check properties
-            if (matches and hop.right.props != null) {
-                for (hop.right.props.?) |prop| {
-                    const expected = try eval.evalExpr(allocator, prop.value.*, env);
-                    if (node.properties.get(prop.key)) |node_prop_val| {
-                        const node_val = switch (node_prop_val) {
-                            .String => |s| Value{ .Str = s },
-                            .Int => |i| Value{ .Int = i },
-                            .Bool => |b| Value{ .Bool = b },
-                            .Float => |f| Value{ .Double = f },
-                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-                            .Null => Value{ .Null = {} },
-                            .ExtValue => |ext| Value{ .ExtValue = ext },
-                        };
-                        if (!valuesEqual(node_val, expected)) {
-                            matches = false;
-                            break;
-                        }
-                    } else {
-                        matches = false;
-                        break;
-                    }
-                }
-            }
-
-            if (matches) {
-                end_id = node.id;
-                break;
-            }
-        }
+        end_id = findFirstMatchingNode(store, hop.right, env, allocator);
     }
 
     if (start_id == null or end_id == null) {
@@ -891,32 +833,18 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
 
     const chain = pattern.chains[0];
 
+    // CANARY: REQ=REQ-NESTING-REFACTOR-008; FEATURE="NestingReduction"; ASPECT=PatternComprehension; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
     // If pattern has no hops, it's just a node pattern
     if (chain.hops.len == 0) {
         if (chain.head) |node_pattern| {
-            // Iterate over all nodes matching the pattern
+            // Iterate over all nodes matching the pattern using helper
             var iter = store.nodes.iterator();
             while (iter.next()) |entry| {
                 const node_ptr = entry.value_ptr;
                 const node = node_ptr.*;
 
-                // Check if node matches the pattern
-                var matches = true;
-                for (node_pattern.labels) |required_label| {
-                    var has_label = false;
-                    for (node.labels) |node_label| {
-                        if (std.mem.eql(u8, required_label, node_label)) {
-                            has_label = true;
-                            break;
-                        }
-                    }
-                    if (!has_label) {
-                        matches = false;
-                        break;
-                    }
-                }
-
-                if (!matches) continue;
+                // Use helper for pattern matching
+                if (!nodeMatchesPattern(node, node_pattern, env, allocator)) continue;
 
                 // Create environment with node binding
                 var new_env = env;
@@ -927,9 +855,7 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
                 // Apply WHERE filter if present
                 if (where_filter) |filter| {
                     const filter_result = try eval.evalExpr(allocator, filter.*, new_env);
-                    if (filter_result != .Bool or !filter_result.Bool) {
-                        continue;
-                    }
+                    if (filter_result != .Bool or !filter_result.Bool) continue;
                 }
 
                 // Evaluate map expression
@@ -954,29 +880,14 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
             }
         }
 
-        // If no source nodes from env, find all matching the left pattern
+        // CANARY: REQ=REQ-NESTING-REFACTOR-009; FEATURE="NestingReduction"; ASPECT=SourceNodeMatch; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+        // If no source nodes from env, find all matching the left pattern using helper
         if (source_nodes.items.len == 0) {
             var iter = store.nodes.iterator();
             while (iter.next()) |entry| {
                 const node_ptr: *const graph_store.Node = entry.value_ptr;
                 const node = node_ptr.*;
-
-                var matches = true;
-                for (hop.left.labels) |required_label| {
-                    var has_label = false;
-                    for (node.labels) |node_label| {
-                        if (std.mem.eql(u8, required_label, node_label)) {
-                            has_label = true;
-                            break;
-                        }
-                    }
-                    if (!has_label) {
-                        matches = false;
-                        break;
-                    }
-                }
-
-                if (matches) {
+                if (nodeMatchesPattern(node, hop.left, env, allocator)) {
                     try source_nodes.append(allocator, node_ptr);
                 }
             }
@@ -1024,23 +935,9 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
                 const target_node_ptr = store.nodes.getPtr(target_id.?) orelse continue;
                 const target_node = target_node_ptr.*;
 
-                // Check if target node matches the right pattern
-                var matches = true;
-                for (hop.right.labels) |required_label| {
-                    var has_label = false;
-                    for (target_node.labels) |node_label| {
-                        if (std.mem.eql(u8, required_label, node_label)) {
-                            has_label = true;
-                            break;
-                        }
-                    }
-                    if (!has_label) {
-                        matches = false;
-                        break;
-                    }
-                }
-
-                if (!matches) continue;
+                // CANARY: REQ=REQ-NESTING-REFACTOR-010; FEATURE="NestingReduction"; ASPECT=TargetNodeMatch; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+                // Check if target node matches the right pattern using helper
+                if (!nodeHasAllLabels(target_node.labels, hop.right.labels)) continue;
 
                 // Create environment with bindings
                 var new_env = env;

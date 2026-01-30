@@ -15,6 +15,58 @@ const Env = value_types.Env;
 // CANARY: REQ=REQ-EXEC-REFACTOR-008; FEATURE="ExecutionRefactoring"; ASPECT=AGGREGATION_EVALUATION; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
 // Extracted aggregation and evaluation functions from execution.zig for better modularity (M1 Phase 8)
 
+// CANARY: REQ=REQ-NESTING-REFACTOR-011; FEATURE="NestingReduction"; ASPECT=AggregationHelpers; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+// Helper functions to reduce nesting in aggregation evaluation (#412)
+
+/// Extract field name from an expression (PropertyAccess or Member)
+fn extractFieldName(expr_ptr: *const ast.Expr) ?[]const u8 {
+    return switch (expr_ptr.*) {
+        .PropertyAccess => |pa| pa.property,
+        .Member => |m| m.field,
+        .Ident => |id| id.orig,
+        else => null,
+    };
+}
+
+/// Convert a property value to a Value
+fn propertyToValue(prop_val: graph_store.PropertyValue) Value {
+    return switch (prop_val) {
+        .String => |s| Value{ .Str = s },
+        .Int => |n| Value{ .Int = n },
+        .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2, .orig_scale = 2, .orig_repr = null } },
+        .Bool => |b| Value{ .Bool = b },
+        .Null => Value{ .Null = {} },
+        .ExtValue => |ext| Value{ .ExtValue = ext },
+        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
+    };
+}
+
+/// Get integer value from property if it's numeric
+fn getPropertyAsInt(prop_val: graph_store.PropertyValue) ?i64 {
+    return switch (prop_val) {
+        .Int => |i| i,
+        else => null,
+    };
+}
+
+/// Get float value from property if it's numeric
+fn getPropertyAsFloat(prop_val: graph_store.PropertyValue) ?f64 {
+    return switch (prop_val) {
+        .Int => |i| @floatFromInt(i),
+        .Float => |f| f,
+        .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+        else => null,
+    };
+}
+
+/// Get string value from property if it's a string
+fn getPropertyAsString(prop_val: graph_store.PropertyValue) ?[]const u8 {
+    return switch (prop_val) {
+        .String => |s| s,
+        else => null,
+    };
+}
+
 pub fn getExpressionNameFromAst(expr: ast.Expr) []const u8 {
     return switch (expr) {
         .Ident => |ident| ident.orig,
@@ -293,30 +345,16 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                 } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
                     // AVG aggregation over group
                     // CANARY: REQ=REQ-AGGREGATION-AVG-002; FEATURE="AvgAggregation"; ASPECT=FloatSupport; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=engine; UPDATED=2026-01-09
+                    // CANARY: REQ=REQ-NESTING-REFACTOR-012; FEATURE="NestingReduction"; ASPECT=AvgRefactor; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
                     if (call.args.len == 1) {
-                        const field_name = if (call.args[0].* == .PropertyAccess)
-                            call.args[0].PropertyAccess.property
-                        else if (call.args[0].* == .Member)
-                            call.args[0].Member.field
-                        else
-                            null;
-
-                        if (field_name) |field| {
+                        if (extractFieldName(call.args[0])) |field| {
                             var sum: f64 = 0;
                             var count: f64 = 0;
                             for (nodes) |node| {
                                 if (node.properties.get(field)) |val| {
-                                    if (val == .Int) {
-                                        sum += @floatFromInt(val.Int);
-                                        count += 1;
-                                    } else if (val == .Float) {
-                                        sum += val.Float;
-                                        count += 1;
-                                    } else if (val == .Decimal) {
-                                        // CANARY: REQ=REQ-AGGREGATION-AVG-DECIMAL-001; FEATURE="AvgAggregation"; ASPECT=DecimalPropertySupport; STATUS=TESTED; TEST=geodetestlab/specs/gap_0123_0136_regression.yml; OWNER=engine; UPDATED=2026-01-25
-                                        // Handle Decimal property values directly
-                                        const decimal_float = @as(f64, @floatFromInt(val.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(val.Decimal.scale)));
-                                        sum += decimal_float;
+                                    // CANARY: REQ=REQ-AGGREGATION-AVG-DECIMAL-001; FEATURE="AvgAggregation"; ASPECT=DecimalPropertySupport; STATUS=TESTED; TEST=geodetestlab/specs/gap_0123_0136_regression.yml; OWNER=engine; UPDATED=2026-01-25
+                                    if (getPropertyAsFloat(val)) |f| {
+                                        sum += f;
                                         count += 1;
                                     }
                                 }
@@ -331,28 +369,18 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
                     // CANARY: REQ=REQ-STRING-MINMAX-001; FEATURE="StringMinMax"; ASPECT=MinAggregation; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-27
+                    // CANARY: REQ=REQ-NESTING-REFACTOR-013; FEATURE="NestingReduction"; ASPECT=MinRefactor; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
                     // MIN aggregation over group - supports both integers and strings
                     if (call.args.len == 1) {
-                        const field_name = if (call.args[0].* == .PropertyAccess)
-                            call.args[0].PropertyAccess.property
-                        else if (call.args[0].* == .Member)
-                            call.args[0].Member.field
-                        else
-                            null;
-
-                        if (field_name) |field| {
+                        if (extractFieldName(call.args[0])) |field| {
                             var min_int: ?i64 = null;
                             var min_str: ?[]const u8 = null;
                             for (nodes) |node| {
                                 if (node.properties.get(field)) |val| {
-                                    if (val == .Int) {
-                                        if (min_int == null or val.Int < min_int.?) {
-                                            min_int = val.Int;
-                                        }
-                                    } else if (val == .String) {
-                                        if (min_str == null or std.mem.lessThan(u8, val.String, min_str.?)) {
-                                            min_str = val.String;
-                                        }
+                                    if (getPropertyAsInt(val)) |i| {
+                                        if (min_int == null or i < min_int.?) min_int = i;
+                                    } else if (getPropertyAsString(val)) |s| {
+                                        if (min_str == null or std.mem.lessThan(u8, s, min_str.?)) min_str = s;
                                     }
                                 }
                             }
@@ -368,75 +396,41 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
                     // CANARY: REQ=REQ-STRING-MINMAX-002; FEATURE="StringMinMax"; ASPECT=MaxAggregation; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-27
+                    // CANARY: REQ=REQ-NESTING-REFACTOR-014; FEATURE="NestingReduction"; ASPECT=MaxRefactor; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
                     // MAX aggregation over group - supports both integers and strings
                     if (call.args.len == 1) {
-                        const field_name = if (call.args[0].* == .PropertyAccess)
-                            call.args[0].PropertyAccess.property
-                        else if (call.args[0].* == .Member)
-                            call.args[0].Member.field
-                        else
-                            null;
-
-                        if (field_name) |field| {
+                        if (extractFieldName(call.args[0])) |field| {
                             var max_int: ?i64 = null;
                             var max_str: ?[]const u8 = null;
                             for (nodes) |node| {
                                 if (node.properties.get(field)) |val| {
-                                    if (val == .Int) {
-                                        if (max_int == null or val.Int > max_int.?) {
-                                            max_int = val.Int;
-                                        }
-                                    } else if (val == .String) {
-                                        if (max_str == null or std.mem.lessThan(u8, max_str.?, val.String)) {
-                                            max_str = val.String;
-                                        }
+                                    if (getPropertyAsInt(val)) |i| {
+                                        if (max_int == null or i > max_int.?) max_int = i;
+                                    } else if (getPropertyAsString(val)) |s| {
+                                        if (max_str == null or std.mem.lessThan(u8, max_str.?, s)) max_str = s;
                                     }
                                 }
                             }
-                            if (max_int) |v| {
-                                return Value{ .Int = v };
-                            }
-                            if (max_str) |s| {
-                                return Value{ .Str = s };
-                            }
+                            if (max_int) |v| return Value{ .Int = v };
+                            if (max_str) |s| return Value{ .Str = s };
                             return Value{ .Null = {} };
                         }
                     }
                     return Value{ .Null = {} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "collect")) {
                     // CANARY: REQ=REQ-AGG-COLLECT-001; FEATURE="AggregationFunctions"; ASPECT=COLLECT; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-22
+                    // CANARY: REQ=REQ-NESTING-REFACTOR-015; FEATURE="NestingReduction"; ASPECT=CollectRefactor; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
                     // COLLECT aggregation - collect values into a list
                     if (call.args.len == 1) {
-                        const field_name = if (call.args[0].* == .PropertyAccess)
-                            call.args[0].PropertyAccess.property
-                        else if (call.args[0].* == .Member)
-                            call.args[0].Member.field
-                        else if (call.args[0].* == .Ident)
-                            call.args[0].Ident.orig
-                        else
-                            null;
-
-                        if (field_name) |field| {
+                        if (extractFieldName(call.args[0])) |field| {
                             var list = try std.ArrayList(Value).initCapacity(allocator, nodes.len);
                             for (nodes) |node| {
-                                // Check if the field matches the node variable name
                                 if (call.args[0].* == .Ident) {
                                     // collect(n) - collect node references
                                     try list.append(allocator, Value{ .Node = node });
-                                } else {
-                                    // collect(n.prop) - collect property values
-                                    if (node.properties.get(field)) |val| {
-                                        const value = switch (val) {
-                                            .String => |s| Value{ .Str = s },
-                                            .Int => |n| Value{ .Int = n },
-                                            .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2, .orig_scale = 2, .orig_repr = null } },
-                                            .Bool => |b| Value{ .Bool = b },
-                                            .Null => Value{ .Null = {} },
-                                            .ExtValue => |ext| Value{ .ExtValue = ext },
-                                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-                                        };
-                                        try list.append(allocator, value);
-                                    }
+                                } else if (node.properties.get(field)) |val| {
+                                    // collect(n.prop) - collect property values using helper
+                                    try list.append(allocator, propertyToValue(val));
                                 }
                             }
                             return Value{ .List = try list.toOwnedSlice(allocator) };
@@ -445,16 +439,10 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                     return Value{ .List = &.{} };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "stddev")) {
                     // CANARY: REQ=REQ-MATH-STATS-001; FEATURE="StatisticalFunctions"; ASPECT=STDDEV; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
+                    // CANARY: REQ=REQ-NESTING-REFACTOR-016; FEATURE="NestingReduction"; ASPECT=StddevRefactor; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
                     // STDDEV aggregation - population standard deviation
                     if (call.args.len == 1) {
-                        const field_name = if (call.args[0].* == .PropertyAccess)
-                            call.args[0].PropertyAccess.property
-                        else if (call.args[0].* == .Member)
-                            call.args[0].Member.field
-                        else
-                            null;
-
-                        if (field_name) |field| {
+                        if (extractFieldName(call.args[0])) |field| {
                             // First pass: calculate mean
                             var sum: f64 = 0;
                             var count: f64 = 0;
