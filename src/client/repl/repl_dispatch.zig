@@ -762,12 +762,17 @@ pub const ClientSession = struct {
             self.last_txn_error = null;
         }
 
-        try self.connection.?.writeAll("{\"type\":\"ROLLBACK\"}\n");
+        self.connection.?.writeAll("{\"type\":\"ROLLBACK\"}\n") catch |err| {
+            // If we can't even send the rollback, connection is broken
+            self.last_txn_error = self.allocator.dupe(u8, "Failed to send ROLLBACK (connection broken)") catch null;
+            return err;
+        };
 
         // Read response with retry logic - special handling for rollback interrupts
         // Rollback requires TWO Ctrl+C presses to cancel, with a warning after the first
+        // Use shorter timeout (3 seconds) since after interrupt the connection may be unstable
         var retry_count: usize = 0;
-        const max_retries: usize = 200; // ~10 seconds with 50ms sleep for rollback
+        const max_retries: usize = 60; // ~3 seconds with 50ms sleep
         var first_interrupt_received = false;
 
         while (retry_count < max_retries) : (retry_count += 1) {
@@ -778,7 +783,7 @@ pub const ClientSession = struct {
                     first_interrupt_received = true;
                     stderr.writeAll("\r\n") catch {};
                     stderr.writeAll("╔══════════════════════════════════════════════════════════════╗\r\n") catch {};
-                    stderr.writeAll("║  ⚠️  WARNING: CANCELLING ROLLBACK MAY CAUSE DATA CORRUPTION  ║\r\n") catch {};
+                    stderr.writeAll("║  WARNING: CANCELLING ROLLBACK MAY CAUSE DATA CORRUPTION      ║\r\n") catch {};
                     stderr.writeAll("╠══════════════════════════════════════════════════════════════╣\r\n") catch {};
                     stderr.writeAll("║  The transaction rollback is in progress.                    ║\r\n") catch {};
                     stderr.writeAll("║  Interrupting now may leave the database in an inconsistent  ║\r\n") catch {};
@@ -800,6 +805,8 @@ pub const ClientSession = struct {
                     std.Thread.sleep(50 * std.time.ns_per_ms);
                     continue;
                 }
+                // Connection error during rollback
+                self.last_txn_error = self.allocator.dupe(u8, "Connection error during ROLLBACK") catch null;
                 return err;
             };
             defer self.allocator.free(response);
@@ -809,11 +816,12 @@ pub const ClientSession = struct {
                 self.extractTransactionError(response);
                 return error.TransactionError;
             }
-            return; // Success
+            // Any valid response means rollback completed
+            return;
         }
 
-        // Timeout waiting for response
-        self.last_txn_error = self.allocator.dupe(u8, "Server did not respond to ROLLBACK (connection may be stale)") catch null;
+        // Timeout waiting for response - after interrupt, connection may be broken
+        self.last_txn_error = self.allocator.dupe(u8, "ROLLBACK timed out (connection may be stale, transaction may still complete on server)") catch null;
         return error.WouldBlock;
     }
 
@@ -924,16 +932,33 @@ pub const ClientSession = struct {
     }
 
     /// Drain any pending responses from the connection (cleanup after errors)
-    /// Note: This function attempts to discard stale data but may not fully drain
-    /// since the server strips "final" markers. Use sparingly.
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-023; FEATURE="SourceInterrupt"; ASPECT=DrainWithTimeout; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// Note: This function attempts to discard stale data with timeout
+    /// Uses quick polling to avoid blocking on dead connections
     pub fn drain(self: *ClientSession) void {
         if (!self.connected or self.connection == null) return;
 
-        // Try to read and discard a few pending messages
-        // This is a best-effort cleanup, not guaranteed to work perfectly
-        var iterations: usize = 0;
-        while (iterations < 3) : (iterations += 1) {
-            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch break;
+        // Try to read and discard pending messages with timeout
+        // Use quick polling (10ms sleep, 10 iterations = 100ms max per message)
+        var messages_drained: usize = 0;
+        const max_messages: usize = 5;
+
+        while (messages_drained < max_messages) : (messages_drained += 1) {
+            var poll_count: usize = 0;
+            const max_polls: usize = 10; // 100ms timeout per message
+
+            const response = while (poll_count < max_polls) : (poll_count += 1) {
+                break self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+                    if (err == error.WouldBlock) {
+                        std.Thread.sleep(10 * std.time.ns_per_ms);
+                        continue;
+                    }
+                    return; // Connection error, stop draining
+                };
+            } else {
+                return; // Timeout, no more data
+            };
+
             self.allocator.free(response);
         }
     }
@@ -1936,12 +1961,37 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
 
     var error_count: usize = 0;
     var batch_error_msg: ?[]const u8 = null;
+    var was_interrupted = false;
 
     executeGql(state, batch_statements.items) catch |err| {
-        if (err != error.WouldBlock) {
+        if (err == error.Interrupted) {
+            // CANARY: REQ=REQ-SHELL-INTERRUPT-022; FEATURE="SourceInterrupt"; ASPECT=ExecutionInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+            // Handle interrupt explicitly - don't just increment error count
+            was_interrupted = true;
+            interrupted = true;
+        } else if (err != error.WouldBlock) {
             error_count += 1;
         }
     };
+
+    // If interrupted during execution, handle immediately
+    if (was_interrupted) {
+        progress_spinner.stop(null);
+        try stderr.writeAll("\r\nExecution cancelled by user (Ctrl+C)\r\n");
+        if (auto_txn and begin_succeeded) {
+            try stderr.writeAll("Attempting to rollback transaction...\r\n");
+            // Drain any pending responses before rollback
+            state.session.drain();
+            // Try rollback with short timeout since connection may be unstable
+            state.session.rollback() catch |rollback_err| {
+                var buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "Rollback failed: {s} (transaction may need manual cleanup)\r\n", .{@errorName(rollback_err)}) catch "";
+                stderr.writeAll(msg) catch {};
+            };
+            state.in_txn = false;
+        }
+        return;
+    }
 
     // CANARY: REQ=REQ-SHELL-SOURCE-ERROR-001; FEATURE="SourceFileErrorDetails"; ASPECT=BatchErrorExtraction; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
     // Check the server response for actual error details
@@ -1966,13 +2016,14 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
         batch_error_msg = null;
     }
 
-    // Check for interrupt before transaction handling
+    // Check for interrupt before transaction handling (may have been pressed during error display)
     if (checkForInterrupt()) {
         interrupted = true;
         progress_spinner.stop(null);
         try stderr.writeAll("\r\nOperation cancelled by user (Ctrl+C)\r\n");
         if (auto_txn and begin_succeeded) {
             try stderr.writeAll("Attempting to rollback transaction...\r\n");
+            state.session.drain();
             state.session.rollback() catch {};
             state.in_txn = false;
         }

@@ -3653,6 +3653,10 @@ REQ-SHELL-INTERRUPT-014,SourceInterrupt,RollbackDoubleInterrupt,IMPL,,,cli,2026-
 REQ-SHELL-INTERRUPT-015,SourceInterrupt,PullAllInterrupt,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-016,SourceInterrupt,HelloInterrupt,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-017,SourceInterrupt,HelloAuthInterrupt,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-INTERRUPT-018,SourceInterrupt,ParsingInterrupt,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-INTERRUPT-019,SourceInterrupt,RollbackTests,TESTED,,,cli,2026-01-30,tests/test_repl.zig
+REQ-SHELL-INTERRUPT-020,SourceInterrupt,ErrorMessageTests,TESTED,,,cli,2026-01-30,tests/test_repl.zig
+REQ-SHELL-INTERRUPT-021,SourceInterrupt,MultipleInterruptTests,TESTED,,,cli,2026-01-30,tests/test_repl.zig
 REQ-SHELL-RECONNECT-001,ShellAutoReconnect,ReconnectionConfig,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-002,ShellAutoReconnect,TransactionState,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-003,ShellAutoReconnect,SessionState,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
