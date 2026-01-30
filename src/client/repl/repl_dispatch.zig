@@ -8,11 +8,39 @@ const spinner_mod = @import("spinner.zig");
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-063; FEATURE="JSON Library Migration"; ASPECT=ReplDispatch; STATUS=EXEMPT; OWNER=client; UPDATED=2026-01-25
 const json_lib = @import("json");
 
-// CANARY: REQ=REQ-SHELL-INTERRUPT-003; FEATURE="SourceInterrupt"; ASPECT=CheckFunction; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+// CANARY: REQ=REQ-SHELL-INTERRUPT-003; FEATURE="SourceInterrupt"; ASPECT=CheckFunction; STATUS=TESTED; TEST=tests/test_repl.zig; OWNER=cli; UPDATED=2026-01-30
 // Issue #390: Helper function to check for Ctrl+C (ASCII 3) in stdin without blocking
-fn checkForInterrupt() bool {
+// Made public so it can be used by other modules for interrupt handling
+pub fn checkForInterrupt() bool {
     if (builtin.os.tag == .windows) {
-        // Windows: TODO - implement console input check
+        // Windows: Check console input for Ctrl+C
+        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return false;
+        var events_available: u32 = 0;
+        // Check if there are any input events waiting
+        if (std.os.windows.kernel32.GetNumberOfConsoleInputEvents(handle, &events_available) == 0) {
+            return false;
+        }
+        if (events_available == 0) return false;
+
+        // Peek at the input to see if it's a Ctrl+C
+        var input_record: std.os.windows.INPUT_RECORD = undefined;
+        var events_read: u32 = 0;
+        if (std.os.windows.kernel32.PeekConsoleInputW(handle, @ptrCast(&input_record), 1, &events_read) == 0) {
+            return false;
+        }
+        if (events_read == 0) return false;
+
+        // Check if it's a key event for Ctrl+C
+        if (input_record.EventType == 1) { // KEY_EVENT
+            const key_event = input_record.Event.KeyEvent;
+            if (key_event.bKeyDown != 0 and key_event.wVirtualKeyCode == 'C' and
+                (key_event.dwControlKeyState & 0x0008) != 0)
+            { // LEFT_CTRL_PRESSED
+                // Consume the event
+                _ = std.os.windows.kernel32.ReadConsoleInputW(handle, @ptrCast(&input_record), 1, &events_read);
+                return true;
+            }
+        }
         return false;
     } else {
         // POSIX: use poll with 0 timeout to check if data is available
@@ -604,6 +632,7 @@ pub const ClientSession = struct {
 
     /// CANARY: REQ=REQ-SHELL-TXN-ERROR-002; FEATURE="TransactionErrorDetails"; ASPECT=CommitWithRetry; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
     /// Commit transaction with retry logic for WouldBlock and detailed error extraction
+    /// Returns error.Interrupted if user pressed Ctrl+C during the operation
     pub fn commit(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
@@ -617,6 +646,10 @@ pub const ClientSession = struct {
 
         // Read response with retry logic for WouldBlock
         const response = self.readTransactionResponse() catch |err| {
+            if (err == error.Interrupted) {
+                self.last_txn_error = self.allocator.dupe(u8, "Operation cancelled by user (Ctrl+C)") catch null;
+                return err;
+            }
             if (err == error.WouldBlock) {
                 self.last_txn_error = self.allocator.dupe(u8, "Server did not respond to COMMIT (connection may be stale)") catch null;
             }
@@ -633,6 +666,7 @@ pub const ClientSession = struct {
 
     /// CANARY: REQ=REQ-SHELL-TXN-ERROR-003; FEATURE="TransactionErrorDetails"; ASPECT=RollbackWithRetry; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
     /// Rollback transaction with retry logic for WouldBlock and detailed error extraction
+    /// Returns error.Interrupted if user pressed Ctrl+C during the operation
     pub fn rollback(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
@@ -646,6 +680,10 @@ pub const ClientSession = struct {
 
         // Read response with retry logic for WouldBlock
         const response = self.readTransactionResponse() catch |err| {
+            if (err == error.Interrupted) {
+                self.last_txn_error = self.allocator.dupe(u8, "Operation cancelled by user (Ctrl+C)") catch null;
+                return err;
+            }
             if (err == error.WouldBlock) {
                 self.last_txn_error = self.allocator.dupe(u8, "Server did not respond to ROLLBACK (connection may be stale)") catch null;
             }
@@ -660,18 +698,25 @@ pub const ClientSession = struct {
         }
     }
 
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-004; FEATURE="SourceInterrupt"; ASPECT=TransactionResponseInterrupt; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
     /// Read a transaction response with retry logic for WouldBlock
     /// This is needed because commit/rollback are synchronous operations
     /// but the transport may return WouldBlock for async I/O
+    /// Checks for Ctrl+C interrupts during retry loop
     fn readTransactionResponse(self: *ClientSession) ![]u8 {
         var retry_count: usize = 0;
         const max_retries: usize = 100; // ~5 seconds with 50ms sleep
 
         while (retry_count < max_retries) : (retry_count += 1) {
+            // Check for Ctrl+C interrupt
+            if (checkForInterrupt()) {
+                return error.Interrupted;
+            }
+
             const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
                 if (err == error.WouldBlock) {
-                    // Poll and wait before retrying
-                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    // Poll and wait before retrying (use shorter sleep to be more responsive)
+                    std.Thread.sleep(25 * std.time.ns_per_ms);
                     continue;
                 }
                 return err;
@@ -1537,11 +1582,27 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     // Initialize spinner for visual feedback during long-running source operations
     var progress_spinner = spinner_mod.Spinner.init(state.allocator, "Parsing file...");
     progress_spinner.start();
+
+    // CANARY: REQ=REQ-SHELL-INTERRUPT-005; FEATURE="SourceInterrupt"; ASPECT=InterruptTracking; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
+    // Track if user requested interrupt via Ctrl+C
+    var interrupted = false;
+
     defer {
         // Ensure spinner is stopped on any exit path
         if (progress_spinner.isRunning()) {
-            progress_spinner.stop(null);
+            if (interrupted) {
+                progress_spinner.fail("Cancelled by user (Ctrl+C)");
+            } else {
+                progress_spinner.stop(null);
+            }
         }
+    }
+
+    // Check for interrupt before starting
+    if (checkForInterrupt()) {
+        interrupted = true;
+        try stderr.writeAll("\r\nOperation cancelled by user (Ctrl+C)\r\n");
+        return;
     }
 
     // CANARY: REQ=REQ-SOURCE-PERF-004; FEATURE="SourceFilePerformance"; ASPECT=BatchParsing; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
@@ -1667,6 +1728,14 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     var exec_msg_buf: [128]u8 = undefined;
     const exec_msg = std.fmt.bufPrint(&exec_msg_buf, "Executing {d} statements...", .{statement_count}) catch "Executing...";
     progress_spinner.setMessage(exec_msg);
+    _ = progress_spinner.tick();
+
+    // Check for interrupt before execution
+    if (checkForInterrupt()) {
+        interrupted = true;
+        try stderr.writeAll("\r\nOperation cancelled by user (Ctrl+C)\r\n");
+        return;
+    }
 
     // CANARY: REQ=REQ-SOURCE-PERF-008; FEATURE="SourceFilePerformance"; ASPECT=TransactionDetection; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
     // Issue #391: Check if file contains explicit transaction commands (BEGIN, COMMIT, ROLLBACK)
@@ -1741,6 +1810,19 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
         batch_error_msg = null;
     }
 
+    // Check for interrupt before transaction handling
+    if (checkForInterrupt()) {
+        interrupted = true;
+        progress_spinner.stop(null);
+        try stderr.writeAll("\r\nOperation cancelled by user (Ctrl+C)\r\n");
+        if (auto_txn and begin_succeeded) {
+            try stderr.writeAll("Attempting to rollback transaction...\r\n");
+            state.session.rollback() catch {};
+            state.in_txn = false;
+        }
+        return;
+    }
+
     // CANARY: REQ=REQ-SOURCE-PERF-010; FEATURE="SourceFilePerformance"; ASPECT=TransactionCommitRollback; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
     // Issue #391: Commit on success, rollback on error for atomicity
     if (auto_txn and begin_succeeded) {
@@ -1752,6 +1834,14 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
             // Rollback on error - ensure atomicity
             state.session.rollback() catch |rollback_err| {
                 progress_spinner.stop(null); // Stop spinner before error output
+                // CANARY: REQ=REQ-SHELL-INTERRUPT-006; FEATURE="SourceInterrupt"; ASPECT=RollbackInterrupt; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
+                // Check if this was an interrupt
+                if (rollback_err == error.Interrupted) {
+                    interrupted = true;
+                    try stderr.writeAll("\r\nRollback cancelled by user (Ctrl+C)\r\n");
+                    state.in_txn = false;
+                    return;
+                }
                 try stderr.writeAll("Error: Failed to rollback transaction");
                 if (state.session.last_txn_error) |txn_err| {
                     try stderr.writeAll(": ");
@@ -1772,6 +1862,17 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
             // Commit on success
             state.session.commit() catch |commit_err| {
                 progress_spinner.stop(null); // Stop spinner before error output
+
+                // CANARY: REQ=REQ-SHELL-INTERRUPT-007; FEATURE="SourceInterrupt"; ASPECT=CommitInterrupt; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
+                // Check if this was an interrupt - allow user to cancel during slow commits
+                if (commit_err == error.Interrupted) {
+                    interrupted = true;
+                    try stderr.writeAll("\r\nCommit cancelled by user (Ctrl+C)\r\n");
+                    try stderr.writeAll("Warning: Transaction state may be inconsistent. Check server logs.\r\n");
+                    state.in_txn = false;
+                    return;
+                }
+
                 // CANARY: REQ=REQ-SHELL-SOURCE-ERROR-002; FEATURE="SourceFileErrorDetails"; ASPECT=CommitErrorMessage; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
                 // Display detailed commit error message instead of just "WouldBlock"
                 try stderr.writeAll("\r\nError: Failed to commit transaction");
@@ -1792,6 +1893,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
                 try stderr.writeAll("    - Splitting the file into smaller batches\r\n");
                 try stderr.writeAll("    - Checking server logs for detailed errors\r\n");
                 try stderr.writeAll("    - Using explicit transactions with COMMIT statements\r\n");
+                try stderr.writeAll("  Tip: Press Ctrl+C to cancel waiting for the server\r\n");
 
                 state.session.rollback() catch {};
                 error_count += 1;

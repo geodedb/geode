@@ -3661,6 +3661,10 @@ REQ-SHELL-SOURCE-ERROR-001,SourceFileErrorDetails,BatchErrorExtraction,IMPL,,,cl
 REQ-SHELL-SOURCE-ERROR-002,SourceFileErrorDetails,CommitErrorMessage,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-SOURCE-ERROR-003,SourceFileErrorDetails,ErrorExtraction,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-SOURCE-ERROR-004,SourceFileErrorDetails,UnitTests,TESTED,,,cli,2026-01-30,tests/test_repl.zig
+REQ-SHELL-SPINNER-001,ShellProcessingIndicator,Module,TESTED,,,cli,2026-01-30,src/client/repl/spinner.zig
+REQ-SHELL-SPINNER-002,ShellProcessingIndicator,ModuleExport,TESTED,,,cli,2026-01-30,src/lib.zig
+REQ-SHELL-SPINNER-003,ShellProcessingIndicator,SourceFileSpinner,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-SPINNER-004,ShellProcessingIndicator,UnitTests,TESTED,,,cli,2026-01-30,tests/test_spinner.zig
 REQ-SHELL-TEST-VERIFICATION,Shell Test Requirements Verification,UnitTests,TESTED,,,testing,2026-01-15,tests/test_shell_requirements_verification.zig
 REQ-SHELL-TLS-001,Shell TLS Configuration,SecureConnection,TESTED,,,cli,2026-01-15,src/cli/main.zig
 REQ-SHELL-TLS-002,Shell TLS Connection,SecureConnection,EXEMPT,,,cli,2026-01-13,src/cli/main.zig

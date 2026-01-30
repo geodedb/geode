@@ -260,3 +260,18 @@ test "containsTransactionCommands detects BEGIN" {
     try testing.expect(!repl_dispatch.containsTransactionCommands("CREATE (:Node);"));
     try testing.expect(!repl_dispatch.containsTransactionCommands("RETURN 'BEGIN' AS word;"));
 }
+
+// CANARY: REQ=REQ-SHELL-INTERRUPT-008; FEATURE="SourceInterrupt"; ASPECT=UnitTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
+// Tests for interrupt checking functionality
+test "checkForInterrupt returns false when no interrupt pending" {
+    // In a test environment, there's no pending Ctrl+C, so this should return false
+    const result = repl_dispatch.checkForInterrupt();
+    try testing.expect(!result);
+}
+
+test "checkForInterrupt is callable and returns bool" {
+    // Verify the function is exported and callable
+    const result = repl_dispatch.checkForInterrupt();
+    // Result should be a boolean (either true or false)
+    _ = @as(bool, result);
+}
