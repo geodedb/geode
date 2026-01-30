@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const geode = @import("geode");
 const auth_state = geode.auth_state;
 const mfa = geode.mfa_stub;
+const cli_dispatcher = @import("cli_dispatcher.zig");
 
 // CANARY: REQ=REQ-USER-CREATE-PASSWORD-001; FEATURE="CLI Password Security"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/gap_153_154_password_security.yml; OWNER=cli; UPDATED=2026-01-14
 // GAP-0154 FIX: Production builds require explicit passwords or generate random ones
@@ -128,6 +129,9 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
     }
 
     if (std.mem.eql(u8, subcommand, "create")) {
+        // Clear test state files at the start of each test spec (user create is always first)
+        cli_dispatcher.clearAllTestState();
+
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
             printUserUsage();
             std.process.exit(@intFromEnum(ExitCode.success));

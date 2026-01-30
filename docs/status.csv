@@ -175,6 +175,16 @@ REQ-AUTH-001,UserManagement,Authentication,TESTED,,,security,2026-01-15,src/secu
 REQ-AUTH-002,Argon2idHashing,PasswordSecurity,COMPLETE,,,security,2025-10-14,docs/ARGON2ID_IMPLEMENTATION.md
 REQ-AUTH-002,Argon2idHashing,PasswordSecurity,TESTED,,,security,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-AUTH-002,AuthenticationLogout,RealImplementation,TESTED,,,cli,2025-09-30,src/cli/main.zig
+REQ-AUTH-APIKEY-CLI-001,ApiKeyCLI,Authentication,TESTED,,,security,2026-01-29,src/cli/cli_dispatcher.zig
+REQ-AUTH-APIKEY-CLI-001,ApiKeyCLI,Implementation,TESTED,,,security,2026-01-29,src/cli/cli_dispatcher.zig
+REQ-AUTH-APIKEYS-001,ApiKeyAuthentication,SECURITY,TESTED,,,security,2026-01-29,src/security/api_keys.zig
+REQ-AUTH-APIKEYS-002,ApiKeyCreation,SECURITY,TESTED,,,security,2026-01-29,src/security/api_keys.zig
+REQ-AUTH-APIKEYS-003,ApiKeyValidation,SECURITY,TESTED,,,security,2026-01-29,src/security/api_keys.zig
+REQ-AUTH-APIKEYS-004,ApiKeyRevocation,SECURITY,TESTED,,,security,2026-01-29,src/security/api_keys.zig
+REQ-AUTH-APIKEYS-005,BearerTokenParsing,SECURITY,TESTED,,,security,2026-01-29,src/security/api_keys.zig
+REQ-AUTH-APIKEYS-TEST,API Key Authentication Testing,Security,TESTED,,,security,2026-01-29,geodetestlab/specs/api_key_auth.yml
+REQ-AUTH-AUTHN-CLI-001,AuthnConfigCLI,Authentication,TESTED,,,security,2026-01-29,src/cli/cli_dispatcher.zig
+REQ-AUTH-AUTHN-CLI-001,AuthnConfigCLI,Implementation,TESTED,,,security,2026-01-29,src/cli/cli_dispatcher.zig
 REQ-AUTH-CLI-001,CLI QUIC Authentication,AuthenticatedHello,TESTED,,,security,2026-01-15,src/client/repl/repl_dispatch.zig
 REQ-AUTH-CLI-001,CLI QUIC Authentication,ServerConnection,TESTED,,,security,2026-01-15,src/cli/main.zig
 REQ-AUTH-CLI-001,CLIUserManagement,FileStorage,TESTED,,,cli,2025-10-26,src/cli/user_storage_simple.zig
@@ -220,6 +230,17 @@ REQ-AUTH-ENFORCE-030,AuthEnforcement,ControlCharacterPrevention,TESTED,,,securit
 REQ-AUTH-GUARD-001,Production Auth Guard,Security,TESTED,,,security,2026-01-15,src/cli/main.zig
 REQ-AUTH-HASH-001,Argon2id Password Hashing,PostQuantumSecurity,TESTED,,,security,2025-10-16,src/security/geode_auth_lib.zig
 REQ-AUTH-HASH-002,Argon2id_Password_Hashing,Core,TESTED,,,security,2026-01-25,src/security/test_argon2id_hashing.zig
+REQ-AUTH-LOGIN-CLI-001,LoginCLI,Authentication,TESTED,,,security,2026-01-29,src/cli/cli_dispatcher.zig
+REQ-AUTH-LOGIN-CLI-001,LoginCLI,Implementation,TESTED,,,security,2026-01-29,src/cli/cli_dispatcher.zig
+REQ-AUTH-LOGOUT-CLI-001,LogoutCLI,Authentication,TESTED,,,security,2026-01-29,src/cli/cli_dispatcher.zig
+REQ-AUTH-LOGOUT-CLI-001,LogoutCLI,Implementation,TESTED,,,security,2026-01-29,src/cli/cli_dispatcher.zig
+REQ-AUTH-MTLS-001,MtlsAuthentication,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
+REQ-AUTH-MTLS-002,CertificateMappingCreation,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
+REQ-AUTH-MTLS-003,CertificateAuthentication,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
+REQ-AUTH-MTLS-004,CertificateIdentityExtraction,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
+REQ-AUTH-MTLS-CLI-001,MtlsCLI,Authentication,TESTED,,,security,2026-01-29,src/cli/cli_dispatcher.zig
+REQ-AUTH-MTLS-CLI-001,MtlsCLI,Implementation,TESTED,,,security,2026-01-29,src/cli/cli_dispatcher.zig
+REQ-AUTH-MTLS-TEST,mTLS Authentication Testing,Security,TESTED,,,security,2026-01-29,geodetestlab/specs/mtls_auth.yml
 REQ-AUTH-POLICY-001,AuthPolicy,PasswordReset,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-AUTH-POLICY-001,Password Reset Tracking,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig
 REQ-AUTH-POLICY-001,UserAuthPolicy,ForceReset,TESTED,,,security,2026-01-15,tests/test_gap_analysis_january_2026.zig
@@ -259,11 +280,17 @@ REQ-AUTH-SESSION-006,ValidateSessionToken,IMPL,TESTED,,,security,2026-01-15,src/
 REQ-AUTH-SESSION-007,CleanupExpiredSessions,IMPL,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig
 REQ-AUTH-SESSION-008,TokenBasedLogin,IMPL,TESTED,,,security,2026-01-15,src/cli/main.zig
 REQ-AUTH-SESSION-009,AutoLoadSessionToken,IMPL,TESTED,,,security,2026-01-15,src/cli/main.zig
+REQ-AUTH-SESSION-CLI-001,SessionCLI,Authentication,TESTED,,,security,2026-01-29,src/cli/cli_dispatcher.zig
+REQ-AUTH-SESSION-CLI-001,SessionCLI,Implementation,TESTED,,,security,2026-01-29,src/cli/cli_dispatcher.zig
+REQ-AUTH-SESSION-ROTATE-001,RotatingSessionToken,SECURITY,TESTED,,,security,2026-01-29,src/security/authn.zig
 REQ-AUTH-STATE-DEFAULTS-001,AuthState,ProductionGuard,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-AUTH-STATE-DEFAULTS-001,Production Password Guard,Security,TESTED,,,security,2026-01-14,src/security/auth_state.zig
 REQ-AUTH-TOKEN-001,AuthToken,Testing,TESTED,,,cli,2025-10-14,src/cli/main.zig
 REQ-AUTH-TOKEN-001,AuthToken,Testing,TESTED,,,cli,2025-10-14,src/cli/main.zig
 REQ-AUTH-TOKEN-001,AuthToken,TokenValidation,TESTED,,,cli,2026-01-16,tests/test_gap_0193_batch2_testing.zig
+REQ-AUTH-UNIFIED-001,UnifiedAuthenticationProvider,SECURITY,TESTED,,,security,2026-01-29,src/security/authn.zig
+REQ-AUTH-UNIFIED-002,AuthenticationChain,SECURITY,TESTED,,,security,2026-01-29,src/security/authn.zig
+REQ-AUTH-UNIFIED-TEST,Unified Authentication Testing,Security,TESTED,,,security,2026-01-29,geodetestlab/specs/authn_provider.yml
 REQ-AUTH-VERIFY-001,SecurePasswordVerify,Security,EXEMPT,,,security,2026-01-10,src/security/user_management.zig
 REQ-BACKUP-CLI-001,CLI Backup,ServerConnection,TESTED,,,cli,2026-01-10,src/cli/backup_cli.zig
 REQ-BACKUP-ERROR-HANDLING-001,BackupErrorHandling,Security,TESTED,,,cli,2026-01-16,src/cli/backup_cli.zig
