@@ -15,6 +15,254 @@ const Env = value_types.Env;
 // CANARY: REQ=REQ-EXEC-REFACTOR-001; FEATURE="ExecutionRefactoring"; ASPECT=GRAPH_ALGORITHMS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
 // Extracted graph algorithm functions from execution.zig for better modularity (M1 Phase 1)
 
+// CANARY: REQ=REQ-NESTING-REFACTOR-001; FEATURE="NestingReduction"; ASPECT=HelperFunctions; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+// Helper functions extracted to reduce nesting levels (#412)
+
+/// Check if a node has all the required labels
+fn nodeHasAllLabels(node_labels: []const []const u8, required_labels: []const []const u8) bool {
+    for (required_labels) |required_label| {
+        var found = false;
+        for (node_labels) |node_label| {
+            if (std.mem.eql(u8, required_label, node_label)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
+/// Convert a property value from storage format to Value type
+fn propertyToValue(node_prop_val: graph_store.PropertyValue) Value {
+    return switch (node_prop_val) {
+        .String => |s| Value{ .Str = s },
+        .Int => |i| Value{ .Int = i },
+        .Bool => |b| Value{ .Bool = b },
+        .Float => |f| Value{ .Double = f },
+        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
+        .Null => Value{ .Null = {} },
+        .ExtValue => |ext| Value{ .ExtValue = ext },
+    };
+}
+
+/// Check if a node's properties match the required properties
+fn nodeMatchesProperties(
+    node_properties: anytype,
+    props: []const ast.Property,
+    env: Env,
+    allocator: std.mem.Allocator,
+) bool {
+    for (props) |prop| {
+        const expected = eval.evalExpr(allocator, prop.value.*, env) catch return false;
+        if (node_properties.get(prop.key)) |node_prop_val| {
+            const node_val = propertyToValue(node_prop_val);
+            if (!valuesEqual(node_val, expected)) return false;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Find a bound node's ID in the environment by variable name
+fn findBoundNodeId(name: []const u8, env: Env) ?u64 {
+    for (env.names, 0..) |env_name, i| {
+        if (std.mem.eql(u8, env_name, name)) {
+            const val = env.values[i];
+            if (val == .Node) return val.Node.id;
+            break;
+        }
+    }
+    return null;
+}
+
+/// Find a bound node in the environment by variable name
+fn findBoundNode(name: []const u8, env: Env) ?*const graph_store.Node {
+    for (env.names, 0..) |env_name, i| {
+        if (std.mem.eql(u8, env_name, name)) {
+            const val = env.values[i];
+            if (val == .Node) return val.Node;
+            break;
+        }
+    }
+    return null;
+}
+
+/// Evaluate a WHERE filter against an extended environment
+fn evaluateWhereFilter(
+    where_filter: *ast.Expr,
+    base_env: Env,
+    target_name: ?[]const u8,
+    target_node_ptr: ?*graph_store.Node,
+    allocator: std.mem.Allocator,
+) bool {
+    var ext_env = base_env;
+
+    if (target_name != null and target_node_ptr != null) {
+        const new_names = allocator.alloc([]const u8, base_env.names.len + 1) catch return false;
+        const new_values = allocator.alloc(Value, base_env.values.len + 1) catch return false;
+        @memcpy(new_names[0..base_env.names.len], base_env.names);
+        @memcpy(new_values[0..base_env.values.len], base_env.values);
+        new_names[base_env.names.len] = target_name.?;
+        new_values[base_env.values.len] = Value{ .Node = target_node_ptr.? };
+        ext_env = .{
+            .names = new_names,
+            .values = new_values,
+            .allocator = allocator,
+            .param_names = base_env.param_names,
+            .param_values = base_env.param_values,
+        };
+    }
+
+    const where_result = eval.evalExpr(allocator, where_filter.*, ext_env) catch return false;
+    return switch (where_result) {
+        .Bool => |b| b,
+        else => false,
+    };
+}
+
+/// CANARY: REQ=REQ-NESTING-REFACTOR-003; FEATURE="NestingReduction"; ASPECT=VariableLengthPath; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+/// Count matches for variable-length path patterns using BFS
+fn countVariableLengthPathMatches(
+    allocator: std.mem.Allocator,
+    bound_node: *const graph_store.Node,
+    hop: ast.Hop,
+    rel_type: ?[]const u8,
+    where_filter: ?*ast.Expr,
+    env: Env,
+    store: *graph_store.GraphStore,
+) !i64 {
+    var count: i64 = 0;
+    const min_len: usize = if (hop.rel.min_len) |m| @intCast(m) else 1;
+    const max_len: usize = if (hop.rel.max_len) |m| @intCast(m) else 10;
+    const target_pattern = hop.right;
+
+    // Check if the target node is bound in the environment
+    const target_bound_id: ?u64 = if (target_pattern.name) |tn| findBoundNodeId(tn, env) else null;
+
+    // BFS to find all reachable nodes within depth range
+    var visited = std.AutoHashMap(u64, usize).init(allocator);
+    defer visited.deinit();
+
+    const QueueItem = struct { node_id: u64, depth: usize };
+    var queue = try std.ArrayList(QueueItem).initCapacity(allocator, 16);
+    defer queue.deinit(allocator);
+
+    // Start from bound node at depth 0
+    try queue.append(allocator, QueueItem{ .node_id = bound_node.id, .depth = 0 });
+    try visited.put(bound_node.id, 0);
+
+    while (queue.items.len > 0) {
+        const current = queue.orderedRemove(0);
+        if (current.depth >= max_len) continue;
+
+        // Find all edges from current node
+        var edge_iter = store.edges.iterator();
+        while (edge_iter.next()) |edge_entry| {
+            const edge = edge_entry.value_ptr.*;
+            if (edge.from_id != current.node_id) continue;
+
+            // Filter by relationship type if specified
+            if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) continue;
+
+            const next_depth = current.depth + 1;
+            const next_node_id = edge.to_id;
+
+            // Skip if already visited at same or lower depth
+            if (visited.get(next_node_id)) |prev_depth| {
+                if (prev_depth <= next_depth) continue;
+            }
+            try visited.put(next_node_id, next_depth);
+
+            // Add to queue for further exploration
+            if (next_depth < max_len) {
+                queue.append(allocator, QueueItem{ .node_id = next_node_id, .depth = next_depth }) catch {};
+            }
+
+            // Check if this node is within valid depth range and matches target pattern
+            if (next_depth >= min_len and next_depth <= max_len) {
+                // If target is bound, only match that specific node
+                if (target_bound_id) |tid| {
+                    if (next_node_id != tid) continue;
+                }
+
+                if (store.nodes.get(next_node_id)) |target_node| {
+                    // Check label constraints on target using helper
+                    if (!nodeHasAllLabels(target_node.labels, target_pattern.labels)) continue;
+
+                    // Check WHERE filter if present
+                    if (where_filter) |wf| {
+                        const target_node_ptr = store.nodes.getPtr(next_node_id) orelse continue;
+                        if (evaluateWhereFilter(wf, env, target_pattern.name, target_node_ptr, allocator)) {
+                            count += 1;
+                        }
+                    } else {
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+    return count;
+}
+
+/// CANARY: REQ=REQ-NESTING-REFACTOR-004; FEATURE="NestingReduction"; ASPECT=SingleHopMatch; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+/// Count matches for single-hop relationship patterns
+fn countSingleHopMatches(
+    allocator: std.mem.Allocator,
+    bound_node: *const graph_store.Node,
+    hop: ast.Hop,
+    rel_type: ?[]const u8,
+    where_filter: ?*ast.Expr,
+    env: Env,
+    store: *graph_store.GraphStore,
+) !i64 {
+    var count: i64 = 0;
+    const target_pattern = hop.right;
+
+    // Check if the target node is also bound in the environment
+    const target_bound_id: ?u64 = if (target_pattern.name) |tn| findBoundNodeId(tn, env) else null;
+
+    var edge_iter = store.edges.iterator();
+    while (edge_iter.next()) |edge_entry| {
+        const edge = edge_entry.value_ptr.*;
+
+        // Check if edge starts from our bound node
+        if (edge.from_id != bound_node.id) continue;
+
+        // Filter by relationship type if specified
+        if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) continue;
+
+        // If target node is bound, only match edges to that specific node
+        if (target_bound_id) |tid| {
+            if (edge.to_id != tid) continue;
+        }
+
+        // Check target node pattern (right side of the hop)
+        if (store.nodes.get(edge.to_id)) |target_node| {
+            // Check label constraints on target using helper
+            if (!nodeHasAllLabels(target_node.labels, target_pattern.labels)) continue;
+
+            // Check property constraints on target using helper
+            if (target_pattern.props) |props| {
+                if (!nodeMatchesProperties(target_node.properties, props, env, allocator)) continue;
+            }
+
+            // Check WHERE filter if present
+            if (where_filter) |wf| {
+                const target_node_ptr = store.nodes.getPtr(edge.to_id) orelse continue;
+                if (evaluateWhereFilter(wf, env, target_pattern.name, target_node_ptr, allocator)) {
+                    count += 1;
+                }
+            } else {
+                count += 1;
+            }
+        }
+    }
+    return count;
+}
+
 /// Count the number of matches for a given graph pattern
 /// CANARY: REQ=REQ-GQL-PATTERN-COUNT; FEATURE="PatternMatching"; ASPECT=COUNT; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-27
 /// Now accepts env parameter for correlated subqueries (EXISTS with outer variable references)
@@ -33,325 +281,40 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
         if (node_pattern_opt) |node_pattern| {
             // CANARY: REQ=REQ-GQL-EXISTS-002; FEATURE="CorrelatedExists"; ASPECT=OuterVariableBinding; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
             // Check if the node pattern has a variable that's bound in the outer environment
-            if (node_pattern.name) |var_name| {
-                // Look up the variable in the environment
-                for (env.names, 0..) |name, i| {
-                    if (std.mem.eql(u8, name, var_name)) {
-                        // Variable is bound - use the bound node for pattern matching
-                        const bound_value = env.values[i];
-                        if (bound_value == .Node) {
-                            const bound_node = bound_value.Node;
-                            // Check if this bound node matches the remaining pattern (labels, properties)
-                            var matches = true;
+            // CANARY: REQ=REQ-NESTING-REFACTOR-002; FEATURE="NestingReduction"; ASPECT=LabelCheck; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+            const maybe_bound_node: ?*const graph_store.Node = if (node_pattern.name) |var_name| findBoundNode(var_name, env) else null;
 
-                            // Check labels on the bound node
-                            for (node_pattern.labels) |required_label| {
-                                var has_label = false;
-                                for (bound_node.labels) |node_label| {
-                                    if (std.mem.eql(u8, required_label, node_label)) {
-                                        has_label = true;
-                                        break;
-                                    }
-                                }
-                                if (!has_label) {
-                                    matches = false;
-                                    break;
-                                }
-                            }
+            if (maybe_bound_node) |bound_node| {
+                // Check if this bound node matches the remaining pattern (labels, properties)
+                if (!nodeHasAllLabels(bound_node.labels, node_pattern.labels)) {
+                    return 0; // Bound node doesn't match required labels
+                }
 
-                            // Check properties on the bound node
-                            if (matches and node_pattern.props != null) {
-                                for (node_pattern.props.?) |prop| {
-                                    const expected = try eval.evalExpr(allocator, prop.value.*, env);
-                                    if (bound_node.properties.get(prop.key)) |node_prop_val| {
-                                        const node_val = switch (node_prop_val) {
-                                            .String => |s| Value{ .Str = s },
-                                            .Int => |ii| Value{ .Int = ii },
-                                            .Bool => |b| Value{ .Bool = b },
-                                            .Float => |f| Value{ .Double = f },
-                                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-                                            .Null => Value{ .Null = {} },
-                                            .ExtValue => |ext| Value{ .ExtValue = ext },
-                                        };
-                                        if (!valuesEqual(node_val, expected)) {
-                                            matches = false;
-                                            break;
-                                        }
-                                    } else {
-                                        matches = false;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            // If bound node matches, now check if the relationship pattern also matches
-                            if (matches and chain.hops.len > 0) {
-                                const hop = chain.hops[0];
-                                const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
-
-                                // CANARY: REQ=REQ-GQL-VAR-LEN-SUBQUERY-001; FEATURE="VariableLengthSubquery"; ASPECT=CountMatches; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
-                                // C01/C02 Fix: Handle variable-length paths (*1..3)
-                                const is_var_length = hop.rel.min_len != null or hop.rel.max_len != null;
-                                if (is_var_length) {
-                                    const min_len: usize = if (hop.rel.min_len) |m| @intCast(m) else 1;
-                                    const max_len: usize = if (hop.rel.max_len) |m| @intCast(m) else 10;
-                                    const target_pattern = hop.right;
-
-                                    // F02 Fix: Check if the target node is bound in the environment for variable-length paths
-                                    var target_bound_id_varlen: ?u64 = null;
-                                    if (target_pattern.name) |target_name| {
-                                        for (env.names, 0..) |env_name_varlen, j| {
-                                            if (std.mem.eql(u8, env_name_varlen, target_name)) {
-                                                const target_val = env.values[j];
-                                                if (target_val == .Node) {
-                                                    target_bound_id_varlen = target_val.Node.id;
-                                                }
-                                                break;
-                                            }
-                                        }
-                                    }
-
-                                    // BFS to find all reachable nodes within depth range
-                                    var visited = std.AutoHashMap(u64, usize).init(allocator);
-                                    defer visited.deinit();
-                                    const QueueItem = struct { node_id: u64, depth: usize };
-                                    var queue = std.ArrayList(QueueItem).initCapacity(allocator, 16) catch continue;
-                                    defer queue.deinit(allocator);
-
-                                    // Start from bound node at depth 0
-                                    queue.append(allocator, QueueItem{ .node_id = bound_node.id, .depth = 0 }) catch continue;
-                                    visited.put(bound_node.id, 0) catch continue;
-
-                                    while (queue.items.len > 0) {
-                                        const current = queue.orderedRemove(0);
-                                        if (current.depth >= max_len) continue;
-
-                                        // Find all edges from current node
-                                        var edge_iter = store.edges.iterator();
-                                        while (edge_iter.next()) |edge_entry| {
-                                            const edge = edge_entry.value_ptr.*;
-                                            if (edge.from_id != current.node_id) continue;
-
-                                            // Filter by relationship type if specified
-                                            if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) {
-                                                continue;
-                                            }
-
-                                            const next_depth = current.depth + 1;
-                                            const next_node_id = edge.to_id;
-
-                                            // Skip if already visited at same or lower depth
-                                            if (visited.get(next_node_id)) |prev_depth| {
-                                                if (prev_depth <= next_depth) continue;
-                                            }
-                                            visited.put(next_node_id, next_depth) catch continue;
-
-                                            // Add to queue for further exploration
-                                            if (next_depth < max_len) {
-                                                queue.append(allocator, QueueItem{ .node_id = next_node_id, .depth = next_depth }) catch {};
-                                            }
-
-                                            // Check if this node is within valid depth range and matches target pattern
-                                            if (next_depth >= min_len and next_depth <= max_len) {
-                                                // F02 Fix: If target is bound, only match that specific node
-                                                if (target_bound_id_varlen) |tid| {
-                                                    if (next_node_id != tid) continue;
-                                                }
-
-                                                if (store.nodes.get(next_node_id)) |target_node| {
-                                                    var target_matches = true;
-
-                                                    // Check label constraints on target
-                                                    for (target_pattern.labels) |required_label| {
-                                                        var has_label = false;
-                                                        for (target_node.labels) |node_label| {
-                                                            if (std.mem.eql(u8, required_label, node_label)) {
-                                                                has_label = true;
-                                                                break;
-                                                            }
-                                                        }
-                                                        if (!has_label) {
-                                                            target_matches = false;
-                                                            break;
-                                                        }
-                                                    }
-
-                                                    // Check WHERE filter if present
-                                                    if (target_matches and where_filter != null) {
-                                                        var ext_env = env;
-                                                        if (target_pattern.name) |target_name| {
-                                                            const target_node_ptr = store.nodes.getPtr(next_node_id) orelse continue;
-                                                            const new_names = allocator.alloc([]const u8, env.names.len + 1) catch continue;
-                                                            const new_values = allocator.alloc(Value, env.values.len + 1) catch continue;
-                                                            @memcpy(new_names[0..env.names.len], env.names);
-                                                            @memcpy(new_values[0..env.values.len], env.values);
-                                                            new_names[env.names.len] = target_name;
-                                                            new_values[env.values.len] = Value{ .Node = target_node_ptr };
-                                                            ext_env = .{
-                                                                .names = new_names,
-                                                                .values = new_values,
-                                                                .allocator = allocator,
-                                                                .param_names = env.param_names,
-                                                                .param_values = env.param_values,
-                                                            };
-                                                        }
-                                                        const where_result = eval.evalExpr(allocator, where_filter.?.*, ext_env) catch continue;
-                                                        const passes = switch (where_result) {
-                                                            .Bool => |b| b,
-                                                            else => false,
-                                                        };
-                                                        if (passes) count += 1;
-                                                    } else if (target_matches) {
-                                                        count += 1;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    return count;
-                                }
-
-                                // Original single-hop handling for non-variable-length patterns
-                                // Count edges from this bound node
-
-                                // CANARY: REQ=REQ-GQL-EXISTS-CORRELATED-002; FEATURE="CorrelatedExists"; ASPECT=TargetNodeBinding; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
-                                // F02 Fix: Check if the target node (right side) is also bound in the environment
-                                // This handles patterns like EXISTS { (u1)-[:REL]->(u2) } where BOTH u1 AND u2 are from outer scope
-                                var target_bound_id: ?u64 = null;
-                                const target_pattern = hop.right;
-                                if (target_pattern.name) |target_name| {
-                                    for (env.names, 0..) |env_name_target, j| {
-                                        if (std.mem.eql(u8, env_name_target, target_name)) {
-                                            const target_val = env.values[j];
-                                            if (target_val == .Node) {
-                                                target_bound_id = target_val.Node.id;
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                var edge_iter = store.edges.iterator();
-                                while (edge_iter.next()) |edge_entry| {
-                                    const edge = edge_entry.value_ptr.*;
-
-                                    // Check if edge starts from our bound node
-                                    if (edge.from_id != bound_node.id) continue;
-
-                                    // Filter by relationship type if specified
-                                    if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) {
-                                        continue;
-                                    }
-
-                                    // F02 Fix: If target node is bound, only match edges to that specific node
-                                    if (target_bound_id) |tid| {
-                                        if (edge.to_id != tid) continue;
-                                    }
-
-                                    // Check target node pattern (right side of the hop)
-                                    // CANARY: REQ=REQ-GQL-EXISTS-PROPS-001; FEATURE="ExistsTargetNodeProps"; ASPECT=PropertyFilter; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
-                                    if (store.nodes.get(edge.to_id)) |target_node| {
-                                        var target_matches = true;
-
-                                        // Check label constraints on target
-                                        for (target_pattern.labels) |required_label| {
-                                            var has_label = false;
-                                            for (target_node.labels) |node_label| {
-                                                if (std.mem.eql(u8, required_label, node_label)) {
-                                                    has_label = true;
-                                                    break;
-                                                }
-                                            }
-                                            if (!has_label) {
-                                                target_matches = false;
-                                                break;
-                                            }
-                                        }
-
-                                        // Check property constraints on target (e.g., {status: 'cancelled'})
-                                        if (target_matches and target_pattern.props != null) {
-                                            for (target_pattern.props.?) |prop| {
-                                                const expected = eval.evalExpr(allocator, prop.value.*, env) catch Value{ .Null = {} };
-                                                if (target_node.properties.get(prop.key)) |node_prop_val| {
-                                                    const node_val = switch (node_prop_val) {
-                                                        .String => |s| Value{ .Str = s },
-                                                        .Int => |ii| Value{ .Int = ii },
-                                                        .Bool => |b| Value{ .Bool = b },
-                                                        .Float => |f| Value{ .Double = f },
-                                                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-                                                        .Null => Value{ .Null = {} },
-                                                        .ExtValue => |ext| Value{ .ExtValue = ext },
-                                                    };
-                                                    if (!valuesEqual(node_val, expected)) {
-                                                        target_matches = false;
-                                                        break;
-                                                    }
-                                                } else {
-                                                    target_matches = false;
-                                                    break;
-                                                }
-                                            }
-                                        }
-
-                                        if (target_matches) {
-                                            // CANARY: REQ=REQ-GQL-EXISTS-WHERE-001; FEATURE="ExistsWithWhere"; ASPECT=WhereFilter; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-27
-                                            // Check WHERE filter if present (for nested EXISTS)
-                                            if (where_filter) |wf| {
-                                                // Build environment with target node bound (if pattern has a name)
-                                                var ext_env = env;
-                                                if (target_pattern.name) |target_name| {
-                                                    // Get node pointer for environment binding
-                                                    const target_node_ptr = store.nodes.getPtr(edge.to_id) orelse continue;
-                                                    // Create extended environment with the target node
-                                                    const new_names = allocator.alloc([]const u8, env.names.len + 1) catch continue;
-                                                    const new_values = allocator.alloc(Value, env.values.len + 1) catch continue;
-                                                    @memcpy(new_names[0..env.names.len], env.names);
-                                                    @memcpy(new_values[0..env.values.len], env.values);
-                                                    new_names[env.names.len] = target_name;
-                                                    new_values[env.values.len] = Value{ .Node = target_node_ptr };
-                                                    ext_env = .{
-                                                        .names = new_names,
-                                                        .values = new_values,
-                                                        .allocator = allocator,
-                                                        .param_names = env.param_names,
-                                                        .param_values = env.param_values,
-                                                    };
-                                                }
-                                                // Evaluate WHERE filter
-                                                const where_result = eval.evalExpr(allocator, wf.*, ext_env) catch continue;
-                                                const passes = switch (where_result) {
-                                                    .Bool => |b| b,
-                                                    else => false,
-                                                };
-                                                if (passes) count += 1;
-                                            } else {
-                                                count += 1;
-                                            }
-                                        }
-                                    }
-                                }
-                                return count;
-                            }
-
-                            // No relationship hops - just count if the node matches
-                            if (matches) {
-                                // Check WHERE filter if present
-                                if (where_filter) |wf| {
-                                    const where_result = eval.evalExpr(allocator, wf.*, env) catch return 0;
-                                    const passes = switch (where_result) {
-                                        .Bool => |b| b,
-                                        else => false,
-                                    };
-                                    if (passes) count = 1;
-                                } else {
-                                    count = 1;
-                                }
-                            }
-                            return count;
-                        }
-                        break;
+                // Check properties on the bound node using helper
+                if (node_pattern.props) |props| {
+                    if (!nodeMatchesProperties(bound_node.properties, props, env, allocator)) {
+                        return 0; // Bound node doesn't match required properties
                     }
                 }
+
+                // If bound node matches, now check if the relationship pattern also matches
+                if (chain.hops.len > 0) {
+                    const hop = chain.hops[0];
+                    const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
+
+                    // CANARY: REQ=REQ-GQL-VAR-LEN-SUBQUERY-001; FEATURE="VariableLengthSubquery"; ASPECT=CountMatches; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
+                    // C01/C02 Fix: Handle variable-length paths (*1..3)
+                    const is_var_length = hop.rel.min_len != null or hop.rel.max_len != null;
+                    if (is_var_length) {
+                        return countVariableLengthPathMatches(allocator, bound_node, hop, rel_type, where_filter, env, store);
+                    }
+
+                    // Original single-hop handling for non-variable-length patterns
+                    return countSingleHopMatches(allocator, bound_node, hop, rel_type, where_filter, env, store);
+                }
+
+                // No relationship pattern, just count the bound node if it matched
+                return 1;
             }
 
             // No outer variable binding - fall through to regular node counting

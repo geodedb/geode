@@ -32,6 +32,248 @@ const expandVariableLengthPaths = execution.expandVariableLengthPaths;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
+// ============================================================================
+// CANARY: REQ=REQ-REFACTOR-MATCH-001; FEATURE="MatchOperationsRefactor"; ASPECT=PatternInfoStruct; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
+// Struct to hold pattern information extracted from MATCH clause
+// ============================================================================
+pub const PatternInfo = struct {
+    match_variable: ?[]const u8 = null,
+    match_labels: [][]const u8 = &.{},
+    match_props: ?[]ast.Property = null,
+    has_relationship: bool = false,
+    rel_type: ?[]const u8 = null,
+    left_node_var: ?[]const u8 = null,
+    right_node_var: ?[]const u8 = null,
+    rel_var: ?[]const u8 = null,
+    right_labels: [][]const u8 = &.{},
+    right_props: ?[]ast.Property = null,
+    var_len_min: ?u32 = null,
+    var_len_max: ?u32 = null,
+    rel_direction: u8 = 'r', // 'r' for right (forward), 'l' for left (reverse), 'u' for undirected
+    chain_path_var: ?[]const u8 = null,
+};
+
+// CANARY: REQ=REQ-REFACTOR-MATCH-002; FEATURE="MatchOperationsRefactor"; ASPECT=PatternExtraction; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
+/// Extract pattern information from MATCH clause chains
+/// This consolidates the pattern extraction logic used in executeMatchQueryImpl
+pub fn extractPatternInfo(q: ast.Query) PatternInfo {
+    var info = PatternInfo{};
+
+    // Get the first chain from the pattern
+    if (q.match.chains.len > 0) {
+        const chain = q.match.chains[0];
+        info.chain_path_var = chain.name;
+
+        // Check if this is a relationship pattern (has hops)
+        if (chain.hops.len > 0) {
+            info.has_relationship = true;
+            const hop = chain.hops[0];
+
+            // Get left node info
+            info.left_node_var = hop.left.name;
+
+            // Get relationship info
+            info.rel_var = hop.rel.name;
+            if (hop.rel.types.len > 0) {
+                info.rel_type = hop.rel.types[0];
+            }
+
+            // Check for variable-length path pattern
+            // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=PatternExtraction; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
+            // CANARY: REQ=REQ-GQL-VARLEN-REVERSE-002; FEATURE="VariableLengthPaths"; ASPECT=DirectionExtraction; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
+            info.var_len_min = hop.rel.min_len;
+            info.var_len_max = hop.rel.max_len;
+
+            // Extract relationship direction for variable-length path traversal
+            info.rel_direction = switch (hop.rel.dir) {
+                .right => 'r',
+                .left => 'l',
+                .undirected => 'u',
+            };
+
+            // Get right node info
+            info.right_node_var = hop.right.name;
+            info.right_labels = hop.right.labels; // Extract right node labels for filtering
+            info.right_props = hop.right.props; // Extract right node properties for filtering
+
+            // Use left node as the main match variable
+            info.match_variable = info.left_node_var;
+            info.match_labels = hop.left.labels;
+            info.match_props = hop.left.props; // Extract left node properties
+        } else if (chain.head) |node_pattern| {
+            // Simple node pattern without relationships
+            info.match_variable = node_pattern.name;
+            info.match_labels = node_pattern.labels;
+            info.match_props = node_pattern.props; // Extract node properties
+        }
+    }
+
+    return info;
+}
+
+// CANARY: REQ=REQ-REFACTOR-MATCH-003; FEATURE="MatchOperationsRefactor"; ASPECT=ShortestPathHandler; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
+/// Handle path variable assignment for shortestPath patterns
+/// Returns the execution result if this is a shortestPath pattern, null otherwise
+/// CANARY: REQ=REQ-GQL-PATH-ASSIGNMENT; FEATURE="PathVariableAssignment"; ASPECT=ShortestPathBinding; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-12
+pub fn handleShortestPathAssignment(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) !?ExecutionResult {
+    // Handle path variable assignment: MATCH p = shortestPath((a)-[*]-(c))
+    // Only trigger for actual shortestPath/allShortestPaths function calls, not regular path assignments
+    if (q.path_variable) |path_var| {
+        // This is a path assignment - check if it's a shortestPath pattern
+        if (q.match.chains.len > 0) {
+            const chain = q.match.chains[0];
+            if (chain.name) |chain_name| {
+                // Only use shortestPath handling if the chain is explicitly marked as a shortest path pattern
+                if (chain.is_shortest and std.mem.eql(u8, chain_name, path_var) and chain.hops.len > 0) {
+                    // This is a shortestPath pattern assignment
+                    // Build environment from inline_let_bindings (which come from WITH clause)
+                    const env = Env{
+                        .names = param_names,
+                        .values = param_values,
+                        .allocator = allocator,
+                    };
+
+                    // Execute shortestPath
+                    const pattern = q.match;
+                    const path_result = try findShortestPath(allocator, pattern, false, env);
+
+                    // Create result with path bound to path_variable
+                    const columns = try generateUniqueColumnNames(allocator, q.ret.items);
+
+                    // Build environment with path variable
+                    var path_env_names = try allocator.alloc([]const u8, param_names.len + 1);
+                    var path_env_values = try allocator.alloc(Value, param_values.len + 1);
+                    for (param_names, 0..) |name, i| {
+                        path_env_names[i] = name;
+                        path_env_values[i] = param_values[i];
+                    }
+                    path_env_names[param_names.len] = path_var;
+                    path_env_values[param_values.len] = path_result;
+
+                    const path_env = Env{
+                        .names = path_env_names,
+                        .values = path_env_values,
+                        .allocator = allocator,
+                        .owned = true, // Owns allocated arrays
+                    };
+
+                    // Evaluate RETURN expressions with path in environment
+                    var row = try allocator.alloc(Value, q.ret.items.len);
+                    for (q.ret.items, 0..) |item, i| {
+                        row[i] = try eval.evalExpr(allocator, item.expr, path_env);
+                    }
+
+                    var rows = try allocator.alloc([]Value, 1);
+                    rows[0] = row;
+
+                    return ExecutionResult{
+                        .columns = columns,
+                        .rows = rows,
+                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    };
+                }
+            }
+        }
+    }
+    return null;
+}
+
+// CANARY: REQ=REQ-REFACTOR-MATCH-004; FEATURE="MatchOperationsRefactor"; ASPECT=SimpleNodeCheck; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
+/// Check if all chains in the match pattern are simple node patterns (no relationships)
+/// CANARY: REQ=REQ-GQL-COMMA-MATCH; FEATURE="CommaSepar atedMatches"; ASPECT=MultipleChains; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-12
+pub fn checkAllSimpleNodes(chains: []const ast.Chain) bool {
+    for (chains) |chain| {
+        if (chain.hops.len > 0 or chain.head == null) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// CANARY: REQ=REQ-REFACTOR-MATCH-005; FEATURE="MatchOperationsRefactor"; ASPECT=MultiChainDispatch; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
+/// Dispatch result type for multi-chain handler routing
+pub const DispatchResult = union(enum) {
+    /// Execute multi-node match (all simple nodes, multiple chains)
+    multi_node_match,
+    /// Execute multi-chain relationship match (multiple chains with relationships)
+    multi_chain_relationship_match,
+    /// Execute match with optional patterns (has optional chains)
+    match_with_optional_patterns,
+    /// Continue with standard single-chain processing
+    continue_processing,
+};
+
+// CANARY: REQ=REQ-REFACTOR-MATCH-006; FEATURE="MatchOperationsRefactor"; ASPECT=DispatchLogic; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
+/// Determine which handler to dispatch to for multi-chain patterns
+/// Returns the appropriate dispatch result based on chain characteristics
+pub fn dispatchToMultiChainHandler(q: ast.Query, all_simple_nodes: bool) DispatchResult {
+    // Handle comma-separated node patterns: MATCH (a:Node), (b:Node)
+    if (all_simple_nodes and q.match.chains.len > 1) {
+        // CANARY: REQ=REQ-GQL-OPTIONAL-NODE-ONLY-003; FEATURE="OptionalMatchNodeOnlyDispatch"; ASPECT=QueryDispatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
+        // Check if any chain is optional - if so, use executeMatchWithOptionalPatterns
+        for (q.match.chains) |chain| {
+            if (chain.is_optional) {
+                return .match_with_optional_patterns;
+            }
+        }
+        // Handle multiple independent node patterns (all required)
+        return .multi_node_match;
+    }
+
+    // CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-002; FEATURE="MultiChainRelationshipMatch"; ASPECT=Dispatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
+    // Handle multiple chains with relationships that share variables
+    // e.g., MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:PURCHASED]->(pr:Product)
+    if (q.match.chains.len > 1 and !all_simple_nodes) {
+        var has_any_optional = false;
+        for (q.match.chains) |chain| {
+            if (chain.is_optional) {
+                has_any_optional = true;
+                break;
+            }
+        }
+        if (!has_any_optional) {
+            // Multiple required chains with relationships - use join logic
+            return .multi_chain_relationship_match;
+        }
+        // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-HOP-001; FEATURE="OptionalMatchWithHops"; ASPECT=Dispatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2026-01-29
+        // When first chain has hops and there are optional chains, use executeMatchWithOptionalPatterns
+        // This handles: MATCH (a)-[r]->(b) OPTIONAL MATCH (b)-[r2]->(c)
+        return .match_with_optional_patterns;
+    }
+
+    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchExecution"; ASPECT=LeftOuterJoin; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
+    // Handle MATCH + OPTIONAL MATCH patterns (left outer join)
+    // e.g., MATCH (p:Person) OPTIONAL MATCH (p)-[:WORKS_FOR]->(c:Company)
+    if (q.match.chains.len >= 2) {
+        // Check if we have a mix of required and optional chains
+        var has_required = false;
+        var has_optional = false;
+        var first_required_is_simple = false;
+        for (q.match.chains, 0..) |chain, idx| {
+            if (chain.is_optional) {
+                has_optional = true;
+            } else {
+                has_required = true;
+                if (idx == 0 and chain.head != null and chain.hops.len == 0) {
+                    first_required_is_simple = true;
+                }
+            }
+        }
+
+        // Handle MATCH (node) OPTIONAL MATCH (node)-[rel]->(other) pattern
+        if (has_required and has_optional and first_required_is_simple) {
+            return .match_with_optional_patterns;
+        }
+    }
+
+    return .continue_processing;
+}
+
 // CANARY: REQ=REQ-GQL-MULTINODE-PROPVARREF-002; FEATURE="PropertyPatternVariableReference"; ASPECT=Detection; STATUS=EXEMPT; OWNER=engine; UPDATED=2025-12-26
 /// Check if an expression contains a variable reference (e.g., Member like d.name)
 /// This is used to detect property patterns like {department: d.name} that can't be
@@ -3321,212 +3563,43 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
 // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=MatchFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // Execute MATCH query with graph isolation - only matches nodes in the specified graph
+// CANARY: REQ=REQ-REFACTOR-MATCH-007; FEATURE="MatchOperationsRefactor"; ASPECT=RefactoredFunction; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
 pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
     // Graph to filter by - use "default" if no graph specified
     const filter_graph = current_graph orelse "default";
 
-    // Extract pattern information from MATCH
-    var match_variable: ?[]const u8 = null;
-    var match_labels: [][]const u8 = &.{};
-    var match_props: ?[]ast.Property = null; // NEW: Extract inline property constraints
-    var has_relationship = false;
-    var rel_type: ?[]const u8 = null;
-    var left_node_var: ?[]const u8 = null;
-    var right_node_var: ?[]const u8 = null;
-    var rel_var: ?[]const u8 = null;
-    var right_labels: [][]const u8 = &.{}; // Labels required on right/target node
-    var right_props: ?[]ast.Property = null; // Properties required on right/target node
+    // Extract pattern information from MATCH using helper function
+    const pattern_info = extractPatternInfo(q);
+    const match_variable = pattern_info.match_variable;
+    const match_labels = pattern_info.match_labels;
+    const match_props = pattern_info.match_props;
+    const has_relationship = pattern_info.has_relationship;
+    const rel_type = pattern_info.rel_type;
+    const left_node_var = pattern_info.left_node_var;
+    const right_node_var = pattern_info.right_node_var;
+    const rel_var = pattern_info.rel_var;
+    const right_labels = pattern_info.right_labels;
+    const right_props = pattern_info.right_props;
+    const var_len_min = pattern_info.var_len_min;
+    const var_len_max = pattern_info.var_len_max;
+    const rel_direction = pattern_info.rel_direction;
+    const chain_path_var = pattern_info.chain_path_var;
 
-    // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=PatternExtraction; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
-    // CANARY: REQ=REQ-GQL-VARLEN-REVERSE-002; FEATURE="VariableLengthPaths"; ASPECT=DirectionExtraction; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
-    // Variable-length path pattern support
-    var var_len_min: ?u32 = null;
-    var var_len_max: ?u32 = null;
-    var rel_direction: u8 = 'r'; // 'r' for right (forward), 'l' for left (reverse), 'u' for undirected
-    var chain_path_var: ?[]const u8 = null;
-
-    // Get the first chain from the pattern
-    if (q.match.chains.len > 0) {
-        const chain = q.match.chains[0];
-        chain_path_var = chain.name;
-
-        // Check if this is a relationship pattern (has hops)
-        if (chain.hops.len > 0) {
-            has_relationship = true;
-            const hop = chain.hops[0];
-
-            // Get left node info
-            left_node_var = hop.left.name;
-
-            // Get relationship info
-            rel_var = hop.rel.name;
-            if (hop.rel.types.len > 0) {
-                rel_type = hop.rel.types[0];
-            }
-
-            // Check for variable-length path pattern
-            var_len_min = hop.rel.min_len;
-            var_len_max = hop.rel.max_len;
-
-            // Extract relationship direction for variable-length path traversal
-            rel_direction = switch (hop.rel.dir) {
-                .right => 'r',
-                .left => 'l',
-                .undirected => 'u',
-            };
-
-            // Get right node info
-            right_node_var = hop.right.name;
-            right_labels = hop.right.labels; // Extract right node labels for filtering
-            right_props = hop.right.props; // Extract right node properties for filtering
-
-            // For now, use left node as the main match variable
-            match_variable = left_node_var;
-            match_labels = hop.left.labels;
-            match_props = hop.left.props; // NEW: Extract left node properties
-        } else if (chain.head) |node_pattern| {
-            // Simple node pattern without relationships
-            match_variable = node_pattern.name;
-            match_labels = node_pattern.labels;
-            match_props = node_pattern.props; // NEW: Extract node properties
-        }
+    // Handle shortestPath assignment using helper function
+    if (try handleShortestPathAssignment(allocator, q, param_names, param_values)) |result| {
+        return result;
     }
 
-    // CANARY: REQ=REQ-GQL-PATH-ASSIGNMENT; FEATURE="PathVariableAssignment"; ASPECT=ShortestPathBinding; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-12
-    // Handle path variable assignment: MATCH p = shortestPath((a)-[*]-(c))
-    // Only trigger for actual shortestPath/allShortestPaths function calls, not regular path assignments
-    if (q.path_variable) |path_var| {
-        // This is a path assignment - check if it's a shortestPath pattern
-        if (q.match.chains.len > 0) {
-            const chain = q.match.chains[0];
-            if (chain.name) |chain_name| {
-                // Only use shortestPath handling if the chain is explicitly marked as a shortest path pattern
-                if (chain.is_shortest and std.mem.eql(u8, chain_name, path_var) and chain.hops.len > 0) {
-                    // This is a shortestPath pattern assignment
-                    // Build environment from inline_let_bindings (which come from WITH clause)
-                    const env = Env{
-                        .names = param_names,
-                        .values = param_values,
-                        .allocator = allocator,
-                    };
+    // Check if all chains are simple node patterns and dispatch accordingly
+    const all_simple_nodes = checkAllSimpleNodes(q.match.chains);
 
-                    // Execute shortestPath
-                    const pattern = q.match;
-                    const path_result = try findShortestPath(allocator, pattern, false, env);
-
-                    // Create result with path bound to path_variable
-                    const columns = try generateUniqueColumnNames(allocator, q.ret.items);
-
-                    // Build environment with path variable
-                    var path_env_names = try allocator.alloc([]const u8, param_names.len + 1);
-                    var path_env_values = try allocator.alloc(Value, param_values.len + 1);
-                    for (param_names, 0..) |name, i| {
-                        path_env_names[i] = name;
-                        path_env_values[i] = param_values[i];
-                    }
-                    path_env_names[param_names.len] = path_var;
-                    path_env_values[param_values.len] = path_result;
-
-                    const path_env = Env{
-                        .names = path_env_names,
-                        .values = path_env_values,
-                        .allocator = allocator,
-                        .owned = true, // Owns allocated arrays
-                    };
-
-                    // Evaluate RETURN expressions with path in environment
-                    var row = try allocator.alloc(Value, q.ret.items.len);
-                    for (q.ret.items, 0..) |item, i| {
-                        row[i] = try eval.evalExpr(allocator, item.expr, path_env);
-                    }
-
-                    var rows = try allocator.alloc([]Value, 1);
-                    rows[0] = row;
-
-                    return ExecutionResult{
-                        .columns = columns,
-                        .rows = rows,
-                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
-                    };
-                }
-            }
-        }
-    }
-
-    // CANARY: REQ=REQ-GQL-COMMA-MATCH; FEATURE="CommaSepar atedMatches"; ASPECT=MultipleChains; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-12
-    // Handle comma-separated node patterns: MATCH (a:Node), (b:Node)
-    // Check if all chains are simple node patterns (no relationships)
-    var all_simple_nodes = true;
-    for (q.match.chains) |chain| {
-        if (chain.hops.len > 0 or chain.head == null) {
-            all_simple_nodes = false;
-            break;
-        }
-    }
-
-    if (all_simple_nodes and q.match.chains.len > 1) {
-        // CANARY: REQ=REQ-GQL-OPTIONAL-NODE-ONLY-003; FEATURE="OptionalMatchNodeOnlyDispatch"; ASPECT=QueryDispatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
-        // Check if any chain is optional - if so, use executeMatchWithOptionalPatterns
-        var has_any_optional_node = false;
-        for (q.match.chains) |chain| {
-            if (chain.is_optional) {
-                has_any_optional_node = true;
-                break;
-            }
-        }
-        if (has_any_optional_node) {
-            // Use optional match handler even for simple nodes
-            return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
-        }
-        // Handle multiple independent node patterns (all required)
-        return executeMultiNodeMatch(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
-    }
-
-    // CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-002; FEATURE="MultiChainRelationshipMatch"; ASPECT=Dispatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
-    // Handle multiple chains with relationships that share variables
-    // e.g., MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:PURCHASED]->(pr:Product)
-    if (q.match.chains.len > 1 and !all_simple_nodes) {
-        var has_any_optional = false;
-        for (q.match.chains) |chain| {
-            if (chain.is_optional) {
-                has_any_optional = true;
-                break;
-            }
-        }
-        if (!has_any_optional) {
-            // Multiple required chains with relationships - use join logic
-            return executeMultiChainRelationshipMatch(allocator, q, param_names, param_values, current_graph);
-        }
-        // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-HOP-001; FEATURE="OptionalMatchWithHops"; ASPECT=Dispatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2026-01-29
-        // When first chain has hops and there are optional chains, use executeMatchWithOptionalPatterns
-        // This handles: MATCH (a)-[r]->(b) OPTIONAL MATCH (b)-[r2]->(c)
-        return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
-    }
-
-    // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchExecution"; ASPECT=LeftOuterJoin; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-    // Handle MATCH + OPTIONAL MATCH patterns (left outer join)
-    // e.g., MATCH (p:Person) OPTIONAL MATCH (p)-[:WORKS_FOR]->(c:Company)
-    if (q.match.chains.len >= 2) {
-        // Check if we have a mix of required and optional chains
-        var has_required = false;
-        var has_optional = false;
-        var first_required_is_simple = false;
-        for (q.match.chains, 0..) |chain, idx| {
-            if (chain.is_optional) {
-                has_optional = true;
-            } else {
-                has_required = true;
-                if (idx == 0 and chain.head != null and chain.hops.len == 0) {
-                    first_required_is_simple = true;
-                }
-            }
-        }
-
-        // Handle MATCH (node) OPTIONAL MATCH (node)-[rel]->(other) pattern
-        if (has_required and has_optional and first_required_is_simple) {
-            return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
-        }
+    // Dispatch to appropriate multi-chain handler using helper function
+    switch (dispatchToMultiChainHandler(q, all_simple_nodes)) {
+        .multi_node_match => return executeMultiNodeMatch(allocator, q, param_names, param_values, inline_let_bindings, current_graph),
+        .multi_chain_relationship_match => return executeMultiChainRelationshipMatch(allocator, q, param_names, param_values, current_graph),
+        .match_with_optional_patterns => return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings, current_graph),
+        .continue_processing => {},
     }
 
     const items = q.ret.items;

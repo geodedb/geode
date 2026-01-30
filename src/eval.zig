@@ -90,6 +90,10 @@ fn extValueListToValueList(allocator: std.mem.Allocator, ext_values: []ExtValue)
 // Phase 6 M6.1: Import type promotion module for type conversion and validation utilities
 const type_promotion = @import("eval/type_promotion.zig");
 
+// CANARY: REQ=REQ-EVAL-REFACTOR-001; FEATURE="EvalExpr Refactoring"; ASPECT=CallHandlersImport; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-30
+// Import call handlers module for function call evaluation helpers
+const call_handlers = @import("eval/call_handlers.zig");
+
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-002; FEATURE="Phase 6 Modularization"; ASPECT=TypePromotionAliases; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 6 M6.1: Use type promotion functions from type_promotion module
 const scaleTo = type_promotion.scaleTo;
@@ -989,6 +993,43 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 },
                 else => break :blk_call .{ .Null = {} }, // Not a simple function call
             };
+
+            // CANARY: REQ=REQ-EVAL-REFACTOR-007; FEATURE="EvalExpr Refactoring"; ASPECT=CallDispatch; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-30
+            // Try the extracted call handler helpers first for cleaner function dispatch
+            // This reduces evalExpr size by delegating common functions to specialized handlers
+
+            // Convert function name to lowercase for lookup
+            var lowercase_name_buf: [256]u8 = undefined;
+            const fn_name_len = @min(function_name.len, lowercase_name_buf.len);
+            for (function_name[0..fn_name_len], 0..) |c, i| {
+                lowercase_name_buf[i] = std.ascii.toLower(c);
+            }
+            const lowercase_fn = lowercase_name_buf[0..fn_name_len];
+
+            // Try math functions (abs, sqrt, ceil, floor, round, sin, cos, tan, etc.)
+            if (try call_handlers.evalMathFunction(allocator, lowercase_fn, call.args, env)) |result| {
+                break :blk_call result;
+            }
+
+            // Try string functions (substring, trim, upper, lower, replace, etc.)
+            if (try call_handlers.evalStringFunction(allocator, lowercase_fn, call.args, env)) |result| {
+                break :blk_call result;
+            }
+
+            // Try type cast functions (cast, toString, toInteger, toFloat, toBoolean)
+            if (try call_handlers.evalTypeCastFunction(allocator, lowercase_fn, call.args, env)) |result| {
+                break :blk_call result;
+            }
+
+            // Try collection functions (keys, values, size, head, tail, last, range, reverse)
+            if (try call_handlers.evalCollectionFunction(allocator, lowercase_fn, call.args, env)) |result| {
+                break :blk_call result;
+            }
+
+            // Try aggregate functions (count, sum, avg, min, max)
+            if (try call_handlers.evalAggregateFunction(allocator, lowercase_fn, call.args, env)) |result| {
+                break :blk_call result;
+            }
 
             // GAP-004: Wiring GQL to Time-Series
             if (std.mem.eql(u8, function_name, "timeseries.value")) {
