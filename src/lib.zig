@@ -236,6 +236,8 @@ pub const repl = struct {
     pub const keymap_vi = @import("client/repl/keymap_vi.zig");
     pub const repl_complete = @import("client/repl/repl_complete.zig");
     pub const repl_config = @import("client/repl/repl_config.zig");
+    /// CANARY: REQ=REQ-SHELL-SPINNER-002; FEATURE="ShellProcessingIndicator"; ASPECT=ModuleExport; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
+    pub const spinner = @import("client/repl/spinner.zig");
 };
 
 // Extend planner module

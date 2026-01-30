@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const repl_errors = @import("repl_errors.zig");
 const repl_render = @import("repl_render.zig");
 const platform = @import("platform.zig");
+const spinner_mod = @import("spinner.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-063; FEATURE="JSON Library Migration"; ASPECT=ReplDispatch; STATUS=EXEMPT; OWNER=client; UPDATED=2026-01-25
 const json_lib = @import("json");
@@ -1532,6 +1533,17 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     const info_msg = std.fmt.bufPrint(&info_buf, "Sourcing: {s}\r\n", .{resolved_path}) catch return;
     try stdout.writeAll(info_msg);
 
+    // CANARY: REQ=REQ-SHELL-SPINNER-003; FEATURE="ShellProcessingIndicator"; ASPECT=SourceFileSpinner; STATUS=TESTED; TEST=tests/test_spinner.zig; OWNER=cli; UPDATED=2026-01-30
+    // Initialize spinner for visual feedback during long-running source operations
+    var progress_spinner = spinner_mod.Spinner.init(state.allocator, "Parsing file...");
+    progress_spinner.start();
+    defer {
+        // Ensure spinner is stopped on any exit path
+        if (progress_spinner.isRunning()) {
+            progress_spinner.stop(null);
+        }
+    }
+
     // CANARY: REQ=REQ-SOURCE-PERF-004; FEATURE="SourceFilePerformance"; ASPECT=BatchParsing; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
     // Issue #400: Parse entire file and collect all GQL statements for batch execution
     var batch_statements = try std.ArrayList(u8).initCapacity(state.allocator, contents.len);
@@ -1640,6 +1652,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
 
     // Handle case with no GQL statements (only meta-commands)
     if (batch_statements.items.len == 0) {
+        progress_spinner.success("Parsing complete");
         // Execute meta-commands only
         for (meta_commands.items) |mc| {
             executeMetaCommand(state, mc, stdout);
@@ -1649,6 +1662,11 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
         try stdout.writeAll(summary);
         return;
     }
+
+    // Update spinner for execution phase
+    var exec_msg_buf: [128]u8 = undefined;
+    const exec_msg = std.fmt.bufPrint(&exec_msg_buf, "Executing {d} statements...", .{statement_count}) catch "Executing...";
+    progress_spinner.setMessage(exec_msg);
 
     // CANARY: REQ=REQ-SOURCE-PERF-008; FEATURE="SourceFilePerformance"; ASPECT=TransactionDetection; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
     // Issue #391: Check if file contains explicit transaction commands (BEGIN, COMMIT, ROLLBACK)
@@ -1727,8 +1745,13 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     // Issue #391: Commit on success, rollback on error for atomicity
     if (auto_txn and begin_succeeded) {
         if (error_count > 0) {
+            // Update spinner for rollback
+            progress_spinner.setMessage("Rolling back transaction...");
+            _ = progress_spinner.tick();
+
             // Rollback on error - ensure atomicity
             state.session.rollback() catch |rollback_err| {
+                progress_spinner.stop(null); // Stop spinner before error output
                 try stderr.writeAll("Error: Failed to rollback transaction");
                 if (state.session.last_txn_error) |txn_err| {
                     try stderr.writeAll(": ");
@@ -1742,8 +1765,13 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
             };
             try stderr.writeAll("Transaction rolled back due to errors\r\n");
         } else {
+            // Update spinner for commit
+            progress_spinner.setMessage("Committing transaction...");
+            _ = progress_spinner.tick();
+
             // Commit on success
             state.session.commit() catch |commit_err| {
+                progress_spinner.stop(null); // Stop spinner before error output
                 // CANARY: REQ=REQ-SHELL-SOURCE-ERROR-002; FEATURE="SourceFileErrorDetails"; ASPECT=CommitErrorMessage; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
                 // Display detailed commit error message instead of just "WouldBlock"
                 try stderr.writeAll("\r\nError: Failed to commit transaction");
@@ -1779,13 +1807,15 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
         }
     }
 
-    // Summary
+    // Stop spinner and display summary
     var summary_buf: [256]u8 = undefined;
-    const summary = if (error_count > 0)
-        std.fmt.bufPrint(&summary_buf, "Executed {d} statement(s) with {d} error(s)\r\n", .{ statement_count, error_count }) catch return
-    else
-        std.fmt.bufPrint(&summary_buf, "Executed {d} statement(s) successfully\r\n", .{statement_count}) catch return;
-    try stdout.writeAll(summary);
+    if (error_count > 0) {
+        const fail_msg = std.fmt.bufPrint(&summary_buf, "Executed {d} statement(s) with {d} error(s)", .{ statement_count, error_count }) catch "Execution failed";
+        progress_spinner.fail(fail_msg);
+    } else {
+        const success_msg = std.fmt.bufPrint(&summary_buf, "Executed {d} statement(s) successfully", .{statement_count}) catch "Execution complete";
+        progress_spinner.success(success_msg);
+    }
 }
 
 /// Meta-command type for deferred execution during source file processing
