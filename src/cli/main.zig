@@ -687,7 +687,7 @@ fn handleControlStatement(
     try runSimpleStatement(writer, allocator, statement, authenticated_username);
 }
 
-// CANARY: REQ=REQ-PERF-WRITE-STALL-001; FEATURE="WriteStallOptimization"; ASPECT=StreamWrite; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-27
+// CANARY: REQ=REQ-PERF-WRITE-STALL-001; FEATURE="WriteStallOptimization"; ASPECT=StreamWrite; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=cli; UPDATED=2026-01-30
 // GAP-0203: Three-phase write stall handling:
 //   Phase 1 (stalls 1-3): Spin with poll only (zero sleep, sub-microsecond)
 //   Phase 2 (stalls 4-8): Poll + yield to OS scheduler (minimal latency)
@@ -1863,7 +1863,7 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     var stream_count: u32 = 0;
     var loop_iteration: u64 = 0;
     // GAP-0201: Adaptive backoff for high throughput - only sleep when idle
-    // CANARY: REQ=REQ-PERF-ADAPTIVE-BACKOFF-001; FEATURE="AdaptiveBackoff"; ASPECT=MainLoopSleep; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-26
+    // CANARY: REQ=REQ-PERF-ADAPTIVE-BACKOFF-001; FEATURE="AdaptiveBackoff"; ASPECT=MainLoopSleep; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=cli; UPDATED=2026-01-30
     var idle_iterations: u32 = 0;
     const max_idle_before_sleep: u32 = 10; // Start sleeping after 10 idle iterations
     const min_sleep_us: u64 = 10; // 10μs minimum sleep
@@ -1992,7 +1992,7 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         }
 
         // GAP-0201: Adaptive backoff - only sleep when idle to maximize throughput
-        // CANARY: REQ=REQ-PERF-ADAPTIVE-BACKOFF-002; FEATURE="AdaptiveBackoff"; ASPECT=IdleSleep; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-26
+        // CANARY: REQ=REQ-PERF-ADAPTIVE-BACKOFF-002; FEATURE="AdaptiveBackoff"; ASPECT=IdleSleep; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=cli; UPDATED=2026-01-30
         if (processed_any_data) {
             // Data was processed - reset idle counter, no sleep needed
             idle_iterations = 0;
@@ -3131,7 +3131,21 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
     // GAP-0113: Execute query via QUIC connection with optional certificate verification
     // CANARY: REQ=REQ-CLI-GRAPH-FLAG-003; FEATURE="GraphFlag"; ASPECT=ExecuteWithGraph; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-    try executeQuicQuery(allocator, server_addr, query_text.?, format, insecure, timeout_secs, retry_count, user, password, ca_cert_path, client_cert_path, client_key_path, graph);
+    // Quality fix #405: Using options struct instead of 13 positional parameters
+    try executeQuicQuery(allocator, .{
+        .server_addr = server_addr,
+        .query_text = query_text.?,
+        .format = format,
+        .insecure = insecure,
+        .timeout_secs = timeout_secs,
+        .retry_count = retry_count,
+        .username = user,
+        .password = password,
+        .ca_cert_path = ca_cert_path,
+        .client_cert_path = client_cert_path,
+        .client_key_path = client_key_path,
+        .graph = graph,
+    });
 }
 
 /// Escape a string for safe embedding in JSON
@@ -3194,7 +3208,35 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 // GAP-0113 SECURITY FIX: Add TLS certificate verification support
 // CANARY: REQ=REQ-TLS-CERT-002; FEATURE="TLSCertVerification"; ASPECT=Core; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-12
 // CANARY: REQ=REQ-CLI-GRAPH-FLAG-004; FEATURE="GraphFlag"; ASPECT=ExecuteQuicQuery; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-fn executeQuicQuery(allocator: std.mem.Allocator, server_addr: []const u8, query_text: []const u8, format: []const u8, insecure: bool, timeout_secs: u32, retry_count: u32, username: ?[]const u8, password: ?[]const u8, ca_cert_path: ?[]const u8, client_cert_path: ?[]const u8, client_key_path: ?[]const u8, graph: ?[]const u8) !void {
+// Quality fix #405: Refactored 13-parameter function to use options struct
+const QuicQueryOptions = struct {
+    server_addr: []const u8,
+    query_text: []const u8,
+    format: []const u8 = "table",
+    insecure: bool = false,
+    timeout_secs: u32 = 30,
+    retry_count: u32 = 0,
+    username: ?[]const u8 = null,
+    password: ?[]const u8 = null,
+    ca_cert_path: ?[]const u8 = null,
+    client_cert_path: ?[]const u8 = null,
+    client_key_path: ?[]const u8 = null,
+    graph: ?[]const u8 = null,
+};
+
+fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void {
+    const server_addr = opts.server_addr;
+    const query_text = opts.query_text;
+    const format = opts.format;
+    const insecure = opts.insecure;
+    const timeout_secs = opts.timeout_secs;
+    const retry_count = opts.retry_count;
+    const username = opts.username;
+    const password = opts.password;
+    const ca_cert_path = opts.ca_cert_path;
+    const client_cert_path = opts.client_cert_path;
+    const client_key_path = opts.client_key_path;
+    const graph = opts.graph;
     const stderr = std.fs.File{ .handle = getStderrHandle() };
 
     var addr_port = std.mem.splitSequence(u8, server_addr, ":");

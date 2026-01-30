@@ -511,7 +511,35 @@ pub const UserStorageBackend = struct {
     }
 
     // Policy operations
-    pub fn persistPolicy(self: *Self, policy_id: u64, name: []const u8, description: []const u8, graph: []const u8, table: []const u8, operation: u8, permissive: bool, enabled: bool, using_clause: ?[]const u8, check_clause: ?[]const u8, audit_level: u8, created_by: u64) !void {
+    // Quality fix #405: Refactored 13-parameter function to use options struct
+    pub const PolicyPersistOptions = struct {
+        policy_id: u64,
+        name: []const u8,
+        description: []const u8,
+        graph: []const u8,
+        table: []const u8,
+        operation: u8,
+        permissive: bool,
+        enabled: bool,
+        using_clause: ?[]const u8,
+        check_clause: ?[]const u8,
+        audit_level: u8,
+        created_by: u64,
+    };
+
+    pub fn persistPolicy(self: *Self, opts: PolicyPersistOptions) !void {
+        const policy_id = opts.policy_id;
+        const name = opts.name;
+        const description = opts.description;
+        const graph = opts.graph;
+        const table = opts.table;
+        const operation = opts.operation;
+        const permissive = opts.permissive;
+        const enabled = opts.enabled;
+        const using_clause = opts.using_clause;
+        const check_clause = opts.check_clause;
+        const audit_level = opts.audit_level;
+        const created_by = opts.created_by;
         if (name.len > 63 or description.len > 255 or graph.len > 63 or table.len > 63) {
             return error.FieldTooLong;
         }

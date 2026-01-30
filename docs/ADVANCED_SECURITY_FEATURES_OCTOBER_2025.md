@@ -65,12 +65,31 @@ ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
 
 ## Authentication & Authorization
 
+### Implemented Authentication Methods (January 2026)
+
+| Method | Status | Use Case | Security Level | Implementation |
+|--------|--------|----------|----------------|----------------|
+| Username/Password | ✅ Implemented | Interactive login | High | `src/security/user_management.zig` |
+| MFA (TOTP) | ✅ Implemented | Two-factor auth | Very High | `src/security/mfa.zig` |
+| Session Tokens | ✅ Implemented | Session continuity | High | `src/security/authn.zig` |
+| API Keys | ✅ Implemented | Service accounts, automation | Medium-High | `src/security/api_keys.zig` |
+| mTLS (Certificate) | ✅ Implemented | Zero-trust, service mesh | Very High | `src/security/mtls_provider.zig` |
+
+### Planned Authentication Methods (Roadmap)
+
+| Method | Status | Target | Use Case |
+|--------|--------|--------|----------|
+| LDAP/Active Directory | 🔜 Planned | Q2 2026 | Enterprise directory integration |
+| OAuth2/OIDC | 🔜 Planned | Q3 2026 | SSO, cloud-native deployments |
+
 ### Features
 
 1. **Authentication Methods**
    - Username/password with Argon2id hashing
    - MFA support (TOTP, recovery codes)
-   - Session token management
+   - Session token management with rotation (`src/security/authn.zig`)
+   - API Keys for programmatic access (`src/security/api_keys.zig`)
+   - mTLS certificate-based authentication (`src/security/mtls_provider.zig`)
 
 2. **Authorization**
    - Role-Based Access Control (RBAC)

@@ -426,3 +426,52 @@ export GEODE_PASSWORD_MIN_WORDS=4
 ```
 
 This authentication system provides **enterprise-grade security** with **complete configurability** while maintaining **user-friendly operation** and **comprehensive documentation** for all deployment scenarios.
+
+## 11. Authentication Methods Reference
+
+### Implemented Methods
+
+| Method | Status | Use Case | Security Level | Implementation |
+|--------|--------|----------|----------------|----------------|
+| **Username/Password** | ✅ Implemented | Interactive login | High | `src/security/user_management.zig` |
+| **MFA (TOTP)** | ✅ Implemented | Two-factor auth | Very High | `src/security/mfa.zig` |
+| **Session Tokens** | ✅ Implemented | Session continuity with rotation | High | `src/security/authn.zig` |
+| **API Keys** | ✅ Implemented | Service accounts, automation | Medium-High | `src/security/api_keys.zig` |
+| **mTLS (Certificate)** | ✅ Implemented | Zero-trust, service mesh | Very High | `src/security/mtls_provider.zig` |
+
+### API Key Authentication
+
+For programmatic access (CI/CD pipelines, automation, service accounts):
+
+```bash
+# API keys follow format: gk1.<token_id>.<secret>
+# Generate via CLI:
+geode admin create-api-key --user service_account --name "ci-pipeline" --scope "read,write"
+
+# Use in requests:
+curl -H "Authorization: Bearer gk1.XXXX.YYYY" https://geode.example.com:3141/api/query
+```
+
+### mTLS Certificate Authentication
+
+For zero-trust environments and service mesh deployments:
+
+```bash
+# Connect with client certificate
+geode shell --cert /path/to/client.crt --key /path/to/client.key --server geode.example.com:3141
+
+# Certificate identity is extracted from:
+# - Subject CN (Common Name)
+# - Subject DN (Distinguished Name)
+# - SAN (Subject Alternative Names)
+# - Certificate fingerprint
+```
+
+### Planned Methods (Roadmap)
+
+| Method | Status | Target | Use Case |
+|--------|--------|--------|----------|
+| **LDAP/Active Directory** | 🔜 Planned | Q2 2026 | Enterprise directory integration |
+| **OAuth2/OIDC** | 🔜 Planned | Q3 2026 | SSO, cloud-native deployments |
+
+**Note**: LDAP/AD and OAuth2/OIDC are on the roadmap for future releases. For enterprise SSO requirements before these are available, consider using mTLS certificate-based authentication with your PKI infrastructure.

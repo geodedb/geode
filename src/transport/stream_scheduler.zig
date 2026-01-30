@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-PERF-DRR-SCHED-001; FEATURE="DRRScheduler"; ASPECT=StreamFairness; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-26
+// CANARY: REQ=REQ-PERF-DRR-SCHED-001; FEATURE="DRRScheduler"; ASPECT=StreamFairness; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=transport; UPDATED=2026-01-30
 // GAP-0201: Deficit Round-Robin scheduler for fair stream polling
 // Prevents convoy effects by ensuring all streams get fair service time
 
@@ -41,7 +41,7 @@ pub const ScheduleResult = struct {
 };
 
 /// Connection-level stream scheduler using Deficit Round-Robin
-/// CANARY: REQ=REQ-PERF-DRR-SCHED-002; FEATURE="DRRScheduler"; ASPECT=ConnectionScheduler; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-26
+/// CANARY: REQ=REQ-PERF-DRR-SCHED-002; FEATURE="DRRScheduler"; ASPECT=ConnectionScheduler; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=transport; UPDATED=2026-01-30
 pub const StreamScheduler = struct {
     const Self = @This();
 

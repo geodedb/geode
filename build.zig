@@ -602,6 +602,8 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addImport("json", json_mod);
 
     // New unit tests for recent implementations
+    // NOTE: These tests stay in src/ due to relative @import dependencies on src/types/* and src/storage/*
+    // Moving them to tests/ requires build.zig module imports refactoring (tracked in #402)
     const math_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_math_functions.zig"), .target = target, .optimize = optimize }) });
     math_func_tests.root_module.addImport("geode", root_mod);
     math_func_tests.root_module.addImport("json", json_mod);
@@ -691,6 +693,7 @@ pub fn build(b: *std.Build) void {
     conformance_patch_tests.root_module.addImport("geode", root_mod);
     const run_conformance_patch_tests = b.addRunArtifact(conformance_patch_tests);
     // Create test_harness module (imports will be added later after auth/rls modules are defined)
+    // NOTE: test_harness.zig stays in src/ due to internal @import dependencies
     const test_harness_mod = b.createModule(.{ .root_source_file = b.path("src/test_harness.zig"), .target = target, .optimize = optimize });
     gql_conformance_tests.root_module.addImport("test_harness", test_harness_mod);
     // Server graph exec module available through geode module

@@ -587,20 +587,21 @@ pub const UserManager = struct {
         const using_clause = if (policy.using_expr) |expr| expr.raw else null;
         const check_clause = if (policy.check_expr) |expr| expr.raw else null;
 
-        try self.user_storage.persistPolicy(
-            policy.id,
-            policy.name,
-            policy.description,
-            policy.graph,
-            policy.table,
-            operation_byte,
-            policy.permissive,
-            policy.enabled,
-            using_clause,
-            check_clause,
-            audit_level_byte,
-            policy.created_by,
-        );
+        // Quality fix #405: Using options struct instead of 13 positional parameters
+        try self.user_storage.persistPolicy(.{
+            .policy_id = policy.id,
+            .name = policy.name,
+            .description = policy.description,
+            .graph = policy.graph,
+            .table = policy.table,
+            .operation = operation_byte,
+            .permissive = policy.permissive,
+            .enabled = policy.enabled,
+            .using_clause = using_clause,
+            .check_clause = check_clause,
+            .audit_level = audit_level_byte,
+            .created_by = policy.created_by,
+        });
     }
 
     fn removePolicyFromStorage(self: *Self, policy_id: u64) !void {

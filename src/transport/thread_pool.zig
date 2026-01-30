@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-PERF-THREAD-POOL-001; FEATURE="ThreadPool"; ASPECT=QueryExecution; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-26
+// CANARY: REQ=REQ-PERF-THREAD-POOL-001; FEATURE="ThreadPool"; ASPECT=QueryExecution; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=transport; UPDATED=2026-01-30
 // GAP-0201: High-performance thread pool for parallel query execution
 // Designed to decouple network I/O from query processing for 10-50x throughput improvement
 
@@ -96,7 +96,7 @@ pub const ThreadPoolConfig = struct {
 };
 
 /// High-performance thread pool for query execution
-/// CANARY: REQ=REQ-PERF-THREAD-POOL-002; FEATURE="ThreadPool"; ASPECT=WorkerManagement; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-26
+/// CANARY: REQ=REQ-PERF-THREAD-POOL-002; FEATURE="ThreadPool"; ASPECT=WorkerManagement; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=transport; UPDATED=2026-01-30
 pub const ThreadPool = struct {
     const Self = @This();
     const QueueType = BoundedQueue(WorkItem, 4096);
@@ -259,7 +259,7 @@ pub const ThreadPool = struct {
 };
 
 /// Query work item for use with the thread pool
-/// CANARY: REQ=REQ-PERF-THREAD-POOL-003; FEATURE="ThreadPool"; ASPECT=QueryWorkItem; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-26
+/// CANARY: REQ=REQ-PERF-THREAD-POOL-003; FEATURE="ThreadPool"; ASPECT=QueryWorkItem; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=transport; UPDATED=2026-01-30
 pub const QueryWorkItem = struct {
     allocator: std.mem.Allocator,
     query: []const u8,
