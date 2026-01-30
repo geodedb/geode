@@ -39,9 +39,9 @@ pub fn main() !void {
     var demo_diagnostics = false;
     var demo_agg = false;
     // Collect parameters from --param name=value occurrences
-    var param_names = std.ArrayList([]const u8).initCapacity(gpa, 0) catch @panic("OOM");
+    var param_names = std.ArrayList([]const u8).empty;
     defer param_names.deinit(gpa);
-    var param_values = std.ArrayList(eval.Value).initCapacity(gpa, 0) catch @panic("OOM");
+    var param_values = std.ArrayList(eval.Value).empty;
     defer param_values.deinit(gpa);
     var idx: usize = 1;
     while (idx < args.len - 1) {
@@ -579,7 +579,7 @@ pub fn main() !void {
                     var v_idxs = try std.ArrayList(usize).initCapacity(gpa, 0);
                     defer v_idxs.deinit(gpa);
                     // Header labels
-                    var labels = std.ArrayList([]const u8).initCapacity(gpa, 0) catch @panic("OOM");
+                    var labels = std.ArrayList([]const u8).empty;
                     defer labels.deinit(gpa);
                     // Collect aggregates helper
                     const addAggFromCall = struct {

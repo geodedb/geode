@@ -1442,10 +1442,10 @@ pub const VariableLengthPath = struct {
     nodes: std.ArrayList(u64),
     edges: std.ArrayList(u64),
 
-    pub fn init(allocator: std.mem.Allocator) VariableLengthPath {
+    pub fn init(_: std.mem.Allocator) VariableLengthPath {
         return .{
-            .nodes = std.ArrayList(u64).initCapacity(allocator, 0) catch unreachable,
-            .edges = std.ArrayList(u64).initCapacity(allocator, 0) catch unreachable,
+            .nodes = std.ArrayList(u64).empty,
+            .edges = std.ArrayList(u64).empty,
         };
     }
 

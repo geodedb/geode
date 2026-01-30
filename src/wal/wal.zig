@@ -160,8 +160,7 @@ pub const Wal = struct {
     pending_commit_count: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator) Wal {
-        const list = std.ArrayList(Record).initCapacity(allocator, 0) catch @panic("OOM WAL init");
-        return .{ .allocator = allocator, .buf = list };
+        return .{ .allocator = allocator, .buf = std.ArrayList(Record).empty };
     }
 
     // GAP-0155 FIX: Updated to use parseWalHexKey with proper error handling
@@ -483,7 +482,7 @@ pub const Wal = struct {
             std.mem.writeInt(u64, header[21..29], rec.prev_lsn, .little);
             std.mem.writeInt(u32, header[29..33], 0, .little); // zero before checksum
             // P2-3: Use WAL's allocator instead of page_allocator
-            var cs_buf = std.ArrayList(u8).initCapacity(self.allocator, 0) catch @panic("OOM");
+            var cs_buf = std.ArrayList(u8).empty;
             defer cs_buf.deinit(self.allocator);
             cs_buf.appendSlice(self.allocator, header[0..]) catch |err| {
                 log.err("Failed to append header to checksum buffer", &.{

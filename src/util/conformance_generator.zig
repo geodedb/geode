@@ -33,7 +33,7 @@ pub const ConformanceGenerator = struct {
     pub fn init(allocator: std.mem.Allocator) ConformanceGenerator {
         return .{
             .allocator = allocator,
-            .features = std.ArrayList(Feature).initCapacity(allocator, 0) catch @panic("OOM"),
+            .features = std.ArrayList(Feature).init(allocator),
             .implementation_status = std.StringHashMap(ImplementationStatus).init(allocator),
         };
     }

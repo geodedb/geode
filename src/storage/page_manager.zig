@@ -227,10 +227,10 @@ pub const PageManager = struct {
     pub fn init(allocator: std.mem.Allocator) PageManager {
         return .{
             .allocator = allocator,
-            .pages = std.ArrayList([]u8).initCapacity(allocator, 0) catch @panic("OOM"),
+            .pages = std.ArrayList([]u8).empty,
             .page_size = 4096,
             .base_path = null,
-            .free_pages = std.ArrayList(u32).initCapacity(allocator, 0) catch @panic("OOM"),
+            .free_pages = std.ArrayList(u32).empty,
             .next_page_id = 0,
             .enc_enabled = false,
             .enc_key = undefined,
@@ -242,10 +242,10 @@ pub const PageManager = struct {
     pub fn initInMemory(allocator: std.mem.Allocator, page_size: usize) PageManager {
         return .{
             .allocator = allocator,
-            .pages = std.ArrayList([]u8).initCapacity(allocator, 0) catch @panic("OOM"),
+            .pages = std.ArrayList([]u8).empty,
             .page_size = page_size,
             .base_path = null,
-            .free_pages = std.ArrayList(u32).initCapacity(allocator, 0) catch @panic("OOM"),
+            .free_pages = std.ArrayList(u32).empty,
             .next_page_id = 0,
             .enc_enabled = false,
             .enc_key = undefined,
@@ -317,10 +317,10 @@ pub const PageManager = struct {
     pub fn initPersistent(allocator: std.mem.Allocator, page_size: usize, base_path: []const u8) PageManager {
         var pm = PageManager{
             .allocator = allocator,
-            .pages = std.ArrayList([]u8).initCapacity(allocator, 0) catch @panic("OOM"),
+            .pages = std.ArrayList([]u8).empty,
             .page_size = page_size,
             .base_path = base_path,
-            .free_pages = std.ArrayList(u32).initCapacity(allocator, 0) catch @panic("OOM"),
+            .free_pages = std.ArrayList(u32).empty,
             .next_page_id = 0,
             .enc_enabled = false,
             .enc_key = undefined,

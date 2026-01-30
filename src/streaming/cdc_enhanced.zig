@@ -339,14 +339,14 @@ pub const CDCEngine = struct {
         var engine = Self{
             .allocator = allocator,
             .config = config,
-            .event_buffer = std.ArrayList(ChangeEvent).initCapacity(allocator, 0) catch @panic("OOM"),
-            .sinks = std.ArrayList(Sink).initCapacity(allocator, 0) catch @panic("OOM"),
+            .event_buffer = std.ArrayList(ChangeEvent).empty,
+            .sinks = std.ArrayList(Sink).empty,
             .last_flush = std.time.milliTimestamp(),
             .total_events = 0,
             .is_running = false,
             .thread = null,
             .mutex = .{},
-            .diag_events = std.ArrayList(DiagEvent).initCapacity(allocator, 0) catch @panic("OOM"),
+            .diag_events = std.ArrayList(DiagEvent).empty,
             .adapt_events_accum = 0,
             .dynamic_batch_size = if (config.adaptive_flush) config.batch_size else 0,
             .peak_buffer = 0,
@@ -469,7 +469,7 @@ pub const CDCEngine = struct {
         self.is_running = true;
         self.start_time_ms = std.time.milliTimestamp();
         // record lifecycle diagnostic
-        self.diag_events.append(self.allocator, .start) catch @panic("OOM");
+        self.diag_events.append(self.allocator, .start) catch {}; // Diagnostic - silently ignore OOM
         self.thread = try std.Thread.spawn(.{}, processingLoop, .{self});
     }
 
@@ -486,7 +486,7 @@ pub const CDCEngine = struct {
 
         if (was_running) { // only record a stop once per active run
             self.mutex.lock();
-            self.diag_events.append(self.allocator, .stop) catch @panic("OOM");
+            self.diag_events.append(self.allocator, .stop) catch {}; // Diagnostic - silently ignore OOM
             self.mutex.unlock();
         }
     }
@@ -1187,7 +1187,7 @@ const Window = struct {
         return Window{
             .allocator = allocator,
             .config = config,
-            .buckets = std.ArrayList(WindowBucket).initCapacity(allocator, 0) catch @panic("OOM"),
+            .buckets = std.ArrayList(WindowBucket).empty,
             .watermark = 0,
         };
     }

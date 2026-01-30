@@ -53,7 +53,7 @@ pub fn writeConformanceJson(w: anytype, prof: Profile) !void {
 }
 
 test "conformance json outputs expected keys" {
-    var buf = std.ArrayList(u8).initCapacity(std.testing.allocator, 0) catch @panic("OOM");
+    var buf = std.ArrayList(u8).init(std.testing.allocator);
     defer buf.deinit(std.testing.allocator);
     const prof = Profile{ .features = .{} };
     try writeConformanceJson(buf.writer(std.testing.allocator), prof);

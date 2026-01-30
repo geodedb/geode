@@ -38,7 +38,7 @@ pub const Scope = struct {
         return .{
             .allocator = allocator,
             .bindings = std.StringHashMap(BindingInfo).init(allocator),
-            .owned_keys = std.ArrayList([]const u8).initCapacity(allocator, 0) catch @panic("OOM"),
+            .owned_keys = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -227,7 +227,7 @@ pub const SemanticAnalyzer = struct {
     pub fn init(allocator: Allocator) SemanticAnalyzer {
         return .{
             .allocator = allocator,
-            .errors = std.ArrayList(SemanticError).initCapacity(allocator, 0) catch @panic("OOM"),
+            .errors = std.ArrayList(SemanticError).empty,
             .scope = Scope.init(allocator),
             .labels = std.StringHashMap(u32).init(allocator),
         };

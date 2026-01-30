@@ -60,7 +60,7 @@ pub const ConflictMatrix = struct {
     }
 
     pub fn removeConflicts(self: *ConflictMatrix, txn_id: TxnId) void {
-        var to_remove = std.ArrayList(struct { TxnId, TxnId }).initCapacity(self.allocator, 0) catch @panic("OOM");
+        var to_remove = std.ArrayList(struct { TxnId, TxnId }).empty;
         defer to_remove.deinit(self.allocator);
 
         var iter = self.conflicts.iterator();
@@ -175,12 +175,12 @@ pub const Manager = struct {
         active: []TxnId,
     };
 
-    pub fn captureSnapshot(self: *Manager, allocator: std.mem.Allocator) Snapshot {
+    pub fn captureSnapshot(self: *Manager, allocator: std.mem.Allocator) !Snapshot {
         const snap_ts = self.next_ts - 1; // last issued timestamp is visible frontier
         var count: usize = 0;
         var iter_count = self.active_txns.iterator();
         while (iter_count.next()) |_| count += 1;
-        var arr = allocator.alloc(TxnId, count) catch @panic("OOM snapshot alloc");
+        const arr = try allocator.alloc(TxnId, count);
         var iter = self.active_txns.iterator();
         var i: usize = 0;
         while (iter.next()) |entry| : (i += 1) arr[i] = entry.value_ptr.id;
@@ -332,7 +332,7 @@ pub const Manager = struct {
         const entry = try self.locks.getOrPut(key);
         if (!entry.found_existing) {
             entry.key_ptr.* = try allocator.dupe(u8, key);
-            entry.value_ptr.* = std.ArrayList(LockEntry).initCapacity(self.allocator, 0) catch @panic("OOM");
+            entry.value_ptr.* = std.ArrayList(LockEntry).empty;
         }
 
         const lock_list = entry.value_ptr;
@@ -417,7 +417,7 @@ pub const Manager = struct {
     fn addWaitFor(self: *Manager, waiter: TxnId, holder: TxnId) !void {
         const entry = try self.wait_for_graph.getOrPut(waiter);
         if (!entry.found_existing) {
-            entry.value_ptr.* = std.ArrayList(TxnId).initCapacity(self.allocator, 0) catch @panic("OOM");
+            entry.value_ptr.* = std.ArrayList(TxnId).empty;
         }
 
         // Avoid duplicates
@@ -481,7 +481,7 @@ pub const Manager = struct {
         if (!self.phantom_enabled) return; // no-op if disabled
         const entry = try self.predicates.getOrPut(txn.id);
         if (!entry.found_existing) {
-            entry.value_ptr.* = std.ArrayList([]u8).initCapacity(self.allocator, 0) catch @panic("OOM");
+            entry.value_ptr.* = std.ArrayList([]u8).empty;
         }
         // avoid duplicates
         for (entry.value_ptr.items) |p| if (std.mem.eql(u8, p, prefix)) return;

@@ -43,7 +43,7 @@ pub const RangeTracker = struct {
         std.debug.assert(le(low, high));
         const entry = try self.map.getOrPut(txn_id);
         if (!entry.found_existing) {
-            entry.value_ptr.* = std.ArrayList(Entry).initCapacity(self.allocator, 0) catch @panic("OOM");
+            entry.value_ptr.* = std.ArrayList(Entry).empty;
         }
         // de-duplicate if identical range already present
         for (entry.value_ptr.items) |e| {

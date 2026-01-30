@@ -107,7 +107,7 @@ pub fn handlePull(
     const page_size = if (page_size_param == 0) 1000 else page_size_param;
     const start = state.page_index;
     const end = @min(state.page_index + page_size, state.page_items.len);
-    var arr_buf = std.ArrayList(u8).initCapacity(allocator, 0) catch @panic("OOM");
+    var arr_buf = std.ArrayList(u8).init(allocator);
     const w = arr_buf.writer(allocator);
     w.writeAll("[") catch {};
     var i: usize = start;

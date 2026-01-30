@@ -24,7 +24,7 @@ pub const EarlyDetector = struct {
     pub fn noteAccess(self: *EarlyDetector, txn_id: u64, key: []const u8, write: bool) !void {
         const got = try self.keys.getOrPut(txn_id);
         if (!got.found_existing) {
-            got.value_ptr.* = std.ArrayList(Access).initCapacity(self.allocator, 0) catch @panic("OOM");
+            got.value_ptr.* = std.ArrayList(Access).empty;
         }
         try got.value_ptr.append(self.allocator, .{ .key = key, .write = write });
     }

@@ -68,8 +68,8 @@ pub const PathExpand = struct {
         pub fn init(allocator: std.mem.Allocator) BFSState {
             return .{
                 .visited = std.AutoHashMap(u64, void).init(allocator),
-                .queue = std.ArrayList(QueueItem).initCapacity(allocator, 0) catch @panic("OOM"),
-                .results = std.ArrayList(PathResult).initCapacity(allocator, 0) catch @panic("OOM"),
+                .queue = std.ArrayList(QueueItem).init(allocator),
+                .results = std.ArrayList(PathResult).init(allocator),
                 .allocator = allocator,
             };
         }
@@ -354,7 +354,7 @@ fn validateGroupBy(allocator: std.mem.Allocator, q: ast.Query) PlanError!void {
     var allowed = std.StringHashMap(void).init(allocator);
     defer allowed.deinit();
     // Track allocated key strings to free after
-    var allocd = std.ArrayList([]const u8).initCapacity(allocator, 0) catch unreachable;
+    var allocd = std.ArrayList([]const u8).empty;
     defer {
         for (allocd.items) |s| allocator.free(s);
         allocd.deinit(allocator);

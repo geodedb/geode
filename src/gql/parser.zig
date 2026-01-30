@@ -295,8 +295,8 @@ pub const Parser = struct {
 
     pub fn parseProgram(self: *Parser) ParserError!ast.Program {
         // initialize alias set arraylist
-        self.path_aliases = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
-        var list = std.ArrayList(ast.Statement).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        self.path_aliases = std.ArrayList([]const u8).empty;
+        var list = std.ArrayList(ast.Statement).empty;
 
         // GAP-0082: Parse CTEs if WITH keyword present at program start
         // CANARY: REQ=REQ-GQL-CTE-002; FEATURE="CTEParsing"; ASPECT=ParserProgram; STATUS=TESTED; TEST=geodetestlab/specs/recursive_and_cte.yml; OWNER=parser; UPDATED=2026-01-10
@@ -394,7 +394,7 @@ pub const Parser = struct {
             self.advance();
         }
 
-        var ctes = std.ArrayList(ast.CommonTableExpression).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        var ctes = std.ArrayList(ast.CommonTableExpression).empty;
         const any_recursive = is_recursive;
 
         // Parse first CTE
@@ -425,7 +425,7 @@ pub const Parser = struct {
         var column_names: ?[]const []const u8 = null;
         if (self.cur.kind == .l_paren) {
             self.advance();
-            var cols = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var cols = std.ArrayList([]const u8).empty;
             if (self.cur.kind == .identifier) {
                 try cols.append(self.arena.allocator(), self.cur.lexeme);
                 self.advance();
@@ -548,7 +548,7 @@ pub const Parser = struct {
                             self.advance();
                             break :blk true;
                         } else false;
-                        var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        var return_items = std.ArrayList(ast.ReturnItem).empty;
                         try self.parseProjectionItems(&return_items);
                         return_clause = .{
                             .items = try return_items.toOwnedSlice(self.arena.allocator()),
@@ -582,7 +582,7 @@ pub const Parser = struct {
                 }
 
                 // Parse select list (same as RETURN items)
-                var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                var items = std.ArrayList(ast.ReturnItem).empty;
                 while (true) {
                     const expr = try self.parseOrExpr();
                     var alias: ?[]const u8 = null;
@@ -682,7 +682,7 @@ pub const Parser = struct {
                             self.advance();
                             break :blk true;
                         } else false;
-                        var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        var return_items = std.ArrayList(ast.ReturnItem).empty;
                         try self.parseProjectionItems(&return_items);
                         return_clause = .{
                             .items = try return_items.toOwnedSlice(self.arena.allocator()),
@@ -724,7 +724,7 @@ pub const Parser = struct {
                     first.limit = null;
                     first.offset = null;
 
-                    var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    var parts = std.ArrayList(ast.UnionQuery.Part).empty;
                     while (self.cur.kind == .UNION) {
                         self.advance();
                         var all = false;
@@ -760,7 +760,7 @@ pub const Parser = struct {
                     if (self.cur.kind == .ORDER) {
                         self.advance();
                         _ = try self.expect(.BY);
-                        var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
                         while (true) {
                             const key_expr = try self.parseOrExpr();
                             var desc = false;
@@ -821,7 +821,7 @@ pub const Parser = struct {
                 if (self.cur.kind == .l_paren) {
                     self.advance();
                     var first = try self.parseQuery();
-                    var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    var parts = std.ArrayList(ast.UnionQuery.Part).empty;
                     if (self.cur.kind != .UNION) return error.UnexpectedToken;
                     // Strip ORDER BY/LIMIT/OFFSET from first query - they apply outside the parentheses
                     first.order_by = null;
@@ -866,7 +866,7 @@ pub const Parser = struct {
                     first.limit = null;
                     first.offset = null;
 
-                    var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    var parts = std.ArrayList(ast.UnionQuery.Part).empty;
                     while (self.cur.kind == .UNION) {
                         self.advance();
                         var all = false;
@@ -902,7 +902,7 @@ pub const Parser = struct {
                     if (self.cur.kind == .ORDER) {
                         self.advance();
                         _ = try self.expect(.BY);
-                        var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
                         while (true) {
                             const key_expr = try self.parseOrExpr();
                             var desc = false;
@@ -1128,7 +1128,7 @@ pub const Parser = struct {
                         // If the next token is a variable or identifier followed by comma or more variables,
                         // this is likely an import list
                         if (self.cur.kind == .dollar) {
-                            var imports = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                            var imports = std.ArrayList([]const u8).empty;
                             while (true) {
                                 if (self.cur.kind == .dollar) {
                                     self.advance();
@@ -1182,7 +1182,7 @@ pub const Parser = struct {
 
                         if (self.cur.kind == .WITH) {
                             self.advance();
-                            var witems = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                            var witems = std.ArrayList(ast.ReturnItem).empty;
                             try self.parseProjectionItems(&witems);
                             with_clause = .{
                                 .items = try witems.toOwnedSlice(self.arena.allocator()),
@@ -1203,7 +1203,7 @@ pub const Parser = struct {
                                 self.advance();
                                 break :blk true;
                             } else false;
-                            var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                            var return_items = std.ArrayList(ast.ReturnItem).empty;
                             try self.parseProjectionItems(&return_items);
                             ret_clause = .{
                                 .items = try return_items.toOwnedSlice(self.arena.allocator()),
@@ -1235,7 +1235,7 @@ pub const Parser = struct {
                             self.advance();
                             break :blk true;
                         } else false;
-                        var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        var return_items = std.ArrayList(ast.ReturnItem).empty;
                         try self.parseProjectionItems(&return_items);
                         return_clause = .{
                             .items = try return_items.toOwnedSlice(self.arena.allocator()),
@@ -1260,7 +1260,7 @@ pub const Parser = struct {
                     var yield_items: ?[]ast.ReturnItem = null;
                     if (self.cur.kind == .YIELD) {
                         self.advance();
-                        var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        var items = std.ArrayList(ast.ReturnItem).empty;
                         try self.parseProjectionItems(&items);
                         yield_items = try items.toOwnedSlice(self.arena.allocator());
                     }
@@ -1273,7 +1273,7 @@ pub const Parser = struct {
                             self.advance();
                             break :blk true;
                         } else false;
-                        var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        var return_items = std.ArrayList(ast.ReturnItem).empty;
                         try self.parseProjectionItems(&return_items);
                         return_clause = .{
                             .items = try return_items.toOwnedSlice(self.arena.allocator()),
@@ -1286,7 +1286,7 @@ pub const Parser = struct {
                     if (return_clause != null and self.cur.kind == .ORDER) {
                         self.advance();
                         _ = try self.expect(.BY);
-                        var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
                         const expr1 = try self.parseOrExpr();
                         var desc1 = false;
                         var nulls1: ast.OrderBy.NullsPolicy = .default;
@@ -1384,7 +1384,7 @@ pub const Parser = struct {
                     };
 
                     // Parse the rest of the set operations
-                    var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    var parts = std.ArrayList(ast.UnionQuery.Part).empty;
 
                     // If inner_stmt was a Union, add its tails first
                     if (inner_stmt == .Union) {
@@ -1450,7 +1450,7 @@ pub const Parser = struct {
             first_query.limit = null;
             first_query.offset = null;
 
-            var parts = std.ArrayList(ast.UnionQuery.Part).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var parts = std.ArrayList(ast.UnionQuery.Part).empty;
             while (self.cur.kind == .UNION or self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
                 const operation = switch (self.cur.kind) {
                     .UNION => ast.SetOperation.union_op,
@@ -1493,7 +1493,7 @@ pub const Parser = struct {
             if (self.cur.kind == .ORDER) {
                 self.advance();
                 _ = try self.expect(.BY);
-                var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
                 while (true) {
                     const key_expr = try self.parseOrExpr();
                     var desc = false;
@@ -1550,7 +1550,7 @@ pub const Parser = struct {
 
     fn parseQuery(self: *Parser) ParserError!ast.Query {
         // Parse LET bindings first (LET $var = expr, ...)
-        var let_bindings = std.ArrayList(ast.LetBinding).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        var let_bindings = std.ArrayList(ast.LetBinding).empty;
         if (self.cur.kind == .LET) {
             self.advance();
             while (true) {
@@ -1584,7 +1584,7 @@ pub const Parser = struct {
         var initial_where_expr: ?ast.Expr = null; // WHERE clause after initial WITH
         if (self.cur.kind == .WITH) {
             self.advance();
-            var witems = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var witems = std.ArrayList(ast.ReturnItem).empty;
             try self.parseProjectionItems(&witems);
 
             // Parse optional ORDER BY, LIMIT, OFFSET after WITH items
@@ -1595,7 +1595,7 @@ pub const Parser = struct {
             if (self.cur.kind == .ORDER) {
                 self.advance();
                 _ = try self.expect(.BY);
-                var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
                 while (true) {
                     const key_expr = try self.parseOrExpr();
                     var desc = false;
@@ -1724,7 +1724,7 @@ pub const Parser = struct {
                 distinct = true;
                 self.advance();
             }
-            var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var items = std.ArrayList(ast.ReturnItem).empty;
             try self.parseProjectionItems(&items);
 
             // Instead of returning immediately, store as initial_with_clause
@@ -1801,7 +1801,7 @@ pub const Parser = struct {
         // CANARY: REQ=REQ-GQL-MULTI-CREATE-001; FEATURE="MultipleConsecutiveCreate"; ASPECT=Parser; STATUS=TESTED; TEST=geodetestlab/specs/gql_data_modification_comprehensive.yml; OWNER=parser; UPDATED=2025-12-27
         if (self.cur.kind == .CREATE) {
             have_create = true;
-            var create_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var create_chains = std.ArrayList(ast.Chain).empty;
             while (self.cur.kind == .CREATE) {
                 self.advance();
                 const cp = try self.parseGraphPattern();
@@ -1838,7 +1838,7 @@ pub const Parser = struct {
         var path_variable: ?[]const u8 = null;
         const pat: ast.GraphPattern = if (have_match) blk_pat: {
             // Handle OPTIONAL { } at the start
-            var all_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var all_chains = std.ArrayList(ast.Chain).empty;
 
             if ((self.cur.kind == .l_brace or self.cur.kind == .l_paren) and optional_match) {
                 // OPTIONAL { ... } or OPTIONAL (...) at the start
@@ -1965,7 +1965,7 @@ pub const Parser = struct {
             // Check for OPTIONAL MATCH after WHERE clause
             // e.g., MATCH (e) WHERE e.x = 1 OPTIONAL MATCH (e)-[:R]->(m) RETURN ...
             if (self.cur.kind == .OPTIONAL) {
-                var post_where_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                var post_where_chains = std.ArrayList(ast.Chain).empty;
                 // First add the existing chains
                 for (combined_gp.chains) |chain| {
                     try post_where_chains.append(self.arena.allocator(), chain);
@@ -1992,7 +1992,7 @@ pub const Parser = struct {
             // Check for required MATCH after WHERE clause
             // e.g., MATCH (d:Department) WHERE d.budget > 0 MATCH (e:Employee {department: d.name}) RETURN ...
             if (self.cur.kind == .MATCH) {
-                var post_where_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                var post_where_chains = std.ArrayList(ast.Chain).empty;
                 // First add the existing chains
                 for (combined_gp.chains) |chain| {
                     try post_where_chains.append(self.arena.allocator(), chain);
@@ -2023,7 +2023,7 @@ pub const Parser = struct {
             // e.g., MATCH (a), (b), (c) CREATE (a)-[:R]->(b) CREATE (a)-[:R]->(c)
             if (self.cur.kind == .CREATE) {
                 have_create = true;
-                var create_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                var create_chains = std.ArrayList(ast.Chain).empty;
                 while (self.cur.kind == .CREATE) {
                     self.advance();
                     const cp = try self.parseGraphPattern();
@@ -2065,7 +2065,7 @@ pub const Parser = struct {
         // Parse inline LET clause (after MATCH/WHERE/FILTER, before WITH/RETURN)
         // Syntax: MATCH ... LET var1 = expr1, var2 = expr2 RETURN ...
         // Note: These are computed bindings (no $ prefix), different from parameter bindings
-        var inline_let_bindings = std.ArrayList(ast.LetBinding).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        var inline_let_bindings = std.ArrayList(ast.LetBinding).empty;
         if (self.cur.kind == .LET) {
             self.advance();
             while (true) {
@@ -2090,7 +2090,7 @@ pub const Parser = struct {
         var next_query_ptr: ?*ast.Query = null;
         if (self.cur.kind == .WITH) {
             self.advance();
-            var witems = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var witems = std.ArrayList(ast.ReturnItem).empty;
             try self.parseProjectionItems(&witems);
 
             // Parse optional ORDER BY, LIMIT, OFFSET after WITH items
@@ -2101,7 +2101,7 @@ pub const Parser = struct {
             if (self.cur.kind == .ORDER) {
                 self.advance();
                 _ = try self.expect(.BY);
-                var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
                 while (true) {
                     const key_expr = try self.parseOrExpr();
                     var desc = false;
@@ -2212,7 +2212,7 @@ pub const Parser = struct {
         if (self.cur.kind == .GROUP) {
             self.advance();
             _ = try self.expect(.BY);
-            var keys_list = std.ArrayList(ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var keys_list = std.ArrayList(ast.Expr).empty;
             // one or more expressions separated by commas
             while (true) {
                 try keys_list.append(self.arena.allocator(), try self.parseOrExpr());
@@ -2268,7 +2268,7 @@ pub const Parser = struct {
             var yield_items: ?[]ast.ReturnItem = null;
             if (self.cur.kind == .YIELD) {
                 self.advance();
-                var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                var items = std.ArrayList(ast.ReturnItem).empty;
                 try self.parseProjectionItems(&items);
                 yield_items = try items.toOwnedSlice(self.arena.allocator());
             }
@@ -2287,7 +2287,7 @@ pub const Parser = struct {
                 self.advance();
                 break :blk true;
             } else false;
-            var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var items = std.ArrayList(ast.ReturnItem).empty;
             try self.parseProjectionItems(&items);
             return_clause = .{ .items = try items.toOwnedSlice(self.arena.allocator()), .distinct = distinct };
 
@@ -2295,7 +2295,7 @@ pub const Parser = struct {
             if (self.cur.kind == .GROUP) {
                 self.advance();
                 _ = try self.expect(.BY);
-                var keys_list2 = std.ArrayList(ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                var keys_list2 = std.ArrayList(ast.Expr).empty;
                 while (true) {
                     try keys_list2.append(self.arena.allocator(), try self.parseOrExpr());
                     if (self.cur.kind != .comma) break;
@@ -2336,7 +2336,7 @@ pub const Parser = struct {
         if (self.cur.kind == .ORDER) {
             self.advance();
             _ = try self.expect(.BY);
-            var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
             // first expression key - allow expressions now
             const expr1 = try self.parseOrExpr();
             // Parse-time enforcement: forbid function calls inside ORDER BY keys when policy active.
@@ -2508,7 +2508,7 @@ pub const Parser = struct {
     }
 
     fn parseGraphPattern(self: *Parser) ParserError!ast.GraphPattern {
-        var chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        var chains = std.ArrayList(ast.Chain).empty;
 
         // CANARY: REQ=REQ-GQL-PATH-MODES-003; FEATURE="GQL Path Mode Parsing"; ASPECT=Parser; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2026-01-08
         // Check for path mode specifier (WALK, TRAIL, ACYCLIC, SIMPLE) before the pattern
@@ -2529,7 +2529,7 @@ pub const Parser = struct {
 
         while (true) {
             // parse a chain with one-or-more hops
-            var hops = std.ArrayList(ast.Hop).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var hops = std.ArrayList(ast.Hop).empty;
             // Optional path alias: ident '=' before a node pattern or shortestPath function
             // CANARY: REQ=REQ-GQL-091; FEATURE="PathAssignmentAfterWITH"; ASPECT=Parser; STATUS=TESTED; TEST=subgraph-isomorphism; OWNER=parser; UPDATED=2025-10-14
             var chain_name: ?[]const u8 = null;
@@ -2681,7 +2681,7 @@ pub const Parser = struct {
             name = self.cur.lexeme;
             self.advance();
         }
-        var labels = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        var labels = std.ArrayList([]const u8).empty;
         while (self.cur.kind == .colon) {
             self.advance();
             // Accept keywords as label names (e.g., :Property, :Type)
@@ -2704,7 +2704,7 @@ pub const Parser = struct {
             name = self.cur.lexeme;
             self.advance();
         }
-        var types = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        var types = std.ArrayList([]const u8).empty;
         while (self.cur.kind == .colon) {
             self.advance();
             // Accept keywords as relationship type names
@@ -2770,7 +2770,7 @@ pub const Parser = struct {
 
     fn parsePropertyMap(self: *Parser) ParserError![]ast.Property {
         _ = try self.expect(.l_brace);
-        var list = std.ArrayList(ast.Property).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        var list = std.ArrayList(ast.Property).empty;
         if (self.cur.kind != .r_brace) {
             while (true) {
                 // Accept identifier, string_lit, or any keyword as property keys
@@ -2995,7 +2995,7 @@ pub const Parser = struct {
                     } else if (self.cur.kind == .l_bracket) {
                         // IN [list] - parse as list
                         self.advance(); // consume [
-                        var elems = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        var elems = std.ArrayList(*ast.Expr).empty;
                         if (self.cur.kind != .r_bracket) {
                             while (true) {
                                 const it = try self.parseOrExpr();
@@ -3046,7 +3046,7 @@ pub const Parser = struct {
                     } else if (self.cur.kind == .l_bracket) {
                         // NOT IN [list]
                         self.advance(); // consume [
-                        var elems = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                        var elems = std.ArrayList(*ast.Expr).empty;
                         if (self.cur.kind != .r_bracket) {
                             while (true) {
                                 const it = try self.parseOrExpr();
@@ -3374,7 +3374,7 @@ pub const Parser = struct {
                     }
                 }
 
-                var args = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                var args = std.ArrayList(*ast.Expr).empty;
                 var saw_distinct = false;
                 if (self.cur.kind != .r_paren) {
                     // Special handling: COUNT(DISTINCT expr)
@@ -3453,7 +3453,7 @@ pub const Parser = struct {
                         cp.* = np.*;
                     }
                     // Convert []*Expr -> []Expr view for validator
-                    var flat = std.ArrayList(ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    var flat = std.ArrayList(ast.Expr).empty;
                     for (args_slice) |p| try flat.append(self.arena.allocator(), p.*);
                     if (!validateBuiltinCall(name.orig, try flat.toOwnedSlice(self.arena.allocator()), self.ts_extensions) and !std.ascii.eqlIgnoreCase(name.orig, "countDistinct")) return self.unexpected("invalid builtin function call");
                 }
@@ -3513,7 +3513,7 @@ pub const Parser = struct {
             if (self.cur.kind == .l_brace) {
                 // Map projection: n {.name, .age}
                 self.advance();
-                var fields = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                var fields = std.ArrayList([]const u8).empty;
 
                 // Parse fields: .prop1, .prop2, ...
                 while (self.cur.kind == .dot) {
@@ -3588,7 +3588,7 @@ pub const Parser = struct {
                     pp.* = opnd;
                     operand_opt = pp;
                 }
-                var whens = std.ArrayList(ast.CaseWhen).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                var whens = std.ArrayList(ast.CaseWhen).empty;
                 while (self.cur.kind == .WHEN) {
                     self.advance();
                     const when_expr = try self.parseOrExpr();
@@ -3664,7 +3664,7 @@ pub const Parser = struct {
                     const frac_part = lex[dot_idx + 1 .. lex.len];
                     const scale: u8 = @intCast(frac_part.len);
                     // coeff = parse int_part ++ frac_part as i128
-                    var buf = std.ArrayList(u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    var buf = std.ArrayList(u8).empty;
                     try buf.appendSlice(self.arena.allocator(), int_part);
                     try buf.appendSlice(self.arena.allocator(), frac_part);
                     const coeff = try std.fmt.parseInt(i128, buf.items, 10);
@@ -3709,7 +3709,7 @@ pub const Parser = struct {
                 var full_type_name = type_name;
                 if (self.cur.kind == .l_paren) {
                     self.advance(); // consume (
-                    var type_buf = std.ArrayList(u8).initCapacity(self.arena.allocator(), 32) catch @panic("OOM");
+                    var type_buf = try std.ArrayList(u8).initCapacity(self.arena.allocator(), 32);
                     try type_buf.appendSlice(self.arena.allocator(), type_name);
                     try type_buf.appendSlice(self.arena.allocator(), "(");
 
@@ -3811,7 +3811,7 @@ pub const Parser = struct {
                     }
 
                     // Try to parse as array literal: [expr, expr, ...]
-                    var elements = std.ArrayList(*ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    var elements = std.ArrayList(*ast.Expr).empty;
 
                     // Handle empty array
                     if (self.cur.kind == .r_bracket) {
@@ -4175,7 +4175,7 @@ pub const Parser = struct {
         // CANARY: REQ=REQ-GQL-MULTI-CREATE-002; FEATURE="MultipleConsecutiveCreate"; ASPECT=ParserCreateStatement; STATUS=TESTED; TEST=geodetestlab/specs/gql_data_modification_comprehensive.yml; OWNER=parser; UPDATED=2025-12-27
         var pattern: ast.GraphPattern = undefined;
         {
-            var create_chains = std.ArrayList(ast.Chain).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var create_chains = std.ArrayList(ast.Chain).empty;
             // First pattern already consumed the CREATE keyword
             const first_pattern = try self.parseGraphPattern();
             for (first_pattern.chains) |chain| {
@@ -4203,7 +4203,7 @@ pub const Parser = struct {
             var next_query_ptr: ?*ast.Query = null;
             if (self.cur.kind == .WITH) {
                 self.advance();
-                var witems = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                var witems = std.ArrayList(ast.ReturnItem).empty;
                 try self.parseProjectionItems(&witems);
 
                 // Parse optional ORDER BY, LIMIT, OFFSET after WITH items
@@ -4214,7 +4214,7 @@ pub const Parser = struct {
                 if (self.cur.kind == .ORDER) {
                     self.advance();
                     _ = try self.expect(.BY);
-                    var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                    var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
                     while (true) {
                         const key_expr = try self.parseOrExpr();
                         var desc = false;
@@ -4327,7 +4327,7 @@ pub const Parser = struct {
                     self.advance();
                     break :blk true;
                 } else false;
-                var items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+                var items = std.ArrayList(ast.ReturnItem).empty;
                 try self.parseProjectionItems(&items);
                 return_clause = .{ .items = try items.toOwnedSlice(self.arena.allocator()), .distinct = distinct };
             } else if (set_clauses.len > 0 or remove_clauses.len > 0 or delete_items.len > 0) {
@@ -4366,7 +4366,7 @@ pub const Parser = struct {
                 self.advance();
                 break :blk true;
             } else false;
-            var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var return_items = std.ArrayList(ast.ReturnItem).empty;
             try self.parseProjectionItems(&return_items);
             return_clause = .{
                 .items = try return_items.toOwnedSlice(self.arena.allocator()),
@@ -4446,7 +4446,7 @@ pub const Parser = struct {
                 self.advance();
                 break :blk true;
             } else false;
-            var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var return_items = std.ArrayList(ast.ReturnItem).empty;
             try self.parseProjectionItems(&return_items);
             return_clause = .{
                 .items = try return_items.toOwnedSlice(self.arena.allocator()),
@@ -4508,7 +4508,7 @@ pub const Parser = struct {
                 self.advance();
                 break :blk true;
             } else false;
-            var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var return_items = std.ArrayList(ast.ReturnItem).empty;
             try self.parseProjectionItems(&return_items);
             return_clause = .{
                 .items = try return_items.toOwnedSlice(self.arena.allocator()),
@@ -5258,14 +5258,14 @@ pub const Parser = struct {
         _ = try self.expect(.VALUES);
 
         // Parse rows: (expr1), (expr2), ...
-        var rows_list = std.ArrayList([]ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        var rows_list = std.ArrayList([]ast.Expr).empty;
 
         while (true) {
             // Expect opening paren for row
             _ = try self.expect(.l_paren);
 
             // Parse expressions in this row
-            var row_exprs = std.ArrayList(ast.Expr).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var row_exprs = std.ArrayList(ast.Expr).empty;
 
             // Parse first expression
             const first_expr = try self.parseOrExpr();
@@ -5296,7 +5296,7 @@ pub const Parser = struct {
         // Parse column names: (col1, col2, ...)
         _ = try self.expect(.l_paren);
 
-        var column_names = std.ArrayList([]const u8).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        var column_names = std.ArrayList([]const u8).empty;
 
         // Parse first column name
         if (self.cur.kind != .identifier) return self.unexpected("expected column name after AS (");
@@ -5374,7 +5374,7 @@ pub const Parser = struct {
             break :blk true;
         } else false;
 
-        var return_items = std.ArrayList(ast.ReturnItem).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        var return_items = std.ArrayList(ast.ReturnItem).empty;
         try self.parseProjectionItems(&return_items);
 
         const return_clause = ast.ReturnClause{
@@ -5387,7 +5387,7 @@ pub const Parser = struct {
         if (self.cur.kind == .ORDER) {
             self.advance();
             _ = try self.expect(.BY);
-            var keys = std.ArrayList(ast.OrderBy.OrderKey).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
 
             // Parse first key
             const expr1 = try self.parseOrExpr();
@@ -5780,7 +5780,7 @@ pub const Parser = struct {
     fn parseFieldDefinitions(self: *Parser) ParserError![]ast.FieldDefinition {
         _ = try self.expect(.l_brace); // Consume opening brace
 
-        var fields = std.ArrayList(ast.FieldDefinition).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+        var fields = std.ArrayList(ast.FieldDefinition).empty;
 
         // Parse fields until we hit closing brace
         while (self.cur.kind != .r_brace and self.cur.kind != .eof) {
@@ -5805,7 +5805,7 @@ pub const Parser = struct {
             }
 
             // Parse annotations (e.g., @encrypted(...), @searchable(...))
-            var annotations = std.ArrayList(ast.FieldAnnotation).initCapacity(self.arena.allocator(), 0) catch @panic("OOM");
+            var annotations = std.ArrayList(ast.FieldAnnotation).empty;
             while (self.cur.kind == .at) {
                 // Track start of annotation (@)
                 const at_lexeme = self.cur.lexeme;

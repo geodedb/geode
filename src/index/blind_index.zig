@@ -88,7 +88,7 @@ pub const BlindIndex = struct {
         // Get or create record list for this token
         const token_gop = try token_map.getOrPut(token);
         if (!token_gop.found_existing) {
-            token_gop.value_ptr.* = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch @panic("OOM");
+            token_gop.value_ptr.* = std.ArrayList([]const u8).empty;
         }
 
         // Add record ID (check for duplicates)

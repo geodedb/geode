@@ -1430,7 +1430,7 @@ pub fn processMessage(
             }
 
             const end = @min(start + page_size, state.page_items.len);
-            var arr_buf = std.ArrayList(u8).initCapacity(gpa, 0) catch @panic("OOM");
+            var arr_buf = std.ArrayList(u8).init(gpa);
             const w = arr_buf.writer(gpa);
             w.writeAll("[") catch {};
             var i: usize = start;

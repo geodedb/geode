@@ -11,14 +11,14 @@ test "TestCANARY_REQ_GQL_013_SnapshotReadView" {
     var t1 = mgr.begin();
     const t2 = mgr.begin();
     // capture snapshot; should include t1 and t2 ids
-    const snap = mgr.captureSnapshot(std.testing.allocator);
+    const snap = try mgr.captureSnapshot(std.testing.allocator);
     defer mgr.releaseSnapshot(std.testing.allocator, snap);
     try std.testing.expect(snap.active.len == 2);
     // commit one txn; snapshot still reflects prior state (SI semantics)
     try mgr.commit(&t1);
     try std.testing.expect(snap.active.len == 2);
     // new snapshot after commit should show only remaining active transaction
-    const snap2 = mgr.captureSnapshot(std.testing.allocator);
+    const snap2 = try mgr.captureSnapshot(std.testing.allocator);
     defer mgr.releaseSnapshot(std.testing.allocator, snap2);
     try std.testing.expect(snap2.active.len == 1);
     try std.testing.expect(snap2.active[0] == t2.id);

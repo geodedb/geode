@@ -832,7 +832,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // Process field definitions and apply annotations
             for (cgt.fields) |field_def| {
                 // Build full annotation text by concatenating all annotations
-                var annotation_text_builder = std.ArrayList(u8).initCapacity(allocator, 256) catch @panic("OOM");
+                var annotation_text_builder = try std.ArrayList(u8).initCapacity(allocator, 256);
                 defer annotation_text_builder.deinit(allocator);
 
                 for (field_def.annotations) |annot| {
