@@ -455,6 +455,7 @@ REQ-CLI-BACKUP-INTEGRATION-001,Remote Backup/Restore Operations,IntegrationTesti
 REQ-CLI-BACKUP-LIST-001,CLIBackupList,DirectoryScan,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-BUGFIXES-2026-01,CLI Bug Fixes,TestSpec,TESTED,,,cli,2026-01-28,geodetestlab/specs/cli_issue_fixes_january_2026.yml
 REQ-CLI-COMPAT-001,Legacy Binary Symlinks,ML,IMPL,,,cli,2026-01-14,build.zig
+REQ-CLI-COMPLETE-001,REPL Tab Completion,Testing,TESTED,,,cli,2026-01-30,src/client/repl/repl_complete.zig
 REQ-CLI-DOT-001,DotGraphOutput,FormatConversion,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-EXIT-001,CLI Exit Code Mapping,ErrorHandling,TESTED,,,cli,2025-10-04,tests/exit_code_mapping_regression_test.sh
 REQ-CLI-FORMAT-001,QueryOutputFormats,DOT_Table_CSV,TESTED,,,cli,2026-01-28,geodetestlab/specs/query_output_formats.yml
