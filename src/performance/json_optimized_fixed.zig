@@ -2,6 +2,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 // CANARY: REQ=REQ-PERF-JSON-001; FEATURE="OptimizedJSON"; ASPECT=Performance; STATUS=TESTED; TEST=TestCANARY_OptimizedJSON; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-QUALITY-GAP-413-001; FEATURE="OrphanedTestFix"; ASPECT=API; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+// Updated for Zig 0.15 ArrayList API - all methods now require allocator parameter
 
 /// High-performance JSON serialization system with arena allocators and streaming support
 /// Addresses 630μs JSON parsing bottleneck (31x slower than target) identified in performance analysis
@@ -12,16 +14,16 @@ pub const OptimizedJsonProcessor = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: Allocator) Self {
+    pub fn init(allocator: Allocator) !Self {
         return .{
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
-            .buffer = std.ArrayList(u8).init(allocator),
+            .buffer = try std.ArrayList(u8).initCapacity(allocator, 256),
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.buffer.deinit();
+        self.buffer.deinit(self.allocator);
         self.arena.deinit();
     }
 
@@ -33,7 +35,7 @@ pub const OptimizedJsonProcessor = struct {
 
     /// Pre-allocate buffer for expected JSON size (eliminates reallocations)
     pub fn reserveCapacity(self: *Self, capacity: usize) !void {
-        try self.buffer.ensureTotalCapacity(capacity);
+        try self.buffer.ensureTotalCapacity(self.allocator, capacity);
     }
 
     /// Streaming JSON writer for large result sets
@@ -44,76 +46,76 @@ pub const OptimizedJsonProcessor = struct {
         first_item: bool = true,
 
         pub fn writeObjectStart(self: *StreamingWriter) !void {
-            try self.buffer.append('{');
+            try self.buffer.append(self.allocator, '{');
         }
 
         pub fn writeObjectEnd(self: *StreamingWriter) !void {
-            try self.buffer.append('}');
+            try self.buffer.append(self.allocator, '}');
         }
 
         pub fn writeArrayStart(self: *StreamingWriter) !void {
-            try self.buffer.append('[');
+            try self.buffer.append(self.allocator, '[');
             self.first_item = true;
         }
 
         pub fn writeArrayEnd(self: *StreamingWriter) !void {
-            try self.buffer.append(']');
+            try self.buffer.append(self.allocator, ']');
         }
 
         pub fn writeFieldName(self: *StreamingWriter, name: []const u8) !void {
             if (!self.first_item) {
-                try self.buffer.append(',');
+                try self.buffer.append(self.allocator, ',');
             }
-            try self.buffer.append('"');
+            try self.buffer.append(self.allocator, '"');
             try self.writeEscapedString(name);
-            try self.buffer.appendSlice("\":");
+            try self.buffer.appendSlice(self.allocator, "\":");
             self.first_item = false;
         }
 
         pub fn writeString(self: *StreamingWriter, value: []const u8) !void {
             if (!self.first_item) {
-                try self.buffer.append(',');
+                try self.buffer.append(self.allocator, ',');
             }
-            try self.buffer.append('"');
+            try self.buffer.append(self.allocator, '"');
             try self.writeEscapedString(value);
-            try self.buffer.append('"');
+            try self.buffer.append(self.allocator, '"');
             self.first_item = false;
         }
 
         pub fn writeNumber(self: *StreamingWriter, value: anytype) !void {
             if (!self.first_item) {
-                try self.buffer.append(',');
+                try self.buffer.append(self.allocator, ',');
             }
             const formatted = try std.fmt.allocPrint(self.arena_allocator, "{}", .{value});
-            try self.buffer.appendSlice(formatted);
+            try self.buffer.appendSlice(self.allocator, formatted);
             self.first_item = false;
         }
 
         pub fn writeBool(self: *StreamingWriter, value: bool) !void {
             if (!self.first_item) {
-                try self.buffer.append(',');
+                try self.buffer.append(self.allocator, ',');
             }
-            try self.buffer.appendSlice(if (value) "true" else "false");
+            try self.buffer.appendSlice(self.allocator, if (value) "true" else "false");
             self.first_item = false;
         }
 
         pub fn writeNull(self: *StreamingWriter) !void {
             if (!self.first_item) {
-                try self.buffer.append(',');
+                try self.buffer.append(self.allocator, ',');
             }
-            try self.buffer.appendSlice("null");
+            try self.buffer.appendSlice(self.allocator, "null");
             self.first_item = false;
         }
 
         fn writeEscapedString(self: *StreamingWriter, input: []const u8) !void {
             for (input) |c| {
                 switch (c) {
-                    '"' => try self.buffer.appendSlice("\\\""),
-                    '\\' => try self.buffer.appendSlice("\\\\"),
-                    '\n' => try self.buffer.appendSlice("\\n"),
-                    '\r' => try self.buffer.appendSlice("\\r"),
-                    '\t' => try self.buffer.appendSlice("\\t"),
-                    else => try self.buffer.append(c),
+                    '"' => try self.buffer.appendSlice(self.allocator, "\\\""),
+                    '\\' => try self.buffer.appendSlice(self.allocator, "\\\\"),
+                    '\n' => try self.buffer.appendSlice(self.allocator, "\\n"),
+                    '\r' => try self.buffer.appendSlice(self.allocator, "\\r"),
+                    '\t' => try self.buffer.appendSlice(self.allocator, "\\t"),
+                    else => try self.buffer.append(self.allocator, c),
                 }
             }
         }
@@ -196,6 +198,7 @@ pub const OptimizedJsonProcessor = struct {
                 }
                 try writer.writeObjectEnd();
             },
+            .number_string => |s| try writer.writeString(s),
         }
     }
 
@@ -220,13 +223,13 @@ pub const JsonProcessorPool = struct {
     const Self = @This();
 
     pub fn init(allocator: Allocator, pool_size: usize) !Self {
-        var processors = std.ArrayList(*OptimizedJsonProcessor).init(allocator);
-        try processors.ensureTotalCapacity(pool_size);
+        var processors = try std.ArrayList(*OptimizedJsonProcessor).initCapacity(allocator, pool_size);
+        errdefer processors.deinit(allocator);
 
         for (0..pool_size) |_| {
             const processor = try allocator.create(OptimizedJsonProcessor);
-            processor.* = OptimizedJsonProcessor.init(allocator);
-            try processors.append(processor);
+            processor.* = try OptimizedJsonProcessor.init(allocator);
+            try processors.append(allocator, processor);
         }
 
         return .{
@@ -240,7 +243,7 @@ pub const JsonProcessorPool = struct {
             processor.deinit();
             self.allocator.destroy(processor);
         }
-        self.processors.deinit();
+        self.processors.deinit(self.allocator);
     }
 
     /// Get a processor from the pool (thread-safe)
@@ -250,8 +253,10 @@ pub const JsonProcessorPool = struct {
 
         if (self.processors.items.len > 0) {
             const processor = self.processors.pop();
-            processor.reset(); // Reset for reuse
-            return processor;
+            if (processor) |p| {
+                p.reset(); // Reset for reuse
+                return p;
+            }
         }
         return null;
     }
@@ -262,7 +267,7 @@ pub const JsonProcessorPool = struct {
         defer self.mutex.unlock();
 
         processor.reset(); // Clean state for next use
-        self.processors.append(processor) catch {
+        self.processors.append(self.allocator, processor) catch {
             // Pool full, just reset and continue
             // In production, might want to track this metric
         };
@@ -293,28 +298,26 @@ pub fn escapeJsonStringOptimized(allocator: Allocator, input: []const u8) ![]u8 
     }
 
     // Escaping needed - use optimized buffer growth
-    var result = std.ArrayList(u8).init(allocator);
-    defer result.deinit();
-
-    try result.ensureTotalCapacity(input.len + (input.len / 4)); // Heuristic: 25% escape overhead
+    var result = try std.ArrayList(u8).initCapacity(allocator, input.len + (input.len / 4)); // Heuristic: 25% escape overhead
+    errdefer result.deinit(allocator);
 
     for (input) |c| {
         switch (c) {
-            '"' => try result.appendSlice("\\\""),
-            '\\' => try result.appendSlice("\\\\"),
-            '\n' => try result.appendSlice("\\n"),
-            '\r' => try result.appendSlice("\\r"),
-            '\t' => try result.appendSlice("\\t"),
+            '"' => try result.appendSlice(allocator, "\\\""),
+            '\\' => try result.appendSlice(allocator, "\\\\"),
+            '\n' => try result.appendSlice(allocator, "\\n"),
+            '\r' => try result.appendSlice(allocator, "\\r"),
+            '\t' => try result.appendSlice(allocator, "\\t"),
             0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => {
-                const escaped = try std.fmt.allocPrint(allocator, "\\u{:0>4x}", .{c});
-                defer allocator.free(escaped);
-                try result.appendSlice(escaped);
+                var hex_buf: [6]u8 = undefined;
+                const hex_slice = std.fmt.bufPrint(&hex_buf, "\\u{x:0>4}", .{c}) catch continue;
+                try result.appendSlice(allocator, hex_slice);
             },
-            else => try result.append(c),
+            else => try result.append(allocator, c),
         }
     }
 
-    return result.toOwnedSlice();
+    return result.toOwnedSlice(allocator);
 }
 
 /// Performance benchmarking function for JSON operations
@@ -323,7 +326,7 @@ pub fn benchmarkJsonProcessing(allocator: Allocator, iterations: usize) !struct 
         \\{"name":"John Doe","age":30,"city":"New York","skills":["programming","design","management"],"active":true}
     ;
 
-    var processor = OptimizedJsonProcessor.init(allocator);
+    var processor = try OptimizedJsonProcessor.init(allocator);
     defer processor.deinit();
 
     // Benchmark parsing

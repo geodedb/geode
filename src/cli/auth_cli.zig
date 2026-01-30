@@ -3,13 +3,15 @@ const builtin = @import("builtin");
 const geode = @import("geode");
 const auth_state = geode.auth_state;
 
+// CANARY: REQ=REQ-QUALITY-GAP-406-006; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
 fn printOut(comptime fmt: []const u8, args: anytype) void {
     var buf: [512]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    const stdout = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
-    else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    const stdout = if (builtin.os.tag == .windows) blk: {
+        const h = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch return;
+        if (h == std.os.windows.INVALID_HANDLE_VALUE) return;
+        break :blk std.fs.File{ .handle = h };
+    } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     stdout.writeAll(msg) catch {};
 }
 

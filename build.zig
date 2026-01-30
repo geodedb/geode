@@ -1777,8 +1777,27 @@ pub fn build(b: *std.Build) void {
     const tde_enforcement_tests = b.addTest(.{ .root_module = tde_enforcement_test_mod });
     test_step.dependOn(&tde_enforcement_tests.step);
 
-    // CANARY: REQ=REQ-QUALITY-GAP-413-001; FEATURE="OrphanedTestAnalysis"; ASPECT=BuildSystem; STATUS=EXEMPT; OWNER=quality; UPDATED=2026-01-30
-    // GAP-413 BLOCKED: 9 orphaned test files in src/ identified but cannot be integrated:
+    // CANARY: REQ=REQ-QUALITY-GAP-413-002; FEATURE="OrphanedTestRemediation"; ASPECT=BuildSystem; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+    // GAP-413: Orphaned test files - PARTIAL REMEDIATION (11 tests now running)
+    //
+    // FIXED: test_json_optimization.zig (11 tests) - Updated to Zig 0.15 ArrayList API
+    const json_opt_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/performance/test_json_optimization.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    // Add imports for json_optimized_fixed.zig and json library
+    const json_opt_fixed_mod_for_test = b.createModule(.{
+        .root_source_file = b.path("src/performance/json_optimized_fixed.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    json_opt_test_mod.addImport("json_opt", json_opt_fixed_mod_for_test);
+    json_opt_test_mod.addImport("json", json_mod);
+    const json_opt_tests = b.addTest(.{ .root_module = json_opt_test_mod });
+    test_step.dependOn(&json_opt_tests.step);
+
+    // GAP-413 REMAINING: 8 orphaned test files (55 test blocks) still need remediation:
     //
     // Files with parent directory imports (need module restructuring):
     //   - src/security/test_timing_attacks.zig (6 tests) - imports ../types/hash.zig
@@ -1792,11 +1811,10 @@ pub fn build(b: *std.Build) void {
     //   - src/server/test_async_connection.zig (5 tests) - module path mismatch
     //
     // Files with deprecated APIs:
-    //   - src/performance/test_json_optimization.zig (11 tests) - uses Zig 0.14 ArrayList.init()
     //   - src/security/test_tde_nonce.zig (6 tests) - uses tde.zig which has deprecated APIs
     //
-    // TOTAL: 66 test blocks across 9 files are NOT running in CI
-    // REMEDIATION: Requires dedicated sprint to modernize these tests or delete obsolete ones
+    // TOTAL REMAINING: 55 test blocks across 8 files NOT running in CI
+    // REMEDIATION: Requires module restructuring or API updates
 
     const audit_chain_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_audit_chain.zig"), .target = target, .optimize = optimize });
     audit_chain_test_mod.addImport("audit", audit_security_mod);

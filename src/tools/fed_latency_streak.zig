@@ -78,7 +78,9 @@ pub fn main() !void {
     var stdin_buf2: [8192]u8 = undefined;
     // Create a File for stdin for cross-platform compatibility.
     const stdin_file: std.fs.File = if (builtin.os.tag == .windows)
-        .{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
+        .{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch {
+            std.process.exit(1);
+        } }
     else
         .{ .handle = std.posix.STDIN_FILENO };
     // Use stdin's reader directly when no file path provided.
@@ -165,7 +167,9 @@ pub fn main() !void {
         );
         const written = fbs2.getWritten();
         const stdout = if (builtin.os.tag == .windows)
-            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                std.process.exit(1);
+            } }
         else
             std.fs.File{ .handle = std.posix.STDOUT_FILENO };
         try stdout.writeAll(written);
@@ -187,7 +191,9 @@ pub fn main() !void {
     try w.writeAll("}\n");
     const out = fbs.getWritten();
     const stdout = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            std.process.exit(1);
+        } }
     else
         std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     try stdout.writeAll(out);

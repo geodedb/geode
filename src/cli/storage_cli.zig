@@ -1,9 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-fn getStdOut() std.fs.File {
+// CANARY: REQ=REQ-QUALITY-GAP-406-005; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+fn getStdOut() error{StdioUnavailable}!std.fs.File {
     if (builtin.os.tag == .windows) {
-        return std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable };
+        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch return error.StdioUnavailable;
+        if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
+        return std.fs.File{ .handle = handle };
     } else {
         return std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     }
@@ -136,7 +139,7 @@ fn cmdStorageVerify(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 }
 
 fn runCheck(allocator: std.mem.Allocator, check_name: []const u8, json_output: bool) !void {
-    const stdout = getStdOut();
+    const stdout = getStdOut() catch return error.StdioUnavailable;
 
     if (std.mem.eql(u8, check_name, "dir")) {
         var rec = fs_fsync.Recorder{};

@@ -170,7 +170,9 @@ pub fn main() !void {
         .Ok => |ok| ok,
         .Err => |pe| {
             // Output structured JSON diagnostic to stderr
-            const stderr_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch {
+                std.process.exit(1);
+            } } else std.fs.File{ .handle = std.posix.STDERR_FILENO };
             const stderr = stderr_file.deprecatedWriter();
             const gql_status = status.syntaxError(pe.msg, pe.line, pe.column, @tagName(pe.token));
             try status.writeJson(stderr, gql_status);
@@ -184,8 +186,12 @@ pub fn main() !void {
         const prof: conf.Profile = .{ .features = .{} };
         {
             const stdout_file = if (builtin.os.tag == .windows)
-                std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
-            else if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                    std.process.exit(1);
+                } }
+            else if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                std.process.exit(1);
+            } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
             const w = stdout_file.deprecatedWriter();
             try conf.writeConformanceJson(w, prof);
         }
@@ -194,14 +200,18 @@ pub fn main() !void {
         if (print_ast_json) {
             if (ast_json_verbose) {
                 {
-                    const out_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                    const out_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                        std.process.exit(1);
+                    } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
                     const w = out_file.deprecatedWriter();
                     // P2-3: Pass allocator to printProgramJsonWith
                     try printer.printProgramJsonWith(gpa, w, res.program, .{ .verbose_temporals = true, .session_offset_minutes = session_offset });
                 }
             } else {
                 {
-                    const out_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                    const out_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                        std.process.exit(1);
+                    } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
                     const w = out_file.deprecatedWriter();
                     // P2-3: Pass allocator to printProgramJsonWith
                     try printer.printProgramJsonWith(gpa, w, res.program, .{ .session_offset_minutes = session_offset });
@@ -211,7 +221,9 @@ pub fn main() !void {
             // P2-3: Add allocator to PrintOptions for temporal formatting
             const popts = printer.PrintOptions{ .normalize_temporals = normalize_temporals, .clamp_frac_digits = clamp_frac_digits, .allocator = gpa };
             {
-                const out_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                const out_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                    std.process.exit(1);
+                } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
                 const w = out_file.deprecatedWriter();
                 try printer.printProgramHumanWith(w, res.program, popts);
             }
@@ -276,7 +288,9 @@ pub fn main() !void {
                         try out.writer(ally).print("  {d} -> {s}\n", .{ r.id, s });
                     }
                     // Write once
-                    const outf = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                    const outf = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                        std.process.exit(1);
+                    } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
                     _ = try outf.write(out.items);
                 },
                 else => {
@@ -314,7 +328,9 @@ pub fn main() !void {
             defer ally.free(ea);
             const ed = try exec.exceptDistinctRows(ally, A, B);
             defer ally.free(ed);
-            const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
+            const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                std.process.exit(1);
+            } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
             try w.print("demo-setops:\n  A = 3 rows, B = 3 rows\n", .{});
             try w.print("  UNION ALL: {d} rows (stable-left)\n", .{ua.len});
             try w.print("  UNION DISTINCT: {d} rows (sorted)\n", .{ud.len});
@@ -345,13 +361,17 @@ pub fn main() !void {
             const ud2 = try exec.unionDistinctRowsOptimized(ally, a_rows, b_rows, exec.SetOpsTuning.union_distinct_hash_threshold);
             defer ally.free(ud2);
             const t2 = std.time.nanoTimestamp();
-            const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
+            const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                std.process.exit(1);
+            } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
             try w.print("bench-setops: N={d}\n  unionDistinctRows    => {d} ns\n  unionDistinct(opt)   => {d} ns\n  same cardinality?     {s}\n", .{ N, t1 - t0, t2 - t1, if (ud1.len == ud2.len) "yes" else "no" });
         } else if (bench_eval) {
             // Micro-bench: regex =~ and IN/NOT IN evaluation
             // P2-3: Use main GPA instead of page_allocator
             const ally = gpa;
-            const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
+            const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                std.process.exit(1);
+            } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
             // Regex benchmark
             const samples = [_][]const u8{ "Alice.", "Bob", "Carol123", "Z", "Alic", "Alice." };
             const pats = [_][]const u8{ "^A.*$", "A[il]ice\\.", "^[^B].*$", "Z?$", "Al?ice\\." };
@@ -413,7 +433,9 @@ pub fn main() !void {
             switch (st) {
                 .Query => |q| {
                     const names = &.{ "a", "s" };
-                    const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
+                    const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                        std.process.exit(1);
+                    } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
                     const pr = gql.printer;
                     if (q.group_by != null) {
                         // Validate GROUP BY semantics first; surface diagnostics
@@ -717,7 +739,9 @@ pub fn main() !void {
                         _ = agg_map.put(sig_buf.items, ai) catch {};
                     }
                     // Print header
-                    const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
+                    const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                        std.process.exit(1);
+                    } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
                     try w.print("demo-agg: groups over (name, val)\n", .{});
                     try w.print("group\t", .{});
                     for (labels.items, 0..) |lab, i| {

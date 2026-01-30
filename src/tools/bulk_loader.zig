@@ -365,21 +365,27 @@ pub const BulkLoader = struct {
 // Zig 0.15 compatibility for std file handles
 fn getStdIn() std.fs.File {
     return if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch {
+            std.process.exit(1);
+        } }
     else
         std.fs.File{ .handle = std.posix.STDIN_FILENO };
 }
 
 fn getStdOut() std.fs.File {
     return if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            std.process.exit(1);
+        } }
     else
         std.fs.File{ .handle = std.posix.STDOUT_FILENO };
 }
 
 fn getStdErr() std.fs.File {
     return if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch {
+            std.process.exit(1);
+        } }
     else
         std.fs.File{ .handle = std.posix.STDERR_FILENO };
 }

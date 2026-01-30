@@ -1185,7 +1185,9 @@ const TerminalState = if (builtin.os.tag == .windows) std.os.windows.DWORD else 
 fn enterRawMode() !TerminalState {
     if (builtin.os.tag == .windows) {
         // Windows terminal setup
-        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable;
+        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch {
+            std.process.exit(1);
+        };
         var mode: std.os.windows.DWORD = undefined;
         _ = std.os.windows.kernel32.GetConsoleMode(handle, &mode);
         const original = mode;

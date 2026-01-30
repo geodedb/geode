@@ -69,20 +69,23 @@ const TlsConfig = struct {
     }
 };
 
-// Cross-platform stdin helper (matches pattern in main.zig)
-fn getStdinFile() std.fs.File {
+// CANARY: REQ=REQ-QUALITY-GAP-406-004; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+// Cross-platform stdin helper with proper error handling
+fn getStdinFile() error{StdioUnavailable}!std.fs.File {
     if (builtin.os.tag == .windows) {
-        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable;
+        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return error.StdioUnavailable;
+        if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
         return std.fs.File{ .handle = handle };
     } else {
         return std.fs.File{ .handle = std.posix.STDIN_FILENO };
     }
 }
 
-// Cross-platform stdout helper for Zig 0.15.2 compatibility
-fn getStdoutFile() std.fs.File {
+// Cross-platform stdout helper with proper error handling
+fn getStdoutFile() error{StdioUnavailable}!std.fs.File {
     if (builtin.os.tag == .windows) {
-        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable;
+        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch return error.StdioUnavailable;
+        if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
         return std.fs.File{ .handle = handle };
     } else {
         return std.fs.File{ .handle = std.posix.STDOUT_FILENO };
@@ -93,7 +96,8 @@ fn getStdoutFile() std.fs.File {
 fn printStdout(comptime fmt: []const u8, args: anytype) void {
     var buf: [4096]u8 = undefined;
     const slice = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    getStdoutFile().writeAll(slice) catch {};
+    const stdout = getStdoutFile() catch return;
+    stdout.writeAll(slice) catch {};
 }
 
 /// Backup command handler - routes to specific backup subcommands
@@ -856,7 +860,10 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
         // Read confirmation from stdin
         std.debug.print("Type 'yes' to confirm restore: ", .{});
 
-        const stdin_file = getStdinFile();
+        const stdin_file = getStdinFile() catch {
+            std.debug.print("\nError: Unable to read from stdin.\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
         var line_buf: [256]u8 = undefined;
         var line_len: usize = 0;
 

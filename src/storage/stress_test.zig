@@ -3,7 +3,9 @@ const builtin = @import("builtin");
 
 fn getStdOut() std.fs.File {
     if (builtin.os.tag == .windows) {
-        return std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable };
+        return std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            std.process.exit(1);
+        } };
     } else {
         return std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     }

@@ -180,18 +180,35 @@ fn extractErrorMessage(allocator: std.mem.Allocator, json_response: []const u8) 
     return std.fmt.allocPrint(allocator, "{s}: {s}", .{ error_type, message });
 }
 
+// CANARY: REQ=REQ-QUALITY-GAP-406-010; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
 fn getStdOut() std.fs.File {
-    return if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
-    else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    if (builtin.os.tag == .windows) {
+        const h = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            std.debug.print("Fatal: Cannot get stdout handle\n", .{});
+            std.process.exit(1);
+        };
+        if (h == std.os.windows.INVALID_HANDLE_VALUE) {
+            std.debug.print("Fatal: Invalid stdout handle\n", .{});
+            std.process.exit(1);
+        }
+        return std.fs.File{ .handle = h };
+    } else {
+        return std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    }
 }
 
 fn getStdErr() std.fs.File {
-    return if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
-    else
-        std.fs.File{ .handle = std.posix.STDERR_FILENO };
+    if (builtin.os.tag == .windows) {
+        const h = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch {
+            std.process.exit(1);
+        };
+        if (h == std.os.windows.INVALID_HANDLE_VALUE) {
+            std.process.exit(1);
+        }
+        return std.fs.File{ .handle = h };
+    } else {
+        return std.fs.File{ .handle = std.posix.STDERR_FILENO };
+    }
 }
 
 fn readLineAlloc(allocator: std.mem.Allocator, file: std.fs.File, max: usize) ![]u8 {

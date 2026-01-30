@@ -36,10 +36,10 @@ pub const Server = struct {
     shutdown_requested: bool = false,
     formatting_options: features.FormattingOptions = .{},
 
-    pub fn init(allocator: Allocator) Server {
+    pub fn init(allocator: Allocator) !Server {
         return .{
             .allocator = allocator,
-            .transport = Transport.init(allocator),
+            .transport = try Transport.init(allocator),
             .documents = DocumentStore.init(allocator),
         };
     }

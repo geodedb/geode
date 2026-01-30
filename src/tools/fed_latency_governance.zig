@@ -162,7 +162,9 @@ pub fn main() !void {
     }
     const written = fbs.getWritten();
     const stdout = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            std.process.exit(1);
+        } }
     else
         std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     try stdout.writeAll(written);

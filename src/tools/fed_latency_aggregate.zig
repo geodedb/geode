@@ -321,7 +321,9 @@ pub fn main() !void {
         });
         const out_txt = fbs.getWritten();
         const stdout = if (builtin.os.tag == .windows)
-            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                std.process.exit(1);
+            } }
         else
             std.fs.File{ .handle = std.posix.STDOUT_FILENO };
         try stdout.writeAll(out_txt);
@@ -387,7 +389,9 @@ pub fn main() !void {
     try w.writeAll("}\n");
     const line_out = fbs.getWritten();
     const stdout2 = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            std.process.exit(1);
+        } }
     else
         std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     try stdout2.writeAll(line_out);

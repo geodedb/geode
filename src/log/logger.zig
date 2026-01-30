@@ -117,12 +117,14 @@ pub fn log(l: Level, msg: []const u8, kvs: anytype) void {
     }
     _ = w.writeAll("}\n") catch return;
     const out_slice = buf[0..fbs.pos];
+    // CANARY: REQ=REQ-QUALITY-GAP-406-008; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
     switch (g_sink) {
         .stderr => {
-            const stderr_file = if (builtin.os.tag == .windows)
-                std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
-            else
-                std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            const stderr_file = if (builtin.os.tag == .windows) blk: {
+                const h = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch return;
+                if (h == std.os.windows.INVALID_HANDLE_VALUE) return;
+                break :blk std.fs.File{ .handle = h };
+            } else std.fs.File{ .handle = std.posix.STDERR_FILENO };
             stderr_file.writeAll(out_slice) catch return;
         },
         .buffer => |list| {

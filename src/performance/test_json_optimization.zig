@@ -20,7 +20,7 @@ const UserRow = struct {
 test "OptimizedJsonProcessor basic functionality" {
     const allocator = testing.allocator;
 
-    var processor = json_opt.OptimizedJsonProcessor.init(allocator);
+    var processor = try json_opt.OptimizedJsonProcessor.init(allocator);
     defer processor.deinit();
 
     var writer = processor.getStreamingWriter();
@@ -41,7 +41,7 @@ test "OptimizedJsonProcessor basic functionality" {
 test "OptimizedJsonProcessor array handling" {
     const allocator = testing.allocator;
 
-    var processor = json_opt.OptimizedJsonProcessor.init(allocator);
+    var processor = try json_opt.OptimizedJsonProcessor.init(allocator);
     defer processor.deinit();
 
     var writer = processor.getStreamingWriter();
@@ -61,7 +61,7 @@ test "OptimizedJsonProcessor array handling" {
 test "OptimizedJsonProcessor string escaping" {
     const allocator = testing.allocator;
 
-    var processor = json_opt.OptimizedJsonProcessor.init(allocator);
+    var processor = try json_opt.OptimizedJsonProcessor.init(allocator);
     defer processor.deinit();
 
     var writer = processor.getStreamingWriter();
@@ -79,7 +79,7 @@ test "OptimizedJsonProcessor string escaping" {
 test "OptimizedJsonProcessor query result serialization" {
     const allocator = testing.allocator;
 
-    var processor = json_opt.OptimizedJsonProcessor.init(allocator);
+    var processor = try json_opt.OptimizedJsonProcessor.init(allocator);
     defer processor.deinit();
 
     const schema = [_]json_opt.SchemaColumn{
@@ -105,7 +105,7 @@ test "OptimizedJsonProcessor query result serialization" {
 test "OptimizedJsonProcessor reset and reuse" {
     const allocator = testing.allocator;
 
-    var processor = json_opt.OptimizedJsonProcessor.init(allocator);
+    var processor = try json_opt.OptimizedJsonProcessor.init(allocator);
     defer processor.deinit();
 
     // First use
@@ -213,7 +213,7 @@ test "JSON processing performance benchmark" {
 test "Large result set streaming performance" {
     const allocator = testing.allocator;
 
-    var processor = json_opt.OptimizedJsonProcessor.init(allocator);
+    var processor = try json_opt.OptimizedJsonProcessor.init(allocator);
     defer processor.deinit();
 
     // Pre-allocate for large result set
@@ -256,7 +256,7 @@ test "Large result set streaming performance" {
 test "Memory usage optimization validation" {
     const allocator = testing.allocator;
 
-    var processor = json_opt.OptimizedJsonProcessor.init(allocator);
+    var processor = try json_opt.OptimizedJsonProcessor.init(allocator);
     defer processor.deinit();
 
     // Test arena allocation efficiency
@@ -280,7 +280,7 @@ test "CANARY: REQ=REQ-PERF-JSON-001" {
     // CANARY: REQ=REQ-PERF-JSON-001; FEATURE="OptimizedJSON"; ASPECT=Integration; STATUS=TESTED; TEST=TestCANARY_REQ_PERF_JSON_001; OWNER=performance; UPDATED=2025-10-04
     const allocator = testing.allocator;
 
-    var processor = json_opt.OptimizedJsonProcessor.init(allocator);
+    var processor = try json_opt.OptimizedJsonProcessor.init(allocator);
     defer processor.deinit();
 
     // Test comprehensive JSON processing pipeline
@@ -292,12 +292,12 @@ test "CANARY: REQ=REQ-PERF-JSON-001" {
         .{ .name = "last_login", .type = "DATETIME" },
     };
 
-    var rows = std.ArrayList([]const u8).init(allocator);
+    var rows = try std.ArrayList([]const u8).initCapacity(allocator, 50);
     defer {
         for (rows.items) |row| {
             allocator.free(row);
         }
-        rows.deinit();
+        rows.deinit(allocator);
     }
 
     // Generate test data

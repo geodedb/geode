@@ -10,11 +10,13 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
+    // CANARY: REQ=REQ-QUALITY-GAP-406-011; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
     // Read all stdin into buffer using posix API
-    const stdin_file = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
-    else
-        std.fs.File{ .handle = std.posix.STDIN_FILENO };
+    const stdin_file = if (builtin.os.tag == .windows) blk: {
+        const h = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return;
+        if (h == std.os.windows.INVALID_HANDLE_VALUE) return;
+        break :blk std.fs.File{ .handle = h };
+    } else std.fs.File{ .handle = std.posix.STDIN_FILENO };
 
     // Read input with size limit to prevent OOM
     const max_input_size: usize = 1024 * 1024; // 1MB max

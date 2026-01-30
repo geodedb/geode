@@ -669,16 +669,31 @@ pub fn main() !void {
     state.federation_manager = &federation_manager;
     state.distributed_planner = &dist_planner;
 
-    const stdin_file = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
-    else
-        std.fs.File{ .handle = std.posix.STDIN_FILENO };
+    // CANARY: REQ=REQ-QUALITY-GAP-406-009; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+    const stdin_file = if (builtin.os.tag == .windows) blk: {
+        const h = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch {
+            std.debug.print("Fatal: Cannot get stdin handle\n", .{});
+            return error.SystemResources;
+        };
+        if (h == std.os.windows.INVALID_HANDLE_VALUE) {
+            std.debug.print("Fatal: Invalid stdin handle\n", .{});
+            return error.SystemResources;
+        }
+        break :blk std.fs.File{ .handle = h };
+    } else std.fs.File{ .handle = std.posix.STDIN_FILENO };
     var stdin_buf: [4096]u8 = undefined;
     var stdin = stdin_file.reader(&stdin_buf);
-    const stdout_file = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
-    else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    const stdout_file = if (builtin.os.tag == .windows) blk: {
+        const h = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            std.debug.print("Fatal: Cannot get stdout handle\n", .{});
+            return error.SystemResources;
+        };
+        if (h == std.os.windows.INVALID_HANDLE_VALUE) {
+            std.debug.print("Fatal: Invalid stdout handle\n", .{});
+            return error.SystemResources;
+        }
+        break :blk std.fs.File{ .handle = h };
+    } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     var line_storage: [65536]u8 = undefined;
 
     // Robust line loop: handle EOF with partial line, ignore blank lines, no spin.

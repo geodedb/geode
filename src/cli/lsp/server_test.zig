@@ -30,7 +30,7 @@ test "ServerCapabilities - completion trigger characters" {
 test "Server - initialization" {
     const allocator = testing.allocator;
 
-    var srv = server.Server.init(allocator);
+    var srv = try server.Server.init(allocator);
     defer srv.deinit();
 
     try testing.expect(!srv.initialized);
@@ -40,7 +40,7 @@ test "Server - initialization" {
 test "Server - document lifecycle" {
     const allocator = testing.allocator;
 
-    var srv = server.Server.init(allocator);
+    var srv = try server.Server.init(allocator);
     defer srv.deinit();
 
     // Open a document
@@ -71,7 +71,7 @@ test "Server - document lifecycle" {
 test "Server - multiple documents" {
     const allocator = testing.allocator;
 
-    var srv = server.Server.init(allocator);
+    var srv = try server.Server.init(allocator);
     defer srv.deinit();
 
     // Open multiple documents
@@ -96,7 +96,7 @@ test "Server - multiple documents" {
 test "Server - state transitions" {
     const allocator = testing.allocator;
 
-    var srv = server.Server.init(allocator);
+    var srv = try server.Server.init(allocator);
     defer srv.deinit();
 
     // Initially not initialized

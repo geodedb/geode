@@ -16,28 +16,36 @@ pub const TransportError = error{
     ReadFailed,
     WriteFailed,
     EndOfStream,
+    StdioUnavailable,
 };
 
-// Cross-platform file handle helpers (copied from main.zig pattern)
-fn getStdinHandle() std.fs.File.Handle {
+// CANARY: REQ=REQ-QUALITY-GAP-406-003; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+// Cross-platform file handle helpers with proper error handling
+fn getStdinHandle() TransportError!std.fs.File.Handle {
     if (builtin.os.tag == .windows) {
-        return windows.GetStdHandle(windows.STD_INPUT_HANDLE) catch unreachable;
+        const handle = windows.GetStdHandle(windows.STD_INPUT_HANDLE) catch return error.StdioUnavailable;
+        if (handle == windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
+        return handle;
     } else {
         return std.posix.STDIN_FILENO;
     }
 }
 
-fn getStdoutHandle() std.fs.File.Handle {
+fn getStdoutHandle() TransportError!std.fs.File.Handle {
     if (builtin.os.tag == .windows) {
-        return windows.GetStdHandle(windows.STD_OUTPUT_HANDLE) catch unreachable;
+        const handle = windows.GetStdHandle(windows.STD_OUTPUT_HANDLE) catch return error.StdioUnavailable;
+        if (handle == windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
+        return handle;
     } else {
         return std.posix.STDOUT_FILENO;
     }
 }
 
-fn getStderrHandle() std.fs.File.Handle {
+fn getStderrHandle() TransportError!std.fs.File.Handle {
     if (builtin.os.tag == .windows) {
-        return windows.GetStdHandle(windows.STD_ERROR_HANDLE) catch unreachable;
+        const handle = windows.GetStdHandle(windows.STD_ERROR_HANDLE) catch return error.StdioUnavailable;
+        if (handle == windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
+        return handle;
     } else {
         return 2;
     }
@@ -49,12 +57,12 @@ pub const Transport = struct {
     stdout: std.fs.File,
     stderr: std.fs.File,
 
-    pub fn init(allocator: Allocator) Transport {
+    pub fn init(allocator: Allocator) TransportError!Transport {
         return .{
             .allocator = allocator,
-            .stdin = std.fs.File{ .handle = getStdinHandle() },
-            .stdout = std.fs.File{ .handle = getStdoutHandle() },
-            .stderr = std.fs.File{ .handle = getStderrHandle() },
+            .stdin = std.fs.File{ .handle = try getStdinHandle() },
+            .stdout = std.fs.File{ .handle = try getStdoutHandle() },
+            .stderr = std.fs.File{ .handle = try getStderrHandle() },
         };
     }
 

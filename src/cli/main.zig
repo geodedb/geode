@@ -409,20 +409,27 @@ const quic_transport = repl_dispatch.Transport{
     .connectFn = quicConnect,
 };
 
-// Cross-platform file handle helpers
+// Cross-platform file handle helpers with proper error handling
+// CANARY: REQ=REQ-QUALITY-GAP-406-002; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
 // On Windows, file handles are HANDLE (*anyopaque), not integers
 // On Unix, file handles are file descriptors (integers)
-fn getStdinHandle() std.fs.File.Handle {
+const StdioError = error{ StdioUnavailable, InvalidHandle };
+
+fn getStdinHandle() StdioError!std.fs.File.Handle {
     if (builtin.os.tag == .windows) {
-        return windows.GetStdHandle(windows.STD_INPUT_HANDLE) catch unreachable;
+        const handle = windows.GetStdHandle(windows.STD_INPUT_HANDLE) catch return error.StdioUnavailable;
+        if (handle == windows.INVALID_HANDLE_VALUE) return error.InvalidHandle;
+        return handle;
     } else {
         return std.posix.STDIN_FILENO;
     }
 }
 
-fn getStdoutHandle() std.fs.File.Handle {
+fn getStdoutHandle() StdioError!std.fs.File.Handle {
     if (builtin.os.tag == .windows) {
-        return windows.GetStdHandle(windows.STD_OUTPUT_HANDLE) catch unreachable;
+        const handle = windows.GetStdHandle(windows.STD_OUTPUT_HANDLE) catch return error.StdioUnavailable;
+        if (handle == windows.INVALID_HANDLE_VALUE) return error.InvalidHandle;
+        return handle;
     } else {
         return std.posix.STDOUT_FILENO;
     }
@@ -451,9 +458,11 @@ fn freeParamValue(allocator: std.mem.Allocator, value: Value) void {
     }
 }
 
-fn getStderrHandle() std.fs.File.Handle {
+fn getStderrHandle() StdioError!std.fs.File.Handle {
     if (builtin.os.tag == .windows) {
-        return windows.GetStdHandle(windows.STD_ERROR_HANDLE) catch unreachable;
+        const handle = windows.GetStdHandle(windows.STD_ERROR_HANDLE) catch return error.StdioUnavailable;
+        if (handle == windows.INVALID_HANDLE_VALUE) return error.InvalidHandle;
+        return handle;
     } else {
         return std.posix.STDERR_FILENO;
     }
@@ -2349,7 +2358,10 @@ fn cmdLsp(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void 
 
     // Import and start the LSP server
     const lsp = @import("lsp/server.zig");
-    var server = lsp.Server.init(allocator);
+    var server = lsp.Server.init(allocator) catch |err| {
+        std.debug.print("Error initializing LSP server: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
     defer server.deinit();
 
     try server.run();
@@ -2383,8 +2395,8 @@ fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // Protocol: read JSON requests from stdin, write JSON responses to stdout
     // Format: {"type": "RUN_GQL", "text": "query", "params": {...}}
 
-    const stdin_file = std.fs.File{ .handle = getStdinHandle() }; // stdin
-    const stdout_fd = std.fs.File{ .handle = getStdoutHandle() }; // stdout
+    const stdin_file = std.fs.File{ .handle = getStdinHandle() catch return error.StdioUnavailable }; // stdin
+    const stdout_fd = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable }; // stdout
 
     // Use the geode module to execute queries
 
@@ -2990,7 +3002,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             const param_value = argv[i + 2];
             // Validate JSON parameter
             if (std.mem.eql(u8, param_name, "bad_json") or std.mem.indexOf(u8, param_value, "{invalid") != null) {
-                const stderr_fd = std.fs.File{ .handle = getStderrHandle() };
+                const stderr_fd = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
                 _ = try stderr_fd.writeAll("JSON malformed parse error\n");
                 std.process.exit(1);
             }
@@ -3043,7 +3055,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     defer if (stdin_allocated) |allocated| allocator.free(allocated);
 
     if (std.mem.eql(u8, query_text.?, "-")) {
-        const stdin = std.fs.File{ .handle = getStdinHandle() }; // stdin handle
+        const stdin = std.fs.File{ .handle = getStdinHandle() catch return error.StdioUnavailable }; // stdin handle
         const stdin_content = try stdin.readToEndAlloc(allocator, 1024 * 1024); // Max 1MB
         defer allocator.free(stdin_content);
 
@@ -3120,7 +3132,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
     // Check for unauthorized user before executing
     if (user != null and std.mem.eql(u8, user.?, "unauthorized")) {
-        const stderr_fd = std.fs.File{ .handle = getStderrHandle() };
+        const stderr_fd = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
         _ = try stderr_fd.writeAll("unauthorized access denied\n");
         std.process.exit(3);
     }
@@ -3237,7 +3249,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     const client_cert_path = opts.client_cert_path;
     const client_key_path = opts.client_key_path;
     const graph = opts.graph;
-    const stderr = std.fs.File{ .handle = getStderrHandle() };
+    const stderr = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
 
     var addr_port = std.mem.splitSequence(u8, server_addr, ":");
     const host = addr_port.next() orelse "127.0.0.1";
@@ -3426,7 +3438,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
     }
 
     // Output results based on format
-    var stdout_file = std.fs.File{ .handle = getStdoutHandle() };
+    var stdout_file = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable };
 
     if (std.mem.eql(u8, format, "dot")) {
         // DOT format: Convert JSON results to Graphviz DOT format
@@ -4069,7 +4081,10 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
 
-    const stdin_handle = getStdinHandle();
+    const stdin_handle = getStdinHandle() catch |err| {
+        std.debug.print("Error: Cannot get stdin handle: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
     const stdin_is_tty = switch (builtin.os.tag) {
         .windows => false,
         else => std.posix.isatty(stdin_handle),
@@ -4196,7 +4211,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
 
     if (non_interactive) {
-        const stderr_file = std.fs.File{ .handle = getStderrHandle() };
+        const stderr_file = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
         _ = stderr_file.writeAll("Non-interactive shell mode is not supported. Use 'geode query' for scripted execution.\n") catch {};
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
@@ -4319,7 +4334,7 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
         const sessions_json =
             \\{"sessions":[{"user":"testuser","expires":"2025-12-31"},{"user":"admin","expires":"2025-12-31"}]}
         ;
-        const stdout_fd = std.fs.File{ .handle = getStdoutHandle() };
+        const stdout_fd = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable };
         _ = try stdout_fd.writeAll(sessions_json);
         _ = try stdout_fd.writeAll("\n");
         std.process.exit(@intFromEnum(ExitCode.success));
@@ -4431,7 +4446,8 @@ fn promptPassword(allocator: std.mem.Allocator, prompt_text: []const u8) ![]cons
 
     if (builtin.os.tag == .windows) {
         // Windows: Disable echo using Console API
-        const stdin_handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable;
+        const stdin_handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return error.StdioUnavailable;
+        if (stdin_handle == std.os.windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
         _ = std.os.windows.kernel32.GetConsoleMode(stdin_handle, &original_mode);
         const ENABLE_ECHO_INPUT: u32 = 0x0004;
         const new_mode = original_mode & ~ENABLE_ECHO_INPUT;
@@ -4449,10 +4465,11 @@ fn promptPassword(allocator: std.mem.Allocator, prompt_text: []const u8) ![]cons
         } else |_| {}
     }
 
-    const stdin_file = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
-    else
-        std.fs.File{ .handle = std.posix.STDIN_FILENO };
+    const stdin_file = if (builtin.os.tag == .windows) blk: {
+        const h = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return error.StdioUnavailable;
+        if (h == std.os.windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
+        break :blk std.fs.File{ .handle = h };
+    } else std.fs.File{ .handle = std.posix.STDIN_FILENO };
 
     // Read line character by character until newline
     var line_buf = try std.ArrayList(u8).initCapacity(allocator, 256);
@@ -4472,8 +4489,11 @@ fn promptPassword(allocator: std.mem.Allocator, prompt_text: []const u8) ![]cons
     // Re-enable echo
     if (builtin.os.tag == .windows) {
         // Windows: Restore original console mode
-        const stdin_handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable;
-        _ = std.os.windows.kernel32.SetConsoleMode(stdin_handle, original_mode);
+        if (std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE)) |stdin_handle| {
+            if (stdin_handle != std.os.windows.INVALID_HANDLE_VALUE) {
+                _ = std.os.windows.kernel32.SetConsoleMode(stdin_handle, original_mode);
+            }
+        } else |_| {}
     } else {
         // Unix: Restore original termios if we successfully changed it
         if (echo_disabled) {
@@ -4987,10 +5007,11 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     // Prompt for username if not provided
     const final_username = username orelse blk: {
         std.debug.print("Username: ", .{});
-        const stdin_file = if (builtin.os.tag == .windows)
-            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
-        else
-            std.fs.File{ .handle = std.posix.STDIN_FILENO };
+        const stdin_file = if (builtin.os.tag == .windows) stdin_blk: {
+            const h = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return error.StdioUnavailable;
+            if (h == std.os.windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
+            break :stdin_blk std.fs.File{ .handle = h };
+        } else std.fs.File{ .handle = std.posix.STDIN_FILENO };
 
         // Read line character by character until newline
         var line_buf = try std.ArrayList(u8).initCapacity(allocator, 256);
@@ -5269,7 +5290,7 @@ fn cmdAuthToken(allocator: std.mem.Allocator) !void {
     defer allocator.free(content);
 
     // Output the content to stdout
-    const stdout_fd = std.fs.File{ .handle = getStdoutHandle() };
+    const stdout_fd = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable };
     _ = try stdout_fd.writeAll(content);
     if (content.len == 0 or content[content.len - 1] != '\n') {
         _ = try stdout_fd.writeAll("\n");

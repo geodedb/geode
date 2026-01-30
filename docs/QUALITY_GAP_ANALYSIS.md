@@ -11,18 +11,18 @@
 | Severity | Count | Status |
 |----------|-------|--------|
 | Critical | 2 | 1 Verified Fixed, 1 Blocked |
-| High | 4 | 2 Verified Fixed, 1 Partial, 1 Blocked |
-| Medium | 6 | 3 Verified Fixed, 3 Blocked |
+| High | 4 | 2 Verified Fixed, 2 Partial |
+| Medium | 6 | 4 Verified Fixed, 2 Blocked |
 | Low | 3 | 2 Verified Fixed, 1 Blocked |
-| **Total** | **15** | **8 Verified Fixed, 1 Partial, 6 Blocked** |
+| **Total** | **15** | **9 Verified Fixed, 2 Partial, 4 Blocked** |
 
 ### Top 5 Priority Items - Status
 
 1. **[#400](https://gitlab.com/devnw/codepros/geode/geode/-/issues/400)** - ~~Remove 92MB backup file~~ **VERIFIED FIXED** (file deleted from repo)
 2. **[#401](https://gitlab.com/devnw/codepros/geode/geode/-/issues/401)** - Refactor 3,839-line monster function - **BLOCKED** (requires dedicated sprint)
 3. **[#409](https://gitlab.com/devnw/codepros/geode/geode/-/issues/409)** - Split eval.zig 2,043-line function - **BLOCKED** (requires dedicated sprint)
-4. **[#413](https://gitlab.com/devnw/codepros/geode/geode/-/issues/413)** - Orphaned test files in src/ - **BLOCKED** (9 files need API modernization)
-5. **[#406](https://gitlab.com/devnw/codepros/geode/geode/-/issues/406)** - Replace catch unreachable patterns (139 occurrences) - **BLOCKED**
+4. **[#413](https://gitlab.com/devnw/codepros/geode/geode/-/issues/413)** - Orphaned test files in src/ - **PARTIAL** (11 of 66 tests now running)
+5. **[#406](https://gitlab.com/devnw/codepros/geode/geode/-/issues/406)** - Replace catch unreachable patterns - **PARTIAL** (reduced from 130 to 75)
 
 ---
 
@@ -33,7 +33,7 @@
 | 1 | Critical | 100 | cleanup | 92MB backup file in repo | Repository | `src/test_harness.zig.backup` | [#400](https://gitlab.com/devnw/codepros/geode/geode/-/issues/400) | File deleted | DevOps | **VERIFIED FIXED** |
 | 2 | Critical | 100 | maintainability | 7,236-line monster file | Execution | `match_operations.zig` (7,236 lines) | [#401](https://gitlab.com/devnw/codepros/geode/geode/-/issues/401) | Split into focused modules | Core | **BLOCKED** |
 | 3 | High | 80 | maintainability | 4,786-line eval.zig | Evaluation | `eval.zig:867+` evalExpr function | [#409](https://gitlab.com/devnw/codepros/geode/geode/-/issues/409) | Apply visitor pattern | Core | **BLOCKED** |
-| 4 | High | 80 | maintainability | 139 unsafe error handling | Multiple | 130 `catch unreachable`, 9 `@panic` | [#406](https://gitlab.com/devnw/codepros/geode/geode/-/issues/406) | Replace with error propagation | Core | **BLOCKED** |
+| 4 | High | 80 | maintainability | 75 unsafe error handling | Multiple | 75 `catch unreachable` (was 130), 9 `@panic` | [#406](https://gitlab.com/devnw/codepros/geode/geode/-/issues/406) | Replaced 55 GetStdHandle patterns | Core | **PARTIAL** |
 | 5 | High | 64 | maintainability | Functions with 13+ parameters | CLI/Storage | `main.zig:3197`, `user_storage.zig:514` | [#405](https://gitlab.com/devnw/codepros/geode/geode/-/issues/405) | Refactored to options structs | Core | **VERIFIED FIXED** |
 | 6 | High | 64 | cleanup | Orphaned test files in src/ | Source | 9 files with 66 test blocks | [#413](https://gitlab.com/devnw/codepros/geode/geode/-/issues/413) | Needs API modernization | Build | **BLOCKED** |
 | 7 | Medium | 48 | cleanup | Orphaned test directories | Repository | `data_test_*` dirs | [#404](https://gitlab.com/devnw/codepros/geode/geode/-/issues/404) | Directories deleted | QA | **VERIFIED FIXED** |

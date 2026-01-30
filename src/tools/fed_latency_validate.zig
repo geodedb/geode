@@ -98,7 +98,9 @@ pub fn main() !void {
             break :blk f.reader(&buf);
         } else {
             const stdin_file: std.fs.File = if (builtin.os.tag == .windows)
-                .{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
+                .{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch {
+                    std.process.exit(1);
+                } }
             else
                 .{ .handle = std.posix.STDIN_FILENO };
             break :blk stdin_file.reader(&buf);
@@ -162,7 +164,9 @@ pub fn main() !void {
         try fbs.writer().print("FED_VALIDATE lines={d} failures={d} strict={s}\n", .{ total_lines, failures, if (strict) "yes" else "no" });
         const written = fbs.getWritten();
         const stdout = if (builtin.os.tag == .windows)
-            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                std.process.exit(1);
+            } }
         else
             std.fs.File{ .handle = std.posix.STDOUT_FILENO };
         try stdout.writeAll(written);
@@ -173,7 +177,9 @@ pub fn main() !void {
         try fbs.writer().print("{{\"lines\":{d},\"failures\":{d},\"strict\":{s}}}\n", .{ total_lines, failures, if (strict) "true" else "false" });
         const written = fbs.getWritten();
         const stdout = if (builtin.os.tag == .windows)
-            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                std.process.exit(1);
+            } }
         else
             std.fs.File{ .handle = std.posix.STDOUT_FILENO };
         try stdout.writeAll(written);

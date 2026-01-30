@@ -11,7 +11,7 @@ const server = @import("server.zig");
 test "E2E - complete document lifecycle with diagnostics" {
     const allocator = testing.allocator;
 
-    var srv = server.Server.init(allocator);
+    var srv = try server.Server.init(allocator);
     defer srv.deinit();
 
     // 1. Open a document with valid GQL
@@ -64,7 +64,7 @@ test "E2E - complete document lifecycle with diagnostics" {
 test "E2E - hover on different elements" {
     const allocator = testing.allocator;
 
-    var srv = server.Server.init(allocator);
+    var srv = try server.Server.init(allocator);
     defer srv.deinit();
 
     const text = "MATCH (p:Person) WHERE p.age > 25 RETURN count(p)";
@@ -97,7 +97,7 @@ test "E2E - hover on different elements" {
 test "E2E - completion workflow" {
     const allocator = testing.allocator;
 
-    var srv = server.Server.init(allocator);
+    var srv = try server.Server.init(allocator);
     defer srv.deinit();
 
     // User typing a query
@@ -141,7 +141,7 @@ test "E2E - completion workflow" {
 test "E2E - multi-line document navigation" {
     const allocator = testing.allocator;
 
-    var srv = server.Server.init(allocator);
+    var srv = try server.Server.init(allocator);
     defer srv.deinit();
 
     const text =
@@ -179,7 +179,7 @@ test "E2E - multi-line document navigation" {
 test "E2E - vector search query workflow" {
     const allocator = testing.allocator;
 
-    var srv = server.Server.init(allocator);
+    var srv = try server.Server.init(allocator);
     defer srv.deinit();
 
     const text = "RETURN distance([1.0, 2.0], [3.0, 4.0], 'L2')";
@@ -208,7 +208,7 @@ test "E2E - vector search query workflow" {
 test "E2E - complex query with multiple features" {
     const allocator = testing.allocator;
 
-    var srv = server.Server.init(allocator);
+    var srv = try server.Server.init(allocator);
     defer srv.deinit();
 
     const text =
@@ -259,7 +259,7 @@ test "E2E - complex query with multiple features" {
 test "E2E - rapid document updates" {
     const allocator = testing.allocator;
 
-    var srv = server.Server.init(allocator);
+    var srv = try server.Server.init(allocator);
     defer srv.deinit();
 
     try srv.documents.open("file:///rapid.gql", "M", 1);
@@ -285,7 +285,7 @@ test "E2E - rapid document updates" {
 test "E2E - concurrent documents" {
     const allocator = testing.allocator;
 
-    var srv = server.Server.init(allocator);
+    var srv = try server.Server.init(allocator);
     defer srv.deinit();
 
     // Open multiple documents
@@ -318,7 +318,7 @@ test "E2E - concurrent documents" {
 test "E2E - error recovery" {
     const allocator = testing.allocator;
 
-    var srv = server.Server.init(allocator);
+    var srv = try server.Server.init(allocator);
     defer srv.deinit();
 
     // Start with invalid query

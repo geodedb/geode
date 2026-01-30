@@ -10,11 +10,15 @@ pub fn main() !void {
     defer _ = gpa_instance.deinit();
     const allocator = gpa_instance.allocator();
     var stdin_file = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable }
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch {
+            std.process.exit(1);
+        } }
     else
         std.fs.File{ .handle = std.posix.STDIN_FILENO };
     var stdout_file = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            std.process.exit(1);
+        } }
     else
         std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
