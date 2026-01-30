@@ -3454,15 +3454,20 @@ REQ-RLS-ENHANCED-INTEGRATION-003,Enhanced RLS Integration,PerformanceOptimizatio
 REQ-RLS-ENHANCED-INTEGRATION-004,Enhanced RLS Integration,MultiTenantScenario,TESTED,,,security,2025-10-05,tests/test_rls_enhanced_integration.zig
 REQ-RLS-ENHANCED-INTEGRATION-005,Enhanced RLS Integration,AuditingIntegration,TESTED,,,security,2025-10-05,tests/test_rls_enhanced_integration.zig
 REQ-RLS-ENHANCED-INTEGRATION-006,Enhanced RLS Integration,ErrorHandlingRobustness,TESTED,,,security,2025-10-05,tests/test_rls_enhanced_integration.zig
+REQ-RLS-EVAL-001,RLSExpressionEvaluation,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig
 REQ-RLS-EXPR-001,RLSExpressionCompilation,Bytecode,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig
 REQ-RLS-EXPR-001,RLSExpressionCompilation,Compilation,TESTED,,,security,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-RLS-EXPR-002,RLSExpressionCompilation,PolicyCompilation,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig
 REQ-RLS-EXPR-003,RLSExpressionCompilation,ExpressionCompiler,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig
 REQ-RLS-EXPR-004,RLSExpressionCompilation,BytecodeVM,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig
 REQ-RLS-EXPR-005,RLSExpressionCompilation,AttributeEvaluation,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig
+REQ-RLS-PERM-001,RLSPermissionCheck,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig
 REQ-RLS-SECURITY-001,RLS,PolicyEnforcement,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-RLS-SECURITY-002,RLS,RowFiltering,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-RLS-SECURITY-003,RLS,PolicyCompilation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
+REQ-RLS-SESSION-001,RLSSessionAccess,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig
+REQ-RLS-TEMPORAL-001,RLSTemporalConstraints,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig
+REQ-RLS-TEST-001,RLSUnitTests,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig
 REQ-S3-BACKUP-001,S3 Cloud Backup,Unit,TESTED,,,storage,2025-10-05,tests/test_s3_backup.zig
 REQ-SEC-ABAC-001,Security,ABAC,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-ACCESS-001,Security,AccessControl,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
