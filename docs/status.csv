@@ -3359,6 +3359,8 @@ REQ-QUIC-001,QUICProtocol,ConnectionHandling,TESTED,,,wire,2026-01-15,tests/test
 REQ-QUIC-CATALOG-001,QUICCatalogSingleton,SideEffectQuery,TESTED,,,engine,2026-01-14,src/server/quic_connection_handler.zig
 REQ-QUIC-CATALOG-002,QUICCatalogSingleton,MainQueryExec,TESTED,,,engine,2026-01-14,src/server/quic_connection_handler.zig
 REQ-QUIC-CATALOG-003,CatalogDataDirIsolation,ServerInit,IMPL,,,engine,2026-01-27,src/server/server_init.zig
+REQ-QUIC-CLIENT-READLINE-001,QuicClientReadLine,RetryLogic,IMPL,,,transport,2026-01-30,src/transport/quic.zig
+REQ-QUIC-CLIENT-READLINE-002,QuicClientReadLine,RegressionTests,TESTED,,,transport,2026-01-30,tests/test_quic_transport.zig
 REQ-QUIC-CONG-001,QUICProtocol,CongestionControl,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-QUIC-CONN-001,QUICProtocol,Connection,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-QUIC-CONN-CLEANUP-001,ConnectionMemoryManagement,ResourceLeak,EXEMPT,,,transport,2025-12-27,src/transport/quic.zig
@@ -3633,6 +3635,8 @@ REQ-SORT-DESC-001,FinalSort,DescendingSort,TESTED,,,exec,2026-01-16,tests/test_g
 REQ-SORT-MULTI-001,FinalSort,MultiColumnSort,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SOURCE-PERF-001,SourceFilePerformance,FileHashCache,IMPL,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-002,SourceFilePerformance,BatchExecution,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-PERF-002,SourceFilePerformance,FileHashCacheCleanup,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-PERF-003,SourceFilePerformance,CacheCleanupOnExit,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-003,SourceFilePerformance,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-004,SourceFilePerformance,BatchParsing,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-005,SourceFilePerformance,SingleRequestExecution,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig

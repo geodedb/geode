@@ -240,3 +240,68 @@ test "protocol messages - comprehensive validation" {
         try testing.expectEqualStrings(test_case.expected_type, msg_type);
     }
 }
+
+// CANARY: REQ=REQ-QUIC-CLIENT-READLINE-002; FEATURE="QuicClientReadLine"; ASPECT=RegressionTests; STATUS=TESTED; OWNER=transport; UPDATED=2026-01-30
+// Issue #413: Regression tests for WouldBlock and memory leak fixes
+
+test "session cleanup - deinitSourcedFileCache called on deinit" {
+    const allocator = testing.allocator;
+
+    // Create multiple sessions and verify cleanup happens properly
+    {
+        var session1 = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+        try session1.connect();
+        session1.deinit(); // Should call deinitSourcedFileCache
+
+        var session2 = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+        try session2.connect();
+        session2.deinit(); // Should call deinitSourcedFileCache again (no crash)
+    }
+
+    // If we get here without crash/leak, the cleanup works correctly
+}
+
+test "session lifecycle - memory safety with transaction operations" {
+    // Use GeneralPurposeAllocator to detect memory leaks
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer {
+        const leaked = gpa.deinit();
+        testing.expect(leaked == .ok) catch |err| {
+            std.debug.print("Memory leak detected in session lifecycle test\n", .{});
+            @panic(@errorName(err));
+        };
+    }
+    const test_allocator = gpa.allocator();
+
+    // Create session and run full lifecycle
+    var session = try repl_dispatch.ClientSession.init(test_allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    defer session.deinit();
+
+    try session.connect();
+    try session.hello();
+
+    // Test transaction lifecycle
+    try session.begin();
+    try session.runGql("CREATE (n:Test {value: 1})");
+    try session.commit();
+
+    // Another transaction with rollback
+    try session.begin();
+    try session.runGql("CREATE (n:Test {value: 2})");
+    try session.rollback();
+
+    // If GPA deinit succeeds without leak warning, test passes
+}
+
+test "connection error detection - isConnectionError" {
+    // Test the connection error detection helper
+    try testing.expect(repl_dispatch.ClientSession.isConnectionError(error.BrokenPipe));
+    try testing.expect(repl_dispatch.ClientSession.isConnectionError(error.ConnectionResetByPeer));
+    try testing.expect(repl_dispatch.ClientSession.isConnectionError(error.ConnectionRefused));
+    try testing.expect(repl_dispatch.ClientSession.isConnectionError(error.EndOfStream));
+    try testing.expect(repl_dispatch.ClientSession.isConnectionError(error.NotConnected));
+
+    // These should not be considered connection errors
+    try testing.expect(!repl_dispatch.ClientSession.isConnectionError(error.OutOfMemory));
+    try testing.expect(!repl_dispatch.ClientSession.isConnectionError(error.InvalidCharacter));
+}

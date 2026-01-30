@@ -629,26 +629,53 @@ pub const QuicClientStream = struct {
         return result;
     }
 
+    // CANARY: REQ=REQ-QUIC-CLIENT-READLINE-001; FEATURE="QuicClientReadLine"; ASPECT=RetryLogic; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-30
+    // Issue #413: Add retry logic for WouldBlock when partial data has been read
+    // This matches the server-side QuicStream.readLine() behavior for consistency
     pub fn readLine(self: *QuicClientStream, max_size: usize) ![]u8 {
         var temp_buf = try self.allocator.alloc(u8, max_size);
         defer self.allocator.free(temp_buf);
         var pos: usize = 0;
+        var retry_count: usize = 0;
+        const max_retries: usize = 200; // Max 200 retries = ~1 second wait time for slow responses
 
         while (pos < max_size) {
             var byte: [1]u8 = undefined;
             const n = self.read(&byte) catch |err| {
+                // If we haven't read anything yet, propagate WouldBlock
                 if (err == error.WouldBlock and pos == 0) return error.WouldBlock;
-                if (err == error.WouldBlock) break;
+                // If we've read some bytes but haven't found '\n' yet, keep trying
+                // This implements polling behavior for complete lines
+                if (err == error.WouldBlock) {
+                    retry_count += 1;
+                    if (retry_count > max_retries) {
+                        // Timeout waiting for complete line
+                        return error.UnexpectedEndOfStream;
+                    }
+                    // Poll for incoming data and wait before retrying
+                    self.endpoint.poll(10) catch {};
+                    std.Thread.sleep(5 * std.time.ns_per_ms);
+                    continue;
+                }
                 return err;
             };
 
             if (n == 0) {
+                // No data available yet - poll and retry
                 if (pos == 0) return error.WouldBlock;
-                break;
+                // If we've read partial data, retry a few times for complete line
+                retry_count += 1;
+                if (retry_count > max_retries) {
+                    return error.UnexpectedEndOfStream;
+                }
+                self.endpoint.poll(10) catch {};
+                std.Thread.sleep(5 * std.time.ns_per_ms);
+                continue;
             }
 
             temp_buf[pos] = byte[0];
             pos += 1;
+            retry_count = 0; // Reset retry count when we successfully read a byte
 
             if (byte[0] == '\n') break;
         }

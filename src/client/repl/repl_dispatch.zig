@@ -277,6 +277,9 @@ pub const ClientSession = struct {
             self.allocator.free(e);
             self.last_reconnect_error = null;
         }
+        // CANARY: REQ=REQ-SOURCE-PERF-003; FEATURE="SourceFilePerformance"; ASPECT=CacheCleanupOnExit; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+        // Issue #413: Clean up global file hash cache to prevent memory leaks on exit
+        deinitSourcedFileCache();
     }
 
     /// CANARY: REQ=REQ-SHELL-RECONNECT-004; FEATURE="ShellAutoReconnect"; ASPECT=ErrorDetection; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
@@ -1336,6 +1339,20 @@ fn getSourcedFileCache(allocator: std.mem.Allocator) *std.StringHashMap(u64) {
         g_sourced_file_hashes = std.StringHashMap(u64).init(allocator);
     }
     return &g_sourced_file_hashes.?;
+}
+
+// CANARY: REQ=REQ-SOURCE-PERF-002; FEATURE="SourceFilePerformance"; ASPECT=FileHashCacheCleanup; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+// Issue #413: Cleanup function to free the global file hash cache on shutdown
+pub fn deinitSourcedFileCache() void {
+    if (g_sourced_file_hashes) |*cache| {
+        // Free all allocated key strings
+        var iter = cache.keyIterator();
+        while (iter.next()) |key| {
+            cache.allocator.free(key.*);
+        }
+        cache.deinit();
+        g_sourced_file_hashes = null;
+    }
 }
 
 // Simple hash function for file content
