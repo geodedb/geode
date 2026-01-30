@@ -106,6 +106,19 @@ const regexRec = logic_helpers.regexRec;
 const transformPlusQuantifier = logic_helpers.transformPlusQuantifier;
 pub const matchSimplePattern = logic_helpers.matchSimplePattern;
 
+// CANARY: REQ=REQ-REFACTOR-EVAL-003; FEATURE="EvalRefactoring"; ASPECT=StringHelpersImport; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+// Import string helpers module for string predicate functions
+const string_helpers = @import("eval/string_helpers.zig");
+const evalStartsWith = string_helpers.evalStartsWith;
+const evalEndsWith = string_helpers.evalEndsWith;
+const evalContains = string_helpers.evalContains;
+
+// CANARY: REQ=REQ-REFACTOR-EVAL-004; FEATURE="EvalRefactoring"; ASPECT=TypeHelpersImport; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+// Import type helpers module for type name functions
+const type_helpers = @import("eval/type_helpers.zig");
+const getTypeName = type_helpers.getTypeName;
+const getExtTypeName = type_helpers.getExtTypeName;
+
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-002; FEATURE="Phase 6 Modularization"; ASPECT=TypePromotionAliases; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 6 M6.1: Use type promotion functions from type_promotion module
 const scaleTo = type_promotion.scaleTo;
@@ -638,36 +651,6 @@ const pow10 = value_types.pow10;
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-006; FEATURE="Phase 6 Modularization"; ASPECT=TypeValidators; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 6 M6.1: Type validator functions moved to eval/type_promotion.zig
 // Functions: expectString, expectInt
-
-fn evalStartsWith(val: Value, pref: Value) EvalError!Value {
-    if (isNull(val) or isNull(pref)) return Value{ .Null = {} };
-    var buf1: [64]u8 = undefined;
-    var buf2: [64]u8 = undefined;
-    const s = try stringify(val, &buf1);
-    const p = try stringify(pref, &buf2);
-    if (p.len == 0) return .{ .Bool = true };
-    return .{ .Bool = std.mem.startsWith(u8, s, p) };
-}
-
-fn evalEndsWith(val: Value, suf: Value) EvalError!Value {
-    if (isNull(val) or isNull(suf)) return Value{ .Null = {} };
-    var buf1: [64]u8 = undefined;
-    var buf2: [64]u8 = undefined;
-    const s = try stringify(val, &buf1);
-    const p = try stringify(suf, &buf2);
-    if (p.len == 0) return .{ .Bool = true };
-    return .{ .Bool = std.mem.endsWith(u8, s, p) };
-}
-
-fn evalContains(val: Value, needle: Value) EvalError!Value {
-    if (isNull(val) or isNull(needle)) return Value{ .Null = {} };
-    var buf1: [64]u8 = undefined;
-    var buf2: [64]u8 = undefined;
-    const s = try stringify(val, &buf1);
-    const n = try stringify(needle, &buf2);
-    if (n.len == 0) return .{ .Bool = true };
-    return .{ .Bool = std.mem.indexOf(u8, s, n) != null };
-}
 
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-011; FEATURE="Circular Dependency Resolution"; ASPECT=Stringify; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Use stringify from value_types module
@@ -4242,95 +4225,6 @@ fn parseDurationString(str: []const u8) !i64 {
     }
 
     return seconds;
-}
-
-// CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type_name; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=types; UPDATED=2025-12-22
-/// Get the type name of a Value for the type() function
-fn getTypeName(value: Value) []const u8 {
-    return switch (value) {
-        .Null => "NULL",
-        .Bool => "BOOLEAN",
-        .Int => "INTEGER",
-        .Decimal => "FLOAT",
-        .Str => "STRING",
-        .List => "LIST",
-        .Map => "MAP",
-        .Node => "NODE",
-        .Edge => "RELATIONSHIP",
-        .Path => "PATH",
-        .ExtValue => |ext| getExtTypeName(ext),
-        // Advanced numeric types
-        .SmallInt => "SMALLINT",
-        .BigInt => "BIGINT",
-        .Real => "REAL",
-        .Double => "DOUBLE",
-        // String types
-        .Char => "CHAR",
-        .Varchar => "VARCHAR",
-        .Text => "TEXT",
-        // Date/time types
-        .Date => "DATE",
-        .Time => "TIME",
-        .TimeTZ => "TIMETZ",
-        .Timestamp => "TIMESTAMP",
-        .TimestampTZ => "TIMESTAMPTZ",
-        .Interval => "INTERVAL",
-        // Binary and document types
-        .Bytea => "BYTEA",
-        .Json => "JSON",
-        .Jsonb => "JSONB",
-        .Xml => "XML",
-        // Network and identifier types
-        .Url => "URL",
-        .Domain => "DOMAIN",
-        .UUID => "UUID",
-        // Other types
-        .Enum => "ENUM",
-        .BitString => "BIT",
-        .VarBit => "VARBIT",
-        .IntRange => "INT4RANGE",
-    };
-}
-
-/// Get the type name for extended values
-fn getExtTypeName(ext: @import("eval_extended.zig").ExtValue) []const u8 {
-    return switch (ext) {
-        .Null => "NULL",
-        .Int => "INTEGER",
-        .Bool => "BOOLEAN",
-        .Str => "STRING",
-        .Decimal => "FLOAT",
-        .Date => "DATE",
-        .Time => "TIME",
-        .TimestampTZ => "DATETIME",
-        .VectorF32 => "VECTOR",
-        .VectorI32 => "VECTOR_I32",
-        .IpAddr => "INET",
-        .Subnet => "CIDR",
-        .Mac => "MAC",
-        .Hash => "HASH",
-        .Currency => "CURRENCY",
-        .LanguageTag => "LANGUAGE_TAG",
-        .LatLon => "POINT",
-        .LatLonAlt => "POINT3D",
-        .Geometry => "GEOMETRY",
-        .Temperature => "TEMPERATURE",
-        .Pressure => "PRESSURE",
-        .List => "LIST",
-        // Advanced types
-        .Interval => "INTERVAL",
-        .UUID => "UUID",
-        .Url => "URL",
-        .Domain => "DOMAIN",
-        .Bytea => "BYTEA",
-        .Json => "JSON",
-        .Jsonb => "JSONB",
-        .Xml => "XML",
-        .BitString => "BIT",
-        .VarBit => "VARBIT",
-        .IntRange => "INT4RANGE",
-        .Enum => "ENUM",
-    };
 }
 
 fn inList(value: Value, set: []*ast.Expr, allocator: std.mem.Allocator, env: Env) EvalError!Value {

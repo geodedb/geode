@@ -31,8 +31,8 @@
 | Rank | Severity | Score | Category | Finding | Component | Evidence | GitLab Issue | Fix Summary | Owner | Status |
 |------|----------|-------|----------|---------|-----------|----------|--------------|-------------|-------|--------|
 | 1 | Critical | 100 | cleanup | 92MB backup file in repo | Repository | `src/test_harness.zig.backup` | [#400](https://gitlab.com/devnw/codepros/geode/geode/-/issues/400) | File deleted | DevOps | **VERIFIED FIXED** |
-| 2 | Critical | 100 | maintainability | 6,611-line monster file | Execution | `match_operations.zig` (6,611 lines) + `pattern_helpers.zig` (478 lines) | [#401](https://gitlab.com/devnw/codepros/geode/geode/-/issues/401) | Split into focused modules | Core | **PARTIAL** |
-| 3 | High | 80 | maintainability | 4,595-line eval.zig | Evaluation | `eval.zig:867+` evalExpr function + `logic_helpers.zig` (255 lines) | [#409](https://gitlab.com/devnw/codepros/geode/geode/-/issues/409) | Extract helper modules | Core | **PARTIAL** |
+| 2 | Critical | 100 | maintainability | 6,457-line monster file | Execution | `match_operations.zig` + 2 helper modules (688 lines extracted) | [#401](https://gitlab.com/devnw/codepros/geode/geode/-/issues/401) | Split into focused modules | Core | **PARTIAL** |
+| 3 | High | 80 | maintainability | 4,489-line eval.zig | Evaluation | `eval.zig` + 3 helper modules (400 lines extracted) | [#409](https://gitlab.com/devnw/codepros/geode/geode/-/issues/409) | Extract helper modules | Core | **PARTIAL** |
 | 4 | High | 80 | maintainability | 75 unsafe error handling | Multiple | 75 `catch unreachable` (was 130), 9 `@panic` | [#406](https://gitlab.com/devnw/codepros/geode/geode/-/issues/406) | Replaced 55 GetStdHandle patterns | Core | **PARTIAL** |
 | 5 | High | 64 | maintainability | Functions with 13+ parameters | CLI/Storage | `main.zig:3197`, `user_storage.zig:514` | [#405](https://gitlab.com/devnw/codepros/geode/geode/-/issues/405) | Refactored to options structs | Core | **VERIFIED FIXED** |
 | 6 | High | 64 | cleanup | Orphaned test files in src/ | Source | 9 files with 66 test blocks | [#413](https://gitlab.com/devnw/codepros/geode/geode/-/issues/413) | Needs API modernization | Build | **BLOCKED** |
@@ -70,8 +70,8 @@ Issues related to code structure, complexity, and long-term maintenance.
 
 | Issue | Finding | Effort | Status |
 |-------|---------|--------|--------|
-| [#401](https://gitlab.com/devnw/codepros/geode/geode/-/issues/401) | 6,611-line file (was 7,053, extracted 478 lines to pattern_helpers.zig) | L | **PARTIAL** |
-| [#409](https://gitlab.com/devnw/codepros/geode/geode/-/issues/409) | 4,595-line eval.zig (was 4,786, extracted 255 lines to logic_helpers.zig) | L | **PARTIAL** |
+| [#401](https://gitlab.com/devnw/codepros/geode/geode/-/issues/401) | 6,457-line file (was 7,053, extracted 688 lines to 2 modules) | L | **PARTIAL** |
+| [#409](https://gitlab.com/devnw/codepros/geode/geode/-/issues/409) | 4,489-line eval.zig (was 4,786, extracted 400 lines to 3 modules) | L | **PARTIAL** |
 | [#405](https://gitlab.com/devnw/codepros/geode/geode/-/issues/405) | Excessive parameters | M | **VERIFIED FIXED** |
 | [#406](https://gitlab.com/devnw/codepros/geode/geode/-/issues/406) | Unsafe error handling (139 patterns) | L | **BLOCKED** |
 | [#411](https://gitlab.com/devnw/codepros/geode/geode/-/issues/411) | Unused parameters (2,172) | M | **VERIFIED FIXED** |
@@ -125,14 +125,19 @@ These items require more planning but are self-contained:
 These items require significant planning and coordination.
 
 1. **[#401](https://gitlab.com/devnw/codepros/geode/geode/-/issues/401)** - Refactor match_operations.zig - **PARTIAL**
-   - **Progress**: 7,053→6,611 lines (-442 lines, -6.3%)
-   - **Extracted**: `pattern_helpers.zig` (478 lines) with PatternInfo, dispatchToMultiChainHandler, etc.
+   - **Progress**: 7,053→6,457 lines (-596 lines, -8.5%)
+   - **Extracted modules**:
+     - `pattern_helpers.zig` (478 lines): PatternInfo, dispatchToMultiChainHandler, etc.
+     - `result_utils.zig` (210 lines): generateUniqueColumnNames, applyDistinct
    - **Next steps**: Continue extracting more handlers into focused modules
 
 2. **[#409](https://gitlab.com/devnw/codepros/geode/geode/-/issues/409)** - Refactor eval.zig - **PARTIAL**
-   - **Progress**: 4,786→4,595 lines (-191 lines, -4.0%)
-   - **Extracted**: `logic_helpers.zig` (255 lines) with and3, or3, xor3, regex helpers
-   - **Next steps**: Continue extracting type-specific evaluation handlers
+   - **Progress**: 4,786→4,489 lines (-297 lines, -6.2%)
+   - **Extracted modules**:
+     - `logic_helpers.zig` (255 lines): and3, or3, xor3, regex helpers
+     - `string_helpers.zig` (46 lines): evalStartsWith, evalEndsWith, evalContains
+     - `type_helpers.zig` (99 lines): getTypeName, getExtTypeName
+   - **Next steps**: Continue extracting function handlers
 
 3. **[#406](https://gitlab.com/devnw/codepros/geode/geode/-/issues/406)** - Error handling improvements (139 patterns) - **BLOCKED**
    - **Blocker**: Pervasive changes across 59 files
@@ -276,16 +281,16 @@ These items require significant planning and coordination.
 | Total .zig files in src/ | 521 |
 | Total lines | 248,477 |
 | Files > 2000 lines | 17 |
-| Largest file | match_operations.zig (6,611 lines) |
+| Largest file | match_operations.zig (6,457 lines) |
 
 ### Files Requiring Attention (> 2000 lines)
 
 | File | Lines |
 |------|-------|
-| src/execution/match_operations.zig | 6,611 |
+| src/execution/match_operations.zig | 6,457 |
 | src/gql/parser.zig | 6,372 |
 | src/cli/main.zig | 5,277 |
-| src/eval.zig | 4,595 |
+| src/eval.zig | 4,489 |
 | src/execution/procedure_registry.zig | 4,446 |
 | src/client/repl/repl_dispatch.zig | 3,088 |
 | src/server/query_executor.zig | 2,792 |
@@ -305,12 +310,12 @@ These items require significant planning and coordination.
 | File | Original Nesting | Current Nesting | Lines |
 |------|-----------------|-----------------|-------|
 | src/execution/graph_algorithms.zig | 16 levels | **10 levels** | 973 |
-| src/execution/match_operations.zig | 13 levels | **8 levels** | 6,611 |
+| src/execution/match_operations.zig | 13 levels | **8 levels** | 6,457 |
 | src/execution/aggregation_evaluation.zig | 12 levels | **8 levels** | 1,305 |
 | src/server/query_executor.zig | 11 levels | **5 levels** | 2,792 |
 | src/execution/procedure_registry.zig | 11 levels | **5 levels** | 4,490 |
 | src/gql/parser.zig | 10 levels | **5 levels** | 6,372 |
-| src/eval.zig | 10 levels | **6 levels** | 4,595 |
+| src/eval.zig | 10 levels | **6 levels** | 4,489 |
 
 **Note**: All files now within or near recommended 4-6 level range.
 
@@ -398,7 +403,7 @@ Max score = 100
 | Issue | Title | Status |
 |-------|-------|--------|
 | [#400](https://gitlab.com/devnw/codepros/geode/geode/-/issues/400) | Remove 92MB backup file | status::done |
-| [#401](https://gitlab.com/devnw/codepros/geode/geode/-/issues/401) | Refactor match_operations.zig (6,611 lines + pattern_helpers.zig 478 lines) | status::partial |
+| [#401](https://gitlab.com/devnw/codepros/geode/geode/-/issues/401) | Refactor match_operations.zig (6,457 lines + pattern_helpers.zig 478 + result_utils.zig 210) | status::partial |
 | [#402](https://gitlab.com/devnw/codepros/geode/geode/-/issues/402) | Test files in src/ (original) | status::partial |
 | [#403](https://gitlab.com/devnw/codepros/geode/geode/-/issues/403) | Empty stub files | status::done |
 | [#404](https://gitlab.com/devnw/codepros/geode/geode/-/issues/404) | Orphaned test directories | status::done |
@@ -406,7 +411,7 @@ Max score = 100
 | [#406](https://gitlab.com/devnw/codepros/geode/geode/-/issues/406) | Unsafe error handling | status::blocked |
 | [#407](https://gitlab.com/devnw/codepros/geode/geode/-/issues/407) | Debug/scratch files | status::done |
 | [#408](https://gitlab.com/devnw/codepros/geode/geode/-/issues/408) | Docker proliferation | status::blocked |
-| [#409](https://gitlab.com/devnw/codepros/geode/geode/-/issues/409) | eval.zig refactor (4,595 lines + logic_helpers.zig 255 lines) | status::partial |
+| [#409](https://gitlab.com/devnw/codepros/geode/geode/-/issues/409) | eval.zig refactor (4,489 lines + logic_helpers 255 + string_helpers 46 + type_helpers 99) | status::partial |
 | [#410](https://gitlab.com/devnw/codepros/geode/geode/-/issues/410) | Untracked security files | status::done |
 | [#411](https://gitlab.com/devnw/codepros/geode/geode/-/issues/411) | Unused parameters | status::done |
 | [#412](https://gitlab.com/devnw/codepros/geode/geode/-/issues/412) | Excessive nesting | status::done |
