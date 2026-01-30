@@ -3354,6 +3354,7 @@ REQ-QP-PARALLEL-001,QueryPlannerOptimization,Parallelization,EXEMPT,,,planner,20
 REQ-QP-PUSH-001,QueryPlannerOptimization,PredicatePushdown,EXEMPT,,,planner,2025-12-30,src/planner/query_optimizer.zig
 REQ-QP-SORT-001,QueryPlannerOptimization,SortElimination,EXEMPT,,,planner,2025-12-30,src/planner/query_optimizer.zig
 REQ-QP-STATS-001,QueryPlannerOptimization,StatisticsEstimation,EXEMPT,,,planner,2025-12-30,src/planner/query_optimizer.zig
+REQ-QUALITY-GAP-413-001,OrphanedTestAnalysis,BuildSystem,EXEMPT,,,quality,2026-01-30,build.zig
 REQ-QUERY-CHAIN-LIMIT-001,QueryChainingWithLimitFix,ChainLimit,TESTED,,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-QUIC-001,QUICProtocol,ConnectionHandling,TESTED,,,wire,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-QUIC-CATALOG-001,QUICCatalogSingleton,SideEffectQuery,TESTED,,,engine,2026-01-14,src/server/quic_connection_handler.zig

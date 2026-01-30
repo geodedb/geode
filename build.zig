@@ -1777,6 +1777,27 @@ pub fn build(b: *std.Build) void {
     const tde_enforcement_tests = b.addTest(.{ .root_module = tde_enforcement_test_mod });
     test_step.dependOn(&tde_enforcement_tests.step);
 
+    // CANARY: REQ=REQ-QUALITY-GAP-413-001; FEATURE="OrphanedTestAnalysis"; ASPECT=BuildSystem; STATUS=EXEMPT; OWNER=quality; UPDATED=2026-01-30
+    // GAP-413 BLOCKED: 9 orphaned test files in src/ identified but cannot be integrated:
+    //
+    // Files with parent directory imports (need module restructuring):
+    //   - src/security/test_timing_attacks.zig (6 tests) - imports ../types/hash.zig
+    //   - src/tests/test_filters.zig (10 tests) - imports ../audit/*.zig
+    //   - src/tests/test_transports.zig (7 tests) - imports ../audit/*.zig
+    //   - src/tests/test_cef.zig (4 tests) - imports ../audit/*.zig
+    //
+    // Files with missing/changed APIs:
+    //   - src/security/test_argon2id_hashing.zig (9 tests) - references non-existent Auth struct
+    //   - src/server/test_abac_enforcement.zig (8 tests) - references non-existent server_init
+    //   - src/server/test_async_connection.zig (5 tests) - module path mismatch
+    //
+    // Files with deprecated APIs:
+    //   - src/performance/test_json_optimization.zig (11 tests) - uses Zig 0.14 ArrayList.init()
+    //   - src/security/test_tde_nonce.zig (6 tests) - uses tde.zig which has deprecated APIs
+    //
+    // TOTAL: 66 test blocks across 9 files are NOT running in CI
+    // REMEDIATION: Requires dedicated sprint to modernize these tests or delete obsolete ones
+
     const audit_chain_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_audit_chain.zig"), .target = target, .optimize = optimize });
     audit_chain_test_mod.addImport("audit", audit_security_mod);
     audit_chain_test_mod.addImport("rls", rls_mod);
