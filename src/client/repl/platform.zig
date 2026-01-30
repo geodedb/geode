@@ -71,3 +71,66 @@ pub fn isStdoutTty() bool {
         return std.posix.isatty(std.posix.STDOUT_FILENO);
     }
 }
+
+// CANARY: REQ=REQ-SHELL-INTERRUPT-010; FEATURE="SourceInterrupt"; ASPECT=SignalHandler; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+// Global atomic flag for SIGINT (Ctrl+C) - set by signal handler, checked by blocking operations
+pub var sigint_received: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+/// Check if SIGINT (Ctrl+C) has been received and clear the flag
+pub fn checkAndClearSigint() bool {
+    return sigint_received.swap(false, .seq_cst);
+}
+
+/// Check if SIGINT (Ctrl+C) has been received without clearing
+pub fn wasSigintReceived() bool {
+    return sigint_received.load(.seq_cst);
+}
+
+/// Clear the SIGINT flag
+pub fn clearSigint() void {
+    sigint_received.store(false, .seq_cst);
+}
+
+/// Install signal handlers for graceful Ctrl+C handling
+pub fn installSignalHandlers() void {
+    if (builtin.os.tag == .windows) {
+        // Windows: Use SetConsoleCtrlHandler
+        _ = std.os.windows.kernel32.SetConsoleCtrlHandler(&windowsCtrlHandler, 1);
+    } else {
+        // POSIX: Use sigaction for SIGINT
+        var sa: std.posix.Sigaction = .{
+            .handler = .{ .handler = posixSigintHandler },
+            .mask = @splat(0), // Empty signal mask
+            .flags = 0,
+        };
+        _ = std.posix.sigaction(std.posix.SIG.INT, &sa, null);
+    }
+}
+
+/// Restore default signal handlers
+pub fn restoreSignalHandlers() void {
+    if (builtin.os.tag == .windows) {
+        _ = std.os.windows.kernel32.SetConsoleCtrlHandler(&windowsCtrlHandler, 0);
+    } else {
+        var sa: std.posix.Sigaction = .{
+            .handler = .{ .handler = std.posix.SIG.DFL },
+            .mask = @splat(0), // Empty signal mask
+            .flags = 0,
+        };
+        _ = std.posix.sigaction(std.posix.SIG.INT, &sa, null);
+    }
+}
+
+// POSIX signal handler for SIGINT
+fn posixSigintHandler(_: c_int) callconv(.c) void {
+    sigint_received.store(true, .seq_cst);
+}
+
+// Windows console control handler
+fn windowsCtrlHandler(dwCtrlType: std.os.windows.DWORD) callconv(.winapi) std.os.windows.BOOL {
+    if (dwCtrlType == 0) { // CTRL_C_EVENT
+        sigint_received.store(true, .seq_cst);
+        return 1; // TRUE - we handled it
+    }
+    return 0; // FALSE - let default handler process it
+}

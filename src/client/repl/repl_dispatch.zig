@@ -9,9 +9,17 @@ const spinner_mod = @import("spinner.zig");
 const json_lib = @import("json");
 
 // CANARY: REQ=REQ-SHELL-INTERRUPT-003; FEATURE="SourceInterrupt"; ASPECT=CheckFunction; STATUS=TESTED; TEST=tests/test_repl.zig; OWNER=cli; UPDATED=2026-01-30
-// Issue #390: Helper function to check for Ctrl+C (ASCII 3) in stdin without blocking
+// Issue #390: Helper function to check for Ctrl+C (SIGINT) using signal handler
 // Made public so it can be used by other modules for interrupt handling
+// This uses signal-based detection which works during blocking operations
 pub fn checkForInterrupt() bool {
+    // Check the signal handler flag first (works during blocking operations)
+    if (platform.checkAndClearSigint()) {
+        return true;
+    }
+
+    // Also check stdin for ASCII 3 (Ctrl+C) in case signal wasn't delivered
+    // (e.g., when terminal is in raw mode)
     if (builtin.os.tag == .windows) {
         // Windows: Check console input for Ctrl+C
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return false;
@@ -1579,9 +1587,10 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     try stdout.writeAll(info_msg);
 
     // CANARY: REQ=REQ-SHELL-SPINNER-003; FEATURE="ShellProcessingIndicator"; ASPECT=SourceFileSpinner; STATUS=TESTED; TEST=tests/test_spinner.zig; OWNER=cli; UPDATED=2026-01-30
-    // Initialize spinner for visual feedback during long-running source operations
+    // Initialize spinner with background thread for visual feedback during long-running source operations
+    // Using startBackground() ensures animation continues during blocking server calls
     var progress_spinner = spinner_mod.Spinner.init(state.allocator, "Parsing file...");
-    progress_spinner.start();
+    progress_spinner.startBackground();
 
     // CANARY: REQ=REQ-SHELL-INTERRUPT-005; FEATURE="SourceInterrupt"; ASPECT=InterruptTracking; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
     // Track if user requested interrupt via Ctrl+C

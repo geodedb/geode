@@ -108,7 +108,7 @@ pub const SpinnerStyle = struct {
     }
 };
 
-/// Spinner state for non-threaded updates
+/// Spinner state with optional background thread animation
 pub const Spinner = struct {
     style: SpinnerStyle,
     message: []const u8,
@@ -119,11 +119,20 @@ pub const Spinner = struct {
     allocator: std.mem.Allocator,
     /// Width of last rendered line (for clearing)
     last_line_width: usize,
+    /// Background animation thread (null if not using background mode)
+    animation_thread: ?std.Thread,
+    /// Atomic flag to signal thread to stop
+    stop_flag: std.atomic.Value(bool),
+    /// Mutex for thread-safe message updates
+    message_mutex: std.Thread.Mutex,
+    /// Buffer for thread-safe message storage
+    message_buffer: [256]u8,
+    message_len: usize,
 
     /// Create a new spinner with a message
     pub fn init(allocator: std.mem.Allocator, message: []const u8) Spinner {
         const terminal = TerminalType.detect();
-        return Spinner{
+        var spinner = Spinner{
             .style = SpinnerStyle.forTerminal(terminal),
             .message = message,
             .frame_index = 0,
@@ -132,12 +141,22 @@ pub const Spinner = struct {
             .started = false,
             .allocator = allocator,
             .last_line_width = 0,
+            .animation_thread = null,
+            .stop_flag = std.atomic.Value(bool).init(false),
+            .message_mutex = .{},
+            .message_buffer = undefined,
+            .message_len = 0,
         };
+        // Copy initial message to buffer
+        const copy_len = @min(message.len, spinner.message_buffer.len);
+        @memcpy(spinner.message_buffer[0..copy_len], message[0..copy_len]);
+        spinner.message_len = copy_len;
+        return spinner;
     }
 
     /// Create a spinner with a specific style
     pub fn initWithStyle(allocator: std.mem.Allocator, message: []const u8, style: SpinnerStyle) Spinner {
-        return Spinner{
+        var spinner = Spinner{
             .style = style,
             .message = message,
             .frame_index = 0,
@@ -146,10 +165,19 @@ pub const Spinner = struct {
             .started = false,
             .allocator = allocator,
             .last_line_width = 0,
+            .animation_thread = null,
+            .stop_flag = std.atomic.Value(bool).init(false),
+            .message_mutex = .{},
+            .message_buffer = undefined,
+            .message_len = 0,
         };
+        const copy_len = @min(message.len, spinner.message_buffer.len);
+        @memcpy(spinner.message_buffer[0..copy_len], message[0..copy_len]);
+        spinner.message_len = copy_len;
+        return spinner;
     }
 
-    /// Start the spinner (renders first frame)
+    /// Start the spinner (renders first frame, no background animation)
     pub fn start(self: *Spinner) void {
         if (self.terminal_type == .non_interactive) {
             // For non-interactive, just print message once
@@ -163,6 +191,67 @@ pub const Spinner = struct {
         self.started = true;
         self.last_update = std.time.milliTimestamp();
         self.render();
+    }
+
+    /// Start the spinner with background animation thread
+    /// Use this when the main thread will be blocked (e.g., waiting for server)
+    pub fn startBackground(self: *Spinner) void {
+        if (self.terminal_type == .non_interactive) {
+            self.start();
+            return;
+        }
+
+        self.stop_flag.store(false, .seq_cst);
+        self.started = true;
+        self.last_update = std.time.milliTimestamp();
+        self.render();
+
+        // Spawn animation thread
+        self.animation_thread = std.Thread.spawn(.{}, animationLoop, .{self}) catch {
+            // If thread spawn fails, fall back to non-animated mode
+            return;
+        };
+    }
+
+    /// Animation loop for background thread
+    fn animationLoop(self: *Spinner) void {
+        while (!self.stop_flag.load(.seq_cst)) {
+            std.Thread.sleep(self.style.interval_ms * std.time.ns_per_ms);
+            if (self.stop_flag.load(.seq_cst)) break;
+
+            self.frame_index = (self.frame_index + 1) % self.style.frames.len;
+            self.renderThreadSafe();
+        }
+    }
+
+    /// Thread-safe render using message from buffer
+    fn renderThreadSafe(self: *Spinner) void {
+        const stdout = platform.getStdoutHandle();
+        const frame = self.style.frames[self.frame_index];
+
+        // Get message under lock
+        self.message_mutex.lock();
+        const msg_len = self.message_len;
+        var msg_copy: [256]u8 = undefined;
+        @memcpy(msg_copy[0..msg_len], self.message_buffer[0..msg_len]);
+        self.message_mutex.unlock();
+
+        // Build the output line
+        var buf: [512]u8 = undefined;
+        const line = std.fmt.bufPrint(&buf, "\r{s} {s}", .{ frame, msg_copy[0..msg_len] }) catch return;
+
+        // Clear previous content if needed (pad with spaces)
+        if (line.len < self.last_line_width) {
+            var clear_buf: [512]u8 = undefined;
+            const padding = self.last_line_width - line.len;
+            @memset(clear_buf[0..padding], ' ');
+            stdout.writeAll(line) catch {};
+            stdout.writeAll(clear_buf[0..padding]) catch {};
+        } else {
+            stdout.writeAll(line) catch {};
+        }
+
+        self.last_line_width = line.len;
     }
 
     /// Update the spinner (call periodically from main loop)
@@ -182,10 +271,16 @@ pub const Spinner = struct {
         return false;
     }
 
-    /// Update the message while spinning
+    /// Update the message while spinning (thread-safe)
     pub fn setMessage(self: *Spinner, message: []const u8) void {
+        self.message_mutex.lock();
+        const copy_len = @min(message.len, self.message_buffer.len);
+        @memcpy(self.message_buffer[0..copy_len], message[0..copy_len]);
+        self.message_len = copy_len;
         self.message = message;
-        if (self.started) {
+        self.message_mutex.unlock();
+
+        if (self.started and self.animation_thread == null) {
             self.render();
         }
     }
@@ -218,6 +313,13 @@ pub const Spinner = struct {
     /// Stop the spinner with a final message
     pub fn stop(self: *Spinner, final_message: ?[]const u8) void {
         if (!self.started) return;
+
+        // Signal background thread to stop and wait for it
+        if (self.animation_thread) |thread| {
+            self.stop_flag.store(true, .seq_cst);
+            thread.join();
+            self.animation_thread = null;
+        }
 
         const stdout = platform.getStdoutHandle();
 

@@ -3640,7 +3640,14 @@ REQ-SHELL-EMPTY-ENTER-001,ShellEmptyEnter,NewlineOnEmptyInput,IMPL,,,cli,2026-01
 REQ-SHELL-HISTORY-RESET-001,HistoryReset,MetaCommand,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
 REQ-SHELL-HISTORY-RESET-002,HistoryReset,GqlExecution,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
 REQ-SHELL-INTERRUPT-001,SourceInterrupt,StateFlag,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
-REQ-SHELL-INTERRUPT-003,SourceInterrupt,CheckFunction,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
+REQ-SHELL-INTERRUPT-003,SourceInterrupt,CheckFunction,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-INTERRUPT-004,SourceInterrupt,TransactionResponseInterrupt,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-INTERRUPT-005,SourceInterrupt,InterruptTracking,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-INTERRUPT-006,SourceInterrupt,RollbackInterrupt,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-INTERRUPT-007,SourceInterrupt,CommitInterrupt,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
+REQ-SHELL-INTERRUPT-008,SourceInterrupt,UnitTests,TESTED,,,cli,2026-01-30,tests/test_repl.zig
+REQ-SHELL-INTERRUPT-010,SourceInterrupt,SignalHandler,IMPL,,,cli,2026-01-30,src/client/repl/platform.zig
+REQ-SHELL-INTERRUPT-011,SourceInterrupt,SignalSetup,IMPL,,,cli,2026-01-30,src/client/repl/repl_loop.zig
 REQ-SHELL-RECONNECT-001,ShellAutoReconnect,ReconnectionConfig,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-002,ShellAutoReconnect,TransactionState,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-003,ShellAutoReconnect,SessionState,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig

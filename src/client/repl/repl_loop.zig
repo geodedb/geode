@@ -51,6 +51,11 @@ pub const ReplLoop = struct {
         const original_termios = try enterRawMode();
         defer restoreTerminalMode(original_termios) catch {};
 
+        // CANARY: REQ=REQ-SHELL-INTERRUPT-011; FEATURE="SourceInterrupt"; ASPECT=SignalSetup; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+        // Install signal handlers for Ctrl+C during blocking operations
+        platform.installSignalHandlers();
+        defer platform.restoreSignalHandlers();
+
         // Initialize components
         const history_path = if (opts.history_enabled) try repl_config.getHistoryPath(opts.allocator) else null;
         defer if (history_path) |path| opts.allocator.free(path);
