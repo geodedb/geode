@@ -357,10 +357,10 @@ test-macos-unit:
   script:
     - export PATH="$PWD/zig-0.15.2:$PATH"
     - zig version
+    # Debug build and tests only - ReleaseSafe is covered by test-cross-build jobs
+    # ReleaseSafe compilation on macOS M1 runners exceeds the 1h job timeout
     - zig build --summary all
     - zig build test --summary all
-    - zig build -Doptimize=ReleaseSafe --summary all
-    - zig build test -Doptimize=ReleaseSafe --summary all
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
