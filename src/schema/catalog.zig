@@ -583,6 +583,40 @@ pub const Catalog = struct {
         return self.graphs.contains(name);
     }
 
+    /// List all graphs in the catalog
+    /// Returns an owned slice of graph names. Caller must free each name and the slice.
+    pub fn listGraphs(self: *Catalog, allocator: std.mem.Allocator) ![][]const u8 {
+        self.rwlock.lockShared();
+        defer self.rwlock.unlockShared();
+
+        var result = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (result.items) |name| {
+                allocator.free(name);
+            }
+            result.deinit(allocator);
+        }
+
+        var iter = self.graphs.iterator();
+        while (iter.next()) |entry| {
+            const name_copy = try allocator.dupe(u8, entry.key_ptr.*);
+            try result.append(allocator, name_copy);
+        }
+
+        return result.toOwnedSlice(allocator);
+    }
+
+    /// Back-compat: registerGraph delegates to addGraph
+    pub fn registerGraph(self: *Catalog, name: []const u8) !void {
+        return self.addGraph(name);
+    }
+
+    /// Back-compat: dropGraph delegates to removeGraph and returns success boolean
+    pub fn dropGraph(self: *Catalog, name: []const u8) bool {
+        self.removeGraph(name) catch return false;
+        return true;
+    }
+
     // GAP-0139: SHOW INDEXES implementation
     // CANARY: REQ=REQ-SHOW-INDEXES-001; FEATURE="SHOW INDEXES"; ASPECT=CatalogList; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=catalog; UPDATED=2026-01-13
     /// List all indexes in the catalog
@@ -629,15 +663,15 @@ pub const Catalog = struct {
         self.rwlock.lockShared();
         defer self.rwlock.unlockShared();
 
-        var result = std.ArrayList([]const u8).init(allocator);
-        errdefer result.deinit();
+        var result = std.ArrayList([]const u8).empty;
+        errdefer result.deinit(allocator);
 
         var iter = self.schemas.iterator();
         while (iter.next()) |entry| {
-            try result.append(entry.key_ptr.*);
+            try result.append(allocator, entry.key_ptr.*);
         }
 
-        return result.toOwnedSlice();
+        return result.toOwnedSlice(allocator);
     }
 };
 
