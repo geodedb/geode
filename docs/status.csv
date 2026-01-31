@@ -3643,8 +3643,6 @@ REQ-SHELL-INTERRUPT-001,SourceInterrupt,StateFlag,IMPL,,,cli,2026-01-28,src/clie
 REQ-SHELL-INTERRUPT-003,SourceInterrupt,CheckFunction,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-004,SourceInterrupt,TransactionResponseInterrupt,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-005,SourceInterrupt,InterruptTracking,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
-REQ-SHELL-INTERRUPT-006,SourceInterrupt,RollbackInterrupt,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
-REQ-SHELL-INTERRUPT-007,SourceInterrupt,CommitInterrupt,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-008,SourceInterrupt,UnitTests,TESTED,,,cli,2026-01-30,tests/test_repl.zig
 REQ-SHELL-INTERRUPT-010,SourceInterrupt,SignalHandler,IMPL,,,cli,2026-01-30,src/client/repl/platform.zig
 REQ-SHELL-INTERRUPT-011,SourceInterrupt,PlatformExport,IMPL,,,cli,2026-01-30,src/lib.zig
@@ -3663,9 +3661,6 @@ REQ-SHELL-INTERRUPT-023,SourceInterrupt,DrainWithTimeout,IMPL,,,cli,2026-01-30,s
 REQ-SHELL-INTERRUPT-024,SourceInterrupt,DrainForRollback,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-025,SourceInterrupt,DrainAllForRollback,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-026,SourceInterrupt,RollbackScaledTimeout,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
-REQ-SHELL-INTERRUPT-027,SourceInterrupt,ServerSideRollback,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
-REQ-SHELL-INTERRUPT-028,SourceInterrupt,ScaledDrainRollback2,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
-REQ-SHELL-INTERRUPT-029,SourceInterrupt,ErrorRollbackScaled,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-030,SourceInterrupt,RollbackScalingTests,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-031,SourceInterrupt,LargeTransactionRollback,TESTED,,,cli,2026-01-30,geodetestlab/specs/large_transaction_rollback.yml
 REQ-SHELL-INTERRUPT-032,SourceInterrupt,PropagateInterrupt,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
@@ -3707,7 +3702,6 @@ REQ-SHELL-RECONNECT-014,ShellAutoReconnect,CacheCredentialsOnAuth,TESTED,,,cli,2
 REQ-SHELL-RECONNECT-015,ShellAutoReconnect,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-016,ShellAutoReconnect,E2ETests,TESTED,,,cli,2026-01-29,geodetestlab/specs/shell_reconnection.yml
 REQ-SHELL-SOURCE-ERROR-001,SourceFileErrorDetails,BatchErrorExtraction,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
-REQ-SHELL-SOURCE-ERROR-002,SourceFileErrorDetails,CommitErrorMessage,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-SOURCE-ERROR-003,SourceFileErrorDetails,ErrorExtraction,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-SOURCE-ERROR-004,SourceFileErrorDetails,UnitTests,TESTED,,,cli,2026-01-30,tests/test_repl.zig
 REQ-SHELL-SPINNER-001,ShellProcessingIndicator,Module,TESTED,,,cli,2026-01-30,src/client/repl/spinner.zig
@@ -3752,7 +3746,7 @@ REQ-SORT-ASC-001,FinalSort,AscendingSort,TESTED,,,exec,2026-01-16,tests/test_gap
 REQ-SORT-DESC-001,FinalSort,DescendingSort,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SORT-MULTI-001,FinalSort,MultiColumnSort,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SOURCE-PERF-001,SourceFilePerformance,FileHashCache,IMPL,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
-REQ-SOURCE-PERF-002,SourceFilePerformance,BatchExecution,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-PERF-002,SourceFilePerformance,BatchExecution,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-002,SourceFilePerformance,FileHashCacheCleanup,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-003,SourceFilePerformance,CacheCleanupOnExit,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-003,SourceFilePerformance,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
@@ -3760,9 +3754,6 @@ REQ-SOURCE-PERF-004,SourceFilePerformance,BatchParsing,TESTED,,,cli,2026-01-29,s
 REQ-SOURCE-PERF-005,SourceFilePerformance,SingleRequestExecution,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-006,SourceBatchTests,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-007,SourceBatchIntegration,E2ETests,TESTED,,,cli,2026-01-29,geodetestlab/specs/shell_source_batch.yml
-REQ-SOURCE-PERF-008,SourceFilePerformance,TransactionDetection,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
-REQ-SOURCE-PERF-009,SourceFilePerformance,AutoTransaction,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
-REQ-SOURCE-PERF-010,SourceFilePerformance,TransactionCommitRollback,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-011,SourceFilePerformance,TransactionDetection,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-012,SourceFilePerformance,TransactionDetectionTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-013,SourceBatchTransaction,E2ETests,TESTED,,,cli,2026-01-29,geodetestlab/specs/shell_source_batch.yml

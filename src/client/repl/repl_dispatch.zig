@@ -1918,10 +1918,10 @@ fn hashFileContent(content: []const u8) u64 {
 /// - Meta-commands (\help, \use, etc.)
 /// - Comments (lines starting with -- or # are ignored)
 ///
-/// CANARY: REQ=REQ-SOURCE-PERF-002; FEATURE="SourceFilePerformance"; ASPECT=BatchExecution; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
+/// CANARY: REQ=REQ-SOURCE-PERF-002; FEATURE="SourceFilePerformance"; ASPECT=BatchExecution; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-30
 /// Issue #400: Batch execution - sends entire file as single request for performance
-/// Issue #391: Auto-wraps source file execution in a transaction for batch performance
 /// Issue #392: Warns when re-sourcing the same file content (use MERGE for idempotent operations)
+/// Note: Users are responsible for adding their own transactions to source files if needed
 pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     const stdout = platform.getStdoutHandle();
     const stderr = platform.getStderrHandle();
@@ -2151,37 +2151,6 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
         return;
     }
 
-    // CANARY: REQ=REQ-SOURCE-PERF-008; FEATURE="SourceFilePerformance"; ASPECT=TransactionDetection; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
-    // Issue #391: Check if file contains explicit transaction commands (BEGIN, COMMIT, ROLLBACK)
-    // If so, don't auto-wrap - let the user manage their own transactions
-    const has_explicit_txn = containsTransactionCommands(batch_statements.items);
-
-    // CANARY: REQ=REQ-SOURCE-PERF-009; FEATURE="SourceFilePerformance"; ASPECT=AutoTransaction; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
-    // Issue #391: Auto-wrap in transaction for atomicity - entire file succeeds or fails together
-    var auto_txn = false;
-    var begin_succeeded = false;
-    if (!state.in_txn and !has_explicit_txn) {
-        if (state.session.begin()) {
-            begin_succeeded = true;
-            auto_txn = true;
-            state.in_txn = true;
-        } else |err| {
-            // BEGIN failed - handle error
-            if (err == error.Interrupted) {
-                interrupted = true;
-                progress_spinner.stop(null);
-                try stderr.writeAll("\r\nOperation cancelled by user (Ctrl+C)\r\n");
-                return;
-            }
-            var buf: [256]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "Note: Transaction batching unavailable ({s})\r\n", .{@errorName(err)}) catch "";
-            stderr.writeAll(msg) catch {};
-            // Don't auto-wrap if BEGIN failed - proceed without transaction
-        }
-    } else if (has_explicit_txn and state.verbose) {
-        try stdout.writeAll("Note: File contains explicit transaction commands, skipping auto-wrap\r\n");
-    }
-
     // Execute meta-commands that should run before batch
     for (meta_commands.items) |mc| {
         if (mc.position == 0) {
@@ -2219,25 +2188,6 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     if (was_interrupted) {
         progress_spinner.stop(null);
         try stderr.writeAll("\r\n^C Interrupt received\r\n");
-        if (auto_txn and begin_succeeded) {
-            // CANARY: REQ=REQ-SHELL-INTERRUPT-027; FEATURE="SourceInterrupt"; ASPECT=ServerSideRollback; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
-            // Close/reset connection - server will automatically rollback uncommitted transaction
-            try stderr.writeAll("Resetting connection (server will rollback uncommitted transaction)...\r\n");
-            state.session.disconnect();
-            state.in_txn = false;
-
-            // Reconnect
-            var reconnect_spinner = spinner_mod.Spinner.init(state.allocator, "Reconnecting...");
-            reconnect_spinner.startBackground();
-            state.session.connect() catch |err| {
-                reconnect_spinner.fail("Reconnect failed");
-                var buf: [128]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "  Error: {s}\r\n  Use \\connect to reconnect manually.\r\n", .{@errorName(err)}) catch "";
-                stderr.writeAll(msg) catch {};
-                return;
-            };
-            reconnect_spinner.success("Reconnected");
-        }
         return;
     }
 
@@ -2264,103 +2214,12 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
         batch_error_msg = null;
     }
 
-    // Check for interrupt before transaction handling (may have been pressed during error display)
+    // Check for interrupt (may have been pressed during error display)
     if (checkForInterrupt()) {
         interrupted = true;
         progress_spinner.stop(null);
         try stderr.writeAll("\r\nOperation cancelled by user (Ctrl+C)\r\n");
-        if (auto_txn and begin_succeeded) {
-            try stderr.writeAll("Attempting to rollback transaction...\r\n");
-            // CANARY: REQ=REQ-SHELL-INTERRUPT-028; FEATURE="SourceInterrupt"; ASPECT=ScaledDrainRollback2; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
-            _ = state.session.drainForRollback(statement_count, stderr) catch 0;
-            const base_retries: usize = 200;
-            const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
-            state.session.rollbackWithTimeout(@min(scaled_retries, 600)) catch {};
-            state.in_txn = false;
-        }
         return;
-    }
-
-    // CANARY: REQ=REQ-SOURCE-PERF-010; FEATURE="SourceFilePerformance"; ASPECT=TransactionCommitRollback; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
-    // Issue #391: Commit on success, rollback on error for atomicity
-    if (auto_txn and begin_succeeded) {
-        if (error_count > 0) {
-            // Update spinner for rollback
-            progress_spinner.setMessage("Rolling back transaction...");
-            _ = progress_spinner.tick();
-
-            // CANARY: REQ=REQ-SHELL-INTERRUPT-029; FEATURE="SourceInterrupt"; ASPECT=ErrorRollbackScaled; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
-            // Rollback on error - ensure atomicity with scaled timeout
-            const base_retries: usize = 200;
-            const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
-            state.session.rollbackWithTimeout(@min(scaled_retries, 600)) catch |rollback_err| {
-                progress_spinner.stop(null); // Stop spinner before error output
-                // CANARY: REQ=REQ-SHELL-INTERRUPT-006; FEATURE="SourceInterrupt"; ASPECT=RollbackInterrupt; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
-                // Check if this was an interrupt
-                if (rollback_err == error.Interrupted) {
-                    interrupted = true;
-                    try stderr.writeAll("\r\nRollback cancelled by user (Ctrl+C)\r\n");
-                    state.in_txn = false;
-                    return;
-                }
-                try stderr.writeAll("Error: Failed to rollback transaction");
-                if (state.session.last_txn_error) |txn_err| {
-                    try stderr.writeAll(": ");
-                    try stderr.writeAll(txn_err);
-                } else {
-                    var buf: [64]u8 = undefined;
-                    const err_name = std.fmt.bufPrint(&buf, ": {s}", .{@errorName(rollback_err)}) catch "";
-                    try stderr.writeAll(err_name);
-                }
-                try stderr.writeAll("\r\n");
-            };
-            try stderr.writeAll("Transaction rolled back due to errors\r\n");
-        } else {
-            // Update spinner for commit
-            progress_spinner.setMessage("Committing transaction...");
-            _ = progress_spinner.tick();
-
-            // Commit on success
-            state.session.commit() catch |commit_err| {
-                progress_spinner.stop(null); // Stop spinner before error output
-
-                // CANARY: REQ=REQ-SHELL-INTERRUPT-007; FEATURE="SourceInterrupt"; ASPECT=CommitInterrupt; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
-                // Check if this was an interrupt - allow user to cancel during slow commits
-                if (commit_err == error.Interrupted) {
-                    interrupted = true;
-                    try stderr.writeAll("\r\nCommit cancelled by user (Ctrl+C)\r\n");
-                    try stderr.writeAll("Warning: Transaction state may be inconsistent. Check server logs.\r\n");
-                    state.in_txn = false;
-                    return;
-                }
-
-                // CANARY: REQ=REQ-SHELL-SOURCE-ERROR-002; FEATURE="SourceFileErrorDetails"; ASPECT=CommitErrorMessage; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
-                // Display detailed commit error message instead of just "WouldBlock"
-                try stderr.writeAll("\r\nError: Failed to commit transaction");
-                if (state.session.last_txn_error) |txn_err| {
-                    try stderr.writeAll(":\r\n  ");
-                    try stderr.writeAll(txn_err);
-                } else if (commit_err != error.WouldBlock) {
-                    var buf: [64]u8 = undefined;
-                    const err_name = std.fmt.bufPrint(&buf, ": {s}", .{@errorName(commit_err)}) catch "";
-                    try stderr.writeAll(err_name);
-                } else {
-                    try stderr.writeAll(":\r\n  Server did not respond (connection may be stale or overloaded)");
-                }
-                try stderr.writeAll("\r\n");
-
-                // Try to provide hints for common issues
-                try stderr.writeAll("  Hint: Large files may require more time. Try:\r\n");
-                try stderr.writeAll("    - Splitting the file into smaller batches\r\n");
-                try stderr.writeAll("    - Checking server logs for detailed errors\r\n");
-                try stderr.writeAll("    - Using explicit transactions with COMMIT statements\r\n");
-                try stderr.writeAll("  Tip: Press Ctrl+C to cancel waiting for the server\r\n");
-
-                state.session.rollback() catch {};
-                error_count += 1;
-            };
-        }
-        state.in_txn = false;
     }
 
     // Execute remaining meta-commands
