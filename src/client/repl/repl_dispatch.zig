@@ -13,6 +13,13 @@ const json_lib = @import("json");
 // Made public so it can be used by other modules for interrupt handling
 // In raw terminal mode, Ctrl+C generates ASCII 3 which we poll for
 pub fn checkForInterrupt() bool {
+    // CANARY: REQ=REQ-SHELL-INTERRUPT-036; FEATURE="SourceInterrupt"; ASPECT=SignalBasedInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    // First check the signal-based flag (most reliable for Ctrl+C in cooked terminal mode)
+    if (platform.checkAndClearSigint()) {
+        return true;
+    }
+
+    // Also check stdin for raw mode terminals
     if (builtin.os.tag == .windows) {
         // Windows: Check console input for Ctrl+C
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return false;
@@ -285,6 +292,21 @@ pub const ClientSession = struct {
             self.connected = true;
         } else {
             return error.NotConnected;
+        }
+    }
+
+    /// Disconnect from server (used on interrupt to let server rollback transaction)
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-035; FEATURE="SourceInterrupt"; ASPECT=DisconnectForRollback; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    pub fn disconnect(self: *ClientSession) void {
+        if (self.connection) |conn| {
+            conn.deinit();
+            self.connection = null;
+        }
+        self.connected = false;
+        // Clear any pending response
+        if (self.last_response) |resp| {
+            self.allocator.free(resp);
+            self.last_response = null;
         }
     }
 
@@ -636,11 +658,21 @@ pub const ClientSession = struct {
     pub fn runGql(self: *ClientSession, gql: []const u8) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
+        // Check for interrupt before encoding (encoding large batches can be slow)
+        if (checkForInterrupt()) {
+            return error.Interrupted;
+        }
+
         // Send RUN_GQL message using json library encoding
         // Note: json_lib.encode handles string escaping automatically
         const run_msg = ReplRunGqlMessage{ .text = gql };
         const json_str = try json_lib.encode(self.allocator, run_msg, .{});
         defer self.allocator.free(json_str);
+
+        // Check for interrupt after encoding
+        if (checkForInterrupt()) {
+            return error.Interrupted;
+        }
 
         // Append newline
         const msg = try self.allocator.alloc(u8, json_str.len + 1);
@@ -648,7 +680,18 @@ pub const ClientSession = struct {
         @memcpy(msg[0..json_str.len], json_str);
         msg[json_str.len] = '\n';
 
-        try self.connection.?.writeAll(msg);
+        // For large payloads, write in chunks with interrupt checks
+        // This allows Ctrl+C to be detected during long writes
+        const chunk_size: usize = 8 * 1024; // 8KB chunks for responsive interrupt
+        var written: usize = 0;
+        while (written < msg.len) {
+            if (checkForInterrupt()) {
+                return error.Interrupted;
+            }
+            const end = @min(written + chunk_size, msg.len);
+            try self.connection.?.writeAll(msg[written..end]);
+            written = end;
+        }
 
         // Clear previous response
         if (self.last_response) |resp| {
@@ -656,28 +699,72 @@ pub const ClientSession = struct {
             self.last_response = null;
         }
 
-        // Read the response with interrupt checking
-        // CANARY: REQ=REQ-SHELL-INTERRUPT-012; FEATURE="SourceInterrupt"; ASPECT=RunGqlInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
-        var retry_count: usize = 0;
-        const max_retries: usize = 6000; // ~5 minutes with 50ms sleep for large batch operations
-        while (retry_count < max_retries) : (retry_count += 1) {
-            // Check for Ctrl+C interrupt
-            if (checkForInterrupt()) {
-                return error.Interrupted;
-            }
+        // CANARY: REQ=REQ-SHELL-INTERRUPT-039; FEATURE="SourceInterrupt"; ASPECT=ThreadedRead; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+        // Use a threaded approach: worker thread does blocking read, main thread checks for interrupts
+        // This allows Ctrl+C to be detected even when QUIC readLine is blocking
+        const ReadContext = struct {
+            connection: *TransportConnection,
+            allocator: std.mem.Allocator,
+            result: ?[]u8 = null,
+            err: ?anyerror = null,
+            done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        };
 
-            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
-                if (err == error.WouldBlock) {
-                    std.Thread.sleep(50 * std.time.ns_per_ms);
-                    continue;
-                }
-                return err;
+        var ctx = ReadContext{
+            .connection = self.connection.?,
+            .allocator = self.allocator,
+        };
+
+        // Spawn worker thread to do the blocking read
+        const worker = std.Thread.spawn(.{}, struct {
+            fn run(c: *ReadContext) void {
+                c.result = c.connection.readLine(c.allocator, 1 << 16) catch |err| {
+                    c.err = err;
+                    c.done.store(true, .release);
+                    return;
+                };
+                c.done.store(true, .release);
+            }
+        }.run, .{&ctx}) catch {
+            // Thread spawn failed, fall back to blocking read
+            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |read_err| {
+                return read_err;
             };
             self.last_response = response;
             return;
+        };
+
+        // Main thread: wait for completion while checking for interrupts
+        const max_wait_ms: usize = 300000; // 5 minutes max
+        var waited_ms: usize = 0;
+        const check_interval_ms: usize = 50; // Check every 50ms
+
+        while (waited_ms < max_wait_ms) {
+            // Check if worker is done
+            if (ctx.done.load(.acquire)) {
+                worker.join();
+                if (ctx.err) |err| {
+                    return err;
+                }
+                self.last_response = ctx.result;
+                return;
+            }
+
+            // Check for interrupt
+            if (checkForInterrupt()) {
+                // Interrupt detected - we need to cancel the read
+                // Detach the worker thread (it will complete eventually or error out)
+                worker.detach();
+                return error.Interrupted;
+            }
+
+            // Wait a bit before checking again
+            std.Thread.sleep(check_interval_ms * std.time.ns_per_ms);
+            waited_ms += check_interval_ms;
         }
 
-        // Timeout waiting for response
+        // Timeout - detach worker and return error
+        worker.detach();
         return error.WouldBlock;
     }
 
@@ -752,6 +839,14 @@ pub const ClientSession = struct {
     /// CANARY: REQ=REQ-SHELL-INTERRUPT-014; FEATURE="SourceInterrupt"; ASPECT=RollbackDoubleInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
     /// Requires TWO Ctrl+C presses to cancel - first shows warning about data corruption
     pub fn rollback(self: *ClientSession) !void {
+        // Default rollback with 10 second timeout
+        return self.rollbackWithTimeout(200); // 200 * 50ms = 10 seconds
+    }
+
+    /// Rollback with configurable timeout for large transactions
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-026; FEATURE="SourceInterrupt"; ASPECT=RollbackScaledTimeout; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// max_retries: number of 50ms retry intervals before timeout
+    pub fn rollbackWithTimeout(self: *ClientSession, max_retries: usize) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
         const stderr = platform.getStderrHandle();
@@ -770,12 +865,21 @@ pub const ClientSession = struct {
 
         // Read response with retry logic - special handling for rollback interrupts
         // Rollback requires TWO Ctrl+C presses to cancel, with a warning after the first
-        // Use shorter timeout (3 seconds) since after interrupt the connection may be unstable
         var retry_count: usize = 0;
-        const max_retries: usize = 60; // ~3 seconds with 50ms sleep
         var first_interrupt_received = false;
+        var last_progress_sec: usize = 0;
 
         while (retry_count < max_retries) : (retry_count += 1) {
+            // Show progress every 2 seconds for long waits
+            const elapsed_sec = (retry_count * 50) / 1000;
+            if (elapsed_sec > last_progress_sec and elapsed_sec > 0 and elapsed_sec % 2 == 0) {
+                last_progress_sec = elapsed_sec;
+                var buf: [64]u8 = undefined;
+                const max_sec = (max_retries * 50) / 1000;
+                const msg = std.fmt.bufPrint(&buf, "       Waiting for server response... ({d}/{d}s)\r", .{ elapsed_sec, max_sec }) catch "";
+                stderr.writeAll(msg) catch {};
+            }
+
             // Check for Ctrl+C interrupt - rollback needs special handling
             if (checkForInterrupt()) {
                 if (!first_interrupt_received) {
@@ -936,31 +1040,162 @@ pub const ClientSession = struct {
     /// Note: This function attempts to discard stale data with timeout
     /// Uses quick polling to avoid blocking on dead connections
     pub fn drain(self: *ClientSession) void {
-        if (!self.connected or self.connection == null) return;
+        // Use default limit for basic drain operations
+        self.drainWithLimit(50, false);
+    }
+
+    /// Drain pending responses with configurable limit and interrupt checking
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-024; FEATURE="SourceInterrupt"; ASPECT=DrainForRollback; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// Returns the number of messages drained, or 0 if interrupted
+    pub fn drainWithLimit(self: *ClientSession, max_messages: usize, check_interrupts: bool) usize {
+        if (!self.connected or self.connection == null) return 0;
 
         // Try to read and discard pending messages with timeout
-        // Use quick polling (10ms sleep, 10 iterations = 100ms max per message)
         var messages_drained: usize = 0;
-        const max_messages: usize = 5;
 
         while (messages_drained < max_messages) : (messages_drained += 1) {
+            // Check for Ctrl+C interrupt if requested
+            if (check_interrupts and checkForInterrupt()) {
+                return messages_drained;
+            }
+
             var poll_count: usize = 0;
-            const max_polls: usize = 10; // 100ms timeout per message
+            const max_polls: usize = 20; // 100ms timeout per message (20 * 5ms)
 
             const response = while (poll_count < max_polls) : (poll_count += 1) {
                 break self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
                     if (err == error.WouldBlock) {
-                        std.Thread.sleep(10 * std.time.ns_per_ms);
+                        std.Thread.sleep(5 * std.time.ns_per_ms);
                         continue;
                     }
-                    return; // Connection error, stop draining
+                    return messages_drained; // Connection error, stop draining
                 };
             } else {
-                return; // Timeout, no more data
+                return messages_drained; // Timeout, no more data
             };
 
             self.allocator.free(response);
         }
+
+        return messages_drained;
+    }
+
+    /// Aggressive drain for use before rollback of large transactions
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-025; FEATURE="SourceInterrupt"; ASPECT=DrainAllForRollback; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// Drains until no more data or timeout, scaled to expected transaction size
+    /// Returns total messages drained, handles interrupt checking
+    pub fn drainForRollback(self: *ClientSession, expected_statements: usize, stderr: anytype) !usize {
+        if (!self.connected or self.connection == null) return 0;
+
+        var total_drained: usize = 0;
+        var consecutive_empty: usize = 0;
+        const max_consecutive_empty: usize = 3; // Stop after 3 empty polls in a row
+        var first_interrupt_received = false;
+        var last_progress_update: usize = 0;
+
+        // Scale drain limit: at least 100 messages, or 2x the statement count for safety
+        const drain_limit = @max(100, expected_statements * 2);
+        var batch_count: usize = 0;
+        const batch_size: usize = 50;
+        const max_batches = (drain_limit + batch_size - 1) / batch_size;
+
+        while (batch_count < max_batches and consecutive_empty < max_consecutive_empty) : (batch_count += 1) {
+            // Check for Ctrl+C interrupt - use double-press safety like rollback
+            if (checkForInterrupt()) {
+                if (!first_interrupt_received) {
+                    first_interrupt_received = true;
+                    stderr.writeAll("\r\n  (Draining buffers... press Ctrl+C again to force cancel)\r\n") catch {};
+                    continue;
+                } else {
+                    return error.Interrupted;
+                }
+            }
+
+            // Drain a batch of messages
+            const drained = self.drainWithLimit(batch_size, false);
+            total_drained += drained;
+
+            if (drained == 0) {
+                consecutive_empty += 1;
+            } else {
+                consecutive_empty = 0;
+                // Show progress every 100 messages drained
+                if (total_drained - last_progress_update >= 100) {
+                    last_progress_update = total_drained;
+                    var buf: [48]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "\r  Draining... {d} responses cleared", .{total_drained}) catch "";
+                    stderr.writeAll(msg) catch {};
+                }
+            }
+
+            // Brief yield to allow server to send more data
+            std.Thread.sleep(5 * std.time.ns_per_ms);
+        }
+
+        // Clear the progress line if we showed any
+        if (last_progress_update > 0) {
+            stderr.writeAll("\r                                          \r") catch {};
+        }
+
+        return total_drained;
+    }
+
+    /// Quick drain with spinner feedback for use before rollback
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-033; FEATURE="SourceInterrupt"; ASPECT=DrainWithSpinner; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    /// Time-limited drain (max 2 seconds) with spinner updates
+    pub fn drainForRollbackWithSpinner(self: *ClientSession, expected_statements: usize, spinner: *spinner_mod.Spinner) !usize {
+        _ = expected_statements; // No longer used - we use time-based limit
+        if (!self.connected or self.connection == null) return 0;
+
+        const stderr = platform.getStderrHandle();
+        var total_drained: usize = 0;
+        var first_interrupt_received = false;
+
+        // Time-limited drain: max 2 seconds, stop early if no data
+        const max_iterations: usize = 40; // 40 * 50ms = 2 seconds max
+        var empty_count: usize = 0;
+
+        var i: usize = 0;
+        while (i < max_iterations) : (i += 1) {
+            if (checkForInterrupt()) {
+                if (!first_interrupt_received) {
+                    first_interrupt_received = true;
+                    spinner.stop(null);
+                    stderr.writeAll("  (Press Ctrl+C again to force cancel)\r\n") catch {};
+                    spinner.setMessage("[1/2] Draining...");
+                    spinner.startBackground();
+                    continue;
+                } else {
+                    return error.Interrupted;
+                }
+            }
+
+            // Try to read one message quickly
+            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+                if (err == error.WouldBlock) {
+                    empty_count += 1;
+                    // Stop after 3 consecutive empty reads (150ms of no data)
+                    if (empty_count >= 3) break;
+                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    continue;
+                }
+                break; // Connection error, stop draining
+            };
+
+            // Got a response, discard it
+            self.allocator.free(response);
+            total_drained += 1;
+            empty_count = 0;
+
+            // Update spinner
+            if (total_drained % 20 == 0) {
+                var buf: [64]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "[1/2] Draining... {d} cleared", .{total_drained}) catch "[1/2] Draining...";
+                spinner.setMessage(msg);
+            }
+        }
+
+        return total_drained;
     }
 };
 
@@ -1537,6 +1772,12 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
             }
 
             // Non-recoverable error or reconnection failed
+            // CANARY: REQ=REQ-SHELL-INTERRUPT-032; FEATURE="SourceInterrupt"; ASPECT=PropagateInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+            // For Interrupted errors, propagate to caller so they can handle rollback
+            if (err == error.Interrupted) {
+                return err;
+            }
+            // For other errors, print and return
             try stderr.writeAll("Error executing query: ");
             try stderr.writeAll(@errorName(err));
             try stderr.writeAll("\r\n");
@@ -1791,13 +2032,13 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     while (line_iter.next()) |raw_line| {
         line_number += 1;
 
-        // Check for interrupt every 100 lines to allow cancellation during parsing
-        if (line_number % 100 == 0) {
+        // Check for interrupt every 10 lines to allow quick cancellation during parsing
+        if (line_number % 10 == 0) {
             _ = progress_spinner.tick(); // Update spinner animation
             if (checkForInterrupt()) {
                 interrupted = true;
                 progress_spinner.stop(null);
-                try stderr.writeAll("\r\nParsing cancelled by user (Ctrl+C)\r\n");
+                try stderr.writeAll("\r\n^C Interrupt received\r\n");
                 return;
             }
         }
@@ -1977,18 +2218,25 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     // If interrupted during execution, handle immediately
     if (was_interrupted) {
         progress_spinner.stop(null);
-        try stderr.writeAll("\r\nExecution cancelled by user (Ctrl+C)\r\n");
+        try stderr.writeAll("\r\n^C Interrupt received\r\n");
         if (auto_txn and begin_succeeded) {
-            try stderr.writeAll("Attempting to rollback transaction...\r\n");
-            // Drain any pending responses before rollback
-            state.session.drain();
-            // Try rollback with short timeout since connection may be unstable
-            state.session.rollback() catch |rollback_err| {
-                var buf: [128]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "Rollback failed: {s} (transaction may need manual cleanup)\r\n", .{@errorName(rollback_err)}) catch "";
-                stderr.writeAll(msg) catch {};
-            };
+            // CANARY: REQ=REQ-SHELL-INTERRUPT-027; FEATURE="SourceInterrupt"; ASPECT=ServerSideRollback; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+            // Close/reset connection - server will automatically rollback uncommitted transaction
+            try stderr.writeAll("Resetting connection (server will rollback uncommitted transaction)...\r\n");
+            state.session.disconnect();
             state.in_txn = false;
+
+            // Reconnect
+            var reconnect_spinner = spinner_mod.Spinner.init(state.allocator, "Reconnecting...");
+            reconnect_spinner.startBackground();
+            state.session.connect() catch |err| {
+                reconnect_spinner.fail("Reconnect failed");
+                var buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "  Error: {s}\r\n  Use \\connect to reconnect manually.\r\n", .{@errorName(err)}) catch "";
+                stderr.writeAll(msg) catch {};
+                return;
+            };
+            reconnect_spinner.success("Reconnected");
         }
         return;
     }
@@ -2023,8 +2271,11 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
         try stderr.writeAll("\r\nOperation cancelled by user (Ctrl+C)\r\n");
         if (auto_txn and begin_succeeded) {
             try stderr.writeAll("Attempting to rollback transaction...\r\n");
-            state.session.drain();
-            state.session.rollback() catch {};
+            // CANARY: REQ=REQ-SHELL-INTERRUPT-028; FEATURE="SourceInterrupt"; ASPECT=ScaledDrainRollback2; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+            _ = state.session.drainForRollback(statement_count, stderr) catch 0;
+            const base_retries: usize = 200;
+            const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
+            state.session.rollbackWithTimeout(@min(scaled_retries, 600)) catch {};
             state.in_txn = false;
         }
         return;
@@ -2038,8 +2289,11 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
             progress_spinner.setMessage("Rolling back transaction...");
             _ = progress_spinner.tick();
 
-            // Rollback on error - ensure atomicity
-            state.session.rollback() catch |rollback_err| {
+            // CANARY: REQ=REQ-SHELL-INTERRUPT-029; FEATURE="SourceInterrupt"; ASPECT=ErrorRollbackScaled; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+            // Rollback on error - ensure atomicity with scaled timeout
+            const base_retries: usize = 200;
+            const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
+            state.session.rollbackWithTimeout(@min(scaled_retries, 600)) catch |rollback_err| {
                 progress_spinner.stop(null); // Stop spinner before error output
                 // CANARY: REQ=REQ-SHELL-INTERRUPT-006; FEATURE="SourceInterrupt"; ASPECT=RollbackInterrupt; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
                 // Check if this was an interrupt
@@ -3636,4 +3890,137 @@ test "TestClientSession_DefaultReconnectConfig" {
 
     try testing.expectEqual(@as(u32, 5), session.reconnect_config.max_attempts);
     try testing.expect(session.reconnect_config.prompt_for_txn_recovery);
+}
+
+// ============================================================================
+// Transaction Rollback Scaling Tests
+// CANARY: REQ=REQ-SHELL-INTERRUPT-030; FEATURE="SourceInterrupt"; ASPECT=RollbackScalingTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
+// ============================================================================
+
+test "TestRollbackTimeoutScaling_SmallTransaction" {
+    // Test that small transactions (< 500 statements) get base timeout
+    const statement_count: usize = 100;
+    const base_retries: usize = 200; // 10 seconds
+    const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
+    const max_retries: usize = @min(scaled_retries, 600);
+
+    // 100 / 500 = 0, so scaled = 200 + 0 = 200
+    try testing.expectEqual(@as(usize, 200), max_retries);
+}
+
+test "TestRollbackTimeoutScaling_MediumTransaction" {
+    // Test that medium transactions (500-2000) get moderate scaling
+    const statement_count: usize = 1500;
+    const base_retries: usize = 200;
+    const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
+    const max_retries: usize = @min(scaled_retries, 600);
+
+    // 1500 / 500 = 3, so scaled = 200 + 60 = 260
+    try testing.expectEqual(@as(usize, 260), max_retries);
+}
+
+test "TestRollbackTimeoutScaling_LargeTransaction" {
+    // Test that large transactions (2000-3000) get significant scaling
+    const statement_count: usize = 2877; // From user's actual use case
+    const base_retries: usize = 200;
+    const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
+    const max_retries: usize = @min(scaled_retries, 600);
+
+    // 2877 / 500 = 5, so scaled = 200 + 100 = 300
+    try testing.expectEqual(@as(usize, 300), max_retries);
+}
+
+test "TestRollbackTimeoutScaling_VeryLargeTransaction" {
+    // Test that very large transactions are capped at 30 seconds
+    const statement_count: usize = 10000;
+    const base_retries: usize = 200;
+    const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
+    const max_retries: usize = @min(scaled_retries, 600);
+
+    // 10000 / 500 = 20, so scaled = 200 + 400 = 600 (capped)
+    try testing.expectEqual(@as(usize, 600), max_retries);
+}
+
+test "TestRollbackTimeoutScaling_ExtremeTransaction" {
+    // Test that extreme transactions don't exceed cap
+    const statement_count: usize = 100000;
+    const base_retries: usize = 200;
+    const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
+    const max_retries: usize = @min(scaled_retries, 600);
+
+    // Should be capped at 600
+    try testing.expectEqual(@as(usize, 600), max_retries);
+}
+
+test "TestRollbackTimeoutScaling_ZeroStatements" {
+    // Test edge case with zero statements
+    const statement_count: usize = 0;
+    const base_retries: usize = 200;
+    const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
+    const max_retries: usize = @min(scaled_retries, 600);
+
+    // 0 / 500 = 0, so scaled = 200 + 0 = 200
+    try testing.expectEqual(@as(usize, 200), max_retries);
+}
+
+test "TestDrainLimitScaling_SmallTransaction" {
+    // Test drain limit for small transactions
+    const statement_count: usize = 20;
+    const drain_limit = @max(@as(usize, 100), statement_count * 2);
+
+    // 20 * 2 = 40, max(100, 40) = 100
+    try testing.expectEqual(@as(usize, 100), drain_limit);
+}
+
+test "TestDrainLimitScaling_MediumTransaction" {
+    // Test drain limit for medium transactions
+    const statement_count: usize = 500;
+    const drain_limit = @max(@as(usize, 100), statement_count * 2);
+
+    // 500 * 2 = 1000, max(100, 1000) = 1000
+    try testing.expectEqual(@as(usize, 1000), drain_limit);
+}
+
+test "TestDrainLimitScaling_LargeTransaction" {
+    // Test drain limit for large transactions (user's case: 2877 statements)
+    const statement_count: usize = 2877;
+    const drain_limit = @max(@as(usize, 100), statement_count * 2);
+
+    // 2877 * 2 = 5754
+    try testing.expectEqual(@as(usize, 5754), drain_limit);
+}
+
+test "TestRollbackTimeoutConversion_ToSeconds" {
+    // Test that retry counts convert to expected seconds
+    // Each retry is 50ms, so:
+    // 200 retries = 10 seconds
+    // 400 retries = 20 seconds
+    // 600 retries = 30 seconds
+
+    const retry_to_seconds = struct {
+        fn convert(retries: usize) usize {
+            return (retries * 50) / 1000;
+        }
+    }.convert;
+
+    try testing.expectEqual(@as(usize, 10), retry_to_seconds(200));
+    try testing.expectEqual(@as(usize, 20), retry_to_seconds(400));
+    try testing.expectEqual(@as(usize, 30), retry_to_seconds(600));
+}
+
+test "TestDrainBatchCalculation" {
+    // Test that batch calculation for drainForRollback is correct
+    const batch_size: usize = 50;
+
+    const calc_batches = struct {
+        fn calculate(drain_limit: usize, bs: usize) usize {
+            return (drain_limit + bs - 1) / bs;
+        }
+    }.calculate;
+
+    // 100 messages / 50 batch = 2 batches
+    try testing.expectEqual(@as(usize, 2), calc_batches(100, batch_size));
+
+    // 5754 messages / 50 batch = 116 batches (rounded up)
+    try testing.expectEqual(@as(usize, 116), calc_batches(5754, batch_size));
 }

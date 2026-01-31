@@ -441,7 +441,116 @@ fn processInput(state: *ReplState) !void {
     var buf: [256]u8 = undefined; // Larger buffer for pastes
 
     outer: while (true) {
-        const n = try stdin.read(&buf);
+        // CANARY: REQ=REQ-SHELL-INTERRUPT-046; FEATURE="SourceInterrupt"; ASPECT=PromptSigintCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+        // Check for SIGINT (Ctrl+C) before reading - with ISIG enabled, Ctrl+C generates
+        // a signal instead of delivering byte 0x03, so we must check the flag here
+        if (platform.checkAndClearSigint()) {
+            // Treat SIGINT as cancel action
+            const stdout = platform.getStdoutHandle();
+            if (state.buffer.items.len == 0 and !state.is_continuation) {
+                // Ctrl+C on empty buffer with no continuation - exit shell
+                try stdout.writeAll("\r\n^C\r\n");
+                state.quit_requested = true;
+                break :outer;
+            } else if (state.is_continuation) {
+                // Cancel multi-line input
+                state.is_continuation = false;
+                state.multi_line_buffer.clearRetainingCapacity();
+                state.buffer.clearRetainingCapacity();
+                state.cursor = 0;
+                state.last_visual_lines = 0;
+                state.last_cursor_row = 0;
+                state.content_changed = true;
+                try stdout.writeAll("\r\n^C\r\n");
+            } else {
+                // Clear current line buffer
+                state.buffer.clearRetainingCapacity();
+                state.cursor = 0;
+                state.last_visual_lines = 0;
+                state.last_cursor_row = 0;
+                state.content_changed = true;
+                try stdout.writeAll("\r\n^C\r\n");
+            }
+            break :outer;
+        }
+
+        // CANARY: REQ=REQ-SHELL-INTERRUPT-048; FEATURE="SourceInterrupt"; ASPECT=PollForInput; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+        // Use poll() with timeout to periodically check for SIGINT while waiting for input.
+        // This prevents blocking indefinitely in read() when SIGINT is delivered.
+        if (builtin.os.tag != .windows) {
+            var fds = [_]std.posix.pollfd{
+                .{ .fd = stdin.handle, .events = std.posix.POLL.IN, .revents = 0 },
+            };
+            // Poll with 100ms timeout to allow periodic SIGINT checking
+            const poll_result = std.posix.poll(&fds, 100) catch |err| {
+                if (err == error.Interrupted) {
+                    // EINTR from signal - check SIGINT
+                    if (platform.checkAndClearSigint()) {
+                        const stdout = platform.getStdoutHandle();
+                        if (state.buffer.items.len == 0 and !state.is_continuation) {
+                            try stdout.writeAll("\r\n^C\r\n");
+                            state.quit_requested = true;
+                            break :outer;
+                        } else {
+                            state.is_continuation = false;
+                            state.multi_line_buffer.clearRetainingCapacity();
+                            state.buffer.clearRetainingCapacity();
+                            state.cursor = 0;
+                            state.last_visual_lines = 0;
+                            state.last_cursor_row = 0;
+                            state.content_changed = true;
+                            try stdout.writeAll("\r\n^C\r\n");
+                            break :outer;
+                        }
+                    }
+                    continue;
+                }
+                return err;
+            };
+
+            // Timeout - no input, check for SIGINT and continue waiting
+            if (poll_result == 0) {
+                continue;
+            }
+
+            // Error condition on fd
+            if ((fds[0].revents & std.posix.POLL.ERR) != 0 or
+                (fds[0].revents & std.posix.POLL.HUP) != 0)
+            {
+                return error.InputClosed;
+            }
+
+            // No data available despite poll returning > 0
+            if ((fds[0].revents & std.posix.POLL.IN) == 0) {
+                continue;
+            }
+        }
+
+        const n = stdin.read(&buf) catch |err| {
+            // EINTR from signal - check for SIGINT and retry
+            if (err == error.Interrupted) {
+                if (platform.checkAndClearSigint()) {
+                    const stdout = platform.getStdoutHandle();
+                    if (state.buffer.items.len == 0 and !state.is_continuation) {
+                        try stdout.writeAll("\r\n^C\r\n");
+                        state.quit_requested = true;
+                        break :outer;
+                    } else {
+                        state.is_continuation = false;
+                        state.multi_line_buffer.clearRetainingCapacity();
+                        state.buffer.clearRetainingCapacity();
+                        state.cursor = 0;
+                        state.last_visual_lines = 0;
+                        state.last_cursor_row = 0;
+                        state.content_changed = true;
+                        try stdout.writeAll("\r\n^C\r\n");
+                        break :outer;
+                    }
+                }
+                continue;
+            }
+            return err;
+        };
         if (n == 0) continue;
 
         // Process all bytes in buffer to handle pastes
@@ -1063,7 +1172,51 @@ fn handleSearch(state: *ReplState) !void {
     var in_paste = false;
 
     while (true) {
-        const n = try stdin.read(&search_buf);
+        // CANARY: REQ=REQ-SHELL-INTERRUPT-047; FEATURE="SourceInterrupt"; ASPECT=SearchSigintCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+        // Check for SIGINT (Ctrl+C) before reading - with ISIG enabled, Ctrl+C generates signal
+        if (platform.checkAndClearSigint()) {
+            state.searching = false;
+            state.buffer.clearRetainingCapacity();
+            state.cursor = 0;
+            try stdout_file.writeAll("\r\n^C\r\n");
+            break;
+        }
+
+        // Use poll() with timeout to periodically check for SIGINT while waiting for input
+        if (builtin.os.tag != .windows) {
+            var fds = [_]std.posix.pollfd{
+                .{ .fd = stdin.handle, .events = std.posix.POLL.IN, .revents = 0 },
+            };
+            const poll_result = std.posix.poll(&fds, 100) catch |err| {
+                if (err == error.Interrupted) {
+                    if (platform.checkAndClearSigint()) {
+                        state.searching = false;
+                        state.buffer.clearRetainingCapacity();
+                        state.cursor = 0;
+                        try stdout_file.writeAll("\r\n^C\r\n");
+                        break;
+                    }
+                    continue;
+                }
+                return err;
+            };
+            if (poll_result == 0) continue; // Timeout, check SIGINT and continue
+            if ((fds[0].revents & std.posix.POLL.IN) == 0) continue;
+        }
+
+        const n = stdin.read(&search_buf) catch |err| {
+            if (err == error.Interrupted) {
+                if (platform.checkAndClearSigint()) {
+                    state.searching = false;
+                    state.buffer.clearRetainingCapacity();
+                    state.cursor = 0;
+                    try stdout_file.writeAll("\r\n^C\r\n");
+                    break;
+                }
+                continue;
+            }
+            return err;
+        };
         if (n == 0) continue;
 
         var i: usize = 0;
@@ -1212,7 +1365,10 @@ fn enterRawMode() !TerminalState {
     raw.oflag.OPOST = false;
     raw.lflag.ECHO = false;
     raw.lflag.ICANON = false;
-    raw.lflag.ISIG = false;
+    // CANARY: REQ=REQ-SHELL-INTERRUPT-037; FEATURE="SourceInterrupt"; ASPECT=KeepISIG; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    // Keep ISIG enabled so Ctrl+C generates SIGINT signal for immediate interrupt detection
+    // The signal handler in platform.zig sets sigint_received flag which is checked by checkForInterrupt()
+    raw.lflag.ISIG = true;
     raw.lflag.IEXTEN = false;
     raw.cc[@intFromEnum(std.posix.V.MIN)] = 1;
     raw.cc[@intFromEnum(std.posix.V.TIME)] = 1; // 0.1 second timeout to collect escape sequences

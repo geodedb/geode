@@ -238,6 +238,8 @@ pub const repl = struct {
     pub const repl_config = @import("client/repl/repl_config.zig");
     /// CANARY: REQ=REQ-SHELL-SPINNER-002; FEATURE="ShellProcessingIndicator"; ASPECT=ModuleExport; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
     pub const spinner = @import("client/repl/spinner.zig");
+    /// CANARY: REQ=REQ-SHELL-INTERRUPT-011; FEATURE="SourceInterrupt"; ASPECT=PlatformExport; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    pub const platform = @import("client/repl/platform.zig");
 };
 
 // Extend planner module

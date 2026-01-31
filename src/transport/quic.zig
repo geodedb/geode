@@ -615,14 +615,21 @@ pub const QuicClientStream = struct {
     }
 
     pub fn read(self: *QuicClientStream, buffer: []u8) !usize {
+        // DEBUG: Track read attempts
+        const debug_read = false; // Set to true to enable verbose read debugging
+        if (debug_read) std.debug.print("[QUIC] read: calling readStream\n", .{});
+
         const result = self.connection.readStream(self.stream_id, buffer) catch |err| {
             if (err == error.WouldBlock) {
+                if (debug_read) std.debug.print("[QUIC] read: WouldBlock, polling\n", .{});
                 // Drive the endpoint to allow incoming packets
                 self.endpoint.poll(10) catch {};
                 return 0;
             }
+            if (debug_read) std.debug.print("[QUIC] read: error {}\n", .{err});
             return err;
         };
+        if (debug_read) std.debug.print("[QUIC] read: got {} bytes\n", .{result});
         if (result == 0) {
             self.endpoint.poll(10) catch {};
         }
@@ -632,14 +639,30 @@ pub const QuicClientStream = struct {
     // CANARY: REQ=REQ-QUIC-CLIENT-READLINE-001; FEATURE="QuicClientReadLine"; ASPECT=RetryLogic; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-30
     // Issue #413: Add retry logic for WouldBlock when partial data has been read
     // This matches the server-side QuicStream.readLine() behavior for consistency
+    // CANARY: REQ=REQ-SHELL-INTERRUPT-034; FEATURE="SourceInterrupt"; ASPECT=QuicReadLineTimeout; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-30
+    // CANARY: REQ=REQ-SHELL-INTERRUPT-038; FEATURE="SourceInterrupt"; ASPECT=QuicReadLineInterrupt; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-30
+    // Added interrupt callback to allow Ctrl+C detection during long server operations
     pub fn readLine(self: *QuicClientStream, max_size: usize) ![]u8 {
+        return self.readLineWithInterrupt(max_size, null);
+    }
+
+    /// readLine with optional interrupt checking callback
+    /// If interrupt_check returns true, returns error.Interrupted
+    pub fn readLineWithInterrupt(self: *QuicClientStream, max_size: usize, interrupt_check: ?*const fn () bool) ![]u8 {
         var temp_buf = try self.allocator.alloc(u8, max_size);
         defer self.allocator.free(temp_buf);
         var pos: usize = 0;
         var retry_count: usize = 0;
-        const max_retries: usize = 200; // Max 200 retries = ~1 second wait time for slow responses
+        const max_retries: usize = 20; // Max 20 retries = ~100ms, allows frequent interrupt checks
 
         while (pos < max_size) {
+            // Check for interrupt before each read attempt
+            if (interrupt_check) |check_fn| {
+                if (check_fn()) {
+                    return error.Interrupted;
+                }
+            }
+
             var byte: [1]u8 = undefined;
             const n = self.read(&byte) catch |err| {
                 // If we haven't read anything yet, propagate WouldBlock
@@ -649,7 +672,8 @@ pub const QuicClientStream = struct {
                 if (err == error.WouldBlock) {
                     retry_count += 1;
                     if (retry_count > max_retries) {
-                        // Timeout waiting for complete line
+                        // Timeout waiting for complete line - return WouldBlock so caller can check interrupts
+                        if (pos == 0) return error.WouldBlock;
                         return error.UnexpectedEndOfStream;
                     }
                     // Poll for incoming data and wait before retrying

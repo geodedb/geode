@@ -4265,6 +4265,10 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         .client_key_path = client_key_path,
     };
 
+    // CANARY: REQ=REQ-SHELL-INTERRUPT-012; FEATURE="SourceInterrupt"; ASPECT=SignalInstall; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+    // Install signal handlers for Ctrl+C detection before starting REPL
+    geode.repl.platform.installSignalHandlers();
+
     // Otherwise try to run the real REPL
     const options = repl_loop.ReplLoop.Options{
         .server = server,

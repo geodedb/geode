@@ -81,7 +81,8 @@ tests:
 
   - name: "migrate-empty-dir"
     description: "Migration with empty directory should report no migrations"
-    args: ["migrate", "status", "--dir", "/tmp"]
+    # Use test data directory which is empty of .gql files (only has .json fixtures)
+    args: ["migrate", "status", "--dir", "tests/fixtures/data"]
     expect:
       exit_code: 0
       stdout_contains:
