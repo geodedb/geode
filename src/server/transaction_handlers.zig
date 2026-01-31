@@ -88,6 +88,34 @@ fn getOrCreateMVCCManager(allocator: std.mem.Allocator) *@import("txn/mvcc.zig")
     return manager;
 }
 
+fn rollbackActiveTransaction(allocator: std.mem.Allocator, state: *ServerState) void {
+    if (state.active_txn == null) return;
+    var tx = state.active_txn.?;
+
+    // Abort MVCC transaction if still tracked
+    if (state.current_mvcc_txn) |mvcc_txn| {
+        state.mvcc_manager.?.abortTransaction(mvcc_txn) catch {};
+        state.current_mvcc_txn = null;
+    }
+
+    // Mark uncommitted inserts for this txn as aborted
+    var ia: usize = 0;
+    while (ia < state.inserted_values.items.len) : (ia += 1) {
+        if (state.inserted_values.items[ia].creator_txn == tx.id and state.inserted_values.items[ia].commit_ts == null) {
+            state.inserted_values.items[ia].aborted = true;
+        }
+    }
+
+    // Rollback undo log changes (if any)
+    const session_storage = getSessionGraphStorage(allocator, state);
+    const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
+    undo_log.rollbackGraphStorage(session_storage);
+
+    state.txn_manager.rollback(&tx);
+    state.active_txn = null;
+    state.in_txn = false;
+}
+
 /// Handle BEGIN transaction message
 /// Returns JSON response string (caller must free) or null if no response needed
 pub fn handleBegin(allocator: std.mem.Allocator, state: *ServerState) !?[]const u8 {
@@ -181,8 +209,7 @@ pub fn handleCommit(allocator: std.mem.Allocator, state: *ServerState, env_wal_c
 
                 // Clean up transaction state
                 state.current_mvcc_txn = null;
-                state.active_txn = null;
-                state.in_txn = false;
+                rollbackActiveTransaction(allocator, state);
                 return err_json;
             };
             state.current_mvcc_txn = null;
@@ -205,6 +232,7 @@ pub fn handleCommit(allocator: std.mem.Allocator, state: *ServerState, env_wal_c
             const result = try allocator.alloc(u8, json_str.len + 1);
             @memcpy(result[0..json_str.len], json_str);
             result[json_str.len] = '\n';
+            rollbackActiveTransaction(allocator, state);
             return result;
         };
 

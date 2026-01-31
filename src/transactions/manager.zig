@@ -209,7 +209,12 @@ pub const Manager = struct {
             return error.SerializationFailure;
         }
 
-        // Assign commit timestamp first (needed for phantom detection scanning window)
+        // Phantom detection before commit stamping
+        if (self.phantom_enabled) {
+            try self.detectPhantoms(txn);
+        }
+
+        // Assign commit timestamp
         txn.state = .Committed;
         txn.commit_ts = self.next_ts;
         self.next_ts += 1;
@@ -221,46 +226,15 @@ pub const Manager = struct {
             }
         }
 
-        // Phantom detection: if enabled, ensure no committed writes by other txns after our start inside any predicate prefix
-        if (self.phantom_enabled) {
-            if (self.predicates.get(txn.id)) |plist| {
-                for (plist.items) |prefix| {
-                    // scan writes
-                    for (self.writes.items) |w| {
-                        if (w.txn_id == txn.id) continue; // ignore own writes
-                        if (w.commit_ts == 0) continue; // not yet committed
-                        if (w.commit_ts <= txn.start_ts) continue; // pre-snapshot
-                        // simple prefix match
-                        if (std.mem.startsWith(u8, w.key, prefix)) {
-                            // rollback side-effects: mark aborted
-                            txn.state = .Aborted;
-                            return error.SerializationFailure; // treat phantom as serialization failure
-                        }
-                    }
-                }
-            }
-            // Range-based phantom detection (if tracker present)
-            if (self.rtracker) |*rt| {
-                // Scan writes for any key inside registered ranges for this txn
-                for (self.writes.items) |w| {
-                    if (w.txn_id == txn.id) continue;
-                    if (w.commit_ts == 0) continue;
-                    if (w.commit_ts <= txn.start_ts) continue;
-                    if (rt.keyInRanges(txn.id, w.key)) {
-                        txn.state = .Aborted;
-                        return error.SerializationFailure;
-                    }
-                }
-            }
-        }
-
         // Release all locks held by this transaction
         self.releaseAllLocks(txn.id);
 
         // Remove from conflict matrix
         self.conflict_matrix.removeConflicts(txn.id);
 
+        self.cleanupTxnTracking(txn.id);
         _ = self.active_txns.remove(txn.id);
+        self.pruneWrites();
     }
 
     pub fn rollback(self: *Manager, txn: *Txn) void {
@@ -272,7 +246,10 @@ pub const Manager = struct {
         // Remove from conflict matrix
         self.conflict_matrix.removeConflicts(txn.id);
 
+        self.cleanupTxnTracking(txn.id);
+        self.removeWritesForTxn(txn.id);
         _ = self.active_txns.remove(txn.id);
+        self.pruneWrites();
     }
 
     fn hasWriteWriteConflicts(self: *Manager, txn_id: TxnId) !bool {
@@ -414,6 +391,36 @@ pub const Manager = struct {
         };
     }
 
+    fn detectPhantoms(self: *Manager, txn: *Txn) !void {
+        if (self.predicates.get(txn.id)) |plist| {
+            for (plist.items) |prefix| {
+                for (self.writes.items) |w| {
+                    if (w.txn_id == txn.id) continue;
+                    if (w.commit_ts == 0) continue;
+                    if (w.commit_ts <= txn.start_ts) continue;
+                    if (std.mem.startsWith(u8, w.key, prefix)) {
+                        return error.SerializationFailure;
+                    }
+                }
+            }
+        }
+        if (self.rtracker) |*rt| {
+            for (self.writes.items) |w| {
+                if (w.txn_id == txn.id) continue;
+                if (w.commit_ts == 0) continue;
+                if (w.commit_ts <= txn.start_ts) continue;
+                if (rt.keyInRanges(txn.id, w.key)) {
+                    return error.SerializationFailure;
+                }
+            }
+        }
+    }
+
+    pub fn checkPhantoms(self: *Manager, txn: *Txn) !void {
+        if (!self.phantom_enabled) return;
+        return self.detectPhantoms(txn);
+    }
+
     fn addWaitFor(self: *Manager, waiter: TxnId, holder: TxnId) !void {
         const entry = try self.wait_for_graph.getOrPut(waiter);
         if (!entry.found_existing) {
@@ -428,7 +435,7 @@ pub const Manager = struct {
         try entry.value_ptr.append(self.allocator, holder);
     }
 
-    fn detectDeadlock(self: *Manager, start_txn: TxnId) !bool {
+    pub fn detectDeadlock(self: *Manager, start_txn: TxnId) !bool {
         var visited = std.AutoHashMap(TxnId, void).init(self.allocator);
         defer visited.deinit();
 
@@ -500,6 +507,14 @@ pub const Manager = struct {
         self.releaseLock(key, txn.id);
     }
 
+    pub fn unlock(self: *Manager, key: []const u8, txn_id: TxnId) void {
+        self.releaseLock(key, txn_id);
+    }
+
+    pub fn unlockAll(self: *Manager, txn_id: TxnId) void {
+        self.releaseAllLocks(txn_id);
+    }
+
     fn releaseLock(self: *Manager, key: []const u8, txn_id: TxnId) void {
         if (self.locks.getPtr(key)) |lock_list| {
             var i: usize = 0;
@@ -514,6 +529,54 @@ pub const Manager = struct {
                 } else {
                     i += 1;
                 }
+            }
+        }
+    }
+
+    fn cleanupTxnTracking(self: *Manager, txn_id: TxnId) void {
+        if (self.predicates.getPtr(txn_id)) |plist| {
+            for (plist.items) |p| self.allocator.free(p);
+            plist.deinit(self.allocator);
+            _ = self.predicates.remove(txn_id);
+        }
+        if (self.rtracker) |*rt| {
+            rt.clearTxn(txn_id);
+        }
+    }
+
+    fn removeWritesForTxn(self: *Manager, txn_id: TxnId) void {
+        var i: usize = 0;
+        while (i < self.writes.items.len) {
+            if (self.writes.items[i].txn_id == txn_id) {
+                self.allocator.free(self.writes.items[i].key);
+                _ = self.writes.swapRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    fn pruneWrites(self: *Manager) void {
+        if (self.writes.items.len == 0) return;
+        var min_start: Timestamp = self.next_ts;
+        var has_active = false;
+        var iter = self.active_txns.iterator();
+        while (iter.next()) |entry| {
+            has_active = true;
+            if (entry.value_ptr.start_ts < min_start) {
+                min_start = entry.value_ptr.start_ts;
+            }
+        }
+        var i: usize = 0;
+        while (i < self.writes.items.len) {
+            const w = self.writes.items[i];
+            const inactive_uncommitted = (w.commit_ts == 0) and !self.active_txns.contains(w.txn_id);
+            const eligible_committed = w.commit_ts != 0 and (!has_active or w.commit_ts <= min_start);
+            if (inactive_uncommitted or eligible_committed) {
+                self.allocator.free(w.key);
+                _ = self.writes.swapRemove(i);
+            } else {
+                i += 1;
             }
         }
     }
@@ -677,4 +740,57 @@ test "txn manager: serialization failure on commit" {
     // But since T1 already failed, we'll test with a new transaction
     var t3 = mgr.begin();
     try mgr.commit(&t3);
+}
+
+test "txn manager: rollback cleans writes and ranges" {
+    var mgr: Manager = undefined;
+    mgr.init(std.testing.allocator);
+    defer mgr.deinit();
+    mgr.enablePhantomPrevention();
+
+    var t1 = mgr.begin();
+    try mgr.predicateRead(&t1, "user:");
+    try mgr.rangeRead(&t1, "a", "z");
+    mgr.recordWrite("user:1", &t1);
+
+    try std.testing.expectEqual(@as(usize, 1), mgr.writes.items.len);
+    mgr.rollback(&t1);
+    try std.testing.expectEqual(@as(usize, 0), mgr.writes.items.len);
+    try std.testing.expect(!mgr.predicates.contains(t1.id));
+    if (mgr.rtracker) |*rt| {
+        try std.testing.expect(!rt.keyInRanges(t1.id, "m"));
+    }
+}
+
+test "txn manager: phantom conflict does not commit writes" {
+    var mgr: Manager = undefined;
+    mgr.init(std.testing.allocator);
+    defer mgr.deinit();
+    mgr.enablePhantomPrevention();
+
+    var t1 = mgr.begin();
+    try mgr.predicateRead(&t1, "k");
+    mgr.recordWrite("k-local", &t1);
+
+    var t2 = mgr.begin();
+    mgr.recordWrite("k-other", &t2);
+    try mgr.commit(&t2);
+
+    try std.testing.expectError(error.SerializationFailure, mgr.commit(&t1));
+    mgr.rollback(&t1);
+
+    for (mgr.writes.items) |w| {
+        try std.testing.expect(w.txn_id != t1.id);
+    }
+}
+
+test "txn manager: commit prunes writes when no active transactions" {
+    var mgr: Manager = undefined;
+    mgr.init(std.testing.allocator);
+    defer mgr.deinit();
+
+    var t1 = mgr.begin();
+    mgr.recordWrite("k1", &t1);
+    try mgr.commit(&t1);
+    try std.testing.expectEqual(@as(usize, 0), mgr.writes.items.len);
 }

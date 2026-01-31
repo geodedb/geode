@@ -128,7 +128,8 @@ pub const TransactionManager = struct {
     ///
     /// CANARY: REQ=REQ-M7.2-TXN-MANAGER-010; FEATURE="Begin Transaction"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_transaction_manager.yml; OWNER=core; UPDATED=2026-01-25
     pub fn begin(self: *TransactionManager) !TxnId {
-        return self.mgr.begin();
+        const txn = self.mgr.begin();
+        return txn.id;
     }
 
     /// Commit a transaction
@@ -141,14 +142,16 @@ pub const TransactionManager = struct {
             try wal.flushUpToFn(lsn);
         }
 
-        return self.mgr.commit(txn_id);
+        const txn = self.mgr.active_txns.getPtr(txn_id) orelse return error.InvalidTransaction;
+        return self.mgr.commit(txn);
     }
 
     /// Abort a transaction
     ///
     /// CANARY: REQ=REQ-M7.2-TXN-MANAGER-012; FEATURE="Abort Transaction"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_transaction_manager.yml; OWNER=core; UPDATED=2026-01-25
     pub fn abort(self: *TransactionManager, txn_id: TxnId) !void {
-        return self.mgr.abort(txn_id);
+        const txn = self.mgr.active_txns.getPtr(txn_id) orelse return error.InvalidTransaction;
+        self.mgr.rollback(txn);
     }
 
     /// Get transaction state
@@ -174,7 +177,8 @@ pub const TransactionManager = struct {
         key: []const u8,
         mode: LockMode,
     ) !void {
-        return self.mgr.lock(txn_id, key, mode);
+        const txn = self.mgr.active_txns.getPtr(txn_id) orelse return error.InvalidTransaction;
+        return self.mgr.acquireLock(key, txn, mode, self.allocator);
     }
 
     /// Release a lock on a key
@@ -185,7 +189,7 @@ pub const TransactionManager = struct {
         txn_id: TxnId,
         key: []const u8,
     ) !void {
-        return self.mgr.unlock(txn_id, key);
+        self.mgr.unlock(key, txn_id);
     }
 
     /// Release all locks held by a transaction
@@ -203,7 +207,7 @@ pub const TransactionManager = struct {
     ///
     /// CANARY: REQ=REQ-M7.2-TXN-MANAGER-017; FEATURE="Deadlock Detection"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_transaction_manager.yml; OWNER=core; UPDATED=2026-01-25
     pub fn detectDeadlock(self: *TransactionManager, txn_id: TxnId) bool {
-        return self.mgr.detectCycle(txn_id);
+        return self.mgr.detectDeadlock(txn_id) catch false;
     }
 
     /// Add conflict between transactions
@@ -282,7 +286,8 @@ pub const TransactionManager = struct {
         predicate: []const u8,
     ) !void {
         if (!self.enable_phantom_prevention) return;
-        return self.mgr.trackPredicate(txn_id, predicate);
+        const txn = self.mgr.active_txns.getPtr(txn_id) orelse return error.InvalidTransaction;
+        return self.mgr.predicateRead(txn, predicate);
     }
 
     /// Check for phantom reads
@@ -290,7 +295,8 @@ pub const TransactionManager = struct {
     /// CANARY: REQ=REQ-M7.2-TXN-MANAGER-025; FEATURE="Phantom Detection"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_transaction_manager.yml; OWNER=core; UPDATED=2026-01-25
     pub fn checkPhantoms(self: *TransactionManager, txn_id: TxnId) !void {
         if (!self.enable_phantom_prevention) return;
-        return self.mgr.checkPhantoms(txn_id);
+        const txn = self.mgr.active_txns.getPtr(txn_id) orelse return error.InvalidTransaction;
+        return self.mgr.checkPhantoms(txn);
     }
 
     // ========================================================================

@@ -1,6 +1,6 @@
 # Gap Analysis
 
-**Last Updated**: January 30, 2026
+**Last Updated**: January 31, 2026
 **Verified By**: Requirements-to-Unit-Test Gap Analysis Audit
 **GitLab Source of Truth**: <https://gitlab.com/devnw/codepros/geode/geode/-/issues?label_name=gap>
 
@@ -13,7 +13,86 @@
 | Documentation | 0 | - |
 | **Total Open Gaps** | **0** | |
 
-**All gaps closed as of January 30, 2026.**
+**All gaps closed as of January 31, 2026.**
+
+---
+
+## Recently Closed Gaps (January 31, 2026)
+
+### GAP-0249: MVCC lock table updates lost under contention
+
+- **Status:** ✅ **CLOSED**
+- **Category:** Test
+- **Resolution:** Fixed lock acquisition to mutate the lock table in-place; added unit tests to assert lock table size and conflict handling.
+- **Changes made:**
+  - `src/server/txn/mvcc.zig` - Use `getOrPut` + value pointers for lock tracking
+  - Added unit tests to validate lock table state on conflicts
+
+---
+
+### GAP-0250: MVCC commits did not persist versions
+
+- **Status:** ✅ **CLOSED**
+- **Category:** Test
+- **Resolution:** Fixed version-chain updates to mutate the stored map entry; added unit tests to verify read-after-commit.
+- **Changes made:**
+  - `src/server/txn/mvcc.zig` - Use `getOrPut` + value pointers for version chains
+  - Added unit tests for commit persistence
+
+---
+
+### GAP-0251: MVCC transaction cleanup leaked allocations
+
+- **Status:** ✅ **CLOSED**
+- **Category:** Test
+- **Resolution:** Destroy MVCC transactions on commit/abort and during manager deinit; added unit tests to ensure no leaks on commit failure.
+- **Changes made:**
+  - `src/server/txn/mvcc.zig` - Cleanup on commit/abort and deinit
+  - Added unit tests for commit failure cleanup
+
+---
+
+### GAP-0252: Commit failure paths left active transactions and undo logs
+
+- **Status:** ✅ **CLOSED**
+- **Category:** Test
+- **Resolution:** Added rollback/undo cleanup on commit failures, and stopped autocommit paths from swallowing errors.
+- **Changes made:**
+  - `src/server/transaction_handlers.zig` - Rollback/undo on commit error
+  - `src/server/query_executor.zig` - Autocommit failure handling
+
+---
+
+### GAP-0253: Phantom detection could mark failed transactions as committed
+
+- **Status:** ✅ **CLOSED**
+- **Category:** Test
+- **Resolution:** Reordered commit flow so phantom checks happen before commit timestamp stamping; added tests for phantom conflict cleanup.
+- **Changes made:**
+  - `src/transactions/manager.zig` - Phantom checks before commit stamping
+  - Added unit tests for phantom conflict behavior
+
+---
+
+### GAP-0254: Transaction write history grew without pruning
+
+- **Status:** ✅ **CLOSED**
+- **Category:** Test
+- **Resolution:** Added write-history pruning and rollback cleanup for aborted transactions to prevent unbounded growth.
+- **Changes made:**
+  - `src/transactions/manager.zig` - Prune committed writes and remove aborted writes
+  - Added unit tests for rollback cleanup
+
+---
+
+### GAP-0255: Undo log persistence dropped complex entries
+
+- **Status:** ✅ **CLOSED**
+- **Category:** Test
+- **Resolution:** Implemented full serialization/deserialization for all undo entry types; added roundtrip persistence tests.
+- **Changes made:**
+  - `src/txn_undo_log.zig` - Complete binary encode/decode
+  - Added unit tests for persistence roundtrips
 
 ---
 

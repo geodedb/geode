@@ -510,6 +510,52 @@ pub fn saveUndoLog(allocator: std.mem.Allocator, log: *UndoLog) !void {
     }
 }
 
+fn writeU32(file: std.fs.File, value: u32) !void {
+    var buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &buf, value, .little);
+    _ = try file.write(&buf);
+}
+
+fn writeU64(file: std.fs.File, value: u64) !void {
+    var buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &buf, value, .little);
+    _ = try file.write(&buf);
+}
+
+fn writeI64(file: std.fs.File, value: i64) !void {
+    var buf: [8]u8 = undefined;
+    std.mem.writeInt(i64, &buf, value, .little);
+    _ = try file.write(&buf);
+}
+
+fn writeF64(file: std.fs.File, value: f64) !void {
+    const bits: u64 = @bitCast(value);
+    try writeU64(file, bits);
+}
+
+fn writeBool(file: std.fs.File, value: bool) !void {
+    const byte: u8 = if (value) 1 else 0;
+    _ = try file.write(&[_]u8{byte});
+}
+
+fn writeString(file: std.fs.File, value: []const u8) !void {
+    try writeU32(file, @intCast(value.len));
+    _ = try file.write(value);
+}
+
+fn writeSerializedProperty(file: std.fs.File, prop: SerializedProperty) !void {
+    try writeString(file, prop.key);
+    _ = try file.write(&[_]u8{prop.value_type});
+    switch (prop.value_type) {
+        0 => {},
+        1 => try writeString(file, prop.string_value orelse ""),
+        2 => try writeI64(file, prop.int_value),
+        3 => try writeF64(file, prop.float_value),
+        4 => try writeBool(file, prop.bool_value),
+        else => {},
+    }
+}
+
 fn writeUndoEntry(file: std.fs.File, entry: UndoEntry) !void {
     // Write entry type
     const entry_type: u8 = @intFromEnum(std.meta.activeTag(entry));
@@ -517,28 +563,63 @@ fn writeUndoEntry(file: std.fs.File, entry: UndoEntry) !void {
 
     switch (entry) {
         .CreateNode => |e| {
-            var buf: [8]u8 = undefined;
-            std.mem.writeInt(u64, &buf, e.node_id, .little);
-            _ = try file.write(&buf);
-            // Write graph_name length and content
-            var len_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &len_buf, @intCast(e.graph_name.len), .little);
-            _ = try file.write(&len_buf);
-            _ = try file.write(e.graph_name);
+            try writeU64(file, e.node_id);
+            try writeString(file, e.graph_name);
         },
         .CreateEdge => |e| {
-            var buf: [8]u8 = undefined;
-            std.mem.writeInt(u64, &buf, e.edge_id, .little);
-            _ = try file.write(&buf);
-            // Write graph_name length and content
-            var len_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &len_buf, @intCast(e.graph_name.len), .little);
-            _ = try file.write(&len_buf);
-            _ = try file.write(e.graph_name);
+            try writeU64(file, e.edge_id);
+            try writeString(file, e.graph_name);
         },
-        else => {
-            // For complex entries, we'll use a simplified approach
-            // In a production system, you'd serialize all fields
+        .SetNodeProperty => |e| {
+            try writeU64(file, e.node_id);
+            try writeString(file, e.key);
+            try writeBool(file, e.had_old_value);
+            try writeSerializedProperty(file, e.old_value);
+        },
+        .RemoveNodeProperty => |e| {
+            try writeU64(file, e.node_id);
+            try writeSerializedProperty(file, e.old_value);
+        },
+        .SetEdgeProperty => |e| {
+            try writeU64(file, e.edge_id);
+            try writeString(file, e.key);
+            try writeBool(file, e.had_old_value);
+            try writeSerializedProperty(file, e.old_value);
+        },
+        .RemoveEdgeProperty => |e| {
+            try writeU64(file, e.edge_id);
+            try writeSerializedProperty(file, e.old_value);
+        },
+        .DeleteNode => |e| {
+            try writeU64(file, e.node_id);
+            try writeU32(file, @intCast(e.labels.len));
+            for (e.labels) |label| {
+                try writeString(file, label);
+            }
+            try writeU32(file, @intCast(e.properties.len));
+            for (e.properties) |prop| {
+                try writeSerializedProperty(file, prop);
+            }
+            try writeString(file, e.graph_name);
+        },
+        .DeleteEdge => |e| {
+            try writeU64(file, e.edge_id);
+            try writeU64(file, e.from_id);
+            try writeU64(file, e.to_id);
+            try writeString(file, e.label);
+            try writeU32(file, @intCast(e.properties.len));
+            for (e.properties) |prop| {
+                try writeSerializedProperty(file, prop);
+            }
+            try writeString(file, e.graph_name);
+        },
+        .AddNodeLabel => |e| {
+            try writeU64(file, e.node_id);
+            try writeString(file, e.label);
+        },
+        .RemoveNodeLabel => |e| {
+            try writeU64(file, e.node_id);
+            try writeString(file, e.label);
         },
     }
 }
@@ -575,6 +656,67 @@ pub fn loadUndoLog(allocator: std.mem.Allocator) !?*UndoLog {
     return log;
 }
 
+fn readU32(file: std.fs.File) !u32 {
+    var buf: [4]u8 = undefined;
+    try file.reader().readNoEof(&buf);
+    return std.mem.readInt(u32, &buf, .little);
+}
+
+fn readU64(file: std.fs.File) !u64 {
+    var buf: [8]u8 = undefined;
+    try file.reader().readNoEof(&buf);
+    return std.mem.readInt(u64, &buf, .little);
+}
+
+fn readI64(file: std.fs.File) !i64 {
+    var buf: [8]u8 = undefined;
+    try file.reader().readNoEof(&buf);
+    return std.mem.readInt(i64, &buf, .little);
+}
+
+fn readF64(file: std.fs.File) !f64 {
+    const bits = try readU64(file);
+    return @bitCast(bits);
+}
+
+fn readBool(file: std.fs.File) !bool {
+    var buf: [1]u8 = undefined;
+    try file.reader().readNoEof(&buf);
+    return buf[0] != 0;
+}
+
+fn readString(allocator: std.mem.Allocator, file: std.fs.File) ![]u8 {
+    const len = try readU32(file);
+    const buf = try allocator.alloc(u8, len);
+    try file.reader().readNoEof(buf);
+    return buf;
+}
+
+fn readSerializedProperty(allocator: std.mem.Allocator, file: std.fs.File) !SerializedProperty {
+    const key = try readString(allocator, file);
+    var type_buf: [1]u8 = undefined;
+    try file.reader().readNoEof(&type_buf);
+    const value_type = type_buf[0];
+    var prop = SerializedProperty{ .key = key, .value_type = value_type };
+    switch (value_type) {
+        0 => {},
+        1 => {
+            prop.string_value = try readString(allocator, file);
+        },
+        2 => {
+            prop.int_value = try readI64(file);
+        },
+        3 => {
+            prop.float_value = try readF64(file);
+        },
+        4 => {
+            prop.bool_value = try readBool(file);
+        },
+        else => {},
+    }
+    return prop;
+}
+
 fn readUndoEntry(allocator: std.mem.Allocator, file: std.fs.File) !?UndoEntry {
     var type_buf: [1]u8 = undefined;
     const bytes_read = try file.read(&type_buf);
@@ -584,32 +726,107 @@ fn readUndoEntry(allocator: std.mem.Allocator, file: std.fs.File) !?UndoEntry {
 
     switch (entry_type) {
         .CreateNode => {
-            var buf: [8]u8 = undefined;
-            _ = try file.read(&buf);
-            const node_id = std.mem.readInt(u64, &buf, .little);
-            // Read graph_name length and content
-            var len_buf: [4]u8 = undefined;
-            _ = try file.read(&len_buf);
-            const name_len = std.mem.readInt(u32, &len_buf, .little);
-            const graph_name = try allocator.alloc(u8, name_len);
-            _ = try file.read(graph_name);
+            const node_id = try readU64(file);
+            const graph_name = try readString(allocator, file);
             return .{ .CreateNode = .{ .node_id = node_id, .graph_name = graph_name } };
         },
         .CreateEdge => {
-            var buf: [8]u8 = undefined;
-            _ = try file.read(&buf);
-            const edge_id = std.mem.readInt(u64, &buf, .little);
-            // Read graph_name length and content
-            var len_buf: [4]u8 = undefined;
-            _ = try file.read(&len_buf);
-            const name_len = std.mem.readInt(u32, &len_buf, .little);
-            const graph_name = try allocator.alloc(u8, name_len);
-            _ = try file.read(graph_name);
+            const edge_id = try readU64(file);
+            const graph_name = try readString(allocator, file);
             return .{ .CreateEdge = .{ .edge_id = edge_id, .graph_name = graph_name } };
         },
-        else => {
-            // For complex entries, skip for now
-            return null;
+        .SetNodeProperty => {
+            const node_id = try readU64(file);
+            const key = try readString(allocator, file);
+            const had_old_value = try readBool(file);
+            const old_value = try readSerializedProperty(allocator, file);
+            return .{ .SetNodeProperty = .{
+                .node_id = node_id,
+                .key = key,
+                .had_old_value = had_old_value,
+                .old_value = old_value,
+            } };
+        },
+        .RemoveNodeProperty => {
+            const node_id = try readU64(file);
+            const old_value = try readSerializedProperty(allocator, file);
+            return .{ .RemoveNodeProperty = .{
+                .node_id = node_id,
+                .old_value = old_value,
+            } };
+        },
+        .SetEdgeProperty => {
+            const edge_id = try readU64(file);
+            const key = try readString(allocator, file);
+            const had_old_value = try readBool(file);
+            const old_value = try readSerializedProperty(allocator, file);
+            return .{ .SetEdgeProperty = .{
+                .edge_id = edge_id,
+                .key = key,
+                .had_old_value = had_old_value,
+                .old_value = old_value,
+            } };
+        },
+        .RemoveEdgeProperty => {
+            const edge_id = try readU64(file);
+            const old_value = try readSerializedProperty(allocator, file);
+            return .{ .RemoveEdgeProperty = .{
+                .edge_id = edge_id,
+                .old_value = old_value,
+            } };
+        },
+        .DeleteNode => {
+            const node_id = try readU64(file);
+            const label_count = try readU32(file);
+            const labels = try allocator.alloc([]const u8, label_count);
+            for (labels, 0..) |*slot, idx| {
+                _ = idx;
+                slot.* = try readString(allocator, file);
+            }
+            const prop_count = try readU32(file);
+            const props = try allocator.alloc(SerializedProperty, prop_count);
+            for (props, 0..) |*slot, idx| {
+                _ = idx;
+                slot.* = try readSerializedProperty(allocator, file);
+            }
+            const graph_name = try readString(allocator, file);
+            return .{ .DeleteNode = .{
+                .node_id = node_id,
+                .labels = labels,
+                .properties = props,
+                .graph_name = graph_name,
+            } };
+        },
+        .DeleteEdge => {
+            const edge_id = try readU64(file);
+            const from_id = try readU64(file);
+            const to_id = try readU64(file);
+            const label = try readString(allocator, file);
+            const prop_count = try readU32(file);
+            const props = try allocator.alloc(SerializedProperty, prop_count);
+            for (props, 0..) |*slot, idx| {
+                _ = idx;
+                slot.* = try readSerializedProperty(allocator, file);
+            }
+            const graph_name = try readString(allocator, file);
+            return .{ .DeleteEdge = .{
+                .edge_id = edge_id,
+                .from_id = from_id,
+                .to_id = to_id,
+                .label = label,
+                .properties = props,
+                .graph_name = graph_name,
+            } };
+        },
+        .AddNodeLabel => {
+            const node_id = try readU64(file);
+            const label = try readString(allocator, file);
+            return .{ .AddNodeLabel = .{ .node_id = node_id, .label = label } };
+        },
+        .RemoveNodeLabel => {
+            const node_id = try readU64(file);
+            const label = try readString(allocator, file);
+            return .{ .RemoveNodeLabel = .{ .node_id = node_id, .label = label } };
         },
     }
 }
@@ -647,4 +864,103 @@ test "basic undo log operations" {
     log.commit();
     try std.testing.expectEqual(@as(usize, 0), log.entries.items.len);
     try std.testing.expect(!log.active);
+}
+
+test "undo log persistence roundtrip for complex entries" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const file = try tmp.dir.createFile("undo.bin", .{ .read = true, .truncate = true });
+    defer file.close();
+
+    const labels = [_][]const u8{ "Person", "Active" };
+    const props = [_]SerializedProperty{
+        .{ .key = "name", .value_type = 1, .string_value = "Ada" },
+        .{ .key = "age", .value_type = 2, .int_value = 42 },
+    };
+
+    const entry1 = UndoEntry{ .SetNodeProperty = .{
+        .node_id = 1,
+        .key = "name",
+        .had_old_value = true,
+        .old_value = props[0],
+    } };
+    const entry2 = UndoEntry{ .DeleteNode = .{
+        .node_id = 7,
+        .labels = labels[0..],
+        .properties = props[0..],
+        .graph_name = "g",
+    } };
+    const entry3 = UndoEntry{ .DeleteEdge = .{
+        .edge_id = 9,
+        .from_id = 1,
+        .to_id = 2,
+        .label = "KNOWS",
+        .properties = props[1..2],
+        .graph_name = "g",
+    } };
+    const entry4 = UndoEntry{ .AddNodeLabel = .{
+        .node_id = 3,
+        .label = "VIP",
+    } };
+
+    try writeUndoEntry(file, entry1);
+    try writeUndoEntry(file, entry2);
+    try writeUndoEntry(file, entry3);
+    try writeUndoEntry(file, entry4);
+
+    try file.seekTo(0);
+
+    var log = UndoLog.init(allocator);
+    defer log.deinit();
+
+    const r1 = (try readUndoEntry(allocator, file)).?;
+    try log.entries.append(allocator, r1);
+    switch (r1) {
+        .SetNodeProperty => |e| {
+            try std.testing.expectEqual(@as(u64, 1), e.node_id);
+            try std.testing.expectEqualStrings("name", e.key);
+            try std.testing.expect(e.had_old_value);
+            try std.testing.expectEqual(@as(u8, 1), e.old_value.value_type);
+            try std.testing.expectEqualStrings("Ada", e.old_value.string_value.?);
+        },
+        else => try std.testing.expect(false),
+    }
+
+    const r2 = (try readUndoEntry(allocator, file)).?;
+    try log.entries.append(allocator, r2);
+    switch (r2) {
+        .DeleteNode => |e| {
+            try std.testing.expectEqual(@as(u64, 7), e.node_id);
+            try std.testing.expectEqual(@as(usize, 2), e.labels.len);
+            try std.testing.expectEqualStrings("Person", e.labels[0]);
+            try std.testing.expectEqualStrings("Active", e.labels[1]);
+            try std.testing.expectEqual(@as(usize, 2), e.properties.len);
+            try std.testing.expectEqualStrings("name", e.properties[0].key);
+            try std.testing.expectEqualStrings("g", e.graph_name);
+        },
+        else => try std.testing.expect(false),
+    }
+
+    const r3 = (try readUndoEntry(allocator, file)).?;
+    try log.entries.append(allocator, r3);
+    switch (r3) {
+        .DeleteEdge => |e| {
+            try std.testing.expectEqual(@as(u64, 9), e.edge_id);
+            try std.testing.expectEqualStrings("KNOWS", e.label);
+            try std.testing.expectEqual(@as(usize, 1), e.properties.len);
+        },
+        else => try std.testing.expect(false),
+    }
+
+    const r4 = (try readUndoEntry(allocator, file)).?;
+    try log.entries.append(allocator, r4);
+    switch (r4) {
+        .AddNodeLabel => |e| {
+            try std.testing.expectEqual(@as(u64, 3), e.node_id);
+            try std.testing.expectEqualStrings("VIP", e.label);
+        },
+        else => try std.testing.expect(false),
+    }
 }

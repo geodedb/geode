@@ -1293,7 +1293,13 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
     // Commit if autocommit
     if (started_auto) {
         if (state.active_txn) |*txc| {
-            state.txn_manager.commit(txc) catch {};
+            state.txn_manager.commit(txc) catch |err| {
+                state.txn_manager.rollback(txc);
+                state.active_txn = null;
+                // Undo auto-transaction changes on commit failure
+                undo_log.rollbackGraphStorage(graph);
+                return err;
+            };
             state.global_commit_ts += 1;
             state.active_txn = null;
             // Clear undo log on successful auto-commit
@@ -1370,7 +1376,11 @@ fn executeDeleteStatement(allocator: std.mem.Allocator, state: *ServerState, stm
     // Commit if autocommit
     if (started_auto) {
         if (state.active_txn) |*txc| {
-            state.txn_manager.commit(txc) catch {};
+            state.txn_manager.commit(txc) catch |err| {
+                state.txn_manager.rollback(txc);
+                state.active_txn = null;
+                return err;
+            };
             state.global_commit_ts += 1;
             state.active_txn = null;
         }
@@ -1457,7 +1467,11 @@ fn executeMergeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt
     // Commit if autocommit
     if (started_auto) {
         if (state.active_txn) |*txc| {
-            state.txn_manager.commit(txc) catch {};
+            state.txn_manager.commit(txc) catch |err| {
+                state.txn_manager.rollback(txc);
+                state.active_txn = null;
+                return err;
+            };
             state.global_commit_ts += 1;
             state.active_txn = null;
         }

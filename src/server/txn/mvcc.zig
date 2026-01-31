@@ -149,12 +149,11 @@ pub const LockManager = struct {
 
     // Request a lock
     pub fn requestLock(self: *LockManager, txn: *Transaction, resource_id: u64, mode: LockMode) !bool {
-        // Check for lock compatibility
-        var requests = self.lock_table.get(resource_id) orelse blk: {
-            const list = std.ArrayList(LockRequest).empty;
-            try self.lock_table.put(resource_id, list);
-            break :blk self.lock_table.get(resource_id).?;
-        };
+        const entry = try self.lock_table.getOrPut(resource_id);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = std.ArrayList(LockRequest).empty;
+        }
+        const requests = entry.value_ptr;
 
         // Check if we already hold a lock on this resource
         for (requests.items) |req| {
@@ -317,6 +316,11 @@ pub const MVCCManager = struct {
     }
 
     pub fn deinit(self: *MVCCManager) void {
+        var txn_iter = self.active_transactions.iterator();
+        while (txn_iter.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
         self.active_transactions.deinit();
         self.lock_manager.deinit();
 
@@ -459,6 +463,7 @@ pub const MVCCManager = struct {
         if (txn.state != .Active) {
             return error.InvalidTransactionState;
         }
+        errdefer self.abortTransaction(txn) catch {};
 
         txn.state = .Committing;
 
@@ -482,13 +487,11 @@ pub const MVCCManager = struct {
         self.current_timestamp += 1;
 
         for (txn.write_set.items) |write_op| {
-            var version_chain = self.versions.get(write_op.resource_id) orelse blk: {
-                const chain = std.ArrayList(Version).empty;
-                try self.versions.put(write_op.resource_id, chain);
-                break :blk self.versions.get(write_op.resource_id).?;
-            };
-
-            try version_chain.append(self.allocator, .{
+            const entry = try self.versions.getOrPut(write_op.resource_id);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = std.ArrayList(Version).empty;
+            }
+            try entry.value_ptr.append(self.allocator, .{
                 .timestamp = commit_timestamp,
                 .txn_id = txn.id,
                 .data = write_op.new_value,
@@ -508,6 +511,8 @@ pub const MVCCManager = struct {
 
         // Remove from active transactions
         _ = self.active_transactions.remove(txn.id);
+        txn.deinit();
+        self.allocator.destroy(txn);
     }
 
     pub fn abortTransaction(self: *MVCCManager, txn: *Transaction) !void {
@@ -528,6 +533,8 @@ pub const MVCCManager = struct {
 
         // Remove from active transactions
         _ = self.active_transactions.remove(txn.id);
+        txn.deinit();
+        self.allocator.destroy(txn);
     }
 
     // Garbage collection of old versions
@@ -706,3 +713,51 @@ pub const MVCCManager = struct {
         return true;
     }
 };
+
+test "mvcc lock manager records requests" {
+    var mgr = MVCCManager.init(std.testing.allocator);
+    defer mgr.deinit();
+
+    var t1 = try mgr.beginTransaction(.SnapshotIsolation);
+    var t2 = try mgr.beginTransaction(.SnapshotIsolation);
+
+    try std.testing.expect(try mgr.lock_manager.requestLock(t1, 1, .Exclusive));
+    try std.testing.expect(!(try mgr.lock_manager.requestLock(t2, 1, .Shared)));
+
+    const requests = mgr.lock_manager.lock_table.get(1).?;
+    try std.testing.expectEqual(@as(usize, 2), requests.items.len);
+
+    try mgr.abortTransaction(t1);
+    try mgr.abortTransaction(t2);
+}
+
+test "mvcc commit persists versions" {
+    var mgr = MVCCManager.init(std.testing.allocator);
+    defer mgr.deinit();
+
+    var t1 = try mgr.beginTransaction(.SnapshotIsolation);
+    try mgr.write(t1, 1, "v1");
+    try mgr.commitTransaction(t1);
+
+    var t2 = try mgr.beginTransaction(.SnapshotIsolation);
+    const val = try mgr.read(t2, 1);
+    try std.testing.expect(val != null);
+    try std.testing.expectEqualStrings("v1", val.?);
+    try mgr.abortTransaction(t2);
+}
+
+test "mvcc commit failure cleans up transaction" {
+    var mgr = MVCCManager.init(std.testing.allocator);
+    defer mgr.deinit();
+
+    var t1 = try mgr.beginTransaction(.Serializable);
+    _ = try mgr.read(t1, 1);
+
+    var t2 = try mgr.beginTransaction(.SnapshotIsolation);
+    try mgr.write(t2, 1, "v2");
+    try mgr.commitTransaction(t2);
+
+    const t1_id = t1.id;
+    try std.testing.expectError(error.SerializationFailure, mgr.commitTransaction(t1));
+    try std.testing.expect(!mgr.active_transactions.contains(t1_id));
+}

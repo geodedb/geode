@@ -66,6 +66,17 @@ pub const RangeTracker = struct {
         }
         return false;
     }
+
+    pub fn clearTxn(self: *RangeTracker, txn_id: u64) void {
+        if (self.map.getPtr(txn_id)) |list| {
+            for (list.items) |e| {
+                self.allocator.free(e.range.low);
+                self.allocator.free(e.range.high);
+            }
+            list.deinit(self.allocator);
+            _ = self.map.remove(txn_id);
+        }
+    }
 };
 
 test "range tracker basic register & query" {
