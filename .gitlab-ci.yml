@@ -325,7 +325,21 @@ test-macos-unit:
   stage: test
   tags:
     - saas-macos-medium-m1
+  variables:
+    # Disable git credential storage to avoid Keychain errors on macOS runners
+    GIT_CONFIG_COUNT: 3
+    GIT_CONFIG_KEY_0: "credential.helper"
+    GIT_CONFIG_VALUE_0: ""
+    GIT_CONFIG_KEY_1: "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/.insteadOf"
+    GIT_CONFIG_VALUE_1: "https://gitlab.com/"
+    GIT_CONFIG_KEY_2: "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/.insteadOf"
+    GIT_CONFIG_VALUE_2: "git+https://gitlab.com/"
   before_script:
+    # Configure git to use CI token for gitlab.com and disable credential storage
+    - |
+      git config --global credential.helper ""
+      git config --global "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/.insteadOf" "https://gitlab.com/"
+      git config --global "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/.insteadOf" "git+https://gitlab.com/"
     # Download and install Zig on macOS (Apple Silicon)
     - |
       ZIG_VERSION="0.15.2"

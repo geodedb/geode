@@ -100,7 +100,7 @@ pub fn installSignalHandlers() void {
         // POSIX: Use sigaction for SIGINT
         var sa: std.posix.Sigaction = .{
             .handler = .{ .handler = posixSigintHandler },
-            .mask = @splat(0), // Empty signal mask
+            .mask = std.mem.zeroes(std.posix.sigset_t), // Empty signal mask (cross-platform)
             .flags = 0,
         };
         _ = std.posix.sigaction(std.posix.SIG.INT, &sa, null);
@@ -114,7 +114,7 @@ pub fn restoreSignalHandlers() void {
     } else {
         var sa: std.posix.Sigaction = .{
             .handler = .{ .handler = std.posix.SIG.DFL },
-            .mask = @splat(0), // Empty signal mask
+            .mask = std.mem.zeroes(std.posix.sigset_t), // Empty signal mask (cross-platform)
             .flags = 0,
         };
         _ = std.posix.sigaction(std.posix.SIG.INT, &sa, null);
