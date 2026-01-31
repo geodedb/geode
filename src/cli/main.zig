@@ -288,6 +288,8 @@ fn quicWriteAll(self: *repl_dispatch.TransportConnection, data: []const u8) !voi
     };
 }
 
+// CANARY: REQ=REQ-SHELL-INTERRUPT-049; FEATURE="SourceInterrupt"; ASPECT=QuicReadLineInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+// Added interrupt checking during QUIC read polling to allow Ctrl+C cancellation
 fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
     const ctx = self.context orelse return error.NotConnected;
     const impl: *QuicTransportConnection = @ptrCast(@alignCast(ctx));
@@ -296,6 +298,12 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
     const start = std.time.milliTimestamp();
     const timeout_ms: i64 = 30000; // 30 second timeout for REPL
     while (true) {
+        // CANARY: REQ=REQ-SHELL-INTERRUPT-050; FEATURE="SourceInterrupt"; ASPECT=QuicReadLineInterruptCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+        // Check for Ctrl+C interrupt during polling to allow cancellation of long-running operations
+        if (repl_dispatch.checkForInterrupt()) {
+            return error.Interrupted;
+        }
+
         const line = impl.stream.readLine(max_size) catch |err| {
             if (err == error.WouldBlock or err == error.EndOfStream) {
                 if (std.time.milliTimestamp() - start >= timeout_ms) return err;

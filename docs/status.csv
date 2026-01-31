@@ -3688,6 +3688,8 @@ REQ-SHELL-INTERRUPT-047,SourceInterrupt,SearchSigintCheck,IMPL,,,cli,2026-01-30,
 REQ-SHELL-INTERRUPT-047,SourceInterrupt,SearchSigintTests,TESTED,,,cli,2026-01-30,tests/test_repl.zig
 REQ-SHELL-INTERRUPT-048,SourceInterrupt,PollBasedInputTests,TESTED,,,cli,2026-01-30,tests/test_repl.zig
 REQ-SHELL-INTERRUPT-048,SourceInterrupt,PollForInput,IMPL,,,cli,2026-01-30,src/client/repl/repl_loop.zig
+REQ-SHELL-INTERRUPT-049,SourceInterrupt,QuicReadLineInterrupt,IMPL,,,cli,2026-01-30,src/cli/main.zig
+REQ-SHELL-INTERRUPT-050,SourceInterrupt,QuicReadLineInterruptCheck,IMPL,,,cli,2026-01-30,src/cli/main.zig
 REQ-SHELL-RECONNECT-001,ShellAutoReconnect,ReconnectionConfig,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-002,ShellAutoReconnect,TransactionState,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-003,ShellAutoReconnect,SessionState,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
