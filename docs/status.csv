@@ -2441,10 +2441,13 @@ REQ-GRAPH-META-004,GraphMetadataPersistence,Persist,EXEMPT,,,multi_graph,2026-01
 REQ-GRAPH-META-005,GraphMetadataPersistence,Remove,EXEMPT,,,multi_graph,2026-01-09,src/storage/multi_graph.zig
 REQ-GRAPH-PERSIST-001,NamedGraphPersistence,SaveLoad,IMPL,,,storage,2026-01-29,src/server/graph_storage_manager.zig
 REQ-GRAPH-PERSIST-002,NamedGraphPersistence,CatalogLoad,IMPL,,,storage,2026-01-29,src/schema/catalog.zig
+REQ-GRAPH-PERSIST-002,NamedGraphPersistence,PostExecution,IMPL,,,storage,2026-01-30,src/cli/main.zig
+REQ-GRAPH-PERSIST-003,NamedGraphPersistence,DataDirSetup,IMPL,,,storage,2026-01-30,src/cli/main.zig
 REQ-GRAPH-PERSIST-003,NamedGraphPersistence,Shutdown,IMPL,,,storage,2026-01-29,src/server/main.zig
 REQ-GRAPH-PERSIST-004,NamedGraphPersistence,UnitTests,TESTED,,,storage,2026-01-29,src/server/graph_storage_manager.zig
 REQ-GRAPH-PERSIST-005,NamedGraphPersistence,CatalogTests,TESTED,,,schema,2026-01-29,src/schema/catalog.zig
 REQ-GRAPH-PERSIST-TEST-001,NamedGraphPersistence,IntegrationTest,TESTED,,,storage,2026-01-29,geodetestlab/specs/gap_384_391_392_graph_persistence.yml
+REQ-GRAPH-PERSIST-TEST-001,NamedGraphPersistence,UnitTests,TESTED,,,storage,2026-01-30,src/tests/test_graph_persistence.zig
 REQ-GRAPH-TRAVERSE-001,Graph,GraphTraversal,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-GRAPH-TYPE-REGISTRY-001,GraphTypeRegistry,CreateStatement,EXEMPT,,,catalog,2026-01-10,src/server/query_executor.zig
 REQ-GRAPH-TYPE-REGISTRY-001,GraphTypeRegistry,DropStatement,EXEMPT,,,catalog,2026-01-10,src/server/query_executor.zig

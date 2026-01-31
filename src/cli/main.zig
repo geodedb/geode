@@ -1034,6 +1034,34 @@ fn processProtocolMessage(
         };
         defer mut_ally.free(result);
 
+        // GAP-384 Fix: Persist named graphs after successful CREATE GRAPH execution
+        // CANARY: REQ=REQ-GRAPH-PERSIST-002; FEATURE="NamedGraphPersistence"; ASPECT=PostExecution; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-30
+        if (std.ascii.startsWithIgnoreCase(trimmed_query, "CREATE GRAPH ") or
+            std.ascii.startsWithIgnoreCase(trimmed_query, "CREATE PROPERTY GRAPH "))
+        {
+            // Parse to get the graph name and persist
+            if (geode.parse(allocator, query_text, .{})) |parse_res| {
+                defer {
+                    var mut_pr = parse_res;
+                    mut_pr.deinit();
+                }
+                for (parse_res.program.statements) |stmt| {
+                    switch (stmt) {
+                        .CreateGraph => |cg| {
+                            // Persist the newly created graph to disk
+                            graph_storage_mgr.saveNamedGraph(allocator, cg.name) catch |err| {
+                                log.warn("Failed to persist graph after CREATE", &.{
+                                    Attr.string("graph", cg.name),
+                                    Attr.err("error", err),
+                                });
+                            };
+                        },
+                        else => {},
+                    }
+                }
+            } else |_| {}
+        }
+
         // Parse the result JSON to extract columns for SCHEMA response
         const result_parsed = try std.json.parseFromSlice(std.json.Value, allocator, result, .{});
         defer result_parsed.deinit();
@@ -1780,6 +1808,10 @@ fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     if (result != 0) {
         std.debug.print("Warning: Failed to set GEODE_DATA_DIR environment variable\n", .{});
     }
+
+    // GAP-384 Fix: Set graph storage manager's data directory for named graph persistence
+    // CANARY: REQ=REQ-GRAPH-PERSIST-003; FEATURE="NamedGraphPersistence"; ASPECT=DataDirSetup; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-30
+    geode.graph_storage_manager.setDataDir(actual_data_dir);
 
     // Set up certificate paths
     const actual_cert_path = cert_path orelse try std.fmt.allocPrint(allocator, "{s}/server.crt", .{actual_data_dir});

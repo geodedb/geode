@@ -73,18 +73,35 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             }
         },
         .graphs => {
-            // Return graph names from graph storage manager (authoritative source)
-            // This ensures SHOW GRAPHS reflects actual graph state after CREATE/DROP
-            const graph_names = graph_storage_manager.listGraphNames(allocator) catch &.{};
+            // Prefer catalog graph names, but merge with graph storage names for legacy compatibility.
+            var seen = std.StringHashMap(void).init(allocator);
+            defer seen.deinit();
+
+            var iter = cat.graphs.iterator();
+            while (iter.next()) |entry| {
+                const name = entry.key_ptr.*;
+                if (seen.contains(name)) continue;
+                const name_copy = try allocator.dupe(u8, name);
+                try seen.put(name_copy, {});
+                var row = try allocator.alloc(Value, 1);
+                row[0] = Value{ .Str = name_copy };
+                try rows_list.append(allocator, row);
+            }
+
+            const storage_graphs = graph_storage_manager.listGraphNames(allocator) catch &.{};
             defer {
-                for (graph_names) |name| {
+                for (storage_graphs) |name| {
                     allocator.free(name);
                 }
-                allocator.free(graph_names);
+                allocator.free(storage_graphs);
             }
-            for (graph_names) |name| {
+
+            for (storage_graphs) |name| {
+                if (seen.contains(name)) continue;
+                const name_copy = try allocator.dupe(u8, name);
+                try seen.put(name_copy, {});
                 var row = try allocator.alloc(Value, 1);
-                row[0] = Value{ .Str = try allocator.dupe(u8, name) };
+                row[0] = Value{ .Str = name_copy };
                 try rows_list.append(allocator, row);
             }
         },

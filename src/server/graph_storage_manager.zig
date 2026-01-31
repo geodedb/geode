@@ -320,6 +320,25 @@ pub fn clearGraphStorage() void {
     g_graph_storage = null;
 }
 
+/// Clear the multi-graph storage map (for testing)
+/// This resets the global state so tests start fresh
+pub fn clearMultiGraphStorage() void {
+    if (g_graph_storages) |*storages| {
+        // Free all graph storages and their keys
+        if (g_allocator) |alloc| {
+            var it = storages.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.*.deinit();
+                alloc.destroy(entry.value_ptr.*);
+                alloc.free(entry.key_ptr.*);
+            }
+        }
+        storages.deinit();
+    }
+    g_graph_storages = null;
+    g_allocator = null;
+}
+
 // ============================================================================
 // Multi-Graph Storage Support
 // ============================================================================
