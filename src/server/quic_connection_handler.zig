@@ -3,7 +3,7 @@ const geode = @import("geode");
 const protocol = geode.protocol;
 const diagnostics = geode.diagnostics;
 const eval = geode.eval;
-const quic_transport = @import("transport/quic.zig");
+const quic_transport = @import("transport/quic");
 const query_plan_cache = @import("query_plan_cache.zig");
 const ServerState = @import("server_state.zig").ServerState;
 const SessionConfiguration = @import("server_state.zig").SessionConfiguration;
@@ -11,7 +11,7 @@ const CatalogSchema = @import("server_state.zig").CatalogSchema;
 const CatalogGraph = @import("server_state.zig").CatalogGraph;
 const query_executor = @import("query_executor.zig");
 const execution = geode.execution;
-const cost_explain = @import("cost_explain.zig");
+const cost_explain = @import("../planner/cost_explain.zig");
 const server_flags = @import("server_flags.zig");
 const message_handlers = @import("message_handlers.zig");
 const protocol_handler = @import("protocol_handler.zig");
@@ -35,7 +35,7 @@ const Attr = logging.Attr;
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-065; FEATURE="JSON Library Migration"; ASPECT=QUICHandler; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-25
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-065; FEATURE="JSON Library Migration"; ASPECT=QUICHandler; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-25
 const json_lib = @import("json");
-const schema = @import("../proto/schema.zig");
+const schema = @import("schema");
 const protobuf = @import("protobuf");
 
 // JSON row types for SHOW statement results (Legacy - might need to map to Proto or keep for internal logic)
@@ -82,7 +82,7 @@ const BufferedProtoReader = struct {
     // Length is 4 bytes Big Endian.
     pub fn nextMessage(self: *BufferedProtoReader) !?schema.QuicClientMessage {
         var would_block_attempts: usize = 0;
-        const max_would_block_attempts: usize = 2000;
+        const max_would_block_attempts: usize = 30000; // 30s at 1ms sleep
 
         while (true) {
             // Check if we have enough data for length header
@@ -100,7 +100,7 @@ const BufferedProtoReader = struct {
 
                     // Decode using schema
                     var fbs = std.io.fixedBufferStream(msg_bytes);
-                    var reader = protobuf.initReader(fbs.reader(), self.allocator);
+                    const reader = protobuf.initReader(fbs.reader(), self.allocator);
                     const msg = schema.QuicClientMessage.decode(self.allocator, reader) catch |err| {
                         log.warn("Failed to decode Protobuf message: {}", .{err});
                         return err;
@@ -121,7 +121,7 @@ const BufferedProtoReader = struct {
                         return error.Timeout;
                     }
                     try self.transport.poll(0);
-                    std.Thread.sleep(100 * std.time.ns_per_us);
+                    std.Thread.sleep(1 * std.time.ns_per_ms);
                     continue;
                 }
                 return err;
@@ -271,6 +271,7 @@ pub fn handleQuicConnection(
     // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-003; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=EXEMPT; OWNER=server; UPDATED=2025-12-27
     // Use destroyConnection to properly remove from transport list, close, and free resources
     defer transport.destroyConnection(conn);
+    std.debug.print("DEBUG_TRACE: Entering handleQuicConnection\n", .{});
     log.debug("Entering handleQuicConnection", &.{});
 
     // Poll the endpoint to process incoming STREAM frames before accepting
@@ -445,6 +446,13 @@ pub fn processMessage(
     _ = memcurve_profile;
     _ = result_format_txt;
 
+    switch (msg) {
+        // Trace logging
+        else => {
+            std.debug.print("FORCE DEBUG: Server processing message\n", .{});
+            log.debug("Server processing message: {}", .{msg});
+        },
+    }
     switch (msg) {
         .hello => |_| {
             // ... Auth logic ...

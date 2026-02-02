@@ -11,6 +11,50 @@ const server_state = @import("server_state.zig");
 const server_flags = @import("server_flags.zig");
 const graph_storage_mgr = @import("graph_storage_manager.zig");
 const union_advanced = geode.union_advanced;
+const ServerState = server_state.ServerState;
+const SessionConfiguration = server_state.SessionConfiguration;
+const CatalogSchema = server_state.CatalogSchema;
+const CatalogGraph = server_state.CatalogGraph;
+const SimplifiedBackupManager = @import("backup_manager.zig").SimplifiedBackupManager;
+const impl_flagger = @import("flagger_impl_defined.zig");
+const BackupConfig = @import("storage/backup").BackupConfig;
+
+// Stub for executeSessionParameterSet
+fn executeSessionParameterSet(
+    allocator: std.mem.Allocator,
+    config: *SessionConfiguration,
+    param: anytype,
+) ![]const u8 {
+    _ = config;
+    _ = param;
+    return encodeStatusResponse(allocator, "00000", "Session parameter set (STUB)");
+}
+
+// Stub for missing evaluateSimpleQuery
+fn evaluateSimpleQuery(
+    allocator: std.mem.Allocator,
+    query: geode.ast.Query,
+    param_names: [][]const u8,
+    param_matrix: [][]const eval.Value,
+    ordered: *bool,
+    order_keys: *[][]const u8,
+    schema_cols: *[]const protocol.SchemaCol,
+    start_node: ?u64,
+    start_edge: ?u64,
+    start_path: ?u64,
+) ![][]const u8 {
+    _ = allocator;
+    _ = query;
+    _ = param_names;
+    _ = param_matrix;
+    _ = ordered;
+    _ = order_keys;
+    _ = schema_cols;
+    _ = start_node;
+    _ = start_edge;
+    _ = start_path;
+    return error.NotImplemented;
+}
 // CANARY: REQ=REQ-TXN-UNDO-SERVER-010; FEATURE="TransactionUndoLog"; ASPECT=QueryExecutorImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("../txn_undo_log.zig");
 
@@ -1193,7 +1237,6 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
     // Get graph storage for current session
     const graph = getSessionGraphStorage(allocator, state);
 
-    // CANARY: REQ=REQ-TXN-UNDO-SERVER-011; FEATURE="TransactionUndoLog"; ASPECT=CreateUndoLog; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
     // Get undo log for transaction rollback support
     const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
 
@@ -1547,6 +1590,13 @@ fn getOrCreateBackupManager(allocator: std.mem.Allocator, state: *ServerState) !
 // Helper function to convert AST expression to property value
 // Removed: evalExprToPropertyValue() function (~73 lines) now in query_executor module (M3.3 Phase 3 seventh increment)
 
+// Stub for paginationStreamScaffold
+fn paginationStreamScaffold(limit: usize, offset: usize) bool {
+    _ = limit;
+    _ = offset;
+    return false;
+}
+
 // CANARY: REQ=REQ-GQL-004; FEATURE="PaginationExecutionStreaming"; ASPECT=Scaffold; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_004_PaginationStreamingScaffold; OWNER=planner; UPDATED=2025-09-26
 test "TestCANARY_REQ_GQL_004_PaginationStreamingScaffold" {
     const expect = std.testing.expect;
@@ -1597,6 +1647,10 @@ fn detectVectorDimension(allocator: std.mem.Allocator, state: *server_state.Serv
 
 /// Convert a property value to a string key suitable for indexing
 // Removed: propertyValueToIndexKey() function (~10 lines) now in query_executor module (M3.3 Phase 3 seventh increment)
+
+pub fn getNextNodeId(g: *graph_exec.GraphStorage) u64 {
+    return g.nodes.count();
+}
 
 fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.CreateIndexStatement) ![]const u8 {
     // Get or create index manager

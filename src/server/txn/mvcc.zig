@@ -81,6 +81,7 @@ pub const Transaction = struct {
     conflicts_detected: std.ArrayList(ConflictInfo),
 
     pub fn init(allocator: std.mem.Allocator, id: TxnId, timestamp: Timestamp, isolation: IsolationLevel) Transaction {
+        _ = allocator;
         return .{
             .id = id,
             .state = .Active,
@@ -718,8 +719,8 @@ test "mvcc lock manager records requests" {
     var mgr = MVCCManager.init(std.testing.allocator);
     defer mgr.deinit();
 
-    var t1 = try mgr.beginTransaction(.SnapshotIsolation);
-    var t2 = try mgr.beginTransaction(.SnapshotIsolation);
+    const t1 = try mgr.beginTransaction(.SnapshotIsolation);
+    const t2 = try mgr.beginTransaction(.SnapshotIsolation);
 
     try std.testing.expect(try mgr.lock_manager.requestLock(t1, 1, .Exclusive));
     try std.testing.expect(!(try mgr.lock_manager.requestLock(t2, 1, .Shared)));
@@ -735,11 +736,11 @@ test "mvcc commit persists versions" {
     var mgr = MVCCManager.init(std.testing.allocator);
     defer mgr.deinit();
 
-    var t1 = try mgr.beginTransaction(.SnapshotIsolation);
+    const t1 = try mgr.beginTransaction(.SnapshotIsolation);
     try mgr.write(t1, 1, "v1");
     try mgr.commitTransaction(t1);
 
-    var t2 = try mgr.beginTransaction(.SnapshotIsolation);
+    const t2 = try mgr.beginTransaction(.SnapshotIsolation);
     const val = try mgr.read(t2, 1);
     try std.testing.expect(val != null);
     try std.testing.expectEqualStrings("v1", val.?);
@@ -750,10 +751,10 @@ test "mvcc commit failure cleans up transaction" {
     var mgr = MVCCManager.init(std.testing.allocator);
     defer mgr.deinit();
 
-    var t1 = try mgr.beginTransaction(.Serializable);
+    const t1 = try mgr.beginTransaction(.Serializable);
     _ = try mgr.read(t1, 1);
 
-    var t2 = try mgr.beginTransaction(.SnapshotIsolation);
+    const t2 = try mgr.beginTransaction(.SnapshotIsolation);
     try mgr.write(t2, 1, "v2");
     try mgr.commitTransaction(t2);
 

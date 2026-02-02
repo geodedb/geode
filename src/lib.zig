@@ -462,6 +462,9 @@ pub const server = struct {
         embedded_server,
         testing,
     };
+
+    // GAP-0165: Expose connection handler for CLI/Tools integration
+    pub const connection_handler = @import("server/quic_connection_handler.zig");
 };
 
 pub fn parseGql(src: []const u8, allocator: std.mem.Allocator) !ParseResult {

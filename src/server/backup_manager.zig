@@ -1,5 +1,5 @@
 const std = @import("std");
-const backup = @import("../storage/backup.zig");
+const backup = @import("storage/backup");
 const BackupConfig = backup.BackupConfig;
 const BackupMetadata = backup.BackupMetadata;
 

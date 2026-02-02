@@ -113,6 +113,10 @@
             .url = "git+https://gitlab.com/devnw/zig/dns.git#d7b914b83af2f431d9e5e9ff3d0acc3c1b19fc8a",
             .hash = "dns-0.1.0-x4U-zYgMCwDlLjH2DUzIcVIqEfCj5x_2yGKIWFaiFJLA",
         },
+        .spice = .{
+            .url = "git+https://gitlab.com/devnw/zig/spice.git#master",
+            .hash = "spice-0.0.0-HnDb57y0AABlp7AaQKAkMShWpww-Tl_8QM7T-1Lx3auu",
+        },
 
         // =======================================================================
         // Phase 5: Optional Enhancements
@@ -124,8 +128,7 @@
             .hash = "mcp-0.1.0-exAeBHj7BAAYmmNRjZD3HG6hXVJG8-LEtybCLkBu7oj6",
         },
         .protobuf = .{
-            .url = "git+https://github.com/Arwalk/zig-protobuf#2828be045c5f3e55c6f3f239c2ec40bc480a26ca",
-            .hash = "protobuf-3.0.0-0e82alnSKAD4lJettI9uUAM148s_36NH5SP7ZVjaAPkg",
+            .path = "vendor/protobuf",
         },
         .grpc_zig = .{
             .path = "vendor/grpc-zig",

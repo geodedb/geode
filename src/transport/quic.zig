@@ -624,7 +624,7 @@ pub const QuicClientStream = struct {
                 if (debug_read) std.debug.print("[QUIC] read: WouldBlock, polling\n", .{});
                 // Drive the endpoint to allow incoming packets
                 self.endpoint.poll(10) catch {};
-                return 0;
+                return error.WouldBlock;
             }
             if (debug_read) std.debug.print("[QUIC] read: error {}\n", .{err});
             return err;

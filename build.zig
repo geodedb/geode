@@ -265,6 +265,10 @@ pub fn build(b: *std.Build) void {
     const tde_hierarchy_mod = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
     const key_provider_mod = b.createModule(.{ .root_source_file = b.path("src/security/key_provider.zig"), .target = target, .optimize = optimize });
 
+    // Storage Catalog Module (moved from test section to be shared)
+    const storage_catalog_mod = b.createModule(.{ .root_source_file = b.path("src/storage/catalog.zig"), .target = target, .optimize = optimize });
+    storage_catalog_mod.addImport("storage_page_manager", storage_page_manager_shared);
+
     // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-004; FEATURE="Centralized Structured Logging"; ASPECT=BuildConfig; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
     // Centralized logging module using external slog library
     const logging_mod = b.createModule(.{ .root_source_file = b.path("src/logging/logger.zig"), .target = target, .optimize = optimize });
@@ -434,12 +438,16 @@ pub fn build(b: *std.Build) void {
     const schema_mod = b.createModule(.{ .root_source_file = b.path("src/proto/schema.zig"), .target = target, .optimize = optimize });
     schema_mod.addImport("protobuf", protobuf_mod);
     geode_exe.root_module.addImport("schema", schema_mod);
+    root_mod.addImport("schema", schema_mod);
 
     // M11: Add storage/backup module for CLI to eliminate BackupConfig duplication
     const storage_backup_mod = b.createModule(.{ .root_source_file = b.path("src/storage/backup.zig"), .target = target, .optimize = optimize });
     storage_backup_mod.addImport("wal", wal_mod);
     storage_backup_mod.addImport("logging", logging_mod);
+    storage_backup_mod.addImport("storage_page_manager", storage_page_manager_shared);
+    storage_backup_mod.addImport("storage_catalog", storage_catalog_mod);
     geode_exe.root_module.addImport("storage/backup", storage_backup_mod);
+    root_mod.addImport("storage/backup", storage_backup_mod);
 
     // M11a: Add migration module for CLI migrate commands
     const migration_mod_cli = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });
@@ -753,18 +761,12 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     // CDC enhanced is available through the geode module, no need for standalone module import
 
-    const storage_catalog_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/catalog.zig"), .target = target, .optimize = optimize });
-    storage_catalog_mod_tests.addImport("storage_page_manager", storage_page_manager_shared);
+    // Use shared storage catalog and backup modules
     custom_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
-    custom_tests.root_module.addImport("storage_catalog", storage_catalog_mod_tests);
+    custom_tests.root_module.addImport("storage_catalog", storage_catalog_mod);
     // custom_tests.root_module.addImport("storage_csr", storage_csr_mod_tests);
-    // Backup & restore module for tests (uses wal + page manager + catalog)
-    const storage_backup_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/backup.zig"), .target = target, .optimize = optimize });
-    storage_backup_mod_tests.addImport("wal", wal_mod);
-    storage_backup_mod_tests.addImport("storage_page_manager", storage_page_manager_shared);
-    storage_backup_mod_tests.addImport("storage_catalog", storage_catalog_mod_tests);
-    storage_backup_mod_tests.addImport("logging", logging_mod);
-    custom_tests.root_module.addImport("storage_backup", storage_backup_mod_tests);
+    // Backup & restore module for tests (uses shared module)
+    custom_tests.root_module.addImport("storage_backup", storage_backup_mod);
 
     // WAL compaction pipeline module (checkpoint selection / compaction orchestration / archival hook)
     const wal_compaction_pipeline_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/wal_compaction_pipeline.zig"), .target = target, .optimize = optimize });
@@ -1116,9 +1118,6 @@ pub fn build(b: *std.Build) void {
     //    const sentinel_mod = b.createModule(.{ .root_source_file = b.path("src/sentinel.zig"), .target = target, .optimize = optimize });
 
     //    const storage_mem_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
-
-    const storage_catalog_mod = b.createModule(.{ .root_source_file = b.path("src/storage/catalog.zig"), .target = target, .optimize = optimize });
-    storage_catalog_mod.addImport("storage_page_manager", storage_page_manager_shared);
 
     const storage_csr_mod = b.createModule(.{ .root_source_file = b.path("src/storage/csr_adjacency.zig"), .target = target, .optimize = optimize });
     storage_csr_mod.addImport("storage_page_manager", storage_page_manager_shared);

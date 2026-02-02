@@ -2562,7 +2562,6 @@ REQ-LIB-MIGRATION-JSON-024,JSON Library Migration,GeoJSON,TESTED,,,spatial,2026-
 REQ-LIB-MIGRATION-JSON-025,JSON Library Migration,WkbToGeoJson,TESTED,,,spatial,2026-01-24,src/eval_extended.zig
 REQ-LIB-MIGRATION-JSON-026,JSON Library Migration,CLI,TESTED,,,cli,2026-01-24,src/cli/main.zig
 REQ-LIB-MIGRATION-JSON-027,JSON Library Migration,CLIMessageTypes,TESTED,,,cli,2026-01-24,src/cli/main.zig
-REQ-LIB-MIGRATION-JSON-030,JSON Library Migration,AuthHelloMessage,TESTED,,,cli,2026-01-24,src/cli/main.zig
 REQ-LIB-MIGRATION-JSON-031,JSON Library Migration,BackupCLI,TESTED,,,cli,2026-01-24,src/cli/backup_cli.zig
 REQ-LIB-MIGRATION-JSON-032,JSON Library Migration,MigrationScript,TESTED,,,cli,2026-01-24,src/cli/backup_cli.zig
 REQ-LIB-MIGRATION-JSON-033,JSON Library Migration,BackupHello,TESTED,,,cli,2026-01-24,src/cli/backup_cli.zig
@@ -4069,7 +4068,6 @@ REQ-TXN-UNDO-SERVER-004,TransactionUndoLog,RollbackTransaction,TESTED,,,engine,2
 REQ-TXN-UNDO-SERVER-004,TransactionUndoLog,ServerRollbackTransaction,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-TXN-UNDO-SERVER-010,TransactionUndoLog,QueryExecutorImport,TESTED,,,engine,2025-12-23,src/server/query_executor.zig
 REQ-TXN-UNDO-SERVER-010,TransactionUndoLog,QueryExecutorImport,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-TXN-UNDO-SERVER-011,TransactionUndoLog,CreateUndoLog,TESTED,,,engine,2025-12-23,src/server/query_executor.zig
 REQ-TXN-UNDO-SERVER-011,TransactionUndoLog,CreateUndoLogServer,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-TXN-UNDO-SERVER-012,TransactionUndoLog,GraphStorageRemoveNode,TESTED,,,engine,2025-12-23,src/types/graph_common.zig
 REQ-TXN-UNDO-SERVER-012,TransactionUndoLog,GraphStorageRemoveNode,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig

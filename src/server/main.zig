@@ -474,6 +474,7 @@ pub fn main() !void {
         }
 
         try transport.listen();
+        std.debug.print("DEBUG_TRACE: QUIC server started listen on {s}:{d}\n", .{ address_str, port });
         log.info("QUIC server started", &.{
             Attr.string("address", address_str),
             Attr.int("port", port),
@@ -535,11 +536,13 @@ pub fn main() !void {
             // Production mode: accept connections in a loop and dispatch to thread pool
             while (true) {
                 const conn = transport.accept() catch |err| {
+                    std.debug.print("DEBUG_TRACE: Failed to accept connection: {}\n", .{err});
                     log.warn("Failed to accept QUIC connection", &.{
                         Attr.string("error", @errorName(err)),
                     });
                     continue;
                 };
+                std.debug.print("DEBUG_TRACE: Accepted connection\n", .{});
 
                 // CANARY: REQ=REQ-ABAC-WIRE-016; FEATURE="ABAC Enforcement"; ASPECT=QUICLoop; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
                 // GAP-0202: Create context for async connection handling
