@@ -17,6 +17,7 @@ core
 /data_embedded/
 /data_*/
 tests/data_*/
+typescript
 
 **/.venv/*
 # Audit test output files

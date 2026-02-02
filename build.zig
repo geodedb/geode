@@ -242,11 +242,11 @@ pub fn build(b: *std.Build) void {
     const mcp_mod = mcp_dep.module("mcp");
 
     // Modules - Level 0 (No dependencies on other internal modules)
-    const fs_fsync_mod = b.createModule(.{ .root_source_file = b.path("src/storage/fs_fsync.zig") });
+
     const fsm_mod = b.createModule(.{ .root_source_file = b.path("src/storage/free_space_map.zig") });
     const commit_coord_mod = b.createModule(.{ .root_source_file = b.path("src/transactions/commit_coordinator.zig") });
     // Storage page manager module - created early, imports added after logging_mod is defined
-    const storage_page_manager_shared = b.createModule(.{ .root_source_file = b.path("src/storage/page_manager.zig"), .target = target, .optimize = optimize });
+    const storage_page_manager_shared = b.createModule(.{ .root_source_file = b.path("src/storage/mod.zig"), .target = target, .optimize = optimize });
     const tde_hierarchy_mod = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
     const key_provider_mod = b.createModule(.{ .root_source_file = b.path("src/security/key_provider.zig"), .target = target, .optimize = optimize });
 
@@ -265,7 +265,7 @@ pub fn build(b: *std.Build) void {
     wal_mod.addImport("tde_hierarchy", tde_hierarchy_mod);
     wal_mod.addImport("storage_page_manager", storage_page_manager_shared);
     wal_mod.addImport("key_provider", key_provider_mod);
-    wal_mod.addImport("fs_fsync", fs_fsync_mod);
+
     wal_mod.addImport("commit_coordinator", commit_coord_mod);
     wal_mod.addImport("logging", logging_mod);
 
@@ -348,7 +348,7 @@ pub fn build(b: *std.Build) void {
     });
     geode_exe.root_module.addOptions("build_options", build_opts);
     geode_exe.root_module.addImport("geode", root_mod);
-    geode_exe.root_module.addImport("fs_fsync", fs_fsync_mod);
+
     geode_exe.root_module.addImport("fsm", fsm_mod);
     geode_exe.root_module.addImport("page_vacuum", vacuum_mod);
     geode_exe.root_module.addImport("commit_coord", commit_coord_mod);
@@ -382,6 +382,9 @@ pub fn build(b: *std.Build) void {
 
     // Add centralized logging module for CLI
     geode_exe.root_module.addImport("logging", logging_mod);
+    // Missing imports required by src/cli/main.zig
+    geode_exe.root_module.addImport("transport/quic", transport_quic_mod);
+    geode_exe.root_module.addImport("vendor_quic", quic_ext_mod);
 
     // Link with OpenSSL for QUIC/TLS crypto operations (external library)
     // Only link system libraries for native builds (not cross-compilation)
@@ -724,11 +727,9 @@ pub fn build(b: *std.Build) void {
 
     const storage_catalog_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/catalog.zig"), .target = target, .optimize = optimize });
     storage_catalog_mod_tests.addImport("storage_page_manager", storage_page_manager_shared);
-    const storage_csr_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/csr_adjacency.zig"), .target = target, .optimize = optimize });
-    storage_csr_mod_tests.addImport("storage_page_manager", storage_page_manager_shared);
     custom_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     custom_tests.root_module.addImport("storage_catalog", storage_catalog_mod_tests);
-    custom_tests.root_module.addImport("storage_csr", storage_csr_mod_tests);
+    // custom_tests.root_module.addImport("storage_csr", storage_csr_mod_tests);
     // Backup & restore module for tests (uses wal + page manager + catalog)
     const storage_backup_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/backup.zig"), .target = target, .optimize = optimize });
     storage_backup_mod_tests.addImport("wal", wal_mod);
@@ -1497,14 +1498,8 @@ pub fn build(b: *std.Build) void {
         .name = "wal_compact",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/wal_compact.zig"), .target = target, .optimize = optimize }),
     });
-    const wal_scan_mod = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
-    wal_scan_mod.addImport("fs_fsync", fs_fsync_mod);
-    wal_scan_mod.addImport("commit_coordinator", commit_coord_mod);
-    wal_scan_mod.addImport("tde_hierarchy", tde_hierarchy_mod);
-    wal_scan_mod.addImport("storage_page_manager", storage_page_manager_shared);
-    wal_scan_mod.addImport("key_provider", key_provider_mod);
-    wal_scan_mod.addImport("logging", logging_mod);
-    wal_compact_exe.root_module.addImport("wal", wal_scan_mod);
+
+    wal_compact_exe.root_module.addImport("wal", wal_mod);
     wal_compact_exe.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     b.installArtifact(wal_compact_exe);
     tools_step.dependOn(&wal_compact_exe.step);

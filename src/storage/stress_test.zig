@@ -48,7 +48,7 @@ pub fn run(allocator: std.mem.Allocator, config: StressConfig) !void {
     // FSM (not directly used by PageManager but kept for future integration)
 
     // PageManager (in-memory for stress test)
-    var pm = page_manager.PageManager.initInMemory(allocator, 16384);
+    var pm = page_manager.initInMemory(allocator, 16384);
     defer pm.deinit();
 
     // 1. Bulk Load

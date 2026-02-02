@@ -3,7 +3,9 @@ const parser = @import("parser.zig");
 const planner = @import("../planner.zig");
 const exec = @import("../exec.zig");
 const txn = @import("../transactions/manager.zig");
-const storage = @import("../storage/interface.zig");
+const storage_mod = @import("storage_page_manager");
+const interface = storage_mod.interface;
+const storage = interface; // Align with existing usage
 const rls = @import("rls");
 const diagnostics = @import("../diagnostics.zig");
 

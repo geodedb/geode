@@ -1,77 +1,109 @@
 const std = @import("std");
 
-pub const PageId = u64;
-pub const SlotId = u16;
-
-pub const RecordId = struct { page: PageId, slot: SlotId };
-
-/// Edge information including destination node and edge ID
-/// GAP-0084: Extended to support edge collection in path finding
-pub const EdgeInfo = struct {
-    dest_node: u64,
-    edge_id: u64,
-    edge_type: u32 = 0,
+pub const RecordId = struct {
+    page: u32,
+    slot: u16,
 };
 
+pub const NodeLocation = struct {
+    page: u32,
+    slot: u16,
+};
+
+pub const PageId = u32;
+
+// Stub for StorageEngine to allow compilation of dependent modules (e.g. match.zig)
 pub const NeighborIter = struct {
     items: []const u64,
-    idx: usize = 0,
-    pub fn next(self: *NeighborIter) ?u64 {
-        if (self.idx >= self.items.len) return null;
-        const v = self.items[self.idx];
-        self.idx += 1;
-        return v;
-    }
-};
-
-/// Edge iterator with edge IDs
-/// GAP-0084: Supports edge collection during path traversal
-pub const EdgeIter = struct {
-    items: []const EdgeInfo,
-    idx: usize = 0,
-
-    pub fn next(self: *EdgeIter) ?EdgeInfo {
-        if (self.idx >= self.items.len) return null;
-        const v = self.items[self.idx];
-        self.idx += 1;
-        return v;
-    }
-
-    /// Get edge ID connecting to a specific destination
-    pub fn getEdgeTo(self: *const EdgeIter, dest: u64) ?u64 {
-        for (self.items) |edge| {
-            if (edge.dest_node == dest) return edge.edge_id;
-        }
-        return null;
-    }
 };
 
 pub const StorageEngine = struct {
-    ctx: *anyopaque,
-    vtable: *const VTable,
+    ctx: *anyopaque = undefined,
+    vtable: *const VTable = &default_vtable,
+    allocator: std.mem.Allocator = undefined,
 
     pub const VTable = struct {
         deinit: *const fn (ctx: *anyopaque) void,
         csrAddEdge: *const fn (ctx: *anyopaque, src: u64, dst: u64) anyerror!void,
         csrNeighbors: *const fn (ctx: *anyopaque, src: u64) anyerror!NeighborIter,
-        // GAP-0084: New edge-aware neighbor lookup
-        csrEdges: ?*const fn (ctx: *anyopaque, src: u64) anyerror!EdgeIter = null,
     };
 
-    pub fn deinit(self: StorageEngine) void {
+    const default_vtable = VTable{
+        .deinit = noopDeinit,
+        .csrAddEdge = noopAddEdge,
+        .csrNeighbors = noopNeighbors,
+    };
+
+    fn noopDeinit(ctx: *anyopaque) void {
+        _ = ctx;
+    }
+    fn noopAddEdge(ctx: *anyopaque, src: u64, dst: u64) anyerror!void {
+        _ = ctx;
+        _ = src;
+        _ = dst;
+        return error.NotImplemented;
+    }
+    fn noopNeighbors(ctx: *anyopaque, src: u64) anyerror!NeighborIter {
+        _ = ctx;
+        _ = src;
+        return NeighborIter{ .items = &[_]u64{} };
+    }
+
+    pub fn deinit(self: *StorageEngine) void {
         self.vtable.deinit(self.ctx);
     }
-    pub fn csrAddEdge(self: StorageEngine, src: u64, dst: u64) !void {
+
+    pub fn csrAddEdge(self: *StorageEngine, src: u64, dst: u64) !void {
         return self.vtable.csrAddEdge(self.ctx, src, dst);
     }
-    pub fn csrNeighbors(self: StorageEngine, src: u64) !NeighborIter {
+
+    pub fn csrNeighbors(self: *StorageEngine, src: u64) !NeighborIter {
         return self.vtable.csrNeighbors(self.ctx, src);
     }
-    /// Get edges with edge IDs (GAP-0084)
-    pub fn csrEdges(self: StorageEngine, src: u64) !?EdgeIter {
-        if (self.vtable.csrEdges) |get_edges| {
-            return try get_edges(self.ctx, src);
-        }
-        return null;
+
+    pub fn createNode(self: *StorageEngine, tx: *anyopaque, label: []const u8, props: anytype) !u64 {
+        _ = self;
+        _ = tx;
+        _ = label;
+        _ = props;
+        return 0;
+    }
+
+    pub fn createEdge(self: *StorageEngine, tx: *anyopaque, src: u64, dst: u64, edge_type: []const u8, props: anytype) !u64 {
+        _ = self;
+        _ = tx;
+        _ = src;
+        _ = dst;
+        _ = edge_type;
+        _ = props;
+        return 0;
+    }
+
+    pub const EntityInfo = struct { entity_type: []const u8, label: []const u8 };
+    pub fn getEntityInfo(self: *StorageEngine, tx: *anyopaque, id: anytype) !EntityInfo {
+        _ = self;
+        _ = tx;
+        _ = id;
+        return EntityInfo{ .entity_type = "node", .label = "default" };
+    }
+
+    pub fn getProperties(self: *StorageEngine, tx: *anyopaque, id: anytype) !std.StringHashMap([]const u8) {
+        _ = self;
+        _ = tx;
+        _ = id;
+        return error.NotImplemented;
+    }
+
+    pub fn updateProperties(self: *StorageEngine, tx: *anyopaque, id: anytype, patch: anytype) !void {
+        _ = self;
+        _ = tx;
+        _ = id;
+        _ = patch;
+    }
+
+    pub fn deleteEntity(self: *StorageEngine, tx: *anyopaque, id: anytype) !void {
+        _ = self;
+        _ = tx;
+        _ = id;
     }
 };

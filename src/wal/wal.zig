@@ -3,7 +3,7 @@ const crypto = std.crypto; // AES‑GCM for WAL encryption (aligned with page-le
 // CANARY: REQ=REQ-GQL-028; FEATURE="WAL Compaction"; ASPECT=CorruptPageRecovery; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_CorruptPageRecovery; OWNER=storage; UPDATED=2025-09-20
 // Page manager imported via build alias to avoid relative path escaping module root.
 const storage = @import("storage_page_manager");
-const fsync_util = @import("fs_fsync");
+const fsync_util = storage.fs_fsync;
 const commit_coord = @import("commit_coordinator");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=WAL; STATUS=EXEMPT; OWNER=storage; UPDATED=2026-01-24

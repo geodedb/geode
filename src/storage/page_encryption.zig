@@ -54,21 +54,26 @@ pub fn shouldEncrypt() bool {
     return std.process.hasEnvVar(env_gpa.allocator(), "GEODE_TDE_KEY") catch false;
 }
 
-pub fn encryptForWrite(allocator: std.mem.Allocator, page_index: usize, plaintext: []const u8) ![]u8 {
-    if (!shouldEncrypt()) {
+pub fn encryptForWrite(allocator: std.mem.Allocator, page_index: usize, plaintext: []const u8, key_opt: ?[32]u8) ![]u8 {
+    // If key provided, force encryption. If not, check env var.
+    if (key_opt == null and !shouldEncrypt()) {
         // Allocate copy so caller always receives mutable []u8 they may treat uniformly.
         const copy = try allocator.alloc(u8, plaintext.len);
         @memcpy(copy, plaintext);
         return copy;
     }
     const aad = std.mem.asBytes(&@as(u64, @intCast(page_index)));
-    const key_opt = try loadRawKey(allocator);
-    if (key_opt == null) {
+    // Use provided key or load from env
+    const final_key = if (key_opt) |k| k else (try loadRawKey(allocator)) orelse {
+        // Should have been caught by check above, but for safety:
         const copy2 = try allocator.alloc(u8, plaintext.len);
         @memcpy(copy2, plaintext);
         return copy2;
-    }
-    const key = key_opt.?;
+    };
+
+    // Proceed with final_key...
+    const key = final_key;
+
     var nonce: [NonceBytes]u8 = undefined;
     const h = std.hash.Wyhash.hash(0, plaintext[0..@min(plaintext.len, 8)]);
     std.mem.writeInt(u64, nonce[0..8], h, .little);
@@ -85,13 +90,16 @@ pub fn encryptForWrite(allocator: std.mem.Allocator, page_index: usize, plaintex
     return out;
 }
 
-pub fn decryptAfterRead(allocator: std.mem.Allocator, page_index: usize, raw: []u8, expected_page_size: usize) ![]u8 {
+pub fn decryptAfterRead(allocator: std.mem.Allocator, page_index: usize, raw: []u8, expected_page_size: usize, key_opt: ?[32]u8) ![]u8 {
     if (raw.len == expected_page_size) return raw; // not encrypted
     if (raw.len != expected_page_size + Overhead) return error.UnexpectedSize;
-    if (!shouldEncrypt()) return error.FeatureDisabled;
-    const key_opt = try loadRawKey(allocator);
-    if (key_opt == null) return error.FeatureDisabled;
-    const key = key_opt.?;
+
+    const final_key = if (key_opt) |k| k else (try loadRawKey(allocator)) orelse return error.FeatureDisabled;
+    // Note: We skip shouldEncrypt() check if key is provided, allowing manual override
+    if (key_opt == null and !shouldEncrypt()) return error.FeatureDisabled;
+
+    const key = final_key;
+
     var nonce: [NonceBytes]u8 = undefined;
     var tag: [TagBytes]u8 = undefined;
     @memcpy(&nonce, raw[0..NonceBytes]);

@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const ast = @import("../ast.zig");
 const planner = @import("../planner.zig");
 const exec = @import("../exec.zig");
-const storage = @import("interface.zig");
+const storage = @import("interface");
 const wal = @import("../wal/wal.zig");
 
 // Materialized Views with incremental refresh and dependency tracking
@@ -888,7 +888,7 @@ pub const MaterializedViewManager = struct {
         // Update statistics
         const end_time = std.time.milliTimestamp();
         view.statistics.last_refresh_time = end_time;
-        view.statistics.last_refresh_duration_ms = @intCast(u64, end_time - job.start_time);
+        view.statistics.last_refresh_duration_ms = @intCast(end_time - job.start_time);
         view.statistics.refresh_count += 1;
         self.statistics.total_refreshes += 1;
 
@@ -1417,7 +1417,7 @@ pub const MaterializedViewManager = struct {
 
         // Hash new rows and identify inserts/updates
         var insert_count: u64 = 0;
-        var update_count: u64 = 0;
+        const update_count: u64 = 0;
         var delete_count: u64 = 0;
 
         while (try new_result.next()) |row| {

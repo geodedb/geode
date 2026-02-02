@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const catalog = @import("catalog.zig");
-const storage = @import("interface.zig");
+const storage = @import("interface");
 
 pub const GraphId = u32;
 

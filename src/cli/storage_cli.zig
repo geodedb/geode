@@ -18,7 +18,8 @@ fn printTo(file: std.fs.File, comptime fmt: []const u8, args: anytype) !void {
     try file.writeAll(slice);
 }
 
-const fs_fsync = @import("fs_fsync");
+const geode = @import("geode");
+const fs_fsync = geode.storage.fs_fsync;
 const fsm = @import("fsm");
 const page_vacuum = @import("page_vacuum");
 // const commit_coord = @import("commit_coord"); // Not used directly in sanity check logic yet

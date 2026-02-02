@@ -3,7 +3,7 @@
 // CANARY: REQ=REQ-GQL-027; FEATURE="WAL/ARIES"; ASPECT=Storage; STATUS=TESTED; TEST=tests/e2e_wal_recovery.zig; OWNER=storage; UPDATED=2025-09-20
 
 const std = @import("std");
-const iface = @import("interface.zig");
+const iface = @import("interface");
 
 // CANARY: REQ=REQ-DISK-AES-001; FEATURE="AES-256 Disk Encryption"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=storage; UPDATED=2026-01-10
 const aes = struct {
@@ -24,7 +24,7 @@ const aes = struct {
 
     /// GF(2^128) multiplication by alpha for XTS mode tweak update
     fn mul_alpha(t: *[16]u8) void {
-        var carry: u8 = t.*[0] >> 7;
+        const carry: u8 = t.*[0] >> 7;
         var i: usize = 15;
         while (i > 0) : (i -= 1) t.*[i] = (t.*[i] << 1) | (t.*[i - 1] >> 7);
         t.*[0] <<= 1;
@@ -40,7 +40,7 @@ pub const Disk = struct {
     key: [32]u8 = undefined,
 
     pub fn init(allocator: std.mem.Allocator, path: []const u8) !Disk {
-        var f = try std.fs.cwd().createFile(path, .{ .truncate = false, .read = true, .mode = 0o600 });
+        const f = try std.fs.cwd().createFile(path, .{ .truncate = false, .read = true, .mode = 0o600 });
         var d = Disk{ .allocator = allocator, .file = f };
         // encryption toggle
         if (std.process.getEnvVarOwned(allocator, "GEODE_DISK_ENCRYPTION")) |v| {

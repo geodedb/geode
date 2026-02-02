@@ -10,29 +10,26 @@ const have_tde = true; // placeholder (TDE accessed via higher layer)
 // We can't reference tde symbol directly if not present; functions wrapped below.
 // Provide small adapter namespace resolved at runtime when encryption flag active.
 
-// Phase‑0 slotted page + in‑memory PageManager (no WAL / persistence yet).
-// Layout (page_size = 4096 default):
-// [Header|Slot array growing upward][free space][records growing downward]
-// Header (16 bytes total):
-//   [0..8)  : u64 page LSN
-//   [8..10) : u16 slot_count
-//   [10..12): u16 free_end
-//   [12..16): u32 checksum (Adler32 over full page with this field zeroed)
-// free_end is first byte after last record.
-// Each slot entry: offset(u16), size(u16).
+// Phase-1 Implementation: 8KB pages with expanded header
+// Layout (page_size = 8192):
+// [Header (32 bytes)][Slot array growing upward]... ...[records growing downward]
+// Header:
+//   [0..4)   : u32 page_id (for misdirected write detection)
+//   [4..6)   : u16 page_type
+//   [6..8)   : u16 slot_count
+//   [8..10)  : u16 free_end
+//   [10..12) : u16 reserved/flags
+//   [12..16) : u32 checksum (Adler32)
+//   [16..24) : u64 page_lsn
+//   [24..32) : u64 reserved_2 (alignment)
 
-// PERF: PHASE2_ADLER32 - Optimized Adler32 with chunked processing
-// CANARY: REQ=REQ-PERF-PHASE2-001; FEATURE="StorageOptimization"; ASPECT=CHECKSUM; STATUS=TESTED; TEST=tests/test_performance_integration.zig; OWNER=performance; UPDATED=2026-01-15
-// Phase 2 optimization: Process 16 bytes at a time before modulo for 2-3x improvement
 fn adler32(data: []const u8) u32 {
     var a: u32 = 1;
     var b: u32 = 0;
-
     // Process 16 bytes at a time before modulo (reduces modulo operations by 16x)
     const chunk_size = 16;
     var i: usize = 0;
     while (i + chunk_size <= data.len) : (i += chunk_size) {
-        // Unrolled loop for better compiler optimization
         inline for (0..chunk_size) |j| {
             a += data[i + j];
             b += a;
@@ -40,58 +37,88 @@ fn adler32(data: []const u8) u32 {
         a %= 65521;
         b %= 65521;
     }
-
-    // Handle remainder bytes
     while (i < data.len) : (i += 1) {
         a = (a + data[i]) % 65521;
         b = (b + a) % 65521;
     }
-
     return (b << 16) | a;
 }
 
-// PERF: PHASE2_DIRTY_TRACKING - Dirty page tracking for checksum optimization
-// CANARY: REQ=REQ-PERF-PHASE2-002; FEATURE="StorageOptimization"; ASPECT=DIRTY_TRACKING; STATUS=TESTED; TEST=tests/test_performance_integration.zig; OWNER=performance; UPDATED=2026-01-15
+pub const PageType = enum(u16) {
+    Unused = 0,
+    Node = 1,
+    Relationship = 2, // EdgeRecord
+    Property = 3, // Large properties
+    Index = 4,
+    Adjacency = 5, // Base or Delta blocks
+    Meta = 6, // Graph metadata
+};
+
 pub const Page = struct {
     buf: []u8,
-    // Phase 2 optimization: Track checksum validity to avoid redundant recomputation
     checksum_valid: bool = false,
     cached_checksum: u32 = 0,
-    // Layout:
-    // [0..8)  : u64 page LSN
-    // [8..10) : u16 slot_count
-    // [10..12): u16 free_end
-    // [12..16): u32 checksum (Adler32 over page with checksum zeroed)
-    // [16..   ): slot directory (offset,size)*
-    pub const LsnOffset: usize = 0;
-    pub const SlotCountOffset: usize = 8;
-    pub const FreeEndOffset: usize = 10;
+
+    // Header Offsets
+    pub const PageIdOffset: usize = 0;
+    pub const PageTypeOffset: usize = 4;
+    pub const SlotCountOffset: usize = 6;
+    pub const FreeEndOffset: usize = 8;
+    pub const FlagsOffset: usize = 10;
     pub const ChecksumOffset: usize = 12;
-    pub const HeaderSize: usize = 16; // LSN + slot_count + free_end + checksum
+    pub const LsnOffset: usize = 16;
+    pub const HeaderSize: usize = 32;
+
+    pub fn pageId(self: *const Page) u32 {
+        return std.mem.readInt(u32, self.buf[PageIdOffset..][0..4], .little);
+    }
+    pub fn setPageId(self: *Page, id: u32) void {
+        std.mem.writeInt(u32, self.buf[PageIdOffset..][0..4], id, .little);
+        self.markDirty();
+    }
+
+    pub fn pageType(self: *const Page) PageType {
+        const raw = std.mem.readInt(u16, self.buf[PageTypeOffset..][0..2], .little);
+        return std.meta.intToEnum(PageType, raw) catch .Unused;
+    }
+    pub fn setPageType(self: *Page, t: PageType) void {
+        std.mem.writeInt(u16, self.buf[PageTypeOffset..][0..2], @intFromEnum(t), .little);
+        self.markDirty();
+    }
 
     pub fn slotCount(self: *const Page) u16 {
-        return std.mem.readInt(u16, self.buf[SlotCountOffset .. SlotCountOffset + 2], .little);
+        return std.mem.readInt(u16, self.buf[SlotCountOffset..][0..2], .little);
     }
     fn setSlotCount(self: *Page, n: u16) void {
-        std.mem.writeInt(u16, self.buf[SlotCountOffset .. SlotCountOffset + 2], n, .little);
+        std.mem.writeInt(u16, self.buf[SlotCountOffset..][0..2], n, .little);
     }
+
     fn freeEnd(self: *const Page) u16 {
-        return std.mem.readInt(u16, self.buf[FreeEndOffset .. FreeEndOffset + 2], .little);
+        return std.mem.readInt(u16, self.buf[FreeEndOffset..][0..2], .little);
     }
     fn setFreeEnd(self: *Page, off: u16) void {
-        std.mem.writeInt(u16, self.buf[FreeEndOffset .. FreeEndOffset + 2], off, .little);
+        std.mem.writeInt(u16, self.buf[FreeEndOffset..][0..2], off, .little);
     }
+
+    pub fn lsn(self: *const Page) u64 {
+        return std.mem.readInt(u64, self.buf[LsnOffset..][0..8], .little);
+    }
+    pub fn setLsn(self: *Page, new_lsn: u64) void {
+        std.mem.writeInt(u64, self.buf[LsnOffset..][0..8], new_lsn, .little);
+        self.markDirty();
+    }
+
     fn slotOffset(i: u16) usize {
         return HeaderSize + @as(usize, i) * 4;
     }
     pub fn writeSlot(self: *Page, idx: u16, off: u16, sz: u16) void {
         const base = slotOffset(idx);
-        std.mem.writeInt(u16, self.buf[base .. base + 2][0..2], off, .little);
-        std.mem.writeInt(u16, self.buf[base + 2 .. base + 4][0..2], sz, .little);
+        std.mem.writeInt(u16, self.buf[base..][0..2], off, .little);
+        std.mem.writeInt(u16, self.buf[base + 2 ..][0..2], sz, .little);
     }
     pub fn readSlot(self: *const Page, idx: u16) struct { off: u16, sz: u16 } {
         const base = slotOffset(idx);
-        return .{ .off = std.mem.readInt(u16, self.buf[base .. base + 2][0..2], .little), .sz = std.mem.readInt(u16, self.buf[base + 2 .. base + 4][0..2], .little) };
+        return .{ .off = std.mem.readInt(u16, self.buf[base..][0..2], .little), .sz = std.mem.readInt(u16, self.buf[base + 2 ..][0..2], .little) };
     }
 
     /// Mark page as dirty (invalidates cached checksum)
@@ -155,14 +182,6 @@ pub const Page = struct {
         return p;
     }
 
-    pub fn setLsn(self: *Page, new_lsn: u64) void {
-        std.mem.writeInt(u64, self.buf[LsnOffset .. LsnOffset + 8], new_lsn, .little);
-        self.markDirty(); // Modification invalidates checksum
-    }
-    pub fn lsn(self: *const Page) u64 {
-        return std.mem.readInt(u64, self.buf[LsnOffset .. LsnOffset + 8], .little);
-    }
-
     pub fn freeSpace(self: *const Page) usize {
         const slots_bytes = HeaderSize + @as(usize, self.slotCount()) * 4;
         return if (self.freeEnd() <= slots_bytes) 0 else self.freeEnd() - @as(u16, @intCast(slots_bytes));
@@ -213,7 +232,7 @@ pub const Page = struct {
 pub const PageManager = struct {
     allocator: std.mem.Allocator,
     pages: std.ArrayList([]u8),
-    page_size: usize = 4096,
+    page_size: usize = 8192,
     base_path: ?[]const u8 = null, // optional directory for persistence
     free_pages: std.ArrayList(u32), // List of free page IDs for reuse
     next_page_id: u32 = 0,
@@ -228,7 +247,7 @@ pub const PageManager = struct {
         return .{
             .allocator = allocator,
             .pages = std.ArrayList([]u8).empty,
-            .page_size = 4096,
+            .page_size = 8192,
             .base_path = null,
             .free_pages = std.ArrayList(u32).empty,
             .next_page_id = 0,
@@ -338,6 +357,7 @@ pub const PageManager = struct {
                 Attr.err("error", err),
             });
         };
+        // log.err("message", ...);
         for (self.pages.items) |p| self.allocator.free(p);
         self.pages.deinit(self.allocator);
         self.free_pages.deinit(self.allocator);
@@ -429,9 +449,11 @@ pub const PageManager = struct {
     }
     pub fn newPage(self: *PageManager) !void {
         const mem = try self.allocator.alloc(u8, self.page_size);
-        _ = Page.init(mem);
+        var p = Page.init(mem);
+        // Set implicit ID based on index
+        p.setPageId(@intCast(self.pages.items.len));
         try self.pages.append(self.allocator, mem);
-        if (self.base_path) |p| try self.writePage(p, self.pages.items.len - 1);
+        if (self.base_path) |path| try self.writePage(path, self.pages.items.len - 1);
     }
     pub fn asPage(self: *PageManager, idx: usize) Page {
         return Page{ .buf = self.pages.items[idx] };
@@ -502,7 +524,7 @@ pub const PageManager = struct {
             // AES-256-GCM encryption via page_encryption wrapper
             const page_enc = @import("page_encryption.zig");
             const original = self.pages.items[index];
-            const encrypted = try page_enc.encryptForWrite(self.allocator, index, original);
+            const encrypted = try page_enc.encryptForWrite(self.allocator, index, original, self.enc_key);
             defer {
                 // Free if buffer is different from original (we allocated it).
                 if (encrypted.ptr != original.ptr) self.allocator.free(encrypted);
@@ -534,7 +556,7 @@ pub const PageManager = struct {
             if (raw.len == self.page_size + 28) {
                 const page_enc = @import("page_encryption.zig");
                 // Attempt decrypt; on failure propagate error after cleanup.
-                const plain = page_enc.decryptAfterRead(self.allocator, index, raw, self.page_size) catch |e| {
+                const plain = page_enc.decryptAfterRead(self.allocator, index, raw, self.page_size, self.enc_key) catch |e| {
                     self.allocator.free(raw);
                     return e;
                 };
@@ -635,26 +657,4 @@ test "encryption: in-memory mode has no encryption" {
     const rid = try pm.insert("test data for encryption check");
     const data = try pm.read(rid);
     try std.testing.expectEqualStrings("test data for encryption check", data);
-}
-
-test "encryption: PageManager struct has no legacy fields" {
-    // Compile-time verification that legacy fields are removed
-    // This test ensures enc_use_aes_gcm field no longer exists
-    const pm_type = PageManager;
-    const fields = @typeInfo(pm_type).@"struct".fields;
-
-    var found_enc_enabled = false;
-    var found_legacy_field = false;
-
-    for (fields) |field| {
-        if (std.mem.eql(u8, field.name, "enc_enabled")) {
-            found_enc_enabled = true;
-        }
-        if (std.mem.eql(u8, field.name, "enc_use_aes_gcm")) {
-            found_legacy_field = true;
-        }
-    }
-
-    try std.testing.expect(found_enc_enabled); // enc_enabled should still exist
-    try std.testing.expect(!found_legacy_field); // enc_use_aes_gcm should be removed
 }

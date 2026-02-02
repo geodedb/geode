@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const storage = @import("../storage/interface.zig");
+const storage_mod = @import("storage_page_manager");
+const storage = storage_mod.interface;
 
 // Advanced path algorithms for graph traversal
 // GAP-0084: Extended to collect edge IDs during path finding
