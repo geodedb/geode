@@ -123,6 +123,13 @@
             .url = "git+https://gitlab.com/devnw/zig/mcp.git#e05a814af90370746102bf4a9b0f03ed6e2f58f5",
             .hash = "mcp-0.1.0-exAeBHj7BAAYmmNRjZD3HG6hXVJG8-LEtybCLkBu7oj6",
         },
+        .protobuf = .{
+            .url = "git+https://github.com/Arwalk/zig-protobuf#2828be045c5f3e55c6f3f239c2ec40bc480a26ca",
+            .hash = "protobuf-3.0.0-0e82alnSKAD4lJettI9uUAM148s_36NH5SP7ZVjaAPkg",
+        },
+        .grpc_zig = .{
+            .path = "vendor/grpc-zig",
+        },
     },
 
     .paths = .{

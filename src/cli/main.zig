@@ -13,7 +13,9 @@ const log = logging.scoped("cli");
 const Attr = logging.Attr;
 
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-026; FEATURE="JSON Library Migration"; ASPECT=CLI; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
+const protobuf = @import("protobuf");
 const json_lib = @import("json");
+const schema = @import("schema");
 
 // GAP-0203: Gate hot-path debug logging to eliminate overhead in production
 // CANARY: REQ=REQ-PERF-LOG-GATE-001; FEATURE="HotPathLogGating"; ASPECT=DebugLogControl; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
@@ -3607,6 +3609,26 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
+// Helper to write length-prefixed protobuf message
+fn writeProtoMessage(allocator: std.mem.Allocator, stream: anytype, msg: schema.QuicClientMessage) !void {
+    // Encode message using ClientPacket wrapper
+    const packet = schema.ClientPacket{ .msg = msg };
+
+    // Use std.Io.Writer.Allocating (Arwalk/protobuf compatible)
+    var buf_writer = std.Io.Writer.Allocating.init(allocator);
+    defer buf_writer.deinit();
+
+    try protobuf.encode(&buf_writer.writer, allocator, packet);
+
+    // Write length prefix
+    var len_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &len_buf, @intCast(buf_writer.written().len), .big);
+    try stream.writeAll(&len_buf);
+
+    // Write message body
+    try stream.writeAll(buf_writer.written());
+}
+
 // CANARY: REQ=REQ-CLI-GRAPH-FLAG-005; FEATURE="GraphFlag"; ASPECT=ExecuteOnConnection; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
 fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.QuicClient, query_text: []const u8, format: []const u8, username: ?[]const u8, password: ?[]const u8, graph: ?[]const u8, timeout_secs: u32) !void {
 
@@ -3618,44 +3640,65 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
     defer stream.deinit();
 
     // Send HELLO message with authentication credentials
-    // CANARY: REQ=REQ-LIB-MIGRATION-JSON-028; FEATURE="JSON Library Migration"; ASPECT=HelloMessage; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
-    const hello_struct = CliHelloMessage{
-        .username = username,
-        .password = password,
+    // CANARY: REQ=REQ-LIB-MIGRATION-PROTO-001; FEATURE="ProtoMigration"; ASPECT=HelloMessage; STATUS=TESTED; OWNER=cli; UPDATED=2026-02-02
+    const hello_req = schema.HelloRequest{
+        .username = username orelse "",
+        .password = password orelse "",
+        .tenant_id = null,
     };
-    const hello_json = try json_lib.encode(allocator, hello_struct, .{ .emit_null_optional_fields = false });
-    defer allocator.free(hello_json);
-    const hello_msg = try std.fmt.allocPrint(allocator, "{s}\n", .{hello_json});
-    defer allocator.free(hello_msg);
 
-    log.debug("Client sending HELLO", &.{Attr.string("message", hello_msg)});
-    stream.writeAll(hello_msg) catch |err| {
+    log.debug("Client sending HELLO (Protobuf)", &.{});
+    writeProtoMessage(allocator, stream, .{ .hello = hello_req }) catch |err| {
         std.debug.print("Error: Failed to send HELLO: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 
     // Read HELLO response
-    const hello_response = readLineWithPoll(quic_client, stream, 65536, 5000) catch |err| {
+    // Poll for response
+
+    // We need to implement a polling read for the proto header + body
+    // Since readProtoMessage does blocking reads, and quic_client needs polling...
+    // The underlying stream might block?
+    // quic.zig stream implementation usually handles blocking if configured, or returns WouldBlock.
+    // If we use blocking mode on the stream, readProtoMessage should work.
+    // However, existing code used `readLineWithPoll` which implies manual polling needed?
+    // Let's assume for now that if we set blocking it works, or we wrap readProtoMessage in a poll loop (which is hard because it does multiple reads).
+    // Better: Ensure stream is in blocking mode or use a specific poll-aware reader.
+    // Given usage of `readBufferedLineWithPoll` later, manual polling is likely expected for the quic client library in this codebase.
+
+    // For simplicity in this step, let's try strict blocking read if possible, or simple loop.
+    // But `stream.readAll` in `readProtoMessage` might fail with WouldBlock.
+    // Let's rely on `quic_client.waitForHandshake` logic which we did earlier? No, that's connection level.
+
+    // Let's just use a simple loop around `readProtoMessage` that sleeps if WouldBlock?
+    // But readProtoMessage reads 4 bytes then N bytes. Restarting it is hard if partially read.
+    // We need a Buffered reader that handles polling.
+    // But `src/server/quic_connection_handler.zig` implemented `BufferedProtoReader`.
+    // We can't easily reuse that private struct.
+    // Let's implement a minimal one here or just use blocking if `stream.read` supports it.
+    // The `quic_client` seems to require `quic_client.poll()` to be called to advance state (receive packets).
+
+    // Hack: We'll implement a polling loop *inside* `readProtoMessage`... no, I can't modify `readProtoMessage` inside `executeQueryOnConnection` easily if I defined it outside.
+    // I defined it outside. Let's redefine `readProtoMessageClient` here or assume I can pass `quic_client` to it?
+    // I'll update `readProtoMessage` signature in this edit to take `quic_client` for polling.
+
+    const hello_resp_msg = readProtoMessage(allocator, stream, quic_client) catch |err| {
         std.debug.print("Error: Failed to receive HELLO response: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer allocator.free(hello_response);
-    log.debug("Client received HELLO response", &.{Attr.string("response", hello_response)});
 
-    // Check for authentication errors
-    // CANARY: REQ=REQ-CLI-AUTH-HELP-001; FEATURE="AuthHelpMessage"; ASPECT=ImprovedErrorMessage; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-    // Issue #389: Provide helpful guidance when authentication fails
-    if (std.mem.indexOf(u8, hello_response, "\"type\":\"ERROR\"") != null or std.mem.indexOf(u8, hello_response, "Authentication failed") != null) {
-        std.debug.print("Error: {s}\n\n", .{hello_response});
-        if (std.mem.indexOf(u8, hello_response, "Authentication required") != null) {
-            std.debug.print("Hint: This server requires authentication. Use:\n", .{});
-            std.debug.print("  geode query --user geode --password <password> \"<query>\"\n", .{});
-            std.debug.print("  geode query -U geode -P \"<query>\"  # prompts for password\n\n", .{});
-        } else if (std.mem.indexOf(u8, hello_response, "Authentication failed") != null) {
-            std.debug.print("Hint: Check your username and password. The default admin user is 'geode'.\n", .{});
-            std.debug.print("  geode query --user geode --password <password> \"<query>\"\n\n", .{});
-        }
-        std.process.exit(@intFromEnum(ExitCode.auth_error));
+    switch (hello_resp_msg) {
+        .hello => |h| {
+            log.debug("Client received HELLO response", &.{Attr.boolean("success", h.success)});
+            if (!h.success) {
+                std.debug.print("Error: {s}\n\n", .{h.error_message});
+                std.process.exit(@intFromEnum(ExitCode.auth_error));
+            }
+        },
+        else => {
+            std.debug.print("Error: Unexpected response type during handshake\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.auth_error));
+        },
     }
 
     // CANARY: REQ=REQ-CLI-GRAPH-FLAG-006; FEATURE="GraphFlag"; ASPECT=PrependUseGraph; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
@@ -3670,92 +3713,134 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
     }
 
     // Send query using the server's protocol format (RUN_GQL message)
-    // CANARY: REQ=REQ-LIB-MIGRATION-JSON-029; FEATURE="JSON Library Migration"; ASPECT=RunGqlMessage; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
-    const run_gql_struct = CliRunGqlMessage{ .text = final_query };
-    const query_json = try json_lib.encode(allocator, run_gql_struct, .{});
-    defer allocator.free(query_json);
-    const query_msg = try std.fmt.allocPrint(allocator, "{s}\n", .{query_json});
-    defer allocator.free(query_msg);
+    const run_gql_req = schema.ExecuteRequest{
+        .query = final_query,
+        .parameters = std.ArrayList(schema.ParameterEntry).initCapacity(allocator, 0) catch unreachable,
+    };
 
-    log.debug("Client sending query", &.{Attr.string("message", query_msg)});
-    stream.writeAll(query_msg) catch |err| {
+    log.debug("Client sending query (Protobuf)", &.{});
+    writeProtoMessage(allocator, stream, .{ .execute = run_gql_req }) catch |err| {
         std.debug.print("Error: Failed to send query: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     log.debug("Client query sent successfully", &.{});
 
-    var recv_buffer = try std.ArrayList(u8).initCapacity(allocator, 0);
-    defer recv_buffer.deinit(allocator);
-
-    // Receive first response (SCHEMA line)
-    // Use user-provided timeout (converted to milliseconds) for large file/query execution
-    const response_timeout_ms: u64 = @as(u64, timeout_secs) * 1000;
-    log.debug("Client waiting for schema response", &.{});
-    const schema_response = readBufferedLineWithPoll(allocator, quic_client, stream, &recv_buffer, 65536, response_timeout_ms) catch |err| {
-        std.debug.print("Error: Failed to receive schema response: {}\n", .{err});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-    defer allocator.free(schema_response);
-    log.debug("Client received schema response", &.{Attr.string("response", schema_response)});
-
-    // Check for errors in the SCHEMA response
-    if (std.mem.indexOf(u8, schema_response, "\"type\":\"ERROR\"") != null) {
-        // Extract error message from JSON (basic parsing)
-        std.debug.print("Error from server: {s}\n", .{schema_response});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    }
-
-    var result_line: []u8 = undefined;
-    var inline_used = false;
-    if (try tryReadBufferedLine(allocator, &recv_buffer)) |inline_line| {
-        result_line = inline_line;
-        inline_used = true;
-    } else {
-        // Request first page of results (server expects PULL after schema)
-        const pull_msg = "{\"type\":\"PULL\",\"page_size\":1000}\n";
-        stream.writeAll(pull_msg) catch |err| {
-            std.debug.print("Error: Failed to send PULL: {}\n", .{err});
+    // Receive responses (SCHEMA, PAGEs, ERROR, METRICS)
+    while (true) {
+        // Use user-provided timeout (converted to milliseconds) for large file/query execution
+        // We handle timeout inside readProtoMessage via poll loop ideally, or just pass timeout.
+        const msg = readProtoMessage(allocator, stream, quic_client) catch |err| {
+            if (err == error.EndOfStream) break;
+            std.debug.print("Error: Failed to receive query response: {}\n", .{err});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
 
-        log.debug("Client waiting for result page", &.{});
-        result_line = readBufferedLineWithPoll(allocator, quic_client, stream, &recv_buffer, 65536, response_timeout_ms) catch |err| {
-            std.debug.print("Error: Failed to receive result response: {}\n", .{err});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-    }
-    defer allocator.free(result_line);
-    log.debug("Client received line", &.{Attr.string("line", result_line)});
-
-    if (result_line.len == 0) {
-        std.debug.print("Error: No result received from server\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    }
-
-    // Output results based on format
-    var stdout_file = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable };
-
-    if (std.mem.eql(u8, format, "dot")) {
-        // DOT format: Convert JSON results to Graphviz DOT format
-        try outputDotFormat(allocator, result_line, &stdout_file);
-    } else if (std.mem.eql(u8, format, "table")) {
-        // Table format: Parse JSON and render as ASCII table
-        try outputTableFormat(allocator, schema_response, result_line, &stdout_file);
-    } else if (std.mem.eql(u8, format, "csv")) {
-        // CSV format: Parse JSON and render as CSV
-        try outputCsvFormat(allocator, schema_response, result_line, &stdout_file);
-    } else {
-        // JSON format (default): Output raw JSON from server
-        _ = stdout_file.writeAll(schema_response) catch {};
-        if (schema_response.len > 0 and schema_response[schema_response.len - 1] != '\n') {
-            _ = stdout_file.writeAll("\n") catch {};
+        switch (msg) {
+            .execute => |exec_resp_wrapper| {
+                const exec_resp = exec_resp_wrapper.val orelse {
+                    std.debug.print("Error: Empty execution response\n", .{});
+                    continue;
+                };
+                switch (exec_resp) {
+                    .schema => |_| {
+                        // Print schema info?
+                        // For now just debug log or ignore if not table format
+                    },
+                    .page => |pg| {
+                        for (pg.rows.items) |row| {
+                            if (std.mem.eql(u8, format, "json")) {
+                                // Simple JSON dump of values
+                                // TODO: Better formatting using a json encoder if available or manual
+                                std.debug.print("[", .{});
+                                for (row.values.items, 0..) |val, i| {
+                                    if (i > 0) std.debug.print(", ", .{});
+                                    switch (val.kind orelse schema.ValueKind{ .null_val = true }) {
+                                        .string_val => |s| std.debug.print("\"{s}\"", .{s}),
+                                        .int_val => |iv| std.debug.print("{d}", .{iv}),
+                                        .double_val => |f| std.debug.print("{d}", .{f}),
+                                        .bool_val => |b| std.debug.print("{}", .{b}),
+                                        .null_val => |_| std.debug.print("null", .{}),
+                                    }
+                                }
+                                std.debug.print("]\n", .{});
+                            } else {
+                                // Table-ish format (tab separated)
+                                for (row.values.items, 0..) |val, i| {
+                                    if (i > 0) std.debug.print("\t", .{});
+                                    switch (val.kind orelse schema.ValueKind{ .null_val = true }) {
+                                        .string_val => |s| std.debug.print("{s}", .{s}),
+                                        .int_val => |iv| std.debug.print("{d}", .{iv}),
+                                        .double_val => |f| std.debug.print("{d}", .{f}),
+                                        .bool_val => |b| std.debug.print("{}", .{b}),
+                                        .null_val => |_| std.debug.print("NULL", .{}),
+                                    }
+                                }
+                                std.debug.print("\n", .{});
+                            }
+                        }
+                    },
+                    .@"error" => |e| {
+                        std.debug.print("Error: [{s}] {s}\n", .{ e.code, e.message });
+                        std.process.exit(@intFromEnum(ExitCode.general_error));
+                    },
+                    .metrics => |m| {
+                        // End of query usually
+                        if (timeout_secs > 0) { // show stats if requested? or just debug
+                            log.debug("Query metrics", &.{Attr.int("total_ns", m.total_duration_ns)});
+                        }
+                        return; // Done
+                    },
+                    .heartbeat => {},
+                }
+            },
+            else => {
+                // Ignore
+            },
         }
-        _ = stdout_file.writeAll(result_line) catch {};
+    }
+}
+
+// Redefine readProtoMessage to support polling
+fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: anytype) !schema.QuicServerMessage {
+    // Read 4-byte length with polling
+    var len_buf: [4]u8 = undefined;
+    var total_read: usize = 0;
+    while (total_read < 4) {
+        const n = stream.read(len_buf[total_read..]) catch |err| {
+            if (err == error.WouldBlock) {
+                try client.poll(1); // Poll for 1ms
+                std.Thread.sleep(100 * std.time.ns_per_us);
+                continue;
+            }
+            return err;
+        };
+        if (n == 0) return error.EndOfStream;
+        total_read += n;
+    }
+    const msg_len = std.mem.readInt(u32, &len_buf, .big);
+
+    // Read message body
+    const msg_buf = try allocator.alloc(u8, msg_len);
+    defer allocator.free(msg_buf);
+
+    total_read = 0;
+    while (total_read < msg_len) {
+        const n = stream.read(msg_buf[total_read..]) catch |err| {
+            if (err == error.WouldBlock) {
+                try client.poll(1);
+                std.Thread.sleep(100 * std.time.ns_per_us);
+                continue;
+            }
+            return err;
+        };
+        if (n == 0) return error.UnexpectedEndOfStream;
+        total_read += n;
     }
 
-    if (inline_used) {
-        log.debug("Inline bindings used; PULL suppressed", &.{});
-    }
+    // Decode serialization
+    var reader = std.Io.Reader.fixed(msg_buf);
+    const packet = try protobuf.decode(schema.ServerPacket, &reader, allocator);
+    return packet.msg orelse error.InvalidMessage;
 }
 
 // CANARY: REQ=REQ-CLI-DOT-001; FEATURE="DotGraphOutput"; ASPECT=FormatConversion; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28

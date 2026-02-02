@@ -241,6 +241,21 @@ pub fn build(b: *std.Build) void {
     });
     const mcp_mod = mcp_dep.module("mcp");
 
+    // Protobuf (Google Protocol Buffers)
+    const protobuf_dep = b.dependency("protobuf", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const protobuf_mod = protobuf_dep.module("protobuf");
+
+    // gRPC (RPC framework)
+    const grpc_dep = b.dependency("grpc_zig", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const grpc_server_mod = grpc_dep.module("grpc-server");
+    const grpc_client_mod = grpc_dep.module("grpc-client");
+
     // Modules - Level 0 (No dependencies on other internal modules)
 
     const fsm_mod = b.createModule(.{ .root_source_file = b.path("src/storage/free_space_map.zig") });
@@ -340,6 +355,11 @@ pub fn build(b: *std.Build) void {
 
     // Phase 5 External Library Imports (optional enhancements)
     root_mod.addImport("mcp", mcp_mod);
+    root_mod.addImport("protobuf", protobuf_mod);
+    root_mod.addImport("grpc", grpc_server_mod); // Expose server as 'grpc' for simplicity in server code? Or 'grpc_server'?
+    // The TAR says "gRPC over HTTP/2". Let's use 'grpc_server' and 'grpc_client' for clarity.
+    root_mod.addImport("grpc_server", grpc_server_mod);
+    root_mod.addImport("grpc_client", grpc_client_mod);
 
     // Main unified CLI binary with server and client capabilities
     const geode_exe = b.addExecutable(.{
@@ -379,6 +399,9 @@ pub fn build(b: *std.Build) void {
 
     // Phase 5 External Library Imports for CLI (optional enhancements)
     geode_exe.root_module.addImport("mcp", mcp_mod);
+    geode_exe.root_module.addImport("protobuf", protobuf_mod);
+    geode_exe.root_module.addImport("grpc_server", grpc_server_mod);
+    geode_exe.root_module.addImport("grpc_client", grpc_client_mod);
 
     // Add centralized logging module for CLI
     geode_exe.root_module.addImport("logging", logging_mod);
@@ -406,6 +429,11 @@ pub fn build(b: *std.Build) void {
     // Add external JSON library for RFC 8259 compliant parsing in protocol module
     protocol_mod.addImport("json", json_mod);
     geode_exe.root_module.addImport("protocol", protocol_mod);
+
+    // Proto Schema Module
+    const schema_mod = b.createModule(.{ .root_source_file = b.path("src/proto/schema.zig"), .target = target, .optimize = optimize });
+    schema_mod.addImport("protobuf", protobuf_mod);
+    geode_exe.root_module.addImport("schema", schema_mod);
 
     // M11: Add storage/backup module for CLI to eliminate BackupConfig duplication
     const storage_backup_mod = b.createModule(.{ .root_source_file = b.path("src/storage/backup.zig"), .target = target, .optimize = optimize });
