@@ -1,6 +1,10 @@
 const std = @import("std");
 const Random = std.Random;
 
+// CANARY: REQ=REQ-PERF-SPICE-009; FEATURE="SpiceIntegration"; ASPECT=ExecutionPool; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
+const spice_wrapper = @import("parallel/spice");
+const SpicePool = spice_wrapper.SpicePool;
+
 // Parallel execution thread pool with work-stealing scheduler
 // CANARY: REQ=REQ-GQL-PARALLEL-001; FEATURE="Parallel Exec"; ASPECT=ENGINE; STATUS=TESTED; TEST=tests/e2e_parallel_execution.zig:1; BENCH=tests/benchmark_parallel_expand_mem_perf.zig:1; OWNER=engine; UPDATED=2025-09-26
 
@@ -138,6 +142,8 @@ pub const Pool = struct {
     enabled: bool = true,
     worker_count: usize,
     chunk_size_estimator: AdaptiveChunkEstimator,
+    // CANARY: REQ=REQ-PERF-SPICE-010; FEATURE="SpicePoolIntegration"; ASPECT=PoolField; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
+    spice_pool: ?*SpicePool = null,
 
     pub fn init(allocator: std.mem.Allocator, worker_count: usize) !Pool {
         const count = if (worker_count == 0) std.Thread.getCpuCount() catch 4 else worker_count;
@@ -150,6 +156,7 @@ pub const Pool = struct {
             .worker_queues = try allocator.alloc(WorkStealingDeque, count),
             .threads = try allocator.alloc(std.Thread, count),
             .chunk_size_estimator = AdaptiveChunkEstimator.init(),
+            .spice_pool = null,
         };
 
         // Initialize work-stealing deques
@@ -163,6 +170,57 @@ pub const Pool = struct {
             pool.threads[i] = try std.Thread.spawn(.{}, workerMainSteal, .{ &pool, i });
         }
         return pool;
+    }
+
+    /// Initialize and attach a SpicePool for fork/join parallelism
+    /// CANARY: REQ=REQ-PERF-SPICE-011; FEATURE="SpicePoolInit"; ASPECT=PoolMethod; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
+    pub fn initSpicePool(self: *Pool) !void {
+        if (self.spice_pool != null) return;
+
+        const sp = try self.allocator.create(SpicePool);
+        sp.* = SpicePool.init(self.allocator, self.worker_count);
+        sp.start();
+        self.spice_pool = sp;
+    }
+
+    /// Execute a fork/join computation using spice
+    /// Falls back to sequential execution if spice pool is not initialized
+    /// CANARY: REQ=REQ-PERF-SPICE-012; FEATURE="ForkJoin"; ASPECT=PoolMethod; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
+    pub fn forkJoin(
+        self: *Pool,
+        comptime T: type,
+        func: anytype,
+        arg: anytype,
+    ) T {
+        if (self.spice_pool) |sp| {
+            return sp.call(T, func, arg);
+        }
+        // Sequential fallback - execute directly
+        var dummy_task: spice_wrapper.Task = undefined;
+        return @call(.auto, func, .{ &dummy_task, arg });
+    }
+
+    /// Parallel map using spice fork/join (for recursive divide-and-conquer workloads)
+    /// Falls back to sequential if spice pool is not initialized or workload is small
+    /// CANARY: REQ=REQ-PERF-SPICE-013; FEATURE="SpiceMap"; ASPECT=PoolMethod; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
+    pub fn spiceMap(
+        self: *Pool,
+        comptime T: type,
+        comptime R: type,
+        items: []const T,
+        comptime mapFn: fn (*spice_wrapper.Task, T) R,
+        threshold: usize,
+    ) ![]R {
+        if (self.spice_pool) |sp| {
+            return spice_wrapper.parallelMap(T, R, sp, items, mapFn, threshold);
+        }
+        // Sequential fallback
+        var results = try self.allocator.alloc(R, items.len);
+        var dummy_task: spice_wrapper.Task = undefined;
+        for (items, 0..) |item, i| {
+            results[i] = mapFn(&dummy_task, item);
+        }
+        return results;
     }
 
     pub fn submit(self: *Pool, job: Job) !void {
@@ -232,6 +290,13 @@ pub const Pool = struct {
     }
 
     pub fn deinit(self: *Pool) void {
+        // Clean up spice pool if initialized
+        if (self.spice_pool) |sp| {
+            sp.deinit();
+            self.allocator.destroy(sp);
+            self.spice_pool = null;
+        }
+
         if (self.enabled) {
             self.mutex.lock();
             self.shutdown = true;

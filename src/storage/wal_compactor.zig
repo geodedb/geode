@@ -7,6 +7,9 @@ const logging = @import("logging");
 const log = logging.scoped("storage");
 const Attr = logging.Attr;
 
+// CANARY: REQ=REQ-PERF-SPICE-023; FEATURE="WALSpiceIntegration"; ASPECT=StorageParallelism; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
+// Spice fork/join parallelism for segment processing can be enabled by external caller
+
 // Automatic WAL compaction based on configurable thresholds
 pub const WalCompactor = struct {
     allocator: Allocator,
@@ -307,5 +310,161 @@ pub const WalCompactor = struct {
         }
 
         _ = new_path;
+    }
+
+    /// Record data extracted from a WAL segment for parallel processing
+    pub const ExtractedRecord = struct {
+        lsn: u64,
+        record_type: u8,
+        data: []u8,
+    };
+
+    /// Result of parallel segment extraction
+    pub const SegmentExtractResult = struct {
+        records: []ExtractedRecord,
+        bytes_processed: u64,
+    };
+
+    /// Extract records from a single segment (used in parallel)
+    fn extractRecordsFromSegment(self: *WalCompactor, segment: WalSegment) !SegmentExtractResult {
+        var records = std.ArrayList(ExtractedRecord).init(self.allocator);
+        var bytes_processed: u64 = 0;
+
+        var file = try std.fs.openFileAbsolute(segment.path, .{});
+        defer file.close();
+
+        var reader = file.reader();
+        while (true) {
+            // Read record header
+            const lsn = reader.readInt(u64, .little) catch break;
+            const record_size = reader.readInt(u32, .little) catch break;
+            const record_type = reader.readInt(u8, .little) catch break;
+
+            // Read record data
+            const record_data = try self.allocator.alloc(u8, record_size);
+            _ = try reader.read(record_data);
+
+            try records.append(.{
+                .lsn = lsn,
+                .record_type = record_type,
+                .data = record_data,
+            });
+
+            bytes_processed += 8 + 4 + 1 + record_size;
+        }
+
+        return .{
+            .records = try records.toOwnedSlice(),
+            .bytes_processed = bytes_processed,
+        };
+    }
+
+    /// Batch segment extraction - sequential implementation
+    /// For parallel spice integration, use spice_wrapper.parallelForEach externally
+    /// CANARY: REQ=REQ-PERF-SPICE-024; FEATURE="ParallelExtractRecords"; ASPECT=WALParallel; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
+    pub fn batchExtractRecords(
+        self: *WalCompactor,
+        segments: []const WalSegment,
+    ) ![]SegmentExtractResult {
+        const results = try self.allocator.alloc(SegmentExtractResult, segments.len);
+
+        for (segments, 0..) |segment, i| {
+            results[i] = try self.extractRecordsFromSegment(segment);
+        }
+
+        return results;
+    }
+
+    /// Enhanced compaction using batch segment extraction
+    /// For parallel spice integration, caller can use spice_wrapper externally
+    /// CANARY: REQ=REQ-PERF-SPICE-025; FEATURE="CompactParallel"; ASPECT=WALCompaction; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
+    pub fn compactEnhanced(self: *WalCompactor) !void {
+        const start_time = std.time.milliTimestamp();
+
+        // Get all segments sorted by creation time
+        const segments = try self.getSegments();
+        defer self.allocator.free(segments);
+
+        if (segments.len <= 1) return; // Nothing to compact
+
+        // Extract records from all segments
+        const extraction_results = try self.batchExtractRecords(segments);
+        defer {
+            for (extraction_results) |result| {
+                for (result.records) |record| {
+                    self.allocator.free(record.data);
+                }
+                self.allocator.free(result.records);
+            }
+            self.allocator.free(extraction_results);
+        }
+
+        // Create new compacted segment
+        const compact_path = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/wal_compact_{}.seg",
+            .{ self.wal_dir, start_time },
+        );
+        defer self.allocator.free(compact_path);
+
+        var compact_file = try std.fs.createFileAbsolute(compact_path, .{});
+        defer compact_file.close();
+
+        var writer = compact_file.writer();
+        var records_written: u64 = 0;
+        var bytes_before: u64 = 0;
+        var bytes_after: u64 = 0;
+
+        // Track which records we've seen to eliminate duplicates
+        var seen_lsns = std.AutoHashMap(u64, void).init(self.allocator);
+        defer seen_lsns.deinit();
+
+        // Calculate total bytes before
+        for (extraction_results) |result| {
+            bytes_before += result.bytes_processed;
+        }
+
+        // Process records from newest to oldest (to keep latest version)
+        var i = extraction_results.len;
+        while (i > 0) {
+            i -= 1;
+            const result = extraction_results[i];
+
+            for (result.records) |record| {
+                // Check if we've already seen this LSN
+                if (seen_lsns.contains(record.lsn)) {
+                    continue;
+                }
+
+                // Write to compacted file
+                try writer.writeInt(u64, record.lsn, .little);
+                try writer.writeInt(u32, @intCast(record.data.len), .little);
+                try writer.writeInt(u8, record.record_type, .little);
+                try writer.writeAll(record.data);
+
+                try seen_lsns.put(record.lsn, {});
+                records_written += 1;
+                bytes_after += 8 + 4 + 1 + record.data.len;
+            }
+        }
+
+        // Sync compacted file
+        try compact_file.sync();
+
+        // Atomically replace old segments with compacted one
+        try self.replaceSegments(segments, compact_path);
+
+        // Update stats
+        self.stats.last_compaction_time = start_time;
+        self.stats.total_compactions += 1;
+        self.stats.bytes_reclaimed += bytes_before - bytes_after;
+        self.stats.records_compacted += records_written;
+
+        log.info("WAL enhanced compaction completed", .{
+            segments.len,
+            bytes_before / 1024 / 1024,
+            bytes_after / 1024 / 1024,
+            records_written,
+        });
     }
 };

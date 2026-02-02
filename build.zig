@@ -256,6 +256,14 @@ pub fn build(b: *std.Build) void {
     const grpc_server_mod = grpc_dep.module("grpc-server");
     const grpc_client_mod = grpc_dep.module("grpc-client");
 
+    // CANARY: REQ=REQ-PERF-SPICE-002; FEATURE="SpiceParallelism"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
+    // Spice - Fork/join parallelism for recursive divide-and-conquer algorithms
+    const spice_dep = b.dependency("spice", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const spice_mod = spice_dep.module("spice");
+
     // Modules - Level 0 (No dependencies on other internal modules)
 
     const fsm_mod = b.createModule(.{ .root_source_file = b.path("src/storage/free_space_map.zig") });
@@ -306,6 +314,11 @@ pub fn build(b: *std.Build) void {
     // Stream Scheduler Module - DRR-based fair stream scheduling (GAP-0201)
     // CANARY: REQ=REQ-PERF-DRR-BUILD-001; FEATURE="DRRScheduler"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
     const stream_scheduler_mod = b.createModule(.{ .root_source_file = b.path("src/transport/stream_scheduler.zig"), .target = target, .optimize = optimize });
+
+    // CANARY: REQ=REQ-PERF-SPICE-008; FEATURE="SpiceParallelModule"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
+    // Spice wrapper module - provides unified fork/join parallelism interface
+    const spice_wrapper_mod = b.createModule(.{ .root_source_file = b.path("src/parallel/spice.zig"), .target = target, .optimize = optimize });
+    spice_wrapper_mod.addImport("spice", spice_mod);
 
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "enable_sentinel", enable_san);
@@ -364,6 +377,8 @@ pub fn build(b: *std.Build) void {
     // The TAR says "gRPC over HTTP/2". Let's use 'grpc_server' and 'grpc_client' for clarity.
     root_mod.addImport("grpc_server", grpc_server_mod);
     root_mod.addImport("grpc_client", grpc_client_mod);
+    root_mod.addImport("spice", spice_mod);
+    root_mod.addImport("parallel/spice", spice_wrapper_mod);
 
     // Main unified CLI binary with server and client capabilities
     const geode_exe = b.addExecutable(.{
@@ -406,6 +421,8 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("protobuf", protobuf_mod);
     geode_exe.root_module.addImport("grpc_server", grpc_server_mod);
     geode_exe.root_module.addImport("grpc_client", grpc_client_mod);
+    geode_exe.root_module.addImport("spice", spice_mod);
+    geode_exe.root_module.addImport("parallel/spice", spice_wrapper_mod);
 
     // Add centralized logging module for CLI
     geode_exe.root_module.addImport("logging", logging_mod);
@@ -1084,6 +1101,31 @@ pub fn build(b: *std.Build) void {
     perf_opt_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
     perf_opt_tests.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
     test_step.dependOn(&perf_opt_tests.step);
+
+    // CANARY: REQ=REQ-PERF-SPICE-027; FEATURE="SpiceIntegrationTests"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
+    // Spice fork/join parallelism integration tests
+    const spice_integration_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_spice_integration.zig"), .target = target, .optimize = optimize }) });
+    spice_integration_tests.root_module.addImport("geode", root_mod);
+    spice_integration_tests.root_module.addImport("spice", spice_mod);
+    spice_integration_tests.root_module.addImport("parallel/spice", spice_wrapper_mod);
+    const run_spice_integration_tests = b.addRunArtifact(spice_integration_tests);
+
+    // Create dedicated test-spice step for spice tests
+    const spice_test_step = b.step("test-spice", "Run spice parallelism integration tests");
+    spice_test_step.dependOn(&run_spice_integration_tests.step);
+
+    // Also add to main test step
+    test_step.dependOn(&spice_integration_tests.step);
+
+    // CANARY: REQ=REQ-PERF-SPICE-028; FEATURE="SpiceBenchmarkBuild"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
+    // Spice parallelism benchmarks
+    const spice_bench = b.addExecutable(.{ .name = "bench_spice_parallelism", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_spice_parallelism.zig"), .target = target, .optimize = .ReleaseFast }) });
+    spice_bench.root_module.addImport("spice", spice_mod);
+    spice_bench.root_module.addImport("parallel/spice", spice_wrapper_mod);
+    b.installArtifact(spice_bench);
+    const run_spice_bench = b.addRunArtifact(spice_bench);
+    const spice_bench_step = b.step("bench-spice", "Run spice fork/join parallelism benchmarks");
+    spice_bench_step.dependOn(&run_spice_bench.step);
 
     // GAP-0201: Transport throughput benchmark for performance optimization validation
     // CANARY: REQ=REQ-PERF-BENCH-BUILD-001; FEATURE="ThroughputBenchmark"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26

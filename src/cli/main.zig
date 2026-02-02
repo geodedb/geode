@@ -1289,15 +1289,14 @@ fn processStreamBuffer(
 }
 
 fn sendProtoResponse(allocator: std.mem.Allocator, transport: *quic.QuicTransport, conn_state: *ConnectionState, stream_id: u64, resp: schema.QuicServerMessage) !void {
-    var raw_buf = try std.ArrayList(u8).initCapacity(allocator, 0);
-    defer raw_buf.deinit(allocator);
+    // Use std.Io.Writer.Allocating for type-erased allocating writer compatible with protobuf
+    var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.init(allocator);
+    defer aw.deinit();
 
     // Encode Message
-    var writer = raw_buf.writer(allocator);
-    var any_writer = writer.any();
-    try protobuf.encode(&any_writer, allocator, resp);
+    try protobuf.encode(&aw.writer, allocator, resp);
 
-    const body = raw_buf.items;
+    const body = aw.writer.buffer[0..aw.writer.end];
 
     // Send Header (4 bytes len)
     var len_buf: [4]u8 = undefined;
@@ -1309,24 +1308,10 @@ fn sendProtoResponse(allocator: std.mem.Allocator, transport: *quic.QuicTranspor
 }
 
 fn processProtobufMessage(allocator: std.mem.Allocator, transport: *quic.QuicTransport, conn_state: *ConnectionState, stream_id: u64, state: *StreamState, data: []const u8) !void {
-    var fbs = std.io.fixedBufferStream(data);
-    const reader = fbs.reader();
-    // Decode message using generic decode function
-    // Assuming protobuf.decode(Allocator, T, Reader) or similar.
-    // Based on `protobuf.encode(Writer, Allocator, T)`, decode is likely `decode(Allocator, T, Reader)` or `decode(T, Allocator, Reader)`.
-    // The commented out code was: `protobuf.decode(schema.QuicClientMessage, &reader, allocator)`.
-    // Let's try that first, but correcting pointer semantics if needed.
-    // Note: protobuf.decode usually takes reader/fbs by value or pointer depending on impl.
-    // arwalk/zig-protobuf uses `decode(Allocator, T, Reader)` usually.
-    // But `schema.zig` doesn't export decode.
-
-    // Let's look at `writeProtoMessage` again -> `protobuf.encode(writer, allocator, msg)`.
-    // So arguments are (Writer, Allocator, T).
-    // Decode usually mirrors: (Allocator, Reader, T) ? No, T must be known.
-    // `protobuf.decode(allocator, Reader, T)`?
-
-    // Let's try to match the commented out signature: `protobuf.decode(schema.QuicClientMessage, reader, allocator)` (removed & since reader is struct usually).
-    const packet = try protobuf.decode(schema.ClientPacket, reader, allocator);
+    // Use std.Io.Reader.fixed() to create a type-erased reader from the data slice
+    // This is the expected type for protobuf.decode in Zig 0.15.x
+    var reader: std.Io.Reader = .fixed(data);
+    const packet = try protobuf.decode(schema.ClientPacket, &reader, allocator);
     const msg = packet.msg orelse return error.InvalidMessage;
 
     if (false) return error.UnexpectedEndOfStream;
@@ -3845,10 +3830,8 @@ fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic
         total_read += n;
     }
 
-    // Decode message
-    var fbs = std.io.fixedBufferStream(msg_bytes);
-
-    var reader = fbs.reader();
+    // Decode message using std.Io.Reader.fixed() for type-erased reader
+    var reader: std.Io.Reader = .fixed(msg_bytes);
 
     // Decode ServerPacket wrapper
     const packet = try protobuf.decode(schema.ServerPacket, &reader, allocator);
@@ -3858,21 +3841,23 @@ fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic
 // Helper to write length-prefixed protobuf message
 fn writeProtoMessage(allocator: std.mem.Allocator, stream: anytype, msg: schema.QuicClientMessage) !void {
     std.debug.print("DEBUG: writeProtoMessage type={s}\n", .{@tagName(msg)});
-    // Write to temporary buffer to determine length
-    var buf = try std.ArrayList(u8).initCapacity(allocator, 4096);
-
-    defer buf.deinit(allocator);
+    // Use std.Io.Writer.Allocating for type-erased allocating writer compatible with protobuf
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
+    defer aw.deinit();
 
     // Encode the inner message variant (QuicClientMessage is a union)
-    try protobuf.encode(buf.writer(allocator), allocator, msg);
+    try protobuf.encode(&aw.writer, allocator, msg);
+
+    // Get the written data
+    const written_data = aw.writer.buffer[0..aw.writer.end];
 
     // Write length prefix (4 bytes BE)
     var len_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &len_buf, @intCast(buf.items.len), .big);
+    std.mem.writeInt(u32, &len_buf, @intCast(written_data.len), .big);
     try stream.writeAll(&len_buf);
 
     // Write message body
-    try stream.writeAll(buf.items);
+    try stream.writeAll(written_data);
 }
 
 // CANARY: REQ=REQ-CLI-GRAPH-FLAG-005; FEATURE="GraphFlag"; ASPECT=ExecuteOnConnection; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
