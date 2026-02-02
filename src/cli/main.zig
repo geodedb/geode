@@ -502,11 +502,12 @@ fn printServeUsage() void {
 fn printQueryUsage() void {
     std.debug.print("geode query - Execute a GQL query\n" ++
         "\n" ++
-        "Usage: geode query [options] <query|-> \n" ++
+        "Usage: geode query [options] <query|-|--file path> \n" ++
         "\n" ++
         "Options:\n" ++
         "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  -g, --graph <name>     Graph to query against (auto-prepends USE GRAPH)\n" ++
+        "  -f, --file <path>      Execute GQL statements from a file (supports ~)\n" ++
         "  --insecure             Skip TLS certificate verification\n" ++
         "  --ca-cert <path>       CA certificate path for server verification\n" ++
         "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
@@ -565,6 +566,10 @@ fn printQueryUsage() void {
         "  geode query --json-param id 123 \"MATCH (n) WHERE id(n) = $id RETURN n\"\n" ++
         "  geode query --server remote:3141 --timeout 5 --retry 3 \"RETURN 1 AS x\"\n" ++
         "  echo \"RETURN 1 AS x\" | geode query -\n" ++
+        "\n" ++
+        "  # Execute from file\n" ++
+        "  geode query --file ~/my_queries.gql\n" ++
+        "  geode query -f ./schema.gql --insecure\n" ++
         "\n", .{});
 }
 
@@ -2951,6 +2956,9 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var ca_cert_path: ?[]const u8 = null;
     var client_cert_path: ?[]const u8 = null;
     var client_key_path: ?[]const u8 = null;
+    // CANARY: REQ=REQ-CLI-FILE-FLAG-001; FEATURE="QueryFileFlag"; ASPECT=FileInput; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-31
+    // Issue GAP-384: Add --file flag to execute GQL from a file (same as /source in shell)
+    var source_file: ?[]const u8 = null;
 
     i = start_idx + 1;
     while (i < argv.len) : (i += 1) {
@@ -2964,6 +2972,15 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             graph = argv[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--file") or std.mem.eql(u8, arg, "-f")) {
+            // CANARY: REQ=REQ-CLI-FILE-FLAG-002; FEATURE="QueryFileFlag"; ASPECT=FlagParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-31
+            // Issue GAP-384: Execute GQL from a file (same as /source in shell)
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --file requires a file path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            source_file = argv[i + 1];
             i += 1;
         } else if (std.mem.eql(u8, arg, "--server")) {
             if (i + 1 >= argv.len) {
@@ -3083,18 +3100,149 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         }
     }
 
-    if (query_text == null) {
+    // CANARY: REQ=REQ-CLI-FILE-FLAG-003; FEATURE="QueryFileFlag"; ASPECT=FileReading; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-31
+    // Handle --file input with tilde expansion (same as /source in shell)
+    var file_allocated: ?[]u8 = null;
+    defer if (file_allocated) |allocated| allocator.free(allocated);
+
+    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-001; FEATURE="ChunkedExecution"; ASPECT=LargeFileSupport; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+    // For large files, we'll collect individual statements to enable chunked execution
+    var file_statements: ?std.ArrayList([]const u8) = null;
+    defer {
+        if (file_statements) |*stmts| {
+            for (stmts.items) |stmt| {
+                allocator.free(stmt);
+            }
+            stmts.deinit(allocator);
+        }
+    }
+
+    if (source_file) |filepath| {
+        // Expand ~ to home directory if present
+        var path_buf: [4096]u8 = undefined;
+        const resolved_path = if (filepath.len > 0 and filepath[0] == '~') blk: {
+            const home = std.posix.getenv("HOME") orelse {
+                std.debug.print("Error: Cannot expand ~: HOME not set\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            };
+            const rest = if (filepath.len > 1) filepath[1..] else "";
+            const path = std.fmt.bufPrint(&path_buf, "{s}{s}", .{ home, rest }) catch {
+                std.debug.print("Error: Path too long\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            };
+            break :blk path;
+        } else filepath;
+
+        // Open and read the file
+        const file = std.fs.cwd().openFile(resolved_path, .{}) catch |err| {
+            std.debug.print("Error: Cannot open file '{s}': {s}\n", .{ resolved_path, @errorName(err) });
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        };
+        defer file.close();
+
+        const contents = file.readToEndAlloc(allocator, 1 << 24) catch |err| { // 16MB max
+            std.debug.print("Error: Cannot read file: {s}\n", .{@errorName(err)});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        };
+        defer allocator.free(contents);
+
+        // Strip comments and collect individual statements
+        // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-002; FEATURE="ChunkedExecution"; ASPECT=StatementParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+        var statements = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+        var current_stmt = try std.ArrayList(u8).initCapacity(allocator, 0);
+        defer current_stmt.deinit(allocator);
+
+        var line_iter = std.mem.splitSequence(u8, contents, "\n");
+        while (line_iter.next()) |raw_line| {
+            const line = std.mem.trimRight(u8, raw_line, "\r");
+            const trimmed = std.mem.trim(u8, line, " \t");
+
+            // Skip empty lines and comments
+            if (trimmed.len == 0) continue;
+            if (std.mem.startsWith(u8, trimmed, "--")) continue;
+            if (std.mem.startsWith(u8, trimmed, "#")) continue;
+
+            // Append line to current statement
+            if (current_stmt.items.len > 0) {
+                current_stmt.append(allocator, ' ') catch {};
+            }
+            current_stmt.appendSlice(allocator, trimmed) catch {};
+
+            // Check if statement is complete (ends with semicolon)
+            if (std.mem.endsWith(u8, trimmed, ";")) {
+                // Save complete statement
+                const stmt_copy = allocator.dupe(u8, current_stmt.items) catch {
+                    std.debug.print("Error: Memory allocation failed\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.usage_error));
+                };
+                statements.append(allocator, stmt_copy) catch {
+                    allocator.free(stmt_copy);
+                    std.debug.print("Error: Memory allocation failed\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.usage_error));
+                };
+                current_stmt.clearRetainingCapacity();
+            }
+        }
+
+        if (statements.items.len == 0) {
+            std.debug.print("Error: File contains no valid GQL statements\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+
+        // Calculate total size to determine if chunking is needed
+        // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-003; FEATURE="ChunkedExecution"; ASPECT=SizeDetection; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+        const max_single_query_size: usize = 32 * 1024; // 32KB threshold for chunking
+        var total_size: usize = 0;
+        for (statements.items) |stmt| {
+            total_size += stmt.len + 1; // +1 for separator
+        }
+
+        std.debug.print("Executing from file: {s}\n", .{resolved_path});
+
+        if (total_size <= max_single_query_size) {
+            // Small enough to send as single query - concatenate all statements
+            var processed = std.ArrayList(u8).initCapacity(allocator, total_size) catch {
+                std.debug.print("Error: Memory allocation failed\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            };
+            for (statements.items) |stmt| {
+                processed.appendSlice(allocator, stmt) catch {};
+                processed.append(allocator, ' ') catch {};
+            }
+            // Clean up statements since we don't need them anymore
+            for (statements.items) |stmt| {
+                allocator.free(stmt);
+            }
+            statements.deinit(allocator);
+
+            file_allocated = processed.toOwnedSlice(allocator) catch {
+                std.debug.print("Error: Memory allocation failed\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            };
+            query_text = file_allocated;
+        } else {
+            // Large file - use chunked execution
+            std.debug.print("Large file detected ({d} bytes, {d} statements) - using chunked execution\n", .{ total_size, statements.items.len });
+            file_statements = statements;
+            query_text = null; // Will use chunked execution instead
+        }
+    }
+
+    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-007; FEATURE="ChunkedExecution"; ASPECT=NullCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+    // Allow null query_text when using chunked execution (file_statements is set)
+    if (query_text == null and file_statements == null) {
         std.debug.print("Error: query text required\n", .{});
         std.debug.print("Example: geode query \"MATCH (n) RETURN n LIMIT 10\"\n", .{});
+        std.debug.print("         geode query --file ~/queries.gql\n", .{});
         printQueryUsage();
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    // Handle stdin input if query_text is "-"
+    // Handle stdin input if query_text is "-" (only when not using chunked execution)
     var stdin_allocated: ?[]u8 = null;
     defer if (stdin_allocated) |allocated| allocator.free(allocated);
 
-    if (std.mem.eql(u8, query_text.?, "-")) {
+    if (query_text != null and std.mem.eql(u8, query_text.?, "-")) {
         const stdin = std.fs.File{ .handle = getStdinHandle() catch return error.StdioUnavailable }; // stdin handle
         const stdin_content = try stdin.readToEndAlloc(allocator, 1024 * 1024); // Max 1MB
         defer allocator.free(stdin_content);
@@ -3180,6 +3328,26 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // Determine execution mode based on --server flag
     // Default to connecting to localhost:3141 if no --server specified
     const server_addr = server orelse "127.0.0.1:3141";
+
+    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-004; FEATURE="ChunkedExecution"; ASPECT=BatchExecution; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+    // Handle chunked execution for large files
+    if (file_statements) |statements| {
+        try executeChunkedQueries(allocator, .{
+            .server_addr = server_addr,
+            .statements = statements.items,
+            .format = format,
+            .insecure = insecure,
+            .timeout_secs = timeout_secs,
+            .retry_count = retry_count,
+            .username = user,
+            .password = password,
+            .ca_cert_path = ca_cert_path,
+            .client_cert_path = client_cert_path,
+            .client_key_path = client_key_path,
+            .graph = graph,
+        });
+        return;
+    }
 
     // GAP-0113: Execute query via QUIC connection with optional certificate verification
     // CANARY: REQ=REQ-CLI-GRAPH-FLAG-003; FEATURE="GraphFlag"; ASPECT=ExecuteWithGraph; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
@@ -3276,6 +3444,91 @@ const QuicQueryOptions = struct {
     graph: ?[]const u8 = null,
 };
 
+// CANARY: REQ=REQ-CLI-CHUNKED-EXEC-005; FEATURE="ChunkedExecution"; ASPECT=OptionsStruct; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+const ChunkedQueryOptions = struct {
+    server_addr: []const u8,
+    statements: []const []const u8,
+    format: []const u8 = "table",
+    insecure: bool = false,
+    timeout_secs: u32 = 30,
+    retry_count: u32 = 0,
+    username: ?[]const u8 = null,
+    password: ?[]const u8 = null,
+    ca_cert_path: ?[]const u8 = null,
+    client_cert_path: ?[]const u8 = null,
+    client_key_path: ?[]const u8 = null,
+    graph: ?[]const u8 = null,
+};
+
+// CANARY: REQ=REQ-CLI-CHUNKED-EXEC-006; FEATURE="ChunkedExecution"; ASPECT=Execution; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+/// Execute statements in chunks, batching multiple statements per request while staying under the size limit
+fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions) !void {
+    const max_chunk_size: usize = 32 * 1024; // 32KB per chunk
+    const statements = opts.statements;
+
+    var executed: usize = 0;
+    var error_count: usize = 0;
+
+    // Process statements in chunks
+    var chunk_start: usize = 0;
+    while (chunk_start < statements.len) {
+        // Build a chunk of statements that fits within the size limit
+        var chunk_size: usize = 0;
+        var chunk_end: usize = chunk_start;
+
+        while (chunk_end < statements.len) {
+            const stmt_len = statements[chunk_end].len + 1; // +1 for separator
+            if (chunk_size + stmt_len > max_chunk_size and chunk_end > chunk_start) {
+                // This statement would exceed the limit, stop here
+                break;
+            }
+            chunk_size += stmt_len;
+            chunk_end += 1;
+        }
+
+        // Build the chunk query
+        var chunk_query = try std.ArrayList(u8).initCapacity(allocator, 0);
+        defer chunk_query.deinit(allocator);
+
+        for (statements[chunk_start..chunk_end]) |stmt| {
+            chunk_query.appendSlice(allocator, stmt) catch {};
+            chunk_query.append(allocator, ' ') catch {};
+        }
+
+        // Execute this chunk
+        const chunk_count = chunk_end - chunk_start;
+        std.debug.print("Executing chunk {d}-{d} of {d} statements...\n", .{ chunk_start + 1, chunk_end, statements.len });
+
+        executeQuicQuery(allocator, .{
+            .server_addr = opts.server_addr,
+            .query_text = chunk_query.items,
+            .format = "json", // Use JSON for chunked to simplify aggregation
+            .insecure = opts.insecure,
+            .timeout_secs = opts.timeout_secs,
+            .retry_count = opts.retry_count,
+            .username = opts.username,
+            .password = opts.password,
+            .ca_cert_path = opts.ca_cert_path,
+            .client_cert_path = opts.client_cert_path,
+            .client_key_path = opts.client_key_path,
+            .graph = opts.graph,
+        }) catch |err| {
+            std.debug.print("Error executing chunk: {}\n", .{err});
+            error_count += 1;
+        };
+
+        executed += chunk_count;
+        chunk_start = chunk_end;
+    }
+
+    // Print summary
+    std.debug.print("\nChunked execution complete:\n", .{});
+    std.debug.print("  Statements executed: {d}\n", .{executed});
+    if (error_count > 0) {
+        std.debug.print("  Errors: {d}\n", .{error_count});
+    }
+}
+
 fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void {
     const server_addr = opts.server_addr;
     const query_text = opts.query_text;
@@ -3333,7 +3586,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
             const handshake_err = quic_client.waitForHandshake(handshake_timeout);
             if (handshake_err) |_| {
                 // Handshake successful, proceed with query execution
-                return try executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph);
+                return try executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph, timeout_secs);
             } else |_| {
                 last_error = "connection timeout";
             }
@@ -3355,7 +3608,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
 }
 
 // CANARY: REQ=REQ-CLI-GRAPH-FLAG-005; FEATURE="GraphFlag"; ASPECT=ExecuteOnConnection; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.QuicClient, query_text: []const u8, format: []const u8, username: ?[]const u8, password: ?[]const u8, graph: ?[]const u8) !void {
+fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.QuicClient, query_text: []const u8, format: []const u8, username: ?[]const u8, password: ?[]const u8, graph: ?[]const u8, timeout_secs: u32) !void {
 
     // Get a stream for communication
     var stream = quic_client.getStream() catch |err| {
@@ -3435,8 +3688,10 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
     defer recv_buffer.deinit(allocator);
 
     // Receive first response (SCHEMA line)
+    // Use user-provided timeout (converted to milliseconds) for large file/query execution
+    const response_timeout_ms: u64 = @as(u64, timeout_secs) * 1000;
     log.debug("Client waiting for schema response", &.{});
-    const schema_response = readBufferedLineWithPoll(allocator, quic_client, stream, &recv_buffer, 65536, 5000) catch |err| {
+    const schema_response = readBufferedLineWithPoll(allocator, quic_client, stream, &recv_buffer, 65536, response_timeout_ms) catch |err| {
         std.debug.print("Error: Failed to receive schema response: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -3464,7 +3719,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
         };
 
         log.debug("Client waiting for result page", &.{});
-        result_line = readBufferedLineWithPoll(allocator, quic_client, stream, &recv_buffer, 65536, 5000) catch |err| {
+        result_line = readBufferedLineWithPoll(allocator, quic_client, stream, &recv_buffer, 65536, response_timeout_ms) catch |err| {
             std.debug.print("Error: Failed to receive result response: {}\n", .{err});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };

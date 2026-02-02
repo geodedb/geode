@@ -454,10 +454,20 @@ REQ-CLI-BACKUP-INTEGRATION-001,CLIBackup,RemoteBackup,TESTED,,,claude,2026-01-16
 REQ-CLI-BACKUP-INTEGRATION-001,Remote Backup/Restore Operations,IntegrationTesting,TESTED,,,claude,2025-10-05,tests/test_server_backup_api_integration.zig
 REQ-CLI-BACKUP-LIST-001,CLIBackupList,DirectoryScan,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-BUGFIXES-2026-01,CLI Bug Fixes,TestSpec,TESTED,,,cli,2026-01-28,geodetestlab/specs/cli_issue_fixes_january_2026.yml
+REQ-CLI-CHUNKED-EXEC-001,ChunkedExecution,LargeFileSupport,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-CLI-CHUNKED-EXEC-002,ChunkedExecution,StatementParsing,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-CLI-CHUNKED-EXEC-003,ChunkedExecution,SizeDetection,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-CLI-CHUNKED-EXEC-004,ChunkedExecution,BatchExecution,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-CLI-CHUNKED-EXEC-005,ChunkedExecution,OptionsStruct,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-CLI-CHUNKED-EXEC-006,ChunkedExecution,Execution,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-CLI-CHUNKED-EXEC-007,ChunkedExecution,NullCheck,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-COMPAT-001,Legacy Binary Symlinks,ML,IMPL,,,cli,2026-01-14,build.zig
 REQ-CLI-COMPLETE-001,REPL Tab Completion,Testing,TESTED,,,cli,2026-01-30,src/client/repl/repl_complete.zig
 REQ-CLI-DOT-001,DotGraphOutput,FormatConversion,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-EXIT-001,CLI Exit Code Mapping,ErrorHandling,TESTED,,,cli,2025-10-04,tests/exit_code_mapping_regression_test.sh
+REQ-CLI-FILE-FLAG-001,QueryFileFlag,FileInput,IMPL,,,cli,2026-01-31,src/cli/main.zig
+REQ-CLI-FILE-FLAG-002,QueryFileFlag,FlagParsing,IMPL,,,cli,2026-01-31,src/cli/main.zig
+REQ-CLI-FILE-FLAG-003,QueryFileFlag,FileReading,IMPL,,,cli,2026-01-31,src/cli/main.zig
 REQ-CLI-FORMAT-001,QueryOutputFormats,DOT_Table_CSV,TESTED,,,cli,2026-01-28,geodetestlab/specs/query_output_formats.yml
 REQ-CLI-GRAPH-FLAG-001,GraphFlag,QueryCommand,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-GRAPH-FLAG-002,GraphFlag,FlagParsing,IMPL,,,cli,2026-01-28,src/cli/main.zig
