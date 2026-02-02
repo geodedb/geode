@@ -174,6 +174,7 @@ class ParallelTestRunner:
         self.default_key = str(self.project_root / "certs" / "server.key")
         self.child_procs: list[subprocess.Popen] = []
         self.child_lock = threading.Lock()
+        self.print_lock = threading.Lock()  # Lock for thread-safe console output
         atexit.register(self._cleanup_children)
 
         # Initialize thread-safe port allocator
@@ -1397,14 +1398,16 @@ class ParallelTestRunner:
         """Log progress to both console and progress log file."""
         timestamp = datetime.now().strftime("%H:%M:%S")
         log_message = f"[{timestamp}] {message}"
-        print(log_message)
-
-        with open(self.progress_log, "a") as f:
-            f.write(log_message + "\n")
+        # Use lock to prevent interleaved output from concurrent threads
+        with self.print_lock:
+            print(log_message, flush=True)
+            with open(self.progress_log, "a") as f:
+                f.write(log_message + "\n")
 
     def write_detailed_log(self, test_result: TestResult):
         """Write detailed test information to detailed log."""
-        with open(self.detailed_log, "a") as f:
+        # Use print_lock to protect file access from concurrent threads
+        with self.print_lock, open(self.detailed_log, "a") as f:
             f.write(f"\n{'=' * 80}\n")
             f.write(f"Test: [{test_result.spec_file}] {test_result.test_name}\n")
             f.write(f"Success: {test_result.success}\n")
