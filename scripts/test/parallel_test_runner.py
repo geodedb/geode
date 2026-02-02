@@ -1400,7 +1400,11 @@ class ParallelTestRunner:
         log_message = f"[{timestamp}] {message}"
         # Use lock to prevent interleaved output from concurrent threads
         with self.print_lock:
-            print(log_message, flush=True)
+            # Clear any partial line content and move cursor to start of line
+            # This prevents garbled output when multiple threads print concurrently
+            sys.stdout.write("\r\033[K")  # Carriage return + clear to end of line
+            sys.stdout.write(log_message + "\n")
+            sys.stdout.flush()
             with open(self.progress_log, "a") as f:
                 f.write(log_message + "\n")
 
