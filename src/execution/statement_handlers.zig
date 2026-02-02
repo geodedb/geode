@@ -88,21 +88,25 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                 try rows_list.append(allocator, row);
             }
 
-            const storage_graphs = graph_storage_manager.listGraphNames(allocator) catch &.{};
-            defer {
-                for (storage_graphs) |name| {
-                    allocator.free(name);
+            // Get storage graphs - only free if we got allocated memory
+            if (graph_storage_manager.listGraphNames(allocator)) |storage_graphs| {
+                defer {
+                    for (storage_graphs) |name| {
+                        allocator.free(name);
+                    }
+                    allocator.free(storage_graphs);
                 }
-                allocator.free(storage_graphs);
-            }
 
-            for (storage_graphs) |name| {
-                if (seen.contains(name)) continue;
-                const name_copy = try allocator.dupe(u8, name);
-                try seen.put(name_copy, {});
-                var row = try allocator.alloc(Value, 1);
-                row[0] = Value{ .Str = name_copy };
-                try rows_list.append(allocator, row);
+                for (storage_graphs) |name| {
+                    if (seen.contains(name)) continue;
+                    const name_copy = try allocator.dupe(u8, name);
+                    try seen.put(name_copy, {});
+                    var row = try allocator.alloc(Value, 1);
+                    row[0] = Value{ .Str = name_copy };
+                    try rows_list.append(allocator, row);
+                }
+            } else |_| {
+                // listGraphNames failed, just use catalog graphs only
             }
         },
         .constraints => {
