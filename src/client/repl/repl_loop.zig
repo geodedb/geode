@@ -176,6 +176,9 @@ pub const ReplState = struct {
     // CANARY: REQ=REQ-SHELL-RECONNECT-013; FEATURE="ShellAutoReconnect"; ASPECT=TxnStatementCount; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
     // Track number of statements executed in current transaction for recovery info
     txn_statement_count: usize = 0,
+    // CANARY: REQ=REQ-SOURCE-CHUNKED-005; FEATURE="SourceChunkedExecution"; ASPECT=SuppressOutput; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+    // Suppress output during chunked execution (only show final summary)
+    suppress_output: bool = false,
 
     pub fn deinit(self: *ReplState) void {
         if (self.current_graph) |g| self.allocator.free(g);

@@ -1703,9 +1703,13 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     const stdout = platform.getStdoutHandle();
     const stderr = platform.getStderrHandle();
 
+    // CANARY: REQ=REQ-SOURCE-CHUNKED-006; FEATURE="SourceChunkedExecution"; ASPECT=OutputSuppression; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+    // Check if output should be suppressed (during chunked execution)
+    const suppress = if (@hasField(@TypeOf(state.*), "suppress_output")) state.suppress_output else false;
+
     // CRITICAL FIX: Move to new line before displaying results
-    // This prevents overlapping with the prompt
-    try stdout.writeAll("\r\n");
+    // This prevents overlapping with the prompt (skip when suppressing output)
+    if (!suppress) try stdout.writeAll("\r\n");
 
     // CANARY: REQ=REQ-MULTI-GRAPH-031; FEATURE="MultiGraphIsolation"; ASPECT=DropGraphReset; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=repl; UPDATED=2025-12-23
     // Check if this is a DROP GRAPH statement that drops the current graph
@@ -1866,12 +1870,12 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     }
 
     // Format and output the response data (BINDINGS/result)
-    if (response_data.items.len > 0) {
+    if (response_data.items.len > 0 and !suppress) {
         _ = try extractAndDisplayResult(state.allocator, response_data.items, stdout, stderr, state.format);
     }
 
     // Display timing information
-    if (state.show_timing) {
+    if (state.show_timing and !suppress) {
         var buf: [256]u8 = undefined;
         const timing_msg = try std.fmt.bufPrint(&buf, "Query executed in {d:.2} ms\r\n", .{duration_ms});
         try stdout.writeAll(timing_msg);
@@ -2200,6 +2204,10 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
         const chunk_msg = std.fmt.bufPrint(&chunk_msg_buf, "Large file ({d} bytes) - using chunked execution...", .{batch_statements.items.len}) catch "Chunked execution...";
         progress_spinner.setMessage(chunk_msg);
         _ = progress_spinner.tick();
+
+        // Suppress per-chunk output during chunked execution
+        state.suppress_output = true;
+        defer state.suppress_output = false;
 
         const max_chunk_size: usize = 32 * 1024;
         var chunk_start: usize = 0;

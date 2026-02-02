@@ -3765,6 +3765,8 @@ REQ-SOURCE-CHUNKED-001,SourceChunkedExecution,StatementList,IMPL,,,cli,2026-02-0
 REQ-SOURCE-CHUNKED-002,SourceChunkedExecution,CollectStatements,IMPL,,,cli,2026-02-02,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-CHUNKED-003,SourceChunkedExecution,SizeCheck,IMPL,,,cli,2026-02-02,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-CHUNKED-004,SourceChunkedExecution,ChunkedExecution,IMPL,,,cli,2026-02-02,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-CHUNKED-005,SourceChunkedExecution,SuppressOutput,IMPL,,,cli,2026-02-02,src/client/repl/repl_loop.zig
+REQ-SOURCE-CHUNKED-006,SourceChunkedExecution,OutputSuppression,IMPL,,,cli,2026-02-02,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-001,SourceFilePerformance,FileHashCache,IMPL,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-002,SourceFilePerformance,BatchExecution,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-002,SourceFilePerformance,FileHashCacheCleanup,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
@@ -3994,6 +3996,9 @@ REQ-TLS-CERT-002,TLSCertVerification,Core,EXEMPT,,,cli,2026-01-12,src/cli/main.z
 REQ-TRACEABILITY-001,Requirement Traceability Tests,Governance,TESTED,,,compliance,2026-01-15,tests/test_requirement_traceability.zig
 REQ-TRIG-001,TrigonometricFunctions,Sin,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-TRIG-002,TrigonometricFunctions,Cos,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig
+REQ-TXN-CHUNKED-ADVANCED-001,TransactionChunkingAdvanced,IntegrationTests,TESTED,,,txn,2026-02-02,geodetestlab/specs/transaction_chunked_advanced.yml
+REQ-TXN-CHUNKED-CONN-001,TransactionConnectionState,IntegrationTests,TESTED,,,txn,2026-02-02,geodetestlab/specs/transaction_chunked_connection_state.yml
+REQ-TXN-CHUNKED-EXEC-001,TransactionChunking,IntegrationTests,TESTED,,,txn,2026-02-02,geodetestlab/specs/transaction_chunked_execution.yml
 REQ-TXN-ISOLATION-001,Enhanced Transaction Isolation,IsolationLevels,TESTED,,,txn,2025-10-05,src/server/txn/enhanced_isolation.zig
 REQ-TXN-ISOLATION-001,EnhancedTransactionIsolation,IsolationLevels,TESTED,,,txn,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-TXN-ISOLATION-002,Advanced Phantom Read Prevention,PhantomReadPrevention,TESTED,,,txn,2025-10-05,src/server/txn/enhanced_isolation.zig
