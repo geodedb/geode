@@ -2962,7 +2962,6 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             i += 1;
         } else if (std.mem.eql(u8, arg, "--listen") and i + 1 < argv.len) {
             listen_addr = argv[i + 1];
-            std.debug.print("DEBUG: Parsed --listen argument: {s}\n", .{listen_addr});
             i += 1;
         } else if (std.mem.eql(u8, arg, "--log-level") and i + 1 < argv.len) {
             log_level = argv[i + 1];
@@ -3805,8 +3804,6 @@ fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic
     }
 
     const msg_len = std.mem.readInt(u32, &len_buf, .big);
-    // DEBUG: Log message length
-    std.debug.print("DEBUG: readProtoMessage len={d}\n", .{msg_len});
     if (msg_len > 16 * 1024 * 1024) return error.MessageTooLarge;
 
     // Read message body
@@ -3840,7 +3837,6 @@ fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic
 
 // Helper to write length-prefixed protobuf message
 fn writeProtoMessage(allocator: std.mem.Allocator, stream: anytype, msg: schema.QuicClientMessage) !void {
-    std.debug.print("DEBUG: writeProtoMessage type={s}\n", .{@tagName(msg)});
     // Use std.Io.Writer.Allocating for type-erased allocating writer compatible with protobuf
     var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
     defer aw.deinit();
