@@ -2012,6 +2012,16 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     var batch_statements = try std.ArrayList(u8).initCapacity(state.allocator, contents.len);
     defer batch_statements.deinit(state.allocator);
 
+    // CANARY: REQ=REQ-SOURCE-CHUNKED-001; FEATURE="SourceChunkedExecution"; ASPECT=StatementList; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+    // Collect individual statements for chunked execution when file is large
+    var statement_list = try std.ArrayList([]const u8).initCapacity(state.allocator, 0);
+    defer {
+        for (statement_list.items) |stmt| {
+            state.allocator.free(stmt);
+        }
+        statement_list.deinit(state.allocator);
+    }
+
     var meta_commands = try std.ArrayList(MetaCommand).initCapacity(state.allocator, 8);
     defer {
         for (meta_commands.items) |mc| {
@@ -2112,6 +2122,12 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
                 try batch_statements.append(state.allocator, ' ');
             }
             try batch_statements.appendSlice(state.allocator, current_statement.items);
+
+            // CANARY: REQ=REQ-SOURCE-CHUNKED-002; FEATURE="SourceChunkedExecution"; ASPECT=CollectStatements; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+            // Also save individual statement for chunked execution
+            const stmt_copy = try state.allocator.dupe(u8, current_statement.items);
+            try statement_list.append(state.allocator, stmt_copy);
+
             statement_count += 1;
             current_statement.clearRetainingCapacity();
         }
@@ -2159,13 +2175,17 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     }
 
     // CANARY: REQ=REQ-SOURCE-PERF-005; FEATURE="SourceFilePerformance"; ASPECT=SingleRequestExecution; STATUS=TESTED; TEST=geodetestlab/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-01-29
-    // Issue #400: Execute entire batch in single request for maximum performance
+    // CANARY: REQ=REQ-SOURCE-CHUNKED-003; FEATURE="SourceChunkedExecution"; ASPECT=SizeCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+    // Issue #400: Execute in single request for small files, chunked for large files
+    const max_single_batch_size: usize = 32 * 1024; // 32KB threshold for chunking
+    const use_chunked = batch_statements.items.len > max_single_batch_size;
+
     if (state.verbose) {
         var stmt_buf: [256]u8 = undefined;
         const preview_len = @min(batch_statements.items.len, 80);
         const preview = batch_statements.items[0..preview_len];
         const ellipsis: []const u8 = if (batch_statements.items.len > 80) "..." else "";
-        const stmt_msg = std.fmt.bufPrint(&stmt_buf, ">> Batch ({d} statements): {s}{s}\r\n", .{ statement_count, preview, ellipsis }) catch "";
+        const stmt_msg = std.fmt.bufPrint(&stmt_buf, ">> Batch ({d} statements, {d} bytes{s}): {s}{s}\r\n", .{ statement_count, batch_statements.items.len, if (use_chunked) ", chunked" else "", preview, ellipsis }) catch "";
         stdout.writeAll(stmt_msg) catch {};
     }
 
@@ -2173,16 +2193,82 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     var batch_error_msg: ?[]const u8 = null;
     var was_interrupted = false;
 
-    executeGql(state, batch_statements.items) catch |err| {
-        if (err == error.Interrupted) {
-            // CANARY: REQ=REQ-SHELL-INTERRUPT-022; FEATURE="SourceInterrupt"; ASPECT=ExecutionInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
-            // Handle interrupt explicitly - don't just increment error count
-            was_interrupted = true;
-            interrupted = true;
-        } else if (err != error.WouldBlock) {
-            error_count += 1;
+    if (use_chunked) {
+        // CANARY: REQ=REQ-SOURCE-CHUNKED-004; FEATURE="SourceChunkedExecution"; ASPECT=ChunkedExecution; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+        // Large file - execute statements in chunks to avoid server message size limit
+        var chunk_msg_buf: [128]u8 = undefined;
+        const chunk_msg = std.fmt.bufPrint(&chunk_msg_buf, "Large file ({d} bytes) - using chunked execution...", .{batch_statements.items.len}) catch "Chunked execution...";
+        progress_spinner.setMessage(chunk_msg);
+        _ = progress_spinner.tick();
+
+        const max_chunk_size: usize = 32 * 1024;
+        var chunk_start: usize = 0;
+        var chunks_executed: usize = 0;
+
+        while (chunk_start < statement_list.items.len) {
+            // Check for interrupt between chunks
+            if (checkForInterrupt()) {
+                interrupted = true;
+                was_interrupted = true;
+                break;
+            }
+
+            // Build chunk of statements that fits within size limit
+            var chunk_size: usize = 0;
+            var chunk_end: usize = chunk_start;
+
+            while (chunk_end < statement_list.items.len) {
+                const stmt_len = statement_list.items[chunk_end].len + 1;
+                if (chunk_size + stmt_len > max_chunk_size and chunk_end > chunk_start) {
+                    break;
+                }
+                chunk_size += stmt_len;
+                chunk_end += 1;
+            }
+
+            // Build chunk query
+            var chunk_query = try std.ArrayList(u8).initCapacity(state.allocator, chunk_size);
+            defer chunk_query.deinit(state.allocator);
+
+            for (statement_list.items[chunk_start..chunk_end]) |stmt| {
+                try chunk_query.appendSlice(state.allocator, stmt);
+                try chunk_query.append(state.allocator, ' ');
+            }
+
+            // Update spinner with progress
+            var progress_buf: [128]u8 = undefined;
+            const progress_msg = std.fmt.bufPrint(&progress_buf, "Executing chunk {d}-{d} of {d}...", .{ chunk_start + 1, chunk_end, statement_list.items.len }) catch "Executing...";
+            progress_spinner.setMessage(progress_msg);
+            _ = progress_spinner.tick();
+
+            // Execute this chunk
+            executeGql(state, chunk_query.items) catch |err| {
+                if (err == error.Interrupted) {
+                    was_interrupted = true;
+                    interrupted = true;
+                } else if (err != error.WouldBlock) {
+                    error_count += 1;
+                }
+            };
+
+            if (was_interrupted) break;
+
+            chunks_executed += 1;
+            chunk_start = chunk_end;
         }
-    };
+    } else {
+        // Small file - execute in single request for performance
+        executeGql(state, batch_statements.items) catch |err| {
+            if (err == error.Interrupted) {
+                // CANARY: REQ=REQ-SHELL-INTERRUPT-022; FEATURE="SourceInterrupt"; ASPECT=ExecutionInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
+                // Handle interrupt explicitly - don't just increment error count
+                was_interrupted = true;
+                interrupted = true;
+            } else if (err != error.WouldBlock) {
+                error_count += 1;
+            }
+        };
+    }
 
     // If interrupted during execution, handle immediately
     if (was_interrupted) {

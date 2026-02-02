@@ -461,6 +461,7 @@ REQ-CLI-CHUNKED-EXEC-004,ChunkedExecution,BatchExecution,IMPL,,,cli,2026-02-02,s
 REQ-CLI-CHUNKED-EXEC-005,ChunkedExecution,OptionsStruct,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-CHUNKED-EXEC-006,ChunkedExecution,Execution,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-CHUNKED-EXEC-007,ChunkedExecution,NullCheck,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-CLI-CHUNKED-EXEC-TEST-001,ChunkedExecution,E2ETests,TESTED,,,test,2026-02-02,geodetestlab/specs/query_file_flag_chunked_execution.yml
 REQ-CLI-COMPAT-001,Legacy Binary Symlinks,ML,IMPL,,,cli,2026-01-14,build.zig
 REQ-CLI-COMPLETE-001,REPL Tab Completion,Testing,TESTED,,,cli,2026-01-30,src/client/repl/repl_complete.zig
 REQ-CLI-DOT-001,DotGraphOutput,FormatConversion,IMPL,,,cli,2026-01-28,src/cli/main.zig
@@ -468,6 +469,8 @@ REQ-CLI-EXIT-001,CLI Exit Code Mapping,ErrorHandling,TESTED,,,cli,2025-10-04,tes
 REQ-CLI-FILE-FLAG-001,QueryFileFlag,FileInput,IMPL,,,cli,2026-01-31,src/cli/main.zig
 REQ-CLI-FILE-FLAG-002,QueryFileFlag,FlagParsing,IMPL,,,cli,2026-01-31,src/cli/main.zig
 REQ-CLI-FILE-FLAG-003,QueryFileFlag,FileReading,IMPL,,,cli,2026-01-31,src/cli/main.zig
+REQ-CLI-FILE-FLAG-TEST-001,QueryFileFlag,E2ETests,TESTED,,,test,2026-02-02,geodetestlab/specs/query_file_flag_comprehensive.yml
+REQ-CLI-FILE-FLAG-TEST-002,QueryFileFlag,EdgeCasesErrors,TESTED,,,test,2026-02-02,geodetestlab/specs/query_file_flag_edge_cases.yml
 REQ-CLI-FORMAT-001,QueryOutputFormats,DOT_Table_CSV,TESTED,,,cli,2026-01-28,geodetestlab/specs/query_output_formats.yml
 REQ-CLI-GRAPH-FLAG-001,GraphFlag,QueryCommand,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-GRAPH-FLAG-002,GraphFlag,FlagParsing,IMPL,,,cli,2026-01-28,src/cli/main.zig
@@ -3758,6 +3761,10 @@ REQ-SNAPSHOT-005,SnapshotInstallation,SnapshotCleanup,TESTED,,,backup,2026-01-15
 REQ-SORT-ASC-001,FinalSort,AscendingSort,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SORT-DESC-001,FinalSort,DescendingSort,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SORT-MULTI-001,FinalSort,MultiColumnSort,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
+REQ-SOURCE-CHUNKED-001,SourceChunkedExecution,StatementList,IMPL,,,cli,2026-02-02,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-CHUNKED-002,SourceChunkedExecution,CollectStatements,IMPL,,,cli,2026-02-02,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-CHUNKED-003,SourceChunkedExecution,SizeCheck,IMPL,,,cli,2026-02-02,src/client/repl/repl_dispatch.zig
+REQ-SOURCE-CHUNKED-004,SourceChunkedExecution,ChunkedExecution,IMPL,,,cli,2026-02-02,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-001,SourceFilePerformance,FileHashCache,IMPL,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-002,SourceFilePerformance,BatchExecution,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SOURCE-PERF-002,SourceFilePerformance,FileHashCacheCleanup,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
