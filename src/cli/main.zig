@@ -1309,14 +1309,27 @@ fn sendProtoResponse(allocator: std.mem.Allocator, transport: *quic.QuicTranspor
 }
 
 fn processProtobufMessage(allocator: std.mem.Allocator, transport: *quic.QuicTransport, conn_state: *ConnectionState, stream_id: u64, state: *StreamState, data: []const u8) !void {
-    // STUBBED out to diagnose build issue
-    // var fbs = std.io.fixedBufferStream(data);
-    // var reader = fbs.reader();
-    // const msg = protobuf.decode(schema.QuicClientMessage, &reader, allocator) catch |err| { ... };
-    const msg = schema.QuicClientMessage{ .hello = schema.HelloRequest{ .username = "stub", .password = "stub" } };
+    var fbs = std.io.fixedBufferStream(data);
+    const reader = fbs.reader();
+    // Decode message using generic decode function
+    // Assuming protobuf.decode(Allocator, T, Reader) or similar.
+    // Based on `protobuf.encode(Writer, Allocator, T)`, decode is likely `decode(Allocator, T, Reader)` or `decode(T, Allocator, Reader)`.
+    // The commented out code was: `protobuf.decode(schema.QuicClientMessage, &reader, allocator)`.
+    // Let's try that first, but correcting pointer semantics if needed.
+    // Note: protobuf.decode usually takes reader/fbs by value or pointer depending on impl.
+    // arwalk/zig-protobuf uses `decode(Allocator, T, Reader)` usually.
+    // But `schema.zig` doesn't export decode.
+
+    // Let's look at `writeProtoMessage` again -> `protobuf.encode(writer, allocator, msg)`.
+    // So arguments are (Writer, Allocator, T).
+    // Decode usually mirrors: (Allocator, Reader, T) ? No, T must be known.
+    // `protobuf.decode(allocator, Reader, T)`?
+
+    // Let's try to match the commented out signature: `protobuf.decode(schema.QuicClientMessage, reader, allocator)` (removed & since reader is struct usually).
+    const packet = try protobuf.decode(schema.ClientPacket, reader, allocator);
+    const msg = packet.msg orelse return error.InvalidMessage;
 
     if (false) return error.UnexpectedEndOfStream;
-    _ = data;
 
     if (HOT_PATH_LOGGING) log.debug("Received Proto Msg", &.{});
 
@@ -1341,12 +1354,12 @@ fn processProtobufMessage(allocator: std.mem.Allocator, transport: *quic.QuicTra
             // We run it via test_harness (as CLI does)
 
             var result_buf = try std.ArrayList(u8).initCapacity(allocator, 0);
-            defer result_buf.deinit();
+            defer result_buf.deinit(allocator);
 
             // Reuse runSimpleStatement which writes output to writer
-            runSimpleStatement(result_buf.writer(), allocator, exec_req.query, state.authenticated_username) catch |err| {
+            runSimpleStatement(result_buf.writer(allocator), allocator, exec_req.query, state.authenticated_username) catch |err| {
                 const err_resp = schema.Error{ .code = "500", .message = @errorName(err) };
-                const resp = schema.QuicServerMessage{ .execute = .{ .@"error" = err_resp } };
+                const resp = schema.QuicServerMessage{ .execute = schema.ExecutionResponse{ .val = schema.ExecutionResponseUnion{ .@"error" = err_resp } } };
                 try sendProtoResponse(allocator, transport, conn_state, stream_id, resp);
                 return;
             };
@@ -1399,18 +1412,20 @@ fn processProtobufMessage(allocator: std.mem.Allocator, transport: *quic.QuicTra
             // Let's rely on `test_harness` returning `[]const u8` which IS the result.
             // I will wrap it in a `DataPage` with one column "output" and one row string value.
 
-            var cols = std.ArrayList([]const u8).init(allocator);
-            try cols.append("output");
+            // var cols = std.ArrayList(schema.ColumnDefinition).init(allocator);
+            // try cols.append(.{ .name = "output", .type = "STRING" });
+            // Note: DataPage only contains rows. SchemaDefinition contains columns.
+            // For now, we skip SchemaDefinition and just send DataPage.
 
-            var vals = std.ArrayList(schema.Value).init(allocator);
-            try vals.append(schema.Value{ .kind = .{ .string_val = json_output } }); // json_output is slice in result_buf
+            var vals = try std.ArrayList(schema.Value).initCapacity(allocator, 1);
+            try vals.append(allocator, schema.Value{ .kind = .{ .string_val = json_output } });
 
-            var rows = std.ArrayList(schema.Row).init(allocator);
-            try rows.append(schema.Row{ .values = vals });
+            var rows = try std.ArrayList(schema.Row).initCapacity(allocator, 1);
+            try rows.append(allocator, schema.Row{ .values = vals });
 
-            const page = schema.DataPage{ .columns = cols, .rows = rows, .final = true };
+            const page = schema.DataPage{ .rows = rows, .last_page = true };
 
-            const resp = schema.QuicServerMessage{ .execute = .{ .page = page } };
+            const resp = schema.QuicServerMessage{ .execute = .{ .val = .{ .page = page } } };
             try sendProtoResponse(allocator, transport, conn_state, stream_id, resp);
         },
         .ping => |_| {
@@ -3780,17 +3795,20 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
 }
 
 // Helper to read length-prefixed protobuf message with polling
-fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic.QuicClient) !schema.QuicServerMessage {
+fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic.QuicClient, timeout_secs: u32) !schema.QuicServerMessage {
     // Read length prefix
     var len_buf: [4]u8 = undefined;
     var total_read: usize = 0;
     var attempts: usize = 0;
+    // Calculate max attempts based on timeout_secs (10ms sleep per attempt)
+    // timeout_secs * 1000ms / 10ms = timeout_secs * 100
+    const max_attempts = timeout_secs * 100;
 
     while (total_read < 4) {
         const n = stream.read(len_buf[total_read..]) catch |err| {
             if (err == error.WouldBlock) {
                 attempts += 1;
-                if (attempts > 1000) return error.Timeout; // ~10s
+                if (attempts > max_attempts) return error.Timeout;
                 try client.poll(1);
                 std.Thread.sleep(10 * std.time.ns_per_ms);
                 continue;
@@ -3802,6 +3820,8 @@ fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic
     }
 
     const msg_len = std.mem.readInt(u32, &len_buf, .big);
+    // DEBUG: Log message length
+    std.debug.print("DEBUG: readProtoMessage len={d}\n", .{msg_len});
     if (msg_len > 16 * 1024 * 1024) return error.MessageTooLarge;
 
     // Read message body
@@ -3814,7 +3834,7 @@ fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic
         const n = stream.read(msg_bytes[total_read..]) catch |err| {
             if (err == error.WouldBlock) {
                 attempts += 1;
-                if (attempts > 1000) return error.Timeout;
+                if (attempts > max_attempts) return error.Timeout;
                 try client.poll(1);
                 std.Thread.sleep(10 * std.time.ns_per_ms);
                 continue;
@@ -3837,6 +3857,7 @@ fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic
 
 // Helper to write length-prefixed protobuf message
 fn writeProtoMessage(allocator: std.mem.Allocator, stream: anytype, msg: schema.QuicClientMessage) !void {
+    std.debug.print("DEBUG: writeProtoMessage type={s}\n", .{@tagName(msg)});
     // Write to temporary buffer to determine length
     var buf = try std.ArrayList(u8).initCapacity(allocator, 4096);
 
@@ -3856,7 +3877,6 @@ fn writeProtoMessage(allocator: std.mem.Allocator, stream: anytype, msg: schema.
 
 // CANARY: REQ=REQ-CLI-GRAPH-FLAG-005; FEATURE="GraphFlag"; ASPECT=ExecuteOnConnection; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
 fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.QuicClient, query_text: []const u8, format: []const u8, username: ?[]const u8, password: ?[]const u8, graph: ?[]const u8, timeout_secs: u32) !void {
-    _ = timeout_secs;
 
     // Get a stream for communication
 
@@ -3909,7 +3929,11 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
     // I defined it outside. Let's redefine `readProtoMessageClient` here or assume I can pass `quic_client` to it?
     // I'll update `readProtoMessage` signature in this edit to take `quic_client` for polling.
 
-    const hello_resp_msg = readProtoMessage(allocator, stream, quic_client) catch |err| {
+    // Use an arena for the HELLO response to ensure cleanup of decoded message fields
+    var hello_arena = std.heap.ArenaAllocator.init(allocator);
+    defer hello_arena.deinit();
+
+    const hello_resp_msg = readProtoMessage(hello_arena.allocator(), stream, quic_client, timeout_secs) catch |err| {
         std.debug.print("Error: Failed to receive HELLO response: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -3923,7 +3947,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
             }
         },
         else => {
-            std.debug.print("Error: Unexpected response type during handshake\n", .{});
+            std.debug.print("Error: Unexpected response type during handshake: {}\n", .{hello_resp_msg});
             std.process.exit(@intFromEnum(ExitCode.auth_error));
         },
     }
@@ -3946,13 +3970,25 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
         .query = try allocator.dupe(u8, final_query),
         .parameters = .empty,
     };
+    defer allocator.free(run_gql_req.query);
 
     try writeProtoMessage(allocator, stream, .{ .execute = run_gql_req });
     log.debug("Client query sent successfully", &.{});
 
     // Receive responses loop
+    // Re-use arena for query results to prevent leaks per row/page
+    var loop_arena = std.heap.ArenaAllocator.init(allocator);
+    defer loop_arena.deinit();
+
     while (true) {
-        const resp = readProtoMessage(allocator, stream, quic_client) catch |err| {
+        // Reset arena at start of loop (or end) to free memory from previous message
+        // But we need the message during this iteration.
+        // Strategy: Process message fully, then reset.
+        // NOTE: If we break, defer deinit will clean up.
+
+        const loop_allocator = loop_arena.allocator();
+
+        const resp = readProtoMessage(loop_allocator, stream, quic_client, timeout_secs) catch |err| {
             if (err == error.EndOfStream) break;
             return err;
         };
@@ -4003,12 +4039,20 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                     }
                 }
             },
-            .hello => |_| {
-                std.debug.print("Unexpected HELLO response during execution.\n", .{});
+            .hello => |h| {
+                std.debug.print("Unexpected HELLO response during execution: success={}\n", .{h.success});
+                if (!h.success) {
+                    std.debug.print("  Error: {s}\n", .{h.error_message});
+                }
+                // Return error to avoid timeout
+                break;
             },
             .ping => {},
             else => {},
         }
+
+        // Free memory for this message before next iteration
+        _ = loop_arena.reset(.retain_capacity);
     }
 }
 
@@ -5160,7 +5204,7 @@ fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: [
     try writeProtoMessage(allocator, stream, .{ .hello = hello_req });
 
     // Read HELLO response
-    const resp = try readProtoMessage(allocator, stream, client);
+    const resp = try readProtoMessage(allocator, stream, client, 30);
     switch (resp) {
         .hello => |h| {
             if (!h.success) {
