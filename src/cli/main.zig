@@ -688,10 +688,12 @@ fn runSimpleStatement(
     allocator: std.mem.Allocator,
     statement: []const u8,
     authenticated_username: ?[]const u8,
+    authenticated_password: ?[]const u8,
 ) !void {
     var query_allocator = allocator;
     const options = geode.test_harness.QueryOptions{
         .user = authenticated_username,
+        .password = authenticated_password,
         .strict_offset_validation = true,
     };
     const result_data = geode.test_harness.runQueryWithAuth(&query_allocator, statement, options) catch |err| {
@@ -708,6 +710,7 @@ fn handleControlStatement(
     allocator: std.mem.Allocator,
     statement: []const u8,
     authenticated_username: ?[]const u8,
+    authenticated_password: ?[]const u8,
     last_result_data: ?*?[]const u8,
 ) !void {
     if (last_result_data) |ptr| {
@@ -716,7 +719,7 @@ fn handleControlStatement(
         }
         ptr.* = null;
     }
-    try runSimpleStatement(writer, allocator, statement, authenticated_username);
+    try runSimpleStatement(writer, allocator, statement, authenticated_username, authenticated_password);
 }
 
 // CANARY: REQ=REQ-PERF-WRITE-STALL-001; FEATURE="WriteStallOptimization"; ASPECT=StreamWrite; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=cli; UPDATED=2026-01-30
@@ -1171,11 +1174,11 @@ fn processProtocolMessage(
             try writeJsonLine(responder, allocator, CliEndResponse{});
         }
     } else if (std.mem.eql(u8, type_str, "BEGIN")) {
-        try handleControlStatement(responder, allocator, "BEGIN", state.authenticated_username, &state.last_result_data);
+        try handleControlStatement(responder, allocator, "BEGIN", state.authenticated_username, state.authenticated_password, &state.last_result_data);
     } else if (std.mem.eql(u8, type_str, "COMMIT")) {
-        try handleControlStatement(responder, allocator, "COMMIT", state.authenticated_username, &state.last_result_data);
+        try handleControlStatement(responder, allocator, "COMMIT", state.authenticated_username, state.authenticated_password, &state.last_result_data);
     } else if (std.mem.eql(u8, type_str, "ROLLBACK")) {
-        try handleControlStatement(responder, allocator, "ROLLBACK", state.authenticated_username, &state.last_result_data);
+        try handleControlStatement(responder, allocator, "ROLLBACK", state.authenticated_username, state.authenticated_password, &state.last_result_data);
     } else if (std.mem.eql(u8, type_str, "SAVEPOINT")) {
         const name_value = obj.get("name") orelse {
             writeErrorJson(responder, allocator, "SAVEPOINT requires name");
@@ -1187,7 +1190,7 @@ fn processProtocolMessage(
         }
         const savepoint_stmt = try std.fmt.allocPrint(allocator, "SAVEPOINT {s}", .{name_value.string});
         defer allocator.free(savepoint_stmt);
-        try handleControlStatement(responder, allocator, savepoint_stmt, state.authenticated_username, &state.last_result_data);
+        try handleControlStatement(responder, allocator, savepoint_stmt, state.authenticated_username, state.authenticated_password, &state.last_result_data);
     } else if (std.mem.eql(u8, type_str, "ROLLBACK_TO")) {
         const name_value = obj.get("name") orelse {
             writeErrorJson(responder, allocator, "ROLLBACK_TO requires name");
@@ -1199,7 +1202,7 @@ fn processProtocolMessage(
         }
         const rollback_stmt = try std.fmt.allocPrint(allocator, "ROLLBACK TO {s}", .{name_value.string});
         defer allocator.free(rollback_stmt);
-        try handleControlStatement(responder, allocator, rollback_stmt, state.authenticated_username, &state.last_result_data);
+        try handleControlStatement(responder, allocator, rollback_stmt, state.authenticated_username, state.authenticated_password, &state.last_result_data);
     } else {
         // Unknown message type
         // CANARY: REQ=REQ-LIB-MIGRATION-JSON-037; FEATURE="JSON Library Migration"; ASPECT=UnknownMsgError; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
@@ -1320,12 +1323,48 @@ fn processProtobufMessage(allocator: std.mem.Allocator, transport: *quic.QuicTra
 
     switch (msg) {
         .hello => |h| {
-            state.authenticated_username = try allocator.dupe(u8, h.username);
-            // Ignore password for now (CLI mock server)
+            // CANARY: REQ=REQ-AUTH-QUIC-004; FEATURE="QUIC Authentication"; ASPECT=ProtobufHelloAuth; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+            // Properly handle authentication in protobuf HELLO handler
+            const user_mgmt = geode.user_management;
+            const auth_enabled = user_mgmt.isAuthEnabled();
 
             var caps = try std.ArrayList([]const u8).initCapacity(allocator, 2);
             try caps.append(allocator, "QUIC");
             try caps.append(allocator, "TLS1.3");
+
+            if (auth_enabled) {
+                // Authentication is required - validate credentials
+                if (h.username.len == 0 or h.password.len == 0) {
+                    const resp = schema.QuicServerMessage{ .hello = .{
+                        .success = false,
+                        .session_id = "",
+                        .error_message = "Authentication required",
+                        .capabilities = caps,
+                    } };
+                    try sendProtoResponse(allocator, transport, conn_state, stream_id, resp);
+                    return;
+                }
+
+                // Validate credentials against user management
+                _ = user_mgmt.authenticate(h.username, h.password) catch {
+                    const resp = schema.QuicServerMessage{ .hello = .{
+                        .success = false,
+                        .session_id = "",
+                        .error_message = "Authentication failed",
+                        .capabilities = caps,
+                    } };
+                    try sendProtoResponse(allocator, transport, conn_state, stream_id, resp);
+                    return;
+                };
+
+                // Store authenticated credentials
+                if (state.authenticated_username) |old| allocator.free(old);
+                state.authenticated_username = try allocator.dupe(u8, h.username);
+                if (state.authenticated_password) |old| allocator.free(old);
+                state.authenticated_password = try allocator.dupe(u8, h.password);
+            }
+            // When auth is disabled, we don't store credentials (leave them null)
+            // This prevents the "partial credentials" error in test_harness
 
             const resp = schema.QuicServerMessage{ .hello = .{ .success = true, .session_id = "cli-session", .capabilities = caps } };
             try sendProtoResponse(allocator, transport, conn_state, stream_id, resp);
@@ -1342,7 +1381,7 @@ fn processProtobufMessage(allocator: std.mem.Allocator, transport: *quic.QuicTra
             defer result_buf.deinit(allocator);
 
             // Reuse runSimpleStatement which writes output to writer
-            runSimpleStatement(result_buf.writer(allocator), allocator, exec_req.query, state.authenticated_username) catch |err| {
+            runSimpleStatement(result_buf.writer(allocator), allocator, exec_req.query, state.authenticated_username, state.authenticated_password) catch |err| {
                 const err_resp = schema.Error{ .code = "500", .message = @errorName(err) };
                 const resp = schema.QuicServerMessage{ .execute = schema.ExecutionResponse{ .val = schema.ExecutionResponseUnion{ .@"error" = err_resp } } };
                 try sendProtoResponse(allocator, transport, conn_state, stream_id, resp);
@@ -1731,13 +1770,13 @@ fn handleQuicStream(allocator: std.mem.Allocator, conn_state: anytype, stream: a
                 try writeJsonLine(stream, allocator, CliEndResponse{});
             }
         } else if (std.mem.eql(u8, type_str, "BEGIN")) {
-            try handleControlStatement(stream, allocator, "BEGIN", state.authenticated_username, &state.last_result_data);
+            try handleControlStatement(stream, allocator, "BEGIN", state.authenticated_username, state.authenticated_password, &state.last_result_data);
             continue;
         } else if (std.mem.eql(u8, type_str, "COMMIT")) {
-            try handleControlStatement(stream, allocator, "COMMIT", state.authenticated_username, &state.last_result_data);
+            try handleControlStatement(stream, allocator, "COMMIT", state.authenticated_username, state.authenticated_password, &state.last_result_data);
             continue;
         } else if (std.mem.eql(u8, type_str, "ROLLBACK")) {
-            try handleControlStatement(stream, allocator, "ROLLBACK", state.authenticated_username, &state.last_result_data);
+            try handleControlStatement(stream, allocator, "ROLLBACK", state.authenticated_username, state.authenticated_password, &state.last_result_data);
             continue;
         } else if (std.mem.eql(u8, type_str, "SAVEPOINT")) {
             const name_value = obj.get("name") orelse {
@@ -1750,7 +1789,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, conn_state: anytype, stream: a
             }
             const savepoint_stmt = try std.fmt.allocPrint(allocator, "SAVEPOINT {s}", .{name_value.string});
             defer allocator.free(savepoint_stmt);
-            try handleControlStatement(stream, allocator, savepoint_stmt, state.authenticated_username, &state.last_result_data);
+            try handleControlStatement(stream, allocator, savepoint_stmt, state.authenticated_username, state.authenticated_password, &state.last_result_data);
             continue;
         } else if (std.mem.eql(u8, type_str, "ROLLBACK_TO")) {
             const name_value = obj.get("name") orelse {
@@ -1763,7 +1802,7 @@ fn handleQuicStream(allocator: std.mem.Allocator, conn_state: anytype, stream: a
             }
             const rollback_stmt = try std.fmt.allocPrint(allocator, "ROLLBACK TO {s}", .{name_value.string});
             defer allocator.free(rollback_stmt);
-            try handleControlStatement(stream, allocator, rollback_stmt, state.authenticated_username, &state.last_result_data);
+            try handleControlStatement(stream, allocator, rollback_stmt, state.authenticated_username, state.authenticated_password, &state.last_result_data);
             continue;
         } else if (std.mem.eql(u8, type_str, "SET_PASSWORD")) {
             // GAP-0150: Handle password change requests via QUIC
@@ -2873,13 +2912,13 @@ fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 try writeJsonLine(stdout_fd, allocator, CliEndResponse{ .status_class = null });
             }
         } else if (std.mem.eql(u8, msg_type.string, "BEGIN")) {
-            try handleControlStatement(stdout_fd, allocator, "BEGIN", null, null);
+            try handleControlStatement(stdout_fd, allocator, "BEGIN", null, null, null);
             continue;
         } else if (std.mem.eql(u8, msg_type.string, "COMMIT")) {
-            try handleControlStatement(stdout_fd, allocator, "COMMIT", null, null);
+            try handleControlStatement(stdout_fd, allocator, "COMMIT", null, null, null);
             continue;
         } else if (std.mem.eql(u8, msg_type.string, "ROLLBACK")) {
-            try handleControlStatement(stdout_fd, allocator, "ROLLBACK", null, null);
+            try handleControlStatement(stdout_fd, allocator, "ROLLBACK", null, null, null);
             continue;
         } else if (std.mem.eql(u8, msg_type.string, "SAVEPOINT")) {
             const name_value = obj.get("name") orelse {
@@ -2892,7 +2931,7 @@ fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
             const savepoint_stmt = try std.fmt.allocPrint(allocator, "SAVEPOINT {s}", .{name_value.string});
             defer allocator.free(savepoint_stmt);
-            try handleControlStatement(stdout_fd, allocator, savepoint_stmt, null, null);
+            try handleControlStatement(stdout_fd, allocator, savepoint_stmt, null, null, null);
             continue;
         } else if (std.mem.eql(u8, msg_type.string, "ROLLBACK_TO")) {
             const name_value = obj.get("name") orelse {
@@ -2905,7 +2944,7 @@ fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
             const rollback_stmt = try std.fmt.allocPrint(allocator, "ROLLBACK TO {s}", .{name_value.string});
             defer allocator.free(rollback_stmt);
-            try handleControlStatement(stdout_fd, allocator, rollback_stmt, null, null);
+            try handleControlStatement(stdout_fd, allocator, rollback_stmt, null, null, null);
             continue;
         }
     }
@@ -3856,13 +3895,16 @@ fn writeProtoMessage(allocator: std.mem.Allocator, stream: anytype, msg: schema.
     try stream.writeAll(written_data);
 }
 
-// CANARY: REQ=REQ-CLI-GRAPH-FLAG-005; FEATURE="GraphFlag"; ASPECT=ExecuteOnConnection; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
+// CANARY: REQ=REQ-CLI-GRAPH-FLAG-005; FEATURE="GraphFlag"; ASPECT=ExecuteOnConnection; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
 fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.QuicClient, query_text: []const u8, format: []const u8, username: ?[]const u8, password: ?[]const u8, graph: ?[]const u8, timeout_secs: u32) !void {
+    // Get stdout and stderr handles for output
+    const stdout = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable };
+    const stderr_handle = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
 
     // Get a stream for communication
-
     var stream = quic_client.getStream() catch |err| {
-        std.debug.print("Error: Failed to get stream: {}\n", .{err});
+        const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to get stream: {}\n", .{err}) catch "Error: Failed to get stream\n";
+        _ = stderr_handle.writeAll(err_msg) catch {};
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer stream.deinit();
@@ -3877,45 +3919,18 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
 
     log.debug("Client sending HELLO (Protobuf)", &.{});
     writeProtoMessage(allocator, stream, .{ .hello = hello_req }) catch |err| {
-        std.debug.print("Error: Failed to send HELLO: {}\n", .{err});
+        const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to send HELLO: {}\n", .{err}) catch "Error: Failed to send HELLO\n";
+        _ = stderr_handle.writeAll(err_msg) catch {};
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-
-    // Read HELLO response
-    // Poll for response
-
-    // We need to implement a polling read for the proto header + body
-    // Since readProtoMessage does blocking reads, and quic_client needs polling...
-    // The underlying stream might block?
-    // quic.zig stream implementation usually handles blocking if configured, or returns WouldBlock.
-    // If we use blocking mode on the stream, readProtoMessage should work.
-    // However, existing code used `readLineWithPoll` which implies manual polling needed?
-    // Let's assume for now that if we set blocking it works, or we wrap readProtoMessage in a poll loop (which is hard because it does multiple reads).
-    // Better: Ensure stream is in blocking mode or use a specific poll-aware reader.
-    // Given usage of `readBufferedLineWithPoll` later, manual polling is likely expected for the quic client library in this codebase.
-
-    // For simplicity in this step, let's try strict blocking read if possible, or simple loop.
-    // But `stream.readAll` in `readProtoMessage` might fail with WouldBlock.
-    // Let's rely on `quic_client.waitForHandshake` logic which we did earlier? No, that's connection level.
-
-    // Let's just use a simple loop around `readProtoMessage` that sleeps if WouldBlock?
-    // But readProtoMessage reads 4 bytes then N bytes. Restarting it is hard if partially read.
-    // We need a Buffered reader that handles polling.
-    // But `src/server/quic_connection_handler.zig` implemented `BufferedProtoReader`.
-    // We can't easily reuse that private struct.
-    // Let's implement a minimal one here or just use blocking if `stream.read` supports it.
-    // The `quic_client` seems to require `quic_client.poll()` to be called to advance state (receive packets).
-
-    // Hack: We'll implement a polling loop *inside* `readProtoMessage`... no, I can't modify `readProtoMessage` inside `executeQueryOnConnection` easily if I defined it outside.
-    // I defined it outside. Let's redefine `readProtoMessageClient` here or assume I can pass `quic_client` to it?
-    // I'll update `readProtoMessage` signature in this edit to take `quic_client` for polling.
 
     // Use an arena for the HELLO response to ensure cleanup of decoded message fields
     var hello_arena = std.heap.ArenaAllocator.init(allocator);
     defer hello_arena.deinit();
 
     const hello_resp_msg = readProtoMessage(hello_arena.allocator(), stream, quic_client, timeout_secs) catch |err| {
-        std.debug.print("Error: Failed to receive HELLO response: {}\n", .{err});
+        const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to receive HELLO response: {}\n", .{err}) catch "Error: Failed to receive HELLO response\n";
+        _ = stderr_handle.writeAll(err_msg) catch {};
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 
@@ -3923,12 +3938,13 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
         .hello => |h| {
             log.debug("Client received HELLO response", &.{Attr.boolean("success", h.success)});
             if (!h.success) {
-                std.debug.print("Error: {s}\n\n", .{h.error_message});
+                const err_msg = std.fmt.allocPrint(allocator, "Error: {s}\n\n", .{h.error_message}) catch "Error: Authentication failed\n\n";
+                _ = stderr_handle.writeAll(err_msg) catch {};
                 std.process.exit(@intFromEnum(ExitCode.auth_error));
             }
         },
         else => {
-            std.debug.print("Error: Unexpected response type during handshake: {}\n", .{hello_resp_msg});
+            _ = stderr_handle.writeAll("Error: Unexpected response type during handshake\n") catch {};
             std.process.exit(@intFromEnum(ExitCode.auth_error));
         },
     }
@@ -3944,10 +3960,8 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
         final_query = allocated_query.?;
     }
 
-    // Send query using the server's protocol format (RUN_GQL message)
     // Send query using Protobuf (ExecuteRequest)
     const run_gql_req = schema.ExecuteRequest{
-        // Ensure we copy or it's valid memory
         .query = try allocator.dupe(u8, final_query),
         .parameters = .empty,
     };
@@ -3956,17 +3970,34 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
     try writeProtoMessage(allocator, stream, .{ .execute = run_gql_req });
     log.debug("Client query sent successfully", &.{});
 
+    // For JSON format, we need to accumulate results before outputting
+    var columns = try std.ArrayList([]const u8).initCapacity(allocator, 16);
+    defer {
+        for (columns.items) |col| allocator.free(col);
+        columns.deinit(allocator);
+    }
+
+    // Use an ArrayList of ArrayLists to store all rows
+    var all_rows = try std.ArrayList(std.ArrayList([]const u8)).initCapacity(allocator, 64);
+    defer {
+        for (all_rows.items) |*row| {
+            for (row.items) |cell| {
+                allocator.free(cell);
+            }
+            row.deinit(allocator);
+        }
+        all_rows.deinit(allocator);
+    }
+
+    var has_error: bool = false;
+    var error_message: []const u8 = "";
+    var error_status: []const u8 = "58000";
+
     // Receive responses loop
-    // Re-use arena for query results to prevent leaks per row/page
     var loop_arena = std.heap.ArenaAllocator.init(allocator);
     defer loop_arena.deinit();
 
     while (true) {
-        // Reset arena at start of loop (or end) to free memory from previous message
-        // But we need the message during this iteration.
-        // Strategy: Process message fully, then reset.
-        // NOTE: If we break, defer deinit will clean up.
-
         const loop_allocator = loop_arena.allocator();
 
         const resp = readProtoMessage(loop_allocator, stream, quic_client, timeout_secs) catch |err| {
@@ -3979,62 +4010,196 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                 if (exec_resp.val) |val| {
                     switch (val) {
                         .schema => |s| {
-                            // Print schema header
+                            // Store column names
+                            for (s.columns.items) |col| {
+                                const col_copy = try allocator.dupe(u8, col.name);
+                                try columns.append(allocator, col_copy);
+                            }
+                            // For table format, print header immediately
                             if (std.mem.eql(u8, format, "table")) {
-                                for (s.columns.items) |col| {
-                                    std.debug.print("{s}\t", .{col.name});
+                                for (columns.items, 0..) |col, i| {
+                                    if (i > 0) _ = stdout.writeAll("\t") catch {};
+                                    _ = stdout.writeAll(col) catch {};
                                 }
-                                std.debug.print("\n", .{});
+                                _ = stdout.writeAll("\n") catch {};
                             }
                         },
                         .page => |p| {
                             for (p.rows.items) |row| {
-                                // Print row
-                                if (std.mem.eql(u8, format, "table")) {
-                                    for (row.values.items) |v| {
-                                        if (v.kind) |k| {
-                                            switch (k) {
-                                                .string_val => |str| std.debug.print("{s}\t", .{str}),
-                                                .int_val => |i| std.debug.print("{d}\t", .{i}),
-                                                .double_val => |d| std.debug.print("{d}\t", .{d}),
-                                                .bool_val => |b| std.debug.print("{}\t", .{b}),
-                                                .null_val => std.debug.print("NULL\t", .{}),
-                                            }
-                                        } else {
-                                            std.debug.print("?\t", .{});
-                                        }
-                                    }
-                                    std.debug.print("\n", .{});
+                                var row_values = try std.ArrayList([]const u8).initCapacity(allocator, 16);
+                                errdefer {
+                                    for (row_values.items) |cell| allocator.free(cell);
+                                    row_values.deinit(allocator);
                                 }
+
+                                for (row.values.items) |v| {
+                                    const cell_str = if (v.kind) |k| switch (k) {
+                                        .string_val => |str| try allocator.dupe(u8, str),
+                                        .int_val => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
+                                        .double_val => |d| try std.fmt.allocPrint(allocator, "{d}", .{d}),
+                                        .bool_val => |b| try allocator.dupe(u8, if (b) "true" else "false"),
+                                        .null_val => try allocator.dupe(u8, "null"),
+                                    } else try allocator.dupe(u8, "null");
+
+                                    try row_values.append(allocator, cell_str);
+                                }
+
+                                // For table format, print row immediately
+                                if (std.mem.eql(u8, format, "table")) {
+                                    for (row_values.items, 0..) |cell, i| {
+                                        if (i > 0) _ = stdout.writeAll("\t") catch {};
+                                        _ = stdout.writeAll(cell) catch {};
+                                    }
+                                    _ = stdout.writeAll("\n") catch {};
+                                }
+
+                                try all_rows.append(allocator, row_values);
                             }
                             if (p.last_page) break;
                         },
                         .@"error" => |e| {
-                            std.debug.print("Error: {s}\n", .{e.message});
+                            has_error = true;
+                            error_message = try allocator.dupe(u8, e.message);
+                            if (e.code.len > 0) {
+                                error_status = try allocator.dupe(u8, e.code);
+                            }
                             break;
                         },
-                        .metrics => |m| {
-                            std.debug.print("Metrics: {}ns\n", .{m.total_duration_ns});
-                        },
+                        .metrics => {},
                         .heartbeat => {},
                     }
                 }
             },
             .hello => |h| {
-                std.debug.print("Unexpected HELLO response during execution: success={}\n", .{h.success});
                 if (!h.success) {
-                    std.debug.print("  Error: {s}\n", .{h.error_message});
+                    has_error = true;
+                    error_message = try allocator.dupe(u8, h.error_message);
+                    error_status = "28000"; // Authentication error
                 }
-                // Return error to avoid timeout
                 break;
             },
             .ping => {},
             else => {},
         }
 
-        // Free memory for this message before next iteration
         _ = loop_arena.reset(.retain_capacity);
     }
+
+    // Output final result based on format
+    if (std.mem.eql(u8, format, "json")) {
+        if (has_error) {
+            // Output error response
+            const err_json = try std.fmt.allocPrint(allocator, "{{\"status_class\":\"{s}\",\"error\":\"{s}\"}}\n", .{ error_status, error_message });
+            defer allocator.free(err_json);
+            _ = stdout.writeAll(err_json) catch {};
+        } else {
+            // Output BINDINGS response in standard format
+            _ = stdout.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"ordered\":false,\"final\":true,") catch {};
+
+            // Write columns
+            _ = stdout.writeAll("\"columns\":[") catch {};
+            for (columns.items, 0..) |col, i| {
+                if (i > 0) _ = stdout.writeAll(",") catch {};
+                const col_json = try std.fmt.allocPrint(allocator, "{{\"name\":\"{s}\",\"type\":\"text\"}}", .{col});
+                defer allocator.free(col_json);
+                _ = stdout.writeAll(col_json) catch {};
+            }
+            _ = stdout.writeAll("],") catch {};
+
+            // Write rows
+            _ = stdout.writeAll("\"rows\":[") catch {};
+            for (all_rows.items, 0..) |row, row_idx| {
+                if (row_idx > 0) _ = stdout.writeAll(",") catch {};
+                _ = stdout.writeAll("{") catch {};
+                for (row.items, 0..) |cell, col_idx| {
+                    if (col_idx > 0) _ = stdout.writeAll(",") catch {};
+                    const col_name = if (col_idx < columns.items.len) columns.items[col_idx] else "?";
+                    // Try to detect if the value is numeric, boolean or null
+                    const is_numeric = isNumericString(cell);
+                    const is_bool = std.mem.eql(u8, cell, "true") or std.mem.eql(u8, cell, "false");
+                    const is_null = std.mem.eql(u8, cell, "null");
+
+                    if (is_null) {
+                        const field_json = std.fmt.allocPrint(allocator, "\"{s}\":null", .{col_name}) catch continue;
+                        defer allocator.free(field_json);
+                        _ = stdout.writeAll(field_json) catch {};
+                    } else if (is_bool or is_numeric) {
+                        const field_json = std.fmt.allocPrint(allocator, "\"{s}\":{s}", .{ col_name, cell }) catch continue;
+                        defer allocator.free(field_json);
+                        _ = stdout.writeAll(field_json) catch {};
+                    } else {
+                        const escaped = escapeJsonString(allocator, cell) catch cell;
+                        // If escapeJsonString succeeded, it allocated memory that needs to be freed
+                        // We compare pointers to check if it returned the original or a new allocation
+                        const escaped_needs_free = escaped.ptr != cell.ptr;
+                        defer if (escaped_needs_free) allocator.free(escaped);
+                        const field_json = std.fmt.allocPrint(allocator, "\"{s}\":\"{s}\"", .{ col_name, escaped }) catch continue;
+                        defer allocator.free(field_json);
+                        _ = stdout.writeAll(field_json) catch {};
+                    }
+                }
+                _ = stdout.writeAll("}") catch {};
+            }
+            _ = stdout.writeAll("]}}\n") catch {};
+        }
+    } else if (std.mem.eql(u8, format, "csv")) {
+        // CSV header
+        for (columns.items, 0..) |col, i| {
+            if (i > 0) _ = stdout.writeAll(",") catch {};
+            _ = stdout.writeAll(col) catch {};
+        }
+        _ = stdout.writeAll("\n") catch {};
+        // CSV rows
+        for (all_rows.items) |row| {
+            for (row.items, 0..) |cell, i| {
+                if (i > 0) _ = stdout.writeAll(",") catch {};
+                // Quote fields containing comma, newline, or quote
+                if (std.mem.indexOf(u8, cell, ",") != null or std.mem.indexOf(u8, cell, "\n") != null or std.mem.indexOf(u8, cell, "\"") != null) {
+                    _ = stdout.writeAll("\"") catch {};
+                    for (cell) |c| {
+                        if (c == '"') {
+                            _ = stdout.writeAll("\"\"") catch {};
+                        } else {
+                            _ = stdout.write(&[_]u8{c}) catch {};
+                        }
+                    }
+                    _ = stdout.writeAll("\"") catch {};
+                } else {
+                    _ = stdout.writeAll(cell) catch {};
+                }
+            }
+            _ = stdout.writeAll("\n") catch {};
+        }
+    }
+    // Note: table format was already printed during streaming
+
+    // Free error strings if allocated
+    if (has_error and error_message.len > 0) {
+        allocator.free(error_message);
+    }
+}
+
+// Helper to check if a string represents a numeric value
+fn isNumericString(s: []const u8) bool {
+    if (s.len == 0) return false;
+    var has_dot = false;
+    var has_digit = false;
+    for (s, 0..) |c, i| {
+        if (c == '-' or c == '+') {
+            if (i != 0) return false;
+        } else if (c == '.') {
+            if (has_dot) return false;
+            has_dot = true;
+        } else if (c >= '0' and c <= '9') {
+            has_digit = true;
+        } else if (c == 'e' or c == 'E') {
+            // Scientific notation
+            if (!has_digit) return false;
+        } else {
+            return false;
+        }
+    }
+    return has_digit;
 }
 
 // CANARY: REQ=REQ-CLI-DOT-001; FEATURE="DotGraphOutput"; ASPECT=FormatConversion; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28

@@ -1105,6 +1105,7 @@ class ParallelTestRunner:
                     str(spec_data_dir),
                     "--log-level",
                     "error",
+                    "--disable-auth",  # Disable auth for tests (auth-specific tests can override)
                 ]
                 server_extra_args = server_args_override or []
                 if server_extra_args:
@@ -1115,6 +1116,8 @@ class ParallelTestRunner:
 
                 server_env = os.environ.copy()
                 server_env.update({k: str(v) for k, v in server_env_overrides.items()})
+                # Allow --disable-auth even in release builds (required for test mode)
+                server_env["GEODE_ALLOW_NO_AUTH"] = "1"
                 # CRITICAL FIX: Use DEVNULL for server stdout/stderr to prevent blocking
                 # When using PIPE, the server can block if it writes more output than the
                 # pipe buffer can hold (typically 64KB on Linux). With many connections,

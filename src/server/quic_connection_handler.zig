@@ -454,20 +454,85 @@ pub fn processMessage(
         },
     }
     switch (msg) {
-        .hello => |_| {
-            // ... Auth logic ...
-            // Simplified for now, similar to gRPC
+        .hello => |hello_req| {
+            const user_mgmt = geode.user_management;
+
             var caps = std.ArrayList([]const u8).init(gpa);
-            try caps.append("QUIC");
-            try caps.append("TLS1.3");
-            return schema.QuicServerMessage{ .hello = .{ .success = true, .session_id = "quic-session", .capabilities = caps } };
+            try caps.append(gpa, "QUIC");
+            try caps.append(gpa, "TLS1.3");
+
+            // Check if authentication is required
+            if (user_mgmt.isAuthEnabled()) {
+                // Validate credentials
+                if (hello_req.username.len == 0 or hello_req.password.len == 0) {
+                    return schema.QuicServerMessage{ .hello = .{
+                        .success = false,
+                        .session_id = "",
+                        .error_message = "Authentication required",
+                        .capabilities = caps,
+                    } };
+                }
+
+                // Authenticate user
+                const role = user_mgmt.authenticate(hello_req.username, hello_req.password) catch {
+                    return schema.QuicServerMessage{ .hello = .{
+                        .success = false,
+                        .session_id = "",
+                        .error_message = "Authentication failed",
+                        .capabilities = caps,
+                    } };
+                };
+
+                // Store authenticated user info in state
+                state.authenticated_user = try gpa.dupe(u8, hello_req.username);
+                state.authenticated_password = try gpa.dupe(u8, hello_req.password);
+                state.authenticated_role = role;
+            }
+
+            return schema.QuicServerMessage{ .hello = .{
+                .success = true,
+                .session_id = "quic-session",
+                .error_message = "",
+                .capabilities = caps,
+            } };
         },
-        .execute => |_| {
-            // ... Execute logic ...
-            // Access query: rq.query
-            // For parity, return simple error or schema
-            const err_resp = schema.Error{ .code = "200", .message = "Query Received (Stub)" };
-            return schema.QuicServerMessage{ .execute = .{ .@"error" = err_resp } };
+        .execute => |exec_req| {
+            // Execute the query using test_harness
+            const user_mgmt = geode.user_management;
+
+            // Check if authentication is required but no user is authenticated
+            if (user_mgmt.isAuthEnabled() and state.authenticated_user == null) {
+                const err_resp = schema.Error{ .code = "28000", .message = "Authentication required" };
+                return schema.QuicServerMessage{ .execute = .{ .val = .{ .@"error" = err_resp } } };
+            }
+
+            // Execute query via test_harness
+            const options = geode.test_harness.QueryOptions{
+                .user = state.authenticated_user,
+                .password = state.authenticated_password,
+                .pre_validated_role = if (state.authenticated_role) |role| .{
+                    .username = state.authenticated_user orelse "",
+                    .role = role,
+                } else null,
+                .output_format = "json",
+            };
+
+            const result = geode.test_harness.runQueryWithAuth(&gpa, exec_req.query, options) catch |err| {
+                const err_msg = @errorName(err);
+                const err_resp = schema.Error{ .code = "58000", .message = err_msg };
+                return schema.QuicServerMessage{ .execute = .{ .val = .{ .@"error" = err_resp } } };
+            };
+            defer gpa.free(result);
+
+            // Build response with result data
+            // For now, return the result as a single string value in a page
+            var rows = std.ArrayList(schema.Row).init(gpa);
+            var values = std.ArrayList(schema.Value).init(gpa);
+            try values.append(gpa, .{ .kind = .{ .string_val = try gpa.dupe(u8, result) } });
+            try rows.append(gpa, .{ .values = values });
+
+            const page = schema.DataPage{ .rows = rows, .last_page = true };
+            return schema.QuicServerMessage{ .execute = .{ .val = .{ .page = page } } };
         },
         .ping => |_| {
             return schema.QuicServerMessage{ .ping = .{ .ok = true } };

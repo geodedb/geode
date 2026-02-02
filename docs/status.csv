@@ -268,6 +268,7 @@ REQ-AUTH-QUIC-002,QUIC Authentication,HelloAuth,TESTED,,,2025-10-25,2026-01-17,s
 REQ-AUTH-QUIC-002,QUIC Authentication,HelloAuth,TESTED,,,2025-10-25,2026-01-17,src/cli/main.zig
 REQ-AUTH-QUIC-003,QUIC Authentication,QueryAuth,TESTED,,,cli,2025-10-25,src/cli/main.zig
 REQ-AUTH-QUIC-003,QUIC Authentication,QueryAuth,TESTED,,,cli,2025-10-25,src/cli/main.zig
+REQ-AUTH-QUIC-004,QUIC Authentication,ProtobufHelloAuth,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-AUTH-RISKSCORE-001,FailSecureRiskScore,SECURITY,TESTED,,,security,2026-01-13,src/security/geode_auth_lib.zig
 REQ-AUTH-RISKSCORE-001,FailSecureRiskScore,TEST,TESTED,,,security,2026-01-13,src/security/geode_auth_lib.zig
 REQ-AUTH-SALT-001,SecurePasswordSalt,Security,EXEMPT,,,security,2026-01-10,src/security/user_management.zig
@@ -474,7 +475,7 @@ REQ-CLI-GRAPH-FLAG-001,GraphFlag,QueryCommand,IMPL,,,cli,2026-01-28,src/cli/main
 REQ-CLI-GRAPH-FLAG-002,GraphFlag,FlagParsing,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-GRAPH-FLAG-003,GraphFlag,ExecuteWithGraph,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-GRAPH-FLAG-004,GraphFlag,ExecuteQuicQuery,IMPL,,,cli,2026-01-28,src/cli/main.zig
-REQ-CLI-GRAPH-FLAG-005,GraphFlag,ExecuteOnConnection,IMPL,,,cli,2026-01-28,src/cli/main.zig
+REQ-CLI-GRAPH-FLAG-005,GraphFlag,ExecuteOnConnection,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-GRAPH-FLAG-006,GraphFlag,PrependUseGraph,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-MIGRATE-CREATE-001,CLIMigrateCreate,FileCreation,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-MIGRATE-RUN-001,CLIMigrateRun,MigrationModule,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig
