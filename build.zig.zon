@@ -113,8 +113,11 @@
             .url = "git+https://gitlab.com/devnw/zig/dns.git#9b5c05a5ba3222faa9d44ff7a8312fbbd06691b9",
             .hash = "dns-0.1.0-x4U-zYgMCwDlLjH2DUzIcVIqEfCj5x_2yGKIWFaiFJLA",
         },
+
+        // Spice - Fork/join parallelism for recursive divide-and-conquer algorithms
+        // CANARY: REQ=REQ-PERF-SPICE-001; FEATURE="SpiceParallelism"; ASPECT=Dependency; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
         .spice = .{
-            .url = "git+https://gitlab.com/devnw/zig/spice.git#master",
+            .url = "git+https://gitlab.com/devnw/zig/spice.git#4b1d366eacd0ff53a6859f6dabc9558b5aabedbf",
             .hash = "spice-0.0.0-HnDb57y0AABlp7AaQKAkMShWpww-Tl_8QM7T-1Lx3auu",
         },
 
@@ -127,18 +130,17 @@
             .url = "git+https://gitlab.com/devnw/zig/mcp.git#91c8c179ee11e99b22e9c902c26c7841000c4752",
             .hash = "mcp-0.1.0-exAeBHj7BAAYmmNRjZD3HG6hXVJG8-LEtybCLkBu7oj6",
         },
+
+        // Protocol Buffers - Zig 0.15.2 compatible
         .protobuf = .{
-            .path = "vendor/protobuf",
-        },
-        .grpc_zig = .{
-            .path = "vendor/grpc-zig",
+            .url = "git+https://gitlab.com/devnw/zig/protobuf.git#53ece58213b7c212d63ba95cf923ddaf1eb3cf4c",
+            .hash = "protobuf-3.0.0-0e82alVdKQAeG_KZQVDXKUNSeMH2vbT1c-ceP6Iz5g10",
         },
 
-        // Spice - Fork/join parallelism for recursive divide-and-conquer algorithms
-        // CANARY: REQ=REQ-PERF-SPICE-001; FEATURE="SpiceParallelism"; ASPECT=Dependency; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
-        .spice = .{
-            .url = "git+https://gitlab.com/devnw/zig/spice.git#4b1d366eacd0ff53a6859f6dabc9558b5aabedbf",
-            .hash = "spice-0.0.0-HnDb57y0AABlp7AaQKAkMShWpww-Tl_8QM7T-1Lx3auu",
+        // gRPC for Zig
+        .grpc_zig = .{
+            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#366a4964ca713c61d7ba774eba29178f4be60ae1",
+            .hash = "grpc_zig-0.1.0-7FnvpF9cAQBqP23FSBWvs6Ts4iQRwzbWAxGkY6NmUr_i",
         },
     },
 
