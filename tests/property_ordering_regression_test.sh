@@ -15,7 +15,7 @@ echo "Testing property-based ordering functionality..."
 echo
 
 echo "1. Testing ORDER BY n.id (node ID property)..."
-OUTPUT1=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id' --insecure 2>&1)
+OUTPUT1=$(timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN n ORDER BY n.id' --insecure 2>&1)
 if echo "$OUTPUT1" | grep -q '"order_keys":\["n.id"\]'; then
     echo "   ✓ ORDER BY n.id works correctly"
     if echo "$OUTPUT1" | grep -q '"flagger_findings":\["I:PropertyOrderingEnabled"\]'; then
@@ -29,7 +29,7 @@ else
 fi
 
 echo "2. Testing ORDER BY n.age (numeric property)..."
-OUTPUT2=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.age' --insecure 2>&1)
+OUTPUT2=$(timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN n ORDER BY n.age' --insecure 2>&1)
 if echo "$OUTPUT2" | grep -q '"order_keys":\["n.age"\]'; then
     echo "   ✓ ORDER BY n.age works correctly"
 else
@@ -38,7 +38,7 @@ else
 fi
 
 echo "3. Testing ORDER BY n.name (string property)..."
-OUTPUT3=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.name' --insecure 2>&1)
+OUTPUT3=$(timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN n ORDER BY n.name' --insecure 2>&1)
 if echo "$OUTPUT3" | grep -q '"order_keys":\["n.name"\]'; then
     echo "   ✓ ORDER BY n.name works correctly"
 else
@@ -47,7 +47,7 @@ else
 fi
 
 echo "4. Testing ORDER BY with multiple properties..."
-OUTPUT4=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.name, n.age' --insecure 2>&1)
+OUTPUT4=$(timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN n ORDER BY n.name, n.age' --insecure 2>&1)
 if echo "$OUTPUT4" | grep -q '"order_keys":\["n.name","n.age"\]'; then
     echo "   ✓ ORDER BY with multiple properties works"
 else
@@ -56,7 +56,7 @@ else
 fi
 
 echo "5. Testing ORDER BY DESC (descending order)..."
-OUTPUT5=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id DESC' --insecure 2>&1)
+OUTPUT5=$(timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN n ORDER BY n.id DESC' --insecure 2>&1)
 if echo "$OUTPUT5" | grep -q '"order_keys":\["n.id"\]'; then
     echo "   ✓ ORDER BY DESC works correctly"
 else
@@ -65,7 +65,7 @@ else
 fi
 
 echo "6. Testing edge property ordering..."
-OUTPUT6=$(timeout 5 ./zig-out/bin/geodec 'MATCH (a)-[r]->(b) RETURN a, r, b ORDER BY r.since' --insecure 2>&1)
+OUTPUT6=$(timeout 5 ./zig-out/bin/geode query 'MATCH (a)-[r]->(b) RETURN a, r, b ORDER BY r.since' --insecure 2>&1)
 if echo "$OUTPUT6" | grep -q '"order_keys":\["r.since"\]'; then
     echo "   ✓ Edge property ordering works"
 elif echo "$OUTPUT6" | grep -q 'NoResult\|no active result'; then
@@ -75,7 +75,7 @@ else
 fi
 
 echo "7. Testing ordering with WHERE clause..."
-OUTPUT7=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) WHERE n.id > 1 RETURN n ORDER BY n.id' --insecure 2>&1)
+OUTPUT7=$(timeout 5 ./zig-out/bin/geode query 'MATCH (n) WHERE n.id > 1 RETURN n ORDER BY n.id' --insecure 2>&1)
 if echo "$OUTPUT7" | grep -q '"order_keys":\["n.id"\]'; then
     echo "   ✓ ORDER BY with WHERE clause works"
 else
@@ -83,7 +83,7 @@ else
 fi
 
 echo "8. Testing property ordering with LIMIT..."
-OUTPUT8=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id LIMIT 2' --insecure 2>&1)
+OUTPUT8=$(timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN n ORDER BY n.id LIMIT 2' --insecure 2>&1)
 if echo "$OUTPUT8" | grep -q '"order_keys":\["n.id"\]'; then
     echo "   ✓ ORDER BY with LIMIT works"
 else
@@ -93,7 +93,7 @@ fi
 
 echo "9. Testing that old IllegalOrderKey error is gone..."
 # This should NOT produce an IllegalOrderKey error anymore
-OUTPUT9=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id' --insecure 2>&1)
+OUTPUT9=$(timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN n ORDER BY n.id' --insecure 2>&1)
 if echo "$OUTPUT9" | grep -q 'IllegalOrderKey'; then
     echo "   ✗ IllegalOrderKey error still present - regression!"
     echo "   Error output: $OUTPUT9"
@@ -104,7 +104,7 @@ fi
 
 echo "10. Testing property ordering flag propagation..."
 # Verify the flag is consistently applied
-OUTPUT10=$(timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.name LIMIT 1' --insecure 2>&1)
+OUTPUT10=$(timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN n ORDER BY n.name LIMIT 1' --insecure 2>&1)
 FLAG_COUNT=$(echo "$OUTPUT10" | grep -c 'PropertyOrderingEnabled' || true)
 if [ "$FLAG_COUNT" -ge 1 ]; then
     echo "   ✓ PropertyOrderingEnabled flag consistently propagated"

@@ -13,7 +13,7 @@ NC='\033[0m' # No Color
 
 # Start the server
 echo -e "${YELLOW}Starting Geode server...${NC}"
-./zig-out/bin/geoded --data_dir ./test_data --insecure &
+./zig-out/bin/geode serve --data_dir ./test_data --insecure &
 SERVER_PID=$!
 sleep 2
 
@@ -25,7 +25,7 @@ run_test() {
 
     echo -n "Testing: $test_name... "
 
-    result=$(./zig-out/bin/geodec "$query" --insecure 2>&1)
+    result=$(./zig-out/bin/geode query "$query" --insecure 2>&1)
 
     if echo "$result" | grep -q "$expected_pattern"; then
         echo -e "${GREEN}PASSED${NC}"
@@ -41,23 +41,23 @@ run_test() {
 
 # Setup test graph - Create a chain: A -> B -> C -> D -> E
 echo -e "${YELLOW}Creating test graph...${NC}"
-./zig-out/bin/geodec "CREATE (a:Node {name: 'A'})" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "CREATE (b:Node {name: 'B'})" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "CREATE (c:Node {name: 'C'})" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "CREATE (d:Node {name: 'D'})" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "CREATE (e:Node {name: 'E'})" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "CREATE (a:Node {name: 'A'})" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "CREATE (b:Node {name: 'B'})" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "CREATE (c:Node {name: 'C'})" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "CREATE (d:Node {name: 'D'})" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "CREATE (e:Node {name: 'E'})" --insecure >/dev/null 2>&1
 
-./zig-out/bin/geodec "MATCH (a:Node {name: 'A'}), (b:Node {name: 'B'}) CREATE (a)-[:NEXT]->(b)" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "MATCH (b:Node {name: 'B'}), (c:Node {name: 'C'}) CREATE (b)-[:NEXT]->(c)" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "MATCH (c:Node {name: 'C'}), (d:Node {name: 'D'}) CREATE (c)-[:NEXT]->(d)" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "MATCH (d:Node {name: 'D'}), (e:Node {name: 'E'}) CREATE (d)-[:NEXT]->(e)" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "MATCH (a:Node {name: 'A'}), (b:Node {name: 'B'}) CREATE (a)-[:NEXT]->(b)" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "MATCH (b:Node {name: 'B'}), (c:Node {name: 'C'}) CREATE (b)-[:NEXT]->(c)" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "MATCH (c:Node {name: 'C'}), (d:Node {name: 'D'}) CREATE (c)-[:NEXT]->(d)" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "MATCH (d:Node {name: 'D'}), (e:Node {name: 'E'}) CREATE (d)-[:NEXT]->(e)" --insecure >/dev/null 2>&1
 
 # Create a cycle: C -> A
-./zig-out/bin/geodec "MATCH (c:Node {name: 'C'}), (a:Node {name: 'A'}) CREATE (c)-[:CYCLE]->(a)" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "MATCH (c:Node {name: 'C'}), (a:Node {name: 'A'}) CREATE (c)-[:CYCLE]->(a)" --insecure >/dev/null 2>&1
 
 # Create shortcuts: A -> C, B -> D
-./zig-out/bin/geodec "MATCH (a:Node {name: 'A'}), (c:Node {name: 'C'}) CREATE (a)-[:SHORTCUT]->(c)" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "MATCH (b:Node {name: 'B'}), (d:Node {name: 'D'}) CREATE (b)-[:SHORTCUT]->(d)" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "MATCH (a:Node {name: 'A'}), (c:Node {name: 'C'}) CREATE (a)-[:SHORTCUT]->(c)" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "MATCH (b:Node {name: 'B'}), (d:Node {name: 'D'}) CREATE (b)-[:SHORTCUT]->(d)" --insecure >/dev/null 2>&1
 
 echo -e "\n${YELLOW}Running variable-length path regression tests...${NC}"
 

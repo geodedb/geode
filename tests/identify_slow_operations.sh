@@ -17,13 +17,13 @@ ISSUES_FOUND=()
 echo "Testing parser performance..."
 echo -n "  Single quotes (working): "
 START=$(date +%s%N)
-echo "CREATE (n {name: 'test'})" | timeout 2 ./zig-out/bin/geoded 2>/dev/null | grep -q "status_class" && echo -e "${GREEN}OK${NC}" || echo -e "${RED}FAIL${NC}"
+echo "CREATE (n {name: 'test'})" | timeout 2 ./zig-out/bin/geode serve 2>/dev/null | grep -q "status_class" && echo -e "${GREEN}OK${NC}" || echo -e "${RED}FAIL${NC}"
 END=$(date +%s%N)
 SINGLE_TIME=$(( (END - START) / 1000000 ))
 
 echo -n "  Double quotes (hangs):   "
 START=$(date +%s%N)
-echo 'CREATE (n {name: "test"})' | timeout 1 ./zig-out/bin/geoded 2>/dev/null | grep -q "status_class" && echo -e "${GREEN}OK${NC}" || echo -e "${RED}HANGS${NC}"
+echo 'CREATE (n {name: "test"})' | timeout 1 ./zig-out/bin/geode serve 2>/dev/null | grep -q "status_class" && echo -e "${GREEN}OK${NC}" || echo -e "${RED}HANGS${NC}"
 END=$(date +%s%N)
 DOUBLE_TIME=$(( (END - START) / 1000000 ))
 
@@ -35,39 +35,39 @@ fi
 echo
 echo "Testing transaction support..."
 echo -n "  BEGIN:    "
-echo "BEGIN" | ./zig-out/bin/geoded 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
+echo "BEGIN" | ./zig-out/bin/geode serve 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
 echo -n "  COMMIT:   "
-echo "COMMIT" | ./zig-out/bin/geoded 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
+echo "COMMIT" | ./zig-out/bin/geode serve 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
 echo -n "  ROLLBACK: "
-echo "ROLLBACK" | ./zig-out/bin/geoded 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
+echo "ROLLBACK" | ./zig-out/bin/geode serve 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
 
 # Test index operations
 echo
 echo "Testing index operations..."
 echo -n "  CREATE INDEX: "
-echo "CREATE INDEX idx_test ON Person(name)" | ./zig-out/bin/geoded 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
+echo "CREATE INDEX idx_test ON Person(name)" | ./zig-out/bin/geode serve 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
 echo -n "  DROP INDEX:   "
-echo "DROP INDEX idx_test" | ./zig-out/bin/geoded 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
+echo "DROP INDEX idx_test" | ./zig-out/bin/geode serve 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
 
 # Test SET/DELETE operations
 echo
 echo "Testing data modification operations..."
 echo -n "  SET property:    "
-echo "MATCH (n) SET n.updated = true" | ./zig-out/bin/geoded 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
+echo "MATCH (n) SET n.updated = true" | ./zig-out/bin/geode serve 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
 echo -n "  DELETE node:     "
-echo "MATCH (n) DELETE n" | ./zig-out/bin/geoded 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
+echo "MATCH (n) DELETE n" | ./zig-out/bin/geode serve 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
 echo -n "  DETACH DELETE:   "
-echo "MATCH (n) DETACH DELETE n" | ./zig-out/bin/geoded 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
+echo "MATCH (n) DETACH DELETE n" | ./zig-out/bin/geode serve 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
 
 # Test advanced features
 echo
 echo "Testing advanced features..."
 echo -n "  Variable paths (*):     "
-echo "MATCH (a)-[*1..3]->(b) RETURN count(*)" | ./zig-out/bin/geoded 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
+echo "MATCH (a)-[*1..3]->(b) RETURN count(*)" | ./zig-out/bin/geode serve 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
 echo -n "  UNION:                  "
-echo "RETURN 1 AS x UNION RETURN 2 AS x" | ./zig-out/bin/geoded 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
+echo "RETURN 1 AS x UNION RETURN 2 AS x" | ./zig-out/bin/geode serve 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
 echo -n "  Subqueries:             "
-echo "MATCH (p) WHERE EXISTS { MATCH (p)-[:KNOWS]->() } RETURN p" | ./zig-out/bin/geoded 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
+echo "MATCH (p) WHERE EXISTS { MATCH (p)-[:KNOWS]->() } RETURN p" | ./zig-out/bin/geode serve 2>&1 | grep -q "error\|NotImplemented" && echo -e "${YELLOW}NOT IMPLEMENTED${NC}" || echo -e "${GREEN}OK${NC}"
 
 # Test performance of working features
 echo
@@ -76,12 +76,12 @@ echo "Testing performance of working features..."
 # Create test data
 echo "Creating 1000 test nodes..."
 for i in $(seq 1 1000); do
-    echo "CREATE (n:PerfTest {id: $i})" | ./zig-out/bin/geoded > /dev/null 2>&1
+    echo "CREATE (n:PerfTest {id: $i})" | ./zig-out/bin/geode serve > /dev/null 2>&1
 done
 
 echo -n "  MATCH all (1000 nodes): "
 START=$(date +%s%N)
-echo "MATCH (n:PerfTest) RETURN count(n)" | ./zig-out/bin/geoded > /dev/null 2>&1
+echo "MATCH (n:PerfTest) RETURN count(n)" | ./zig-out/bin/geode serve > /dev/null 2>&1
 END=$(date +%s%N)
 MATCH_TIME=$(( (END - START) / 1000000 ))
 if [ $MATCH_TIME -le 100 ]; then
@@ -96,7 +96,7 @@ fi
 
 echo -n "  ORDER BY performance:    "
 START=$(date +%s%N)
-echo "MATCH (n:PerfTest) RETURN n.id ORDER BY n.id LIMIT 10" | ./zig-out/bin/geoded > /dev/null 2>&1
+echo "MATCH (n:PerfTest) RETURN n.id ORDER BY n.id LIMIT 10" | ./zig-out/bin/geode serve > /dev/null 2>&1
 END=$(date +%s%N)
 ORDER_TIME=$(( (END - START) / 1000000 ))
 if [ $ORDER_TIME -le 200 ]; then

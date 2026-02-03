@@ -15,7 +15,7 @@ echo "Testing basic graph traversal patterns..."
 
 # Test 1: Simple node selection
 echo "1. Simple node selection..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (n) RETURN n' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q "SCHEMA.*BINDINGS"; then
     echo "   ✓ Simple node selection works"
     # Count nodes in output
@@ -27,7 +27,7 @@ fi
 
 # Test 2: Node selection with labels
 echo "2. Node selection with labels..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (p:Person) RETURN p' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (p:Person) RETURN p' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q "SCHEMA.*BINDINGS"; then
     echo "   ✓ Label-based node selection works"
     PERSON_COUNT=$(echo "$OUTPUT" | grep -o '"labels":\["Person"\]' | wc -l)
@@ -38,7 +38,7 @@ fi
 
 # Test 3: Simple relationship traversal
 echo "3. Simple relationship traversal..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (a)-[r]->(b) RETURN a, r, b' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (a)-[r]->(b) RETURN a, r, b' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q "SCHEMA"; then
     echo "   ✓ Basic relationship traversal executed"
     if echo "$OUTPUT" | grep -q "BINDINGS"; then
@@ -52,7 +52,7 @@ fi
 
 # Test 4: Bidirectional traversal
 echo "4. Bidirectional relationship traversal..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (a)-[r]-(b) RETURN a, r, b' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (a)-[r]-(b) RETURN a, r, b' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q "SCHEMA"; then
     echo "   ✓ Bidirectional traversal executed"
 else
@@ -61,7 +61,7 @@ fi
 
 # Test 5: Multi-hop traversal
 echo "5. Multi-hop traversal..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (a)-[:KNOWS]->(b)-[:KNOWS]->(c) RETURN a, b, c' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (a)-[:KNOWS]->(b)-[:KNOWS]->(c) RETURN a, b, c' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q "SCHEMA"; then
     echo "   ✓ Multi-hop traversal executed"
 else
@@ -70,7 +70,7 @@ fi
 
 # Test 6: Node property access
 echo "6. Node property access..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n.age, n.name' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (n) RETURN n.age, n.name' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q "SCHEMA"; then
     echo "   ✓ Property access executed"
 else
@@ -79,7 +79,7 @@ fi
 
 # Test 7: Cross product queries
 echo "7. Cross product queries..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (a), (b) WHERE a <> b RETURN a, b' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (a), (b) WHERE a <> b RETURN a, b' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q "SCHEMA.*BINDINGS"; then
     echo "   ✓ Cross product query works"
     PAIR_COUNT=$(echo "$OUTPUT" | grep -o '"id":[0-9]*' | wc -l)
@@ -90,7 +90,7 @@ fi
 
 # Test 8: WHERE clause filtering
 echo "8. WHERE clause filtering..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) WHERE n.id = 1 RETURN n' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (n) WHERE n.id = 1 RETURN n' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q "SCHEMA"; then
     echo "   ✓ WHERE clause filtering executed"
 else
@@ -99,7 +99,7 @@ fi
 
 # Test 9: Variable binding
 echo "9. Variable binding in MATCH..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (person:Person)-[relationship]->(target) RETURN person, relationship, target' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (person:Person)-[relationship]->(target) RETURN person, relationship, target' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q "SCHEMA"; then
     echo "   ✓ Variable binding executed"
 else
@@ -108,7 +108,7 @@ fi
 
 # Test 10: Path length constraints
 echo "10. Path length constraints..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (a)-[*1..2]->(b) RETURN a, b' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (a)-[*1..2]->(b) RETURN a, b' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q "SCHEMA"; then
     echo "   ✓ Path length constraints executed"
 else
@@ -120,7 +120,7 @@ echo "Testing query result formats..."
 
 # Test 11: Column aliasing
 echo "11. Column aliasing..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n AS node, n.id AS node_id' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (n) RETURN n AS node, n.id AS node_id' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q '"name":"node".*"name":"node_id"'; then
     echo "   ✓ Column aliasing works correctly"
 else
@@ -129,7 +129,7 @@ fi
 
 # Test 12: DISTINCT results
 echo "12. DISTINCT results..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN DISTINCT n.id' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (n) RETURN DISTINCT n.id' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q "SCHEMA"; then
     echo "   ✓ DISTINCT query executed"
 else
@@ -138,7 +138,7 @@ fi
 
 # Test 13: LIMIT clause
 echo "13. LIMIT clause..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n LIMIT 2' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (n) RETURN n LIMIT 2' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q "SCHEMA"; then
     echo "   ✓ LIMIT clause executed"
 else
@@ -147,7 +147,7 @@ fi
 
 # Test 14: ORDER BY clause
 echo "14. ORDER BY clause..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (n) RETURN n ORDER BY n.id' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q "SCHEMA"; then
     echo "   ✓ ORDER BY clause executed"
 else
@@ -159,7 +159,7 @@ echo "Testing advanced traversal patterns..."
 
 # Test 15: Optional matches
 echo "15. Optional matches..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (a) OPTIONAL MATCH (a)-[r]->(b) RETURN a, r, b' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (a) OPTIONAL MATCH (a)-[r]->(b) RETURN a, r, b' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q "SCHEMA"; then
     echo "   ✓ Optional match executed"
 else
@@ -168,7 +168,7 @@ fi
 
 # Test 16: Multiple MATCH clauses
 echo "16. Multiple MATCH clauses..."
-OUTPUT=$(timeout 3 ./zig-out/bin/geodec 'MATCH (a) MATCH (b) WHERE a.id <> b.id RETURN a, b' --insecure 2>&1)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query 'MATCH (a) MATCH (b) WHERE a.id <> b.id RETURN a, b' --insecure 2>&1)
 if echo "$OUTPUT" | grep -q "SCHEMA"; then
     echo "   ✓ Multiple MATCH clauses executed"
 else

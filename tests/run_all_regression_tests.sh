@@ -50,7 +50,7 @@ echo -e "${YELLOW}║     Geode Regression Test Suite Runner       ║${NC}"
 echo -e "${YELLOW}╚══════════════════════════════════════════════╝${NC}"
 
 # Check if server is built
-if [ ! -f "./zig-out/bin/geoded" ]; then
+if [ ! -f "./zig-out/bin/geode serve" ]; then
     echo -e "${YELLOW}Building Geode...${NC}"
     zig build
 fi

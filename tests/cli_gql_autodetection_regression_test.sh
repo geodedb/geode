@@ -7,7 +7,7 @@ set -e
 echo "=== GQL Query Auto-detection Regression Tests ==="
 
 GEODE_BIN="./zig-out/bin/geode"
-# Note: Tests must run from the project root directory where ./zig-out/bin/geoded is available
+# Note: Tests must run from the project root directory where ./zig-out/bin/geode serve is available
 
 # Test 1: Basic RETURN query without 'query' subcommand
 echo "Test 1: Basic RETURN query auto-detection"

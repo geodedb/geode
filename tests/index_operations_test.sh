@@ -21,7 +21,7 @@ make build > /dev/null 2>&1 || { echo -e "${RED}Build failed${NC}"; exit 1; }
 
 # Start server
 echo "Starting Geode server..."
-./zig-out/bin/geoded --data_dir /tmp/geode_index_test_$$ --insecure > /tmp/geode_server_$$.log 2>&1 &
+./zig-out/bin/geode serve --data_dir /tmp/geode_index_test_$$ --insecure > /tmp/geode_server_$$.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -44,7 +44,7 @@ test_query() {
     echo -n "Testing $name... "
 
     local output
-    output=$(./zig-out/bin/geodec "$query" --insecure 2>&1 || true)
+    output=$(./zig-out/bin/geode query "$query" --insecure 2>&1 || true)
 
     if echo "$output" | grep -q "NotImplemented"; then
         echo -e "${YELLOW}NOT IMPLEMENTED${NC}"
@@ -130,9 +130,9 @@ echo
 
 # Create some nodes
 echo "Creating test nodes..."
-./zig-out/bin/geodec "CREATE (n:Person {name: 'Alice', age: 30})" --insecure 2>&1 > /dev/null
-./zig-out/bin/geodec "CREATE (n:Person {name: 'Bob', age: 25})" --insecure 2>&1 > /dev/null
-./zig-out/bin/geodec "CREATE (n:Person {name: 'Charlie', age: 35})" --insecure 2>&1 > /dev/null
+./zig-out/bin/geode query "CREATE (n:Person {name: 'Alice', age: 30})" --insecure 2>&1 > /dev/null
+./zig-out/bin/geode query "CREATE (n:Person {name: 'Bob', age: 25})" --insecure 2>&1 > /dev/null
+./zig-out/bin/geode query "CREATE (n:Person {name: 'Charlie', age: 35})" --insecure 2>&1 > /dev/null
 
 # Test index creation and usage
 test_query "Create index on Person.name" \

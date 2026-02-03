@@ -25,7 +25,7 @@ run_stdio_test() {
 
     echo -n "Testing $name... "
     local output
-    output=$(echo "$json_message" | timeout 3 ./zig-out/bin/geoded 2>/dev/null | head -1)
+    output=$(echo "$json_message" | timeout 3 ./zig-out/bin/geode serve 2>/dev/null | head -1)
     if echo "$output" | grep -q "$expected_pattern"; then
         echo -e "${GREEN}PASS${NC}"
         ((TESTS_PASSED++))
@@ -84,7 +84,7 @@ echo -e "${BLUE}=== Protocol Error Tests ===${NC}"
 
 # This should fail gracefully (wrong field name)
 echo -n "Testing wrong field name... "
-if echo '{"type":"RUN_GQL","gql":"RETURN 1 AS num"}' | timeout 3 ./zig-out/bin/geoded 2>/dev/null | wc -l | grep -q "^0$"; then
+if echo '{"type":"RUN_GQL","gql":"RETURN 1 AS num"}' | timeout 3 ./zig-out/bin/geode serve 2>/dev/null | wc -l | grep -q "^0$"; then
     echo -e "${GREEN}PASS${NC} (correctly ignored invalid message)"
     ((TESTS_PASSED++))
 else

@@ -60,7 +60,7 @@ echo -e "${BLUE}=== Phase 1: Server TLS Configuration ===${NC}"
 
 # Start server in background with debug logging
 echo "Starting server with TLS..."
-GEODE_LOG_JSON=true ./zig-out/bin/geoded --listen-quic 0.0.0.0:8443 > server.log 2>&1 &
+GEODE_LOG_JSON=true ./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443 > server.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -78,21 +78,21 @@ echo -e "${BLUE}=== Phase 2: Client Connection Tests ===${NC}"
 
 # Test 1: Normal TLS connection (should fail without proper certificates)
 test_handshake "TLS connection without certificates" \
-    "./zig-out/bin/geodec 'RETURN 1 AS x' --quic-addr 127.0.0.1 --quic-port 8443" \
+    "./zig-out/bin/geode query 'RETURN 1 AS x' --server 127.0.0.1:8443" \
     false
 
 # Test 2: Insecure connection (should work)
 test_handshake "Insecure connection with --insecure flag" \
-    "./zig-out/bin/geodec 'RETURN 1 AS x' --quic-addr 127.0.0.1 --quic-port 8443 --insecure" \
+    "./zig-out/bin/geode query 'RETURN 1 AS x' --server 127.0.0.1:8443 --insecure" \
     true
 
 # Test 3: Multiple insecure connections
 test_handshake "First insecure connection" \
-    "./zig-out/bin/geodec 'RETURN 2 AS y' --quic-addr 127.0.0.1 --quic-port 8443 --insecure" \
+    "./zig-out/bin/geode query 'RETURN 2 AS y' --server 127.0.0.1:8443 --insecure" \
     true
 
 test_handshake "Second insecure connection" \
-    "./zig-out/bin/geodec 'RETURN 3 AS z' --quic-addr 127.0.0.1 --quic-port 8443 --insecure" \
+    "./zig-out/bin/geode query 'RETURN 3 AS z' --server 127.0.0.1:8443 --insecure" \
     true
 
 # Test 4: Concurrent insecure connections
@@ -101,9 +101,9 @@ echo -e "${BLUE}=== Phase 3: Concurrent Connection Tests ===${NC}"
 
 echo -n "Testing concurrent insecure connections... "
 (
-    ./zig-out/bin/geodec 'RETURN 10 AS a' --quic-addr 127.0.0.1 --quic-port 8443 --insecure &
-    ./zig-out/bin/geodec 'RETURN 20 AS b' --quic-addr 127.0.0.1 --quic-port 8443 --insecure &
-    ./zig-out/bin/geodec 'RETURN 30 AS c' --quic-addr 127.0.0.1 --quic-port 8443 --insecure &
+    ./zig-out/bin/geode query 'RETURN 10 AS a' --server 127.0.0.1:8443 --insecure &
+    ./zig-out/bin/geode query 'RETURN 20 AS b' --server 127.0.0.1:8443 --insecure &
+    ./zig-out/bin/geode query 'RETURN 30 AS c' --server 127.0.0.1:8443 --insecure &
     wait
 ) > concurrent.out 2>&1
 
@@ -121,7 +121,7 @@ echo -e "${BLUE}=== Phase 4: Handshake Timeout Tests ===${NC}"
 
 # Test with debug output to verify handshake behavior
 echo -n "Testing handshake completion logging... "
-GEODE_LOG_LEVEL=DEBUG ./zig-out/bin/geodec 'RETURN 99 AS debug_test' --quic-addr 127.0.0.1 --quic-port 8443 --insecure 2>debug.log
+GEODE_LOG_LEVEL=DEBUG ./zig-out/bin/geode query 'RETURN 99 AS debug_test' --server 127.0.0.1:8443 --insecure 2>debug.log
 if grep -q 'handshake completed' debug.log || grep -q 'connection initiated successfully' debug.log; then
     echo -e "${GREEN}PASS${NC}"
     ((PASSED++))
@@ -145,7 +145,7 @@ fi
 
 # Start server again - should auto-generate certificates
 echo "Starting server without certificates (should auto-generate)..."
-./zig-out/bin/geoded --listen-quic 0.0.0.0:8443 > server2.log 2>&1 &
+./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443 > server2.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -159,7 +159,7 @@ fi
 
 # Test connection with auto-generated cert
 test_handshake "Connection with auto-generated certificate" \
-    "./zig-out/bin/geodec 'RETURN 100 AS auto_cert' --quic-addr 127.0.0.1 --quic-port 8443 --insecure" \
+    "./zig-out/bin/geode query 'RETURN 100 AS auto_cert' --server 127.0.0.1:8443 --insecure" \
     true
 
 # Clean up

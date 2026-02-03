@@ -26,7 +26,7 @@ test_quotes() {
     local exit_code=0
 
     # Use timeout to prevent hangs
-    output=$(echo "$input" | timeout $timeout_sec ./zig-out/bin/geoded 2>&1) || exit_code=$?
+    output=$(echo "$input" | timeout $timeout_sec ./zig-out/bin/geode serve 2>&1) || exit_code=$?
 
     if [ $exit_code -eq 124 ]; then
         # Timeout occurred

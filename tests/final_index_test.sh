@@ -12,7 +12,7 @@ NC='\033[0m'
 
 # Start server
 echo "Starting server..."
-./zig-out/bin/geoded --data_dir /tmp/idx_test_$$ --insecure > /tmp/server_$$.log 2>&1 &
+./zig-out/bin/geode serve --data_dir /tmp/idx_test_$$ --insecure > /tmp/server_$$.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -25,7 +25,7 @@ trap cleanup EXIT
 
 echo
 echo "Testing CREATE INDEX..."
-OUTPUT=$(./zig-out/bin/geodec "CREATE INDEX person_name_idx ON Person(name)" --insecure 2>&1)
+OUTPUT=$(./zig-out/bin/geode query "CREATE INDEX person_name_idx ON Person(name)" --insecure 2>&1)
 echo "Result: $OUTPUT"
 
 if echo "$OUTPUT" | grep -q "Index person_name_idx created successfully"; then
@@ -38,17 +38,17 @@ fi
 
 echo
 echo "Testing CREATE UNIQUE INDEX..."
-OUTPUT=$(./zig-out/bin/geodec "CREATE UNIQUE INDEX person_id_idx ON Person(id)" --insecure 2>&1)
+OUTPUT=$(./zig-out/bin/geode query "CREATE UNIQUE INDEX person_id_idx ON Person(id)" --insecure 2>&1)
 echo "Result: $OUTPUT"
 
 echo
 echo "Testing CREATE INDEX IF NOT EXISTS..."
-OUTPUT=$(./zig-out/bin/geodec "CREATE INDEX IF NOT EXISTS person_name_idx ON Person(name)" --insecure 2>&1)
+OUTPUT=$(./zig-out/bin/geode query "CREATE INDEX IF NOT EXISTS person_name_idx ON Person(name)" --insecure 2>&1)
 echo "Result: $OUTPUT"
 
 echo
 echo "Testing DROP INDEX..."
-OUTPUT=$(./zig-out/bin/geodec "DROP INDEX person_name_idx" --insecure 2>&1)
+OUTPUT=$(./zig-out/bin/geode query "DROP INDEX person_name_idx" --insecure 2>&1)
 echo "Result: $OUTPUT"
 
 if echo "$OUTPUT" | grep -q "Index person_name_idx dropped successfully"; then
@@ -59,17 +59,17 @@ fi
 
 echo
 echo "Testing DROP INDEX IF EXISTS..."
-OUTPUT=$(./zig-out/bin/geodec "DROP INDEX IF EXISTS non_existent_idx" --insecure 2>&1)
+OUTPUT=$(./zig-out/bin/geode query "DROP INDEX IF EXISTS non_existent_idx" --insecure 2>&1)
 echo "Result: $OUTPUT"
 
 echo
 echo "Testing BACKUP..."
-OUTPUT=$(./zig-out/bin/geodec "BACKUP TO '/tmp/backup.db'" --insecure 2>&1)
+OUTPUT=$(./zig-out/bin/geode query "BACKUP TO '/tmp/backup.db'" --insecure 2>&1)
 echo "Result: $OUTPUT"
 
 echo
 echo "Testing RESTORE..."
-OUTPUT=$(./zig-out/bin/geodec "RESTORE FROM '/tmp/backup.db'" --insecure 2>&1)
+OUTPUT=$(./zig-out/bin/geode query "RESTORE FROM '/tmp/backup.db'" --insecure 2>&1)
 echo "Result: $OUTPUT"
 
 echo

@@ -66,59 +66,59 @@ echo
 echo "=== Phase 1: Basic Operation Performance ==="
 
 # Basic performance benchmarks (based on documented performance)
-test_performance "Node creation" "timeout 5 ./zig-out/bin/geodec 'CREATE (a), (b), (c)' --insecure" 100
-test_performance "Simple query" "timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n' --insecure" 100
-test_performance "Count query" "timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN count(n)' --insecure" 100
-test_performance "Property ordering" "timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id' --insecure" 100
-test_performance "Edge traversal" "timeout 5 ./zig-out/bin/geodec 'MATCH (a)-[r]->(b) RETURN count(r)' --insecure" 100
+test_performance "Node creation" "timeout 5 ./zig-out/bin/geode query 'CREATE (a), (b), (c)' --insecure" 100
+test_performance "Simple query" "timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN n' --insecure" 100
+test_performance "Count query" "timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN count(n)' --insecure" 100
+test_performance "Property ordering" "timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN n ORDER BY n.id' --insecure" 100
+test_performance "Edge traversal" "timeout 5 ./zig-out/bin/geode query 'MATCH (a)-[r]->(b) RETURN count(r)' --insecure" 100
 
 echo
 echo "=== Phase 2: Complex Query Performance ==="
 
 # Complex query performance
-test_performance "Complex CREATE" "timeout 5 ./zig-out/bin/geodec \"CREATE (p:Person {name: 'Alice', age: 30})-[:WORKS_AT]->(c:Company)\" --insecure" 200
-test_performance "Multi-hop traversal" "timeout 5 ./zig-out/bin/geodec 'MATCH (a)-[:KNOWS]->(b)-[:KNOWS]->(c) RETURN a, b, c' --insecure" 200
-test_performance "Cross product query" "timeout 5 ./zig-out/bin/geodec 'MATCH (a), (b) WHERE a <> b RETURN a, b' --insecure" 200
-test_performance "Aggregation with grouping" "timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n.type, count(n)' --insecure" 200
+test_performance "Complex CREATE" "timeout 5 ./zig-out/bin/geode query \"CREATE (p:Person {name: 'Alice', age: 30})-[:WORKS_AT]->(c:Company)\" --insecure" 200
+test_performance "Multi-hop traversal" "timeout 5 ./zig-out/bin/geode query 'MATCH (a)-[:KNOWS]->(b)-[:KNOWS]->(c) RETURN a, b, c' --insecure" 200
+test_performance "Cross product query" "timeout 5 ./zig-out/bin/geode query 'MATCH (a), (b) WHERE a <> b RETURN a, b' --insecure" 200
+test_performance "Aggregation with grouping" "timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN n.type, count(n)' --insecure" 200
 
 echo
 echo "=== Phase 3: Bulk Operations ==="
 
 # Bulk operation performance
-test_performance "Batch node creation" "timeout 10 ./zig-out/bin/geodec 'CREATE (a1), (a2), (a3), (a4), (a5), (a6), (a7), (a8), (a9), (a10)' --insecure" 500
-test_performance "Batch edge creation" "timeout 10 ./zig-out/bin/geodec 'CREATE (a)-[:R1]->(b), (b)-[:R2]->(c), (c)-[:R3]->(d), (d)-[:R4]->(e)' --insecure" 500
-test_performance "Large result set" "timeout 10 ./zig-out/bin/geodec 'MATCH (a), (b), (c) RETURN a, b, c LIMIT 50' --insecure" 1000
+test_performance "Batch node creation" "timeout 10 ./zig-out/bin/geode query 'CREATE (a1), (a2), (a3), (a4), (a5), (a6), (a7), (a8), (a9), (a10)' --insecure" 500
+test_performance "Batch edge creation" "timeout 10 ./zig-out/bin/geode query 'CREATE (a)-[:R1]->(b), (b)-[:R2]->(c), (c)-[:R3]->(d), (d)-[:R4]->(e)' --insecure" 500
+test_performance "Large result set" "timeout 10 ./zig-out/bin/geode query 'MATCH (a), (b), (c) RETURN a, b, c LIMIT 50' --insecure" 1000
 
 echo
 echo "=== Phase 4: Memory Stress Tests ==="
 
 # Memory and resource stress tests
-test_stress "Large property values" "timeout 5 ./zig-out/bin/geodec \"CREATE (p {data: 'abcdefghijklmnopqrstuvwxyz0123456789'})\" --insecure"
-test_stress "Many properties" "timeout 5 ./zig-out/bin/geodec \"CREATE (p {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10})\" --insecure"
-test_stress "Deep nesting query" "timeout 10 ./zig-out/bin/geodec 'MATCH (n) WHERE n.age > 18 AND n.age < 65 AND n.active = true RETURN n ORDER BY n.age, n.name LIMIT 100' --insecure"
+test_stress "Large property values" "timeout 5 ./zig-out/bin/geode query \"CREATE (p {data: 'abcdefghijklmnopqrstuvwxyz0123456789'})\" --insecure"
+test_stress "Many properties" "timeout 5 ./zig-out/bin/geode query \"CREATE (p {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10})\" --insecure"
+test_stress "Deep nesting query" "timeout 10 ./zig-out/bin/geode query 'MATCH (n) WHERE n.age > 18 AND n.age < 65 AND n.active = true RETURN n ORDER BY n.age, n.name LIMIT 100' --insecure"
 
 echo
 echo "=== Phase 5: Concurrent Operation Simulation ==="
 
 # Simulate concurrent operations
-test_stress "Multiple CREATE ops" "timeout 10 bash -c 'for i in {1..5}; do ./zig-out/bin/geodec \"CREATE (p\$i:Person {id: \$i})\" --insecure > /dev/null 2>&1; done'"
-test_stress "Mixed operations" "timeout 15 bash -c './zig-out/bin/geodec \"CREATE (p {id: 100})\" --insecure > /dev/null 2>&1 && ./zig-out/bin/geodec \"MATCH (n) RETURN count(n)\" --insecure > /dev/null 2>&1 && ./zig-out/bin/geodec \"MATCH (n) RETURN n ORDER BY n.id\" --insecure > /dev/null 2>&1'"
+test_stress "Multiple CREATE ops" "timeout 10 bash -c 'for i in {1..5}; do ./zig-out/bin/geode query \"CREATE (p\$i:Person {id: \$i})\" --insecure > /dev/null 2>&1; done'"
+test_stress "Mixed operations" "timeout 15 bash -c './zig-out/bin/geode query \"CREATE (p {id: 100})\" --insecure > /dev/null 2>&1 && ./zig-out/bin/geode query \"MATCH (n) RETURN count(n)\" --insecure > /dev/null 2>&1 && ./zig-out/bin/geode query \"MATCH (n) RETURN n ORDER BY n.id\" --insecure > /dev/null 2>&1'"
 
 echo
 echo "=== Phase 6: Edge Case Performance ==="
 
 # Edge case performance
-test_performance "Empty result aggregation" "timeout 5 ./zig-out/bin/geodec 'MATCH (n:NonExistent) RETURN count(n)' --insecure" 100
-test_performance "Large LIMIT value" "timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n LIMIT 999999' --insecure" 200
-test_performance "Complex WHERE clause" "timeout 5 ./zig-out/bin/geodec 'MATCH (n) WHERE n.age > 20 AND n.active = true OR n.score > 90 RETURN n' --insecure" 200
+test_performance "Empty result aggregation" "timeout 5 ./zig-out/bin/geode query 'MATCH (n:NonExistent) RETURN count(n)' --insecure" 100
+test_performance "Large LIMIT value" "timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN n ORDER BY n LIMIT 999999' --insecure" 200
+test_performance "Complex WHERE clause" "timeout 5 ./zig-out/bin/geode query 'MATCH (n) WHERE n.age > 20 AND n.active = true OR n.score > 90 RETURN n' --insecure" 200
 
 echo
 echo "=== Phase 7: Data Type Performance ==="
 
 # Data type handling performance
-test_performance "Boolean operations" "timeout 5 ./zig-out/bin/geodec 'CREATE (p {flag1: true, flag2: false})' --insecure" 100
-test_performance "Number operations" "timeout 5 ./zig-out/bin/geodec 'CREATE (p {score: 95, age: 30, salary: 75000})' --insecure" 100
-test_performance "String operations" "timeout 5 ./zig-out/bin/geodec \"CREATE (p {name: 'John Doe', title: 'Senior Developer'})\" --insecure" 100
+test_performance "Boolean operations" "timeout 5 ./zig-out/bin/geode query 'CREATE (p {flag1: true, flag2: false})' --insecure" 100
+test_performance "Number operations" "timeout 5 ./zig-out/bin/geode query 'CREATE (p {score: 95, age: 30, salary: 75000})' --insecure" 100
+test_performance "String operations" "timeout 5 ./zig-out/bin/geode query \"CREATE (p {name: 'John Doe', title: 'Senior Developer'})\" --insecure" 100
 
 echo
 echo "=== Performance Results Summary ==="

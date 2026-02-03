@@ -38,37 +38,37 @@ make build > /dev/null 2>&1
 
 echo
 echo "Testing basic operations:"
-time_operation "Simple RETURN" "./zig-out/bin/geodec 'RETURN 1 AS x' --insecure" 500
-time_operation "CREATE node" "./zig-out/bin/geodec 'CREATE (n:Test {id: 1})' --insecure" 600
-time_operation "MATCH count" "./zig-out/bin/geodec 'MATCH (n) RETURN count(n)' --insecure" 700
-time_operation "Property query" "./zig-out/bin/geodec 'MATCH (n:Test) WHERE n.id = 1 RETURN n' --insecure" 800
+time_operation "Simple RETURN" "./zig-out/bin/geode query 'RETURN 1 AS x' --insecure" 500
+time_operation "CREATE node" "./zig-out/bin/geode query 'CREATE (n:Test {id: 1})' --insecure" 600
+time_operation "MATCH count" "./zig-out/bin/geode query 'MATCH (n) RETURN count(n)' --insecure" 700
+time_operation "Property query" "./zig-out/bin/geode query 'MATCH (n:Test) WHERE n.id = 1 RETURN n' --insecure" 800
 
 echo
 echo "Creating test data..."
 for i in {1..100}; do
-    ./zig-out/bin/geodec "CREATE (p:Person {id: $i, name: 'Person$i', age: $((20 + i % 50))})" --insecure 2>/dev/null
+    ./zig-out/bin/geode query "CREATE (p:Person {id: $i, name: 'Person$i', age: $((20 + i % 50))})" --insecure 2>/dev/null
 done
 echo "Created 100 test nodes"
 
 echo
 echo "Testing query performance:"
-time_operation "Count all" "./zig-out/bin/geodec 'MATCH (p:Person) RETURN count(p)' --insecure" 800
-time_operation "Range query" "./zig-out/bin/geodec 'MATCH (p:Person) WHERE p.age > 30 RETURN count(p)' --insecure" 1000
-time_operation "ORDER BY" "./zig-out/bin/geodec 'MATCH (p:Person) RETURN p.name ORDER BY p.age LIMIT 10' --insecure" 1200
-time_operation "Aggregation" "./zig-out/bin/geodec 'MATCH (p:Person) RETURN avg(p.age) AS avg' --insecure" 1000
+time_operation "Count all" "./zig-out/bin/geode query 'MATCH (p:Person) RETURN count(p)' --insecure" 800
+time_operation "Range query" "./zig-out/bin/geode query 'MATCH (p:Person) WHERE p.age > 30 RETURN count(p)' --insecure" 1000
+time_operation "ORDER BY" "./zig-out/bin/geode query 'MATCH (p:Person) RETURN p.name ORDER BY p.age LIMIT 10' --insecure" 1200
+time_operation "Aggregation" "./zig-out/bin/geode query 'MATCH (p:Person) RETURN avg(p.age) AS avg' --insecure" 1000
 
 echo
 echo "Testing string literals (critical issue):"
 echo -n "Single quotes: "
 start=$(date +%s%N)
-./zig-out/bin/geodec "CREATE (n {name: 'test'})" --insecure > /dev/null 2>&1
+./zig-out/bin/geode query "CREATE (n {name: 'test'})" --insecure > /dev/null 2>&1
 end=$(date +%s%N)
 duration_ms=$(( (end - start) / 1000000 ))
 echo -e "${GREEN}${duration_ms}ms ✓${NC}"
 
 echo -n "Double quotes (should timeout): "
 start=$(date +%s%N)
-timeout 2 ./zig-out/bin/geodec 'CREATE (n {name: "test"})' --insecure > /dev/null 2>&1 || true
+timeout 2 ./zig-out/bin/geode query 'CREATE (n {name: "test"})' --insecure > /dev/null 2>&1 || true
 end=$(date +%s%N)
 duration_ms=$(( (end - start) / 1000000 ))
 if [ $duration_ms -ge 1900 ]; then

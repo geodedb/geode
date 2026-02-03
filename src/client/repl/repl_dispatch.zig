@@ -327,7 +327,7 @@ fn protoNodeToJson(allocator: std.mem.Allocator, node: proto_schema.NodeValue) !
 
     var labels = std.json.Array.init(allocator);
     for (node.labels.items) |label| {
-        try labels.append(allocator, .{ .string = try allocator.dupe(u8, label) });
+        try labels.append(.{ .string = try allocator.dupe(u8, label) });
     }
     try obj.put("labels", .{ .array = labels });
 
@@ -353,13 +353,13 @@ fn protoPathToJson(allocator: std.mem.Allocator, path: proto_schema.PathValue) !
 
     var nodes = std.json.Array.init(allocator);
     for (path.nodes.items) |node| {
-        try nodes.append(allocator, try protoNodeToJson(allocator, node));
+        try nodes.append(try protoNodeToJson(allocator, node));
     }
     try obj.put("nodes", .{ .array = nodes });
 
     var edges = std.json.Array.init(allocator);
     for (path.edges.items) |edge| {
-        try edges.append(allocator, try protoEdgeToJson(allocator, edge));
+        try edges.append(try protoEdgeToJson(allocator, edge));
     }
     try obj.put("edges", .{ .array = edges });
     return .{ .object = obj };
@@ -383,7 +383,7 @@ fn protoExtendedToJson(allocator: std.mem.Allocator, ext: proto_schema.ExtendedV
     return .{ .object = obj };
 }
 
-fn protoValueToJson(allocator: std.mem.Allocator, value: proto_schema.Value) !std.json.Value {
+fn protoValueToJson(allocator: std.mem.Allocator, value: proto_schema.Value) error{OutOfMemory}!std.json.Value {
     const kind = value.kind orelse return std.json.Value.null;
     return switch (kind) {
         .null_val => std.json.Value.null,
@@ -399,7 +399,7 @@ fn protoValueToJson(allocator: std.mem.Allocator, value: proto_schema.Value) !st
         .list_val => |v| blk: {
             var arr = std.json.Array.init(allocator);
             for (v.values.items) |item| {
-                try arr.append(allocator, try protoValueToJson(allocator, item));
+                try arr.append(try protoValueToJson(allocator, item));
             }
             break :blk .{ .array = arr };
         },
@@ -417,7 +417,7 @@ fn protoValueToJson(allocator: std.mem.Allocator, value: proto_schema.Value) !st
 fn buildColumnsJsonArray(allocator: std.mem.Allocator, columns: []const []const u8) !std.json.Array {
     var arr = std.json.Array.init(allocator);
     for (columns) |col| {
-        try arr.append(allocator, .{ .string = try allocator.dupe(u8, col) });
+        try arr.append(.{ .string = try allocator.dupe(u8, col) });
     }
     return arr;
 }
@@ -425,7 +425,7 @@ fn buildColumnsJsonArray(allocator: std.mem.Allocator, columns: []const []const 
 fn rowToJsonArray(allocator: std.mem.Allocator, row: proto_schema.Row) !std.json.Value {
     var arr = std.json.Array.init(allocator);
     for (row.values.items) |val| {
-        try arr.append(allocator, try protoValueToJson(allocator, val));
+        try arr.append(try protoValueToJson(allocator, val));
     }
     return .{ .array = arr };
 }
@@ -472,11 +472,11 @@ fn buildRowsJsonArray(allocator: std.mem.Allocator, rows: []const proto_schema.R
 
         for (results) |res| {
             if (res.err) |err| return err;
-            try arr.append(allocator, res.value);
+            try arr.append(res.value);
         }
     } else {
         for (rows) |row| {
-            try arr.append(allocator, try rowToJsonArray(allocator, row));
+            try arr.append(try rowToJsonArray(allocator, row));
         }
     }
 
@@ -507,14 +507,14 @@ fn executionResponseToJson(
         if (st.additional_statuses.items.len > 0) {
             var arr = std.json.Array.init(a);
             for (st.additional_statuses.items) |item| {
-                try arr.append(a, .{ .string = try a.dupe(u8, item) });
+                try arr.append(.{ .string = try a.dupe(u8, item) });
             }
             try root.put("additional_statuses", .{ .array = arr });
         }
         if (st.flagger_findings.items.len > 0) {
             var arr = std.json.Array.init(a);
             for (st.flagger_findings.items) |item| {
-                try arr.append(a, .{ .string = try a.dupe(u8, item) });
+                try arr.append(.{ .string = try a.dupe(u8, item) });
             }
             try root.put("flagger_findings", .{ .array = arr });
         }
@@ -530,7 +530,7 @@ fn executionResponseToJson(
                 if (schema_def.columns.items.len > 0) {
                     var cols = std.json.Array.init(a);
                     for (schema_def.columns.items) |col| {
-                        try cols.append(a, .{ .string = try a.dupe(u8, col.name) });
+                        try cols.append(.{ .string = try a.dupe(u8, col.name) });
                     }
                     try root.put("columns", .{ .array = cols });
                 }
@@ -1218,7 +1218,7 @@ pub const ClientSession = struct {
 
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
-            var packet = decodeServerPacket(arena.allocator(), response) catch return error.InvalidResponse;
+            const packet = decodeServerPacket(arena.allocator(), response) catch return error.InvalidResponse;
             const msg_union = packet.quic orelse return error.InvalidResponse;
             switch (msg_union) {
                 .begin => return,
@@ -1263,7 +1263,7 @@ pub const ClientSession = struct {
 
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
-        var packet = decodeServerPacket(arena.allocator(), response) catch return error.InvalidResponse;
+        const packet = decodeServerPacket(arena.allocator(), response) catch return error.InvalidResponse;
         const msg_union = packet.quic orelse return error.InvalidResponse;
         switch (msg_union) {
             .commit => |resp| {
@@ -1326,8 +1326,8 @@ pub const ClientSession = struct {
                 last_progress_sec = elapsed_sec;
                 var buf: [64]u8 = undefined;
                 const max_sec = (max_retries * 50) / 1000;
-                const msg = std.fmt.bufPrint(&buf, "       Waiting for server response... ({d}/{d}s)\r", .{ elapsed_sec, max_sec }) catch "";
-                stderr.writeAll(msg) catch {};
+                const progress_msg = std.fmt.bufPrint(&buf, "       Waiting for server response... ({d}/{d}s)\r", .{ elapsed_sec, max_sec }) catch "";
+                stderr.writeAll(progress_msg) catch {};
             }
 
             // Check for Ctrl+C interrupt - rollback needs special handling
@@ -1367,7 +1367,7 @@ pub const ClientSession = struct {
 
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
-            var packet = decodeServerPacket(arena.allocator(), response) catch {
+            const packet = decodeServerPacket(arena.allocator(), response) catch {
                 self.last_txn_error = self.allocator.dupe(u8, "Invalid rollback response") catch null;
                 return error.TransactionError;
             };
@@ -1472,7 +1472,7 @@ pub const ClientSession = struct {
 
             var resp_arena = std.heap.ArenaAllocator.init(self.allocator);
             defer resp_arena.deinit();
-            var packet = decodeServerPacket(resp_arena.allocator(), response) catch return error.InvalidResponse;
+            const packet = decodeServerPacket(resp_arena.allocator(), response) catch return error.InvalidResponse;
             const msg_union = packet.quic orelse return error.InvalidResponse;
 
             switch (msg_union) {
@@ -1488,7 +1488,7 @@ pub const ClientSession = struct {
                             .page => |page| {
                                 const page_rows = try buildRowsJsonArray(a, page.rows.items);
                                 for (page_rows.items) |row| {
-                                    try all_rows.append(a, row);
+                                    try all_rows.append(row);
                                 }
                                 done = page.final;
                             },

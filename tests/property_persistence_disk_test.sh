@@ -41,20 +41,20 @@ echo "2. Testing property implementation code paths..."
 
 echo "2. Creating nodes with properties..."
 echo "   Creating Alice..."
-timeout 10 ./zig-out/bin/geodec "CREATE (alice:Person {name: 'Alice', age: 30, city: 'NYC'})" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Failed to create Alice"
+timeout 10 ./zig-out/bin/geode query "CREATE (alice:Person {name: 'Alice', age: 30, city: 'NYC'})" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Failed to create Alice"
 
 echo "   Creating Bob..."
-timeout 10 ./zig-out/bin/geodec "CREATE (bob:Person {name: 'Bob', age: 25, city: 'SF'})" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Failed to create Bob"
+timeout 10 ./zig-out/bin/geode query "CREATE (bob:Person {name: 'Bob', age: 25, city: 'SF'})" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Failed to create Bob"
 
 echo "   Creating relationship..."
-timeout 10 ./zig-out/bin/geodec "CREATE (charlie:Person {name: 'Charlie', age: 35})-[:KNOWS {since: 2020}]->(diana:Person {name: 'Diana', age: 28})" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Failed to create relationship"
+timeout 10 ./zig-out/bin/geode query "CREATE (charlie:Person {name: 'Charlie', age: 35})-[:KNOWS {since: 2020}]->(diana:Person {name: 'Diana', age: 28})" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Failed to create relationship"
 
 echo "3. Querying properties before restart..."
 echo "   All nodes:"
-timeout 10 ./zig-out/bin/geodec "MATCH (n) RETURN n ORDER BY n.id" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Query failed"
+timeout 10 ./zig-out/bin/geode query "MATCH (n) RETURN n ORDER BY n.id" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Query failed"
 
 echo "   Property access:"
-timeout 10 ./zig-out/bin/geodec "MATCH (n) RETURN n.name AS name, n.age AS age, n.city AS city ORDER BY n.id" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Property query failed"
+timeout 10 ./zig-out/bin/geode query "MATCH (n) RETURN n.name AS name, n.age AS age, n.city AS city ORDER BY n.id" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Property query failed"
 
 echo "4. Stopping server to test persistence..."
 kill $SERVER_PID 2>/dev/null
@@ -62,7 +62,7 @@ wait $SERVER_PID 2>/dev/null || true
 sleep 2
 
 echo "5. Restarting server with same data directory..."
-./zig-out/bin/geoded --listen-quic 127.0.0.1:9443 --data_dir "$GEODE_TEST_DIR" &
+./zig-out/bin/geode serve --listen-quic 127.0.0.1:9443 --data_dir "$GEODE_TEST_DIR" &
 SERVER_PID=$!
 
 # Wait for server to restart
@@ -70,22 +70,22 @@ sleep 3
 
 echo "6. Querying properties after restart..."
 echo "   All nodes after restart:"
-timeout 10 ./zig-out/bin/geodec "MATCH (n) RETURN n ORDER BY n.id" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Query after restart failed"
+timeout 10 ./zig-out/bin/geode query "MATCH (n) RETURN n ORDER BY n.id" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Query after restart failed"
 
 echo "   Property access after restart:"
-timeout 10 ./zig-out/bin/geodec "MATCH (n) RETURN n.name AS name, n.age AS age, n.city AS city ORDER BY n.id" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Property query after restart failed"
+timeout 10 ./zig-out/bin/geode query "MATCH (n) RETURN n.name AS name, n.age AS age, n.city AS city ORDER BY n.id" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Property query after restart failed"
 
 echo "   Filtering by property:"
-timeout 10 ./zig-out/bin/geodec "MATCH (n) WHERE n.name = 'Alice' RETURN n" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Property filter failed"
+timeout 10 ./zig-out/bin/geode query "MATCH (n) WHERE n.name = 'Alice' RETURN n" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Property filter failed"
 
 echo "7. Testing edge properties..."
-timeout 10 ./zig-out/bin/geodec "MATCH (a)-[r]->(b) RETURN a.name, type(r), r.since, b.name" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Edge property query failed"
+timeout 10 ./zig-out/bin/geode query "MATCH (a)-[r]->(b) RETURN a.name, type(r), r.since, b.name" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Edge property query failed"
 
 echo "8. Testing property updates..."
-timeout 10 ./zig-out/bin/geodec "MATCH (n) WHERE n.name = 'Alice' SET n.age = 31 RETURN n" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Property update failed"
+timeout 10 ./zig-out/bin/geode query "MATCH (n) WHERE n.name = 'Alice' SET n.age = 31 RETURN n" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Property update failed"
 
 echo "9. Final verification..."
-timeout 10 ./zig-out/bin/geodec "MATCH (n) RETURN n.name, n.age ORDER BY n.name" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Final verification failed"
+timeout 10 ./zig-out/bin/geode query "MATCH (n) RETURN n.name, n.age ORDER BY n.name" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   Final verification failed"
 
 echo
 echo "=== Property Persistence Disk Test Results ==="

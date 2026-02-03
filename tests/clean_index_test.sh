@@ -8,7 +8,7 @@ echo
 
 # Start server quietly
 echo "Starting server..."
-./zig-out/bin/geoded --data_dir /tmp/idx_test_$$ --insecure > /tmp/server_$$.log 2>&1 &
+./zig-out/bin/geode serve --data_dir /tmp/idx_test_$$ --insecure > /tmp/server_$$.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -22,7 +22,7 @@ trap cleanup EXIT
 # Filter out debug logs and extract only the actual response
 run_query() {
     local query="$1"
-    local result=$(./zig-out/bin/geodec "$query" --insecure 2>/dev/null | grep -v '"level":' | grep -v '"component":' | tail -1)
+    local result=$(./zig-out/bin/geode query "$query" --insecure 2>/dev/null | grep -v '"level":' | grep -v '"component":' | tail -1)
     echo "$result"
 }
 

@@ -8,7 +8,7 @@ echo "=== Comprehensive Regression Test Suite ==="
 echo "Testing all major fixes implemented in Geode database"
 echo
 echo "Date: $(date)"
-echo "Geode Build: $(./zig-out/bin/geodec --version 2>/dev/null || echo 'version unknown')"
+echo "Geode Build: $(./zig-out/bin/geode query --version 2>/dev/null || echo 'version unknown')"
 echo
 
 # Track test results
@@ -27,7 +27,7 @@ run_test() {
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     echo -n "Test $TOTAL_TESTS: $test_name... "
 
-    OUTPUT=$(timeout 5 ./zig-out/bin/geodec "$query" --insecure 2>&1 || true)
+    OUTPUT=$(timeout 5 ./zig-out/bin/geode query "$query" --insecure 2>&1 || true)
 
     if [ "$test_type" = "positive" ]; then
         if echo "$OUTPUT" | grep -q "$expected_pattern"; then

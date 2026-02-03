@@ -59,19 +59,19 @@ echo
 echo -e "${BLUE}=== Phase 1: B-tree Index Testing ===${NC}"
 
 test_index "CREATE B-tree index on property" \
-    "./zig-out/bin/geodec 'CREATE INDEX idx_person_age ON Person(age)' --insecure" \
+    "./zig-out/bin/geode query 'CREATE INDEX idx_person_age ON Person(age)' --insecure" \
     "CREATE INDEX\|success\|NotImplemented"
 
 test_index "CREATE unique index" \
-    "./zig-out/bin/geodec 'CREATE UNIQUE INDEX idx_person_email ON Person(email)' --insecure" \
+    "./zig-out/bin/geode query 'CREATE UNIQUE INDEX idx_person_email ON Person(email)' --insecure" \
     "CREATE.*INDEX\|unique\|success\|NotImplemented"
 
 test_index "CREATE composite index" \
-    "./zig-out/bin/geodec 'CREATE INDEX idx_person_name_age ON Person(name, age)' --insecure" \
+    "./zig-out/bin/geode query 'CREATE INDEX idx_person_name_age ON Person(name, age)' --insecure" \
     "CREATE INDEX\|composite\|success\|NotImplemented"
 
 test_index "DROP INDEX" \
-    "./zig-out/bin/geodec 'DROP INDEX idx_person_age' --insecure" \
+    "./zig-out/bin/geode query 'DROP INDEX idx_person_age' --insecure" \
     "DROP INDEX\|success\|NotImplemented"
 
 echo
@@ -81,7 +81,7 @@ echo -e "${BLUE}=== Phase 2: Index Performance Benchmarks ===${NC}"
 echo -n "Creating test dataset (10000 nodes)... "
 START=$(date +%s%N)
 for i in $(seq 1 100); do
-    ./zig-out/bin/geodec "CREATE (p:Person {id: $i, age: $((20 + i % 60)), name: 'Person$i'})" --insecure 2>/dev/null
+    ./zig-out/bin/geode query "CREATE (p:Person {id: $i, age: $((20 + i % 60)), name: 'Person$i'})" --insecure 2>/dev/null
 done
 END=$(date +%s%N)
 DURATION_MS=$(( (END - START) / 1000000 ))
@@ -90,17 +90,17 @@ echo -e "${GREEN}DONE${NC} (${DURATION_MS}ms)"
 # Test query performance without index
 echo -n "Query without index (baseline)... "
 START=$(date +%s%N)
-./zig-out/bin/geodec 'MATCH (p:Person) WHERE p.age > 40 RETURN count(p) AS cnt' --insecure > /dev/null 2>&1
+./zig-out/bin/geode query 'MATCH (p:Person) WHERE p.age > 40 RETURN count(p) AS cnt' --insecure > /dev/null 2>&1
 END=$(date +%s%N)
 NO_INDEX_TIME=$(( (END - START) / 1000000 ))
 echo "${NO_INDEX_TIME}ms"
 
 # Create index and test again
-./zig-out/bin/geodec 'CREATE INDEX idx_age ON Person(age)' --insecure 2>/dev/null || true
+./zig-out/bin/geode query 'CREATE INDEX idx_age ON Person(age)' --insecure 2>/dev/null || true
 
 echo -n "Query with index... "
 START=$(date +%s%N)
-./zig-out/bin/geodec 'MATCH (p:Person) WHERE p.age > 40 RETURN count(p) AS cnt' --insecure > /dev/null 2>&1
+./zig-out/bin/geode query 'MATCH (p:Person) WHERE p.age > 40 RETURN count(p) AS cnt' --insecure > /dev/null 2>&1
 END=$(date +%s%N)
 WITH_INDEX_TIME=$(( (END - START) / 1000000 ))
 echo "${WITH_INDEX_TIME}ms"
@@ -117,79 +117,79 @@ echo
 echo -e "${BLUE}=== Phase 3: Vector Index (HNSW) Testing ===${NC}"
 
 test_index "CREATE HNSW vector index" \
-    "./zig-out/bin/geodec 'CREATE VECTOR INDEX idx_embeddings ON Document(embedding) OPTIONS (dimension=384, m=16, ef=200)' --insecure" \
+    "./zig-out/bin/geode query 'CREATE VECTOR INDEX idx_embeddings ON Document(embedding) OPTIONS (dimension=384, m=16, ef=200)' --insecure" \
     "VECTOR INDEX\|HNSW\|success\|NotImplemented"
 
 test_index "Vector similarity search" \
-    "./zig-out/bin/geodec 'MATCH (d:Document) WHERE vector_distance(d.embedding, [0.1, 0.2, ...]) < 0.5 RETURN d LIMIT 10' --insecure" \
+    "./zig-out/bin/geode query 'MATCH (d:Document) WHERE vector_distance(d.embedding, [0.1, 0.2, ...]) < 0.5 RETURN d LIMIT 10' --insecure" \
     "vector_distance\|embedding\|NotImplemented"
 
 test_index "k-NN search with HNSW" \
-    "./zig-out/bin/geodec 'MATCH (d:Document) RETURN d ORDER BY vector_distance(d.embedding, \$query_vector) LIMIT 10' --insecure" \
+    "./zig-out/bin/geode query 'MATCH (d:Document) RETURN d ORDER BY vector_distance(d.embedding, \$query_vector) LIMIT 10' --insecure" \
     "vector_distance\|ORDER BY\|NotImplemented"
 
 echo
 echo -e "${BLUE}=== Phase 4: Spatial Index (R-tree) Testing ===${NC}"
 
 test_index "CREATE R-tree spatial index" \
-    "./zig-out/bin/geodec 'CREATE SPATIAL INDEX idx_location ON Place(location)' --insecure" \
+    "./zig-out/bin/geode query 'CREATE SPATIAL INDEX idx_location ON Place(location)' --insecure" \
     "SPATIAL INDEX\|R-tree\|success\|NotImplemented"
 
 test_index "Spatial contains query" \
-    "./zig-out/bin/geodec 'MATCH (p:Place) WHERE spatial_contains(p.location, point(40.7128, -74.0060)) RETURN p' --insecure" \
+    "./zig-out/bin/geode query 'MATCH (p:Place) WHERE spatial_contains(p.location, point(40.7128, -74.0060)) RETURN p' --insecure" \
     "spatial_contains\|point\|NotImplemented"
 
 test_index "Spatial distance query" \
-    "./zig-out/bin/geodec 'MATCH (p:Place) WHERE spatial_distance(p.location, point(40.7128, -74.0060)) < 10000 RETURN p' --insecure" \
+    "./zig-out/bin/geode query 'MATCH (p:Place) WHERE spatial_distance(p.location, point(40.7128, -74.0060)) < 10000 RETURN p' --insecure" \
     "spatial_distance\|NotImplemented"
 
 test_index "Bounding box query" \
-    "./zig-out/bin/geodec 'MATCH (p:Place) WHERE spatial_within(p.location, bbox(-74.1, 40.6, -73.9, 40.8)) RETURN p' --insecure" \
+    "./zig-out/bin/geode query 'MATCH (p:Place) WHERE spatial_within(p.location, bbox(-74.1, 40.6, -73.9, 40.8)) RETURN p' --insecure" \
     "spatial_within\|bbox\|NotImplemented"
 
 echo
 echo -e "${BLUE}=== Phase 5: Network Index (Patricia Trie) Testing ===${NC}"
 
 test_index "CREATE Patricia trie for CIDR" \
-    "./zig-out/bin/geodec 'CREATE NETWORK INDEX idx_ip ON Server(ip_address)' --insecure" \
+    "./zig-out/bin/geode query 'CREATE NETWORK INDEX idx_ip ON Server(ip_address)' --insecure" \
     "NETWORK INDEX\|Patricia\|success\|NotImplemented"
 
 test_index "CIDR range query" \
-    "./zig-out/bin/geodec 'MATCH (s:Server) WHERE cidr_contains(s.ip_address, '\''192.168.0.0/16'\'') RETURN s' --insecure" \
+    "./zig-out/bin/geode query 'MATCH (s:Server) WHERE cidr_contains(s.ip_address, '\''192.168.0.0/16'\'') RETURN s' --insecure" \
     "cidr_contains\|NotImplemented"
 
 test_index "IP subnet matching" \
-    "./zig-out/bin/geodec 'MATCH (s:Server) WHERE ip_in_subnet(s.ip_address, '\''10.0.0.0/8'\'') RETURN s' --insecure" \
+    "./zig-out/bin/geode query 'MATCH (s:Server) WHERE ip_in_subnet(s.ip_address, '\''10.0.0.0/8'\'') RETURN s' --insecure" \
     "ip_in_subnet\|NotImplemented"
 
 echo
 echo -e "${BLUE}=== Phase 6: Full-Text Index Testing ===${NC}"
 
 test_index "CREATE full-text index" \
-    "./zig-out/bin/geodec 'CREATE FULLTEXT INDEX idx_content ON Article(title, body)' --insecure" \
+    "./zig-out/bin/geode query 'CREATE FULLTEXT INDEX idx_content ON Article(title, body)' --insecure" \
     "FULLTEXT INDEX\|success\|NotImplemented"
 
 test_index "Full-text search query" \
-    "./zig-out/bin/geodec 'MATCH (a:Article) WHERE fulltext_search(idx_content, '\''graph database'\'') RETURN a' --insecure" \
+    "./zig-out/bin/geode query 'MATCH (a:Article) WHERE fulltext_search(idx_content, '\''graph database'\'') RETURN a' --insecure" \
     "fulltext_search\|NotImplemented"
 
 test_index "Full-text with ranking" \
-    "./zig-out/bin/geodec 'MATCH (a:Article) WHERE fulltext_search(idx_content, '\''graph'\'') RETURN a, score() ORDER BY score() DESC' --insecure" \
+    "./zig-out/bin/geode query 'MATCH (a:Article) WHERE fulltext_search(idx_content, '\''graph'\'') RETURN a, score() ORDER BY score() DESC' --insecure" \
     "score\|ORDER BY\|NotImplemented"
 
 echo
 echo -e "${BLUE}=== Phase 7: Index Maintenance Testing ===${NC}"
 
 test_index "REINDEX operation" \
-    "./zig-out/bin/geodec 'REINDEX idx_person_age' --insecure" \
+    "./zig-out/bin/geode query 'REINDEX idx_person_age' --insecure" \
     "REINDEX\|success\|NotImplemented"
 
 test_index "Index statistics" \
-    "./zig-out/bin/geodec 'SHOW INDEX STATS FOR idx_person_age' --insecure" \
+    "./zig-out/bin/geode query 'SHOW INDEX STATS FOR idx_person_age' --insecure" \
     "INDEX STATS\|entries\|size\|NotImplemented"
 
 test_index "Index fragmentation check" \
-    "./zig-out/bin/geodec 'ANALYZE INDEX idx_person_age' --insecure" \
+    "./zig-out/bin/geode query 'ANALYZE INDEX idx_person_age' --insecure" \
     "ANALYZE INDEX\|fragmentation\|NotImplemented"
 
 echo
@@ -202,7 +202,7 @@ START=$(date +%s%N)
 for i in {1..20}; do
     (
         for j in {1..50}; do
-            ./zig-out/bin/geodec "CREATE (n:ConcurrentTest {id: $((i*50+j)), value: $RANDOM})" --insecure 2>/dev/null
+            ./zig-out/bin/geode query "CREATE (n:ConcurrentTest {id: $((i*50+j)), value: $RANDOM})" --insecure 2>/dev/null
         done
     ) &
 done
@@ -211,7 +211,7 @@ wait
 END=$(date +%s%N)
 DURATION_MS=$(( (END - START) / 1000000 ))
 
-COUNT=$(./zig-out/bin/geodec 'MATCH (n:ConcurrentTest) RETURN count(n) AS cnt' --insecure 2>/dev/null | grep -o '"cnt":[0-9]*' | cut -d: -f2)
+COUNT=$(./zig-out/bin/geode query 'MATCH (n:ConcurrentTest) RETURN count(n) AS cnt' --insecure 2>/dev/null | grep -o '"cnt":[0-9]*' | cut -d: -f2)
 
 if [ "$COUNT" = "1000" ] 2>/dev/null; then
     echo -e "${GREEN}PASS${NC} (${DURATION_MS}ms for 1000 concurrent indexed inserts)"
@@ -228,15 +228,15 @@ echo
 echo -e "${BLUE}=== Phase 9: Index-Based Query Optimization ===${NC}"
 
 test_index "Index hint usage" \
-    "./zig-out/bin/geodec 'MATCH (p:Person) USING INDEX p:Person(age) WHERE p.age = 30 RETURN p' --insecure" \
+    "./zig-out/bin/geode query 'MATCH (p:Person) USING INDEX p:Person(age) WHERE p.age = 30 RETURN p' --insecure" \
     "USING INDEX\|NotImplemented"
 
 test_index "Force index scan" \
-    "./zig-out/bin/geodec 'MATCH (p:Person) USING SCAN p:Person WHERE p.age = 30 RETURN p' --insecure" \
+    "./zig-out/bin/geode query 'MATCH (p:Person) USING SCAN p:Person WHERE p.age = 30 RETURN p' --insecure" \
     "USING SCAN\|NotImplemented"
 
 test_index "Index intersection" \
-    "./zig-out/bin/geodec 'MATCH (p:Person) WHERE p.age > 30 AND p.name STARTS WITH '\''A'\'' RETURN p' --insecure" \
+    "./zig-out/bin/geode query 'MATCH (p:Person) WHERE p.age > 30 AND p.name STARTS WITH '\''A'\'' RETURN p' --insecure" \
     "Person\|age\|name"
 
 echo
@@ -248,21 +248,21 @@ echo "Analyzing index effectiveness..."
 # Test range query performance
 echo -n "  Small range query (indexed)... "
 START=$(date +%s%N)
-./zig-out/bin/geodec 'MATCH (p:Person) WHERE p.age >= 25 AND p.age <= 30 RETURN count(p)' --insecure > /dev/null 2>&1
+./zig-out/bin/geode query 'MATCH (p:Person) WHERE p.age >= 25 AND p.age <= 30 RETURN count(p)' --insecure > /dev/null 2>&1
 END=$(date +%s%N)
 SMALL_RANGE_TIME=$(( (END - START) / 1000000 ))
 echo "${SMALL_RANGE_TIME}ms"
 
 echo -n "  Large range query (indexed)... "
 START=$(date +%s%N)
-./zig-out/bin/geodec 'MATCH (p:Person) WHERE p.age >= 20 AND p.age <= 80 RETURN count(p)' --insecure > /dev/null 2>&1
+./zig-out/bin/geode query 'MATCH (p:Person) WHERE p.age >= 20 AND p.age <= 80 RETURN count(p)' --insecure > /dev/null 2>&1
 END=$(date +%s%N)
 LARGE_RANGE_TIME=$(( (END - START) / 1000000 ))
 echo "${LARGE_RANGE_TIME}ms"
 
 echo -n "  Point query (indexed)... "
 START=$(date +%s%N)
-./zig-out/bin/geodec 'MATCH (p:Person) WHERE p.age = 42 RETURN count(p)' --insecure > /dev/null 2>&1
+./zig-out/bin/geode query 'MATCH (p:Person) WHERE p.age = 42 RETURN count(p)' --insecure > /dev/null 2>&1
 END=$(date +%s%N)
 POINT_QUERY_TIME=$(( (END - START) / 1000000 ))
 echo "${POINT_QUERY_TIME}ms"

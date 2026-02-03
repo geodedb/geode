@@ -55,19 +55,19 @@ echo -e "${BLUE}=== Section 1: String Literal Handling ===${NC}"
 echo "Regression tests for single/double quote issues"
 
 test_feature "Single quotes in RETURN" \
-    "echo \"RETURN 'test' AS x\" | ./zig-out/bin/geoded" \
+    "echo \"RETURN 'test' AS x\" | ./zig-out/bin/geode serve" \
     "status_class\|SCHEMA"
 
 test_feature "Single quotes in properties" \
-    "echo \"CREATE (n {name: 'Alice', city: 'NYC'})\" | ./zig-out/bin/geoded" \
+    "echo \"CREATE (n {name: 'Alice', city: 'NYC'})\" | ./zig-out/bin/geode serve" \
     "status_class"
 
 test_feature "Mixed quotes (single for strings)" \
-    "echo \"MATCH (n {name: 'Bob'}) RETURN n\" | ./zig-out/bin/geoded" \
+    "echo \"MATCH (n {name: 'Bob'}) RETURN n\" | ./zig-out/bin/geode serve" \
     "status_class\|SCHEMA"
 
 test_feature "Double quotes (should work or timeout gracefully)" \
-    "echo 'RETURN \"test\"' | timeout 1 ./zig-out/bin/geoded" \
+    "echo 'RETURN \"test\"' | timeout 1 ./zig-out/bin/geode serve" \
     "status_class\|timeout" \
     true
 
@@ -76,16 +76,16 @@ echo -e "${BLUE}=== Section 2: QUIC TLS Handshake ===${NC}"
 echo "Regression tests for TLS connection issues"
 
 # Start server for TLS tests
-./zig-out/bin/geoded --listen-quic 0.0.0.0:8443 > /tmp/tls_test.log 2>&1 &
+./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443 > /tmp/tls_test.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
 test_feature "QUIC connection with --insecure" \
-    "./zig-out/bin/geodec 'RETURN 1 AS x' --quic-addr 127.0.0.1 --quic-port 8443 --insecure" \
+    "./zig-out/bin/geode query 'RETURN 1 AS x' --server 127.0.0.1:8443 --insecure" \
     "\"x\":1"
 
 test_feature "Multiple insecure connections" \
-    "for i in 1 2 3; do ./zig-out/bin/geodec 'RETURN \$i AS n' --quic-addr 127.0.0.1 --quic-port 8443 --insecure 2>/dev/null; done | grep '\"n\"' | wc -l" \
+    "for i in 1 2 3; do ./zig-out/bin/geode query 'RETURN \$i AS n' --server 127.0.0.1:8443 --insecure 2>/dev/null; done | grep '\"n\"' | wc -l" \
     "3"
 
 kill $SERVER_PID 2>/dev/null
@@ -96,31 +96,31 @@ echo -e "${BLUE}=== Section 3: Query Features ===${NC}"
 echo "Regression tests for implemented query features"
 
 test_feature "Simple CREATE" \
-    "echo \"CREATE (n:Person {id: 1})\" | ./zig-out/bin/geoded" \
+    "echo \"CREATE (n:Person {id: 1})\" | ./zig-out/bin/geode serve" \
     "status_class"
 
 test_feature "MATCH with WHERE" \
-    "echo \"MATCH (n:Person) WHERE n.age > 25 RETURN n\" | ./zig-out/bin/geoded" \
+    "echo \"MATCH (n:Person) WHERE n.age > 25 RETURN n\" | ./zig-out/bin/geode serve" \
     "status_class\|SCHEMA"
 
 test_feature "COUNT aggregation" \
-    "echo \"MATCH (n) RETURN count(n) AS total\" | ./zig-out/bin/geoded" \
+    "echo \"MATCH (n) RETURN count(n) AS total\" | ./zig-out/bin/geode serve" \
     "status_class\|total"
 
 test_feature "ORDER BY property" \
-    "echo \"MATCH (n) RETURN n ORDER BY n.age LIMIT 10\" | ./zig-out/bin/geoded" \
+    "echo \"MATCH (n) RETURN n ORDER BY n.age LIMIT 10\" | ./zig-out/bin/geode serve" \
     "status_class\|SCHEMA"
 
 test_feature "LIMIT without ORDER BY" \
-    "echo \"MATCH (n) RETURN n LIMIT 5\" | ./zig-out/bin/geoded" \
+    "echo \"MATCH (n) RETURN n LIMIT 5\" | ./zig-out/bin/geode serve" \
     "status_class"
 
 test_feature "Multiple MATCH clauses" \
-    "echo \"MATCH (a:Person) MATCH (b:Company) RETURN a, b\" | ./zig-out/bin/geoded" \
+    "echo \"MATCH (a:Person) MATCH (b:Company) RETURN a, b\" | ./zig-out/bin/geode serve" \
     "status_class\|SCHEMA"
 
 test_feature "OPTIONAL MATCH" \
-    "echo \"MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, m\" | ./zig-out/bin/geoded" \
+    "echo \"MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, m\" | ./zig-out/bin/geode serve" \
     "status_class\|SCHEMA"
 
 echo
@@ -128,15 +128,15 @@ echo -e "${BLUE}=== Section 4: Data Modification ===${NC}"
 echo "Testing SET/DELETE operations"
 
 test_feature "SET property" \
-    "echo \"MATCH (n) SET n.updated = true\" | ./zig-out/bin/geoded" \
+    "echo \"MATCH (n) SET n.updated = true\" | ./zig-out/bin/geode serve" \
     "status_class"
 
 test_feature "DELETE node" \
-    "echo \"MATCH (n:Temp) DELETE n\" | ./zig-out/bin/geoded" \
+    "echo \"MATCH (n:Temp) DELETE n\" | ./zig-out/bin/geode serve" \
     "status_class"
 
 test_feature "DETACH DELETE" \
-    "echo \"MATCH (n:Temp) DETACH DELETE n\" | ./zig-out/bin/geoded" \
+    "echo \"MATCH (n:Temp) DETACH DELETE n\" | ./zig-out/bin/geode serve" \
     "status_class"
 
 echo
@@ -144,15 +144,15 @@ echo -e "${BLUE}=== Section 5: Transaction Support ===${NC}"
 echo "Testing transaction operations"
 
 test_feature "BEGIN transaction" \
-    "echo \"BEGIN\" | ./zig-out/bin/geoded" \
+    "echo \"BEGIN\" | ./zig-out/bin/geode serve" \
     "status_class\|BEGIN"
 
 test_feature "COMMIT transaction" \
-    "echo \"COMMIT\" | ./zig-out/bin/geoded" \
+    "echo \"COMMIT\" | ./zig-out/bin/geode serve" \
     "status_class\|COMMIT"
 
 test_feature "ROLLBACK transaction" \
-    "echo \"ROLLBACK\" | ./zig-out/bin/geoded" \
+    "echo \"ROLLBACK\" | ./zig-out/bin/geode serve" \
     "status_class\|ROLLBACK"
 
 echo
@@ -162,13 +162,13 @@ echo "Ensuring no performance degradation"
 # Create test data
 echo -n "Creating test dataset... "
 for i in {1..100}; do
-    echo "CREATE (n:PerfTest {id: $i})" | ./zig-out/bin/geoded > /dev/null 2>&1
+    echo "CREATE (n:PerfTest {id: $i})" | ./zig-out/bin/geode serve > /dev/null 2>&1
 done
 echo "Done"
 
 echo -n "Testing query performance (100 nodes)... "
 START=$(date +%s%N)
-echo "MATCH (n:PerfTest) RETURN count(n)" | ./zig-out/bin/geoded > /dev/null 2>&1
+echo "MATCH (n:PerfTest) RETURN count(n)" | ./zig-out/bin/geode serve > /dev/null 2>&1
 END=$(date +%s%N)
 DURATION_MS=$(( (END - START) / 1000000 ))
 
@@ -188,15 +188,15 @@ echo -e "${BLUE}=== Section 7: Error Handling ===${NC}"
 echo "Testing error cases and graceful failures"
 
 test_feature "Invalid syntax error" \
-    "echo \"INVALID QUERY SYNTAX\" | ./zig-out/bin/geoded" \
+    "echo \"INVALID QUERY SYNTAX\" | ./zig-out/bin/geode serve" \
     "error\|ParseError"
 
 test_feature "Malformed property map" \
-    "echo \"CREATE (n {invalid})\" | ./zig-out/bin/geoded" \
+    "echo \"CREATE (n {invalid})\" | ./zig-out/bin/geode serve" \
     "error\|unexpected"
 
 test_feature "US001 error (OFFSET without ORDER BY)" \
-    "echo \"MATCH (n) RETURN n OFFSET 5\" | ./zig-out/bin/geoded" \
+    "echo \"MATCH (n) RETURN n OFFSET 5\" | ./zig-out/bin/geode serve" \
     "US001\|error"
 
 echo
@@ -204,15 +204,15 @@ echo -e "${BLUE}=== Section 8: Advanced Features ===${NC}"
 echo "Testing advanced query features"
 
 test_feature "Variable length paths" \
-    "echo \"MATCH (a)-[*1..3]->(b) RETURN count(*)\" | ./zig-out/bin/geoded" \
+    "echo \"MATCH (a)-[*1..3]->(b) RETURN count(*)\" | ./zig-out/bin/geode serve" \
     "status_class\|SCHEMA"
 
 test_feature "UNION queries" \
-    "echo \"RETURN 1 AS x UNION RETURN 2 AS x\" | ./zig-out/bin/geoded" \
+    "echo \"RETURN 1 AS x UNION RETURN 2 AS x\" | ./zig-out/bin/geode serve" \
     "status_class\|SCHEMA"
 
 test_feature "WITH clause" \
-    "echo \"MATCH (n) WITH n WHERE n.age > 30 RETURN n\" | ./zig-out/bin/geoded" \
+    "echo \"MATCH (n) WITH n WHERE n.age > 30 RETURN n\" | ./zig-out/bin/geode serve" \
     "status_class\|SCHEMA"
 
 # Cleanup

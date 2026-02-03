@@ -61,7 +61,7 @@ mkdir -p "$BACKUP_DIR" "$DATA_DIR"
 
 # Start server with data directory
 echo "Starting server with persistent storage..."
-./zig-out/bin/geoded --listen-quic 0.0.0.0:8443 --data_dir "$DATA_DIR" > /tmp/backup_server.log 2>&1 &
+./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443 --data_dir "$DATA_DIR" > /tmp/backup_server.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -70,57 +70,57 @@ echo -e "${BLUE}=== Phase 1: Create Test Data ===${NC}"
 
 # Create initial dataset
 echo -n "Creating test dataset... "
-./zig-out/bin/geodec "CREATE (u:User {id: 1, name: 'Alice', email: 'alice@example.com'})" --insecure 2>/dev/null
-./zig-out/bin/geodec "CREATE (u:User {id: 2, name: 'Bob', email: 'bob@example.com'})" --insecure 2>/dev/null
-./zig-out/bin/geodec "CREATE (p:Post {id: 1, title: 'Hello World', content: 'First post'})" --insecure 2>/dev/null
-./zig-out/bin/geodec "CREATE (p:Post {id: 2, title: 'Graph Databases', content: 'GQL is awesome'})" --insecure 2>/dev/null
-./zig-out/bin/geodec "MATCH (u:User {id: 1}), (p:Post {id: 1}) CREATE (u)-[:AUTHORED]->(p)" --insecure 2>/dev/null
-./zig-out/bin/geodec "MATCH (u:User {id: 2}), (p:Post {id: 2}) CREATE (u)-[:AUTHORED]->(p)" --insecure 2>/dev/null
+./zig-out/bin/geode query "CREATE (u:User {id: 1, name: 'Alice', email: 'alice@example.com'})" --insecure 2>/dev/null
+./zig-out/bin/geode query "CREATE (u:User {id: 2, name: 'Bob', email: 'bob@example.com'})" --insecure 2>/dev/null
+./zig-out/bin/geode query "CREATE (p:Post {id: 1, title: 'Hello World', content: 'First post'})" --insecure 2>/dev/null
+./zig-out/bin/geode query "CREATE (p:Post {id: 2, title: 'Graph Databases', content: 'GQL is awesome'})" --insecure 2>/dev/null
+./zig-out/bin/geode query "MATCH (u:User {id: 1}), (p:Post {id: 1}) CREATE (u)-[:AUTHORED]->(p)" --insecure 2>/dev/null
+./zig-out/bin/geode query "MATCH (u:User {id: 2}), (p:Post {id: 2}) CREATE (u)-[:AUTHORED]->(p)" --insecure 2>/dev/null
 echo -e "${GREEN}DONE${NC}"
 
 # Verify data
-USER_COUNT=$(./zig-out/bin/geodec 'MATCH (u:User) RETURN count(u) AS cnt' --insecure 2>/dev/null | grep -o '"cnt":[0-9]*' | cut -d: -f2)
-POST_COUNT=$(./zig-out/bin/geodec 'MATCH (p:Post) RETURN count(p) AS cnt' --insecure 2>/dev/null | grep -o '"cnt":[0-9]*' | cut -d: -f2)
+USER_COUNT=$(./zig-out/bin/geode query 'MATCH (u:User) RETURN count(u) AS cnt' --insecure 2>/dev/null | grep -o '"cnt":[0-9]*' | cut -d: -f2)
+POST_COUNT=$(./zig-out/bin/geode query 'MATCH (p:Post) RETURN count(p) AS cnt' --insecure 2>/dev/null | grep -o '"cnt":[0-9]*' | cut -d: -f2)
 echo "Created $USER_COUNT users and $POST_COUNT posts"
 
 echo
 echo -e "${BLUE}=== Phase 2: Full Backup Testing ===${NC}"
 
 test_backup "Full backup to local filesystem" \
-    "./zig-out/bin/geodec 'BACKUP DATABASE TO '\''$BACKUP_DIR/full-backup-1'\''' --insecure" \
+    "./zig-out/bin/geode query 'BACKUP DATABASE TO '\''$BACKUP_DIR/full-backup-1'\''' --insecure" \
     "BACKUP.*success\|backup_completed\|NotImplemented"
 
 test_backup "Full backup with compression" \
-    "./zig-out/bin/geodec 'BACKUP DATABASE TO '\''$BACKUP_DIR/full-backup-compressed.gz'\'' WITH COMPRESSION' --insecure" \
+    "./zig-out/bin/geode query 'BACKUP DATABASE TO '\''$BACKUP_DIR/full-backup-compressed.gz'\'' WITH COMPRESSION' --insecure" \
     "BACKUP.*COMPRESSION\|success\|NotImplemented"
 
 test_backup "Full backup with encryption" \
-    "./zig-out/bin/geodec 'BACKUP DATABASE TO '\''$BACKUP_DIR/full-backup-encrypted'\'' WITH ENCRYPTION KEY '\''secret123'\''' --insecure" \
+    "./zig-out/bin/geode query 'BACKUP DATABASE TO '\''$BACKUP_DIR/full-backup-encrypted'\'' WITH ENCRYPTION KEY '\''secret123'\''' --insecure" \
     "BACKUP.*ENCRYPTION\|success\|NotImplemented"
 
 echo
 echo -e "${BLUE}=== Phase 3: Incremental Backup Testing ===${NC}"
 
 # Add more data for incremental backup
-./zig-out/bin/geodec "CREATE (u:User {id: 3, name: 'Charlie', email: 'charlie@example.com'})" --insecure 2>/dev/null
+./zig-out/bin/geode query "CREATE (u:User {id: 3, name: 'Charlie', email: 'charlie@example.com'})" --insecure 2>/dev/null
 
 test_backup "Incremental backup after changes" \
-    "./zig-out/bin/geodec 'BACKUP DATABASE INCREMENTAL FROM '\''$BACKUP_DIR/full-backup-1'\'' TO '\''$BACKUP_DIR/incremental-1'\''' --insecure" \
+    "./zig-out/bin/geode query 'BACKUP DATABASE INCREMENTAL FROM '\''$BACKUP_DIR/full-backup-1'\'' TO '\''$BACKUP_DIR/incremental-1'\''' --insecure" \
     "INCREMENTAL.*BACKUP\|success\|NotImplemented"
 
 test_backup "Differential backup" \
-    "./zig-out/bin/geodec 'BACKUP DATABASE DIFFERENTIAL FROM '\''$BACKUP_DIR/full-backup-1'\'' TO '\''$BACKUP_DIR/differential-1'\''' --insecure" \
+    "./zig-out/bin/geode query 'BACKUP DATABASE DIFFERENTIAL FROM '\''$BACKUP_DIR/full-backup-1'\'' TO '\''$BACKUP_DIR/differential-1'\''' --insecure" \
     "DIFFERENTIAL.*BACKUP\|success\|NotImplemented"
 
 echo
 echo -e "${BLUE}=== Phase 4: S3 Backup Testing ===${NC}"
 
 test_backup "Backup to S3" \
-    "./zig-out/bin/geodec 'BACKUP DATABASE TO '\''s3://geode-backups/backup-$(date +%Y%m%d)'\'' WITH AWS_PROFILE='\''default'\''' --insecure" \
+    "./zig-out/bin/geode query 'BACKUP DATABASE TO '\''s3://geode-backups/backup-$(date +%Y%m%d)'\'' WITH AWS_PROFILE='\''default'\''' --insecure" \
     "s3.*BACKUP\|success\|NotImplemented\|AWS"
 
 test_backup "List S3 backups" \
-    "./zig-out/bin/geodec 'SHOW BACKUPS IN '\''s3://geode-backups/'\''' --insecure" \
+    "./zig-out/bin/geode query 'SHOW BACKUPS IN '\''s3://geode-backups/'\''' --insecure" \
     "SHOW BACKUPS\|s3\|NotImplemented"
 
 echo
@@ -134,31 +134,31 @@ wait $SERVER_PID 2>/dev/null
 rm -rf "$DATA_DIR"/*
 
 # Restart server
-./zig-out/bin/geoded --listen-quic 0.0.0.0:8443 --data_dir "$DATA_DIR" > /tmp/backup_server.log 2>&1 &
+./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443 --data_dir "$DATA_DIR" > /tmp/backup_server.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
 test_backup "Restore from full backup" \
-    "./zig-out/bin/geodec 'RESTORE DATABASE FROM '\''$BACKUP_DIR/full-backup-1'\''' --insecure" \
+    "./zig-out/bin/geode query 'RESTORE DATABASE FROM '\''$BACKUP_DIR/full-backup-1'\''' --insecure" \
     "RESTORE.*success\|restore_completed\|NotImplemented"
 
 test_backup "Verify restored data" \
-    "./zig-out/bin/geodec 'MATCH (u:User) RETURN count(u) AS cnt' --insecure" \
+    "./zig-out/bin/geode query 'MATCH (u:User) RETURN count(u) AS cnt' --insecure" \
     "cnt.*2"
 
 test_backup "Point-in-time restore" \
-    "./zig-out/bin/geodec 'RESTORE DATABASE FROM '\''$BACKUP_DIR/full-backup-1'\'' TO TIMESTAMP '\''2024-01-01T12:00:00Z'\''' --insecure" \
+    "./zig-out/bin/geode query 'RESTORE DATABASE FROM '\''$BACKUP_DIR/full-backup-1'\'' TO TIMESTAMP '\''2024-01-01T12:00:00Z'\''' --insecure" \
     "RESTORE.*TIMESTAMP\|point-in-time\|NotImplemented"
 
 echo
 echo -e "${BLUE}=== Phase 6: Backup Validation ===${NC}"
 
 test_backup "Validate backup integrity" \
-    "./zig-out/bin/geodec 'VALIDATE BACKUP '\''$BACKUP_DIR/full-backup-1'\''' --insecure" \
+    "./zig-out/bin/geode query 'VALIDATE BACKUP '\''$BACKUP_DIR/full-backup-1'\''' --insecure" \
     "VALIDATE.*BACKUP\|checksum\|valid\|NotImplemented"
 
 test_backup "Show backup metadata" \
-    "./zig-out/bin/geodec 'SHOW BACKUP INFO '\''$BACKUP_DIR/full-backup-1'\''' --insecure" \
+    "./zig-out/bin/geode query 'SHOW BACKUP INFO '\''$BACKUP_DIR/full-backup-1'\''' --insecure" \
     "BACKUP INFO\|size\|timestamp\|NotImplemented"
 
 echo
@@ -170,7 +170,7 @@ echo -n "Testing online backup under load... "
 # Start background load
 (
     for i in {1..100}; do
-        ./zig-out/bin/geodec "CREATE (n:LoadTest {id: $i, data: 'test$i'})" --insecure 2>/dev/null
+        ./zig-out/bin/geode query "CREATE (n:LoadTest {id: $i, data: 'test$i'})" --insecure 2>/dev/null
         sleep 0.01
     done
 ) &
@@ -178,7 +178,7 @@ LOAD_PID=$!
 
 # Perform backup while load is running
 sleep 1
-./zig-out/bin/geodec 'BACKUP DATABASE ONLINE TO '\''$BACKUP_DIR/online-backup'\''' --insecure 2>/dev/null
+./zig-out/bin/geode query 'BACKUP DATABASE ONLINE TO '\''$BACKUP_DIR/online-backup'\''' --insecure 2>/dev/null
 
 # Wait for load to complete
 wait $LOAD_PID
@@ -195,15 +195,15 @@ echo
 echo -e "${BLUE}=== Phase 8: Backup Scheduling ===${NC}"
 
 test_backup "Schedule daily backup" \
-    "./zig-out/bin/geodec 'CREATE BACKUP SCHEDULE daily_backup EVERY 1 DAY AT '\''02:00'\'' TO '\''$BACKUP_DIR/scheduled/'\''' --insecure" \
+    "./zig-out/bin/geode query 'CREATE BACKUP SCHEDULE daily_backup EVERY 1 DAY AT '\''02:00'\'' TO '\''$BACKUP_DIR/scheduled/'\''' --insecure" \
     "BACKUP SCHEDULE\|created\|NotImplemented"
 
 test_backup "List backup schedules" \
-    "./zig-out/bin/geodec 'SHOW BACKUP SCHEDULES' --insecure" \
+    "./zig-out/bin/geode query 'SHOW BACKUP SCHEDULES' --insecure" \
     "BACKUP SCHEDULES\|daily_backup\|NotImplemented"
 
 test_backup "Drop backup schedule" \
-    "./zig-out/bin/geodec 'DROP BACKUP SCHEDULE daily_backup' --insecure" \
+    "./zig-out/bin/geode query 'DROP BACKUP SCHEDULE daily_backup' --insecure" \
     "DROP.*SCHEDULE\|success\|NotImplemented"
 
 echo
@@ -215,11 +215,11 @@ echo "corrupted_data" > "$DATA_DIR/corrupted_file" 2>/dev/null
 echo -e "${YELLOW}SIMULATED${NC}"
 
 test_backup "Detect corruption" \
-    "./zig-out/bin/geodec 'CHECK DATABASE INTEGRITY' --insecure" \
+    "./zig-out/bin/geode query 'CHECK DATABASE INTEGRITY' --insecure" \
     "INTEGRITY.*CHECK\|corruption\|clean\|NotImplemented"
 
 test_backup "Automatic recovery from WAL" \
-    "./zig-out/bin/geodec 'RECOVER DATABASE FROM WAL' --insecure" \
+    "./zig-out/bin/geode query 'RECOVER DATABASE FROM WAL' --insecure" \
     "RECOVER.*WAL\|success\|NotImplemented"
 
 echo
@@ -231,20 +231,20 @@ echo "Testing backup performance..."
 # Small dataset backup
 echo -n "  Small dataset (100 nodes)... "
 START=$(date +%s%N)
-./zig-out/bin/geodec 'BACKUP DATABASE TO '\''$BACKUP_DIR/perf-small'\''' --insecure 2>/dev/null || true
+./zig-out/bin/geode query 'BACKUP DATABASE TO '\''$BACKUP_DIR/perf-small'\''' --insecure 2>/dev/null || true
 END=$(date +%s%N)
 SMALL_TIME=$(( (END - START) / 1000000 ))
 echo "${SMALL_TIME}ms"
 
 # Create larger dataset
 for i in {1..900}; do
-    ./zig-out/bin/geodec "CREATE (n:PerfTest {id: $i})" --insecure 2>/dev/null
+    ./zig-out/bin/geode query "CREATE (n:PerfTest {id: $i})" --insecure 2>/dev/null
 done
 
 # Large dataset backup
 echo -n "  Large dataset (1000 nodes)... "
 START=$(date +%s%N)
-./zig-out/bin/geodec 'BACKUP DATABASE TO '\''$BACKUP_DIR/perf-large'\''' --insecure 2>/dev/null || true
+./zig-out/bin/geode query 'BACKUP DATABASE TO '\''$BACKUP_DIR/perf-large'\''' --insecure 2>/dev/null || true
 END=$(date +%s%N)
 LARGE_TIME=$(( (END - START) / 1000000 ))
 echo "${LARGE_TIME}ms"

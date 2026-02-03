@@ -1816,47 +1816,47 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
     var error_status: []const u8 = "58000";
 
     const RowAppender = struct {
-        fn valueToString(allocator: std.mem.Allocator, v: schema.Value) ![]const u8 {
+        fn valueToString(alloc: std.mem.Allocator, v: schema.Value) ![]const u8 {
             if (v.kind) |k| {
                 return switch (k) {
-                    .string_val => |str| try allocator.dupe(u8, str.value),
-                    .int_val => |i| try std.fmt.allocPrint(allocator, "{d}", .{i.value}),
-                    .double_val => |d| try std.fmt.allocPrint(allocator, "{d}", .{d.value}),
-                    .bool_val => |b| try allocator.dupe(u8, if (b) "true" else "false"),
-                    .null_val => try allocator.dupe(u8, "null"),
+                    .string_val => |str| try alloc.dupe(u8, str.value),
+                    .int_val => |i| try std.fmt.allocPrint(alloc, "{d}", .{i.value}),
+                    .double_val => |d| try std.fmt.allocPrint(alloc, "{d}", .{d.value}),
+                    .bool_val => |b| try alloc.dupe(u8, if (b) "true" else "false"),
+                    .null_val => try alloc.dupe(u8, "null"),
                     .decimal_val => |dec| blk: {
                         const repr = if (dec.orig_repr.len > 0) dec.orig_repr else dec.coeff;
-                        break :blk try allocator.dupe(u8, repr);
+                        break :blk try alloc.dupe(u8, repr);
                     },
                     .bytes_val => |bv| blk: {
-                        const out = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(bv.value.len));
+                        const out = try alloc.alloc(u8, std.base64.standard.Encoder.calcSize(bv.value.len));
                         _ = std.base64.standard.Encoder.encode(out, bv.value);
                         break :blk out;
                     },
-                    else => try allocator.dupe(u8, "?"),
+                    else => try alloc.dupe(u8, "?"),
                 };
             }
-            return allocator.dupe(u8, "null");
+            return alloc.dupe(u8, "null");
         }
 
         fn appendPage(
-            allocator: std.mem.Allocator,
+            alloc: std.mem.Allocator,
             page: schema.DataPage,
-            all_rows: *std.ArrayList(std.ArrayList([]const u8)),
+            rows_list: *std.ArrayList(std.ArrayList([]const u8)),
         ) !void {
             for (page.rows.items) |row| {
-                var row_values = try std.ArrayList([]const u8).initCapacity(allocator, row.values.items.len);
+                var row_values = try std.ArrayList([]const u8).initCapacity(alloc, row.values.items.len);
                 errdefer {
-                    for (row_values.items) |cell| allocator.free(cell);
-                    row_values.deinit(allocator);
+                    for (row_values.items) |cell| alloc.free(cell);
+                    row_values.deinit(alloc);
                 }
 
                 for (row.values.items) |v| {
-                    const cell_str = try valueToString(allocator, v);
-                    try row_values.append(allocator, cell_str);
+                    const cell_str = try valueToString(alloc, v);
+                    try row_values.append(alloc, cell_str);
                 }
 
-                try all_rows.append(allocator, row_values);
+                try rows_list.append(alloc, row_values);
             }
         }
     };

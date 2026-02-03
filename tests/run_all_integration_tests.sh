@@ -66,20 +66,20 @@ TOTAL_TESTS=$((TOTAL_TESTS + 1))
 echo "Testing core database operations..."
 
 # Test 1: Basic node creation and querying
-if OUTPUT=$(timeout 10 ./zig-out/bin/geodec 'MATCH (n) RETURN count(n)' --insecure 2>&1) && echo "$OUTPUT" | grep -q '"col":[0-9]'; then
+if OUTPUT=$(timeout 10 ./zig-out/bin/geode query 'MATCH (n) RETURN count(n)' --insecure 2>&1) && echo "$OUTPUT" | grep -q '"col":[0-9]'; then
     NODE_COUNT=$(echo "$OUTPUT" | grep -o '"col":[0-9]' | cut -d: -f2)
     echo "✅ Node querying works: Found $NODE_COUNT nodes"
 
     # Test 2: Property-based ordering
-    if OUTPUT2=$(timeout 10 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.id' --insecure 2>&1) && echo "$OUTPUT2" | grep -q '"order_keys":\["n.id"\]'; then
+    if OUTPUT2=$(timeout 10 ./zig-out/bin/geode query 'MATCH (n) RETURN n ORDER BY n.id' --insecure 2>&1) && echo "$OUTPUT2" | grep -q '"order_keys":\["n.id"\]'; then
         echo "✅ Property-based ordering works"
 
         # Test 3: Aggregation
-        if OUTPUT3=$(timeout 10 ./zig-out/bin/geodec 'MATCH (n) RETURN count(n)' --insecure 2>&1) && echo "$OUTPUT3" | grep -q '"col":[0-9]'; then
+        if OUTPUT3=$(timeout 10 ./zig-out/bin/geode query 'MATCH (n) RETURN count(n)' --insecure 2>&1) && echo "$OUTPUT3" | grep -q '"col":[0-9]'; then
             echo "✅ Count aggregation works"
 
             # Test 4: Edge traversal
-            if OUTPUT4=$(timeout 10 ./zig-out/bin/geodec 'MATCH (a)-[r]->(b) RETURN count(r)' --insecure 2>&1) && echo "$OUTPUT4" | grep -q '"col":[0-9]'; then
+            if OUTPUT4=$(timeout 10 ./zig-out/bin/geode query 'MATCH (a)-[r]->(b) RETURN count(r)' --insecure 2>&1) && echo "$OUTPUT4" | grep -q '"col":[0-9]'; then
                 EDGE_COUNT=$(echo "$OUTPUT4" | grep -o '"col":[0-9]' | cut -d: -f2)
                 echo "✅ Edge traversal works: Found $EDGE_COUNT edges"
                 PASSED_TESTS=$((PASSED_TESTS + 1))

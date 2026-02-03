@@ -105,7 +105,6 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const enable_san = b.option(bool, "san", "Enable sentinel allocator in runtime components") orelse false;
     const enable_llvm_fuzzer = b.option(bool, "enable-llvm-fuzzer", "Enable LLVM libFuzzer fallback for fuzz tests") orelse false;
-    const enable_test_harness = b.option(bool, "enable-test-harness", "Enable test_harness in non-test builds") orelse false;
 
     // Get version from git tags
     const version = getGitVersion(b);
@@ -324,7 +323,6 @@ pub fn build(b: *std.Build) void {
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "enable_sentinel", enable_san);
     build_opts.addOption(bool, "enable_llvm_fuzzer", enable_llvm_fuzzer);
-    build_opts.addOption(bool, "enable_test_harness", enable_test_harness);
     build_opts.addOption([]const u8, "version", version);
 
     const lib = b.addLibrary(.{
@@ -508,30 +506,7 @@ pub fn build(b: *std.Build) void {
     }
     b.installArtifact(geode_exe);
 
-    // CANARY: REQ=REQ-CLI-COMPAT-001; FEATURE="Legacy Binary Symlinks"; ASPECT=ML; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-14
-    // GAP-0163: Add geoded and geodec symlinks for backward compatibility with tests/docs
-    // This allows existing tests and documentation referencing geoded/geodec to continue working
-    // Create symlinks on Unix-like systems; on Windows, copy the executable
-    // NOTE: Use dynamic install path to support cross-compilation with custom prefixes
-    if (target.result.os.tag != .windows) {
-        const bin_path = b.getInstallPath(.bin, "");
-        const create_geoded_symlink = b.addSystemCommand(&.{ "ln", "-sf", "geode", b.fmt("{s}/geoded", .{bin_path}) });
-        create_geoded_symlink.step.dependOn(&geode_exe.step);
-        b.getInstallStep().dependOn(&create_geoded_symlink.step);
-
-        const create_geodec_symlink = b.addSystemCommand(&.{ "ln", "-sf", "geode", b.fmt("{s}/geodec", .{bin_path}) });
-        create_geodec_symlink.step.dependOn(&geode_exe.step);
-        b.getInstallStep().dependOn(&create_geodec_symlink.step);
-    } else {
-        // On Windows, we can't create symlinks easily without admin, so copy instead
-        const copy_geoded = b.addInstallFile(geode_exe.getEmittedBin(), "bin/geoded.exe");
-        b.getInstallStep().dependOn(&copy_geoded.step);
-
-        const copy_geodec = b.addInstallFile(geode_exe.getEmittedBin(), "bin/geodec.exe");
-        b.getInstallStep().dependOn(&copy_geodec.step);
-    }
-
-    // Remove legacy wire binary build and install (deprecated)
+    // Unified CLI only; legacy geodec/geoded binaries removed.
 
     const gql_exe = b.addExecutable(.{
         .name = "gql",

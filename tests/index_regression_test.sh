@@ -13,7 +13,7 @@ NC='\033[0m' # No Color
 
 # Start the server
 echo -e "${YELLOW}Starting Geode server...${NC}"
-./zig-out/bin/geoded --data_dir ./test_data --insecure &
+./zig-out/bin/geode serve --data_dir ./test_data --insecure &
 SERVER_PID=$!
 sleep 2
 
@@ -25,7 +25,7 @@ run_test() {
 
     echo -n "Testing: $test_name... "
 
-    result=$(./zig-out/bin/geodec "$query" --insecure 2>&1)
+    result=$(./zig-out/bin/geode query "$query" --insecure 2>&1)
 
     if echo "$result" | grep -q "$expected_pattern"; then
         echo -e "${GREEN}PASSED${NC}"
@@ -41,11 +41,11 @@ run_test() {
 
 # Setup test data
 echo -e "${YELLOW}Creating test data...${NC}"
-./zig-out/bin/geodec "CREATE (n:Person {name: 'Alice', age: 30, location: point(40.7128, -74.0060)})" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "CREATE (n:Person {name: 'Bob', age: 25, location: point(37.7749, -122.4194)})" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "CREATE (n:Person {name: 'Charlie', age: 35, location: point(51.5074, -0.1278)})" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "CREATE (n:Document {title: 'Graph Database Guide', content: 'This is a comprehensive guide to graph databases'})" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "CREATE (n:Product {id: 1, features: [0.1, 0.2, 0.3, 0.4, 0.5]})" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "CREATE (n:Person {name: 'Alice', age: 30, location: point(40.7128, -74.0060)})" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "CREATE (n:Person {name: 'Bob', age: 25, location: point(37.7749, -122.4194)})" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "CREATE (n:Person {name: 'Charlie', age: 35, location: point(51.5074, -0.1278)})" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "CREATE (n:Document {title: 'Graph Database Guide', content: 'This is a comprehensive guide to graph databases'})" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "CREATE (n:Product {id: 1, features: [0.1, 0.2, 0.3, 0.4, 0.5]})" --insecure >/dev/null 2>&1
 
 echo -e "\n${YELLOW}Running index regression tests...${NC}"
 
@@ -146,14 +146,14 @@ run_test "Create index with special name" \
 
 # Test 20: Drop all remaining test indexes
 echo -e "\n${YELLOW}Cleaning up indexes...${NC}"
-./zig-out/bin/geodec "DROP INDEX IF EXISTS person_age_idx" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "DROP INDEX IF EXISTS person_name_idx" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "DROP INDEX IF EXISTS person_location_idx" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "DROP INDEX IF EXISTS doc_content_idx" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "DROP INDEX IF EXISTS product_features_idx" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "DROP INDEX IF EXISTS new_idx" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "DROP INDEX IF EXISTS nonexistent_idx" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "DROP INDEX IF EXISTS person_age_idx_2" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "DROP INDEX IF EXISTS person_age_idx" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "DROP INDEX IF EXISTS person_name_idx" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "DROP INDEX IF EXISTS person_location_idx" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "DROP INDEX IF EXISTS doc_content_idx" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "DROP INDEX IF EXISTS product_features_idx" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "DROP INDEX IF EXISTS new_idx" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "DROP INDEX IF EXISTS nonexistent_idx" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "DROP INDEX IF EXISTS person_age_idx_2" --insecure >/dev/null 2>&1
 
 # Cleanup
 echo -e "\n${YELLOW}Stopping server...${NC}"

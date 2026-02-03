@@ -54,7 +54,7 @@ echo "PASS: CLI works with absolute path"
 # Test 5: Embedded server path resolution
 echo "Test 5: Embedded server path resolution"
 # Check that geoded server binary exists and is accessible from working directory
-if [[ ! -f "./zig-out/bin/geoded" ]]; then
+if [[ ! -f "./zig-out/bin/geode serve" ]]; then
     echo "FAIL: geoded server binary not found at expected path"
     exit 1
 fi

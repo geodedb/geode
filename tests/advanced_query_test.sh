@@ -15,7 +15,7 @@ TEST_DIR="/tmp/adv_query_test_$$"
 mkdir -p "$TEST_DIR"
 
 echo "Starting server..."
-./zig-out/bin/geoded --data_dir "$TEST_DIR" --insecure > "$TEST_DIR/server.log" 2>&1 &
+./zig-out/bin/geode serve --data_dir "$TEST_DIR" --insecure > "$TEST_DIR/server.log" 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -28,7 +28,7 @@ trap cleanup EXIT
 
 run_query() {
     local query="$1"
-    ./zig-out/bin/geodec "$query" --insecure 2>/dev/null | grep -v '"level":\|"component":' | tail -1
+    ./zig-out/bin/geode query "$query" --insecure 2>/dev/null | grep -v '"level":\|"component":' | tail -1
 }
 
 echo

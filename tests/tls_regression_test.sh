@@ -25,13 +25,13 @@ mkdir -p /tmp/test-certs
 openssl req -x509 -newkey rsa:2048 -keyout /tmp/test-certs/server.key -out /tmp/test-certs/server.crt -days 1 -nodes -subj "/CN=localhost" 2>/dev/null
 
 # Start server with test certificates
-./zig-out/bin/geoded --listen-quic 0.0.0.0:8443 --cert /tmp/test-certs/server.crt --key /tmp/test-certs/server.key > /tmp/server.log 2>&1 &
+./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443 --cert /tmp/test-certs/server.crt --key /tmp/test-certs/server.key > /tmp/server.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
 echo
 echo "Test 1: Connection with --insecure flag (should work)"
-if timeout 5 ./zig-out/bin/geodec 'RETURN 1 AS x' --quic-addr 127.0.0.1 --quic-port 8443 --insecure 2>/dev/null | grep -q '"x":1'; then
+if timeout 5 ./zig-out/bin/geode query 'RETURN 1 AS x' --server 127.0.0.1:8443 --insecure 2>/dev/null | grep -q '"x":1'; then
     echo -e "${GREEN}PASS${NC} - Insecure connection works"
     ((PASSED++))
 else
@@ -42,7 +42,7 @@ fi
 echo "Test 2: Multiple sequential insecure connections"
 SUCCESS=true
 for i in {1..5}; do
-    if ! timeout 5 ./zig-out/bin/geodec "RETURN $i AS n" --quic-addr 127.0.0.1 --quic-port 8443 --insecure 2>/dev/null | grep -q "\"n\":$i"; then
+    if ! timeout 5 ./zig-out/bin/geode query "RETURN $i AS n" --server 127.0.0.1:8443 --insecure 2>/dev/null | grep -q "\"n\":$i"; then
         SUCCESS=false
         break
     fi
@@ -62,7 +62,7 @@ kill $SERVER_PID 2>/dev/null
 wait $SERVER_PID 2>/dev/null
 
 START_TIME=$(date +%s)
-timeout 10 ./zig-out/bin/geodec 'RETURN 1 AS x' --quic-addr 127.0.0.1 --quic-port 8443 --insecure 2>/dev/null || true
+timeout 10 ./zig-out/bin/geode query 'RETURN 1 AS x' --server 127.0.0.1:8443 --insecure 2>/dev/null || true
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
 

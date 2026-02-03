@@ -46,19 +46,19 @@ echo
 
 # Test single quotes work correctly
 test_feature "Single quote string in RETURN" \
-    "timeout 5 ./zig-out/bin/geodec \"RETURN 'hello world'\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"RETURN 'hello world'\" --insecure"
 
 test_feature "Single quote string in CREATE" \
-    "timeout 5 ./zig-out/bin/geodec \"CREATE (p {name: 'Alice', age: 30})\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"CREATE (p {name: 'Alice', age: 30})\" --insecure"
 
 test_feature "Single quotes in properties" \
-    "timeout 5 ./zig-out/bin/geodec \"CREATE (p {name: 'Bob', city: 'New York'})\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"CREATE (p {name: 'Bob', city: 'New York'})\" --insecure"
 
 test_feature "Single quoted property names" \
-    "timeout 5 ./zig-out/bin/geodec \"CREATE (p {'first_name': 'Charlie', 'last_name': 'Brown'})\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"CREATE (p {'first_name': 'Charlie', 'last_name': 'Brown'})\" --insecure"
 
 test_feature "Escaped single quotes" \
-    "timeout 5 ./zig-out/bin/geodec \"RETURN 'She said \\\"hello\\\"'\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"RETURN 'She said \\\"hello\\\"'\" --insecure"
 
 echo
 echo "=== Phase 2: Property Names Support (FIXED) ==="
@@ -68,16 +68,16 @@ echo
 
 # Test various property name formats
 test_feature "Numeric property names (quoted)" \
-    "timeout 5 ./zig-out/bin/geodec \"CREATE (p {'123': 'numeric_key', '456': 789})\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"CREATE (p {'123': 'numeric_key', '456': 789})\" --insecure"
 
 test_feature "Single quoted property names" \
-    "timeout 5 ./zig-out/bin/geodec \"CREATE (p {'prop_name': 'value'})\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"CREATE (p {'prop_name': 'value'})\" --insecure"
 
 test_feature "Property names with spaces" \
-    "timeout 5 ./zig-out/bin/geodec \"CREATE (p {'full name': 'John Doe'})\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"CREATE (p {'full name': 'John Doe'})\" --insecure"
 
 test_feature "Property names with special chars" \
-    "timeout 5 ./zig-out/bin/geodec \"CREATE (p {'prop-name': 'value', 'prop.name': 'other'})\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"CREATE (p {'prop-name': 'value', 'prop.name': 'other'})\" --insecure"
 
 echo
 echo "=== Phase 3: Long String Handling (FIXED) ==="
@@ -87,17 +87,17 @@ echo
 
 # Test long strings and keyword edge cases
 test_feature "Very long string value" \
-    "timeout 5 ./zig-out/bin/geodec \"CREATE (p {description: 'This is a very long string that tests the limits of string property handling in the database system and ensures that long strings are properly processed without any truncation or parsing errors'})\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"CREATE (p {description: 'This is a very long string that tests the limits of string property handling in the database system and ensures that long strings are properly processed without any truncation or parsing errors'})\" --insecure"
 
 test_feature "String with SQL-like content" \
-    "timeout 5 ./zig-out/bin/geodec \"CREATE (p {query: 'SELECT * FROM users WHERE id = 123'})\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"CREATE (p {query: 'SELECT * FROM users WHERE id = 123'})\" --insecure"
 
 test_feature "String with GQL keywords" \
-    "timeout 5 ./zig-out/bin/geodec \"CREATE (p {content: 'MATCH and RETURN and CREATE and DELETE'})\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"CREATE (p {content: 'MATCH and RETURN and CREATE and DELETE'})\" --insecure"
 
 # Note: 'desc' is a reserved keyword, so we use 'description' instead
 test_feature "Property name avoiding reserved word" \
-    "timeout 5 ./zig-out/bin/geodec \"CREATE (p {description: 'avoiding desc keyword', note: 'DESC is reserved for ORDER BY DESC'})\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"CREATE (p {description: 'avoiding desc keyword', note: 'DESC is reserved for ORDER BY DESC'})\" --insecure"
 
 echo
 echo "=== Phase 4: Multiple MATCH Clauses (FIXED) ==="
@@ -107,16 +107,16 @@ echo
 
 # Test multiple MATCH patterns
 test_feature "Two MATCH clauses" \
-    "timeout 5 ./zig-out/bin/geodec 'MATCH (a) MATCH (b) RETURN a, b LIMIT 1' --insecure"
+    "timeout 5 ./zig-out/bin/geode query 'MATCH (a) MATCH (b) RETURN a, b LIMIT 1' --insecure"
 
 test_feature "Three MATCH clauses" \
-    "timeout 5 ./zig-out/bin/geodec 'MATCH (a) MATCH (b) MATCH (c) RETURN a, b, c LIMIT 1' --insecure"
+    "timeout 5 ./zig-out/bin/geode query 'MATCH (a) MATCH (b) MATCH (c) RETURN a, b, c LIMIT 1' --insecure"
 
 test_feature "Multiple MATCH with WHERE" \
-    "timeout 5 ./zig-out/bin/geodec 'MATCH (a) MATCH (b) WHERE a <> b RETURN a, b LIMIT 1' --insecure"
+    "timeout 5 ./zig-out/bin/geode query 'MATCH (a) MATCH (b) WHERE a <> b RETURN a, b LIMIT 1' --insecure"
 
 test_feature "Multiple MATCH with labels" \
-    "timeout 5 ./zig-out/bin/geodec 'MATCH (a:Person) MATCH (b:Person) WHERE a <> b RETURN a, b LIMIT 1' --insecure"
+    "timeout 5 ./zig-out/bin/geode query 'MATCH (a:Person) MATCH (b:Person) WHERE a <> b RETURN a, b LIMIT 1' --insecure"
 
 echo
 echo "=== Phase 5: OPTIONAL MATCH Support (FIXED) ==="
@@ -126,16 +126,16 @@ echo
 
 # Test OPTIONAL MATCH functionality
 test_feature "Single OPTIONAL MATCH" \
-    "timeout 5 ./zig-out/bin/geodec 'OPTIONAL MATCH (n) RETURN n LIMIT 1' --insecure"
+    "timeout 5 ./zig-out/bin/geode query 'OPTIONAL MATCH (n) RETURN n LIMIT 1' --insecure"
 
 test_feature "MATCH with OPTIONAL MATCH" \
-    "timeout 5 ./zig-out/bin/geodec 'MATCH (a) OPTIONAL MATCH (b:NonExistent) RETURN a, b LIMIT 1' --insecure"
+    "timeout 5 ./zig-out/bin/geode query 'MATCH (a) OPTIONAL MATCH (b:NonExistent) RETURN a, b LIMIT 1' --insecure"
 
 test_feature "Multiple OPTIONAL MATCH" \
-    "timeout 5 ./zig-out/bin/geodec 'OPTIONAL MATCH (a) OPTIONAL MATCH (b) RETURN a, b LIMIT 1' --insecure"
+    "timeout 5 ./zig-out/bin/geode query 'OPTIONAL MATCH (a) OPTIONAL MATCH (b) RETURN a, b LIMIT 1' --insecure"
 
 test_feature "OPTIONAL MATCH with WHERE" \
-    "timeout 5 ./zig-out/bin/geodec 'OPTIONAL MATCH (n) WHERE n.age > 25 RETURN n LIMIT 1' --insecure"
+    "timeout 5 ./zig-out/bin/geode query 'OPTIONAL MATCH (n) WHERE n.age > 25 RETURN n LIMIT 1' --insecure"
 
 echo
 echo "=== Phase 6: Property-Based Ordering (Previously Fixed) ==="
@@ -144,13 +144,13 @@ echo
 
 # Verify property ordering still works
 test_feature "ORDER BY node property" \
-    "timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.name LIMIT 1' --insecure"
+    "timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN n ORDER BY n.name LIMIT 1' --insecure"
 
 test_feature "ORDER BY with DESC" \
-    "timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.age DESC LIMIT 1' --insecure"
+    "timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN n ORDER BY n.age DESC LIMIT 1' --insecure"
 
 test_feature "Multiple property ordering" \
-    "timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN n ORDER BY n.name, n.age LIMIT 1' --insecure"
+    "timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN n ORDER BY n.name, n.age LIMIT 1' --insecure"
 
 echo
 echo "=== Phase 7: Count Aggregation (Previously Fixed) ==="
@@ -159,13 +159,13 @@ echo
 
 # Verify count aggregation still works
 test_feature "Basic count" \
-    "timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN count(n)' --insecure"
+    "timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN count(n)' --insecure"
 
 test_feature "Count with filter" \
-    "timeout 5 ./zig-out/bin/geodec 'MATCH (n:Person) RETURN count(n)' --insecure"
+    "timeout 5 ./zig-out/bin/geode query 'MATCH (n:Person) RETURN count(n)' --insecure"
 
 test_feature "Count distinct" \
-    "timeout 5 ./zig-out/bin/geodec 'MATCH (n) RETURN count(DISTINCT n.name)' --insecure"
+    "timeout 5 ./zig-out/bin/geode query 'MATCH (n) RETURN count(DISTINCT n.name)' --insecure"
 
 echo
 echo "=== Phase 8: Complex Integration Tests ==="
@@ -174,16 +174,16 @@ echo
 
 # Test combinations of fixes
 test_feature "Single quotes with multiple MATCH" \
-    "timeout 5 ./zig-out/bin/geodec \"MATCH (a {name: 'Alice'}) MATCH (b) RETURN a, b LIMIT 1\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"MATCH (a {name: 'Alice'}) MATCH (b) RETURN a, b LIMIT 1\" --insecure"
 
 test_feature "OPTIONAL MATCH with single quotes" \
-    "timeout 5 ./zig-out/bin/geodec \"MATCH (a) OPTIONAL MATCH (b {status: 'active'}) RETURN a, b LIMIT 1\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"MATCH (a) OPTIONAL MATCH (b {status: 'active'}) RETURN a, b LIMIT 1\" --insecure"
 
 test_feature "Complex property names with single quotes" \
-    "timeout 5 ./zig-out/bin/geodec \"CREATE (p {'user-id': 1, 'full name': 'Test User'})\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"CREATE (p {'user-id': 1, 'full name': 'Test User'})\" --insecure"
 
 test_feature "All features combined" \
-    "timeout 5 ./zig-out/bin/geodec \"MATCH (a {name: 'Test'}) OPTIONAL MATCH (b) WHERE b.age > 20 RETURN a, b ORDER BY b.age DESC LIMIT 5\" --insecure"
+    "timeout 5 ./zig-out/bin/geode query \"MATCH (a {name: 'Test'}) OPTIONAL MATCH (b) WHERE b.age > 20 RETURN a, b ORDER BY b.age DESC LIMIT 5\" --insecure"
 
 echo
 echo "=== Regression Test Results Summary ==="

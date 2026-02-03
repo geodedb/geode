@@ -123,7 +123,7 @@ test "Telemetry smoke emits PULL_PAGE (env-gated)" {
     };
     const err_all = serr.readToEndAlloc(allocator, 1 << 20) catch &[_]u8{};
     defer if (err_all.len > 0) allocator.free(err_all);
-    // Server should have exited due to --test-exit-after-first-request; wait to reap.
+    // Server should have exited due to; wait to reap.
     _ = server.wait() catch {};
     // stack buffer; no free needed
 

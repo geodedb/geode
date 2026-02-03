@@ -13,7 +13,7 @@ NC='\033[0m' # No Color
 
 # Start the server
 echo -e "${YELLOW}Starting Geode server...${NC}"
-./zig-out/bin/geoded --data_dir ./test_data --insecure &
+./zig-out/bin/geode serve --data_dir ./test_data --insecure &
 SERVER_PID=$!
 sleep 2
 
@@ -25,7 +25,7 @@ run_test() {
 
     echo -n "Testing: $test_name... "
 
-    result=$(./zig-out/bin/geodec "$query" --insecure 2>&1)
+    result=$(./zig-out/bin/geode query "$query" --insecure 2>&1)
 
     if echo "$result" | grep -q "$expected_pattern"; then
         echo -e "${GREEN}PASSED${NC}"
@@ -41,10 +41,10 @@ run_test() {
 
 # Setup test data
 echo -e "${YELLOW}Creating test data...${NC}"
-./zig-out/bin/geodec "CREATE (n:Person {name: 'Alice', age: 30})" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "CREATE (n:Person {name: 'Bob', age: 25})" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "CREATE (n:Company {name: 'TechCorp', employees: 100})" --insecure >/dev/null 2>&1
-./zig-out/bin/geodec "MATCH (p:Person {name: 'Alice'}), (c:Company {name: 'TechCorp'}) CREATE (p)-[:WORKS_AT]->(c)" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "CREATE (n:Person {name: 'Alice', age: 30})" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "CREATE (n:Person {name: 'Bob', age: 25})" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "CREATE (n:Company {name: 'TechCorp', employees: 100})" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "MATCH (p:Person {name: 'Alice'}), (c:Company {name: 'TechCorp'}) CREATE (p)-[:WORKS_AT]->(c)" --insecure >/dev/null 2>&1
 
 echo -e "\n${YELLOW}Running backup/restore regression tests...${NC}"
 
@@ -72,14 +72,14 @@ run_test "Backup with special path" \
     "Backup completed"
 
 # Test 5: Query data before restore
-original_count=$(./zig-out/bin/geodec "MATCH (n) RETURN count(n) AS count" --insecure 2>&1 | grep -o '[0-9]*' | head -1)
+original_count=$(./zig-out/bin/geode query "MATCH (n) RETURN count(n) AS count" --insecure 2>&1 | grep -o '[0-9]*' | head -1)
 echo "Original node count: $original_count"
 
 # Test 6: Delete some data
-./zig-out/bin/geodec "MATCH (n:Person {name: 'Bob'}) DELETE n" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "MATCH (n:Person {name: 'Bob'}) DELETE n" --insecure >/dev/null 2>&1
 
 # Test 7: Verify data was deleted
-new_count=$(./zig-out/bin/geodec "MATCH (n) RETURN count(n) AS count" --insecure 2>&1 | grep -o '[0-9]*' | head -1)
+new_count=$(./zig-out/bin/geode query "MATCH (n) RETURN count(n) AS count" --insecure 2>&1 | grep -o '[0-9]*' | head -1)
 if [ "$new_count" -lt "$original_count" ]; then
     echo -e "Data deletion verified... ${GREEN}PASSED${NC}"
 else
@@ -92,7 +92,7 @@ run_test "Basic restore" \
     "Restore completed"
 
 # Test 9: Verify data was restored
-restored_count=$(./zig-out/bin/geodec "MATCH (n) RETURN count(n) AS count" --insecure 2>&1 | grep -o '[0-9]*' | head -1)
+restored_count=$(./zig-out/bin/geode query "MATCH (n) RETURN count(n) AS count" --insecure 2>&1 | grep -o '[0-9]*' | head -1)
 if [ "$restored_count" -eq "$original_count" ]; then
     echo -e "Data restoration verified... ${GREEN}PASSED${NC}"
 else
@@ -117,19 +117,19 @@ run_test "Restore with timestamp" \
     "Restore completed\|timestamp"
 
 # Test 13: Backup after creating index
-./zig-out/bin/geodec "CREATE INDEX person_name_idx ON Person(name)" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "CREATE INDEX person_name_idx ON Person(name)" --insecure >/dev/null 2>&1
 run_test "Backup with indexes" \
     "BACKUP TO './backup_with_index.bak'" \
     "Backup completed"
 
 # Test 14: Drop index and restore
-./zig-out/bin/geodec "DROP INDEX person_name_idx" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "DROP INDEX person_name_idx" --insecure >/dev/null 2>&1
 run_test "Restore with indexes" \
     "RESTORE FROM './backup_with_index.bak'" \
     "Restore completed"
 
 # Test 15: Verify index was restored
-index_exists=$(./zig-out/bin/geodec "SHOW INDEXES" --insecure 2>&1 | grep -c "person_name_idx" || true)
+index_exists=$(./zig-out/bin/geode query "SHOW INDEXES" --insecure 2>&1 | grep -c "person_name_idx" || true)
 if [ "$index_exists" -gt 0 ]; then
     echo -e "Index restoration... ${GREEN}PASSED${NC}"
 else
@@ -137,19 +137,19 @@ else
 fi
 
 # Test 16: Backup empty database
-./zig-out/bin/geodec "MATCH (n) DETACH DELETE n" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "MATCH (n) DETACH DELETE n" --insecure >/dev/null 2>&1
 run_test "Backup empty database" \
     "BACKUP TO './empty_backup.bak'" \
     "Backup completed"
 
 # Test 17: Restore empty backup
-./zig-out/bin/geodec "CREATE (n:Test {value: 1})" --insecure >/dev/null 2>&1
+./zig-out/bin/geode query "CREATE (n:Test {value: 1})" --insecure >/dev/null 2>&1
 run_test "Restore empty backup" \
     "RESTORE FROM './empty_backup.bak'" \
     "Restore completed"
 
 # Test 18: Verify empty restore
-empty_count=$(./zig-out/bin/geodec "MATCH (n) RETURN count(n) AS count" --insecure 2>&1 | grep -o '[0-9]*' | head -1)
+empty_count=$(./zig-out/bin/geode query "MATCH (n) RETURN count(n) AS count" --insecure 2>&1 | grep -o '[0-9]*' | head -1)
 if [ "$empty_count" -eq 0 ]; then
     echo -e "Empty database restoration... ${GREEN}PASSED${NC}"
 else
@@ -164,7 +164,7 @@ run_test "Restore non-existent file" \
 # Test 20: Large backup test
 echo -e "\n${YELLOW}Creating large dataset for backup test...${NC}"
 for i in {1..100}; do
-    ./zig-out/bin/geodec "CREATE (n:Node {id: $i, data: 'test_data_$i'})" --insecure >/dev/null 2>&1
+    ./zig-out/bin/geode query "CREATE (n:Node {id: $i, data: 'test_data_$i'})" --insecure >/dev/null 2>&1
 done
 
 run_test "Large backup" \

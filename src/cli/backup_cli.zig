@@ -9,6 +9,7 @@ const quic = @import("transport/quic");
 const migration = @import("migration");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
+const json_lib = @import("json");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CLI; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -23,6 +24,23 @@ const Attr = logging.Attr;
 
 // GAP-0221 SECURITY FIX: Replace silent catch 0 with logged error handling
 // CANARY: REQ=REQ-BACKUP-ERROR-HANDLING-001; FEATURE="BackupErrorHandling"; ASPECT=Security; STATUS=TESTED; TEST=test_gap_0221_backup_error_handling; OWNER=cli; UPDATED=2026-01-16
+
+// Helper function to read a line with polling (similar to main.zig)
+fn readLineWithPoll(quic_client: *quic.QuicClient, stream: *quic.QuicClientStream, max_size: usize, timeout_ms: u64) ![]u8 {
+    const start = std.time.milliTimestamp();
+    while (true) {
+        const line = stream.readLine(max_size) catch |err| {
+            if (err == error.WouldBlock or err == error.EndOfStream) {
+                if (std.time.milliTimestamp() - start >= @as(i64, @intCast(timeout_ms))) return err;
+                quic_client.poll(5) catch {};
+                std.Thread.sleep(5 * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+        return line;
+    }
+}
 
 // Exit codes for consistency with main CLI
 const ExitCode = enum(u8) {
@@ -986,7 +1004,7 @@ fn readProtoMessage(
     stream: *quic.QuicClientStream,
     timeout_ms: u64,
 ) !schema.QuicServerMessage {
-    const max_attempts: usize = if (timeout_ms == 0) 0 else @max(@as(usize, 1), @intCast(timeout_ms / 10));
+    const max_attempts: usize = if (timeout_ms == 0) 0 else @max(@as(usize, 1), @as(usize, @intCast(timeout_ms / 10)));
     var attempts: usize = 0;
 
     var len_buf: [4]u8 = undefined;

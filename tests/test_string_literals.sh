@@ -28,7 +28,7 @@ test_query() {
 
     echo -n "Testing $name: "
     local output
-    if output=$(timeout "$timeout_duration" ./zig-out/bin/geodec "$query" --insecure 2>&1); then
+    if output=$(timeout "$timeout_duration" ./zig-out/bin/geode query "$query" --insecure 2>&1); then
         if echo "$output" | grep -q "status_class.*00000"; then
             echo -e "${GREEN}PASS${NC}"
             ((PASSED++))
