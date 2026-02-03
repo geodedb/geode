@@ -176,7 +176,7 @@ pub const QuicTransport = struct {
 
     pub fn accept(self: *QuicTransport) !*QuicConnection {
         if (self.endpoint) |*ep| {
-            const conn = try ep.accept();
+            const conn = try api.accept(ep);
             const wrapper = try self.allocator.create(QuicConnection);
             wrapper.* = QuicConnection{
                 .allocator = self.allocator,
@@ -186,7 +186,7 @@ pub const QuicTransport = struct {
             // GAP-0202: Thread-safe connection list append
             self.connections_mutex.lock();
             defer self.connections_mutex.unlock();
-            try self.connections.append(wrapper);
+            try self.connections.append(self.allocator, wrapper);
             return wrapper;
         }
         return QuicError.InvalidState;

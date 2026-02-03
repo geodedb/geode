@@ -1180,6 +1180,7 @@ pub fn build(b: *std.Build) void {
     const range_tracker_mod = b.createModule(.{ .root_source_file = b.path("src/transactions/range_tracker.zig"), .target = target, .optimize = optimize });
     txn_mod.addImport("range_tracker", range_tracker_mod);
     root_mod.addImport("mvcc_adv", mvcc_adv_mod);
+    root_mod.addImport("txn", txn_mod);
     // const wal_mod = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
     // Security TDE hierarchy module
     // const tde_hierarchy_mod = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });

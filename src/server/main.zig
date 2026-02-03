@@ -56,7 +56,7 @@ const transaction_handlers = @import("transaction_handlers.zig");
 // Import message handlers (M3.2 Phase 3 message handlers extraction)
 const message_handlers = geode.message_handlers;
 // Import QUIC connection handlers (M3.3 Phase 3 QUIC handlers extraction)
-const quic_connection_handler = geode.server.connection_handler;
+const quic_connection_handler = @import("quic_connection_handler.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-017; FEATURE="ABAC Enforcement"; ASPECT=AsyncConnection; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
 // GAP-0165: Import geode_auth for SecurityManager type in async connection context
 const geode_auth = @import("geode_auth");

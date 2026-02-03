@@ -150,23 +150,23 @@ pub const PrometheusExporter = struct {
             const metric = entry.value_ptr.*;
 
             // Write HELP line
-            try writer.print("# HELP {} {}\n", .{ metric.name, metric.help });
+            try writer.print("# HELP {s} {s}\n", .{ metric.name, metric.help });
 
             // Write TYPE line
-            try writer.print("# TYPE {} {}\n", .{ metric.name, @tagName(metric.type) });
+            try writer.print("# TYPE {s} {s}\n", .{ metric.name, @tagName(metric.type) });
 
             // Write metric value(s)
             switch (metric.value) {
                 .counter => |c| {
-                    try writer.print("{} {}", .{ metric.name, c });
+                    try writer.print("{s} {}", .{ metric.name, c });
                 },
                 .gauge => |g| {
-                    try writer.print("{} {}", .{ metric.name, g });
+                    try writer.print("{s} {}", .{ metric.name, g });
                 },
                 .histogram => |h| {
                     // Write bucket values
                     for (h.buckets) |bucket| {
-                        try writer.print("{}_bucket{{le=\"{}\"}} {}", .{
+                        try writer.print("{s}_bucket{{le=\"{}\"}} {}", .{
                             metric.name,
                             bucket.upper_bound,
                             bucket.count,
@@ -178,7 +178,7 @@ pub const PrometheusExporter = struct {
                     }
 
                     // Write +Inf bucket
-                    try writer.print("{}_bucket{{le=\"+Inf\"}} {}", .{
+                    try writer.print("{s}_bucket{{le=\"+Inf\"}} {}", .{
                         metric.name,
                         h.count,
                     });
@@ -188,18 +188,18 @@ pub const PrometheusExporter = struct {
                     try writer.writeByte('\n');
 
                     // Write sum and count
-                    try writer.print("{}_sum {}", .{ metric.name, h.sum });
+                    try writer.print("{s}_sum {}", .{ metric.name, h.sum });
                     if (metric.timestamp) |ts| {
                         try writer.print(" {}", .{ts});
                     }
                     try writer.writeByte('\n');
 
-                    try writer.print("{}_count {}", .{ metric.name, h.count });
+                    try writer.print("{s}_count {}", .{ metric.name, h.count });
                 },
                 .summary => |s| {
                     // Write quantile values
                     for (s.quantiles) |quantile| {
-                        try writer.print("{}_quantile{{quantile=\"{}\"}} {}", .{
+                        try writer.print("{s}_quantile{{quantile=\"{}\"}} {}", .{
                             metric.name,
                             quantile.quantile,
                             quantile.value,
@@ -211,13 +211,13 @@ pub const PrometheusExporter = struct {
                     }
 
                     // Write sum and count
-                    try writer.print("{}_sum {}", .{ metric.name, s.sum });
+                    try writer.print("{s}_sum {}", .{ metric.name, s.sum });
                     if (metric.timestamp) |ts| {
                         try writer.print(" {}", .{ts});
                     }
                     try writer.writeByte('\n');
 
-                    try writer.print("{}_count {}", .{ metric.name, s.count });
+                    try writer.print("{s}_count {}", .{ metric.name, s.count });
                 },
             }
 

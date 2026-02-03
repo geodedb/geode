@@ -233,10 +233,9 @@ pub const UnionMetrics = struct {
     hash_size: ?usize,
 };
 
-// Additional imports needed for ServerState (use geode module instead of relative imports)
-const geode = @import("geode");
+// Additional imports needed for ServerState (use relative imports since this file is part of geode module)
 const execution = @import("../execution.zig");
-const mvcc = geode.server_mvcc;
+const mvcc = @import("txn/mvcc.zig");
 const query_plan_cache = @import("query_plan_cache.zig");
 // Note: query_ast_cache type reference is opaque to avoid circular dependency with lib.zig
 // The actual type is query_ast_cache.SharedAstCache but we use *anyopaque here
@@ -250,6 +249,10 @@ const geode_auth = @import("geode_auth");
 pub const ServerState = struct {
     // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
     query_mem_limit_bytes: usize = 0,
+    // Whether to return results inline in RUN_GQL response (vs separate PULL)
+    inline_results_enabled: bool = false,
+    // Maximum rows to return inline (0 = no limit)
+    inline_results_max_rows: usize = 0,
     result_ordered: bool = false,
     result_order_keys: []const []const u8 = &.{},
     result_page_index: usize = 0,
@@ -327,8 +330,9 @@ pub const ServerState = struct {
     query_ast_cache: ?*anyopaque = null,
 
     // Distributed query planner for federation-aware optimization
-    distributed_planner: ?*geode.distributed.query_planner.DistributedQueryPlanner = null,
-    federation_manager: ?*geode.distributed.query_planner.FederationManager = null,
+    // Types are DistributedQueryPlanner/FederationManager but we use opaque to avoid circular dep
+    distributed_planner: ?*anyopaque = null,
+    federation_manager: ?*anyopaque = null,
 
     // Catalog management for schemas and graphs
     catalog_schemas: std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
@@ -345,7 +349,9 @@ pub const ServerState = struct {
 
     // Authentication state for current session (set by HELLO message handler)
     authenticated_user: ?[]const u8 = null,
-    authenticated_role: ?geode.user_management.Role = null,
+    authenticated_password: ?[]const u8 = null,
+    // Type is user_management.Role but we use u8 enum value to avoid circular dep
+    authenticated_role: ?u8 = null,
 
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphSupport"; ASPECT=SessionGraph; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-20
     // Current graph for this session (set by USE GRAPH command)

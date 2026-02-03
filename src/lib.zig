@@ -179,6 +179,10 @@ pub const server_state = @import("server/server_state.zig");
 pub const server_mvcc = @import("server/txn/mvcc.zig");
 // Note: query_ast_cache is imported directly by server files to avoid circular dependency
 // (it needs ParseOptions/ParseResult which are defined in this file)
+// Re-export query_plan_cache for unified binary
+pub const query_plan_cache = @import("server/query_plan_cache.zig");
+// Re-export protocol_handler for unified binary
+pub const protocol_handler = @import("server/protocol_handler.zig");
 // Re-export query_executor for unified binary
 pub const query_executor = @import("server/query_executor.zig");
 // Re-export server_flags for unified binary
@@ -486,8 +490,7 @@ pub const server = struct {
         testing,
     };
 
-    // GAP-0165: Expose connection handler for CLI/Tools integration
-    pub const connection_handler = @import("server/quic_connection_handler.zig");
+    // Note: connection_handler imported directly by server files to avoid circular dependency
 };
 
 pub fn parseGql(src: []const u8, allocator: std.mem.Allocator) !ParseResult {

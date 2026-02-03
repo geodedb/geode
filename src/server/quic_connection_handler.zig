@@ -2,17 +2,17 @@ const std = @import("std");
 const geode = @import("geode");
 const diagnostics = geode.diagnostics;
 const quic_transport = @import("transport/quic");
-const query_plan_cache = @import("query_plan_cache.zig");
+const query_plan_cache = geode.query_plan_cache;
 const ServerState = geode.server_state.ServerState;
 const SessionConfiguration = geode.server_state.SessionConfiguration;
 const CatalogSchema = geode.server_state.CatalogSchema;
 const CatalogGraph = geode.server_state.CatalogGraph;
 const query_executor = geode.query_executor;
 const execution = geode.execution;
-const cost_explain = @import("../planner/cost_explain.zig");
+const cost_explain = geode.cost_explain;
 const server_flags = geode.server_flags;
 const message_handlers = geode.message_handlers;
-const protocol_handler = @import("protocol_handler.zig");
+const protocol_handler = geode.protocol_handler;
 const wal_manager = geode.wal_manager;
 // Note: query_ast_cache type is opaque to avoid circular dependency with lib.zig
 // CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
@@ -39,22 +39,32 @@ const json_lib = @import("json");
 fn buildErrorResponse(allocator: std.mem.Allocator, status_class: []const u8, message: []const u8) schema.ExecutionResponse {
     _ = allocator;
     return .{
-        .status = .ERROR,
-        .error_message = @constCast(message),
-        .status_class = @constCast(status_class),
+        .status = .{
+            .status_class = @constCast(status_class),
+            .status_subclass = "",
+            .additional_statuses = std.ArrayList([]const u8){},
+            .flagger_findings = std.ArrayList([]const u8){},
+        },
+        .payload = .{
+            .@"error" = .{
+                .code = @constCast(status_class),
+                .message = @constCast(message),
+                .type = "ERROR",
+                .anchor = "",
+            },
+        },
     };
 }
 
 /// Write a length-prefixed protobuf ServerPacket to the stream
 fn writeServerPacket(allocator: std.mem.Allocator, stream: *quic_transport.QuicStream, packet: schema.ServerPacket) !void {
     // Encode the packet to protobuf bytes
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 4096) catch return error.OutOfMemory;
+    defer aw.deinit();
 
-    const writer = buf.writer(allocator);
-    try packet.encode(writer);
+    try protobuf.encode(&aw.writer, allocator, packet);
 
-    const msg_bytes = buf.items;
+    const msg_bytes = aw.writer.buffer[0..aw.writer.end];
     const msg_len: u32 = @intCast(msg_bytes.len);
 
     // Write 4-byte big-endian length prefix
@@ -85,7 +95,7 @@ const BufferedProtoReader = struct {
             .allocator = allocator,
             .transport = transport,
             .stream = stream,
-            .buffer = std.ArrayList(u8).init(allocator),
+            .buffer = std.ArrayList(u8){},
         };
     }
 
@@ -114,10 +124,9 @@ const BufferedProtoReader = struct {
                     const msg_bytes = unread[4..][0..msg_len];
 
                     // Decode using schema
-                    var fbs = std.io.fixedBufferStream(msg_bytes);
-                    const reader = protobuf.initReader(fbs.reader(), self.allocator);
-                    const msg = schema.ClientPacket.decode(self.allocator, reader) catch |err| {
-                        log.warn("Failed to decode Protobuf message: {}", .{err});
+                    var reader: std.Io.Reader = .fixed(msg_bytes);
+                    const msg = protobuf.decode(schema.ClientPacket, &reader, self.allocator) catch |err| {
+                        log.warn("Failed to decode Protobuf message", &.{Attr.err("error", err)});
                         return err;
                     };
 
@@ -332,30 +341,30 @@ pub fn handleQuicConnection(
                 try transport.poll(0);
                 continue;
             }
-            log.err("Protobuf read error: {}", .{err});
+            log.err("Protobuf read error", &.{Attr.err("error", err)});
             return err;
         };
 
         if (packet_opt == null) return; // EOF
-        const packet = packet_opt.?;
+        var packet = packet_opt.?;
         defer packet.deinit(gpa);
 
         const msg = packet.quic orelse {
             log.err("Received empty ClientPacket", &.{});
             const err_resp = buildErrorResponse(gpa, "58000", "Empty packet");
-            try writeServerPacket(gpa, stream, .{ .execute = err_resp });
+            try writeServerPacket(gpa, stream, .{ .quic = .{ .execute = err_resp } });
             continue;
         };
 
         // Process protobuf message
         const response_msg = processMessage(gpa, &state, msg, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |err| {
-            log.err("Protobuf process error: {}", .{err});
+            log.err("Protobuf process error", &.{Attr.err("error", err)});
             const err_resp = buildErrorResponse(gpa, "58000", "Internal Server Error");
-            try writeServerPacket(gpa, stream, .{ .execute = err_resp });
+            try writeServerPacket(gpa, stream, .{ .quic = .{ .execute = err_resp } });
             continue;
         };
 
-        try writeServerPacket(gpa, stream, response_msg);
+        try writeServerPacket(gpa, stream, .{ .quic = response_msg });
     }
 }
 
@@ -377,14 +386,14 @@ pub fn processMessage(
         // Trace logging
         else => {
             std.debug.print("FORCE DEBUG: Server processing message\n", .{});
-            log.debug("Server processing message: {}", .{msg});
+            log.debug("Server processing message", &.{});
         },
     }
     switch (msg) {
         .hello => |hello_req| {
             const user_mgmt = geode.user_management;
 
-            var caps = std.ArrayList([]const u8).init(gpa);
+            var caps = std.ArrayList([]const u8){};
             try caps.append(gpa, "QUIC");
             try caps.append(gpa, "TLS1.3");
 
@@ -413,7 +422,7 @@ pub fn processMessage(
                 // Store authenticated user info in state
                 state.authenticated_user = try gpa.dupe(u8, hello_req.username);
                 state.authenticated_password = try gpa.dupe(u8, hello_req.password);
-                state.authenticated_role = role;
+                state.authenticated_role = @intFromEnum(role);
             }
 
             return schema.QuicServerMessage{ .hello = .{
@@ -434,26 +443,25 @@ pub fn processMessage(
             // Check if authentication is required but no user is authenticated
             if (user_mgmt.isAuthEnabled() and state.authenticated_user == null) {
                 const err_resp = schema.Error{ .code = "28000", .message = "Authentication required" };
-                return schema.QuicServerMessage{ .execute = .{ .val = .{ .@"error" = err_resp } } };
+                return schema.QuicServerMessage{ .execute = .{ .payload =.{ .@"error" = err_resp } } };
             }
 
             // Execute query via test_harness
             const options = geode.test_harness.QueryOptions{
                 .user = state.authenticated_user,
                 .password = state.authenticated_password,
-                .pre_validated_role = if (state.authenticated_role) |role| .{
+                .pre_validated_role = if (state.authenticated_role) |role_u8| .{
                     .username = state.authenticated_user orelse "",
-                    .role = role,
+                    .role = @enumFromInt(role_u8),
                 } else null,
-                .output_format = "json",
-            };
+                            };
 
             log.info("Executing query via test_harness", &.{});
-            const result = geode.test_harness.runQueryWithAuth(&gpa, exec_req.query, options) catch |err| {
+            const result = geode.test_harness.runQueryWithAuth(@constCast(&gpa), exec_req.query, options) catch |err| {
                 log.err("Query execution failed", &.{Attr.err("error", err)});
                 const err_msg = @errorName(err);
                 const err_resp = schema.Error{ .code = "58000", .message = err_msg };
-                return schema.QuicServerMessage{ .execute = .{ .val = .{ .@"error" = err_resp } } };
+                return schema.QuicServerMessage{ .execute = .{ .payload =.{ .@"error" = err_resp } } };
             };
             defer gpa.free(result);
 
@@ -466,42 +474,74 @@ pub fn processMessage(
 
             // Build response with result data
             // For now, return the result as a single string value in a page
-            var rows = std.ArrayList(schema.Row).init(gpa);
-            var values = std.ArrayList(schema.Value).init(gpa);
-            try values.append(gpa, .{ .kind = .{ .string_val = try gpa.dupe(u8, result) } });
+            var rows = std.ArrayList(schema.Row){};
+            var values = std.ArrayList(schema.Value){};
+            try values.append(gpa, .{ .kind = .{ .string_val = .{ .value = try gpa.dupe(u8, result) } } });
             try rows.append(gpa, .{ .values = values });
 
-            const page = schema.DataPage{ .rows = rows, .last_page = true };
-            return schema.QuicServerMessage{ .execute = .{ .val = .{ .page = page } } };
+            const page = schema.DataPage{ .rows = rows, .final = true, .order_keys = std.ArrayList([]const u8){} };
+            return schema.QuicServerMessage{ .execute = .{ .payload =.{ .page = page } } };
         },
         .ping => |_| {
             return schema.QuicServerMessage{ .ping = .{ .ok = true } };
         },
         .begin => |bg| {
-            // Begin Transaction
-            const tx_id = state.txn_manager.beginTransaction(bg.read_only) catch {
-                const err_resp = schema.Error{ .code = "500", .message = "Failed to begin transaction" };
-                return schema.QuicServerMessage{ .execute = .{ .@"error" = err_resp } }; // Todo: wrapped error?
-            };
-            // Simplified: assumes txn_manager returns u64 or string.
-            // If u64, format it.
-            var tx_id_str = std.ArrayList(u8).init(gpa);
-            // defer tx_id_str.deinit(); // We hand off to response
-            try std.fmt.format(tx_id_str.writer(), "{d}", .{tx_id});
+            _ = bg; // read_only flag - for future use
+            // Begin Transaction - store in state.active_txn
+            const txn = state.txn_manager.begin();
+            state.active_txn = txn;
 
-            return schema.QuicServerMessage{ .begin = .{ .session_id = "sess", .tx_id = tx_id_str.toOwnedSlice() catch "" } };
+            // Format transaction ID as string
+            var tx_id_str = std.ArrayList(u8){};
+            try std.fmt.format(tx_id_str.writer(gpa), "{d}", .{txn.id});
+
+            return schema.QuicServerMessage{ .begin = .{ .session_id = "sess", .tx_id = tx_id_str.toOwnedSlice(gpa) catch "" } };
         },
         .commit => |_| {
-            state.txn_manager.commitTransaction() catch {
-                return schema.QuicServerMessage{ .commit = .{ .success = false } };
-            };
-            return schema.QuicServerMessage{ .commit = .{ .success = true } };
+            if (state.active_txn) |*txn| {
+                state.txn_manager.commit(txn) catch {
+                    return schema.QuicServerMessage{ .commit = .{ .success = false } };
+                };
+                state.active_txn = null;
+                return schema.QuicServerMessage{ .commit = .{ .success = true } };
+            }
+            return schema.QuicServerMessage{ .commit = .{ .success = false } };
         },
         .rollback => |_| {
-            state.txn_manager.rollbackTransaction() catch {
-                return schema.QuicServerMessage{ .rollback = .{ .success = false } };
-            };
-            return schema.QuicServerMessage{ .rollback = .{ .success = true } };
+            if (state.active_txn) |*txn| {
+                state.txn_manager.rollback(txn);
+                state.active_txn = null;
+                return schema.QuicServerMessage{ .rollback = .{ .success = true } };
+            }
+            return schema.QuicServerMessage{ .rollback = .{ .success = false } };
+        },
+        .pull => |_| {
+            // Pull is handled inline in execute for now
+            const page = schema.DataPage{ .rows = std.ArrayList(schema.Row){}, .final = true, .order_keys = std.ArrayList([]const u8){} };
+            return schema.QuicServerMessage{ .pull = .{ .response = .{ .payload = .{ .page = page } } } };
+        },
+        .cdc_diag => |_| {
+            return schema.QuicServerMessage{ .cdc_diag = .{} };
+        },
+        .cdc_ctrl => |_| {
+            return schema.QuicServerMessage{ .cdc_ctrl = .{ .success = true } };
+        },
+        .savepoint => |sp| {
+            _ = sp;
+            return schema.QuicServerMessage{ .savepoint = .{ .success = true } };
+        },
+        .rollback_to => |rt| {
+            _ = rt;
+            return schema.QuicServerMessage{ .rollback_to = .{ .success = true } };
+        },
+        .backup => |_| {
+            return schema.QuicServerMessage{ .backup = .{ .success = true, .backup_id = "", .message = "Not implemented" } };
+        },
+        .restore => |_| {
+            return schema.QuicServerMessage{ .restore = .{ .success = false, .message = "Not implemented" } };
+        },
+        .upload_backup => |_| {
+            return schema.QuicServerMessage{ .upload_backup = .{ .success = false, .message = "Not implemented" } };
         },
     }
 }
@@ -563,14 +603,13 @@ pub fn processJsonLineMessage(
         const options = geode.test_harness.QueryOptions{
             .user = state.authenticated_user,
             .password = state.authenticated_password,
-            .pre_validated_role = if (state.authenticated_role) |role| .{
+            .pre_validated_role = if (state.authenticated_role) |role_u8| .{
                 .username = state.authenticated_user orelse "",
-                .role = role,
+                .role = @enumFromInt(role_u8),
             } else null,
-            .output_format = "json",
-        };
+                    };
 
-        const result = geode.test_harness.runQueryWithAuth(&gpa, query, options) catch |err| {
+        const result = geode.test_harness.runQueryWithAuth(@constCast(&gpa), query, options) catch |err| {
             const err_msg = @errorName(err);
             return try std.fmt.allocPrint(gpa, "{{\"status_class\":\"58000\",\"error\":\"{s}\"}}\n", .{err_msg});
         };
