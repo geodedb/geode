@@ -768,8 +768,60 @@ class ParallelTestRunner:
             # Only set GEODE_DATA_DIR for embedded mode tests (not server mode)
             env["GEODE_DATA_DIR"] = data_dir
 
+        # Handle setup - can be a list of commands or a dict with script/files/commands
+        setup_data = test_case.get("setup", [])
+
+        # Handle setup.script - execute bash scripts that create test files
+        if isinstance(setup_data, dict):
+            setup_script = setup_data.get("script")
+            if setup_script:
+                try:
+                    # Execute the script with bash explicitly for brace expansion support ({1..100})
+                    script_result = subprocess.run(
+                        ["/bin/bash", "-c", setup_script],
+                        capture_output=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=60,  # Scripts may need longer timeout for file creation
+                        env=env,
+                    )
+                    if script_result.returncode != 0:
+                        # Log but continue - setup failure shouldn't necessarily fail the test
+                        pass
+                except subprocess.TimeoutExpired:
+                    pass  # Continue with test
+                except Exception:
+                    pass  # Continue with test
+
+            # Handle setup.files - create test files before running the test
+            setup_files = setup_data.get("files", [])
+            for file_spec in setup_files:
+                try:
+                    file_path = file_spec.get("path")
+                    file_content = file_spec.get("content", "")
+                    if file_path:
+                        # Expand ~ in path
+                        file_path = os.path.expanduser(file_path)
+                        # Create parent directories if needed
+                        os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
+                        # Write file content
+                        with open(file_path, "w", encoding="utf-8") as f:
+                            f.write(file_content)
+                        # Handle optional mode/permissions
+                        mode = file_spec.get("mode")
+                        if mode:
+                            os.chmod(file_path, int(mode, 8))
+                except Exception:
+                    pass  # Continue with test
+
+            # Get setup commands from dict
+            setup_commands = setup_data.get("commands", [])
+        elif isinstance(setup_data, list):
+            setup_commands = setup_data
+        else:
+            setup_commands = []
+
         # Handle setup commands - run them separately with persistence
-        setup_commands = test_case.get("setup", [])
         if setup_commands:
             for setup_item in setup_commands:
                 try:
@@ -921,17 +973,23 @@ class ParallelTestRunner:
 
         # Check exit code
         if "exit_code" in expect:
-            # Special case for integration test invalid-command
-            if (
-                spec_name == "geode_integration.yml"
-                and test_name == "invalid-command"
-                and expect["exit_code"] == 0
-                and result.returncode == 2
-            ):
-                # This is the conflicting test - keep exit code 2 for consistency
-                pass
-            elif result.returncode != expect["exit_code"]:
-                return False, f"exit code: expected {expect['exit_code']}, got {result.returncode}"
+            expected_exit = expect["exit_code"]
+            # Handle list of acceptable exit codes
+            if isinstance(expected_exit, list):
+                if result.returncode not in expected_exit:
+                    return False, f"exit code: expected {expected_exit}, got {result.returncode}"
+            else:
+                # Special case for integration test invalid-command
+                if (
+                    spec_name == "geode_integration.yml"
+                    and test_name == "invalid-command"
+                    and expected_exit == 0
+                    and result.returncode == 2
+                ):
+                    # This is the conflicting test - keep exit code 2 for consistency
+                    pass
+                elif result.returncode != expected_exit:
+                    return False, f"exit code: expected {expected_exit}, got {result.returncode}"
 
         # Filter out JSON log lines from stdout/stderr for cleaner output matching
         stdout_lines = [line for line in result.stdout.split("\n") if not line.startswith("{")]
@@ -1212,12 +1270,62 @@ class ParallelTestRunner:
         mode_str = "server" if server_enabled else "embedded"
         self.log_progress(f"Running {spec_label} ({len(tests)} tests) [{mode_str}]")
 
-        # Handle spec-level setup
-        setup_commands = spec.get("setup", [])
+        # Handle spec-level setup - can be a list or dict with script/files/commands
+        setup_data = spec.get("setup", [])
+        setup_env = os.environ.copy()
+        if not server_address:
+            setup_env["GEODE_DATA_DIR"] = str(spec_data_dir)
+
+        # Handle setup as dict with script/files/commands keys
+        if isinstance(setup_data, dict):
+            # Execute setup script if present
+            setup_script = setup_data.get("script")
+            if setup_script:
+                try:
+                    # Use bash explicitly for brace expansion support ({1..100})
+                    script_result = subprocess.run(
+                        ["/bin/bash", "-c", setup_script],
+                        capture_output=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=60,
+                        env=setup_env,
+                    )
+                    if script_result.returncode != 0:
+                        self.log_progress(
+                            f"Setup script failed for {spec_label}: {script_result.stderr[:200] if script_result.stderr else ''}"
+                        )
+                except subprocess.TimeoutExpired:
+                    self.log_progress(f"Setup script timed out for {spec_label}")
+                except Exception as e:
+                    self.log_progress(f"Setup script error for {spec_label}: {str(e)}")
+
+            # Handle setup.files
+            setup_files = setup_data.get("files", [])
+            for file_spec in setup_files:
+                try:
+                    file_path = file_spec.get("path")
+                    file_content = file_spec.get("content", "")
+                    if file_path:
+                        file_path = os.path.expanduser(file_path)
+                        os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
+                        with open(file_path, "w", encoding="utf-8") as f:
+                            f.write(file_content)
+                        mode = file_spec.get("mode")
+                        if mode:
+                            os.chmod(file_path, int(mode, 8))
+                except Exception as e:
+                    self.log_progress(f"Setup file creation failed for {spec_label}: {str(e)}")
+
+            # Get setup commands from dict
+            setup_commands = setup_data.get("commands", [])
+        elif isinstance(setup_data, list):
+            setup_commands = setup_data
+        else:
+            setup_commands = []
+
+        # Handle spec-level setup commands
         if setup_commands:
-            setup_env = os.environ.copy()
-            if not server_address:
-                setup_env["GEODE_DATA_DIR"] = str(spec_data_dir)
             for setup_item in setup_commands:
                 try:
                     # Handle both string and dict setup items

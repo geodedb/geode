@@ -284,13 +284,13 @@ def run_test(
         setup_script = setup_data.get("script")
         if setup_script:
             try:
+                # Use bash explicitly for brace expansion support ({1..100})
                 result = subprocess.run(
-                    setup_script,
-                    shell=True,
+                    ["/bin/bash", "-c", setup_script],
                     capture_output=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=30,
+                    timeout=60,  # Scripts may need longer timeout for file creation
                 )
                 if result.returncode != 0:
                     return (
@@ -753,18 +753,24 @@ def run_test(
 
     # Check exit code
     if "exit_code" in expect:
-        # Special case for integration test invalid-command
-        if (
-            spec_name == "geode_integration.yml"
-            and test_case.get("name") == "invalid-command"
-            and expect["exit_code"] == 0
-            and result.returncode == 2
-        ):
-            # This is the conflicting test - integration wants 0, others want 2
-            # We keep exit code 2 for consistency with other tests
-            pass
-        elif result.returncode != expect["exit_code"]:
-            return False, f"exit code: expected {expect['exit_code']}, got {result.returncode}"
+        expected_exit = expect["exit_code"]
+        # Handle list of acceptable exit codes
+        if isinstance(expected_exit, list):
+            if result.returncode not in expected_exit:
+                return False, f"exit code: expected {expected_exit}, got {result.returncode}"
+        else:
+            # Special case for integration test invalid-command
+            if (
+                spec_name == "geode_integration.yml"
+                and test_case.get("name") == "invalid-command"
+                and expected_exit == 0
+                and result.returncode == 2
+            ):
+                # This is the conflicting test - integration wants 0, others want 2
+                # We keep exit code 2 for consistency with other tests
+                pass
+            elif result.returncode != expected_exit:
+                return False, f"exit code: expected {expected_exit}, got {result.returncode}"
 
     # Filter out JSON log lines from stdout/stderr for cleaner output matching
     stdout_lines = [line for line in result.stdout.split("\n") if not line.startswith("{")]
