@@ -2,7 +2,7 @@ const std = @import("std");
 const geode = @import("geode");
 const ServerState = geode.server_state.ServerState;
 const wal_mod = @import("wal");
-const wal_manager = @import("wal_manager.zig");
+const wal_manager = geode.wal_manager;
 // CANARY: REQ=REQ-TXN-UNDO-SERVER-001; FEATURE="TransactionUndoLog"; ASPECT=ServerIntegration; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = geode.txn_undo_log;
 const graph_store = geode.graph_store;

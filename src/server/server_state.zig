@@ -238,7 +238,8 @@ const geode = @import("geode");
 const execution = @import("../execution.zig");
 const mvcc = geode.server_mvcc;
 const query_plan_cache = @import("query_plan_cache.zig");
-const query_ast_cache = @import("query_ast_cache.zig");
+// Note: query_ast_cache type reference is opaque to avoid circular dependency with lib.zig
+// The actual type is query_ast_cache.SharedAstCache but we use *anyopaque here
 const txn_mgr = @import("txn");
 // CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerIntegration; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Wire ABAC enforcement into server execution paths
@@ -322,7 +323,8 @@ pub const ServerState = struct {
     // Query optimizer gating flag (profile/explain always enables it)
     query_optimizer_enabled: bool = false,
     // Parsed AST cache for hot-path query reuse (shared across connections)
-    query_ast_cache: ?*query_ast_cache.SharedAstCache = null,
+    // Type is query_ast_cache.SharedAstCache but we use opaque pointer to avoid circular dependency
+    query_ast_cache: ?*anyopaque = null,
 
     // Distributed query planner for federation-aware optimization
     distributed_planner: ?*geode.distributed.query_planner.DistributedQueryPlanner = null,

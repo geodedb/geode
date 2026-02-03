@@ -3,8 +3,8 @@ const geode = @import("geode");
 const protocol = geode.protocol;
 const ServerState = geode.server_state.ServerState;
 const TextFormatter = @import("text_formatter").TextFormatter;
-const query_executor = @import("query_executor.zig");
-const server_flags = @import("server_flags.zig");
+const query_executor = geode.query_executor;
+const server_flags = geode.server_flags;
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-011; FEATURE="Structured Logging"; ASPECT=MessageHandlers; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");

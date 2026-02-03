@@ -71,18 +71,18 @@ pub const MetricsServer = struct {
 
     /// Serve Prometheus metrics
     fn serveMetrics(self: *MetricsServer, stream: std.net.Stream) !void {
-        var body = std.ArrayList(u8).init(self.allocator);
-        defer body.deinit();
+        var body = std.ArrayList(u8){};
+        defer body.deinit(self.allocator);
 
-        try self.collector.exportMetrics(body.writer());
+        try self.collector.exportMetrics(body.writer(self.allocator));
 
         const body_slice = body.items;
 
         // Build HTTP response
-        var response = std.ArrayList(u8).init(self.allocator);
-        defer response.deinit();
+        var response = std.ArrayList(u8){};
+        defer response.deinit(self.allocator);
 
-        try response.writer().print(
+        try response.writer(self.allocator).print(
             "HTTP/1.1 200 OK\r\n" ++
                 "Content-Type: text/plain; version=0.0.4; charset=utf-8\r\n" ++
                 "Content-Length: {d}\r\n" ++
@@ -90,7 +90,7 @@ pub const MetricsServer = struct {
                 "\r\n",
             .{body_slice.len},
         );
-        try response.appendSlice(body_slice);
+        try response.appendSlice(self.allocator, body_slice);
 
         _ = stream.write(response.items) catch {};
     }

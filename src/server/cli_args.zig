@@ -142,7 +142,7 @@ pub fn printHelp() void {
     std.debug.print("  --enable-auth                Enable authentication (default)\n", .{});
     std.debug.print("  --help                       Show this help message\n", .{});
     std.debug.print("\nConfig File Locations (searched in order):\n", .{});
-    std.debug.print("  1. .geode/config.{yaml|toml|json}    (project config)\n", .{});
+    std.debug.print("  1. .geode/config.{{yaml|toml|json}}    (project config)\n", .{});
     std.debug.print("  2. ~/.config/geode/config.*          (user config)\n", .{});
     std.debug.print("\nIf no listen option is specified, defaults to 0.0.0.0:3141 (QUIC/TLS).\n", .{});
     std.debug.print("Auto-generated certificates are placed in data_dir or /tmp.\n", .{});
@@ -188,10 +188,12 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
         }
     } else {
         // Search for config file in default locations
-        if (loadConfigFile(allocator)) |result| {
-            var mutable_result = result;
-            defer mutable_result.deinit();
-            mergeFileConfig(&config, result);
+        if (loadConfigFile(allocator)) |maybe_result| {
+            if (maybe_result) |result| {
+                var mutable_result = result;
+                defer mutable_result.deinit();
+                mergeFileConfig(&config, mutable_result);
+            }
         } else |_| {
             // No config file found, use defaults (this is normal)
         }

@@ -1,8 +1,8 @@
 const std = @import("std");
-const geode = @import("geode");
-const graph_exec = geode.graph_exec;
-const graph_store = geode.graph_store;
-const audit = geode.security.audit;
+// Use relative imports since this file is part of the geode module
+const graph_exec = @import("graph/exec.zig");
+const graph_store = @import("../graph_store.zig");
+const audit = @import("../security/audit.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-013; FEATURE="Structured Logging"; ASPECT=GraphStorageManager; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");

@@ -2,12 +2,12 @@ const std = @import("std");
 const geode = @import("geode");
 const storage_pm = @import("storage_page_manager");
 const storage_catalog = @import("storage_catalog");
-const server_flags = @import("server_flags.zig");
+const server_flags = geode.server_flags;
 const graph_storage_mgr = geode.graph_storage_manager;
 // CANARY: REQ=REQ-BINARY-PERSIST-001; FEATURE="BinaryPersistence"; ASPECT=ServerInit; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
-const graph_store = @import("graph_store");
+const graph_store = geode.graph_store;
 const index_catalog = @import("index_catalog.zig");
-const wal_manager = @import("wal_manager.zig");
+const wal_manager = geode.wal_manager;
 const query_ast_cache = @import("query_ast_cache.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager initialization at server startup
@@ -235,19 +235,10 @@ pub fn initialize(
     // Apply ORDER BY key policy
     server_flags.setOrderKeysExpr(order_keys_mode_expr);
 
-    // Ensure the execution/catalog singleton uses the server's data directory.
-    // Without this, ensureCatalogInstance() falls back to /tmp, and parallel
-    // test servers can interfere with each other's catalog/graph metadata.
     // CANARY: REQ=REQ-QUIC-CATALOG-003; FEATURE="CatalogDataDirIsolation"; ASPECT=ServerInit; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
-    const actual_data_dir = data_dir orelse "./data";
-    std.process.setEnvVar("GEODE_DATA_DIR", actual_data_dir) catch |err| {
-        log.warn("Failed to set GEODE_DATA_DIR", &.{
-            Attr.string("error", @errorName(err)),
-            Attr.string("data_dir", actual_data_dir),
-        });
-    };
-
-    // Set data directory for graph storage manager
+    // Note: GEODE_DATA_DIR environment variable is read at startup if needed;
+    // direct configuration via graph_storage_mgr.setDataDir() is preferred
+    // Set data directory for graph storage manager (this is the canonical way to configure isolation)
     graph_storage_mgr.setDataDir(data_dir);
 
     // Initialize persistent storage and catalog

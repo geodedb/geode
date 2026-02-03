@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const geode = @import("geode");
-const impl_flagger = @import("flagger_impl_defined.zig");
+const impl_flagger = geode.impl_flagger;
 const diagnostics = @import("geode").diagnostics;
 const eval = geode.eval;
 const eval_extended = geode.eval_ext;
@@ -11,10 +11,10 @@ const storage_catalog = @import("storage_catalog");
 const txn_mgr = @import("txn");
 const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
 const TextFormatter = @import("text_formatter").TextFormatter;
-const quic_transport = @import("transport/quic.zig");
-const thread_pool = @import("transport/thread_pool.zig");
+const quic_transport = @import("transport/quic");
+const thread_pool = @import("transport/thread_pool");
 const cert_gen = @import("../tools/cert_gen.zig");
-const wal_manager = @import("wal_manager.zig");
+const wal_manager = geode.wal_manager;
 const query_ast_cache = @import("query_ast_cache.zig");
 // Note: cert_gen now imported for certificate generation (M3.2 Phase 3 CLI extraction)
 // const mvcc = @import("server/txn/mvcc.zig");
@@ -32,12 +32,12 @@ const audit = geode.security.audit;
 // GAP-0166: Import metrics server for Prometheus endpoint
 const metrics_server = @import("../monitoring/metrics_server.zig");
 // Import backup manager (M3.1 Phase 3 modularization)
-const backup_manager = @import("backup_manager.zig");
+const backup_manager = geode.backup_manager;
 const SimplifiedBackupManager = backup_manager.SimplifiedBackupManager;
 // Import index catalog (M3.1 Phase 3 modularization)
 const index_catalog = @import("index_catalog.zig");
 // Import server flags (M3.1 Phase 3 modularization)
-const server_flags = @import("server_flags.zig");
+const server_flags = geode.server_flags;
 // Import graph storage manager (M3.1 Phase 3 modularization)
 const graph_storage_mgr = geode.graph_storage_manager;
 // Import CLI argument parsing (M3.2 Phase 3 CLI extraction)
@@ -45,7 +45,7 @@ const cli_args = @import("cli_args.zig");
 // Import server initialization (M3.2 Phase 3 initialization extraction)
 const server_init = @import("server_init.zig");
 // Import query executor (M3.3 Phase 3 modularization)
-const query_executor = @import("query_executor.zig");
+const query_executor = geode.query_executor;
 const evaluateUnion = query_executor.evaluateUnion;
 const evaluateBinarySet = query_executor.evaluateBinarySet;
 const executeCreateStatement = query_executor.executeCreateStatement;
@@ -54,7 +54,7 @@ const executeMergeStatement = query_executor.executeMergeStatement;
 // Import transaction handlers (M3.2 Phase 3 transaction handlers extraction)
 const transaction_handlers = @import("transaction_handlers.zig");
 // Import message handlers (M3.2 Phase 3 message handlers extraction)
-const message_handlers = @import("message_handlers.zig");
+const message_handlers = geode.message_handlers;
 // Import QUIC connection handlers (M3.3 Phase 3 QUIC handlers extraction)
 const quic_connection_handler = geode.server.connection_handler;
 // CANARY: REQ=REQ-ABAC-WIRE-017; FEATURE="ABAC Enforcement"; ASPECT=AsyncConnection; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
@@ -305,14 +305,14 @@ pub fn main() !void {
     // Extract config values into local variables for compatibility with existing code
     const result_format_txt = config.result_format_txt;
     const disable_estimates = config.disable_estimates;
-    var compact_profile = config.compact_profile;
+    const compact_profile = config.compact_profile;
     var memcurve_profile = config.memcurve_profile;
     const test_wal_skip_ratio = config.test_wal_skip_ratio;
     const listen_quic = config.listen_quic;
     const order_keys_mode_expr = config.order_keys_mode_expr;
     const data_dir = config.data_dir;
     const test_exit_after_first = config.test_exit_after_first;
-    const force_no_tls = config.force_no_tls;
+    _ = config.force_no_tls; // Reserved for future TLS configuration
     const catalog_create_name = config.catalog_create_name;
     const log_level_arg = config.log_level_arg;
     var auth_enabled = config.auth_enabled;
@@ -413,7 +413,7 @@ pub fn main() !void {
     defer init_ctx.deinit();
 
     // Extract initialization values for compatibility with existing code
-    const wal = init_ctx.wal;
+    _ = init_ctx.wal; // WAL managed by server_init
     const env_spill_sort = init_ctx.env_config.spill_sort;
     const env_spill_distinct = init_ctx.env_config.spill_distinct;
     const env_spill_union = init_ctx.env_config.spill_union;
@@ -460,8 +460,8 @@ pub fn main() !void {
         var transport = try quic_transport.QuicTransport.init(gpa, .{
             .address = address_str,
             .port = port,
-            .cert_path = cert_path.?,
-            .key_path = key_path.?,
+            .cert_path = cert_path,
+            .key_path = key_path,
         });
         // In short-lived test runs we avoid tearing down the QUIC endpoint to sidestep
         // vendor teardown crashes; enable passive teardown when --test-exit-after-first
@@ -485,7 +485,7 @@ pub fn main() !void {
 
         if (test_exit_after_first) {
             // For testing: handle a single connection without blocking on second accept
-            log.debug("Test mode enabled - calling transport.accept() ONCE", .{});
+            log.debug("Test mode enabled - calling transport.accept() ONCE", &.{});
             const conn = transport.accept() catch |err| {
                 log.err("Failed to accept QUIC connection", &.{
                     Attr.string("error", @errorName(err)),
@@ -494,7 +494,7 @@ pub fn main() !void {
             };
 
             // QUIC transport uses event-driven callbacks, no polling needed
-            log.debug("Test mode - calling handleQuicConnection", .{});
+            log.debug("Test mode - calling handleQuicConnection", &.{});
 
             // CANARY: REQ=REQ-ABAC-WIRE-015; FEATURE="ABAC Enforcement"; ASPECT=QUICCall; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
             // GAP-0165: Pass SecurityManager to handleQuicConnection for ABAC enforcement

@@ -7,14 +7,14 @@ const ServerState = geode.server_state.ServerState;
 const SessionConfiguration = geode.server_state.SessionConfiguration;
 const CatalogSchema = geode.server_state.CatalogSchema;
 const CatalogGraph = geode.server_state.CatalogGraph;
-const query_executor = @import("query_executor.zig");
+const query_executor = geode.query_executor;
 const execution = geode.execution;
 const cost_explain = @import("../planner/cost_explain.zig");
-const server_flags = @import("server_flags.zig");
-const message_handlers = @import("message_handlers.zig");
+const server_flags = geode.server_flags;
+const message_handlers = geode.message_handlers;
 const protocol_handler = @import("protocol_handler.zig");
-const wal_manager = @import("wal_manager.zig");
-const query_ast_cache = @import("query_ast_cache.zig");
+const wal_manager = geode.wal_manager;
+// Note: query_ast_cache type is opaque to avoid circular dependency with lib.zig
 // CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager type in QUIC connection handling
 const geode_auth = @import("geode_auth");
@@ -217,7 +217,7 @@ pub fn handleQuicConnection(
     env_wal_compact_interval: usize,
     _force_serialization_failure_unused: bool,
     security_manager: ?*geode_auth.SecurityManager,
-    shared_ast_cache: ?*query_ast_cache.SharedAstCache,
+    shared_ast_cache: ?*anyopaque, // Type is query_ast_cache.SharedAstCache
 ) !void {
     _ = env_wal_compact_interval;
     _ = _force_serialization_failure_unused;

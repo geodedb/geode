@@ -177,6 +177,20 @@ pub const graph_exec = @import("server/graph/exec.zig");
 pub const server_state = @import("server/server_state.zig");
 // Re-export server txn/mvcc for unified binary
 pub const server_mvcc = @import("server/txn/mvcc.zig");
+// Note: query_ast_cache is imported directly by server files to avoid circular dependency
+// (it needs ParseOptions/ParseResult which are defined in this file)
+// Re-export query_executor for unified binary
+pub const query_executor = @import("server/query_executor.zig");
+// Re-export server_flags for unified binary
+pub const server_flags = @import("server/server_flags.zig");
+// Re-export backup_manager for unified binary
+pub const backup_manager = @import("server/backup_manager.zig");
+// Re-export impl_flagger for unified binary
+pub const impl_flagger = @import("server/flagger_impl_defined.zig");
+// Re-export message_handlers for unified binary
+pub const message_handlers = @import("server/message_handlers.zig");
+// Re-export wal_manager for unified binary
+pub const wal_manager = @import("server/wal_manager.zig");
 
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {

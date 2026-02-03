@@ -1,13 +1,13 @@
 const std = @import("std");
 const geode = @import("geode");
-const ServerState = @import("server_state.zig").ServerState;
-const mvcc = @import("txn/mvcc.zig");
+const ServerState = geode.server_state.ServerState;
+const mvcc = geode.server_mvcc;
 const eval = geode.eval;
 const wal_mod = @import("wal");
-const wal_manager = @import("wal_manager.zig");
+const wal_manager = geode.wal_manager;
 const protocol = geode.protocol;
 const diagnostics = geode.diagnostics;
-const server_flags = @import("server_flags.zig");
+const server_flags = geode.server_flags;
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-011; FEATURE="ServerRefactoring"; ASPECT=SERVER_UTILITIES; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.3 - Server Utilities Module (Seventh Increment)

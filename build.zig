@@ -1197,6 +1197,18 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("transport/thread_pool", thread_pool_mod); // GAP-0201: Thread pool
     geode_exe.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod); // GAP-0201: DRR scheduling
 
+    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-002; FEATURE="CLI Subprocess Elimination"; ASPECT=ServerModules; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
+    // Add server-required modules for unified binary (server/main.zig imports)
+    geode_exe.root_module.addImport("storage_page_manager", storage_page_manager_shared);
+    geode_exe.root_module.addImport("storage_catalog", storage_catalog_mod);
+    geode_exe.root_module.addImport("txn", txn_mod);
+    // Create and add index_selectivity module for server
+    const index_selectivity_mod = b.createModule(.{ .root_source_file = b.path("src/index/selectivity.zig"), .target = target, .optimize = optimize });
+    geode_exe.root_module.addImport("index_selectivity", index_selectivity_mod);
+    // Create and add text_formatter module for server
+    const text_formatter_mod = b.createModule(.{ .root_source_file = b.path("src/util/text_formatter.zig"), .target = target, .optimize = optimize });
+    geode_exe.root_module.addImport("text_formatter", text_formatter_mod);
+
     // Add audit CLI module for verification functionality
     const audit_mod = b.createModule(.{ .root_source_file = b.path("src/cli/geode_audit_verify.zig"), .target = target, .optimize = optimize });
     geode_exe.root_module.addImport("audit_cli", audit_mod);
@@ -1330,6 +1342,9 @@ pub fn build(b: *std.Build) void {
     auth_mod.addImport("logging", logging_mod);
     root_mod.addImport("geode_auth", auth_mod);
     root_mod.addImport("mfa", mfa_mod);
+    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-003; FEATURE="CLI Subprocess Elimination"; ASPECT=AuthModule; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
+    // Add auth module to unified binary for server authentication
+    geode_exe.root_module.addImport("geode_auth", auth_mod);
 
     const rls_mod = b.createModule(.{ .root_source_file = b.path("src/security/rls_core.zig"), .target = target, .optimize = optimize });
     rls_mod.addImport("geode_auth", auth_mod);

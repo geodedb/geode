@@ -8,15 +8,15 @@ const ast = geode.ast;
 const graph_exec = geode.graph_exec;
 const eval_extended = geode.eval_ext;
 const server_state = geode.server_state;
-const server_flags = @import("server_flags.zig");
+const server_flags = geode.server_flags;
 const graph_storage_mgr = geode.graph_storage_manager;
 const union_advanced = geode.union_advanced;
 const ServerState = server_state.ServerState;
 const SessionConfiguration = server_state.SessionConfiguration;
 const CatalogSchema = server_state.CatalogSchema;
 const CatalogGraph = server_state.CatalogGraph;
-const SimplifiedBackupManager = @import("backup_manager.zig").SimplifiedBackupManager;
-const impl_flagger = @import("flagger_impl_defined.zig");
+const SimplifiedBackupManager = geode.backup_manager.SimplifiedBackupManager;
+const impl_flagger = geode.impl_flagger;
 const BackupConfig = @import("storage/backup").BackupConfig;
 
 // Stub for executeSessionParameterSet

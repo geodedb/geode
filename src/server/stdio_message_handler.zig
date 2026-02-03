@@ -2,14 +2,14 @@ const std = @import("std");
 const geode = @import("geode");
 const protocol = geode.protocol;
 const diagnostics = geode.diagnostics;
-const ServerState = @import("server_state.zig").ServerState;
+const ServerState = geode.server_state.ServerState;
 const transaction_handlers = @import("transaction_handlers.zig");
-const message_handlers = @import("message_handlers.zig");
+const message_handlers = geode.message_handlers;
 const protocol_handler = @import("protocol_handler.zig");
-const quic_connection_handler = @import("quic_connection_handler.zig");
-const server_flags = @import("server_flags.zig");
+const quic_connection_handler = geode.server.connection_handler;
+const server_flags = geode.server_flags;
 const server_utilities = @import("server_utilities.zig");
-const query_executor = @import("query_executor.zig");
+const query_executor = geode.query_executor;
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-013; FEATURE="ServerRefactoring"; ASPECT=STDIO_HANDLER; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.3 - Stdio Message Handler Module (Twelfth Increment)
