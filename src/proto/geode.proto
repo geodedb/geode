@@ -88,6 +88,7 @@ message ExecuteRequest {
 message PullRequest {
   uint64 request_id = 1;
   uint32 page_size = 2;
+  string session_id = 3; // Required for gRPC; ignored for QUIC
 }
 
 message PullResponse {
@@ -294,27 +295,34 @@ message PingResponse {
 // ============================================================================
 message BeginRequest {
   bool read_only = 1;
+  string session_id = 2; // Required for gRPC; ignored for QUIC
 }
 message BeginResponse {
   string session_id = 1;
   string tx_id = 2;
 }
-message CommitRequest {}
+message CommitRequest {
+  string session_id = 1; // Required for gRPC; ignored for QUIC
+}
 message CommitResponse {
   bool success = 1;
 }
-message RollbackRequest {}
+message RollbackRequest {
+  string session_id = 1; // Required for gRPC; ignored for QUIC
+}
 message RollbackResponse {
   bool success = 1;
 }
 message SavepointRequest {
   string name = 1;
+  string session_id = 2; // Required for gRPC; ignored for QUIC
 }
 message SavepointResponse {
   bool success = 1;
 }
 message RollbackToRequest {
   string name = 1;
+  string session_id = 2; // Required for gRPC; ignored for QUIC
 }
 message RollbackToResponse {
   bool success = 1;

@@ -12,6 +12,7 @@ const txn_mgr = @import("txn");
 const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
 const TextFormatter = @import("text_formatter").TextFormatter;
 const quic_transport = @import("transport/quic");
+const grpc_transport = @import("../transport/grpc_server.zig");
 const thread_pool = @import("transport/thread_pool");
 const cert_gen = @import("../tools/cert_gen.zig");
 const wal_manager = geode.wal_manager;
@@ -44,17 +45,8 @@ const graph_storage_mgr = geode.graph_storage_manager;
 const cli_args = @import("cli_args.zig");
 // Import server initialization (M3.2 Phase 3 initialization extraction)
 const server_init = @import("server_init.zig");
-// Import query executor (M3.3 Phase 3 modularization)
-const query_executor = geode.query_executor;
-const evaluateUnion = query_executor.evaluateUnion;
-const evaluateBinarySet = query_executor.evaluateBinarySet;
-const executeCreateStatement = query_executor.executeCreateStatement;
-const executeDeleteStatement = query_executor.executeDeleteStatement;
-const executeMergeStatement = query_executor.executeMergeStatement;
 // Import transaction handlers (M3.2 Phase 3 transaction handlers extraction)
 const transaction_handlers = @import("transaction_handlers.zig");
-// Import message handlers (M3.2 Phase 3 message handlers extraction)
-const message_handlers = geode.message_handlers;
 // Import QUIC connection handlers (M3.3 Phase 3 QUIC handlers extraction)
 const quic_connection_handler = @import("quic_connection_handler.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-017; FEATURE="ABAC Enforcement"; ASPECT=AsyncConnection; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
@@ -111,18 +103,6 @@ fn handleConnectionAsync(context: *anyopaque) void {
     ctx.allocator.destroy(ctx);
 }
 
-const executeCreateIndexStatement = query_executor.executeCreateIndexStatement;
-const executeDropIndexStatement = query_executor.executeDropIndexStatement;
-const executeBackupStatement = query_executor.executeBackupStatement;
-const executeRestoreStatement = query_executor.executeRestoreStatement;
-const executeCreateSchemaStatement = query_executor.executeCreateSchemaStatement;
-const executeDropSchemaStatement = query_executor.executeDropSchemaStatement;
-const executeCreateGraphStatement = query_executor.executeCreateGraphStatement;
-const executeDropGraphStatement = query_executor.executeDropGraphStatement;
-const executeCreateGraphTypeStatement = query_executor.executeCreateGraphTypeStatement;
-const executeDropGraphTypeStatement = query_executor.executeDropGraphTypeStatement;
-const executeSessionSetStatement = query_executor.executeSessionSetStatement;
-const executeSessionResetStatement = query_executor.executeSessionResetStatement;
 // Distributed query planner accessed via geode module to avoid import path issues
 // Cost model explain helpers now accessed via geode root module re-exports (distinct from calibration reporting module)
 const cost_explain = geode.cost_explain;
@@ -168,27 +148,6 @@ const getOrCreateGraphStorage = graph_storage_mgr.getOrCreateGraphStorage;
 const graph_store = geode.graph_store;
 // Import protocol handler functions (M3.2 Phase 3 backup protocol extraction)
 // Import query executor utility functions (M3.3 Phase 3 query utilities extraction)
-const valueTypeName = query_executor.valueTypeName;
-const bindingValueTypeName = query_executor.bindingValueTypeName;
-const bindingValueRowToJson = query_executor.bindingValueRowToJson;
-const writeJsonValue = query_executor.writeJsonValue;
-const parseParams = query_executor.parseParams;
-const buildExplainJson = query_executor.buildExplainJson;
-const canonicalValuesKey = query_executor.canonicalValuesKey;
-const collectTextDiagnostics = query_executor.collectTextDiagnostics;
-const collectPlannerDiagnostics = query_executor.collectPlannerDiagnostics;
-const hasEqualityPredicate = query_executor.hasEqualityPredicate;
-const hasAggregationFunction = query_executor.hasAggregationFunction;
-const canonicalRowKey = query_executor.canonicalRowKey;
-const buildAdditionalStatusesAlloc = query_executor.buildAdditionalStatusesAlloc;
-const writeBindingsAdaptive = query_executor.writeBindingsAdaptive;
-const distinctDedup = query_executor.distinctDedup;
-const convertEvalValueToBindingValue = query_executor.convertEvalValueToBindingValue;
-const StageTimings = query_executor.StageTimings;
-const AllocTracker = query_executor.AllocTracker;
-const trackerGet = query_executor.trackerGet;
-const evalExprToPropertyValue = query_executor.evalExprToPropertyValue;
-const propertyValueToIndexKey = query_executor.propertyValueToIndexKey;
 
 // Removed: ServerState struct now in server_state module (M3.2 Phase 3 ServerState extraction)
 // Original: ServerState struct definition (~107 lines, lines 145-252)
@@ -301,6 +260,7 @@ pub fn main() !void {
     const compact_profile = config.compact_profile;
     var memcurve_profile = config.memcurve_profile;
     const listen_quic = config.listen_quic;
+    const listen_grpc = config.listen_grpc;
     const order_keys_mode_expr = config.order_keys_mode_expr;
     const data_dir = config.data_dir;
     _ = config.force_no_tls; // Reserved for future TLS configuration
@@ -438,6 +398,54 @@ pub fn main() !void {
         });
     }
     defer metrics_server.shutdownGlobalMetrics(gpa);
+
+    // gRPC server (optional)
+    if (listen_grpc) |grpc_addr| {
+        const colon = std.mem.lastIndexOfScalar(u8, grpc_addr, ':');
+        var grpc_port: u16 = 3142;
+        var grpc_address: []const u8 = "0.0.0.0";
+
+        if (colon) |ci| {
+            grpc_address = grpc_addr[0..ci];
+            const p = grpc_addr[ci + 1 ..];
+            grpc_port = std.fmt.parseUnsigned(u16, p, 10) catch 3142;
+        } else {
+            grpc_port = std.fmt.parseUnsigned(u16, grpc_addr, 10) catch 3142;
+        }
+
+        const grpc_config = grpc_transport.GrpcConfig{
+            .spill_sort = env_spill_sort,
+            .spill_distinct = env_spill_distinct,
+            .spill_union = env_spill_union,
+            .spill_threshold = env_spill_threshold,
+            .storage_checksum_error = env_storage_checksum_error,
+            .security_manager = init_ctx.security_manager,
+        };
+
+        const grpc_server = try gpa.create(grpc_transport.GeodeGrpcServer);
+        grpc_server.* = try grpc_transport.GeodeGrpcServer.init(gpa, grpc_port, cert_path, key_path, grpc_config);
+
+        if (listen_quic == null) {
+            log.info("gRPC server started", &.{
+                Attr.string("address", grpc_address),
+                Attr.int("port", grpc_port),
+            });
+            try grpc_server.start();
+            return;
+        } else {
+            _ = std.Thread.spawn(.{}, grpc_transport.GeodeGrpcServer.start, .{grpc_server}) catch |err| {
+                log.err("Failed to start gRPC server", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.int("port", grpc_port),
+                });
+            };
+
+            log.info("gRPC server started", &.{
+                Attr.string("address", grpc_address),
+                Attr.int("port", grpc_port),
+            });
+        }
+    }
 
     // QUIC mode: preferred over TCP
     if (listen_quic) |addr_str| {

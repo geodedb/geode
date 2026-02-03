@@ -442,6 +442,8 @@ pub fn build(b: *std.Build) void {
     if (is_native and target.result.os.tag != .windows) {
         geode_exe.linkSystemLibrary("ssl");
         geode_exe.linkSystemLibrary("crypto");
+        // Link zlib for gRPC compression support
+        geode_exe.linkSystemLibrary("z");
     }
     if (target.result.os.tag == .linux and is_native) {
         geode_exe.linkSystemLibrary("dl");
@@ -914,8 +916,8 @@ pub fn build(b: *std.Build) void {
 
     // JSON wire protocol compatibility tests (Phase 6 validation)
     const json_wire_protocol_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/json_wire_protocol_compatibility.zig"), .target = target, .optimize = optimize }) });
-    json_wire_protocol_tests.root_module.addImport("geode", root_mod);
-    json_wire_protocol_tests.root_module.addImport("json", json_mod);
+    json_wire_protocol_tests.root_module.addImport("protobuf", protobuf_mod);
+    json_wire_protocol_tests.root_module.addImport("schema", schema_mod);
     const run_json_wire_protocol_tests = b.addRunArtifact(json_wire_protocol_tests);
     test_step.dependOn(&run_json_wire_protocol_tests.step);
 
@@ -959,7 +961,8 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run_lfu_cache_fuzz.step);
 
         const protocol_hello_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/protocol_hello_fuzz.zig"), .target = target, .optimize = .Debug }) });
-        protocol_hello_fuzz_tests.root_module.addImport("geode", root_mod);
+        protocol_hello_fuzz_tests.root_module.addImport("protobuf", protobuf_mod);
+        protocol_hello_fuzz_tests.root_module.addImport("schema", schema_mod);
         const run_protocol_hello_fuzz = b.addRunArtifact(protocol_hello_fuzz_tests);
         test_step.dependOn(&run_protocol_hello_fuzz.step);
 

@@ -3,6 +3,49 @@ const backup = @import("storage/backup");
 const BackupConfig = backup.BackupConfig;
 const BackupMetadata = backup.BackupMetadata;
 
+// Helper functions for writing integers to files (Zig 0.15+ compatible)
+fn writeIntU64(file: std.fs.File, value: u64) !void {
+    const bytes = std.mem.toBytes(std.mem.nativeToLittle(u64, value));
+    try file.writeAll(&bytes);
+}
+
+fn writeIntU32(file: std.fs.File, value: u32) !void {
+    const bytes = std.mem.toBytes(std.mem.nativeToLittle(u32, value));
+    try file.writeAll(&bytes);
+}
+
+fn writeIntU16(file: std.fs.File, value: u16) !void {
+    const bytes = std.mem.toBytes(std.mem.nativeToLittle(u16, value));
+    try file.writeAll(&bytes);
+}
+
+fn writeIntU128(file: std.fs.File, value: u128) !void {
+    const bytes = std.mem.toBytes(std.mem.nativeToLittle(u128, value));
+    try file.writeAll(&bytes);
+}
+
+// Helper functions for reading integers from files (Zig 0.15+ compatible)
+fn readIntU64(file: std.fs.File) !u64 {
+    var bytes: [8]u8 = undefined;
+    const n = try file.readAll(&bytes);
+    if (n != 8) return error.UnexpectedEof;
+    return std.mem.littleToNative(u64, @bitCast(bytes));
+}
+
+fn readIntU16(file: std.fs.File) !u16 {
+    var bytes: [2]u8 = undefined;
+    const n = try file.readAll(&bytes);
+    if (n != 2) return error.UnexpectedEof;
+    return std.mem.littleToNative(u16, @bitCast(bytes));
+}
+
+fn readIntU32(file: std.fs.File) !u32 {
+    var bytes: [4]u8 = undefined;
+    const n = try file.readAll(&bytes);
+    if (n != 4) return error.UnexpectedEof;
+    return std.mem.littleToNative(u32, @bitCast(bytes));
+}
+
 // CANARY: REQ=REQ-SERVER-REFACTOR-002; FEATURE="ServerRefactoring"; ASPECT=BACKUP_MANAGER; STATUS=EXEMPT; OWNER=refactor; UPDATED=2026-01-10
 // CANARY: REQ=REQ-BACKUP-REAL-DATA-001; FEATURE="BackupRealData"; ASPECT=DataIntegrity; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-10
 // CANARY: REQ=REQ-BACKUP-LSN-TRACKING-001; FEATURE="BackupLSNTracking"; ASPECT=IncrementalChain; STATUS=TESTED; TEST=geodetestlab/specs/gap_0181_backup_lsn_tracking.yml; OWNER=backup; UPDATED=2026-01-14
@@ -94,7 +137,6 @@ pub const SimplifiedBackupManager = struct {
         const file = try std.fs.cwd().createFile(backup_path, .{});
         defer file.close();
 
-        var writer = file.writer();
         var size_bytes: u64 = 0;
 
         // GAP-0181: Write backup header with LSN information
@@ -128,16 +170,16 @@ pub const SimplifiedBackupManager = struct {
         }
         defer if (catalog_owned) self.allocator.free(catalog_data);
 
-        try writer.writeInt(u64, catalog_data.len, .little);
-        try writer.writeAll(catalog_data);
+        try writeIntU64(file, catalog_data.len);
+        try file.writeAll(catalog_data);
         size_bytes += @sizeOf(u64) + catalog_data.len;
 
         // Find and backup all page files from data directory
         var page_count: u64 = 0;
-        var page_files = std.ArrayList([]const u8).init(self.allocator);
+        var page_files: std.ArrayList([]const u8) = .{};
         defer {
             for (page_files.items) |pf| self.allocator.free(pf);
-            page_files.deinit();
+            page_files.deinit(self.allocator);
         }
 
         // Scan data directory for .page files
@@ -148,7 +190,7 @@ pub const SimplifiedBackupManager = struct {
             while (try iter.next()) |entry| {
                 if (entry.kind == .file) {
                     if (std.mem.endsWith(u8, entry.name, ".page") or std.mem.endsWith(u8, entry.name, ".dat")) {
-                        try page_files.append(try self.allocator.dupe(u8, entry.name));
+                        try page_files.append(self.allocator, try self.allocator.dupe(u8, entry.name));
                         page_count += 1;
                     }
                 }
@@ -158,7 +200,7 @@ pub const SimplifiedBackupManager = struct {
         }
 
         // Write page count
-        try writer.writeInt(u64, page_count, .little);
+        try writeIntU64(file, page_count);
         size_bytes += @sizeOf(u64);
 
         // Write each page file
@@ -167,8 +209,8 @@ pub const SimplifiedBackupManager = struct {
             defer self.allocator.free(page_path);
 
             // Write page name length and name
-            try writer.writeInt(u16, @intCast(page_name.len), .little);
-            try writer.writeAll(page_name);
+            try writeIntU16(file, @intCast(page_name.len));
+            try file.writeAll(page_name);
             size_bytes += @sizeOf(u16) + page_name.len;
 
             // Read and write page data
@@ -177,12 +219,12 @@ pub const SimplifiedBackupManager = struct {
                 const page_data = try page_file.readToEndAlloc(self.allocator, 64 * 1024 * 1024);
                 defer self.allocator.free(page_data);
 
-                try writer.writeInt(u32, @intCast(page_data.len), .little);
-                try writer.writeAll(page_data);
+                try writeIntU32(file, @intCast(page_data.len));
+                try file.writeAll(page_data);
                 size_bytes += @sizeOf(u32) + page_data.len;
             } else |_| {
                 // Failed to read page, write zero-length marker
-                try writer.writeInt(u32, 0, .little);
+                try writeIntU32(file, 0);
                 size_bytes += @sizeOf(u32);
             }
         }
@@ -233,7 +275,6 @@ pub const SimplifiedBackupManager = struct {
         const file = try std.fs.cwd().createFile(backup_path, .{});
         defer file.close();
 
-        var writer = file.writer();
         var size_bytes: u64 = 0;
 
         // GAP-0181: Write backup header with LSN chain information
@@ -253,7 +294,7 @@ pub const SimplifiedBackupManager = struct {
         size_bytes += @sizeOf(BackupHeader);
 
         // Write parent backup ID (kept for compatibility, also in header)
-        try writer.writeInt(u128, parent_id, .little);
+        try writeIntU128(file, parent_id);
         size_bytes += @sizeOf(u128);
 
         // Read and write WAL files for incremental backup
@@ -272,8 +313,8 @@ pub const SimplifiedBackupManager = struct {
         }
         defer if (wal_owned) self.allocator.free(wal_data);
 
-        try writer.writeInt(u64, wal_data.len, .little);
-        try writer.writeAll(wal_data);
+        try writeIntU64(file, wal_data.len);
+        try file.writeAll(wal_data);
         size_bytes += @sizeOf(u64) + wal_data.len;
 
         // Calculate checksum
@@ -392,22 +433,20 @@ pub const SimplifiedBackupManager = struct {
         const backup_file = try std.fs.cwd().openFile(backup_file_path, .{});
         defer backup_file.close();
 
-        var reader = backup_file.reader();
-
         // Read and verify header
         var header_bytes: [@sizeOf(BackupHeader)]u8 = undefined;
-        _ = try reader.readAll(&header_bytes);
-        const header = @as(*const BackupHeader, @ptrCast(&header_bytes)).*;
+        _ = try backup_file.readAll(&header_bytes);
+        const header = @as(*const BackupHeader, @ptrCast(@alignCast(&header_bytes))).*;
 
         if (header.magic != BACKUP_MAGIC) {
             return error.InvalidBackupFormat;
         }
 
         // Read catalog data
-        const catalog_len = try reader.readInt(u64, .little);
+        const catalog_len = try readIntU64(backup_file);
         const catalog_data = try self.allocator.alloc(u8, catalog_len);
         defer self.allocator.free(catalog_data);
-        _ = try reader.readAll(catalog_data);
+        _ = try backup_file.readAll(catalog_data);
 
         // Write catalog to restore directory
         const restore_catalog_path = try std.fmt.allocPrint(self.allocator, "{s}/catalog.dat", .{restore_dir});
@@ -417,21 +456,21 @@ pub const SimplifiedBackupManager = struct {
         try catalog_file.writeAll(catalog_data);
 
         // Read and restore page files
-        const page_count = try reader.readInt(u64, .little);
+        const page_count = try readIntU64(backup_file);
         var i: u64 = 0;
         while (i < page_count) : (i += 1) {
             // Read page name
-            const name_len = try reader.readInt(u16, .little);
+            const name_len = try readIntU16(backup_file);
             const page_name = try self.allocator.alloc(u8, name_len);
             defer self.allocator.free(page_name);
-            _ = try reader.readAll(page_name);
+            _ = try backup_file.readAll(page_name);
 
             // Read page data
-            const page_len = try reader.readInt(u32, .little);
+            const page_len = try readIntU32(backup_file);
             if (page_len > 0) {
                 const page_data = try self.allocator.alloc(u8, page_len);
                 defer self.allocator.free(page_data);
-                _ = try reader.readAll(page_data);
+                _ = try backup_file.readAll(page_data);
 
                 // Write page to restore directory
                 const restore_page_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ restore_dir, page_name });

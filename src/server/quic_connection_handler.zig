@@ -9,16 +9,15 @@ const execution = geode.execution;
 const server_flags = geode.server_flags;
 const wal_manager = geode.wal_manager;
 const graph_store = geode.graph_store;
-const proto_util = @import("proto_util.zig");
+const proto_util = geode.proto_util;
 const gql_print = geode.printer;
 const gql_ast = geode.gql.ast;
 const backup_manager = geode.backup_manager;
 const SimplifiedBackupManager = backup_manager.SimplifiedBackupManager;
+const BackupConfig = @import("storage/backup").BackupConfig;
 const txn_undo_log = geode.txn_undo_log;
-const query_executor = geode.query_executor;
-const message_handlers = geode.message_handlers;
-const protocol_handler = geode.protocol_handler;
-const json_lib = @import("json");
+const diagnostics = geode.diagnostics;
+const user_mgmt = geode.user_management;
 // Note: query_ast_cache type is opaque to avoid circular dependency with lib.zig
 // CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager type in QUIC connection handling
@@ -37,22 +36,23 @@ const Attr = logging.Attr;
 const schema = @import("schema");
 const protobuf = @import("protobuf");
 
-/// Build a protobuf error response
-fn buildErrorResponse(allocator: std.mem.Allocator, status_class: []const u8, message: []const u8) schema.ExecutionResponse {
-    _ = allocator;
+/// Build a protobuf error response with status and error payload
+fn buildErrorResponse(
+    allocator: std.mem.Allocator,
+    status_class: []const u8,
+    message: []const u8,
+    additional_statuses: []const []const u8,
+    flagger_findings: []const []const u8,
+) !schema.ExecutionResponse {
+    const status = try proto_util.buildStatusFull(allocator, status_class, additional_statuses, flagger_findings);
     return .{
-        .status = .{
-            .status_class = @constCast(status_class),
-            .status_subclass = "",
-            .additional_statuses = std.ArrayList([]const u8){},
-            .flagger_findings = std.ArrayList([]const u8){},
-        },
+        .status = status,
         .payload = .{
             .@"error" = .{
-                .code = @constCast(status_class),
-                .message = @constCast(message),
-                .type = "ERROR",
-                .anchor = "",
+                .code = try allocator.dupe(u8, status_class),
+                .message = try allocator.dupe(u8, message),
+                .type = try allocator.dupe(u8, "ERROR"),
+                .anchor = try allocator.dupe(u8, ""),
             },
         },
     };
@@ -189,23 +189,134 @@ const BufferedProtoReader = struct {
     }
 };
 
-// Import types and functions from query_executor
-const evaluateUnion = query_executor.evaluateUnion;
-const UnionMetrics = query_executor.UnionMetrics;
-const StageTimings = query_executor.StageTimings;
-const parseParams = query_executor.parseParams;
-const collectTextDiagnostics = query_executor.collectTextDiagnostics;
-const buildAdditionalStatusesAlloc = query_executor.buildAdditionalStatusesAlloc;
+fn sendQuicMessage(allocator: std.mem.Allocator, stream: *quic_transport.QuicStream, msg: schema.QuicServerMessage) !void {
+    var msg_copy = msg;
+    defer msg_copy.deinit(allocator);
+    try writeServerPacket(allocator, stream, .{ .quic = msg_copy });
+}
 
-// Import functions from server_flags
-const computeBaseFlags = server_flags.computeBaseFlags;
-const g_order_keys_expr = server_flags.getOrderKeysExpr();
+fn sendExecuteError(
+    allocator: std.mem.Allocator,
+    stream: *quic_transport.QuicStream,
+    status_class: []const u8,
+    message: []const u8,
+    additional_statuses: []const []const u8,
+    flagger_findings: []const []const u8,
+) !void {
+    const resp = try buildErrorResponse(allocator, status_class, message, additional_statuses, flagger_findings);
+    try sendQuicMessage(allocator, stream, .{ .execute = resp });
+}
 
-// Import CDC and backup handlers
-const handleCdcControl = message_handlers.handleCdcControl;
-const handleBackupRequest = protocol_handler.handleBackupRequest;
-const handleRestoreRequest = protocol_handler.handleRestoreRequest;
-const handleUploadBackupRequest = protocol_handler.handleUploadBackupRequest;
+fn sendPullError(
+    allocator: std.mem.Allocator,
+    stream: *quic_transport.QuicStream,
+    status_class: []const u8,
+    message: []const u8,
+    additional_statuses: []const []const u8,
+    flagger_findings: []const []const u8,
+) !void {
+    const resp = try buildErrorResponse(allocator, status_class, message, additional_statuses, flagger_findings);
+    try sendQuicMessage(allocator, stream, .{ .pull = .{ .response = resp } });
+}
+
+fn appendFlagIfMissing(allocator: std.mem.Allocator, flags: *std.ArrayList([]const u8), flag: []const u8) !void {
+    for (flags.items) |existing| {
+        if (std.mem.eql(u8, existing, flag)) return;
+    }
+    try flags.append(allocator, flag);
+}
+
+fn findOrderBy(program: *const gql_ast.Program) ?*const gql_ast.OrderBy {
+    var idx: usize = program.statements.len;
+    while (idx > 0) : (idx -= 1) {
+        const stmt_ptr = &program.statements[idx - 1];
+        switch (stmt_ptr.*) {
+            .Query => |*q| {
+                if (q.order_by) |*ob| return ob;
+                return null;
+            },
+            .Union => |*u| {
+                if (u.order_by) |ob_ptr| return ob_ptr;
+                return null;
+            },
+            .StartTransaction, .Commit, .Rollback => continue,
+            else => return null,
+        }
+    }
+    return null;
+}
+
+fn buildOrderKeys(
+    allocator: std.mem.Allocator,
+    order_by: *const gql_ast.OrderBy,
+    result: *const execution.ExecutionResult,
+) ![]const []const u8 {
+    var keys = try allocator.alloc([]const u8, order_by.keys.len);
+    var i: usize = 0;
+    while (i < order_by.keys.len) : (i += 1) {
+        const expr = order_by.keys[i].expr;
+        if (expr == .Int) {
+            const ordinal = expr.Int;
+            if (ordinal > 0 and @as(usize, @intCast(ordinal)) <= result.columns.len) {
+                keys[i] = try allocator.dupe(u8, result.columns[@intCast(ordinal - 1)]);
+                continue;
+            }
+        }
+        keys[i] = try gql_print.stringifyExprAlloc(allocator, expr, .{});
+    }
+    return keys;
+}
+
+const BackupHeader = extern struct {
+    magic: u32,
+    version: u16,
+    backup_type: u8,
+    timestamp: i64,
+    compression: u8,
+    encrypted: bool = false,
+    _padding: [2]u8 = .{0} ** 2,
+    start_lsn: u64 = 0,
+    end_lsn: u64 = 0,
+    parent_backup_id: u128 = 0,
+};
+
+const BACKUP_MAGIC: u32 = 0x47454F42; // "GEOB"
+
+fn getParentBackupLsn(allocator: std.mem.Allocator, backup_dir: []const u8, parent_id_hex: []const u8) !u64 {
+    const parent_id = std.fmt.parseUnsigned(u128, parent_id_hex, 16) catch {
+        return error.InvalidParentId;
+    };
+
+    const full_path = try std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ backup_dir, parent_id });
+    defer allocator.free(full_path);
+    const incr_path = try std.fmt.allocPrint(allocator, "{s}/incr_{x}.backup", .{ backup_dir, parent_id });
+    defer allocator.free(incr_path);
+
+    var backup_file: std.fs.File = undefined;
+    if (std.fs.cwd().openFile(full_path, .{})) |f| {
+        backup_file = f;
+    } else |_| {
+        if (std.fs.cwd().openFile(incr_path, .{})) |f| {
+            backup_file = f;
+        } else |_| {
+            return error.ParentBackupNotFound;
+        }
+    }
+    defer backup_file.close();
+
+    var header_bytes: [@sizeOf(BackupHeader)]u8 = undefined;
+    const bytes_read = backup_file.readAll(&header_bytes) catch {
+        return error.BackupReadError;
+    };
+    if (bytes_read < @sizeOf(BackupHeader)) {
+        return @intCast(parent_id);
+    }
+    const header = @as(*const BackupHeader, @ptrCast(@alignCast(&header_bytes))).*;
+    if (header.magic != BACKUP_MAGIC) {
+        return error.InvalidBackupFormat;
+    }
+    return if (header.end_lsn > 0) header.end_lsn else @intCast(parent_id);
+}
 
 const DEBUG_PROFILE = false;
 
@@ -378,303 +489,473 @@ pub fn handleQuicConnection(
 
         const msg = packet.quic orelse {
             log.err("Received empty ClientPacket", &.{});
-            const err_resp = buildErrorResponse(gpa, "58000", "Empty packet");
-            try writeServerPacket(gpa, stream, .{ .quic = .{ .execute = err_resp } });
+            try sendExecuteError(gpa, stream, "58000", "Empty packet", &.{}, &.{});
             continue;
         };
 
-        // Process protobuf message
-        const response_msg = processMessage(gpa, &state, msg, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |err| {
+        // Process protobuf message and emit responses directly
+        handleClientMessage(gpa, &state, stream, msg, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |err| {
             log.err("Protobuf process error", &.{Attr.err("error", err)});
-            const err_resp = buildErrorResponse(gpa, "58000", "Internal Server Error");
-            try writeServerPacket(gpa, stream, .{ .quic = .{ .execute = err_resp } });
+            try sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{});
             continue;
         };
-
-        try writeServerPacket(gpa, stream, .{ .quic = response_msg });
     }
 }
 
-pub fn processMessage(
+fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Program) void {
+    var has_start: bool = false;
+    var has_commit: bool = false;
+    var has_rollback: bool = false;
+
+    for (program.statements) |stmt| {
+        switch (stmt) {
+            .StartTransaction => |st| {
+                if (st.body == null) has_start = true;
+            },
+            .Commit => has_commit = true,
+            .Rollback => has_rollback = true,
+            else => {},
+        }
+    }
+
+    if (has_commit or has_rollback) {
+        state.in_txn = false;
+        state.txn_id = 0;
+        return;
+    }
+
+    if (has_start) {
+        state.in_txn = true;
+        if (state.txn_id == 0) {
+            state.txn_id = @intCast(std.time.milliTimestamp());
+        }
+    }
+}
+
+fn handleClientMessage(
     gpa: std.mem.Allocator,
     state: *ServerState,
-    msg: schema.QuicClientMessage, // Changed from []const u8 line
+    stream: *quic_transport.QuicStream,
+    msg: schema.QuicClientMessage,
     result_format_txt: bool,
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
-) !schema.QuicServerMessage {
+) !void {
+    _ = result_format_txt;
     _ = disable_estimates;
     _ = compact_profile;
     _ = memcurve_profile;
-    _ = result_format_txt;
 
-    switch (msg) {
-        // Trace logging
-        else => {
-            std.debug.print("FORCE DEBUG: Server processing message\n", .{});
-            log.debug("Server processing message", &.{});
-        },
-    }
     switch (msg) {
         .hello => |hello_req| {
-            const user_mgmt = geode.user_management;
+            var caps = std.ArrayList([]const u8).initCapacity(gpa, 3) catch return error.OutOfMemory;
+            try caps.append(gpa, try gpa.dupe(u8, "QUIC"));
+            try caps.append(gpa, try gpa.dupe(u8, "TLS1.3"));
+            try caps.append(gpa, try gpa.dupe(u8, "PROTOBUF"));
 
-            var caps = std.ArrayList([]const u8){};
-            try caps.append(gpa, "QUIC");
-            try caps.append(gpa, "TLS1.3");
-
-            // Check if authentication is required
             if (user_mgmt.isAuthEnabled()) {
-                // Validate credentials
                 if (hello_req.username.len == 0 or hello_req.password.len == 0) {
-                    return schema.QuicServerMessage{ .hello = .{
+                    const resp = schema.QuicServerMessage{ .hello = .{
                         .success = false,
-                        .session_id = "",
-                        .error_message = "Authentication required",
+                        .session_id = try gpa.dupe(u8, ""),
+                        .error_message = try gpa.dupe(u8, "Authentication required"),
                         .capabilities = caps,
                     } };
+                    try sendQuicMessage(gpa, stream, resp);
+                    return;
                 }
 
-                // Authenticate user
                 const role = user_mgmt.authenticate(hello_req.username, hello_req.password) catch {
-                    return schema.QuicServerMessage{ .hello = .{
+                    const resp = schema.QuicServerMessage{ .hello = .{
                         .success = false,
-                        .session_id = "",
-                        .error_message = "Authentication failed",
+                        .session_id = try gpa.dupe(u8, ""),
+                        .error_message = try gpa.dupe(u8, "Authentication failed"),
                         .capabilities = caps,
                     } };
+                    try sendQuicMessage(gpa, stream, resp);
+                    return;
                 };
 
-                // Store authenticated user info in state
+                if (state.authenticated_user) |u| gpa.free(u);
+                if (state.authenticated_password) |p| gpa.free(p);
                 state.authenticated_user = try gpa.dupe(u8, hello_req.username);
                 state.authenticated_password = try gpa.dupe(u8, hello_req.password);
                 state.authenticated_role = @intFromEnum(role);
             }
 
-            return schema.QuicServerMessage{ .hello = .{
+            if (hello_req.tenant_id) |tenant| {
+                if (state.session_config == null) {
+                    state.session_config = geode.server_state.SessionConfiguration.init(gpa);
+                }
+                if (state.session_config.?.tenant_id) |old| {
+                    gpa.free(old);
+                }
+                state.session_config.?.tenant_id = try gpa.dupe(u8, tenant);
+            }
+
+            const session_id = try std.fmt.allocPrint(gpa, "sess_{d}", .{std.time.milliTimestamp()});
+            const resp = schema.QuicServerMessage{ .hello = .{
                 .success = true,
-                .session_id = "quic-session",
-                .error_message = "",
+                .session_id = session_id,
+                .error_message = try gpa.dupe(u8, ""),
                 .capabilities = caps,
             } };
+            try sendQuicMessage(gpa, stream, resp);
         },
         .execute => |exec_req| {
             log.info("PROTOBUF .execute received", &.{
                 Attr.int("query_len", @intCast(exec_req.query.len)),
             });
 
-            // Execute the query using test_harness
-            const user_mgmt = geode.user_management;
+            state.resetResult();
 
-            // Check if authentication is required but no user is authenticated
             if (user_mgmt.isAuthEnabled() and state.authenticated_user == null) {
-                const err_resp = schema.Error{ .code = "28000", .message = "Authentication required" };
-                return schema.QuicServerMessage{ .execute = .{ .payload = .{ .@"error" = err_resp } } };
+                try sendExecuteError(gpa, stream, "28000", "Authentication required", &.{}, &.{});
+                return;
             }
 
-            // Execute query via test_harness
-            const options = geode.test_harness.QueryOptions{
-                .user = state.authenticated_user,
-                .password = state.authenticated_password,
-                .pre_validated_role = if (state.authenticated_role) |role_u8| .{
-                    .username = state.authenticated_user orelse "",
-                    .role = @enumFromInt(role_u8),
-                } else null,
-            };
-
-            log.info("Executing query via test_harness", &.{});
-            const result = geode.test_harness.runQueryWithAuth(@constCast(&gpa), exec_req.query, options) catch |err| {
-                log.err("Query execution failed", &.{Attr.err("error", err)});
+            const bindings = proto_util.parseParamsJson(gpa, exec_req.params_json) catch |err| {
                 const err_msg = @errorName(err);
-                const err_resp = schema.Error{ .code = "58000", .message = err_msg };
-                return schema.QuicServerMessage{ .execute = .{ .payload = .{ .@"error" = err_resp } } };
+                try sendExecuteError(gpa, stream, "22023", err_msg, &.{}, &.{});
+                return;
             };
-            defer gpa.free(result);
+            defer proto_util.freeParamBindings(gpa, bindings);
 
-            log.info("Query executed successfully, calling saveIfDirty", &.{});
-            // CANARY: REQ=REQ-QUIC-PERSIST-001; FEATURE="QUICDataPersistence"; ASPECT=PostExecutionPersist; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
-            // Save graph store if dirty after query execution
-            // Mutations mark the store as dirty; we save once per query to avoid O(n²) overhead
-            const global_store = geode.graph_store.getGlobalStore(gpa);
-            global_store.saveIfDirty();
+            const order_keys_expr = server_flags.getOrderKeysExpr();
+            const parse_opts = geode.ParseOptions{
+                .ident_order_only = !order_keys_expr,
+                .forbid_orderby_calls = !order_keys_expr,
+            };
 
-            // Build response with result data
-            // For now, return the result as a single string value in a page
-            var rows = std.ArrayList(schema.Row){};
-            var values = std.ArrayList(schema.Value){};
-            try values.append(gpa, .{ .kind = .{ .string_val = .{ .value = try gpa.dupe(u8, result) } } });
-            try rows.append(gpa, .{ .values = values });
+            const outcome = try geode.parseGqlOutcome(exec_req.query, gpa, parse_opts);
+            switch (outcome) {
+                .Err => |err_info| {
+                    const err_msg = if (err_info.has_double_dash_comment)
+                        diagnostics.defaultMessage(.GB02CommentDisabled)
+                    else
+                        err_info.msg;
+                    try sendExecuteError(gpa, stream, "42000", err_msg, &.{}, &.{});
+                    return;
+                },
+                .Ok => |parse_result_const| {
+                    var parse_result = parse_result_const;
+                    defer parse_result.deinit();
 
-            const page = schema.DataPage{ .rows = rows, .final = true, .order_keys = std.ArrayList([]const u8){} };
-            return schema.QuicServerMessage{ .execute = .{ .payload = .{ .page = page } } };
+                    if (parse_result.has_double_dash_comment) {
+                        try sendExecuteError(gpa, stream, "42000", diagnostics.defaultMessage(.GB02CommentDisabled), &.{}, &.{});
+                        return;
+                    }
+
+                    const order_by_ptr = findOrderBy(&parse_result.program);
+                    const ordered = order_by_ptr != null;
+
+                    const role = if (state.authenticated_role) |role_u8|
+                        @as(user_mgmt.Role, @enumFromInt(role_u8))
+                    else
+                        null;
+
+                    const catalog = try execution.ensureCatalogInstance(gpa);
+                    const exec_context = execution.ExecutionContext{
+                        .catalog = catalog,
+                        .user = state.authenticated_user,
+                        .role = role,
+                        .token = null,
+                        .strict_offset_validation = false,
+                        .session_state = if (state.exec_session) |*s| s else null,
+                        .transaction_state = if (state.in_txn) .Active else .None,
+                        .query_param_names = bindings.names,
+                        .query_param_values = bindings.values,
+                    };
+
+                    var exec_result = execution.executeProgramWithContext(gpa, &parse_result.program, exec_context) catch |err| {
+                        const info = proto_util.mapError(err);
+                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                        return;
+                    };
+                    var store_result = false;
+                    defer if (!store_result) exec_result.deinit(gpa);
+
+                    var order_keys: []const []const u8 = &.{};
+                    defer if (!store_result) {
+                        for (order_keys) |key| gpa.free(key);
+                        if (order_keys.len > 0) gpa.free(order_keys);
+                    };
+                    if (order_by_ptr) |ob| {
+                        order_keys = try buildOrderKeys(gpa, ob, &exec_result);
+                    }
+
+                    const base_flags = server_flags.computeBaseFlags(ordered, false);
+                    for (base_flags) |flag| {
+                        try appendFlagIfMissing(gpa, &exec_result.flags, flag);
+                    }
+                    if (parse_result.has_double_solidus_comment) {
+                        try appendFlagIfMissing(gpa, &exec_result.flags, "GB03:DoubleSolidusComment");
+                    }
+
+                    const status = try proto_util.buildStatus(gpa, "00000", exec_result.flags.items);
+                    const schema_def = try proto_util.buildSchemaDefinition(gpa, &exec_result);
+                    const schema_resp = schema.ExecutionResponse{
+                        .status = status,
+                        .payload = .{ .schema = schema_def },
+                    };
+                    try sendQuicMessage(gpa, stream, .{ .execute = schema_resp });
+
+                    var sent_rows: usize = 0;
+                    var page_final = false;
+                    if (state.inline_results_enabled) {
+                        const inline_max = if (state.inline_results_max_rows == 0) exec_result.rows.len else state.inline_results_max_rows;
+                        const page = try proto_util.buildDataPage(gpa, &exec_result, 0, inline_max, ordered, order_keys);
+                        sent_rows = page.rows.items.len;
+                        page_final = page.final;
+                        const page_status = try proto_util.buildStatus(gpa, "00000", exec_result.flags.items);
+                        const page_resp = schema.ExecutionResponse{
+                            .status = page_status,
+                            .payload = .{ .page = page },
+                        };
+                        try sendQuicMessage(gpa, stream, .{ .execute = page_resp });
+                    }
+
+                    if (!state.inline_results_enabled or !page_final) {
+                        store_result = true;
+                        state.active_result_values = exec_result;
+                        state.active_result = true;
+                        state.result_page_index = if (state.inline_results_enabled) sent_rows else 0;
+                        state.result_ordered = ordered;
+                        state.result_order_keys = order_keys;
+                    }
+
+                    updateTxnStateFromProgram(state, &parse_result.program);
+
+                    if (!state.in_txn) {
+                        const global_store = graph_store.getGlobalStore(gpa);
+                        global_store.saveIfDirty();
+                    }
+                },
+            }
+        },
+        .pull => |pull_req| {
+            if (state.active_result_values == null) {
+                try sendPullError(gpa, stream, "02000", "no active result set", &.{}, &.{});
+                return;
+            }
+
+            const page_size = pull_req.page_size;
+            const start = state.result_page_index;
+            const result = &state.active_result_values.?;
+            const page = try proto_util.buildDataPage(gpa, result, start, page_size, state.result_ordered, state.result_order_keys);
+            state.result_page_index = start + page.rows.items.len;
+
+            if (state.telemetry_paging) {
+                var ps_buf: [32]u8 = undefined;
+                const ps_str = std.fmt.bufPrint(&ps_buf, "{d}", .{page_size}) catch "0";
+                var rows_buf: [32]u8 = undefined;
+                const rows_str = std.fmt.bufPrint(&rows_buf, "{d}", .{page.rows.items.len}) catch "0";
+                log.info("telemetry", &.{
+                    Attr.string("type", "TELEMETRY"),
+                    Attr.string("event", "PULL_PAGE"),
+                    Attr.string("page_size", ps_str),
+                    Attr.string("rows_emitted", rows_str),
+                    Attr.string("final", if (page.final) "true" else "false"),
+                });
+            }
+
+            const status = try proto_util.buildStatus(gpa, "00000", result.flags.items);
+            const resp = schema.ExecutionResponse{
+                .status = status,
+                .payload = .{ .page = page },
+            };
+            try sendQuicMessage(gpa, stream, .{ .pull = .{ .response = resp } });
+
+            if (page.final) {
+                state.resetResult();
+            }
         },
         .ping => |_| {
-            return schema.QuicServerMessage{ .ping = .{ .ok = true } };
+            try sendQuicMessage(gpa, stream, .{ .ping = .{ .ok = true } });
         },
         .begin => |bg| {
-            _ = bg; // read_only flag - for future use
-            // Begin Transaction - store in state.active_txn
-            const txn = state.txn_manager.begin();
-            state.active_txn = txn;
+            _ = bg;
+            if (state.in_txn) {
+                try sendQuicMessage(gpa, stream, .{ .begin = .{ .session_id = try gpa.dupe(u8, ""), .tx_id = try gpa.dupe(u8, "") } });
+                return;
+            }
 
-            // Format transaction ID as string
-            var tx_id_str = std.ArrayList(u8){};
-            try std.fmt.format(tx_id_str.writer(gpa), "{d}", .{txn.id});
+            state.in_txn = true;
+            state.txn_id = @intCast(std.time.milliTimestamp());
+            txn_undo_log.getGlobalUndoLog(gpa).begin();
 
-            return schema.QuicServerMessage{ .begin = .{ .session_id = "sess", .tx_id = tx_id_str.toOwnedSlice(gpa) catch "" } };
+            const tx_id_str = try std.fmt.allocPrint(gpa, "{d}", .{state.txn_id});
+            try sendQuicMessage(gpa, stream, .{ .begin = .{ .session_id = try gpa.dupe(u8, "sess"), .tx_id = tx_id_str } });
         },
         .commit => |_| {
-            if (state.active_txn) |*txn| {
-                state.txn_manager.commit(txn) catch {
-                    return schema.QuicServerMessage{ .commit = .{ .success = false } };
-                };
-                state.active_txn = null;
-                return schema.QuicServerMessage{ .commit = .{ .success = true } };
+            if (state.in_txn) {
+                txn_undo_log.getGlobalUndoLog(gpa).commit();
+                state.in_txn = false;
+                state.txn_id = 0;
+                const global_store = graph_store.getGlobalStore(gpa);
+                global_store.saveIfDirty();
+                try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = true } });
+            } else {
+                try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false } });
             }
-            return schema.QuicServerMessage{ .commit = .{ .success = false } };
         },
         .rollback => |_| {
-            if (state.active_txn) |*txn| {
-                state.txn_manager.rollback(txn);
-                state.active_txn = null;
-                return schema.QuicServerMessage{ .rollback = .{ .success = true } };
+            if (state.in_txn) {
+                const store = graph_store.getGlobalStore(gpa);
+                txn_undo_log.getGlobalUndoLog(gpa).rollback(store) catch |err| {
+                    log.err("Rollback failed", &.{Attr.err("error", err)});
+                };
+                state.in_txn = false;
+                state.txn_id = 0;
+                const global_store = graph_store.getGlobalStore(gpa);
+                global_store.saveIfDirty();
+                try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = true } });
+            } else {
+                try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false } });
             }
-            return schema.QuicServerMessage{ .rollback = .{ .success = false } };
         },
-        .pull => |_| {
-            // Pull is handled inline in execute for now
-            const page = schema.DataPage{ .rows = std.ArrayList(schema.Row){}, .final = true, .order_keys = std.ArrayList([]const u8){} };
-            return schema.QuicServerMessage{ .pull = .{ .response = .{ .payload = .{ .page = page } } } };
+        .savepoint => |_| {
+            try sendQuicMessage(gpa, stream, .{ .savepoint = .{ .success = false } });
+        },
+        .rollback_to => |_| {
+            try sendQuicMessage(gpa, stream, .{ .rollback_to = .{ .success = false } });
         },
         .cdc_diag => |_| {
-            return schema.QuicServerMessage{ .cdc_diag = .{} };
+            if (state.cdc_engine) |eng| {
+                const payload = try eng.exportDiagnostics(gpa);
+                try sendQuicMessage(gpa, stream, .{ .cdc_diag = .{ .json_payload = payload } });
+            } else {
+                const payload = try gpa.dupe(u8, "{\"cdc\":{\"enabled\":false}}");
+                try sendQuicMessage(gpa, stream, .{ .cdc_diag = .{ .json_payload = payload } });
+            }
         },
-        .cdc_ctrl => |_| {
-            return schema.QuicServerMessage{ .cdc_ctrl = .{ .success = true } };
+        .cdc_ctrl => |ctrl| {
+            if (state.cdc_engine) |eng| {
+                if (std.ascii.eqlIgnoreCase(ctrl.action, "RESET_GUARDRAILS")) {
+                    eng.resetGuardrailState();
+                    try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = .{ .success = true, .status = try gpa.dupe(u8, "OK"), .guardrail_epoch = eng.guardrail_epoch } });
+                } else {
+                    try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = .{ .success = false, .status = try gpa.dupe(u8, "UNSUPPORTED"), .guardrail_epoch = eng.guardrail_epoch } });
+                }
+            } else {
+                try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = .{ .success = false, .status = try gpa.dupe(u8, "NO_ENGINE"), .guardrail_epoch = 0 } });
+            }
         },
-        .savepoint => |sp| {
-            _ = sp;
-            return schema.QuicServerMessage{ .savepoint = .{ .success = true } };
+        .backup => |backup_req| {
+            const backup_dir = "./server_backups";
+            const backup_config = BackupConfig{
+                .compression = if (backup_req.compress) .zstd else .none,
+                .encryption = false,
+                .retention_days = 30,
+            };
+
+            var mgr = SimplifiedBackupManager.init(gpa, backup_dir, backup_config) catch |err| {
+                const msg_text = try std.fmt.allocPrint(gpa, "Backup init failed: {s}", .{@errorName(err)});
+                try sendQuicMessage(gpa, stream, .{ .backup = .{ .success = false, .message = msg_text } });
+                return;
+            };
+            defer mgr.deinit();
+
+            const metadata = if (std.ascii.eqlIgnoreCase(backup_req.backup_type, "full"))
+                (mgr.createFullBackup() catch |err| {
+                    const msg_text = try std.fmt.allocPrint(gpa, "Backup failed: {s}", .{@errorName(err)});
+                    try sendQuicMessage(gpa, stream, .{ .backup = .{ .success = false, .message = msg_text } });
+                    return;
+                })
+            else if (std.ascii.eqlIgnoreCase(backup_req.backup_type, "incremental")) blk: {
+                if (backup_req.parent_id.len == 0) {
+                    const msg_text = try gpa.dupe(u8, "Incremental backup requires parent_id");
+                    try sendQuicMessage(gpa, stream, .{ .backup = .{ .success = false, .message = msg_text } });
+                    return;
+                }
+                const parent_lsn = getParentBackupLsn(gpa, backup_dir, backup_req.parent_id) catch 0;
+                break :blk mgr.createIncrementalBackup(parent_lsn) catch |err| {
+                    const msg_text = try std.fmt.allocPrint(gpa, "Backup failed: {s}", .{@errorName(err)});
+                    try sendQuicMessage(gpa, stream, .{ .backup = .{ .success = false, .message = msg_text } });
+                    return;
+                };
+            } else {
+                const msg_text = try gpa.dupe(u8, "Unknown backup type");
+                try sendQuicMessage(gpa, stream, .{ .backup = .{ .success = false, .message = msg_text } });
+                return;
+            };
+
+            const backup_id = try std.fmt.allocPrint(gpa, "{x}", .{metadata.backup_id});
+            const backup_type = try gpa.dupe(u8, @tagName(metadata.backup_type));
+            const compression = try gpa.dupe(u8, @tagName(metadata.compression));
+            const checksum = try std.fmt.allocPrint(gpa, "{x}", .{metadata.checksum});
+            try sendQuicMessage(gpa, stream, .{ .backup = .{
+                .success = true,
+                .message = try gpa.dupe(u8, "Backup completed successfully"),
+                .backup_id = backup_id,
+                .backup_type = backup_type,
+                .size_bytes = metadata.size_bytes,
+                .compression = compression,
+                .checksum = checksum,
+                .start_lsn = metadata.start_lsn,
+                .end_lsn = metadata.end_lsn,
+            } });
         },
-        .rollback_to => |rt| {
-            _ = rt;
-            return schema.QuicServerMessage{ .rollback_to = .{ .success = true } };
+        .restore => |restore_req| {
+            if (!restore_req.confirm) {
+                const msg_text = try gpa.dupe(u8, "Restore requires confirmation");
+                try sendQuicMessage(gpa, stream, .{ .restore = .{ .success = false, .message = msg_text } });
+                return;
+            }
+
+            const backup_config = BackupConfig{
+                .compression = .zstd,
+                .encryption = false,
+                .retention_days = 30,
+            };
+            var mgr = SimplifiedBackupManager.init(gpa, "./server_backups", backup_config) catch |err| {
+                const msg_text = try std.fmt.allocPrint(gpa, "Restore init failed: {s}", .{@errorName(err)});
+                try sendQuicMessage(gpa, stream, .{ .restore = .{ .success = false, .message = msg_text } });
+                return;
+            };
+            defer mgr.deinit();
+
+            const target_time: i64 = if (restore_req.target_time.len > 0)
+                std.fmt.parseInt(i64, restore_req.target_time, 10) catch std.time.milliTimestamp()
+            else
+                std.time.milliTimestamp();
+
+            const restore_dir = if (std.process.getEnvVarOwned(gpa, "GEODE_DATA_DIR")) |dir| blk: {
+                defer gpa.free(dir);
+                break :blk try gpa.dupe(u8, dir);
+            } else |_| try gpa.dupe(u8, "./data");
+
+            mgr.restoreToPointInTime(target_time, restore_dir) catch |err| {
+                const msg_text = try std.fmt.allocPrint(gpa, "Restore failed: {s}", .{@errorName(err)});
+                try sendQuicMessage(gpa, stream, .{ .restore = .{ .success = false, .message = msg_text } });
+                gpa.free(restore_dir);
+                return;
+            };
+
+            const ts = std.time.milliTimestamp();
+            try sendQuicMessage(gpa, stream, .{ .restore = .{
+                .success = true,
+                .message = try gpa.dupe(u8, "Restore completed"),
+                .restore_dir = restore_dir,
+                .target_time = try gpa.dupe(u8, if (restore_req.target_time.len > 0) restore_req.target_time else "latest"),
+                .restore_timestamp = @intCast(ts),
+            } });
         },
-        .backup => |_| {
-            return schema.QuicServerMessage{ .backup = .{ .success = true, .backup_id = "", .message = "Not implemented" } };
+        .upload_backup => |upload_req| {
+            if (upload_req.size_bytes == 0 or upload_req.checksum.len == 0) {
+                try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = try gpa.dupe(u8, "Invalid upload request") } });
+                return;
+            }
+
+            std.fs.cwd().makePath("./uploaded_backups") catch {};
+            const path = try std.fmt.allocPrint(gpa, "./uploaded_backups/backup_{d}.bin", .{std.time.milliTimestamp()});
+            // Create empty placeholder file
+            if (std.fs.cwd().createFile(path, .{})) |file| {
+                file.close();
+            } else |_| {}
+
+            try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = true, .message = try gpa.dupe(u8, "Upload slot ready"), .upload_path = path } });
         },
-        .restore => |_| {
-            return schema.QuicServerMessage{ .restore = .{ .success = false, .message = "Not implemented" } };
-        },
-        .upload_backup => |_| {
-            return schema.QuicServerMessage{ .upload_backup = .{ .success = false, .message = "Not implemented" } };
-        },
-    }
-}
-
-// CANARY: REQ=REQ-JSON-LINE-PROCESS-001; FEATURE="JsonLineProtocol"; ASPECT=MessageProcessing; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
-/// Process a JSON line protocol message and return JSON response
-/// This handles legacy REPL/CLI clients that send JSON instead of protobuf
-pub fn processJsonLineMessage(
-    gpa: std.mem.Allocator,
-    state: *ServerState,
-    json_line: []const u8,
-) ![]u8 {
-    log.info("processJsonLineMessage called", &.{
-        Attr.int("line_len", @intCast(json_line.len)),
-    });
-
-    // Parse the JSON message
-    const trimmed = std.mem.trim(u8, json_line, " \t\r\n");
-    if (trimmed.len == 0) {
-        return try gpa.dupe(u8, "{\"status_class\":\"42000\",\"error\":\"Empty message\"}\n");
-    }
-
-    // Parse JSON using json_lib
-    const parsed = json_lib.decode(gpa, trimmed, .{}) catch {
-        return try gpa.dupe(u8, "{\"status_class\":\"42000\",\"error\":\"Invalid JSON\"}\n");
-    };
-    defer if (parsed.arena) |a| a.deinit();
-
-    const obj = parsed.value.object;
-
-    // Get message type
-    const msg_type = obj.get("type") orelse {
-        return try gpa.dupe(u8, "{\"status_class\":\"42000\",\"error\":\"Missing type field\"}\n");
-    };
-
-    if (msg_type != .string) {
-        return try gpa.dupe(u8, "{\"status_class\":\"42000\",\"error\":\"Invalid type field\"}\n");
-    }
-
-    const type_str = msg_type.string;
-
-    // Handle different message types
-    if (std.mem.eql(u8, type_str, "HELLO")) {
-        // Simple HELLO acknowledgment for JSON protocol
-        return try gpa.dupe(u8, "{\"type\":\"HELLO\",\"status\":\"ok\",\"capabilities\":[\"QUIC\",\"TLS1.3\"]}\n");
-    } else if (std.mem.eql(u8, type_str, "RUN_GQL")) {
-        // Execute GQL query
-        const text_val = obj.get("text") orelse {
-            return try gpa.dupe(u8, "{\"status_class\":\"42000\",\"error\":\"Missing text field\"}\n");
-        };
-
-        if (text_val != .string) {
-            return try gpa.dupe(u8, "{\"status_class\":\"42000\",\"error\":\"Invalid text field\"}\n");
-        }
-
-        const query = text_val.string;
-
-        // Execute query via test_harness
-        const options = geode.test_harness.QueryOptions{
-            .user = state.authenticated_user,
-            .password = state.authenticated_password,
-            .pre_validated_role = if (state.authenticated_role) |role_u8| .{
-                .username = state.authenticated_user orelse "",
-                .role = @enumFromInt(role_u8),
-            } else null,
-        };
-
-        const result = geode.test_harness.runQueryWithAuth(@constCast(&gpa), query, options) catch |err| {
-            const err_msg = @errorName(err);
-            return try std.fmt.allocPrint(gpa, "{{\"status_class\":\"58000\",\"error\":\"{s}\"}}\n", .{err_msg});
-        };
-        defer gpa.free(result);
-
-        // Save graph store if dirty after query execution
-        const global_store = geode.graph_store.getGlobalStore(gpa);
-        global_store.saveIfDirty();
-
-        // Return the result with newline
-        var response = try gpa.alloc(u8, result.len + 1);
-        @memcpy(response[0..result.len], result);
-        response[result.len] = '\n';
-        return response;
-    } else if (std.mem.eql(u8, type_str, "PULL")) {
-        // For JSON protocol, PULL just returns empty bindings (results are inlined with RUN_GQL)
-        return try gpa.dupe(u8, "{\"type\":\"BINDINGS\",\"bindings\":[],\"has_more\":false}\n");
-    } else if (std.mem.eql(u8, type_str, "PING")) {
-        return try gpa.dupe(u8, "{\"type\":\"PONG\",\"ok\":true}\n");
-    } else if (std.mem.eql(u8, type_str, "BEGIN")) {
-        const tx_id = state.txn_manager.beginTransaction(false) catch {
-            return try gpa.dupe(u8, "{\"status_class\":\"25000\",\"error\":\"Failed to begin transaction\"}\n");
-        };
-        return try std.fmt.allocPrint(gpa, "{{\"type\":\"BEGIN_OK\",\"tx_id\":{d}}}\n", .{tx_id});
-    } else if (std.mem.eql(u8, type_str, "COMMIT")) {
-        state.txn_manager.commitTransaction() catch {
-            return try gpa.dupe(u8, "{\"status_class\":\"25000\",\"error\":\"Failed to commit transaction\"}\n");
-        };
-        // Save graph store after commit
-        const global_store = geode.graph_store.getGlobalStore(gpa);
-        global_store.saveIfDirty();
-        return try gpa.dupe(u8, "{\"type\":\"COMMIT_OK\"}\n");
-    } else if (std.mem.eql(u8, type_str, "ROLLBACK")) {
-        state.txn_manager.rollbackTransaction() catch {
-            return try gpa.dupe(u8, "{\"status_class\":\"25000\",\"error\":\"Failed to rollback transaction\"}\n");
-        };
-        return try gpa.dupe(u8, "{\"type\":\"ROLLBACK_OK\"}\n");
-    } else {
-        return try std.fmt.allocPrint(gpa, "{{\"status_class\":\"42000\",\"error\":\"Unknown message type: {s}\"}}\n", .{type_str});
     }
 }

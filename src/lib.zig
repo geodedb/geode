@@ -151,8 +151,8 @@ pub const materialized_views = @import("query/materialized_views.zig");
 
 const builtin = @import("builtin");
 
-// Re-export test harness for all builds (needed for query execution)
-pub const test_harness = @import("test_harness.zig");
+// Re-export test harness only for test builds (production uses a stub).
+pub const test_harness = if (builtin.is_test) @import("test_harness.zig") else @import("test_harness_stub.zig");
 
 // CANARY: REQ=REQ-TXN-UNDO-003; FEATURE="TransactionUndoLog"; ASPECT=LibExport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 // Re-export transaction undo log for CLI rollback support
@@ -181,20 +181,16 @@ pub const server_mvcc = @import("server/txn/mvcc.zig");
 // (it needs ParseOptions/ParseResult which are defined in this file)
 // Re-export query_plan_cache for unified binary
 pub const query_plan_cache = @import("server/query_plan_cache.zig");
-// Re-export protocol_handler for unified binary
-pub const protocol_handler = @import("server/protocol_handler.zig");
-// Re-export query_executor for unified binary
-pub const query_executor = @import("server/query_executor.zig");
 // Re-export server_flags for unified binary
 pub const server_flags = @import("server/server_flags.zig");
 // Re-export backup_manager for unified binary
 pub const backup_manager = @import("server/backup_manager.zig");
 // Re-export impl_flagger for unified binary
 pub const impl_flagger = @import("server/flagger_impl_defined.zig");
-// Re-export message_handlers for unified binary
-pub const message_handlers = @import("server/message_handlers.zig");
 // Re-export wal_manager for unified binary
 pub const wal_manager = @import("server/wal_manager.zig");
+// Re-export proto_util for unified binary
+pub const proto_util = @import("server/proto_util.zig");
 
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {
@@ -240,7 +236,7 @@ pub const index = struct {
     pub const advanced_types_index = @import("index/advanced_types_index.zig");
 };
 
-// Re-export wire protocol definitions for tests/benchmarks needing Value / frame types
+// Re-export wire-neutral protocol value types for distributed coordination.
 pub const protocol = @import("protocol.zig");
 
 // Distributed systems modules

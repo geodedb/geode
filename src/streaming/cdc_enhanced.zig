@@ -922,7 +922,8 @@ pub const CDCEngine = struct {
             .timestamp_ms = now_ms,
         };
 
-        return try json_lib.encode(allocator, response, .{});
+        // Use std.json.Stringify.valueAlloc instead of json_lib.encode to avoid comptime branch quota issues
+        return try std.json.Stringify.valueAlloc(allocator, response, .{});
     }
 };
 

@@ -265,34 +265,34 @@ pub const Interval = struct {
             return allocator.dupe(u8, "PT0S");
         }
 
-        var result = std.ArrayList(u8).init(allocator);
-        defer result.deinit();
+        var result: std.ArrayList(u8) = .{};
+        defer result.deinit(allocator);
 
-        try result.append('P');
+        try result.append(allocator, 'P');
 
         if (self.months != 0) {
             const years = @divFloor(self.months, 12);
             const months = @rem(self.months, 12);
-            if (years != 0) try std.fmt.format(result.writer(), "{d}Y", .{years});
-            if (months != 0) try std.fmt.format(result.writer(), "{d}M", .{months});
+            if (years != 0) try std.fmt.format(result.writer(allocator), "{d}Y", .{years});
+            if (months != 0) try std.fmt.format(result.writer(allocator), "{d}M", .{months});
         }
 
         if (self.days != 0) {
-            try std.fmt.format(result.writer(), "{d}D", .{self.days});
+            try std.fmt.format(result.writer(allocator), "{d}D", .{self.days});
         }
 
         if (self.micros != 0) {
-            try result.append('T');
+            try result.append(allocator, 'T');
             const hours = @divFloor(self.micros, 3600 * 1_000_000);
             const minutes = @divFloor(@rem(self.micros, 3600 * 1_000_000), 60 * 1_000_000);
             const seconds = @divFloor(@rem(self.micros, 60 * 1_000_000), 1_000_000);
 
-            if (hours != 0) try std.fmt.format(result.writer(), "{d}H", .{hours});
-            if (minutes != 0) try std.fmt.format(result.writer(), "{d}M", .{minutes});
-            if (seconds != 0) try std.fmt.format(result.writer(), "{d}S", .{seconds});
+            if (hours != 0) try std.fmt.format(result.writer(allocator), "{d}H", .{hours});
+            if (minutes != 0) try std.fmt.format(result.writer(allocator), "{d}M", .{minutes});
+            if (seconds != 0) try std.fmt.format(result.writer(allocator), "{d}S", .{seconds});
         }
 
-        return result.toOwnedSlice();
+        return result.toOwnedSlice(allocator);
     }
 };
 

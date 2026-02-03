@@ -98,10 +98,12 @@ pub const ExecuteRequest = struct {
 pub const PullRequest = struct {
     request_id: u64 = 0,
     page_size: u32 = 0,
+    session_id: []const u8 = "",
 
     pub const _desc_table = .{
         .request_id = fd(1, .{ .scalar = .uint64 }),
         .page_size = fd(2, .{ .scalar = .uint32 }),
+        .session_id = fd(3, .{ .scalar = .string }),
     };
 
     pub fn deinit(self: *PullRequest, allocator: std.mem.Allocator) void {
@@ -572,9 +574,11 @@ pub const PingResponse = struct {
 // ============================================================================
 pub const BeginRequest = struct {
     read_only: bool = false,
+    session_id: []const u8 = "",
 
     pub const _desc_table = .{
         .read_only = fd(1, .{ .scalar = .bool }),
+        .session_id = fd(2, .{ .scalar = .string }),
     };
 
     pub fn deinit(self: *BeginRequest, allocator: std.mem.Allocator) void {
@@ -597,7 +601,11 @@ pub const BeginResponse = struct {
 };
 
 pub const CommitRequest = struct {
-    pub const _desc_table = .{};
+    session_id: []const u8 = "",
+
+    pub const _desc_table = .{
+        .session_id = fd(1, .{ .scalar = .string }),
+    };
     pub fn deinit(self: *CommitRequest, allocator: std.mem.Allocator) void {
         protobuf.deinit(allocator, self);
     }
@@ -616,7 +624,11 @@ pub const CommitResponse = struct {
 };
 
 pub const RollbackRequest = struct {
-    pub const _desc_table = .{};
+    session_id: []const u8 = "",
+
+    pub const _desc_table = .{
+        .session_id = fd(1, .{ .scalar = .string }),
+    };
     pub fn deinit(self: *RollbackRequest, allocator: std.mem.Allocator) void {
         protobuf.deinit(allocator, self);
     }
@@ -636,9 +648,11 @@ pub const RollbackResponse = struct {
 
 pub const SavepointRequest = struct {
     name: []const u8 = "",
+    session_id: []const u8 = "",
 
     pub const _desc_table = .{
         .name = fd(1, .{ .scalar = .string }),
+        .session_id = fd(2, .{ .scalar = .string }),
     };
 
     pub fn deinit(self: *SavepointRequest, allocator: std.mem.Allocator) void {
@@ -660,9 +674,11 @@ pub const SavepointResponse = struct {
 
 pub const RollbackToRequest = struct {
     name: []const u8 = "",
+    session_id: []const u8 = "",
 
     pub const _desc_table = .{
         .name = fd(1, .{ .scalar = .string }),
+        .session_id = fd(2, .{ .scalar = .string }),
     };
 
     pub fn deinit(self: *RollbackToRequest, allocator: std.mem.Allocator) void {

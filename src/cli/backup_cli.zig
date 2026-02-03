@@ -7,29 +7,13 @@ const backup_types = @import("storage/backup");
 const quic = @import("transport/quic");
 // Import migration module for actual migration operations
 const migration = @import("migration");
+const protobuf = @import("protobuf");
+const schema = @import("schema");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CLI; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("cli");
 const Attr = logging.Attr;
-
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-031; FEATURE="JSON Library Migration"; ASPECT=BackupCLI; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
-const json_lib = @import("json");
-
-// Backup CLI Protocol Message Types
-const BackupHelloMessage = struct {
-    type: []const u8 = "HELLO",
-    client_name: []const u8 = "geode-cli",
-    client_ver: []const u8 = "0.1.0",
-    wanted_conformance: []const u8 = "GQL/1.0",
-    username: ?[]const u8 = null,
-    password: ?[]const u8 = null,
-};
-
-const BackupRunGqlMessage = struct {
-    type: []const u8 = "RUN_GQL",
-    text: []const u8,
-};
 
 // CANARY: REQ=REQ-M4.3-BACKUP-CLI-001; FEATURE="CLI Modularization"; ASPECT=BackupCommands; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-09
 // Phase 4 M4.3: Extract backup/restore/migrate commands from cli/main.zig
@@ -982,66 +966,72 @@ fn connectMigrationClient(allocator: std.mem.Allocator, server_addr: []const u8,
     return client;
 }
 
-fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-    var escape_count: usize = 0;
-    for (input) |c| switch (c) {
-        '"', '\\', '\n', '\r', '\t' => escape_count += 1,
-        else => {},
-    };
-    if (escape_count == 0) return allocator.dupe(u8, input);
-    const result = try allocator.alloc(u8, input.len + escape_count);
-    var write_idx: usize = 0;
-    for (input) |c| {
-        switch (c) {
-            '"' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = '"';
-                write_idx += 2;
-            },
-            '\\' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = '\\';
-                write_idx += 2;
-            },
-            '\n' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = 'n';
-                write_idx += 2;
-            },
-            '\r' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = 'r';
-                write_idx += 2;
-            },
-            '\t' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = 't';
-                write_idx += 2;
-            },
-            else => {
-                result[write_idx] = c;
-                write_idx += 1;
-            },
-        }
-    }
-    return result;
+fn writeProtoMessage(allocator: std.mem.Allocator, stream: *quic.QuicClientStream, msg: schema.QuicClientMessage) !void {
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 1024);
+    defer aw.deinit();
+
+    const packet = schema.ClientPacket{ .quic = msg };
+    try protobuf.encode(&aw.writer, allocator, packet);
+
+    const body = aw.writer.buffer[0..aw.writer.end];
+    var len_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &len_buf, @intCast(body.len), .big);
+    try stream.writeAll(&len_buf);
+    try stream.writeAll(body);
 }
 
-fn readLineWithPoll(quic_client: *quic.QuicClient, stream: *quic.QuicClientStream, max_size: usize, timeout_ms: u64) ![]u8 {
-    const start = std.time.milliTimestamp();
-    while (true) {
-        const line = stream.readLine(max_size) catch |err| {
-            if (err == error.WouldBlock or err == error.EndOfStream) {
-                if (std.time.milliTimestamp() - start >= timeout_ms) return err;
-                // GAP-0200: Reduced poll/sleep from 50ms to 10ms for higher throughput
+fn readProtoMessage(
+    allocator: std.mem.Allocator,
+    quic_client: *quic.QuicClient,
+    stream: *quic.QuicClientStream,
+    timeout_ms: u64,
+) !schema.QuicServerMessage {
+    const max_attempts: usize = if (timeout_ms == 0) 0 else @max(@as(usize, 1), @intCast(timeout_ms / 10));
+    var attempts: usize = 0;
+
+    var len_buf: [4]u8 = undefined;
+    var total_read: usize = 0;
+    while (total_read < 4) {
+        const n = stream.read(len_buf[total_read..]) catch |err| {
+            if (err == error.WouldBlock) {
+                attempts += 1;
+                if (attempts > max_attempts) return error.Timeout;
                 quic_client.poll(10) catch {};
                 std.Thread.sleep(10 * std.time.ns_per_ms);
                 continue;
             }
             return err;
         };
-        return line;
+        if (n == 0) return error.EndOfStream;
+        total_read += n;
     }
+
+    const msg_len = std.mem.readInt(u32, &len_buf, .big);
+    if (msg_len > 16 * 1024 * 1024) return error.MessageTooLarge;
+
+    const msg_bytes = try allocator.alloc(u8, msg_len);
+    defer allocator.free(msg_bytes);
+
+    total_read = 0;
+    attempts = 0;
+    while (total_read < msg_len) {
+        const n = stream.read(msg_bytes[total_read..]) catch |err| {
+            if (err == error.WouldBlock) {
+                attempts += 1;
+                if (attempts > max_attempts) return error.Timeout;
+                quic_client.poll(10) catch {};
+                std.Thread.sleep(10 * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+        if (n == 0) return error.EndOfStream;
+        total_read += n;
+    }
+
+    var reader: std.Io.Reader = .fixed(msg_bytes);
+    const packet = try protobuf.decode(schema.ServerPacket, &reader, allocator);
+    return packet.quic orelse error.InvalidMessage;
 }
 
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-032; FEATURE="JSON Library Migration"; ASPECT=MigrationScript; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
@@ -1050,39 +1040,73 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
     var stream = ctx.quic_client.getStream() catch |err| return err;
     defer stream.deinit();
 
-    // Build HELLO message using JSON library
-    const hello_struct = BackupHelloMessage{
-        .username = ctx.username,
-        .password = ctx.password,
+    const hello_req = schema.HelloRequest{
+        .username = ctx.username orelse "",
+        .password = ctx.password orelse "",
+        .client_name = "geode-migrate",
+        .client_version = "0.18.0",
+        .wanted_conformance = "min",
     };
-    const hello_json = try json_lib.encode(ctx.allocator, hello_struct, .{ .emit_null_optional_fields = false });
-    defer ctx.allocator.free(hello_json);
-    const hello_msg = try std.fmt.allocPrint(ctx.allocator, "{s}\n", .{hello_json});
-    defer ctx.allocator.free(hello_msg);
-    try stream.writeAll(hello_msg);
+    try writeProtoMessage(ctx.allocator, stream, .{ .hello = hello_req });
 
-    const hello_resp = readLineWithPoll(ctx.quic_client, stream, 65536, 5000) catch |err| return err;
-    defer ctx.allocator.free(hello_resp);
-    if (std.mem.indexOf(u8, hello_resp, "\"type\":\"ERROR\"") != null) return error.ApplyFailed;
+    var arena = std.heap.ArenaAllocator.init(ctx.allocator);
+    defer arena.deinit();
+    const hello_resp = readProtoMessage(arena.allocator(), ctx.quic_client, stream, 5000) catch |err| return err;
+    var session_id_buf: ?[]u8 = null;
+    switch (hello_resp) {
+        .hello => |h| {
+            if (!h.success) return error.ApplyFailed;
+            session_id_buf = try ctx.allocator.dupe(u8, h.session_id);
+        },
+        else => return error.ApplyFailed,
+    }
+    const session_id = session_id_buf orelse return error.ApplyFailed;
+    defer ctx.allocator.free(session_id);
 
-    // Build RUN_GQL message using JSON library (handles escaping)
-    const run_gql_struct = BackupRunGqlMessage{ .text = script };
-    const query_json = try json_lib.encode(ctx.allocator, run_gql_struct, .{});
-    defer ctx.allocator.free(query_json);
-    const query_msg = try std.fmt.allocPrint(ctx.allocator, "{s}\n", .{query_json});
-    defer ctx.allocator.free(query_msg);
-    try stream.writeAll(query_msg);
+    const exec_req = schema.ExecuteRequest{
+        .session_id = session_id,
+        .query = script,
+        .params_json = "",
+    };
+    try writeProtoMessage(ctx.allocator, stream, .{ .execute = exec_req });
 
-    const schema_response = readLineWithPoll(ctx.quic_client, stream, 65536, 5000) catch |err| return err;
-    defer ctx.allocator.free(schema_response);
-    if (std.mem.indexOf(u8, schema_response, "\"type\":\"ERROR\"") != null) return error.ApplyFailed;
+    _ = arena.reset(.retain_capacity);
+    const exec_resp_msg = readProtoMessage(arena.allocator(), ctx.quic_client, stream, 5000) catch |err| return err;
+    switch (exec_resp_msg) {
+        .execute => |exec_resp| {
+            if (exec_resp.payload) |payload| switch (payload) {
+                .@"error" => return error.ApplyFailed,
+                .schema => {},
+                else => {},
+            };
+        },
+        else => return error.ApplyFailed,
+    }
 
-    const pull_msg = "{\"type\":\"PULL\",\"page_size\":1000}\n";
-    try stream.writeAll(pull_msg);
+    var request_id: u64 = 1;
+    var done = false;
+    while (!done) : (request_id += 1) {
+        const pull_req = schema.PullRequest{
+            .request_id = request_id,
+            .page_size = 0,
+            .session_id = session_id,
+        };
+        try writeProtoMessage(ctx.allocator, stream, .{ .pull = pull_req });
 
-    const result_line = readLineWithPoll(ctx.quic_client, stream, 65536, 5000) catch |err| return err;
-    defer ctx.allocator.free(result_line);
-    if (std.mem.indexOf(u8, result_line, "\"type\":\"ERROR\"") != null) return error.ApplyFailed;
+        _ = arena.reset(.retain_capacity);
+        const pull_resp_msg = readProtoMessage(arena.allocator(), ctx.quic_client, stream, 5000) catch |err| return err;
+        switch (pull_resp_msg) {
+            .pull => |pull_resp| {
+                const exec_resp = pull_resp.response orelse return error.ApplyFailed;
+                if (exec_resp.payload) |payload| switch (payload) {
+                    .page => |p| done = p.final,
+                    .@"error" => return error.ApplyFailed,
+                    else => {},
+                };
+            },
+            else => return error.ApplyFailed,
+        }
+    }
 }
 
 // CANARY: REQ=REQ-CLI-MIGRATE-STATUS-001; FEATURE="CLIMigrateStatus"; ASPECT=MigrationModule; STATUS=TESTED; TEST=geodetestlab/specs/geode_migrations.yml; OWNER=cli; UPDATED=2026-01-11

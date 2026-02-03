@@ -5,8 +5,10 @@ const repl_render = @import("repl_render.zig");
 const platform = @import("platform.zig");
 const spinner_mod = @import("spinner.zig");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-063; FEATURE="JSON Library Migration"; ASPECT=ReplDispatch; STATUS=EXEMPT; OWNER=client; UPDATED=2026-01-25
-const json_lib = @import("json");
+const protobuf = @import("protobuf");
+const proto_schema = @import("schema");
+
+const spice_wrapper = @import("parallel/spice");
 
 // CANARY: REQ=REQ-SHELL-INTERRUPT-003; FEATURE="SourceInterrupt"; ASPECT=CheckFunction; STATUS=TESTED; TEST=tests/test_repl.zig; OWNER=cli; UPDATED=2026-01-30
 // Issue #390: Helper function to check for Ctrl+C (ASCII 3) in stdin without blocking
@@ -79,12 +81,6 @@ pub fn checkForInterrupt() bool {
     }
 }
 
-// JSON message types for REPL protocol
-const ReplRunGqlMessage = struct {
-    type: []const u8 = "RUN_GQL",
-    text: []const u8,
-};
-
 // CANARY: REQ=REQ-REPL-QUIC-001; FEATURE="REPL QUIC Integration"; ASPECT=ClientSession; STATUS=TESTED; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=repl; UPDATED=2026-01-15
 
 // Transport interface - implemented by CLI layer to avoid module conflicts
@@ -119,21 +115,121 @@ pub const TransportConnection = struct {
     }
 };
 
+const MockRequestKind = enum {
+    none,
+    hello,
+    execute,
+    begin,
+    commit,
+    rollback,
+    pull,
+    ping,
+    other,
+};
+
 /// Mock transport connection for testing/fallback
 const MockTransportConnection = struct {
     allocator: std.mem.Allocator,
+    last_kind: MockRequestKind = .none,
 
     pub fn writeAll(self: *TransportConnection, data: []const u8) !void {
-        _ = self;
-        _ = data;
-        // Mock implementation - do nothing
+        const ctx = self.context orelse return;
+        const mock: *MockTransportConnection = @ptrCast(@alignCast(ctx));
+
+        if (data.len < 4) {
+            mock.last_kind = .other;
+            return;
+        }
+
+        const msg_len = std.mem.readInt(u32, data[0..4], .big);
+        if (data.len < 4 + msg_len) {
+            mock.last_kind = .other;
+            return;
+        }
+
+        var reader: std.Io.Reader = .fixed(data[4 .. 4 + msg_len]);
+        const packet = protobuf.decode(proto_schema.ClientPacket, &reader, mock.allocator) catch {
+            mock.last_kind = .other;
+            return;
+        };
+        defer packet.deinit(mock.allocator);
+
+        const msg = packet.quic orelse {
+            mock.last_kind = .other;
+            return;
+        };
+
+        mock.last_kind = switch (msg) {
+            .hello => .hello,
+            .execute => .execute,
+            .begin => .begin,
+            .commit => .commit,
+            .rollback => .rollback,
+            .pull => .pull,
+            .ping => .ping,
+            else => .other,
+        };
     }
 
     pub fn readLine(self: *TransportConnection, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
-        _ = self;
         _ = max_size;
-        // Mock implementation - return simple JSON response
-        return allocator.dupe(u8, "{\"type\":\"MOCK_RESPONSE\"}");
+        const ctx = self.context orelse return error.NotConnected;
+        const mock: *MockTransportConnection = @ptrCast(@alignCast(ctx));
+
+        var response: proto_schema.QuicServerMessage = switch (mock.last_kind) {
+            .hello => blk: {
+                var caps = std.ArrayList([]const u8).init(allocator);
+                try caps.append(allocator, try allocator.dupe(u8, "PROTOBUF"));
+                break :blk .{ .hello = .{
+                    .success = true,
+                    .session_id = "mock_session",
+                    .error_message = "",
+                    .capabilities = caps,
+                } };
+            },
+            .execute => blk: {
+                var cols = std.ArrayList(proto_schema.ColumnDefinition).init(allocator);
+                try cols.append(allocator, .{ .name = "mock", .type = "STRING" });
+                break :blk .{ .execute = .{
+                    .status = .{
+                        .status_class = "00000",
+                        .status_subclass = "",
+                        .additional_statuses = std.ArrayList([]const u8).init(allocator),
+                        .flagger_findings = std.ArrayList([]const u8).init(allocator),
+                    },
+                    .payload = .{ .schema = .{ .columns = cols } },
+                } };
+            },
+            .pull => blk: {
+                var values = std.ArrayList(proto_schema.Value).init(allocator);
+                try values.append(allocator, .{ .kind = .{ .string_val = .{ .value = "mock", .kind = .STRING } } });
+                var row_list = std.ArrayList(proto_schema.Row).init(allocator);
+                try row_list.append(allocator, .{ .values = values });
+                break :blk .{ .pull = .{ .response = .{
+                    .status = .{
+                        .status_class = "00000",
+                        .status_subclass = "",
+                        .additional_statuses = std.ArrayList([]const u8).init(allocator),
+                        .flagger_findings = std.ArrayList([]const u8).init(allocator),
+                    },
+                    .payload = .{ .page = .{
+                        .rows = row_list,
+                        .final = true,
+                        .ordered = false,
+                        .order_keys = std.ArrayList([]const u8).init(allocator),
+                    } },
+                } } };
+            },
+            .begin => .{ .begin = .{ .session_id = "mock_session", .tx_id = "1" } },
+            .commit => .{ .commit = .{ .success = true } },
+            .rollback => .{ .rollback = .{ .success = true } },
+            .ping => .{ .ping = .{ .ok = true } },
+            else => .{ .ping = .{ .ok = true } },
+        };
+
+        const body = try encodeServerPacketBody(allocator, response);
+        response.deinit(allocator);
+        return body;
     }
 
     pub fn deinit(self: *TransportConnection) void {
@@ -168,61 +264,337 @@ pub const mock_transport = Transport{
     .connectFn = mockConnectFn,
 };
 
-/// Escape a string for safe embedding in JSON
-fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-    // Count how many characters need escaping to allocate correct size
-    var escape_count: usize = 0;
-    for (input) |c| {
-        switch (c) {
-            '"', '\\', '\n', '\r', '\t' => escape_count += 1,
-            else => {},
+fn encodeClientPacket(allocator: std.mem.Allocator, msg: proto_schema.QuicClientMessage) ![]u8 {
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 1024);
+    defer aw.deinit();
+
+    const packet = proto_schema.ClientPacket{ .quic = msg };
+    try protobuf.encode(&aw.writer, allocator, packet);
+
+    const body = aw.writer.buffer[0..aw.writer.end];
+    const out = try allocator.alloc(u8, body.len + 4);
+    std.mem.writeInt(u32, out[0..4], @intCast(body.len), .big);
+    @memcpy(out[4..], body);
+    return out;
+}
+
+fn decodeServerPacket(allocator: std.mem.Allocator, bytes: []const u8) !proto_schema.ServerPacket {
+    var reader: std.Io.Reader = .fixed(bytes);
+    return try protobuf.decode(proto_schema.ServerPacket, &reader, allocator);
+}
+
+fn encodeServerPacketBody(allocator: std.mem.Allocator, msg: proto_schema.QuicServerMessage) ![]u8 {
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 512);
+    defer aw.deinit();
+
+    const packet = proto_schema.ServerPacket{ .quic = msg };
+    try protobuf.encode(&aw.writer, allocator, packet);
+
+    const body = aw.writer.buffer[0..aw.writer.end];
+    return allocator.dupe(u8, body);
+}
+
+fn jsonNumberFromU64(allocator: std.mem.Allocator, value: u64) !std.json.Value {
+    if (value <= @as(u64, std.math.maxInt(i64))) {
+        return .{ .integer = @intCast(value) };
+    }
+    const num_str = try std.fmt.allocPrint(allocator, "{d}", .{value});
+    return .{ .number_string = num_str };
+}
+
+fn base64Encode(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
+    const out = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(bytes.len));
+    _ = std.base64.standard.Encoder.encode(out, bytes);
+    return out;
+}
+
+fn protoMapEntriesToJson(allocator: std.mem.Allocator, entries: []const proto_schema.MapEntry) !std.json.ObjectMap {
+    var obj = std.json.ObjectMap.init(allocator);
+    for (entries) |entry| {
+        const key = try allocator.dupe(u8, entry.key);
+        const val = if (entry.value) |v|
+            try protoValueToJson(allocator, v)
+        else
+            std.json.Value.null;
+        try obj.put(key, val);
+    }
+    return obj;
+}
+
+fn protoNodeToJson(allocator: std.mem.Allocator, node: proto_schema.NodeValue) !std.json.Value {
+    var obj = std.json.ObjectMap.init(allocator);
+    try obj.put("id", try jsonNumberFromU64(allocator, node.id));
+
+    var labels = std.json.Array.init(allocator);
+    for (node.labels.items) |label| {
+        try labels.append(allocator, .{ .string = try allocator.dupe(u8, label) });
+    }
+    try obj.put("labels", .{ .array = labels });
+
+    const props_obj = try protoMapEntriesToJson(allocator, node.properties.items);
+    try obj.put("properties", .{ .object = props_obj });
+    return .{ .object = obj };
+}
+
+fn protoEdgeToJson(allocator: std.mem.Allocator, edge: proto_schema.EdgeValue) !std.json.Value {
+    var obj = std.json.ObjectMap.init(allocator);
+    try obj.put("id", try jsonNumberFromU64(allocator, edge.id));
+    try obj.put("from", try jsonNumberFromU64(allocator, edge.from_id));
+    try obj.put("to", try jsonNumberFromU64(allocator, edge.to_id));
+    try obj.put("label", .{ .string = try allocator.dupe(u8, edge.label) });
+
+    const props_obj = try protoMapEntriesToJson(allocator, edge.properties.items);
+    try obj.put("properties", .{ .object = props_obj });
+    return .{ .object = obj };
+}
+
+fn protoPathToJson(allocator: std.mem.Allocator, path: proto_schema.PathValue) !std.json.Value {
+    var obj = std.json.ObjectMap.init(allocator);
+
+    var nodes = std.json.Array.init(allocator);
+    for (path.nodes.items) |node| {
+        try nodes.append(allocator, try protoNodeToJson(allocator, node));
+    }
+    try obj.put("nodes", .{ .array = nodes });
+
+    var edges = std.json.Array.init(allocator);
+    for (path.edges.items) |edge| {
+        try edges.append(allocator, try protoEdgeToJson(allocator, edge));
+    }
+    try obj.put("edges", .{ .array = edges });
+    return .{ .object = obj };
+}
+
+fn protoExtendedToJson(allocator: std.mem.Allocator, ext: proto_schema.ExtendedValue) !std.json.Value {
+    var obj = std.json.ObjectMap.init(allocator);
+    if (ext.type_name.len > 0) {
+        try obj.put("type", .{ .string = try allocator.dupe(u8, ext.type_name) });
+    }
+    if (ext.data) |data| {
+        const val: std.json.Value = switch (data) {
+            .text => |t| .{ .string = try allocator.dupe(u8, t) },
+            .bytes => |b| .{ .string = try base64Encode(allocator, b) },
+            .int_val => |n| .{ .integer = n },
+            .double_val => |f| .{ .float = f },
+            .bool_val => |b| .{ .bool = b },
+        };
+        try obj.put("value", val);
+    }
+    return .{ .object = obj };
+}
+
+fn protoValueToJson(allocator: std.mem.Allocator, value: proto_schema.Value) !std.json.Value {
+    const kind = value.kind orelse return std.json.Value.null;
+    return switch (kind) {
+        .null_val => std.json.Value.null,
+        .int_val => |v| .{ .integer = v.value },
+        .double_val => |v| .{ .float = v.value },
+        .bool_val => |b| .{ .bool = b },
+        .string_val => |v| .{ .string = try allocator.dupe(u8, v.value) },
+        .decimal_val => |v| blk: {
+            const repr = if (v.orig_repr.len > 0) v.orig_repr else v.coeff;
+            break :blk .{ .string = try allocator.dupe(u8, repr) };
+        },
+        .bytes_val => |v| .{ .string = try base64Encode(allocator, v.value) },
+        .list_val => |v| blk: {
+            var arr = std.json.Array.init(allocator);
+            for (v.values.items) |item| {
+                try arr.append(allocator, try protoValueToJson(allocator, item));
+            }
+            break :blk .{ .array = arr };
+        },
+        .map_val => |v| blk: {
+            const obj = try protoMapEntriesToJson(allocator, v.entries.items);
+            break :blk .{ .object = obj };
+        },
+        .node_val => |v| try protoNodeToJson(allocator, v),
+        .edge_val => |v| try protoEdgeToJson(allocator, v),
+        .path_val => |v| try protoPathToJson(allocator, v),
+        .ext_val => |v| try protoExtendedToJson(allocator, v),
+    };
+}
+
+fn buildColumnsJsonArray(allocator: std.mem.Allocator, columns: []const []const u8) !std.json.Array {
+    var arr = std.json.Array.init(allocator);
+    for (columns) |col| {
+        try arr.append(allocator, .{ .string = try allocator.dupe(u8, col) });
+    }
+    return arr;
+}
+
+fn rowToJsonArray(allocator: std.mem.Allocator, row: proto_schema.Row) !std.json.Value {
+    var arr = std.json.Array.init(allocator);
+    for (row.values.items) |val| {
+        try arr.append(allocator, try protoValueToJson(allocator, val));
+    }
+    return .{ .array = arr };
+}
+
+fn buildRowsJsonArray(allocator: std.mem.Allocator, rows: []const proto_schema.Row) !std.json.Array {
+    var arr = std.json.Array.init(allocator);
+    if (rows.len == 0) return arr;
+
+    if (spice_wrapper.shouldUseParallelism(rows.len, spice_wrapper.Thresholds.map)) {
+        var pool = spice_wrapper.SpicePool.init(allocator, null);
+        pool.start();
+        defer pool.deinit();
+
+        var ts_alloc = std.heap.ThreadSafeAllocator{ .child_allocator = allocator };
+        const safe_alloc = ts_alloc.allocator();
+
+        const RowInput = struct {
+            row: *const proto_schema.Row,
+            allocator: std.mem.Allocator,
+        };
+
+        const RowResult = struct {
+            value: std.json.Value,
+            err: ?anyerror,
+        };
+
+        const inputs = try allocator.alloc(RowInput, rows.len);
+        defer allocator.free(inputs);
+        for (rows, 0..) |*row, i| {
+            inputs[i] = .{ .row = row, .allocator = safe_alloc };
+        }
+
+        const mapFn = struct {
+            fn map(_: *spice_wrapper.Task, input: RowInput) RowResult {
+                const value = rowToJsonArray(input.allocator, input.row.*) catch |err| {
+                    return .{ .value = std.json.Value.null, .err = err };
+                };
+                return .{ .value = value, .err = null };
+            }
+        }.map;
+
+        const results = try spice_wrapper.parallelMap(RowInput, RowResult, &pool, inputs, mapFn, spice_wrapper.Thresholds.map);
+        defer allocator.free(results);
+
+        for (results) |res| {
+            if (res.err) |err| return err;
+            try arr.append(allocator, res.value);
+        }
+    } else {
+        for (rows) |row| {
+            try arr.append(allocator, try rowToJsonArray(allocator, row));
         }
     }
 
-    // If no escaping needed, just duplicate the string
-    if (escape_count == 0) {
-        return allocator.dupe(u8, input);
+    return arr;
+}
+
+fn executionResponseToJson(
+    allocator: std.mem.Allocator,
+    exec_resp: proto_schema.ExecutionResponse,
+    columns: ?[]const []const u8,
+) ![]u8 {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var root = std.json.ObjectMap.init(a);
+
+    const status_class = if (exec_resp.status) |st|
+        if (st.status_class.len > 0) st.status_class else "00000"
+    else
+        "00000";
+    try root.put("status_class", .{ .string = try a.dupe(u8, status_class) });
+
+    if (exec_resp.status) |st| {
+        if (st.status_subclass.len > 0) {
+            try root.put("status_subclass", .{ .string = try a.dupe(u8, st.status_subclass) });
+        }
+        if (st.additional_statuses.items.len > 0) {
+            var arr = std.json.Array.init(a);
+            for (st.additional_statuses.items) |item| {
+                try arr.append(a, .{ .string = try a.dupe(u8, item) });
+            }
+            try root.put("additional_statuses", .{ .array = arr });
+        }
+        if (st.flagger_findings.items.len > 0) {
+            var arr = std.json.Array.init(a);
+            for (st.flagger_findings.items) |item| {
+                try arr.append(a, .{ .string = try a.dupe(u8, item) });
+            }
+            try root.put("flagger_findings", .{ .array = arr });
+        }
     }
 
-    // Allocate buffer for escaped string
-    const result = try allocator.alloc(u8, input.len + escape_count);
-    var write_idx: usize = 0;
+    if (exec_resp.payload) |payload| {
+        switch (payload) {
+            .schema => |schema_def| {
+                var result_obj = std.json.ObjectMap.init(a);
+                try result_obj.put("type", .{ .string = try a.dupe(u8, "SCHEMA") });
+                try root.put("result", .{ .object = result_obj });
 
-    for (input) |c| {
-        switch (c) {
-            '"' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = '"';
-                write_idx += 2;
+                if (schema_def.columns.items.len > 0) {
+                    var cols = std.json.Array.init(a);
+                    for (schema_def.columns.items) |col| {
+                        try cols.append(a, .{ .string = try a.dupe(u8, col.name) });
+                    }
+                    try root.put("columns", .{ .array = cols });
+                }
             },
-            '\\' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = '\\';
-                write_idx += 2;
+            .page => |page| {
+                const cols = columns orelse &.{};
+                if (cols.len > 0) {
+                    const cols_array = try buildColumnsJsonArray(a, cols);
+                    try root.put("columns", .{ .array = cols_array });
+                }
+                const rows_array = try buildRowsJsonArray(a, page.rows.items);
+                try root.put("rows", .{ .array = rows_array });
             },
-            '\n' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = 'n';
-                write_idx += 2;
+            .@"error" => |err| {
+                var result_obj = std.json.ObjectMap.init(a);
+                try result_obj.put("type", .{ .string = try a.dupe(u8, "RESULT") });
+                if (err.message.len > 0) {
+                    try result_obj.put("error", .{ .string = try a.dupe(u8, err.message) });
+                    try root.put("message", .{ .string = try a.dupe(u8, err.message) });
+                }
+                if (err.code.len > 0) {
+                    try root.put("error_code", .{ .string = try a.dupe(u8, err.code) });
+                }
+                try root.put("result", .{ .object = result_obj });
             },
-            '\r' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = 'r';
-                write_idx += 2;
+            .metrics => |metrics| {
+                var result_obj = std.json.ObjectMap.init(a);
+                try result_obj.put("type", .{ .string = try a.dupe(u8, "METRICS") });
+                try result_obj.put("parse_ns", .{ .integer = metrics.parse_duration_ns });
+                try result_obj.put("plan_ns", .{ .integer = metrics.plan_duration_ns });
+                try result_obj.put("execute_ns", .{ .integer = metrics.execute_duration_ns });
+                try result_obj.put("total_ns", .{ .integer = metrics.total_duration_ns });
+                try root.put("result", .{ .object = result_obj });
             },
-            '\t' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = 't';
-                write_idx += 2;
+            .explain => |explain| {
+                var result_obj = std.json.ObjectMap.init(a);
+                try result_obj.put("type", .{ .string = try a.dupe(u8, "EXPLAIN") });
+                if (std.json.parseFromSlice(std.json.Value, a, explain.json_payload, .{})) |parsed| {
+                    try result_obj.put("json", parsed.value);
+                } else |_| {
+                    try result_obj.put("json", .{ .string = try a.dupe(u8, explain.json_payload) });
+                }
+                try root.put("result", .{ .object = result_obj });
             },
-            else => {
-                result[write_idx] = c;
-                write_idx += 1;
+            .profile => |profile| {
+                var result_obj = std.json.ObjectMap.init(a);
+                try result_obj.put("type", .{ .string = try a.dupe(u8, "PROFILE") });
+                if (std.json.parseFromSlice(std.json.Value, a, profile.json_payload, .{})) |parsed| {
+                    try result_obj.put("json", parsed.value);
+                } else |_| {
+                    try result_obj.put("json", .{ .string = try a.dupe(u8, profile.json_payload) });
+                }
+                try root.put("result", .{ .object = result_obj });
+            },
+            .heartbeat => |_| {
+                var result_obj = std.json.ObjectMap.init(a);
+                try result_obj.put("type", .{ .string = try a.dupe(u8, "HEARTBEAT") });
+                try root.put("result", .{ .object = result_obj });
             },
         }
     }
 
-    return result;
+    const root_value = std.json.Value{ .object = root };
+    return std.json.Stringify.valueAlloc(allocator, root_value, .{});
 }
 
 /// CANARY: REQ=REQ-SHELL-RECONNECT-001; FEATURE="ShellAutoReconnect"; ASPECT=ReconnectionConfig; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
@@ -274,6 +646,8 @@ pub const ClientSession = struct {
     transport: ?*const Transport = null,
     connection: ?*TransportConnection = null,
     last_response: ?[]u8 = null,
+    session_id: ?[]const u8 = null,
+    last_columns: ?[]const []const u8 = null,
     /// CANARY: REQ=REQ-SHELL-RECONNECT-003; FEATURE="ShellAutoReconnect"; ASPECT=SessionState; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
     reconnect_config: ReconnectionConfig = .{},
     pending_txn_state: PendingTransactionState = .{},
@@ -313,6 +687,11 @@ pub const ClientSession = struct {
             self.connection = null;
         }
         self.connected = false;
+        if (self.session_id) |sid| {
+            self.allocator.free(sid);
+            self.session_id = null;
+        }
+        self.clearLastColumns();
         // Clear any pending response
         if (self.last_response) |resp| {
             self.allocator.free(resp);
@@ -330,6 +709,11 @@ pub const ClientSession = struct {
             self.allocator.free(resp);
             self.last_response = null;
         }
+        if (self.session_id) |sid| {
+            self.allocator.free(sid);
+            self.session_id = null;
+        }
+        self.clearLastColumns();
         if (self.cached_username) |u| {
             self.allocator.free(u);
             self.cached_username = null;
@@ -349,6 +733,14 @@ pub const ClientSession = struct {
         // CANARY: REQ=REQ-SOURCE-PERF-003; FEATURE="SourceFilePerformance"; ASPECT=CacheCleanupOnExit; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
         // Issue #413: Clean up global file hash cache to prevent memory leaks on exit
         deinitSourcedFileCache();
+    }
+
+    fn clearLastColumns(self: *ClientSession) void {
+        if (self.last_columns) |cols| {
+            for (cols) |col| self.allocator.free(col);
+            self.allocator.free(cols);
+            self.last_columns = null;
+        }
     }
 
     /// CANARY: REQ=REQ-SHELL-RECONNECT-004; FEATURE="ShellAutoReconnect"; ASPECT=ErrorDetection; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
@@ -500,9 +892,15 @@ pub const ClientSession = struct {
     pub fn hello(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
-        // Send HELLO handshake
-        const hello_msg = "{\"type\":\"HELLO\",\"client_name\":\"geode-repl\",\"client_ver\":\"0.18.0\",\"wanted_conformance\":\"min\"}\n";
-        try self.connection.?.writeAll(hello_msg);
+        const hello_req = proto_schema.HelloRequest{
+            .client_name = "geode-repl",
+            .client_version = "0.18.0",
+            .wanted_conformance = "min",
+        };
+
+        const msg = try encodeClientPacket(self.allocator, .{ .hello = hello_req });
+        defer self.allocator.free(msg);
+        try self.connection.?.writeAll(msg);
 
         // Read HELLO acknowledgment with interrupt checking
         var retry_count: usize = 0;
@@ -521,11 +919,24 @@ pub const ClientSession = struct {
             };
             defer self.allocator.free(hello_ack);
 
-            // Check if server requires authentication
-            if (std.mem.indexOf(u8, hello_ack, "Authentication required") != null) {
-                return error.AuthenticationRequired;
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            const packet = decodeServerPacket(arena.allocator(), hello_ack) catch return error.InvalidResponse;
+            const msg_union = packet.quic orelse return error.InvalidResponse;
+            switch (msg_union) {
+                .hello => |resp| {
+                    if (!resp.success) {
+                        if (std.mem.indexOf(u8, resp.error_message, "Authentication required") != null) {
+                            return error.AuthenticationRequired;
+                        }
+                        return error.AuthenticationFailed;
+                    }
+                    if (self.session_id) |sid| self.allocator.free(sid);
+                    self.session_id = try self.allocator.dupe(u8, resp.session_id);
+                    return;
+                },
+                else => return error.InvalidResponse,
             }
-            return;
         }
 
         return error.WouldBlock;
@@ -544,20 +955,17 @@ pub const ClientSession = struct {
     pub fn helloWithAuth(self: *ClientSession, username: []const u8, password: []const u8) !AuthHelloResult {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
-        // Escape credentials for JSON
-        const escaped_username = try escapeJsonString(self.allocator, username);
-        defer self.allocator.free(escaped_username);
-        const escaped_password = try escapeJsonString(self.allocator, password);
-        defer self.allocator.free(escaped_password);
+        const hello_req = proto_schema.HelloRequest{
+            .username = username,
+            .password = password,
+            .client_name = "geode-cli",
+            .client_version = "0.18.0",
+            .wanted_conformance = "min",
+        };
 
-        // Send authenticated HELLO handshake
-        const hello_msg = try std.fmt.allocPrint(
-            self.allocator,
-            "{{\"type\":\"HELLO\",\"client_name\":\"geode-cli\",\"client_ver\":\"0.18.0\",\"wanted_conformance\":\"min\",\"username\":\"{s}\",\"password\":\"{s}\"}}\n",
-            .{ escaped_username, escaped_password },
-        );
-        defer self.allocator.free(hello_msg);
-        try self.connection.?.writeAll(hello_msg);
+        const msg = try encodeClientPacket(self.allocator, .{ .hello = hello_req });
+        defer self.allocator.free(msg);
+        try self.connection.?.writeAll(msg);
 
         // Read HELLO response with interrupt checking
         var retry_count: usize = 0;
@@ -589,8 +997,9 @@ pub const ClientSession = struct {
         };
         defer self.allocator.free(response);
 
-        // Parse response
-        var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, response, .{ .duplicate_field_behavior = .use_last }) catch {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const packet = decodeServerPacket(arena.allocator(), response) catch {
             return AuthHelloResult{
                 .success = false,
                 .session_token = null,
@@ -598,71 +1007,50 @@ pub const ClientSession = struct {
                 .error_message = try self.allocator.dupe(u8, "Invalid server response"),
             };
         };
-        defer parsed.deinit();
-
-        const obj = parsed.value.object;
-
-        // Check if it's an error response
-        const type_val = obj.get("type") orelse {
+        const msg_union = packet.quic orelse {
             return AuthHelloResult{
                 .success = false,
                 .session_token = null,
                 .requires_password_reset = false,
-                .error_message = try self.allocator.dupe(u8, "Missing type in response"),
+                .error_message = try self.allocator.dupe(u8, "Invalid server response"),
             };
         };
 
-        if (type_val != .string) {
-            return AuthHelloResult{
-                .success = false,
-                .session_token = null,
-                .requires_password_reset = false,
-                .error_message = try self.allocator.dupe(u8, "Invalid type in response"),
-            };
+        switch (msg_union) {
+            .hello => |resp| {
+                if (!resp.success) {
+                    const error_msg = if (resp.error_message.len > 0)
+                        try self.allocator.dupe(u8, resp.error_message)
+                    else
+                        try self.allocator.dupe(u8, "Authentication failed");
+
+                    return AuthHelloResult{
+                        .success = false,
+                        .session_token = null,
+                        .requires_password_reset = false,
+                        .error_message = error_msg,
+                    };
+                }
+
+                if (self.session_id) |sid| self.allocator.free(sid);
+                self.session_id = try self.allocator.dupe(u8, resp.session_id);
+
+                return AuthHelloResult{
+                    .success = true,
+                    .session_token = null,
+                    .requires_password_reset = false,
+                    .error_message = null,
+                };
+            },
+            else => {
+                return AuthHelloResult{
+                    .success = false,
+                    .session_token = null,
+                    .requires_password_reset = false,
+                    .error_message = try self.allocator.dupe(u8, "Unexpected response type"),
+                };
+            },
         }
-
-        const type_str = type_val.string;
-
-        if (std.mem.eql(u8, type_str, "ERROR")) {
-            const msg = if (obj.get("message")) |m|
-                if (m == .string) try self.allocator.dupe(u8, m.string) else try self.allocator.dupe(u8, "Authentication failed")
-            else
-                try self.allocator.dupe(u8, "Authentication failed");
-
-            return AuthHelloResult{
-                .success = false,
-                .session_token = null,
-                .requires_password_reset = false,
-                .error_message = msg,
-            };
-        }
-
-        if (std.mem.eql(u8, type_str, "HELLO")) {
-            // Authentication successful - extract session token if provided
-            const session_token = if (obj.get("session_token")) |st|
-                if (st == .string) try self.allocator.dupe(u8, st.string) else null
-            else
-                null;
-
-            const requires_reset = if (obj.get("requires_password_reset")) |rpr|
-                if (rpr == .bool) rpr.bool else false
-            else
-                false;
-
-            return AuthHelloResult{
-                .success = true,
-                .session_token = session_token,
-                .requires_password_reset = requires_reset,
-                .error_message = null,
-            };
-        }
-
-        return AuthHelloResult{
-            .success = false,
-            .session_token = null,
-            .requires_password_reset = false,
-            .error_message = try self.allocator.dupe(u8, "Unexpected response type"),
-        };
     }
 
     pub fn runGql(self: *ClientSession, gql: []const u8) !void {
@@ -673,22 +1061,13 @@ pub const ClientSession = struct {
             return error.Interrupted;
         }
 
-        // Send RUN_GQL message using json library encoding
-        // Note: json_lib.encode handles string escaping automatically
-        const run_msg = ReplRunGqlMessage{ .text = gql };
-        const json_str = try json_lib.encode(self.allocator, run_msg, .{});
-        defer self.allocator.free(json_str);
-
-        // Check for interrupt after encoding
-        if (checkForInterrupt()) {
-            return error.Interrupted;
-        }
-
-        // Append newline
-        const msg = try self.allocator.alloc(u8, json_str.len + 1);
+        const exec_req = proto_schema.ExecuteRequest{
+            .session_id = self.session_id orelse "",
+            .query = gql,
+            .params_json = "",
+        };
+        const msg = try encodeClientPacket(self.allocator, .{ .execute = exec_req });
         defer self.allocator.free(msg);
-        @memcpy(msg[0..json_str.len], json_str);
-        msg[json_str.len] = '\n';
 
         // For large payloads, write in chunks with interrupt checks
         // This allows Ctrl+C to be detected during long writes
@@ -708,6 +1087,37 @@ pub const ClientSession = struct {
             self.allocator.free(resp);
             self.last_response = null;
         }
+
+        const ResponseHandler = struct {
+            fn handle(session: *ClientSession, raw: []u8) !void {
+                defer session.allocator.free(raw);
+                var arena = std.heap.ArenaAllocator.init(session.allocator);
+                defer arena.deinit();
+
+                const packet = decodeServerPacket(arena.allocator(), raw) catch return error.InvalidResponse;
+                const msg_union = packet.quic orelse return error.InvalidResponse;
+
+                switch (msg_union) {
+                    .execute => |exec_resp| {
+                    if (exec_resp.payload) |payload| {
+                        switch (payload) {
+                            .schema => |schema_def| {
+                                session.clearLastColumns();
+                                const cols = try session.allocator.alloc([]const u8, schema_def.columns.items.len);
+                                for (schema_def.columns.items, 0..) |col, i| {
+                                    cols[i] = try session.allocator.dupe(u8, col.name);
+                                }
+                                session.last_columns = cols;
+                            },
+                            else => {},
+                        }
+                    }
+                    session.last_response = try executionResponseToJson(session.allocator, exec_resp, session.last_columns);
+                },
+                    else => return error.InvalidResponse,
+                }
+            }
+        };
 
         // CANARY: REQ=REQ-SHELL-INTERRUPT-039; FEATURE="SourceInterrupt"; ASPECT=ThreadedRead; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
         // Use a threaded approach: worker thread does blocking read, main thread checks for interrupts
@@ -740,8 +1150,7 @@ pub const ClientSession = struct {
             const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |read_err| {
                 return read_err;
             };
-            self.last_response = response;
-            return;
+            return ResponseHandler.handle(self, response);
         };
 
         // Main thread: wait for completion while checking for interrupts
@@ -756,8 +1165,8 @@ pub const ClientSession = struct {
                 if (ctx.err) |err| {
                     return err;
                 }
-                self.last_response = ctx.result;
-                return;
+                const raw = ctx.result orelse return error.InvalidResponse;
+                return ResponseHandler.handle(self, raw);
             }
 
             // Check for interrupt
@@ -781,7 +1190,13 @@ pub const ClientSession = struct {
     pub fn begin(self: *ClientSession) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
-        try self.connection.?.writeAll("{\"type\":\"BEGIN\"}\n");
+        const begin_req = proto_schema.BeginRequest{
+            .read_only = false,
+            .session_id = self.session_id orelse "",
+        };
+        const msg = try encodeClientPacket(self.allocator, .{ .begin = begin_req });
+        defer self.allocator.free(msg);
+        try self.connection.?.writeAll(msg);
 
         // Read and check response with interrupt checking
         // CANARY: REQ=REQ-SHELL-INTERRUPT-013; FEATURE="SourceInterrupt"; ASPECT=BeginInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
@@ -801,10 +1216,14 @@ pub const ClientSession = struct {
             };
             defer self.allocator.free(response);
 
-            if (std.mem.indexOf(u8, response, "\"type\":\"ERROR\"") != null) {
-                return error.TransactionError;
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            var packet = decodeServerPacket(arena.allocator(), response) catch return error.InvalidResponse;
+            const msg_union = packet.quic orelse return error.InvalidResponse;
+            switch (msg_union) {
+                .begin => return,
+                else => return error.TransactionError,
             }
-            return;
         }
 
         return error.WouldBlock;
@@ -822,7 +1241,12 @@ pub const ClientSession = struct {
             self.last_txn_error = null;
         }
 
-        try self.connection.?.writeAll("{\"type\":\"COMMIT\"}\n");
+        const commit_req = proto_schema.CommitRequest{
+            .session_id = self.session_id orelse "",
+        };
+        const msg = try encodeClientPacket(self.allocator, .{ .commit = commit_req });
+        defer self.allocator.free(msg);
+        try self.connection.?.writeAll(msg);
 
         // Read response with retry logic for WouldBlock
         const response = self.readTransactionResponse() catch |err| {
@@ -837,10 +1261,21 @@ pub const ClientSession = struct {
         };
         defer self.allocator.free(response);
 
-        // Check for error response and extract details
-        if (std.mem.indexOf(u8, response, "\"type\":\"ERROR\"") != null) {
-            self.extractTransactionError(response);
-            return error.TransactionError;
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        var packet = decodeServerPacket(arena.allocator(), response) catch return error.InvalidResponse;
+        const msg_union = packet.quic orelse return error.InvalidResponse;
+        switch (msg_union) {
+            .commit => |resp| {
+                if (!resp.success) {
+                    self.last_txn_error = self.allocator.dupe(u8, "Commit failed") catch null;
+                    return error.TransactionError;
+                }
+            },
+            else => {
+                self.last_txn_error = self.allocator.dupe(u8, "Unexpected COMMIT response") catch null;
+                return error.TransactionError;
+            },
         }
     }
 
@@ -867,7 +1302,12 @@ pub const ClientSession = struct {
             self.last_txn_error = null;
         }
 
-        self.connection.?.writeAll("{\"type\":\"ROLLBACK\"}\n") catch |err| {
+        const rollback_req = proto_schema.RollbackRequest{
+            .session_id = self.session_id orelse "",
+        };
+        const msg = try encodeClientPacket(self.allocator, .{ .rollback = rollback_req });
+        defer self.allocator.free(msg);
+        self.connection.?.writeAll(msg) catch |err| {
             // If we can't even send the rollback, connection is broken
             self.last_txn_error = self.allocator.dupe(u8, "Failed to send ROLLBACK (connection broken)") catch null;
             return err;
@@ -925,13 +1365,29 @@ pub const ClientSession = struct {
             };
             defer self.allocator.free(response);
 
-            // Check for error response and extract details
-            if (std.mem.indexOf(u8, response, "\"type\":\"ERROR\"") != null) {
-                self.extractTransactionError(response);
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            var packet = decodeServerPacket(arena.allocator(), response) catch {
+                self.last_txn_error = self.allocator.dupe(u8, "Invalid rollback response") catch null;
                 return error.TransactionError;
+            };
+            const msg_union = packet.quic orelse {
+                self.last_txn_error = self.allocator.dupe(u8, "Invalid rollback response") catch null;
+                return error.TransactionError;
+            };
+            switch (msg_union) {
+                .rollback => |resp| {
+                    if (!resp.success) {
+                        self.last_txn_error = self.allocator.dupe(u8, "Rollback failed") catch null;
+                        return error.TransactionError;
+                    }
+                    return;
+                },
+                else => {
+                    self.last_txn_error = self.allocator.dupe(u8, "Unexpected ROLLBACK response") catch null;
+                    return error.TransactionError;
+                },
             }
-            // Any valid response means rollback completed
-            return;
         }
 
         // Timeout waiting for response - after interrupt, connection may be broken
@@ -969,80 +1425,103 @@ pub const ClientSession = struct {
         return error.WouldBlock;
     }
 
-    /// Extract error message from a transaction error response
-    fn extractTransactionError(self: *ClientSession, response: []const u8) void {
-        // Try to parse JSON and extract error message
-        const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, response, .{}) catch {
-            self.last_txn_error = self.allocator.dupe(u8, "Transaction failed (could not parse error response)") catch null;
-            return;
-        };
-        defer parsed.deinit();
-
-        const obj = parsed.value.object;
-
-        // Try to get the error message from various possible fields
-        if (obj.get("error")) |error_val| {
-            if (error_val == .string) {
-                self.last_txn_error = self.allocator.dupe(u8, error_val.string) catch null;
-                return;
-            }
-        }
-
-        if (obj.get("message")) |msg_val| {
-            if (msg_val == .string) {
-                self.last_txn_error = self.allocator.dupe(u8, msg_val.string) catch null;
-                return;
-            }
-        }
-
-        if (obj.get("result")) |result_val| {
-            if (result_val == .object) {
-                if (result_val.object.get("error")) |err_val| {
-                    if (err_val == .string) {
-                        self.last_txn_error = self.allocator.dupe(u8, err_val.string) catch null;
-                        return;
-                    }
-                }
-            }
-        }
-
-        // Fallback: couldn't find specific error message
-        self.last_txn_error = self.allocator.dupe(u8, "Transaction failed (unknown error)") catch null;
-    }
-
     /// CANARY: REQ=REQ-SHELL-INTERRUPT-015; FEATURE="SourceInterrupt"; ASPECT=PullAllInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
     pub fn pullAll(self: *ClientSession, sink: anytype) !void {
         if (!self.connected or self.connection == null) return error.NotConnected;
 
-        // Send PULL request for all results at once (page_size:-1)
-        // With page_size:-1, the server returns ALL results in a single response
-        const pull_msg = "{\"type\":\"PULL\",\"request_id\":1,\"page_size\":-1}\n";
-        try self.connection.?.writeAll(pull_msg);
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
 
-        // Read the single response with interrupt checking
-        var retry_count: usize = 0;
-        const max_retries: usize = 6000; // ~5 minutes with 50ms sleep for large results
-        while (retry_count < max_retries) : (retry_count += 1) {
-            if (checkForInterrupt()) {
-                return error.Interrupted;
-            }
+        var all_rows = std.json.Array.init(a);
+        var status_class: []const u8 = "00000";
+        var status_subclass: []const u8 = "";
+        var request_id: u64 = 1;
 
-            const response = self.connection.?.readLine(self.allocator, 1 << 20) catch |err| { // 1MB max
-                if (err == error.WouldBlock) {
-                    std.Thread.sleep(50 * std.time.ns_per_ms);
-                    continue;
+        const page_size: u32 = 0; // 0 -> server default page size
+        var done = false;
+
+        while (!done) : (request_id += 1) {
+            const pull_req = proto_schema.PullRequest{
+                .request_id = request_id,
+                .page_size = page_size,
+                .session_id = self.session_id orelse "",
+            };
+            const msg = try encodeClientPacket(self.allocator, .{ .pull = pull_req });
+            defer self.allocator.free(msg);
+            try self.connection.?.writeAll(msg);
+
+            // Read the response with interrupt checking
+            var retry_count: usize = 0;
+            const max_retries: usize = 6000; // ~5 minutes with 50ms sleep for large results
+            const response = while (retry_count < max_retries) : (retry_count += 1) {
+                if (checkForInterrupt()) {
+                    return error.Interrupted;
                 }
-                return err;
+                break self.connection.?.readLine(self.allocator, 1 << 20) catch |err| {
+                    if (err == error.WouldBlock) {
+                        std.Thread.sleep(50 * std.time.ns_per_ms);
+                        continue;
+                    }
+                    return err;
+                };
+            } else {
+                return error.WouldBlock;
             };
             defer self.allocator.free(response);
 
-            if (response.len > 0) {
-                try sink.appendSlice(self.allocator, response);
+            var resp_arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer resp_arena.deinit();
+            var packet = decodeServerPacket(resp_arena.allocator(), response) catch return error.InvalidResponse;
+            const msg_union = packet.quic orelse return error.InvalidResponse;
+
+            switch (msg_union) {
+                .pull => |pull_resp| {
+                    const exec_resp = pull_resp.response orelse return error.InvalidResponse;
+                    if (exec_resp.status) |st| {
+                        if (st.status_class.len > 0) status_class = try a.dupe(u8, st.status_class);
+                        if (st.status_subclass.len > 0) status_subclass = try a.dupe(u8, st.status_subclass);
+                    }
+
+                    if (exec_resp.payload) |payload| {
+                        switch (payload) {
+                            .page => |page| {
+                                const page_rows = try buildRowsJsonArray(a, page.rows.items);
+                                for (page_rows.items) |row| {
+                                    try all_rows.append(a, row);
+                                }
+                                done = page.final;
+                            },
+                            .@"error" => {
+                                const err_json = try executionResponseToJson(self.allocator, exec_resp, self.last_columns);
+                                defer self.allocator.free(err_json);
+                                try sink.appendSlice(self.allocator, err_json);
+                                return;
+                            },
+                            else => {},
+                        }
+                    }
+                },
+                else => return error.InvalidResponse,
             }
-            return;
         }
 
-        return error.WouldBlock;
+        var root = std.json.ObjectMap.init(a);
+        try root.put("status_class", .{ .string = try a.dupe(u8, status_class) });
+        if (status_subclass.len > 0) {
+            try root.put("status_subclass", .{ .string = try a.dupe(u8, status_subclass) });
+        }
+
+        if (self.last_columns) |cols| {
+            const cols_array = try buildColumnsJsonArray(a, cols);
+            try root.put("columns", .{ .array = cols_array });
+        }
+        try root.put("rows", .{ .array = all_rows });
+
+        const root_value = std.json.Value{ .object = root };
+        const json = try std.json.Stringify.valueAlloc(self.allocator, root_value, .{});
+        defer self.allocator.free(json);
+        try sink.appendSlice(self.allocator, json);
     }
 
     /// Drain any pending responses from the connection (cleanup after errors)
@@ -3259,30 +3738,6 @@ test "TestShellAuthDetection_ErrorMessageExtraction" {
     // Issue #387: Test error message parsing from auth failure
     const error_response = "{\"status_class\":\"42000\",\"type\":\"ERROR\",\"message\":\"Invalid credentials\"}";
     try testing.expect(std.mem.indexOf(u8, error_response, "Invalid credentials") != null);
-}
-
-test "TestEscapeJsonString_NoEscaping" {
-    // Test string that doesn't need escaping
-    const allocator = testing.allocator;
-    const result = try escapeJsonString(allocator, "hello world");
-    defer allocator.free(result);
-    try testing.expectEqualStrings("hello world", result);
-}
-
-test "TestEscapeJsonString_QuotesAndBackslashes" {
-    // Test escaping quotes and backslashes
-    const allocator = testing.allocator;
-    const result = try escapeJsonString(allocator, "say \"hello\"\\test");
-    defer allocator.free(result);
-    try testing.expectEqualStrings("say \\\"hello\\\"\\\\test", result);
-}
-
-test "TestEscapeJsonString_Newlines" {
-    // Test escaping newlines and tabs
-    const allocator = testing.allocator;
-    const result = try escapeJsonString(allocator, "line1\nline2\ttab");
-    defer allocator.free(result);
-    try testing.expectEqualStrings("line1\\nline2\\ttab", result);
 }
 
 // CANARY: REQ=REQ-SOURCE-PERF-003; FEATURE="SourceFilePerformance"; ASPECT=UnitTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29

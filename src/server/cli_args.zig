@@ -19,6 +19,7 @@ pub const ServerConfig = struct {
 
     // Network configuration
     listen_quic: ?[]const u8 = null,
+    listen_grpc: ?[]const u8 = null,
     cert_path: ?[]const u8 = null,
     key_path: ?[]const u8 = null,
     force_no_tls: bool = false,
@@ -98,6 +99,9 @@ pub fn mergeFileConfig(config: *ServerConfig, file_result: config_lib.Value) voi
     if (file_result.getString("listen_quic")) |v| {
         if (config.listen_quic == null) config.listen_quic = v;
     }
+    if (file_result.getString("listen_grpc")) |v| {
+        if (config.listen_grpc == null) config.listen_grpc = v;
+    }
     if (file_result.getString("cert_path")) |v| {
         if (config.cert_path == null) config.cert_path = v;
     }
@@ -120,6 +124,7 @@ pub fn printHelp() void {
     std.debug.print("  -c, --config <path>          Path to config file (YAML, TOML, or JSON)\n", .{});
     std.debug.print("  --listen-quic <addr:port>    Listen on QUIC/TLS (e.g., 0.0.0.0:3141)\n", .{});
     std.debug.print("  --listen <addr:port>         Alias for --listen-quic\n", .{});
+    std.debug.print("  --listen-grpc <addr:port>    Listen on gRPC (e.g., 0.0.0.0:3142)\n", .{});
     std.debug.print("  --cert <path>                Path to TLS certificate (default: auto-generate)\n", .{});
     std.debug.print("  --key <path>                 Path to TLS private key (default: auto-generate)\n", .{});
     std.debug.print("  --data_dir <path>            Data directory for storage and generated certs\n", .{});
@@ -210,6 +215,9 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
             config.memcurve_profile = true;
         } else if ((std.mem.eql(u8, arg, "--listen-quic") or std.mem.eql(u8, arg, "--listen")) and ai + 1 < args.len) {
             config.listen_quic = try allocator.dupe(u8, args[ai + 1]);
+            ai += 1;
+        } else if (std.mem.eql(u8, arg, "--listen-grpc") and ai + 1 < args.len) {
+            config.listen_grpc = try allocator.dupe(u8, args[ai + 1]);
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--cert") and ai + 1 < args.len) {
             config.cert_path = try allocator.dupe(u8, args[ai + 1]);

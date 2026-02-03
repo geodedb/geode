@@ -176,120 +176,21 @@ const QuicTransportConnection = struct {
     client: *quic.QuicClient,
     stream: *quic.QuicClientStream,
     owns_client: bool,
-    // CANARY: REQ=REQ-SHELL-PROTO-003; FEATURE="ShellProtobufTransport"; ASPECT=PullSkip; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-    // Track if last write was PULL - server doesn't use PULL in Protobuf protocol
-    // Data is returned with Execute, so PULL should return empty/success
-    pending_pull: bool = false,
 };
 
 // CANARY: REQ=REQ-SHELL-PROTO-001; FEATURE="ShellProtobufTransport"; ASPECT=WriteAll; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-// Convert JSON messages from REPL to Protobuf with length-prefix framing for server
+// Write pre-encoded length-prefixed protobuf message bytes to QUIC stream
 fn quicWriteAll(self: *repl_dispatch.TransportConnection, data: []const u8) !void {
     const ctx = self.context orelse return error.NotConnected;
     const impl: *QuicTransportConnection = @ptrCast(@alignCast(ctx));
-    const allocator = impl.allocator;
-
-    // Strip trailing newline for JSON parsing
-    const trimmed = std.mem.trimRight(u8, data, "\r\n");
-    if (trimmed.len == 0) return;
-
-    // Parse JSON to determine message type
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{}) catch {
-        // Not valid JSON, send as-is (shouldn't happen but fallback)
-        impl.stream.writeAll(data) catch |err| return err;
-        return;
-    };
-    defer parsed.deinit();
-
-    if (parsed.value != .object) {
-        impl.stream.writeAll(data) catch |err| return err;
-        return;
-    }
-
-    const obj = parsed.value.object;
-    const msg_type = obj.get("type") orelse {
-        impl.stream.writeAll(data) catch |err| return err;
-        return;
-    };
-
-    if (msg_type != .string) {
-        impl.stream.writeAll(data) catch |err| return err;
-        return;
-    }
-
-    // Convert JSON to Protobuf based on message type
-    const proto_msg: schema.QuicClientMessage = blk: {
-        if (std.mem.eql(u8, msg_type.string, "HELLO")) {
-            // Extract optional username/password for authenticated HELLO
-            const username = if (obj.get("username")) |u| (if (u == .string) u.string else "") else "";
-            const password = if (obj.get("password")) |p| (if (p == .string) p.string else "") else "";
-            break :blk .{ .hello = .{
-                .username = username,
-                .password = password,
-                .tenant_id = null,
-            } };
-        } else if (std.mem.eql(u8, msg_type.string, "RUN_GQL")) {
-            const text = if (obj.get("text")) |t| (if (t == .string) t.string else "") else "";
-            break :blk .{ .execute = .{
-                .session_id = "",
-                .query = text,
-                .params_json = "",
-            } };
-        } else if (std.mem.eql(u8, msg_type.string, "BEGIN")) {
-            break :blk .{ .begin = .{ .read_only = false } };
-        } else if (std.mem.eql(u8, msg_type.string, "COMMIT")) {
-            break :blk .{ .commit = .{} };
-        } else if (std.mem.eql(u8, msg_type.string, "ROLLBACK")) {
-            break :blk .{ .rollback = .{} };
-        } else if (std.mem.eql(u8, msg_type.string, "PING")) {
-            break :blk .{ .ping = .{} };
-        } else if (std.mem.eql(u8, msg_type.string, "PULL")) {
-            // CANARY: REQ=REQ-SHELL-PROTO-004; FEATURE="ShellProtobufTransport"; ASPECT=PullNoOp; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-            // PULL doesn't exist in Protobuf protocol - server returns all data with Execute
-            // Mark pending_pull so readLine returns empty success without server round-trip
-            impl.pending_pull = true;
-            return; // Don't send anything to server
-        } else {
-            // Unknown message type, try sending as-is
-            impl.stream.writeAll(data) catch |err| return err;
-            return;
-        }
-    };
-
-    // Encode to Protobuf
-    var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 4096) catch return error.OutOfMemory;
-    defer aw.deinit();
-
-    protobuf.encode(&aw.writer, allocator, proto_msg) catch |err| {
-        log.err("Failed to encode protobuf message", &.{Attr.err("error", err)});
-        return err;
-    };
-
-    const encoded = aw.writer.buffer[0..aw.writer.end];
-
-    // Write length prefix (4 bytes big-endian)
-    var len_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &len_buf, @intCast(encoded.len), .big);
-    impl.stream.writeAll(&len_buf) catch |err| return err;
-
-    // Write message body
-    impl.stream.writeAll(encoded) catch |err| return err;
+    impl.stream.writeAll(data) catch |err| return err;
 }
 
 // CANARY: REQ=REQ-SHELL-PROTO-002; FEATURE="ShellProtobufTransport"; ASPECT=ReadLine; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-// Read length-prefixed Protobuf responses and convert to JSON for REPL compatibility
+// Read length-prefixed protobuf responses and return raw message bytes
 fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
-    _ = max_size;
     const ctx = self.context orelse return error.NotConnected;
     const impl: *QuicTransportConnection = @ptrCast(@alignCast(ctx));
-
-    // CANARY: REQ=REQ-SHELL-PROTO-005; FEATURE="ShellProtobufTransport"; ASPECT=PullResponse; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-    // If we sent PULL, return empty success - data was already returned with Execute
-    if (impl.pending_pull) {
-        impl.pending_pull = false;
-        // Return empty BINDINGS response - no more data (it was all in Execute response)
-        return try allocator.dupe(u8, "{\"type\":\"BINDINGS\",\"rows\":[],\"final\":true}");
-    }
 
     const start = std.time.milliTimestamp();
     const timeout_ms: i64 = 30000; // 30 second timeout for REPL
@@ -317,6 +218,7 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
 
     const msg_len = std.mem.readInt(u32, &len_buf, .big);
     if (msg_len > 16 * 1024 * 1024) return error.MessageTooLarge; // 16MB limit
+    if (max_size > 0 and msg_len > max_size) return error.MessageTooLarge;
 
     // Read message body
     const body = try allocator.alloc(u8, msg_len);
@@ -349,253 +251,7 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
         body_read += n;
     }
 
-    // Decode Protobuf
-    var reader: std.Io.Reader = .fixed(body);
-    var packet = protobuf.decode(schema.ServerPacket, &reader, allocator) catch |err| {
-        allocator.free(body);
-        log.err("Failed to decode protobuf response", &.{Attr.err("error", err)});
-        return err;
-    };
-    allocator.free(body);
-    defer packet.deinit(allocator);
-
-    const msg = packet.quic orelse return error.InvalidMessage;
-
-    // Convert Protobuf response to JSON for REPL compatibility
-    var json_buf = std.ArrayList(u8).initCapacity(allocator, 1024) catch return error.OutOfMemory;
-    errdefer json_buf.deinit(allocator);
-    const writer = json_buf.writer(allocator);
-
-    switch (msg) {
-        .hello => |h| {
-            // HELLO response
-            writer.writeAll("{\"type\":\"HELLO\",\"success\":") catch {};
-            if (h.success) {
-                writer.writeAll("true") catch {};
-            } else {
-                writer.writeAll("false") catch {};
-            }
-            if (h.error_message.len > 0) {
-                writer.writeAll(",\"error\":\"") catch {};
-                // Escape the error message
-                for (h.error_message) |c| {
-                    switch (c) {
-                        '"' => writer.writeAll("\\\"") catch {},
-                        '\\' => writer.writeAll("\\\\") catch {},
-                        '\n' => writer.writeAll("\\n") catch {},
-                        '\r' => writer.writeAll("\\r") catch {},
-                        '\t' => writer.writeAll("\\t") catch {},
-                        else => writer.writeByte(c) catch {},
-                    }
-                }
-                writer.writeAll("\"") catch {};
-            }
-            writer.writeAll("}") catch {};
-        },
-        .execute => |exec| {
-            // Query execution response - exec.payload is optional ExecutionResponseUnion
-            if (exec.payload) |exec_val| {
-                switch (exec_val) {
-                    .schema => |s| {
-                        // Schema definition response
-                        writer.writeAll("{\"type\":\"SCHEMA\",\"columns\":[") catch {};
-                        var first = true;
-                        for (s.columns.items) |col| {
-                            if (!first) writer.writeAll(",") catch {};
-                            first = false;
-                            writer.writeAll("{\"name\":\"") catch {};
-                            writer.writeAll(col.name) catch {};
-                            writer.writeAll("\",\"type\":\"") catch {};
-                            writer.writeAll(col.type) catch {};
-                            writer.writeAll("\"}") catch {};
-                        }
-                        writer.writeAll("]}") catch {};
-                    },
-                    .page => |p| {
-                        // Data page response - server returns JSON result as string_val
-                        // Check if first row first value is a complete JSON response (server wraps result in string)
-                        const handled_passthrough = handle_blk: {
-                            if (p.rows.items.len == 1 and p.rows.items[0].values.items.len == 1) {
-                                if (p.rows.items[0].values.items[0].kind) |kind| {
-                                    switch (kind) {
-                                        .string_val => |str_val| {
-                                            // Check if it looks like a complete JSON response
-                                            if (std.mem.startsWith(u8, str_val.value, "{\"status_class\"") or
-                                                std.mem.startsWith(u8, str_val.value, "{\"type\":"))
-                                            {
-                                                // Server already returned complete JSON - pass through directly
-                                                writer.writeAll(str_val.value) catch {};
-                                                break :handle_blk true;
-                                            }
-                                        },
-                                        else => {},
-                                    }
-                                }
-                            }
-                            break :handle_blk false;
-                        };
-
-                        if (!handled_passthrough) {
-                            // Fallback: convert DataPage to BINDINGS format
-                            writer.writeAll("{\"type\":\"BINDINGS\",\"rows\":[") catch {};
-                            var first_row = true;
-                            for (p.rows.items) |row| {
-                                if (!first_row) writer.writeAll(",") catch {};
-                                first_row = false;
-                                writer.writeAll("[") catch {};
-                                var first_val = true;
-                                for (row.values.items) |val| {
-                                    if (!first_val) writer.writeAll(",") catch {};
-                                    first_val = false;
-                                    // Serialize value based on kind (optional)
-                                    if (val.kind) |kind| {
-                                        switch (kind) {
-                                            .null_val => writer.writeAll("null") catch {},
-                                            .string_val => |s| {
-                                                writer.writeAll("\"") catch {};
-                                                for (s.value) |c| {
-                                                    switch (c) {
-                                                        '"' => writer.writeAll("\\\"") catch {},
-                                                        '\\' => writer.writeAll("\\\\") catch {},
-                                                        '\n' => writer.writeAll("\\n") catch {},
-                                                        else => writer.writeByte(c) catch {},
-                                                    }
-                                                }
-                                                writer.writeAll("\"") catch {};
-                                            },
-                                            .int_val => |i| {
-                                                var num_buf: [32]u8 = undefined;
-                                                const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{i.value}) catch "0";
-                                                writer.writeAll(num_str) catch {};
-                                            },
-                                            .double_val => |d| {
-                                                var num_buf: [64]u8 = undefined;
-                                                const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{d.value}) catch "0";
-                                                writer.writeAll(num_str) catch {};
-                                            },
-                                            .bool_val => |b| {
-                                                writer.writeAll(if (b) "true" else "false") catch {};
-                                            },
-                                            else => writer.writeAll("null") catch {},
-                                        }
-                                    } else {
-                                        writer.writeAll("null") catch {};
-                                    }
-                                }
-                                writer.writeAll("]") catch {};
-                            }
-                            writer.writeAll("],\"final\":") catch {};
-                            writer.writeAll(if (p.final) "true" else "false") catch {};
-                            writer.writeAll("}") catch {};
-                        }
-                    },
-                    .@"error" => |e| {
-                        writer.writeAll("{\"type\":\"ERROR\",\"status_class\":\"") catch {};
-                        writer.writeAll(e.code) catch {};
-                        writer.writeAll("\",\"error\":\"") catch {};
-                        for (e.message) |c| {
-                            switch (c) {
-                                '"' => writer.writeAll("\\\"") catch {},
-                                '\\' => writer.writeAll("\\\\") catch {},
-                                '\n' => writer.writeAll("\\n") catch {},
-                                else => writer.writeByte(c) catch {},
-                            }
-                        }
-                        writer.writeAll("\"}") catch {};
-                    },
-                    .metrics, .heartbeat => {
-                        // Ignore metrics/heartbeat messages
-                        writer.writeAll("{\"type\":\"OK\"}") catch {};
-                    },
-                    .explain => |ex| {
-                        writer.writeAll("{\"type\":\"EXPLAIN\",\"plan\":\"") catch {};
-                        writer.writeAll(ex.json_payload) catch {};
-                        writer.writeAll("\"}") catch {};
-                    },
-                    .profile => |pr| {
-                        writer.writeAll("{\"type\":\"PROFILE\",\"plan\":\"") catch {};
-                        writer.writeAll(pr.json_payload) catch {};
-                        writer.writeAll("\"}") catch {};
-                    },
-                }
-            } else {
-                writer.writeAll("{\"type\":\"ERROR\",\"error\":\"Empty response\"}") catch {};
-            }
-        },
-        .ping => |p| {
-            writer.writeAll("{\"type\":\"PING\",\"ok\":") catch {};
-            writer.writeAll(if (p.ok) "true" else "false") catch {};
-            writer.writeAll("}") catch {};
-        },
-        .begin => |b| {
-            // BeginResponse has session_id and tx_id, not success
-            writer.writeAll("{\"type\":\"BEGIN\",\"success\":true,\"tx_id\":\"") catch {};
-            writer.writeAll(b.tx_id) catch {};
-            writer.writeAll("\"}") catch {};
-        },
-        .commit => |c| {
-            writer.writeAll("{\"type\":\"COMMIT\",\"success\":") catch {};
-            writer.writeAll(if (c.success) "true" else "false") catch {};
-            writer.writeAll("}") catch {};
-        },
-        .rollback => |r| {
-            writer.writeAll("{\"type\":\"ROLLBACK\",\"success\":") catch {};
-            writer.writeAll(if (r.success) "true" else "false") catch {};
-            writer.writeAll("}") catch {};
-        },
-        .pull => |p| {
-            // Forward to execute handler since pull contains ExecutionResponse
-            if (p.response) |resp| {
-                if (resp.payload) |exec_val| {
-                    switch (exec_val) {
-                        .page => |page| {
-                            writer.writeAll("{\"type\":\"BINDINGS\",\"rows\":[],\"final\":") catch {};
-                            writer.writeAll(if (page.final) "true" else "false") catch {};
-                            writer.writeAll("}") catch {};
-                        },
-                        else => writer.writeAll("{\"type\":\"OK\"}") catch {},
-                    }
-                } else {
-                    writer.writeAll("{\"type\":\"OK\"}") catch {};
-                }
-            } else {
-                writer.writeAll("{\"type\":\"OK\"}") catch {};
-            }
-        },
-        .cdc_diag => {
-            writer.writeAll("{\"type\":\"CDC_DIAG\",\"success\":true}") catch {};
-        },
-        .cdc_ctrl => {
-            writer.writeAll("{\"type\":\"CDC_CTRL\",\"success\":true}") catch {};
-        },
-        .savepoint => |s| {
-            writer.writeAll("{\"type\":\"SAVEPOINT\",\"success\":") catch {};
-            writer.writeAll(if (s.success) "true" else "false") catch {};
-            writer.writeAll("}") catch {};
-        },
-        .rollback_to => |r| {
-            writer.writeAll("{\"type\":\"ROLLBACK_TO\",\"success\":") catch {};
-            writer.writeAll(if (r.success) "true" else "false") catch {};
-            writer.writeAll("}") catch {};
-        },
-        .backup => |b| {
-            writer.writeAll("{\"type\":\"BACKUP\",\"success\":") catch {};
-            writer.writeAll(if (b.success) "true" else "false") catch {};
-            writer.writeAll("}") catch {};
-        },
-        .restore => |r| {
-            writer.writeAll("{\"type\":\"RESTORE\",\"success\":") catch {};
-            writer.writeAll(if (r.success) "true" else "false") catch {};
-            writer.writeAll("}") catch {};
-        },
-        .upload_backup => |u| {
-            writer.writeAll("{\"type\":\"UPLOAD_BACKUP\",\"success\":") catch {};
-            writer.writeAll(if (u.success) "true" else "false") catch {};
-            writer.writeAll("}") catch {};
-        },
-    }
-
-    return json_buf.toOwnedSlice(allocator) catch return error.OutOfMemory;
+    return body;
 }
 
 fn quicDeinit(self: *repl_dispatch.TransportConnection) void {
@@ -2037,8 +1693,8 @@ fn writeProtoMessage(allocator: std.mem.Allocator, stream: anytype, msg: schema.
     var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
     defer aw.deinit();
 
-    // Encode the inner message variant (QuicClientMessage is a union)
-    try protobuf.encode(&aw.writer, allocator, msg);
+    const packet = schema.ClientPacket{ .quic = msg };
+    try protobuf.encode(&aw.writer, allocator, packet);
 
     // Get the written data
     const written_data = aw.writer.buffer[0..aw.writer.end];
@@ -2091,6 +1747,9 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 
+    var session_id: []const u8 = "";
+    var session_id_owned: ?[]u8 = null;
+
     switch (hello_resp_msg) {
         .hello => |h| {
             log.debug("Client received HELLO response", &.{Attr.boolean("success", h.success)});
@@ -2099,12 +1758,17 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                 _ = stderr_handle.writeAll(err_msg) catch {};
                 std.process.exit(@intFromEnum(ExitCode.auth_error));
             }
+            if (h.session_id.len > 0) {
+                session_id_owned = try allocator.dupe(u8, h.session_id);
+                session_id = session_id_owned.?;
+            }
         },
         else => {
             _ = stderr_handle.writeAll("Error: Unexpected response type during handshake\n") catch {};
             std.process.exit(@intFromEnum(ExitCode.auth_error));
         },
     }
+    defer if (session_id_owned) |sid| allocator.free(sid);
 
     // CANARY: REQ=REQ-CLI-GRAPH-FLAG-006; FEATURE="GraphFlag"; ASPECT=PrependUseGraph; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
     // If a graph is specified, prepend "USE GRAPH graphname;" to the query
@@ -2119,6 +1783,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
 
     // Send query using Protobuf (ExecuteRequest)
     const run_gql_req = schema.ExecuteRequest{
+        .session_id = session_id,
         .query = try allocator.dupe(u8, final_query),
         .params_json = "",
     };
@@ -2150,11 +1815,62 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
     var error_message: []const u8 = "";
     var error_status: []const u8 = "58000";
 
+    const RowAppender = struct {
+        fn valueToString(allocator: std.mem.Allocator, v: schema.Value) ![]const u8 {
+            if (v.kind) |k| {
+                return switch (k) {
+                    .string_val => |str| try allocator.dupe(u8, str.value),
+                    .int_val => |i| try std.fmt.allocPrint(allocator, "{d}", .{i.value}),
+                    .double_val => |d| try std.fmt.allocPrint(allocator, "{d}", .{d.value}),
+                    .bool_val => |b| try allocator.dupe(u8, if (b) "true" else "false"),
+                    .null_val => try allocator.dupe(u8, "null"),
+                    .decimal_val => |dec| blk: {
+                        const repr = if (dec.orig_repr.len > 0) dec.orig_repr else dec.coeff;
+                        break :blk try allocator.dupe(u8, repr);
+                    },
+                    .bytes_val => |bv| blk: {
+                        const out = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(bv.value.len));
+                        _ = std.base64.standard.Encoder.encode(out, bv.value);
+                        break :blk out;
+                    },
+                    else => try allocator.dupe(u8, "?"),
+                };
+            }
+            return allocator.dupe(u8, "null");
+        }
+
+        fn appendPage(
+            allocator: std.mem.Allocator,
+            page: schema.DataPage,
+            all_rows: *std.ArrayList(std.ArrayList([]const u8)),
+        ) !void {
+            for (page.rows.items) |row| {
+                var row_values = try std.ArrayList([]const u8).initCapacity(allocator, row.values.items.len);
+                errdefer {
+                    for (row_values.items) |cell| allocator.free(cell);
+                    row_values.deinit(allocator);
+                }
+
+                for (row.values.items) |v| {
+                    const cell_str = try valueToString(allocator, v);
+                    try row_values.append(allocator, cell_str);
+                }
+
+                try all_rows.append(allocator, row_values);
+            }
+        }
+    };
+
     // Receive responses loop
     var loop_arena = std.heap.ArenaAllocator.init(allocator);
     defer loop_arena.deinit();
 
-    while (true) {
+    var schema_received = false;
+    var saw_inline_page = false;
+    var inline_final = false;
+    var need_pull = false;
+
+    while (!schema_received and !has_error) {
         const loop_allocator = loop_arena.allocator();
 
         const resp = readProtoMessage(loop_allocator, stream, quic_client, timeout_secs) catch |err| {
@@ -2167,58 +1883,20 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                 if (exec_resp.payload) |val| {
                     switch (val) {
                         .schema => |s| {
-                            // Store column names
                             for (s.columns.items) |col| {
                                 const col_copy = try allocator.dupe(u8, col.name);
                                 try columns.append(allocator, col_copy);
                             }
-                            // Table format is no longer streamed - it's formatted at the end
-                            // to calculate proper column widths
+                            schema_received = true;
                         },
                         .page => |p| {
-                            // CANARY: REQ=REQ-CLI-PROTO-001; FEATURE="ProtoMigration"; ASPECT=ParseWrappedJson; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-                            // Server sends entire JSON result as a single string value - we need to parse it
-                            // Check if this is a wrapped JSON response (single row, single string value containing JSON)
-                            if (p.rows.items.len == 1 and p.rows.items[0].values.items.len == 1) {
-                                if (p.rows.items[0].values.items[0].kind) |k| {
-                                    if (k == .string_val) {
-                                        const json_str = k.string_val.value;
-                                        // Try to parse as JSON and extract actual columns/rows
-                                        if (parseWrappedJsonResponse(allocator, json_str, &columns, &all_rows)) |_| {
-                                            if (p.final) break;
-                                            continue;
-                                        } else |_| {
-                                            // Not a wrapped JSON response, fall through to normal processing
-                                        }
-                                    }
-                                }
+                            saw_inline_page = true;
+                            try RowAppender.appendPage(allocator, p, &all_rows);
+                            if (p.final) {
+                                inline_final = true;
+                            } else {
+                                need_pull = true;
                             }
-
-                            // Normal processing for properly structured protobuf responses
-                            for (p.rows.items) |row| {
-                                var row_values = try std.ArrayList([]const u8).initCapacity(allocator, 16);
-                                errdefer {
-                                    for (row_values.items) |cell| allocator.free(cell);
-                                    row_values.deinit(allocator);
-                                }
-
-                                for (row.values.items) |v| {
-                                    const cell_str = if (v.kind) |k| switch (k) {
-                                        .string_val => |str| try allocator.dupe(u8, str.value),
-                                        .int_val => |i| try std.fmt.allocPrint(allocator, "{d}", .{i.value}),
-                                        .double_val => |d| try std.fmt.allocPrint(allocator, "{d}", .{d.value}),
-                                        .bool_val => |b| try allocator.dupe(u8, if (b) "true" else "false"),
-                                        .null_val => try allocator.dupe(u8, "null"),
-                                        else => try allocator.dupe(u8, "?"),
-                                    } else try allocator.dupe(u8, "null");
-
-                                    try row_values.append(allocator, cell_str);
-                                }
-
-                                // Row data is stored and formatted at the end for all formats
-                                try all_rows.append(allocator, row_values);
-                            }
-                            if (p.final) break;
                         },
                         .@"error" => |e| {
                             has_error = true;
@@ -2226,7 +1904,6 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                             if (e.code.len > 0) {
                                 error_status = try allocator.dupe(u8, e.code);
                             }
-                            break;
                         },
                         .metrics, .heartbeat, .explain, .profile => {},
                     }
@@ -2236,15 +1913,111 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                 if (!h.success) {
                     has_error = true;
                     error_message = try allocator.dupe(u8, h.error_message);
-                    error_status = "28000"; // Authentication error
+                    error_status = "28000";
                 }
-                break;
+                schema_received = true;
             },
             .ping => {},
             else => {},
         }
 
         _ = loop_arena.reset(.retain_capacity);
+    }
+
+    if (!has_error and !saw_inline_page) {
+        const loop_allocator = loop_arena.allocator();
+        const maybe_inline = readProtoMessage(loop_allocator, stream, quic_client, 1) catch |err| blk: {
+            if (err == error.Timeout or err == error.EndOfStream) break :blk null;
+            return err;
+        };
+
+        if (maybe_inline) |resp| {
+            switch (resp) {
+                .execute => |exec_resp| {
+                    if (exec_resp.payload) |val| switch (val) {
+                        .page => |p| {
+                            saw_inline_page = true;
+                            try RowAppender.appendPage(allocator, p, &all_rows);
+                            if (p.final) {
+                                inline_final = true;
+                            } else {
+                                need_pull = true;
+                            }
+                        },
+                        .@"error" => |e| {
+                            has_error = true;
+                            error_message = try allocator.dupe(u8, e.message);
+                            if (e.code.len > 0) {
+                                error_status = try allocator.dupe(u8, e.code);
+                            }
+                        },
+                        else => {},
+                    };
+                },
+                else => {},
+            }
+        }
+
+        _ = loop_arena.reset(.retain_capacity);
+    }
+
+    if (!has_error and (!inline_final or need_pull)) {
+        var request_id: u64 = 1;
+        var done = false;
+
+        while (!done and !has_error) : (request_id += 1) {
+            const pull_req = schema.PullRequest{
+                .request_id = request_id,
+                .page_size = 0,
+                .session_id = session_id,
+            };
+            try writeProtoMessage(allocator, stream, .{ .pull = pull_req });
+
+            const loop_allocator = loop_arena.allocator();
+            const resp = readProtoMessage(loop_allocator, stream, quic_client, timeout_secs) catch |err| {
+                if (err == error.EndOfStream) break;
+                return err;
+            };
+
+            switch (resp) {
+                .pull => |pull_resp| {
+                    const exec_resp = pull_resp.response orelse break;
+                    if (exec_resp.payload) |val| switch (val) {
+                        .page => |p| {
+                            try RowAppender.appendPage(allocator, p, &all_rows);
+                            if (p.final) done = true;
+                        },
+                        .@"error" => |e| {
+                            has_error = true;
+                            error_message = try allocator.dupe(u8, e.message);
+                            if (e.code.len > 0) {
+                                error_status = try allocator.dupe(u8, e.code);
+                            }
+                        },
+                        else => {},
+                    };
+                },
+                .execute => |exec_resp| {
+                    if (exec_resp.payload) |val| switch (val) {
+                        .page => |p| {
+                            try RowAppender.appendPage(allocator, p, &all_rows);
+                            if (p.final) done = true;
+                        },
+                        .@"error" => |e| {
+                            has_error = true;
+                            error_message = try allocator.dupe(u8, e.message);
+                            if (e.code.len > 0) {
+                                error_status = try allocator.dupe(u8, e.code);
+                            }
+                        },
+                        else => {},
+                    };
+                },
+                else => {},
+            }
+
+            _ = loop_arena.reset(.retain_capacity);
+        }
     }
 
     // Output final result based on format
@@ -2443,103 +2216,6 @@ fn isNumericString(s: []const u8) bool {
         }
     }
     return has_digit;
-}
-
-// CANARY: REQ=REQ-CLI-PROTO-002; FEATURE="ProtoMigration"; ASPECT=ParseWrappedJson; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-/// Parse wrapped JSON response from server and extract columns/rows
-/// Server sends entire result as JSON string in a single protobuf value
-fn parseWrappedJsonResponse(
-    allocator: std.mem.Allocator,
-    json_str: []const u8,
-    columns: *std.ArrayList([]const u8),
-    all_rows: *std.ArrayList(std.ArrayList([]const u8)),
-) !void {
-    // Parse the JSON string
-    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
-    defer parsed.deinit();
-
-    if (parsed.value != .object) return error.InvalidJson;
-    const root = parsed.value.object;
-
-    // CANARY: REQ=REQ-CLI-PROTO-002; FEATURE="ProtoMigration"; ASPECT=NestedResultParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-    // Server returns JSON wrapped in: {"status_class":"00000","result":{"type":"BINDINGS",...,"columns":[...],"rows":[...]}}
-    // Get the actual data container - either nested under 'result' or at root level
-    const data_obj = blk: {
-        if (root.get("result")) |result_val| {
-            if (result_val == .object) break :blk result_val.object;
-        }
-        break :blk root;
-    };
-
-    // Extract columns
-    if (data_obj.get("columns")) |cols_val| {
-        if (cols_val == .array) {
-            for (cols_val.array.items) |col| {
-                const col_name = switch (col) {
-                    .string => |s| try allocator.dupe(u8, s),
-                    .object => |obj| obj_blk: {
-                        if (obj.get("name")) |name| {
-                            if (name == .string) break :obj_blk try allocator.dupe(u8, name.string);
-                        }
-                        break :obj_blk try allocator.dupe(u8, "?");
-                    },
-                    else => try allocator.dupe(u8, "?"),
-                };
-                try columns.append(allocator, col_name);
-            }
-        }
-    }
-
-    // Extract rows
-    if (data_obj.get("rows")) |rows_val| {
-        if (rows_val == .array) {
-            for (rows_val.array.items) |row_item| {
-                var row_values = try std.ArrayList([]const u8).initCapacity(allocator, 16);
-                errdefer {
-                    for (row_values.items) |cell| allocator.free(cell);
-                    row_values.deinit(allocator);
-                }
-
-                // Handle both array rows (legacy) and object rows (standard format)
-                if (row_item == .array) {
-                    for (row_item.array.items) |cell| {
-                        const cell_str = try jsonValueToString(allocator, cell);
-                        try row_values.append(allocator, cell_str);
-                    }
-                } else if (row_item == .object) {
-                    // Object row format: {"col1": val1, "col2": val2}
-                    // Extract values in column order
-                    for (columns.items) |col_name| {
-                        if (row_item.object.get(col_name)) |cell| {
-                            const cell_str = try jsonValueToString(allocator, cell);
-                            try row_values.append(allocator, cell_str);
-                        } else {
-                            try row_values.append(allocator, try allocator.dupe(u8, "null"));
-                        }
-                    }
-                }
-
-                if (row_values.items.len > 0) {
-                    try all_rows.append(allocator, row_values);
-                } else {
-                    row_values.deinit(allocator);
-                }
-            }
-        }
-    }
-}
-
-/// Convert JSON value to string representation
-fn jsonValueToString(allocator: std.mem.Allocator, val: std.json.Value) ![]const u8 {
-    return switch (val) {
-        .null => try allocator.dupe(u8, "null"),
-        .bool => |b| try allocator.dupe(u8, if (b) "true" else "false"),
-        .integer => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
-        .float => |f| try std.fmt.allocPrint(allocator, "{d}", .{f}),
-        .string => |s| try allocator.dupe(u8, s),
-        .array, .object => try std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(val, .{})}),
-        .number_string => |s| try allocator.dupe(u8, s),
-    };
 }
 
 // CANARY: REQ=REQ-CLI-DOT-001; FEATURE="DotGraphOutput"; ASPECT=FormatConversion; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28

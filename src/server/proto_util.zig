@@ -1,13 +1,12 @@
 const std = @import("std");
-const geode = @import("geode");
 const schema = @import("schema");
 const spice_wrapper = @import("parallel/spice");
-const value_types = geode.value_types;
-const execution = geode.execution;
-const graph_store = geode.graph_store;
-// Use geode module exports to avoid cross-module file ownership conflicts
-const type_helpers = geode.eval.type_helpers;
-const eval_extended = geode.eval_ext;
+// Use relative imports since this file is part of the geode module
+const value_types = @import("../value_types.zig");
+const execution = @import("../execution.zig");
+const graph_store = @import("../graph_store.zig");
+const type_helpers = @import("../eval/type_helpers.zig");
+const eval_extended = @import("../eval_extended.zig");
 
 pub const ParamBindings = struct {
     names: []const []const u8,
@@ -91,7 +90,8 @@ fn freeJsonValue(allocator: std.mem.Allocator, value: value_types.Value) void {
             for (list) |item| freeJsonValue(allocator, item);
             allocator.free(list);
         },
-        .Map => |map| {
+        .Map => |map_const| {
+            var map = map_const;
             var iter = map.iterator();
             while (iter.next()) |entry| {
                 allocator.free(entry.key_ptr.*);
@@ -133,14 +133,29 @@ pub fn mapError(err: anyerror) ErrorInfo {
 }
 
 pub fn buildStatus(allocator: std.mem.Allocator, status_class: []const u8, flagger_findings: []const []const u8) !schema.Status {
+    return buildStatusFull(allocator, status_class, &.{}, flagger_findings);
+}
+
+pub fn buildStatusFull(
+    allocator: std.mem.Allocator,
+    status_class: []const u8,
+    additional_statuses: []const []const u8,
+    flagger_findings: []const []const u8,
+) !schema.Status {
     var flags = std.ArrayList([]const u8).initCapacity(allocator, flagger_findings.len) catch return error.OutOfMemory;
     for (flagger_findings) |flag| {
         try flags.append(allocator, try allocator.dupe(u8, flag));
     }
+
+    var additional = std.ArrayList([]const u8).initCapacity(allocator, additional_statuses.len) catch return error.OutOfMemory;
+    for (additional_statuses) |status| {
+        try additional.append(allocator, try allocator.dupe(u8, status));
+    }
+
     return .{
         .status_class = try allocator.dupe(u8, status_class),
         .status_subclass = "",
-        .additional_statuses = std.ArrayList([]const u8){},
+        .additional_statuses = additional,
         .flagger_findings = flags,
     };
 }
@@ -231,7 +246,8 @@ pub fn buildDataPage(
         for (results, 0..) |res, i| {
             if (res.err) |err| {
                 for (results[0..i]) |prev| {
-                    prev.row.values.deinit(allocator);
+                    var vals = prev.row.values;
+                    vals.deinit(allocator);
                 }
                 return err;
             }
@@ -315,16 +331,16 @@ fn valueToProto(allocator: std.mem.Allocator, value: value_types.Value) !schema.
             }
             break :blk .{ .kind = .{ .map_val = .{ .entries = entries } } };
         },
-        .Node => |node| .{ .kind = .{ .node_val = try nodeToProto(allocator, node) } },
-        .Edge => |edge| .{ .kind = .{ .edge_val = try edgeToProto(allocator, edge) } },
+        .Node => |node| .{ .kind = .{ .node_val = try nodeToProto(allocator, node.*) } },
+        .Edge => |edge| .{ .kind = .{ .edge_val = try edgeToProto(allocator, edge.*) } },
         .Path => |path| blk: {
             var nodes = std.ArrayList(schema.NodeValue).initCapacity(allocator, path.nodes.len) catch return error.OutOfMemory;
             for (path.nodes) |n| {
-                try nodes.append(allocator, try nodeToProto(allocator, n));
+                try nodes.append(allocator, try nodeToProto(allocator, n.*));
             }
             var edges = std.ArrayList(schema.EdgeValue).initCapacity(allocator, path.edges.len) catch return error.OutOfMemory;
             for (path.edges) |e| {
-                try edges.append(allocator, try edgeToProto(allocator, e));
+                try edges.append(allocator, try edgeToProto(allocator, e.*));
             }
             break :blk .{ .kind = .{ .path_val = .{ .nodes = nodes, .edges = edges } } };
         },
