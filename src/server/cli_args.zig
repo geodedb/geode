@@ -26,6 +26,9 @@ pub const ServerConfig = struct {
     // Storage configuration
     data_dir: ?[]const u8 = null,
 
+    // Authentication
+    auth_enabled: bool = true,
+
     // Logging
     log_level_arg: ?[]const u8 = null,
 
@@ -122,9 +125,11 @@ pub fn printHelp() void {
     std.debug.print("Options:\n", .{});
     std.debug.print("  -c, --config <path>          Path to config file (YAML, TOML, or JSON)\n", .{});
     std.debug.print("  --listen-quic <addr:port>    Listen on QUIC/TLS (e.g., 0.0.0.0:3141)\n", .{});
+    std.debug.print("  --listen <addr:port>         Alias for --listen-quic\n", .{});
     std.debug.print("  --cert <path>                Path to TLS certificate (default: auto-generate)\n", .{});
     std.debug.print("  --key <path>                 Path to TLS private key (default: auto-generate)\n", .{});
     std.debug.print("  --data_dir <path>            Data directory for storage and generated certs\n", .{});
+    std.debug.print("  --data-dir <path>            Alias for --data_dir\n", .{});
     std.debug.print("  --result-format <txt|json>   Result format (default: json)\n", .{});
     std.debug.print("  --no-estimates               Disable query estimation\n", .{});
     std.debug.print("  --profile-compact            Enable compact profiling\n", .{});
@@ -133,11 +138,13 @@ pub fn printHelp() void {
     std.debug.print("  --match-max-results <N>      Override MATCH guard max_results (test/deterministic)\n", .{});
     std.debug.print("  --match-max-frontier <N>     Override MATCH guard max_frontier (test/deterministic)\n", .{});
     std.debug.print("  --log-level <lvl>            Set log level trace|debug|info|warn|error|critical (default info)\n", .{});
+    std.debug.print("  --disable-auth               Disable authentication (debug builds only)\n", .{});
+    std.debug.print("  --enable-auth                Enable authentication (default)\n", .{});
     std.debug.print("  --help                       Show this help message\n", .{});
     std.debug.print("\nConfig File Locations (searched in order):\n", .{});
     std.debug.print("  1. .geode/config.{yaml|toml|json}    (project config)\n", .{});
     std.debug.print("  2. ~/.config/geode/config.*          (user config)\n", .{});
-    std.debug.print("\nIf no listen option is specified, defaults to stdio mode.\n", .{});
+    std.debug.print("\nIf no listen option is specified, defaults to 0.0.0.0:3141 (QUIC/TLS).\n", .{});
     std.debug.print("Auto-generated certificates are placed in data_dir or /tmp.\n", .{});
 }
 
@@ -211,7 +218,7 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
             const v = std.fmt.parseFloat(f64, args[ai + 1]) catch -1.0;
             if (v >= 0.0) config.test_wal_skip_ratio = v;
             ai += 1;
-        } else if (std.mem.eql(u8, arg, "--listen-quic") and ai + 1 < args.len) {
+        } else if ((std.mem.eql(u8, arg, "--listen-quic") or std.mem.eql(u8, arg, "--listen")) and ai + 1 < args.len) {
             config.listen_quic = args[ai + 1];
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--cert") and ai + 1 < args.len) {
@@ -220,9 +227,13 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
         } else if (std.mem.eql(u8, arg, "--key") and ai + 1 < args.len) {
             config.key_path = args[ai + 1];
             ai += 1;
-        } else if (std.mem.eql(u8, arg, "--data_dir") and ai + 1 < args.len) {
+        } else if ((std.mem.eql(u8, arg, "--data_dir") or std.mem.eql(u8, arg, "--data-dir")) and ai + 1 < args.len) {
             config.data_dir = args[ai + 1];
             ai += 1;
+        } else if (std.mem.eql(u8, arg, "--disable-auth")) {
+            config.auth_enabled = false;
+        } else if (std.mem.eql(u8, arg, "--enable-auth")) {
+            config.auth_enabled = true;
         } else if (std.mem.eql(u8, arg, "--order-keys") and ai + 1 < args.len) {
             const mode = args[ai + 1];
             if (std.mem.eql(u8, mode, "expr")) {
@@ -255,6 +266,9 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
         }
     }
 
+    if (config.listen_quic == null) {
+        config.listen_quic = "0.0.0.0:3141";
+    }
     return config;
 }
 

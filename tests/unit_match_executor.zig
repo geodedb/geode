@@ -9,14 +9,15 @@ test "TestCANARY_REQ_GQL_017_MatchSingleHop" {
     // Build tiny graph: 1-[:KNOWS]->2, 2-[:KNOWS]->3
     var g = graph_exec.GraphStorage.init(allocator);
     defer g.deinit();
-    try g.addNode(allocator, 1, &.{"Person"});
-    try g.setNodeProperty(1, "age", .{ .Int = 30 });
-    try g.addNode(allocator, 2, &.{"Person"});
-    try g.setNodeProperty(2, "age", .{ .Int = 30 });
-    try g.addNode(allocator, 3, &.{"Person"});
-    try g.setNodeProperty(3, "age", .{ .Int = 40 });
-    _ = try g.addEdge(allocator, 1, 2, "KNOWS");
-    _ = try g.addEdge(allocator, 2, 3, "KNOWS");
+    var person_labels = [_][]const u8{"Person"};
+    const n1 = try g.createNode(&person_labels);
+    try g.setNodeProperty(n1, "age", .{ .Int = 30 });
+    const n2 = try g.createNode(&person_labels);
+    try g.setNodeProperty(n2, "age", .{ .Int = 30 });
+    const n3 = try g.createNode(&person_labels);
+    try g.setNodeProperty(n3, "age", .{ .Int = 40 });
+    _ = try g.createEdge(n1, n2, "KNOWS");
+    _ = try g.createEdge(n2, n3, "KNOWS");
 
     const qtxt = "MATCH (a:Person {age:30})-[:KNOWS]->(b:Person) RETURN a, b";
     var parsed = try geode.parseGql(qtxt, allocator);
@@ -38,7 +39,8 @@ test "TestCANARY_REQ_GQL_017_InvalidHopBounds" {
     const allocator = std.testing.allocator;
     var g = graph_exec.GraphStorage.init(allocator);
     defer g.deinit();
-    try g.addNode(allocator, 1, &.{"X"});
+    var labels = [_][]const u8{"X"};
+    _ = try g.createNode(&labels);
     const qtxt = "MATCH (a:X)-[*3..1]->(b) RETURN a, b"; // min>max triggers guard
     var parsed = try geode.parseGql(qtxt, allocator);
     defer parsed.deinit();
@@ -74,11 +76,12 @@ test "TestCANARY_REQ_GQL_017_BoundedVarLen" {
     const allocator = std.testing.allocator;
     var g = graph_exec.GraphStorage.init(allocator);
     defer g.deinit();
-    try g.addNode(allocator, 1, &.{"Person"});
-    try g.addNode(allocator, 2, &.{"Person"});
-    try g.addNode(allocator, 3, &.{"Person"});
-    _ = try g.addEdge(allocator, 1, 2, "KNOWS");
-    _ = try g.addEdge(allocator, 2, 3, "KNOWS");
+    var person_labels = [_][]const u8{"Person"};
+    const a = try g.createNode(&person_labels);
+    const b = try g.createNode(&person_labels);
+    const c = try g.createNode(&person_labels);
+    _ = try g.createEdge(a, b, "KNOWS");
+    _ = try g.createEdge(b, c, "KNOWS");
     const qtxt = "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a, b";
     var parsed = try geode.parseGql(qtxt, allocator);
     defer parsed.deinit();

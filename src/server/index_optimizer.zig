@@ -4,6 +4,7 @@ const geode = @import("geode");
 const ast = geode.ast;
 const graph_common = geode.graph_common;
 const index_manager = geode.index.IndexManager;
+const spice_wrapper = @import("parallel/spice");
 
 // Import types from common module
 const PropertyValue = graph_common.PropertyValue;
@@ -444,10 +445,19 @@ pub const IndexOptimizer = struct {
         return switch (value) {
             .String => |s| self.allocator.dupe(u8, s),
             .Int => |i| std.fmt.allocPrint(self.allocator, "{d}", .{i}),
+            .Float => |f| std.fmt.allocPrint(self.allocator, "{d}", .{f}),
             .Bool => |b| self.allocator.dupe(u8, if (b) "true" else "false"),
             .Null => self.allocator.dupe(u8, "null"),
             .Decimal => |d| std.fmt.allocPrint(self.allocator, "{d}", .{d.coeff}),
-            .VectorF32 => |v| std.fmt.allocPrint(self.allocator, "vector_{d}x{d}", .{ v.dim, v.data.len }),
+            .ExtValue => |ext| switch (ext) {
+                .Str => |s| self.allocator.dupe(u8, s),
+                .Int => |i| std.fmt.allocPrint(self.allocator, "{d}", .{i}),
+                .Bool => |b| self.allocator.dupe(u8, if (b) "true" else "false"),
+                .Decimal => |d| std.fmt.allocPrint(self.allocator, "{d}", .{d.coeff}),
+                .VectorF32 => |v| std.fmt.allocPrint(self.allocator, "vector_{d}x{d}", .{ v.dim, v.data.len }),
+                .VectorI32 => |v| std.fmt.allocPrint(self.allocator, "vector_{d}x{d}", .{ v.dim, v.data.len }),
+                else => self.allocator.dupe(u8, "<ext>"),
+            },
         };
     }
 
@@ -1670,11 +1680,18 @@ pub const VectorKNNOptimizer = struct {
         // This is a simplified implementation that would compute distances
         // for all nodes and select the top-k results
         // GAP-0220 FIX: Use try for proper error propagation
-        var candidates = try std.ArrayList(struct { node: *graph_common.Node, distance: f64 }).initCapacity(self.allocator, 0);
-        defer candidates.deinit(self.allocator);
+        const Candidate = struct {
+            node: *graph_common.Node,
+            vector: []const f32,
+            query: []const f32,
+        };
+        const DistanceCandidate = struct { node: *graph_common.Node, distance: f64 };
+
+        var candidate_nodes = try std.ArrayList(Candidate).initCapacity(self.allocator, 0);
+        defer candidate_nodes.deinit(self.allocator);
 
         // Scan all nodes
-        var node_iter = graph.getAllNodes();
+        var node_iter = graph.nodes.iterator();
         while (node_iter.next()) |entry| {
             const node = entry.value_ptr;
 
@@ -1683,20 +1700,55 @@ pub const VectorKNNOptimizer = struct {
 
             // Extract vector property
             if (node.*.properties.get(knn_info.property)) |prop_value| {
-                if (prop_value == .VectorF32) {
-                    const node_vector = prop_value.VectorF32;
-                    if (node_vector.data.len == knn_info.query_vector.len) {
-                        // Compute distance (simplified L2 for now)
-                        var distance: f64 = 0;
-                        for (knn_info.query_vector, node_vector.data) |qv, nv| {
-                            const diff = qv - nv;
-                            distance += diff * diff;
-                        }
-                        distance = @sqrt(distance);
-
-                        try candidates.append(self.allocator, .{ .node = node, .distance = distance });
+                if (prop_value == .ExtValue) {
+                    switch (prop_value.ExtValue) {
+                        .VectorF32 => |node_vector| {
+                            if (node_vector.data.len == knn_info.query_vector.len) {
+                                try candidate_nodes.append(self.allocator, .{
+                                    .node = node,
+                                    .vector = node_vector.data,
+                                    .query = knn_info.query_vector,
+                                });
+                            }
+                        },
+                        else => {},
                     }
                 }
+            }
+        }
+
+        var candidates = try std.ArrayList(DistanceCandidate).initCapacity(self.allocator, 0);
+        defer candidates.deinit(self.allocator);
+
+        if (spice_wrapper.shouldUseParallelism(candidate_nodes.items.len, spice_wrapper.Thresholds.map)) {
+            var pool = spice_wrapper.SpicePool.init(self.allocator, null);
+            pool.start();
+            defer pool.deinit();
+
+            const mapFn = struct {
+                fn map(task: *spice_wrapper.Task, item: Candidate) DistanceCandidate {
+                    _ = task;
+                    var distance: f64 = 0;
+                    for (item.query, item.vector) |qv, nv| {
+                        const diff = qv - nv;
+                        distance += diff * diff;
+                    }
+                    return .{ .node = item.node, .distance = @sqrt(distance) };
+                }
+            }.map;
+
+            const results = try spice_wrapper.parallelMap(Candidate, DistanceCandidate, &pool, candidate_nodes.items, mapFn, spice_wrapper.Thresholds.map);
+            defer self.allocator.free(results);
+            try candidates.appendSlice(self.allocator, results);
+        } else {
+            for (candidate_nodes.items) |cand| {
+                var distance: f64 = 0;
+                for (cand.query, cand.vector) |qv, nv| {
+                    const diff = qv - nv;
+                    distance += diff * diff;
+                }
+                distance = @sqrt(distance);
+                try candidates.append(self.allocator, .{ .node = cand.node, .distance = distance });
             }
         }
 

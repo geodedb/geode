@@ -1,11 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const geode = @import("geode");
-const protocol = geode.protocol;
 const impl_flagger = @import("flagger_impl_defined.zig");
 const diagnostics = @import("geode").diagnostics;
 const eval = geode.eval;
-const eval_extended = @import("../eval_extended.zig");
+const eval_extended = geode.eval_ext;
 const exec = geode.exec;
 const storage_pm = @import("storage_page_manager");
 const storage_catalog = @import("storage_catalog");
@@ -23,17 +22,15 @@ const query_ast_cache = @import("query_ast_cache.zig");
 // const query_plan_cache = @import("query_plan_cache.zig");
 
 // Import real logger for proper log level handling
-const logger = @import("../log/logger.zig");
+const logger = geode.audit.system_logger;
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-010; FEATURE="Structured Logging"; ASPECT=ServerMain; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("server");
 const Attr = logging.Attr;
-const audit = @import("../security/audit.zig");
+const audit = geode.security.audit;
 // CANARY: REQ=REQ-PROMETHEUS-WIRE-003; FEATURE="Prometheus Metrics Endpoint"; ASPECT=ServerImport; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
 // GAP-0166: Import metrics server for Prometheus endpoint
 const metrics_server = @import("../monitoring/metrics_server.zig");
-// Import server state management (M3.1 Phase 3 modularization)
-const server_state = @import("server_state.zig");
 // Import backup manager (M3.1 Phase 3 modularization)
 const backup_manager = @import("backup_manager.zig");
 const SimplifiedBackupManager = backup_manager.SimplifiedBackupManager;
@@ -43,8 +40,6 @@ const index_catalog = @import("index_catalog.zig");
 const server_flags = @import("server_flags.zig");
 // Import graph storage manager (M3.1 Phase 3 modularization)
 const graph_storage_mgr = geode.graph_storage_manager;
-// Import protocol handler (M3.2 Phase 3 modularization)
-const protocol_handler = @import("protocol_handler.zig");
 // Import CLI argument parsing (M3.2 Phase 3 CLI extraction)
 const cli_args = @import("cli_args.zig");
 // Import server initialization (M3.2 Phase 3 initialization extraction)
@@ -61,13 +56,7 @@ const transaction_handlers = @import("transaction_handlers.zig");
 // Import message handlers (M3.2 Phase 3 message handlers extraction)
 const message_handlers = @import("message_handlers.zig");
 // Import QUIC connection handlers (M3.3 Phase 3 QUIC handlers extraction)
-const quic_connection_handler = @import("quic_connection_handler.zig");
-// Import stdio message handler (M3.3 Phase 3 stdio handler extraction)
-const stdio_message_handler = @import("stdio_message_handler.zig");
-// Import server utilities (M3.3 Phase 3 server utilities extraction)
-const server_utilities = @import("server_utilities.zig");
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-064; FEATURE="JSON Library Migration"; ASPECT=ServerMain; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-25
-const json_lib = @import("json");
+const quic_connection_handler = geode.server.connection_handler;
 // CANARY: REQ=REQ-ABAC-WIRE-017; FEATURE="ABAC Enforcement"; ASPECT=AsyncConnection; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
 // GAP-0165: Import geode_auth for SecurityManager type in async connection context
 const geode_auth = @import("geode_auth");
@@ -124,12 +113,6 @@ fn handleConnectionAsync(context: *anyopaque) void {
     ctx.allocator.destroy(ctx);
 }
 
-// JSON response types for session parameter operations
-const SessionParamResponse = struct {
-    status_class: []const u8 = "00000",
-    message: []const u8,
-};
-
 const executeCreateIndexStatement = query_executor.executeCreateIndexStatement;
 const executeDropIndexStatement = query_executor.executeDropIndexStatement;
 const executeBackupStatement = query_executor.executeBackupStatement;
@@ -148,7 +131,7 @@ const cost_explain = geode.cost_explain;
 
 // CANARY: REQ=REQ-M11-DRY-001; FEATURE="CodeQuality"; ASPECT=DuplicateCode; STATUS=EXEMPT; OWNER=core; UPDATED=2025-10-17
 // M11: Import backup types from canonical location (storage/backup.zig) instead of duplicating
-const backup = @import("../storage/backup.zig");
+const backup = @import("storage/backup");
 const BackupConfig = backup.BackupConfig;
 const CompressionType = backup.CompressionType;
 const BackupType = backup.BackupType;
@@ -159,21 +142,6 @@ const BackupMetadata = backup.BackupMetadata;
 
 // Removed: UnionMetrics now imported from server_state module (see below)
 
-// Lightweight server implementing JSON line protocol used by tests.
-// Focus: RETURN queries, UNION (ALL/DISTINCT), GROUP BY aggregation via exec.runGroupedQuery,
-// ORDER/LIMIT/OFFSET legality (US001), EXPLAIN/PROFILE, pagination, txn demarcation.
-
-// Import server state support types from modularized server_state.zig (M3.1 Phase 3 incremental extraction)
-const ServerState = server_state.ServerState; // M3.2 Phase 3 - ServerState struct extraction
-const ServerStateInsertedValue = server_state.ServerStateInsertedValue;
-const CatalogSchema = server_state.CatalogSchema;
-const CatalogGraph = server_state.CatalogGraph;
-// Import session management types (M3.1 Phase 3 session extraction)
-const SessionConfiguration = server_state.SessionConfiguration;
-const SessionParameterValue = server_state.SessionParameterValue;
-const SessionResetType = server_state.SessionResetType;
-// Import union metrics (M3.1 Phase 3 utility types extraction)
-const UnionMetrics = server_state.UnionMetrics;
 // Import index catalog (M3.1 Phase 3 index management extraction)
 const IndexStats = index_catalog.IndexStats;
 const initIndexCatalog = index_catalog.initIndexCatalog;
@@ -199,12 +167,8 @@ const computeFlagsExtended = server_flags.computeFlagsExtended;
 // CANARY: REQ=REQ-BINARY-PERSIST-003; FEATURE="BinaryPersistence"; ASPECT=MainImports; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
 // Note: JSON Lines persistence (tryLoadGraphFromDir, saveGraphToDir) removed - using binary persistence via graph_store
 const getOrCreateGraphStorage = graph_storage_mgr.getOrCreateGraphStorage;
-const getNextNodeId = graph_storage_mgr.getNextNodeId;
 const graph_store = geode.graph_store;
 // Import protocol handler functions (M3.2 Phase 3 backup protocol extraction)
-const handleBackupRequest = protocol_handler.handleBackupRequest;
-const handleRestoreRequest = protocol_handler.handleRestoreRequest;
-const handleUploadBackupRequest = protocol_handler.handleUploadBackupRequest;
 // Import query executor utility functions (M3.3 Phase 3 query utilities extraction)
 const valueTypeName = query_executor.valueTypeName;
 const bindingValueTypeName = query_executor.bindingValueTypeName;
@@ -351,12 +315,50 @@ pub fn main() !void {
     const force_no_tls = config.force_no_tls;
     const catalog_create_name = config.catalog_create_name;
     const log_level_arg = config.log_level_arg;
+    var auth_enabled = config.auth_enabled;
 
     // Apply log level and MATCH overrides
     if (log_level_arg) |lla| {
         logger.setLevel(logger.parseLevel(lla));
     }
     log.info("server.start", &.{Attr.string("level", log_level_arg orelse "info")});
+
+    // Initialize user management and enforce auth guard (migrated from CLI wrapper)
+    const user_mgmt = geode.user_management;
+    if (!auth_enabled) {
+        if (builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall) {
+            log.err("SECURITY ERROR: --disable-auth is blocked in production builds", &.{});
+            log.err("If this is intentional for testing, use a Debug build or set GEODE_ALLOW_NO_AUTH=1", &.{});
+            const allow_no_auth = std.process.getEnvVarOwned(gpa, "GEODE_ALLOW_NO_AUTH") catch null;
+            if (allow_no_auth) |v| {
+                defer gpa.free(v);
+                if (std.mem.eql(u8, v, "1") or std.mem.eql(u8, v, "true")) {
+                    log.warn("SECURITY WARNING: Authentication disabled via GEODE_ALLOW_NO_AUTH override!", &.{});
+                    auth_enabled = false;
+                } else {
+                    return error.AuthenticationBypassBlockedInProduction;
+                }
+            } else {
+                return error.AuthenticationBypassBlockedInProduction;
+            }
+        } else {
+            log.warn("SECURITY WARNING: Authentication disabled. Do not use in production!", &.{});
+        }
+    }
+
+    if (auth_enabled) {
+        user_mgmt.initUserStore(gpa) catch |err| {
+            log.err("Failed to initialize user store", &.{Attr.string("error", @errorName(err))});
+            return err;
+        };
+        user_mgmt.setAuthEnabled(true);
+        user_mgmt.ensureDefaultUser(gpa) catch |err| {
+            log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
+            return err;
+        };
+    } else {
+        user_mgmt.setAuthEnabled(false);
+    }
 
     if (config.match_max_results_override) |mmr| g_match_max_results_override = mmr;
     if (config.match_max_frontier_override) |mfr| g_match_max_frontier_override = mfr;
@@ -593,265 +595,6 @@ pub fn main() !void {
         return;
     }
 
-    var state = ServerState{
-        .allocator = gpa,
-        .session_config = SessionConfiguration.init(gpa),
-    };
-    state.telemetry_paging = if (std.process.getEnvVarOwned(gpa, "GEODE_TELEMETRY_PAGING")) |v| blk: {
-        defer gpa.free(v);
-        break :blk true;
-    } else |_| false;
-    // Initialize CDC engine if enabled via environment
-    var cdc_engine_storage: @import("cdc_enhanced").CDCEngine = undefined;
-    var cdc_inited = false;
-    if (std.process.getEnvVarOwned(gpa, "GEODE_CDC_ENABLE")) |val| {
-        defer gpa.free(val);
-        if (val.len > 0 and (val[0] == '1' or std.ascii.eqlIgnoreCase(val, "true"))) {
-            var sinks_arr = [_]@import("cdc_enhanced").CDCSink{.memory};
-            const cfg = @import("cdc_enhanced").CDCConfig{ .enabled = true, .sinks = sinks_arr[0..] };
-            cdc_engine_storage = @import("cdc_enhanced").CDCEngine.init(gpa, cfg) catch blk: {
-                log.err("Failed to init CDC engine", &.{});
-                break :blk undefined;
-            };
-            cdc_engine_storage.start() catch log.err("CDC engine start failed", &.{});
-            state.cdc_engine = &cdc_engine_storage;
-            cdc_inited = true;
-        }
-    } else |_| {}
-    defer if (cdc_inited) {
-        cdc_engine_storage.deinit();
-    };
-    state.txn_manager.init(gpa);
-    state.inserted_values = .{};
-    state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
-    state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
-    state.wal_ptr = @ptrCast(wal);
-    state.spill_sort = env_spill_sort;
-    state.spill_distinct = env_spill_distinct;
-    state.spill_union = env_spill_union;
-    state.query_mem_limit_bytes = env_spill_threshold;
-    // CANARY: REQ=REQ-ABAC-WIRE-011; FEATURE="ABAC Enforcement"; ASPECT=StdioState; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
-    // GAP-0165: Wire SecurityManager into ServerState for stdio mode ABAC enforcement
-    state.security_manager = init_ctx.security_manager;
-    state.storage_checksum_error = env_storage_checksum_error;
-    state.query_ast_cache = init_ctx.shared_ast_cache;
-
-    state.query_optimizer_enabled = if (std.process.getEnvVarOwned(gpa, "GEODE_ENABLE_QUERY_OPTIMIZER")) |v| blk: {
-        defer gpa.free(v);
-        if (v.len == 0) break :blk false;
-        if (v[0] == '0') break :blk false;
-        if (std.ascii.eqlIgnoreCase(v, "false")) break :blk false;
-        if (std.ascii.eqlIgnoreCase(v, "off")) break :blk false;
-        break :blk true;
-    } else |_| false;
-
-    // Inline RUN+PULL for small results (configurable).
-    state.inline_results_enabled = if (std.process.getEnvVarOwned(gpa, "GEODE_INLINE_RESULTS")) |v| blk: {
-        defer gpa.free(v);
-        if (v.len == 0) break :blk true;
-        if (v[0] == '0') break :blk false;
-        if (std.ascii.eqlIgnoreCase(v, "false")) break :blk false;
-        if (std.ascii.eqlIgnoreCase(v, "off")) break :blk false;
-        break :blk true;
-    } else |_| true;
-    state.inline_results_max_rows = if (std.process.getEnvVarOwned(gpa, "GEODE_INLINE_RESULTS_MAX_ROWS")) |v| blk: {
-        defer gpa.free(v);
-        break :blk std.fmt.parseInt(usize, v, 10) catch state.inline_results_max_rows;
-    } else |_| state.inline_results_max_rows;
-
-    // Initialize query plan cache and optimizer for performance optimization
-    var query_optimizer = query_plan_cache.QueryOptimizer.init(gpa, 100); // Cache up to 100 plans
-    defer query_optimizer.deinit();
-    state.query_optimizer = &query_optimizer;
-
-    // Initialize distributed query planner for federation-aware optimization
-    var federation_manager = geode.distributed.query_planner.FederationManager.init(gpa);
-    defer federation_manager.deinit();
-    var dist_planner = geode.distributed.query_planner.DistributedQueryPlanner.init(gpa, &federation_manager);
-    defer dist_planner.deinit();
-    state.federation_manager = &federation_manager;
-    state.distributed_planner = &dist_planner;
-
-    // CANARY: REQ=REQ-QUALITY-GAP-406-009; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
-    const stdin_file = if (builtin.os.tag == .windows) blk: {
-        const h = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch {
-            std.debug.print("Fatal: Cannot get stdin handle\n", .{});
-            return error.SystemResources;
-        };
-        if (h == std.os.windows.INVALID_HANDLE_VALUE) {
-            std.debug.print("Fatal: Invalid stdin handle\n", .{});
-            return error.SystemResources;
-        }
-        break :blk std.fs.File{ .handle = h };
-    } else std.fs.File{ .handle = std.posix.STDIN_FILENO };
-    var stdin_buf: [4096]u8 = undefined;
-    var stdin = stdin_file.reader(&stdin_buf);
-    const stdout_file = if (builtin.os.tag == .windows) blk: {
-        const h = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
-            std.debug.print("Fatal: Cannot get stdout handle\n", .{});
-            return error.SystemResources;
-        };
-        if (h == std.os.windows.INVALID_HANDLE_VALUE) {
-            std.debug.print("Fatal: Invalid stdout handle\n", .{});
-            return error.SystemResources;
-        }
-        break :blk std.fs.File{ .handle = h };
-    } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-    var line_storage: [65536]u8 = undefined;
-
-    // Robust line loop: handle EOF with partial line, ignore blank lines, no spin.
-    while (true) {
-        var read_len: usize = 0;
-        var got_newline = false;
-        while (!got_newline and read_len < line_storage.len) {
-            var one: [1]u8 = undefined;
-            const amt = stdin.read(&one) catch |e| switch (e) {
-                error.EndOfStream => 0,
-                else => 0,
-            };
-            if (amt == 0) break; // EOF or error
-            const b = one[0];
-            if (b == '\n') {
-                got_newline = true;
-                break;
-            }
-            line_storage[read_len] = b;
-            read_len += 1;
-        }
-        if (read_len == 0) {
-            // No bytes collected. If we didn't get a newline and next read is EOF, terminate.
-            // Attempt a single probe read to distinguish between blank line and EOF.
-            var probe: [1]u8 = undefined;
-            const probe_amt = stdin.read(&probe) catch |e| switch (e) {
-                error.EndOfStream => 0,
-                else => 0,
-            };
-            if (probe_amt == 0) break; // real EOF
-            if (probe[0] == '\n') continue; // blank line
-            // Start new line with probe byte.
-            line_storage[0] = probe[0];
-            read_len = 1;
-            // Continue filling remainder of line until newline/EOF.
-            while (read_len < line_storage.len) {
-                var nxt: [1]u8 = undefined;
-                const na = stdin.read(&nxt) catch |e| switch (e) {
-                    error.EndOfStream => 0,
-                    else => 0,
-                };
-                if (na == 0) break;
-                if (nxt[0] == '\n') break;
-                line_storage[read_len] = nxt[0];
-                read_len += 1;
-            }
-        }
-        const raw = line_storage[0..read_len];
-        if (raw.len == 0) continue; // ignore
-        if (DEBUG_PROFILE and raw.len > 0) {
-            const preview_len = if (raw.len < 120) raw.len else 120;
-            log.debug("Received line", &.{
-                Attr.int("len", @intCast(raw.len)),
-                Attr.string("head", raw[0..preview_len]),
-            });
-        }
-        // Parse client message
-        var arena = std.heap.ArenaAllocator.init(gpa);
-        defer arena.deinit();
-        const msg = protocol.parseClientMessage(arena.allocator(), raw) catch continue; // ignore invalid
-        // Process message using unified stdio handler (M3.3 Phase 3 stdio handler extraction)
-        // Delegates to quic_connection_handler.processMessage for most message types,
-        // eliminating ~1,784 lines of duplicated code
-        const should_continue = stdio_message_handler.processStdioMessage(
-            gpa,
-            &state,
-            msg,
-            stdout_file,
-            result_format_txt,
-            disable_estimates,
-            compact_profile,
-            memcurve_profile,
-            env_wal_compact_interval,
-            raw,
-        );
-        if (!should_continue) break;
-    }
-    // Graceful shutdown: binary persistence is handled automatically by graph_store.zig
-    // CANARY: REQ=REQ-GRAPH-PERSIST-003; FEATURE="BinaryPersistence"; ASPECT=Shutdown; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
-    // Note: graph_store.saveToFile() is called automatically after each data modification
-    // so no explicit save is needed on shutdown. Just update catalog metadata.
-    if (data_dir) |_| {
-        // Update catalog metadata if initialized
-        if (catalog_inited) {
-            const global_store = graph_store.getGlobalStore(gpa);
-            const node_count = global_store.getNodeCount();
-            catalog.saveGraphMetadata(@intCast(node_count), 0, 0, 0) catch |err| {
-                log.warn("Failed to save graph metadata to catalog", &.{Attr.string("error", @errorName(err))});
-            };
-        }
-    }
-    // Flush WAL if present before exiting.
-    if (state.wal_ptr) |wp_flush| {
-        const wflush: *wal_manager.WalManager = @ptrCast(@alignCast(wp_flush));
-        wflush.fsync() catch {};
-    }
-}
-
-// Execute session parameter setting
-fn executeSessionParameterSet(allocator: std.mem.Allocator, session_config: *SessionConfiguration, param_clause: geode.ast.ParameterClause) ![]const u8 {
-    switch (param_clause) {
-        .ValueParam => |value_param| {
-            const param_name = value_param.parameter_name.specification;
-            const value = if (value_param.initializer) |init|
-                SessionParameterValue{ .Value = try allocator.dupe(u8, init) }
-            else
-                SessionParameterValue{ .Value = try allocator.dupe(u8, "") };
-
-            try session_config.setParameter(param_name, value);
-            const msg = try std.fmt.allocPrint(allocator, "Session value parameter '{s}' set", .{param_name});
-            defer allocator.free(msg);
-            const response = SessionParamResponse{ .message = msg };
-            const json_str = try json_lib.encode(allocator, response, .{});
-            defer allocator.free(json_str);
-            const result = try allocator.alloc(u8, json_str.len + 1);
-            @memcpy(result[0..json_str.len], json_str);
-            result[json_str.len] = '\n';
-            return result;
-        },
-        .GraphParam => |graph_param| {
-            const param_name = graph_param.parameter_name.specification;
-            const value = if (graph_param.initializer) |init|
-                SessionParameterValue{ .Graph = try allocator.dupe(u8, init) }
-            else
-                SessionParameterValue{ .Graph = try allocator.dupe(u8, "") };
-
-            try session_config.setParameter(param_name, value);
-            const graph_type = if (graph_param.property_graph) "property graph" else "graph";
-            const msg = try std.fmt.allocPrint(allocator, "Session {s} parameter '{s}' set", .{ graph_type, param_name });
-            defer allocator.free(msg);
-            const response = SessionParamResponse{ .message = msg };
-            const json_str = try json_lib.encode(allocator, response, .{});
-            defer allocator.free(json_str);
-            const result = try allocator.alloc(u8, json_str.len + 1);
-            @memcpy(result[0..json_str.len], json_str);
-            result[json_str.len] = '\n';
-            return result;
-        },
-        .BindingTableParam => |binding_param| {
-            const param_name = binding_param.parameter_name.specification;
-            const value = if (binding_param.initializer) |init|
-                SessionParameterValue{ .BindingTable = try allocator.dupe(u8, init) }
-            else
-                SessionParameterValue{ .BindingTable = try allocator.dupe(u8, "") };
-
-            try session_config.setParameter(param_name, value);
-            const msg = try std.fmt.allocPrint(allocator, "Session binding table parameter '{s}' set", .{param_name});
-            defer allocator.free(msg);
-            const response = SessionParamResponse{ .message = msg };
-            const json_str = try json_lib.encode(allocator, response, .{});
-            defer allocator.free(json_str);
-            const result = try allocator.alloc(u8, json_str.len + 1);
-            @memcpy(result[0..json_str.len], json_str);
-            result[json_str.len] = '\n';
-            return result;
-        },
-    }
+    log.err("No QUIC listener configured. Stdio server is disabled; use --listen-quic.", &.{});
+    return error.MissingListenAddress;
 }

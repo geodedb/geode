@@ -12,22 +12,27 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_001_EndToEndWorkflow" 
 
     // Create graph storage
     var graph = geode.graph_common.GraphStorage.init(allocator);
-    defer graph.deinit(allocator);
+    defer graph.deinit();
 
     // Add nodes with properties
-    const user_id = try graph.addNode(allocator, 1, &[_][]const u8{"User"});
-    const post_id = try graph.addNode(allocator, 2, &[_][]const u8{"Post"});
-    const comment_id = try graph.addNode(allocator, 3, &[_][]const u8{"Comment"});
+    var user_labels = [_][]const u8{"User"};
+    var post_labels = [_][]const u8{"Post"};
+    var comment_labels = [_][]const u8{"Comment"};
+    const user_id = try graph.createNode(&user_labels);
+    const post_id = try graph.createNode(&post_labels);
+    const comment_id = try graph.createNode(&comment_labels);
 
     // Add relationships
-    const created_edge = try graph.addEdge(allocator, user_id, post_id, "CREATED");
-    const commented_edge = try graph.addEdge(allocator, user_id, comment_id, "WROTE");
-    const comment_on_edge = try graph.addEdge(allocator, comment_id, post_id, "COMMENT_ON");
+    const created_edge = try graph.createEdge(user_id, post_id, "CREATED");
+    const commented_edge = try graph.createEdge(user_id, comment_id, "WROTE");
+    const comment_on_edge = try graph.createEdge(comment_id, post_id, "COMMENT_ON");
 
     // Verify graph structure
-    try testing.expect(user_id == 1);
-    try testing.expect(post_id == 2);
-    try testing.expect(comment_id == 3);
+    try testing.expect(user_id != 0);
+    try testing.expect(post_id != 0);
+    try testing.expect(comment_id != 0);
+    try testing.expect(user_id != post_id);
+    try testing.expect(user_id != comment_id);
     try testing.expect(created_edge != 0);
     try testing.expect(commented_edge != 0);
     try testing.expect(comment_on_edge != 0);
@@ -161,7 +166,7 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_003_GraphStorageIntegr
 
     // Create graph storage instance
     var graph = geode.graph_common.GraphStorage.init(allocator);
-    defer graph.deinit(allocator);
+    defer graph.deinit();
 
     // Test complex graph creation
     const users = [_]struct { id: u64, name: []const u8 }{
@@ -181,20 +186,22 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_003_GraphStorageIntegr
     var user_node_ids = std.ArrayList(u64).init(allocator);
     defer user_node_ids.deinit();
 
+    var user_labels = [_][]const u8{"User"};
     for (users) |user| {
-        const node_id = try graph.addNode(allocator, user.id, &[_][]const u8{"User"});
+        _ = user;
+        const node_id = try graph.createNode(&user_labels);
         try user_node_ids.append(node_id);
-        try testing.expect(node_id == user.id);
     }
 
     // Add post nodes
     var post_node_ids = std.ArrayList(u64).init(allocator);
     defer post_node_ids.deinit();
 
+    var post_labels = [_][]const u8{"Post"};
     for (posts) |post| {
-        const node_id = try graph.addNode(allocator, post.id, &[_][]const u8{"Post"});
+        _ = post;
+        const node_id = try graph.createNode(&post_labels);
         try post_node_ids.append(node_id);
-        try testing.expect(node_id == post.id);
     }
 
     // Create relationships: Alice creates all posts, others create comments
@@ -203,7 +210,7 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_003_GraphStorageIntegr
 
     // Alice creates all posts
     for (post_node_ids.items) |post_id| {
-        const edge_id = try graph.addEdge(allocator, user_node_ids.items[0], post_id, "CREATED");
+        const edge_id = try graph.createEdge(user_node_ids.items[0], post_id, "CREATED");
         try edge_ids.append(edge_id);
         try testing.expect(edge_id != 0);
     }
@@ -218,7 +225,7 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_003_GraphStorageIntegr
     };
 
     for (follow_relationships) |rel| {
-        const edge_id = try graph.addEdge(allocator, user_node_ids.items[rel.from], user_node_ids.items[rel.to], "FOLLOWS");
+        const edge_id = try graph.createEdge(user_node_ids.items[rel.from], user_node_ids.items[rel.to], "FOLLOWS");
         try edge_ids.append(edge_id);
         try testing.expect(edge_id != 0);
     }
@@ -229,11 +236,11 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_003_GraphStorageIntegr
     defer alice_posts.deinit();
 
     // Get Alice's outgoing edges
-    if (graph.outgoing.get(user_node_ids.items[0])) |alice_edges| {
+    if (graph.outgoing_edges.get(user_node_ids.items[0])) |alice_edges| {
         for (alice_edges.items) |edge_id| {
             if (graph.edges.get(edge_id)) |edge| {
-                if (std.mem.eql(u8, edge.edge_type, "CREATED")) {
-                    try alice_posts.append(edge.target);
+                if (std.mem.eql(u8, edge.label, "CREATED")) {
+                    try alice_posts.append(edge.to_id);
                 }
             }
         }
@@ -302,7 +309,7 @@ test "Cross-module dependency resolution validation" {
     defer mv_manager.deinit();
 
     var graph = geode.graph_common.GraphStorage.init(allocator);
-    defer graph.deinit(allocator);
+    defer graph.deinit();
 
     // Test 2: Column type is accessible from multiple modules
     const column_types = [_]geode.graph_common.Column{
@@ -407,7 +414,7 @@ test "Build system stability under load" {
     var graphs = std.ArrayList(geode.graph_common.GraphStorage).init(allocator);
     defer {
         for (graphs.items) |*graph| {
-            graph.deinit(allocator);
+            graph.deinit();
         }
         graphs.deinit();
     }
@@ -416,9 +423,10 @@ test "Build system stability under load" {
         var graph = geode.graph_common.GraphStorage.init(allocator);
 
         // Add nodes to each graph
+        var labels = [_][]const u8{"TestNode"};
         for (0..5) |j| {
-            const node_id = @as(u64, @intCast(i * 10 + j + 1));
-            _ = try graph.addNode(allocator, node_id, &[_][]const u8{"TestNode"});
+            _ = j;
+            _ = try graph.createNode(&labels);
         }
 
         try graphs.append(graph);
@@ -474,13 +482,8 @@ test "Build system stability under load" {
 
     // Verify all instances are independent and functional
     for (graphs.items, 0..) |graph, i| {
+        _ = i;
         try testing.expect(graph.nodes.count() == 5);
-
-        // Verify each graph has the expected nodes
-        for (0..5) |j| {
-            const expected_node_id = @as(u64, @intCast(i * 10 + j + 1));
-            try testing.expect(graph.nodes.contains(expected_node_id));
-        }
     }
 
     for (schemas.items) |schema| {

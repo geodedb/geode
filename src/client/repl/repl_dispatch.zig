@@ -19,6 +19,16 @@ pub fn checkForInterrupt() bool {
         return true;
     }
 
+    // CANARY: REQ=REQ-SHELL-PLAIN-009; FEATURE="ShellPlainMode"; ASPECT=InterruptCheckTTY; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+    // Only check stdin for Ctrl+C if it's a TTY. When stdin is piped (non-interactive/plain mode),
+    // reading from stdin will consume actual command input, not just Ctrl+C signals.
+    // In piped mode, rely on signal-based interrupt handling above.
+    if (builtin.os.tag != .windows) {
+        if (!std.posix.isatty(std.posix.STDIN_FILENO)) {
+            return false;
+        }
+    }
+
     // Also check stdin for raw mode terminals
     if (builtin.os.tag == .windows) {
         // Windows: Check console input for Ctrl+C
@@ -2513,6 +2523,24 @@ fn extractAndDisplayResult(allocator: std.mem.Allocator, response: []const u8, s
         }
     }
 
+    // CANARY: REQ=REQ-SHELL-PLAIN-010; FEATURE="ShellPlainMode"; ASPECT=TopLevelRowsFormat; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+    // Handle top-level columns/rows format used by shell protocol:
+    // {"status_class":"00000","columns":["col1","col2"],"rows":[[val1,val2],...]}
+    // This is different from the nested format: {"result":{"type":"BINDINGS","rows":[{...}]}}
+    if (root.get("columns")) |columns_value| {
+        if (root.get("rows")) |rows_value| {
+            if (columns_value == .array and rows_value == .array) {
+                const columns = columns_value.array;
+                const rows = rows_value.array;
+
+                // Convert 2D array format to array of objects for display
+                // [[val1, val2], [val3, val4]] -> [{"col1":val1,"col2":val2}, {"col1":val3,"col2":val4}]
+                try displayRowsWithColumns(allocator, columns, rows, stdout, format);
+                return false;
+            }
+        }
+    }
+
     // Extract and display the result
     if (root.get("result")) |result_value| {
         if (result_value == .object) {
@@ -2583,6 +2611,170 @@ fn displayRows(allocator: std.mem.Allocator, rows_value: std.json.Value, stdout:
     var buf: [64]u8 = undefined;
     const count_msg = std.fmt.bufPrint(&buf, "({d} row{s})\r\n", .{ rows.items.len, if (rows.items.len == 1) "" else "s" }) catch return;
     try stdout.writeAll(count_msg);
+}
+
+/// CANARY: REQ=REQ-SHELL-PLAIN-011; FEATURE="ShellPlainMode"; ASPECT=ColumnRowsDisplay; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+/// Display rows from shell protocol format with separate columns and 2D rows array
+/// columns: ["col1", "col2"], rows: [[val1, val2], [val3, val4]]
+fn displayRowsWithColumns(allocator: std.mem.Allocator, columns: std.json.Array, rows: std.json.Array, stdout: anytype, format: anytype) !void {
+    if (rows.items.len == 0) {
+        try stdout.writeAll("(0 rows)\r\n");
+        return;
+    }
+
+    // Get column names
+    var col_names = try allocator.alloc([]const u8, columns.items.len);
+    defer allocator.free(col_names);
+    for (columns.items, 0..) |col, i| {
+        col_names[i] = if (col == .string) col.string else "?";
+    }
+
+    switch (format) {
+        .table => try displayRowsWithColumnsAsTable(allocator, col_names, rows, stdout),
+        .csv => try displayRowsWithColumnsAsCsv(col_names, rows, stdout),
+        .json => {
+            // Convert to object format and pretty print
+            try stdout.writeAll("[\r\n");
+            for (rows.items, 0..) |row, row_idx| {
+                if (row == .array) {
+                    try stdout.writeAll("  {");
+                    for (row.array.items, 0..) |val, col_idx| {
+                        if (col_idx > 0) try stdout.writeAll(", ");
+                        try stdout.writeAll("\"");
+                        try stdout.writeAll(col_names[col_idx]);
+                        try stdout.writeAll("\": ");
+                        try writeJsonValue(stdout, val);
+                    }
+                    try stdout.writeAll("}");
+                    if (row_idx < rows.items.len - 1) try stdout.writeAll(",");
+                    try stdout.writeAll("\r\n");
+                }
+            }
+            try stdout.writeAll("]\r\n");
+        },
+    }
+
+    // Show row count
+    var buf: [64]u8 = undefined;
+    const count_msg = std.fmt.bufPrint(&buf, "({d} row{s})\r\n", .{ rows.items.len, if (rows.items.len == 1) "" else "s" }) catch return;
+    try stdout.writeAll(count_msg);
+}
+
+/// Display rows with columns as table format
+fn displayRowsWithColumnsAsTable(allocator: std.mem.Allocator, col_names: []const []const u8, rows: std.json.Array, stdout: anytype) !void {
+    // Calculate column widths
+    var col_widths = try allocator.alloc(usize, col_names.len);
+    defer allocator.free(col_widths);
+
+    for (col_names, 0..) |name, i| {
+        col_widths[i] = name.len;
+    }
+
+    // Check each row for max widths
+    for (rows.items) |row| {
+        if (row != .array) continue;
+        for (row.array.items, 0..) |val, i| {
+            if (i >= col_widths.len) break;
+            const width = getValueDisplayWidth(val);
+            col_widths[i] = @max(col_widths[i], @min(width, 50)); // Cap at 50 chars
+        }
+    }
+
+    // Print header
+    try stdout.writeAll("| ");
+    for (col_names, 0..) |name, i| {
+        try stdout.writeAll(name);
+        const padding = col_widths[i] -| name.len;
+        for (0..padding) |_| try stdout.writeAll(" ");
+        try stdout.writeAll(" | ");
+    }
+    try stdout.writeAll("\r\n");
+
+    // Print separator
+    try stdout.writeAll("|");
+    for (col_widths) |width| {
+        try stdout.writeAll("-");
+        for (0..width) |_| try stdout.writeAll("-");
+        try stdout.writeAll("-|");
+    }
+    try stdout.writeAll("\r\n");
+
+    // Print data rows
+    for (rows.items) |row| {
+        if (row != .array) continue;
+        try stdout.writeAll("| ");
+        for (col_names, 0..) |_, i| {
+            var val_buf: [256]u8 = undefined;
+            var printed_len: usize = 0;
+            if (i < row.array.items.len) {
+                const val = row.array.items[i];
+                const str = formatValueCompact(&val_buf, val);
+                const display_str = if (str.len > col_widths[i]) str[0..col_widths[i]] else str;
+                try stdout.writeAll(display_str);
+                printed_len = display_str.len;
+            }
+            const padding = col_widths[i] -| printed_len;
+            for (0..padding) |_| try stdout.writeAll(" ");
+            try stdout.writeAll(" | ");
+        }
+        try stdout.writeAll("\r\n");
+    }
+}
+
+/// Display rows with columns as CSV format
+fn displayRowsWithColumnsAsCsv(col_names: []const []const u8, rows: std.json.Array, stdout: anytype) !void {
+    // Print header
+    for (col_names, 0..) |name, i| {
+        if (i > 0) try stdout.writeAll(",");
+        try stdout.writeAll(name);
+    }
+    try stdout.writeAll("\r\n");
+
+    // Print data rows
+    for (rows.items) |row| {
+        if (row != .array) continue;
+        for (row.array.items, 0..) |val, i| {
+            if (i > 0) try stdout.writeAll(",");
+            var val_buf: [256]u8 = undefined;
+            const str = formatValueCompact(&val_buf, val);
+            try stdout.writeAll(str);
+        }
+        try stdout.writeAll("\r\n");
+    }
+}
+
+/// Write a JSON value for output
+fn writeJsonValue(stdout: anytype, val: std.json.Value) !void {
+    var buf: [256]u8 = undefined;
+    switch (val) {
+        .null => try stdout.writeAll("null"),
+        .bool => |b| try stdout.writeAll(if (b) "true" else "false"),
+        .integer => |i| {
+            const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch "?";
+            try stdout.writeAll(str);
+        },
+        .float => |f| {
+            const str = std.fmt.bufPrint(&buf, "{d}", .{f}) catch "?";
+            try stdout.writeAll(str);
+        },
+        .string => |s| {
+            try stdout.writeAll("\"");
+            try stdout.writeAll(s);
+            try stdout.writeAll("\"");
+        },
+        .array => |arr| {
+            try stdout.writeAll("[");
+            for (arr.items, 0..) |item, i| {
+                if (i > 0) try stdout.writeAll(", ");
+                try writeJsonValue(stdout, item);
+            }
+            try stdout.writeAll("]");
+        },
+        .object => {
+            try stdout.writeAll("{...}");
+        },
+        .number_string => |s| try stdout.writeAll(s),
+    }
 }
 
 /// Display rows as a formatted table

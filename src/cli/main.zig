@@ -11,6 +11,8 @@ const Value = geode.value_types.Value;
 const logging = @import("logging");
 const log = logging.scoped("cli");
 const Attr = logging.Attr;
+// Import server main from unified entry point (both cli and server share same module tree)
+const server_main = @import("../server/main.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-026; FEATURE="JSON Library Migration"; ASPECT=CLI; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
 const protobuf = @import("protobuf");
@@ -22,111 +24,6 @@ const schema = @import("schema");
 // Set to true only when debugging protocol/query issues. In production, keep false.
 const HOT_PATH_LOGGING = false;
 
-// CLI Protocol Message Types for JSON Library encoding
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-027; FEATURE="JSON Library Migration"; ASPECT=CLIMessageTypes; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
-const CliHelloMessage = struct {
-    type: []const u8 = "HELLO",
-    client_name: []const u8 = "geode-cli",
-    client_ver: []const u8 = "0.1.0",
-    wanted_conformance: []const u8 = "GQL/1.0",
-    username: ?[]const u8 = null,
-    password: ?[]const u8 = null,
-};
-
-const CliRunGqlMessage = struct {
-    type: []const u8 = "RUN_GQL",
-    text: []const u8,
-};
-
-const CliErrorResponse = struct {
-    status_class: []const u8 = "58000",
-    @"error": []const u8,
-};
-
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-058; FEATURE="JSON Library Migration"; ASPECT=CLIErrorTypes; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
-// Additional error response types for CLI
-const CliStatusError = struct {
-    status_class: []const u8,
-    @"error": []const u8,
-};
-
-const CliTypeError = struct {
-    type: []const u8 = "ERROR",
-    status_class: []const u8,
-    message: []const u8,
-};
-
-const CliResultError = struct {
-    result: ResultError,
-
-    const ResultError = struct {
-        type: []const u8 = "ERROR",
-        code: []const u8,
-        message: []const u8,
-    };
-};
-
-const CliColumnDef = struct {
-    name: []const u8,
-    type: []const u8 = "text",
-};
-
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-059; FEATURE="JSON Library Migration"; ASPECT=CLIResponseTypes; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-27
-// Response struct types for JSON-encoded server responses
-const CliHelloResponse = struct {
-    type: []const u8 = "HELLO",
-    server_name: []const u8 = "geode",
-    server_ver: []const u8 = "0.1.0",
-    conformance: []const u8 = "ISO/IEC 39075:2024",
-};
-
-const CliEndResponse = struct {
-    status_class: ?[]const u8 = "00000",
-    result: EndResult = .{},
-
-    const EndResult = struct {
-        type: []const u8 = "END",
-    };
-};
-
-const CliPullResultResponse = struct {
-    status_class: []const u8,
-    result: PullResult,
-
-    const PullResult = struct {
-        type: []const u8 = "RESULT",
-        @"error": ?[]const u8 = null,
-        rows: []const bool = &.{},
-        final: bool = true,
-    };
-};
-
-const CliSuccessMessage = struct {
-    type: []const u8,
-    message: []const u8,
-};
-
-// Helper: encode a struct as JSON and write it as a line to the writer
-fn writeJsonLine(writer: anytype, allocator: std.mem.Allocator, value: anytype) !void {
-    const json_bytes = try json_lib.encode(allocator, value, .{ .emit_null_optional_fields = false });
-    defer allocator.free(json_bytes);
-    try writer.writeAll(json_bytes);
-    try writer.writeAll("\n");
-}
-
-// Helper: write a CliErrorResponse JSON line, with static fallback on encode failure
-fn writeErrorJson(writer: anytype, allocator: std.mem.Allocator, err_msg: []const u8) void {
-    writeJsonLine(writer, allocator, CliErrorResponse{ .@"error" = err_msg }) catch {
-        writer.writeAll("{\"status_class\":\"58000\",\"error\":\"Encoding error\"}\n") catch {};
-    };
-}
-
-// Helper: write a CliTypeError (auth error) JSON line, with static fallback on encode failure
-fn writeAuthError(writer: anytype, allocator: std.mem.Allocator, message: []const u8) void {
-    writeJsonLine(writer, allocator, CliTypeError{ .status_class = "28000", .message = message }) catch {
-        writer.writeAll("{\"type\":\"ERROR\",\"status_class\":\"28000\",\"message\":\"Encoding error\"}\n") catch {};
-    };
-}
 
 // C library function for setting environment variables
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
@@ -337,7 +234,7 @@ fn quicWriteAll(self: *repl_dispatch.TransportConnection, data: []const u8) !voi
             break :blk .{ .execute = .{
                 .session_id = "",
                 .query = text,
-                .parameters = .empty,
+                .params_json = "",
             } };
         } else if (std.mem.eql(u8, msg_type.string, "BEGIN")) {
             break :blk .{ .begin = .{ .read_only = false } };
@@ -463,7 +360,7 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
     allocator.free(body);
     defer packet.deinit(allocator);
 
-    const msg = packet.msg orelse return error.InvalidMessage;
+    const msg = packet.quic orelse return error.InvalidMessage;
 
     // Convert Protobuf response to JSON for REPL compatibility
     var json_buf = std.ArrayList(u8).initCapacity(allocator, 1024) catch return error.OutOfMemory;
@@ -497,8 +394,8 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
             writer.writeAll("}") catch {};
         },
         .execute => |exec| {
-            // Query execution response - exec.val is optional ExecutionResponseUnion
-            if (exec.val) |exec_val| {
+            // Query execution response - exec.payload is optional ExecutionResponseUnion
+            if (exec.payload) |exec_val| {
                 switch (exec_val) {
                     .schema => |s| {
                         // Schema definition response
@@ -522,17 +419,17 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
                             if (p.rows.items.len == 1 and p.rows.items[0].values.items.len == 1) {
                                 if (p.rows.items[0].values.items[0].kind) |kind| {
                                     switch (kind) {
-                                        .string_val => |json_str| {
+                                        .string_val => |str_val| {
                                             // Check if it looks like a complete JSON response
-                                            if (std.mem.startsWith(u8, json_str, "{\"status_class\"") or
-                                                std.mem.startsWith(u8, json_str, "{\"type\":"))
+                                            if (std.mem.startsWith(u8, str_val.value, "{\"status_class\"") or
+                                                std.mem.startsWith(u8, str_val.value, "{\"type\":"))
                                             {
                                                 // Server already returned complete JSON - pass through directly
-                                                writer.writeAll(json_str) catch {};
+                                                writer.writeAll(str_val.value) catch {};
                                                 break :handle_blk true;
                                             }
                                         },
-                                        .null_val, .int_val, .double_val, .bool_val => {},
+                                        else => {},
                                     }
                                 }
                             }
@@ -557,7 +454,7 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
                                             .null_val => writer.writeAll("null") catch {},
                                             .string_val => |s| {
                                                 writer.writeAll("\"") catch {};
-                                                for (s) |c| {
+                                                for (s.value) |c| {
                                                     switch (c) {
                                                         '"' => writer.writeAll("\\\"") catch {},
                                                         '\\' => writer.writeAll("\\\\") catch {},
@@ -569,17 +466,18 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
                                             },
                                             .int_val => |i| {
                                                 var num_buf: [32]u8 = undefined;
-                                                const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch "0";
+                                                const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{i.value}) catch "0";
                                                 writer.writeAll(num_str) catch {};
                                             },
                                             .double_val => |d| {
                                                 var num_buf: [64]u8 = undefined;
-                                                const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{d}) catch "0";
+                                                const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{d.value}) catch "0";
                                                 writer.writeAll(num_str) catch {};
                                             },
                                             .bool_val => |b| {
                                                 writer.writeAll(if (b) "true" else "false") catch {};
                                             },
+                                            else => writer.writeAll("null") catch {},
                                         }
                                     } else {
                                         writer.writeAll("null") catch {};
@@ -588,7 +486,7 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
                                 writer.writeAll("]") catch {};
                             }
                             writer.writeAll("],\"final\":") catch {};
-                            writer.writeAll(if (p.last_page) "true" else "false") catch {};
+                            writer.writeAll(if (p.final) "true" else "false") catch {};
                             writer.writeAll("}") catch {};
                         }
                     },
@@ -609,6 +507,16 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
                     .metrics, .heartbeat => {
                         // Ignore metrics/heartbeat messages
                         writer.writeAll("{\"type\":\"OK\"}") catch {};
+                    },
+                    .explain => |ex| {
+                        writer.writeAll("{\"type\":\"EXPLAIN\",\"plan\":\"") catch {};
+                        writer.writeAll(ex.json_payload) catch {};
+                        writer.writeAll("\"}") catch {};
+                    },
+                    .profile => |pr| {
+                        writer.writeAll("{\"type\":\"PROFILE\",\"plan\":\"") catch {};
+                        writer.writeAll(pr.json_payload) catch {};
+                        writer.writeAll("\"}") catch {};
                     },
                 }
             } else {
@@ -634,6 +542,56 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
         .rollback => |r| {
             writer.writeAll("{\"type\":\"ROLLBACK\",\"success\":") catch {};
             writer.writeAll(if (r.success) "true" else "false") catch {};
+            writer.writeAll("}") catch {};
+        },
+        .pull => |p| {
+            // Forward to execute handler since pull contains ExecutionResponse
+            if (p.response) |resp| {
+                if (resp.payload) |exec_val| {
+                    switch (exec_val) {
+                        .page => |page| {
+                            writer.writeAll("{\"type\":\"BINDINGS\",\"rows\":[],\"final\":") catch {};
+                            writer.writeAll(if (page.final) "true" else "false") catch {};
+                            writer.writeAll("}") catch {};
+                        },
+                        else => writer.writeAll("{\"type\":\"OK\"}") catch {},
+                    }
+                } else {
+                    writer.writeAll("{\"type\":\"OK\"}") catch {};
+                }
+            } else {
+                writer.writeAll("{\"type\":\"OK\"}") catch {};
+            }
+        },
+        .cdc_diag => {
+            writer.writeAll("{\"type\":\"CDC_DIAG\",\"success\":true}") catch {};
+        },
+        .cdc_ctrl => {
+            writer.writeAll("{\"type\":\"CDC_CTRL\",\"success\":true}") catch {};
+        },
+        .savepoint => |s| {
+            writer.writeAll("{\"type\":\"SAVEPOINT\",\"success\":") catch {};
+            writer.writeAll(if (s.success) "true" else "false") catch {};
+            writer.writeAll("}") catch {};
+        },
+        .rollback_to => |r| {
+            writer.writeAll("{\"type\":\"ROLLBACK_TO\",\"success\":") catch {};
+            writer.writeAll(if (r.success) "true" else "false") catch {};
+            writer.writeAll("}") catch {};
+        },
+        .backup => |b| {
+            writer.writeAll("{\"type\":\"BACKUP\",\"success\":") catch {};
+            writer.writeAll(if (b.success) "true" else "false") catch {};
+            writer.writeAll("}") catch {};
+        },
+        .restore => |r| {
+            writer.writeAll("{\"type\":\"RESTORE\",\"success\":") catch {};
+            writer.writeAll(if (r.success) "true" else "false") catch {};
+            writer.writeAll("}") catch {};
+        },
+        .upload_backup => |u| {
+            writer.writeAll("{\"type\":\"UPLOAD_BACKUP\",\"success\":") catch {};
+            writer.writeAll(if (u.success) "true" else "false") catch {};
             writer.writeAll("}") catch {};
         },
     }
@@ -808,14 +766,12 @@ fn printServeUsage() void {
         "  --key <path>           TLS private key path (auto-generated if missing)\n" ++
         "  --log-level <level>    Log level: debug|info|warn|error (default: info)\n" ++
         "  --disable-auth         Disable user authentication (default: enabled) [SECURITY WARNING]\n" ++
-        "  --stdio                Use stdio for communication (development mode)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Examples:\n" ++
         "  geode serve\n" ++
         "  geode serve --data-dir /var/lib/geode --listen 0.0.0.0:3141\n" ++
         "  geode serve --log-level info  # Auth enabled by default\n" ++
-        "  geode serve --stdio --log-level debug\n" ++
         "\n", .{});
 }
 
@@ -893,152 +849,10 @@ fn printQueryUsage() void {
         "\n", .{});
 }
 
-// Server configuration structure
-const ServerConfig = struct {
-    data_dir: ?[]const u8 = null,
-    listen_quic: ?[]const u8 = null,
-    cert_path: ?[]const u8 = null,
-    key_path: ?[]const u8 = null,
-    log_level: []const u8 = "info",
-    result_format_txt: bool = false,
-    disable_estimates: bool = false,
-    compact_profile: bool = false,
-    memcurve_profile: bool = false,
-    force_no_tls: bool = false,
-    test_exit_after_first: bool = false,
-};
+// (server-only helpers removed; unified CLI delegates to src/server/main.zig)
 
-// GAP-0138 CODE CLEANUP: Removed unused ClientConfig struct
-// Previously defined at lines 430-449, was only used by dead code runEmbeddedClient function
-// The query command now uses executeQuicQuery() with inline parameters (GAP-0113 fix)
+// (embedded server state/types removed)
 
-const MAX_LINE_SIZE: usize = 65_536;
-
-const StreamState = struct {
-    buffer: std.ArrayList(u8),
-    authenticated_username: ?[]const u8 = null,
-    authenticated_password: ?[]const u8 = null,
-    last_result_data: ?[]const u8 = null,
-    message_count: usize = 0,
-    // CANARY: REQ=REQ-MULTI-GRAPH-028; FEATURE="MultiGraphIsolation"; ASPECT=StreamStateGraph; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-    current_graph: ?[]const u8 = null, // Current graph for multi-graph isolation
-
-    // Protobuf buffering state
-    proto_start_index: usize = 0,
-    proto_reading_body: bool = false,
-    proto_body_len: u32 = 0,
-
-    fn init(allocator: std.mem.Allocator) !StreamState {
-        return StreamState{
-            .buffer = try std.ArrayList(u8).initCapacity(allocator, 1024),
-            .authenticated_username = null,
-            .authenticated_password = null,
-            .last_result_data = null,
-            .message_count = 0,
-            .current_graph = null,
-            .proto_start_index = 0,
-            .proto_reading_body = false,
-            .proto_body_len = 0,
-        };
-    }
-
-    fn deinit(self: *StreamState, allocator: std.mem.Allocator) void {
-        self.buffer.deinit(allocator);
-        if (self.authenticated_username) |username| allocator.free(username);
-        if (self.authenticated_password) |password| allocator.free(password);
-        if (self.last_result_data) |data| allocator.free(data);
-        if (self.current_graph) |graph| allocator.free(graph);
-    }
-
-    fn resetLastResult(self: *StreamState, allocator: std.mem.Allocator) void {
-        if (self.last_result_data) |data| {
-            allocator.free(data);
-            self.last_result_data = null;
-        }
-    }
-};
-
-const ConnectionState = struct {
-    conn: *quic.QuicConnection,
-    transport: *quic.QuicTransport,
-    streams: std.AutoHashMap(u64, StreamState),
-
-    fn init(allocator: std.mem.Allocator, conn: *quic.QuicConnection, transport: *quic.QuicTransport) ConnectionState {
-        return ConnectionState{
-            .conn = conn,
-            .transport = transport,
-            .streams = std.AutoHashMap(u64, StreamState).init(allocator),
-        };
-    }
-
-    // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-004; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-12-28
-    // E01 Fix: Use destroyConnection to properly close, remove from list, and free connection
-    fn deinit(self: *ConnectionState, allocator: std.mem.Allocator) void {
-        var it = self.streams.valueIterator();
-        while (it.next()) |state| {
-            state.deinit(allocator);
-        }
-        self.streams.deinit();
-        // Use destroyConnection instead of close() to properly cleanup and free memory
-        self.transport.destroyConnection(self.conn);
-    }
-};
-
-const StreamResponder = struct {
-    transport: *quic.QuicTransport,
-    conn: *quic.QuicConnection,
-    stream_id: u64,
-
-    fn writeAll(self: StreamResponder, data: []const u8) !void {
-        try writeAllToStream(self.transport, self.conn, self.stream_id, data);
-    }
-};
-
-// Thread wrapper for handleQuicStream
-fn handleQuicStreamThread(allocator: std.mem.Allocator, conn: anytype, stream: anytype) void {
-    handleQuicStream(allocator, conn, stream) catch |err| {
-        log.err("Error in stream handler", &.{Attr.err("error", err)});
-    };
-}
-
-fn runSimpleStatement(
-    writer: anytype,
-    allocator: std.mem.Allocator,
-    statement: []const u8,
-    authenticated_username: ?[]const u8,
-    authenticated_password: ?[]const u8,
-) !void {
-    var query_allocator = allocator;
-    const options = geode.test_harness.QueryOptions{
-        .user = authenticated_username,
-        .password = authenticated_password,
-        .strict_offset_validation = true,
-    };
-    const result_data = geode.test_harness.runQueryWithAuth(&query_allocator, statement, options) catch |err| {
-        writeErrorJson(writer, allocator, @errorName(err));
-        return;
-    };
-    defer query_allocator.free(result_data);
-    try writer.writeAll(result_data);
-    try writer.writeAll("\n");
-}
-
-fn handleControlStatement(
-    writer: anytype,
-    allocator: std.mem.Allocator,
-    statement: []const u8,
-    authenticated_username: ?[]const u8,
-    authenticated_password: ?[]const u8,
-    last_result_data: ?*?[]const u8,
-) !void {
-    if (last_result_data) |ptr| {
-        if (ptr.*) |data| {
-            allocator.free(data);
-        }
-        ptr.* = null;
-    }
-    try runSimpleStatement(writer, allocator, statement, authenticated_username, authenticated_password);
-}
 
 // CANARY: REQ=REQ-PERF-WRITE-STALL-001; FEATURE="WriteStallOptimization"; ASPECT=StreamWrite; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=cli; UPDATED=2026-01-30
 // GAP-0203: Three-phase write stall handling:
@@ -1099,1524 +913,6 @@ fn writeAllToStream(
     }
 }
 
-fn processProtocolMessage(
-    allocator: std.mem.Allocator,
-    transport: *quic.QuicTransport,
-    conn_state: *ConnectionState,
-    stream_id: u64,
-    state: *StreamState,
-    msg: []const u8,
-) !void {
-    state.message_count += 1;
-    if (HOT_PATH_LOGGING) log.debug("Message loop iteration", &.{Attr.uint("iteration", state.message_count)});
-
-    var responder = StreamResponder{
-        .transport = transport,
-        .conn = conn_state.conn,
-        .stream_id = stream_id,
-    };
-
-    const msg_trimmed = std.mem.trimRight(u8, msg, "\r\n");
-
-    // Parse JSON message
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, msg_trimmed, .{}) catch |err| {
-        log.err("Failed to parse JSON", &.{Attr.err("error", err)});
-        writeErrorJson(responder, allocator, "Invalid JSON");
-        return;
-    };
-    defer parsed.deinit();
-
-    if (parsed.value != .object) {
-        writeErrorJson(responder, allocator, "Invalid message format");
-        return;
-    }
-
-    const obj = parsed.value.object;
-    const msg_type = obj.get("type") orelse {
-        writeErrorJson(responder, allocator, "Missing type field");
-        return;
-    };
-
-    if (msg_type != .string) {
-        writeErrorJson(responder, allocator, "type field must be string");
-        return;
-    }
-
-    const type_str = msg_type.string;
-
-    if (std.mem.eql(u8, type_str, "HELLO")) {
-        // Handle HELLO handshake with authentication
-        if (HOT_PATH_LOGGING) log.debug("Processing HELLO message", &.{});
-
-        // Extract client info (optional)
-        const client_name = if (obj.get("client_name")) |cn|
-            if (cn == .string) cn.string else "unknown"
-        else
-            "unknown";
-        const client_ver = if (obj.get("client_ver")) |cv|
-            if (cv == .string) cv.string else "unknown"
-        else
-            "unknown";
-
-        if (HOT_PATH_LOGGING) log.debug("Client connected", &.{ Attr.string("name", client_name), Attr.string("version", client_ver) });
-
-        // CANARY: REQ=REQ-AUTH-QUIC-002; FEATURE="QUIC Authentication"; ASPECT=HelloAuth; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; OWNER=2025-10-25; UPDATED=2026-01-17
-        // Extract and validate authentication credentials (using global geode import to share state)
-        const user_mgmt = geode.user_management;
-
-        // Check if authentication is enabled
-        const auth_enabled_status = user_mgmt.isAuthEnabled();
-        if (HOT_PATH_LOGGING) log.debug("Auth enabled check", &.{Attr.boolean("enabled", auth_enabled_status)});
-        if (auth_enabled_status) {
-            if (HOT_PATH_LOGGING) log.debug("Authentication is enabled, validating credentials", &.{});
-
-            // Extract username and password from HELLO message
-            const username_value = obj.get("username");
-            const password_value = obj.get("password");
-
-            if (username_value == null or password_value == null) {
-                // Auth is enabled but credentials not provided
-                writeAuthError(responder, allocator, "Authentication required");
-                if (HOT_PATH_LOGGING) log.debug("Authentication failed: credentials not provided", &.{});
-                return;
-            }
-
-            if (username_value.? != .string or password_value.? != .string) {
-                // Credentials are not strings
-                writeAuthError(responder, allocator, "Invalid credential format");
-                if (HOT_PATH_LOGGING) log.debug("Authentication failed: invalid credential format", &.{});
-                return;
-            }
-
-            const username = username_value.?.string;
-            const password = password_value.?.string;
-
-            // Validate credentials
-            _ = user_mgmt.authenticate(username, password) catch {
-                // Invalid credentials
-                writeAuthError(responder, allocator, "Authentication failed");
-                if (HOT_PATH_LOGGING) log.debug("Authentication failed for user", &.{Attr.string("username", username)});
-                return;
-            };
-
-            // Authentication successful - store username and password
-            if (state.authenticated_username) |old| allocator.free(old);
-            state.authenticated_username = try allocator.dupe(u8, username);
-            if (state.authenticated_password) |old| allocator.free(old);
-            state.authenticated_password = try allocator.dupe(u8, password);
-            if (HOT_PATH_LOGGING) log.debug("Authentication successful for user", &.{Attr.string("username", username)});
-        } else {
-            if (HOT_PATH_LOGGING) log.debug("Authentication is NOT enabled, skipping credential validation", &.{});
-        }
-
-        // Send HELLO response
-        try writeJsonLine(responder, allocator, CliHelloResponse{});
-        if (HOT_PATH_LOGGING) log.debug("HELLO response sent", &.{});
-    } else if (std.mem.eql(u8, type_str, "RUN_GQL")) {
-        // Handle query execution
-        const query_text_value = obj.get("text") orelse {
-            writeErrorJson(responder, allocator, "Missing text field");
-            return;
-        };
-
-        if (query_text_value != .string) {
-            writeErrorJson(responder, allocator, "text field must be string");
-            return;
-        }
-
-        const query_text = query_text_value.string;
-        if (HOT_PATH_LOGGING) log.debug("Query text received", &.{Attr.string("query", query_text)});
-
-        var param_names = std.ArrayList([]const u8).empty;
-        defer {
-            for (param_names.items) |pname| allocator.free(pname);
-            param_names.deinit(allocator);
-        }
-        var param_values = std.ArrayList(Value).empty;
-        defer {
-            for (param_values.items) |pval| freeParamValue(allocator, pval);
-            param_values.deinit(allocator);
-        }
-        var params_valid = true;
-        if (obj.get("params")) |params_value| {
-            if (params_value != .object) {
-                writeErrorJson(responder, allocator, "params must be object");
-                params_valid = false;
-            } else {
-                var iter = params_value.object.iterator();
-                while (iter.next()) |entry| {
-                    const dup_name = try allocator.dupe(u8, entry.key_ptr.*);
-                    const param_value = convertJsonParam(allocator, entry.value_ptr.*) catch {
-                        allocator.free(dup_name);
-                        writeErrorJson(responder, allocator, "Unsupported parameter type");
-                        params_valid = false;
-                        break;
-                    };
-                    try param_names.append(allocator, dup_name);
-                    try param_values.append(allocator, param_value);
-                }
-            }
-        }
-        if (!params_valid) return;
-
-        // CANARY: REQ=REQ-MULTI-GRAPH-029; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphParsing; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-        // GAP-0203: Replaced full GQL parse with cheap string detection for graph operations.
-        // The full parse is done once inside runQueryWithAuth; this pre-check only needs to detect
-        // USE GRAPH, CREATE GRAPH, and DROP GRAPH keywords to update session state.
-        // CANARY: REQ=REQ-PERF-SINGLE-PARSE-001; FEATURE="SingleParseOptimization"; ASPECT=StringDetection; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
-        const graph_storage_mgr = geode.graph_storage_manager;
-        const trimmed_query = std.mem.trimLeft(u8, query_text, " \t\n\r");
-        if (std.ascii.startsWithIgnoreCase(trimmed_query, "USE GRAPH ") or
-            std.ascii.startsWithIgnoreCase(trimmed_query, "USE PROPERTY GRAPH "))
-        {
-            // Only do full parse for USE GRAPH statements (rare path)
-            if (geode.parse(allocator, query_text, .{})) |parse_res| {
-                defer {
-                    var mut_pr = parse_res;
-                    mut_pr.deinit();
-                }
-                for (parse_res.program.statements) |stmt| {
-                    switch (stmt) {
-                        .UseGraph => |ug| {
-                            if (graph_storage_mgr.graphExists(ug.graph_name)) {
-                                if (state.current_graph) |old| allocator.free(old);
-                                state.current_graph = allocator.dupe(u8, ug.graph_name) catch null;
-                            }
-                        },
-                        else => {},
-                    }
-                }
-            } else |_| {}
-        } else if (std.ascii.startsWithIgnoreCase(trimmed_query, "CREATE GRAPH ") or
-            std.ascii.startsWithIgnoreCase(trimmed_query, "CREATE PROPERTY GRAPH "))
-        {
-            // Only do full parse for CREATE GRAPH statements (rare path)
-            if (geode.parse(allocator, query_text, .{})) |parse_res| {
-                defer {
-                    var mut_pr = parse_res;
-                    mut_pr.deinit();
-                }
-                for (parse_res.program.statements) |stmt| {
-                    switch (stmt) {
-                        .CreateGraph => |cg| {
-                            _ = graph_storage_mgr.createGraphStorage(allocator, cg.name) catch {};
-                        },
-                        else => {},
-                    }
-                }
-            } else |_| {}
-        } else if (std.ascii.startsWithIgnoreCase(trimmed_query, "DROP GRAPH ") or
-            std.ascii.startsWithIgnoreCase(trimmed_query, "DROP PROPERTY GRAPH "))
-        {
-            // Only do full parse for DROP GRAPH statements (rare path)
-            if (geode.parse(allocator, query_text, .{})) |parse_res| {
-                defer {
-                    var mut_pr = parse_res;
-                    mut_pr.deinit();
-                }
-                for (parse_res.program.statements) |stmt| {
-                    switch (stmt) {
-                        .DropGraph => |dg| {
-                            graph_storage_mgr.dropGraphStorage(dg.name) catch {};
-                            if (state.current_graph) |curr| {
-                                if (std.mem.eql(u8, curr, dg.name)) {
-                                    allocator.free(curr);
-                                    state.current_graph = null;
-                                }
-                            }
-                        },
-                        else => {},
-                    }
-                }
-            } else |_| {}
-        }
-        // All other queries (99%+ of traffic) skip parsing entirely here
-
-        // CANARY: REQ=REQ-AUTH-QUIC-003; FEATURE="QUIC Authentication"; ASPECT=QueryAuth; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; OWNER=cli; UPDATED=2025-10-25
-        // Execute query with authenticated user context (using global geode import)
-        // GAP-0203: Pass performance options to skip redundant per-query work
-        const options = geode.test_harness.QueryOptions{
-            .token = null,
-            .user = state.authenticated_username,
-            .password = state.authenticated_password,
-            .strict_offset_validation = true, // QUIC mode enforces US001 (OFFSET requires ORDER BY)
-            .param_names = param_names.items,
-            .param_values = param_values.items,
-            .current_graph = state.current_graph, // Pass current graph for multi-graph isolation
-            .pre_validated_role = if (state.authenticated_username != null) .{
-                .role = null,
-                .username = state.authenticated_username,
-            } else null,
-            .skip_txn_session_file = true, // QUIC server manages txn state in-memory
-        };
-
-        var mut_ally = allocator;
-        const result = geode.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
-            // Send error response
-            // CANARY: REQ=REQ-LIB-MIGRATION-JSON-036; FEATURE="JSON Library Migration"; ASPECT=ErrorResponse; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
-            const err_resp = CliErrorResponse{ .@"error" = @errorName(err) };
-            const err_json = json_lib.encode(allocator, err_resp, .{}) catch {
-                try responder.writeAll("{\"status_class\":\"58000\",\"error\":\"Encoding error\"}\n");
-                return;
-            };
-            defer allocator.free(err_json);
-            const error_msg = std.fmt.allocPrint(allocator, "STATUS: {s}\n", .{err_json}) catch {
-                try responder.writeAll("{\"status_class\":\"58000\",\"error\":\"Encoding error\"}\n");
-                return;
-            };
-            defer allocator.free(error_msg);
-            try responder.writeAll(error_msg);
-            return;
-        };
-        defer mut_ally.free(result);
-
-        // GAP-384 Fix: Persist named graphs after successful CREATE GRAPH execution
-        // CANARY: REQ=REQ-GRAPH-PERSIST-002; FEATURE="NamedGraphPersistence"; ASPECT=PostExecution; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-30
-        if (std.ascii.startsWithIgnoreCase(trimmed_query, "CREATE GRAPH ") or
-            std.ascii.startsWithIgnoreCase(trimmed_query, "CREATE PROPERTY GRAPH "))
-        {
-            // Parse to get the graph name and persist
-            if (geode.parse(allocator, query_text, .{})) |parse_res| {
-                defer {
-                    var mut_pr = parse_res;
-                    mut_pr.deinit();
-                }
-                for (parse_res.program.statements) |stmt| {
-                    switch (stmt) {
-                        .CreateGraph => |cg| {
-                            // Persist the newly created graph to disk
-                            graph_storage_mgr.saveNamedGraph(allocator, cg.name) catch |err| {
-                                log.warn("Failed to persist graph after CREATE", &.{
-                                    Attr.string("graph", cg.name),
-                                    Attr.err("error", err),
-                                });
-                            };
-                        },
-                        else => {},
-                    }
-                }
-            } else |_| {}
-        }
-
-        // CANARY: REQ=REQ-QUIC-PERSIST-003; FEATURE="QUICDataPersistence"; ASPECT=JsonRpcPersist; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
-        // Save graph store if dirty after query execution (RUN_GQL JSON handler)
-        // This ensures data created via JSON protocol (shell /source) is persisted to disk
-        const global_store = geode.graph_store.getGlobalStore(allocator);
-        global_store.saveIfDirty();
-
-        // Parse the result JSON to extract columns for SCHEMA response
-        const result_parsed = try std.json.parseFromSlice(std.json.Value, allocator, result, .{});
-        defer result_parsed.deinit();
-
-        const result_obj = result_parsed.value.object;
-
-        // GAP-0203 Fix #3: Pre-build PULL response at RUN_GQL time to eliminate
-        // second JSON parse in PULL handler. Parse result once, build both SCHEMA
-        // and BINDINGS/RESULT responses, store the pre-built PULL response.
-        state.resetLastResult(allocator);
-
-        // Build SCHEMA response for immediate send
-        var schema_buf = std.ArrayList(u8).initCapacity(allocator, 4096) catch {
-            const error_response = "{\"status_class\":\"58000\",\"error\":\"Out of memory\"}\n";
-            try responder.writeAll(error_response);
-            return;
-        };
-        defer schema_buf.deinit(allocator);
-        const schema_writer = schema_buf.writer(allocator);
-
-        try schema_writer.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"SCHEMA\",\"columns\":[");
-        if (result_obj.get("columns")) |columns| {
-            for (columns.array.items, 0..) |col, idx| {
-                if (idx > 0) try schema_writer.writeAll(",");
-                try schema_writer.print("{{\"name\":\"{s}\",\"type\":\"text\"}}", .{col.string});
-            }
-        }
-        try schema_writer.writeAll("]}}\n");
-
-        // Pre-build the PULL response (BINDINGS or RESULT) and store for zero-parse PULL
-        var pull_buf = std.ArrayList(u8).initCapacity(allocator, 4096) catch {
-            const error_response = "{\"status_class\":\"58000\",\"error\":\"Out of memory\"}\n";
-            try responder.writeAll(error_response);
-            return;
-        };
-        defer pull_buf.deinit(allocator);
-        const pull_writer = pull_buf.writer(allocator);
-
-        const status_class = result_obj.get("status_class");
-        const has_error = result_obj.get("error") != null;
-        const columns_val = result_obj.get("columns");
-        const rows_val = result_obj.get("rows");
-
-        if (has_error or columns_val == null or rows_val == null) {
-            // Error or non-data query: build RESULT response
-            try writeJsonLine(pull_writer, allocator, CliPullResultResponse{
-                .status_class = if (status_class) |sc| sc.string else "00000",
-                .result = .{ .@"error" = if (result_obj.get("error")) |e| e.string else null },
-            });
-        } else {
-            // Data result: build BINDINGS response
-            try pull_writer.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"ordered\":false,\"final\":true,\"rows\":[");
-
-            const rows = rows_val.?;
-            const columns = columns_val.?;
-
-            for (rows.array.items, 0..) |row_array, row_idx| {
-                if (row_idx > 0) try pull_writer.writeAll(",");
-                try pull_writer.writeAll("{");
-                for (columns.array.items, 0..) |col, col_idx| {
-                    if (col_idx > 0) try pull_writer.writeAll(",");
-                    try pull_writer.print("\"{s}\":", .{col.string});
-                    if (col_idx < row_array.array.items.len) {
-                        try writeJsonValueWithDecimalScale(pull_writer, row_array.array.items[col_idx], allocator);
-                    } else {
-                        try pull_writer.writeAll("null");
-                    }
-                }
-                try pull_writer.writeAll("}");
-            }
-
-            try pull_writer.writeAll("]}}\n");
-        }
-
-        // Store pre-built PULL response (zero-parse on PULL)
-        state.last_result_data = try allocator.dupe(u8, pull_buf.items);
-        if (HOT_PATH_LOGGING) log.debug("RUN_GQL: Pre-built PULL response", &.{Attr.uint("bytes", pull_buf.items.len)});
-
-        // Send SCHEMA response
-        if (HOT_PATH_LOGGING) log.debug("Writing query response", &.{Attr.uint("bytes", schema_buf.items.len)});
-        try responder.writeAll(schema_buf.items);
-        if (HOT_PATH_LOGGING) log.debug("Query response sent successfully", &.{});
-    } else if (std.mem.eql(u8, type_str, "PULL")) {
-        // GAP-0203 Fix #3: PULL handler sends pre-built response directly (zero JSON parsing)
-        if (HOT_PATH_LOGGING) log.debug("Processing PULL request", &.{});
-        if (state.last_result_data) |prebuilt_response| {
-            if (HOT_PATH_LOGGING) log.debug("PULL: Sending pre-built response", &.{Attr.uint("bytes", prebuilt_response.len)});
-            try responder.writeAll(prebuilt_response);
-        } else {
-            // No stored result, send END
-            if (HOT_PATH_LOGGING) log.debug("PULL: No stored result, sending END", &.{});
-            try writeJsonLine(responder, allocator, CliEndResponse{});
-        }
-    } else if (std.mem.eql(u8, type_str, "BEGIN")) {
-        try handleControlStatement(responder, allocator, "BEGIN", state.authenticated_username, state.authenticated_password, &state.last_result_data);
-    } else if (std.mem.eql(u8, type_str, "COMMIT")) {
-        try handleControlStatement(responder, allocator, "COMMIT", state.authenticated_username, state.authenticated_password, &state.last_result_data);
-    } else if (std.mem.eql(u8, type_str, "ROLLBACK")) {
-        try handleControlStatement(responder, allocator, "ROLLBACK", state.authenticated_username, state.authenticated_password, &state.last_result_data);
-    } else if (std.mem.eql(u8, type_str, "SAVEPOINT")) {
-        const name_value = obj.get("name") orelse {
-            writeErrorJson(responder, allocator, "SAVEPOINT requires name");
-            return;
-        };
-        if (name_value != .string) {
-            writeErrorJson(responder, allocator, "SAVEPOINT name must be string");
-            return;
-        }
-        const savepoint_stmt = try std.fmt.allocPrint(allocator, "SAVEPOINT {s}", .{name_value.string});
-        defer allocator.free(savepoint_stmt);
-        try handleControlStatement(responder, allocator, savepoint_stmt, state.authenticated_username, state.authenticated_password, &state.last_result_data);
-    } else if (std.mem.eql(u8, type_str, "ROLLBACK_TO")) {
-        const name_value = obj.get("name") orelse {
-            writeErrorJson(responder, allocator, "ROLLBACK_TO requires name");
-            return;
-        };
-        if (name_value != .string) {
-            writeErrorJson(responder, allocator, "ROLLBACK_TO name must be string");
-            return;
-        }
-        const rollback_stmt = try std.fmt.allocPrint(allocator, "ROLLBACK TO {s}", .{name_value.string});
-        defer allocator.free(rollback_stmt);
-        try handleControlStatement(responder, allocator, rollback_stmt, state.authenticated_username, state.authenticated_password, &state.last_result_data);
-    } else {
-        // Unknown message type
-        // CANARY: REQ=REQ-LIB-MIGRATION-JSON-037; FEATURE="JSON Library Migration"; ASPECT=UnknownMsgError; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
-        const err_msg_str = std.fmt.allocPrint(allocator, "Unknown message type: {s}", .{type_str}) catch {
-            writeErrorJson(responder, allocator, "Unknown message type");
-            return;
-        };
-        defer allocator.free(err_msg_str);
-        writeErrorJson(responder, allocator, err_msg_str);
-    }
-}
-
-fn processStreamBuffer(
-    allocator: std.mem.Allocator,
-    transport: *quic.QuicTransport,
-    conn_state: *ConnectionState,
-    stream_counter: *u32,
-    stream_id: u64,
-    data: []const u8,
-) !void {
-    const entry = try conn_state.streams.getOrPut(stream_id);
-    if (!entry.found_existing) {
-        entry.value_ptr.* = try StreamState.init(allocator);
-        stream_counter.* += 1;
-        log.debug("Tracking new stream", &.{Attr.uint("stream_id", stream_id)});
-    }
-    var state = entry.value_ptr;
-
-    if (data.len > 0) {
-        try state.buffer.appendSlice(allocator, data);
-    }
-
-    // Prevent unbounded growth if newline never arrives
-    if (state.buffer.items.len > MAX_LINE_SIZE and std.mem.indexOfScalar(u8, state.buffer.items, '\n') == null) {
-        log.warn("Buffer exceeded MAX_LINE_SIZE without newline, clearing buffer", &.{Attr.uint("bytes", state.buffer.items.len)});
-        state.buffer.items = state.buffer.items[0..0];
-        return;
-    }
-
-    // Protobuf Length-Prefixed Framing Loop
-    while (true) {
-        if (!state.proto_reading_body) {
-            // Needed: 4 bytes for length
-            const remaining = state.buffer.items.len - state.proto_start_index;
-            if (remaining < 4) break; // Wait for more data
-
-            const len_bytes = state.buffer.items[state.proto_start_index..][0..4];
-            state.proto_body_len = std.mem.readInt(u32, len_bytes, .big);
-            state.proto_reading_body = true;
-            state.proto_start_index += 4;
-
-            // Log for debugging
-            if (HOT_PATH_LOGGING) log.debug("Proto header read", &.{Attr.uint("len", state.proto_body_len)});
-        }
-
-        if (state.proto_reading_body) {
-            const remaining = state.buffer.items.len - state.proto_start_index;
-            if (remaining < state.proto_body_len) break; // Wait for body
-
-            // We have the full body
-            const body = state.buffer.items[state.proto_start_index..][0..state.proto_body_len];
-
-            processProtobufMessage(allocator, transport, conn_state, stream_id, state, body) catch |err| {
-                log.err("Failed to process protobuf message", &.{Attr.err("error", err)});
-                // Depending on error, we might want to close stream, but let's try to continue
-            };
-
-            // Advance
-            state.proto_start_index += state.proto_body_len;
-            state.proto_reading_body = false;
-        }
-    }
-
-    // Compact buffer if needed
-    if (state.proto_start_index > 0) {
-        if (state.proto_start_index == state.buffer.items.len) {
-            state.buffer.clearRetainingCapacity();
-            state.proto_start_index = 0;
-        } else if (state.proto_start_index > 4096) {
-            // Shift remaining to front
-            const remaining_bytes = state.buffer.items[state.proto_start_index..];
-            std.mem.copyForwards(u8, state.buffer.items, remaining_bytes);
-            state.buffer.shrinkRetainingCapacity(remaining_bytes.len);
-            state.proto_start_index = 0;
-        }
-    }
-}
-
-fn sendProtoResponse(allocator: std.mem.Allocator, transport: *quic.QuicTransport, conn_state: *ConnectionState, stream_id: u64, resp: schema.QuicServerMessage) !void {
-    // Use std.Io.Writer.Allocating for type-erased allocating writer compatible with protobuf
-    var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.init(allocator);
-    defer aw.deinit();
-
-    // Encode Message
-    try protobuf.encode(&aw.writer, allocator, resp);
-
-    const body = aw.writer.buffer[0..aw.writer.end];
-
-    // Send Header (4 bytes len)
-    var len_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &len_buf, @intCast(body.len), .big);
-
-    const responder = StreamResponder{ .transport = transport, .conn = conn_state.conn, .stream_id = stream_id };
-    try responder.writeAll(&len_buf);
-    try responder.writeAll(body);
-}
-
-fn processProtobufMessage(allocator: std.mem.Allocator, transport: *quic.QuicTransport, conn_state: *ConnectionState, stream_id: u64, state: *StreamState, data: []const u8) !void {
-    // Use std.Io.Reader.fixed() to create a type-erased reader from the data slice
-    // This is the expected type for protobuf.decode in Zig 0.15.x
-    var reader: std.Io.Reader = .fixed(data);
-    const packet = try protobuf.decode(schema.ClientPacket, &reader, allocator);
-    const msg = packet.msg orelse return error.InvalidMessage;
-
-    if (false) return error.UnexpectedEndOfStream;
-
-    if (HOT_PATH_LOGGING) log.debug("Received Proto Msg", &.{});
-
-    switch (msg) {
-        .hello => |h| {
-            // CANARY: REQ=REQ-AUTH-QUIC-004; FEATURE="QUIC Authentication"; ASPECT=ProtobufHelloAuth; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-            // Properly handle authentication in protobuf HELLO handler
-            const user_mgmt = geode.user_management;
-            const auth_enabled = user_mgmt.isAuthEnabled();
-
-            var caps = try std.ArrayList([]const u8).initCapacity(allocator, 2);
-            try caps.append(allocator, "QUIC");
-            try caps.append(allocator, "TLS1.3");
-
-            if (auth_enabled) {
-                // Authentication is required - validate credentials
-                if (h.username.len == 0 or h.password.len == 0) {
-                    const resp = schema.QuicServerMessage{ .hello = .{
-                        .success = false,
-                        .session_id = "",
-                        .error_message = "Authentication required",
-                        .capabilities = caps,
-                    } };
-                    try sendProtoResponse(allocator, transport, conn_state, stream_id, resp);
-                    return;
-                }
-
-                // Validate credentials against user management
-                _ = user_mgmt.authenticate(h.username, h.password) catch {
-                    const resp = schema.QuicServerMessage{ .hello = .{
-                        .success = false,
-                        .session_id = "",
-                        .error_message = "Authentication failed",
-                        .capabilities = caps,
-                    } };
-                    try sendProtoResponse(allocator, transport, conn_state, stream_id, resp);
-                    return;
-                };
-
-                // Store authenticated credentials
-                if (state.authenticated_username) |old| allocator.free(old);
-                state.authenticated_username = try allocator.dupe(u8, h.username);
-                if (state.authenticated_password) |old| allocator.free(old);
-                state.authenticated_password = try allocator.dupe(u8, h.password);
-            }
-            // When auth is disabled, we don't store credentials (leave them null)
-            // This prevents the "partial credentials" error in test_harness
-
-            const resp = schema.QuicServerMessage{ .hello = .{ .success = true, .session_id = "cli-session", .capabilities = caps } };
-            try sendProtoResponse(allocator, transport, conn_state, stream_id, resp);
-        },
-        .execute => |exec_req| {
-            // Adapt to runSimpleStatement logic
-            // We need a writer that captures output to send back as ExecutionResponse
-            // Simplification: We'll construct a ExecutionResponse manually
-
-            // For query: exec_req.query
-            // We run it via test_harness (as CLI does)
-
-            var result_buf = try std.ArrayList(u8).initCapacity(allocator, 0);
-            defer result_buf.deinit(allocator);
-
-            // Reuse runSimpleStatement which writes output to writer
-            runSimpleStatement(result_buf.writer(allocator), allocator, exec_req.query, state.authenticated_username, state.authenticated_password) catch |err| {
-                const err_resp = schema.Error{ .code = "500", .message = @errorName(err) };
-                const resp = schema.QuicServerMessage{ .execute = schema.ExecutionResponse{ .val = schema.ExecutionResponseUnion{ .@"error" = err_resp } } };
-                try sendProtoResponse(allocator, transport, conn_state, stream_id, resp);
-                return;
-            };
-
-            // CANARY: REQ=REQ-QUIC-PERSIST-002; FEATURE="QUICDataPersistence"; ASPECT=PostExecutionPersist; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
-            // Save graph store if dirty after query execution
-            // This ensures data created via QUIC protocol is persisted to disk
-            const global_store = geode.graph_store.getGlobalStore(allocator);
-            global_store.saveIfDirty();
-
-            // Result is probably JSON text.
-            // Wrap in ExecutionResponse?
-            // Existing CLI runSimpleStatement returns JSON (I think).
-            // Schema expects `schema.ExecutionResponse`.
-            // Which is union(enum) { schema, page, error }.
-            // This is tricky. CLI `runSimpleStatement` handles JSON output formatting.
-            // If we want to support strict Protobuf client, we should ideally return data page.
-            // But if the client expects to parse JSON from the body (it doesn't, it expects Proto),
-
-            // WAIT. `geode query` client logic:
-            // `readProtoMessage` returns `QuicServerMessage`.
-            // Inside `.execute`: `switch(exec_resp)`.
-            // It expects `.page`, `.schema` etc.
-
-            // If `runSimpleStatement` produces raw TEXT (JSON), we can't easily put it into `DataPage` without parsing it back.
-            // BUT: `test_harness` calls `execution.execute`.
-            // This CLI "Serve" implementation is messy.
-
-            // Short-term fix: Just return the raw JSON as an "Error" message? No.
-            // Or return a "Page" with a single column "json"?
-
-            // Let's assume for now we just want the HELLO handshake to pass.
-            // For Execute, if I fail to implementations, tests will still fail.
-            // But `geode query` with "return 1" is simple.
-
-            // Let's use `runSimpleStatement` logic but capture output.
-            const json_output = result_buf.items;
-
-            // We can return a DataPage with 1 row, 1 column "result", value = json_output.
-            // Schema has `DataPage`.
-            // Or create a special `RawJson` message if schema has it? No.
-
-            // Actually, the `processProtocolMessage` (legacy) called `runSimpleStatement`.
-            // It wrote JSON to the stream.
-            // The NEW client expects Protobuf.
-
-            // If I can't easily return Page, I'll return an Error with the JSON output as message :)
-            // No, that's hacky.
-
-            // Looking at `server/quic_connection_handler` (L458), it returns stub error "Query Received (Stub)".
-            // If I return that, the client will see error.
-
-            // I should try to return a valid Page.
-            // But populating `DataPage` from `test_harness` result is hard without access to `ExecutionResult`.
-
-            // Let's rely on `test_harness` returning `[]const u8` which IS the result.
-            // I will wrap it in a `DataPage` with one column "output" and one row string value.
-
-            // var cols = std.ArrayList(schema.ColumnDefinition).init(allocator);
-            // try cols.append(.{ .name = "output", .type = "STRING" });
-            // Note: DataPage only contains rows. SchemaDefinition contains columns.
-            // For now, we skip SchemaDefinition and just send DataPage.
-
-            var vals = try std.ArrayList(schema.Value).initCapacity(allocator, 1);
-            try vals.append(allocator, schema.Value{ .kind = .{ .string_val = json_output } });
-
-            var rows = try std.ArrayList(schema.Row).initCapacity(allocator, 1);
-            try rows.append(allocator, schema.Row{ .values = vals });
-
-            const page = schema.DataPage{ .rows = rows, .last_page = true };
-
-            const resp = schema.QuicServerMessage{ .execute = .{ .val = .{ .page = page } } };
-            try sendProtoResponse(allocator, transport, conn_state, stream_id, resp);
-        },
-        .ping => |_| {
-            try sendProtoResponse(allocator, transport, conn_state, stream_id, schema.QuicServerMessage{ .ping = .{ .ok = true } });
-        },
-        else => {},
-    }
-}
-
-// Handle a QUIC stream and process queries
-fn handleQuicStream(allocator: std.mem.Allocator, conn_state: anytype, stream: anytype) !void {
-    const transport = conn_state.transport;
-    defer stream.close();
-
-    const stream_id = @intFromPtr(stream);
-    log.debug("Stream handler started", &.{Attr.uint("stream_id", stream_id)});
-
-    // CANARY: REQ=REQ-AUTH-QUIC-001; FEATURE="QUIC Authentication"; ASPECT=ConnectionAuth; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; OWNER=cli; UPDATED=2025-10-25
-    // Connection-scoped authentication state
-    var state = try StreamState.init(allocator);
-    defer state.deinit(allocator);
-
-    // Main message processing loop
-    while (true) {
-        state.message_count += 1;
-        log.debug("Message loop iteration", &.{Attr.uint("iteration", state.message_count)});
-        // Retry readLine until we get a message or real error
-        const msg = blk: while (true) {
-            // Main loop handles all polling - we just retry reading
-            // Try to read message
-            if (stream.readLine(65536)) |m| {
-                break :blk m;
-            } else |err| {
-                if (err == error.EndOfStream) return;
-                if (err == error.WouldBlock) {
-                    // Data not ready yet, poll and retry
-                    // GAP-0200: Reduced sleep from 10ms to 1ms for higher throughput
-                    std.Thread.sleep(1 * std.time.ns_per_ms);
-                    continue;
-                }
-                log.err("Failed to read message", &.{Attr.err("error", err)});
-                return err;
-            }
-        };
-        defer allocator.free(msg);
-
-        log.debug("Received message", &.{Attr.string("message", msg)});
-
-        // Strip trailing newline for JSON parsing
-        const msg_trimmed = std.mem.trimRight(u8, msg, "\r\n");
-
-        if (state.proto_reading_body == false and state.proto_start_index == 0 and msg.len > 0 and msg[0] == '{') {
-            // Fallback for legacy JSON clients (test harness might use them?)
-            // Assume one-line JSON for now
-            try processProtocolMessage(allocator, transport, conn_state, stream_id, state, msg); // Use original msg
-        }
-
-        // Parse JSON message
-        const parsed = std.json.parseFromSlice(std.json.Value, allocator, msg_trimmed, .{}) catch |err| {
-            log.err("Failed to parse JSON", &.{ Attr.err("error", err), Attr.uint("len", msg.len) });
-            writeErrorJson(stream, allocator, "Invalid JSON");
-            continue;
-        };
-        defer parsed.deinit();
-
-        // Check message type
-        if (parsed.value != .object) {
-            writeErrorJson(stream, allocator, "Invalid message format");
-            continue;
-        }
-
-        const obj = parsed.value.object;
-        const msg_type = obj.get("type") orelse {
-            writeErrorJson(stream, allocator, "Missing type field");
-            continue;
-        };
-
-        if (msg_type != .string) {
-            writeErrorJson(stream, allocator, "type field must be string");
-            continue;
-        }
-
-        const type_str = msg_type.string;
-
-        if (std.mem.eql(u8, type_str, "HELLO")) {
-            // Handle HELLO handshake with authentication
-            log.debug("Processing HELLO message", &.{});
-
-            // Extract client info (optional)
-            const client_name = if (obj.get("client_name")) |cn|
-                if (cn == .string) cn.string else "unknown"
-            else
-                "unknown";
-            const client_ver = if (obj.get("client_ver")) |cv|
-                if (cv == .string) cv.string else "unknown"
-            else
-                "unknown";
-
-            if (HOT_PATH_LOGGING) log.debug("Client connected", &.{ Attr.string("name", client_name), Attr.string("version", client_ver) });
-
-            // CANARY: REQ=REQ-AUTH-QUIC-002; FEATURE="QUIC Authentication"; ASPECT=HelloAuth; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; OWNER=2025-10-25; UPDATED=2026-01-17
-            // Extract and validate authentication credentials (using global geode import to share state)
-            const user_mgmt = geode.user_management;
-
-            // Check if authentication is enabled
-            const auth_enabled_status = user_mgmt.isAuthEnabled();
-            if (HOT_PATH_LOGGING) log.debug("Auth enabled check", &.{Attr.boolean("enabled", auth_enabled_status)});
-            if (auth_enabled_status) {
-                if (HOT_PATH_LOGGING) log.debug("Authentication is enabled, validating credentials", &.{});
-
-                // Extract username and password from HELLO message
-                const username_value = obj.get("username");
-                const password_value = obj.get("password");
-
-                if (username_value == null or password_value == null) {
-                    // Auth is enabled but credentials not provided
-                    writeAuthError(stream, allocator, "Authentication required");
-                    if (HOT_PATH_LOGGING) log.debug("Authentication failed: credentials not provided", &.{});
-                    return;
-                }
-
-                if (username_value.? != .string or password_value.? != .string) {
-                    // Credentials are not strings
-                    writeAuthError(stream, allocator, "Invalid credential format");
-                    if (HOT_PATH_LOGGING) log.debug("Authentication failed: invalid credential format", &.{});
-                    return;
-                }
-
-                const username = username_value.?.string;
-                const password = password_value.?.string;
-
-                // Validate credentials
-                _ = user_mgmt.authenticate(username, password) catch {
-                    // Invalid credentials
-                    writeAuthError(stream, allocator, "Authentication failed");
-                    if (HOT_PATH_LOGGING) log.debug("Authentication failed for user", &.{Attr.string("username", username)});
-                    return;
-                };
-
-                // Authentication successful - store username
-                state.authenticated_username = try allocator.dupe(u8, username);
-                if (HOT_PATH_LOGGING) log.debug("Authentication successful for user", &.{Attr.string("username", username)});
-            } else {
-                if (HOT_PATH_LOGGING) log.debug("Authentication is NOT enabled, skipping credential validation", &.{});
-            }
-
-            // Send HELLO response
-            try writeJsonLine(stream, allocator, CliHelloResponse{});
-            if (HOT_PATH_LOGGING) log.debug("HELLO response sent", &.{});
-        } else if (std.mem.eql(u8, type_str, "RUN_GQL")) {
-            // Handle query execution
-            const query_text_value = obj.get("text") orelse {
-                writeErrorJson(stream, allocator, "Missing text field");
-                continue;
-            };
-
-            if (query_text_value != .string) {
-                writeErrorJson(stream, allocator, "text field must be string");
-                continue;
-            }
-
-            const query_text = query_text_value.string;
-            log.debug("Query text received", &.{Attr.string("query", query_text)});
-
-            var param_names = std.ArrayList([]const u8).empty;
-            defer {
-                for (param_names.items) |pname| allocator.free(pname);
-                param_names.deinit(allocator);
-            }
-            var param_values = std.ArrayList(Value).empty;
-            defer {
-                for (param_values.items) |pval| freeParamValue(allocator, pval);
-                param_values.deinit(allocator);
-            }
-            var params_valid = true;
-            if (obj.get("params")) |params_value| {
-                if (params_value != .object) {
-                    writeErrorJson(stream, allocator, "params must be object");
-                    params_valid = false;
-                } else {
-                    var iter = params_value.object.iterator();
-                    while (iter.next()) |entry| {
-                        const dup_name = try allocator.dupe(u8, entry.key_ptr.*);
-                        const param_value = convertJsonParam(allocator, entry.value_ptr.*) catch {
-                            allocator.free(dup_name);
-                            writeErrorJson(stream, allocator, "Unsupported parameter type");
-                            params_valid = false;
-                            break;
-                        };
-                        try param_names.append(allocator, dup_name);
-                        try param_values.append(allocator, param_value);
-                    }
-                }
-            }
-            if (!params_valid) continue;
-
-            // CANARY: REQ=REQ-AUTH-QUIC-003; FEATURE="QUIC Authentication"; ASPECT=QueryAuth; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; OWNER=cli; UPDATED=2025-10-25
-            // Execute query with authenticated user context (using global geode import)
-            const options = geode.test_harness.QueryOptions{
-                .token = null,
-                .user = state.authenticated_username,
-                .strict_offset_validation = true, // QUIC mode enforces US001 (OFFSET requires ORDER BY)
-                .param_names = param_names.items,
-                .param_values = param_values.items,
-            };
-
-            var mut_ally = allocator;
-            const result = geode.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
-                // Send error response
-                const err_resp = CliStatusError{ .status_class = "58000", .@"error" = @errorName(err) };
-                const err_json = json_lib.encode(allocator, err_resp, .{}) catch {
-                    try stream.writeAll("STATUS: {\"status_class\":\"58000\",\"error\":\"encoding_error\"}\n");
-                    continue;
-                };
-                defer allocator.free(err_json);
-                try stream.writeAll("STATUS: ");
-                try stream.writeAll(err_json);
-                try stream.writeAll("\n");
-                continue;
-            };
-            defer mut_ally.free(result);
-
-            // CANARY: REQ=REQ-QUIC-PERSIST-004; FEATURE="QUICDataPersistence"; ASPECT=StreamJsonRpcPersist; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
-            // Save graph store if dirty after query execution (RUN_GQL stream handler)
-            // This ensures data created via JSON protocol (shell /source) is persisted to disk
-            const global_store = geode.graph_store.getGlobalStore(allocator);
-            global_store.saveIfDirty();
-
-            // Parse the result JSON to extract columns for SCHEMA response
-            const result_parsed = try std.json.parseFromSlice(std.json.Value, allocator, result, .{});
-            defer result_parsed.deinit();
-
-            const result_obj = result_parsed.value.object;
-
-            // Store result data for PULL request
-            if (state.last_result_data) |old_data| allocator.free(old_data);
-            state.last_result_data = try allocator.dupe(u8, result);
-            if (HOT_PATH_LOGGING) log.debug("RUN_GQL: Stored result data", &.{Attr.uint("bytes", result.len)});
-
-            // Build and send SCHEMA response only (client will PULL for data)
-            var response_buf = std.ArrayList(u8).initCapacity(allocator, 4096) catch {
-                const error_response = "{\"status_class\":\"58000\",\"error\":\"Out of memory\"}\n";
-                try stream.writeAll(error_response);
-                continue;
-            };
-            defer response_buf.deinit(allocator);
-            const resp_writer = response_buf.writer(allocator);
-
-            // Build SCHEMA response: {"status_class":"00000","result":{"type":"SCHEMA","columns":[...]}}
-            try resp_writer.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"SCHEMA\",\"columns\":[");
-            if (result_obj.get("columns")) |columns| {
-                for (columns.array.items, 0..) |col, idx| {
-                    if (idx > 0) try resp_writer.writeAll(",");
-                    try resp_writer.print("{{\"name\":\"{s}\",\"type\":\"text\"}}", .{col.string});
-                }
-            }
-            try resp_writer.writeAll("]}}\n");
-
-            log.debug("Writing query response", &.{Attr.uint("bytes", response_buf.items.len)});
-            stream.writeAll(response_buf.items) catch |err| {
-                return err;
-            };
-            log.debug("Query response sent successfully", &.{});
-        } else if (std.mem.eql(u8, type_str, "PULL")) {
-            // Handle PULL request - send result data from last query
-            log.debug("Processing PULL request", &.{});
-            if (state.last_result_data) |result_data| {
-                // Parse the stored result
-                const result_parsed = try std.json.parseFromSlice(std.json.Value, allocator, result_data, .{});
-                defer result_parsed.deinit();
-
-                const result_obj = result_parsed.value.object;
-
-                // Check if this is an error result (no columns/rows fields)
-                const status_class = result_obj.get("status_class");
-                const has_error = result_obj.get("error") != null;
-                const columns_val = result_obj.get("columns");
-                const rows_val = result_obj.get("rows");
-
-                if (has_error or columns_val == null or rows_val == null) {
-                    // This is an error result or non-data query - send RESULT with status
-                    log.debug("PULL: Forwarding error/status result", &.{});
-                    try writeJsonLine(stream, allocator, CliPullResultResponse{
-                        .status_class = if (status_class) |sc| sc.string else "00000",
-                        .result = .{ .@"error" = if (result_obj.get("error")) |e| e.string else null },
-                    });
-                    log.debug("PULL: RESULT response sent successfully", &.{});
-                } else {
-                    // This is a data result - send BINDINGS response
-                    log.debug("PULL: Sending BINDINGS with row data", &.{});
-                    var response_buf = std.ArrayList(u8).initCapacity(allocator, 4096) catch {
-                        const error_response = "{\"status_class\":\"58000\",\"error\":\"Out of memory\"}\n";
-                        try stream.writeAll(error_response);
-                        continue;
-                    };
-                    defer response_buf.deinit(allocator);
-                    const resp_writer = response_buf.writer(allocator);
-
-                    try resp_writer.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"ordered\":false,\"final\":true,\"rows\":[");
-
-                    const rows = rows_val.?;
-                    const columns = columns_val.?;
-
-                    for (rows.array.items, 0..) |row_array, row_idx| {
-                        if (row_idx > 0) try resp_writer.writeAll(",");
-                        try resp_writer.writeAll("{");
-
-                        // Convert row from array to object with column names
-                        for (columns.array.items, 0..) |col, col_idx| {
-                            if (col_idx > 0) try resp_writer.writeAll(",");
-                            try resp_writer.print("\"{s}\":", .{col.string});
-                            try writeJsonValueWithDecimalScale(resp_writer, row_array.array.items[col_idx], allocator);
-                        }
-
-                        try resp_writer.writeAll("}");
-                    }
-
-                    try resp_writer.writeAll("]}}\n");
-                    try stream.writeAll(response_buf.items);
-                }
-            } else {
-                // No stored result, send END
-                log.debug("PULL: No stored result, sending END", &.{});
-                try writeJsonLine(stream, allocator, CliEndResponse{});
-            }
-        } else if (std.mem.eql(u8, type_str, "BEGIN")) {
-            try handleControlStatement(stream, allocator, "BEGIN", state.authenticated_username, state.authenticated_password, &state.last_result_data);
-            continue;
-        } else if (std.mem.eql(u8, type_str, "COMMIT")) {
-            try handleControlStatement(stream, allocator, "COMMIT", state.authenticated_username, state.authenticated_password, &state.last_result_data);
-            continue;
-        } else if (std.mem.eql(u8, type_str, "ROLLBACK")) {
-            try handleControlStatement(stream, allocator, "ROLLBACK", state.authenticated_username, state.authenticated_password, &state.last_result_data);
-            continue;
-        } else if (std.mem.eql(u8, type_str, "SAVEPOINT")) {
-            const name_value = obj.get("name") orelse {
-                writeErrorJson(stream, allocator, "SAVEPOINT requires name");
-                continue;
-            };
-            if (name_value != .string) {
-                writeErrorJson(stream, allocator, "SAVEPOINT name must be string");
-                continue;
-            }
-            const savepoint_stmt = try std.fmt.allocPrint(allocator, "SAVEPOINT {s}", .{name_value.string});
-            defer allocator.free(savepoint_stmt);
-            try handleControlStatement(stream, allocator, savepoint_stmt, state.authenticated_username, state.authenticated_password, &state.last_result_data);
-            continue;
-        } else if (std.mem.eql(u8, type_str, "ROLLBACK_TO")) {
-            const name_value = obj.get("name") orelse {
-                writeErrorJson(stream, allocator, "ROLLBACK_TO requires name");
-                continue;
-            };
-            if (name_value != .string) {
-                writeErrorJson(stream, allocator, "ROLLBACK_TO name must be string");
-                continue;
-            }
-            const rollback_stmt = try std.fmt.allocPrint(allocator, "ROLLBACK TO {s}", .{name_value.string});
-            defer allocator.free(rollback_stmt);
-            try handleControlStatement(stream, allocator, rollback_stmt, state.authenticated_username, state.authenticated_password, &state.last_result_data);
-            continue;
-        } else if (std.mem.eql(u8, type_str, "SET_PASSWORD")) {
-            // GAP-0150: Handle password change requests via QUIC
-            // CANARY: REQ=REQ-AUTH-CLI-002; FEATURE="CLI QUIC Password Update"; ASPECT=PasswordChange; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
-            const user_mgmt = geode.user_management;
-
-            // Extract required fields
-            const username_val = obj.get("username") orelse {
-                writeAuthError(stream, allocator, "SET_PASSWORD requires username");
-                continue;
-            };
-            const new_password_val = obj.get("new_password") orelse {
-                writeAuthError(stream, allocator, "SET_PASSWORD requires new_password");
-                continue;
-            };
-
-            if (username_val != .string or new_password_val != .string) {
-                writeAuthError(stream, allocator, "Invalid field format");
-                continue;
-            }
-
-            const target_username = username_val.string;
-            const new_password = new_password_val.string;
-
-            // Check authorization: user can only change their own password, or admin can change anyone's
-            const is_own_password = if (state.authenticated_username) |auth_user|
-                std.mem.eql(u8, auth_user, target_username)
-            else
-                false;
-
-            // For now, only allow changing own password when authenticated
-            if (!is_own_password) {
-                writeJsonLine(stream, allocator, CliTypeError{ .status_class = "42501", .message = "Permission denied: can only change your own password" }) catch {
-                    stream.writeAll("{\"type\":\"ERROR\",\"status_class\":\"42501\",\"message\":\"Encoding error\"}\n") catch {};
-                };
-                continue;
-            }
-
-            // Update password
-            _ = user_mgmt.setPassword(target_username, new_password) catch |err| {
-                const pwd_err_msg = std.fmt.allocPrint(allocator, "Password update failed: {s}", .{@errorName(err)}) catch {
-                    writeAuthError(stream, allocator, "Password update failed");
-                    continue;
-                };
-                defer allocator.free(pwd_err_msg);
-                writeAuthError(stream, allocator, pwd_err_msg);
-                continue;
-            };
-
-            // Success response
-            try writeJsonLine(stream, allocator, CliSuccessMessage{ .type = "SET_PASSWORD_OK", .message = "Password updated successfully" });
-            log.debug("Password updated for user", &.{Attr.string("username", target_username)});
-            continue;
-        } else {
-            // Unknown message type
-            const unknown_type_msg = std.fmt.allocPrint(allocator, "Unknown message type: {s}", .{type_str}) catch {
-                writeErrorJson(stream, allocator, "Unknown message type");
-                continue;
-            };
-            defer allocator.free(unknown_type_msg);
-            writeErrorJson(stream, allocator, unknown_type_msg);
-        }
-    }
-}
-
-// Write JSON value with special handling for decimal scale preservation
-fn writeJsonValueWithDecimalScale(writer: anytype, value: std.json.Value, allocator: std.mem.Allocator) !void {
-    switch (value) {
-        .null => try writer.writeAll("null"),
-        .bool => |b| try writer.writeAll(if (b) "true" else "false"),
-        .integer => |i| try writer.print("{}", .{i}),
-        .float => |f| {
-            // Check if this is actually a decimal that needs scale preservation
-            // For now, just write the float normally
-            try writer.print("{d}", .{f});
-        },
-        .number_string => |s| {
-            // This might be a decimal with preserved scale
-            try writer.writeAll(s);
-        },
-        .string => |s| {
-            // Check if this is a decimal value encoded as a string (e.g., "1.2300")
-            // The Go client expects decimals to preserve their scale
-            if (isDecimalString(s)) {
-                // Write as-is to preserve scale
-                try writer.print("\"{s}\"", .{s});
-            } else {
-                // Regular string - escape properly
-                try writer.writeByte('"');
-                for (s) |c| {
-                    switch (c) {
-                        '"' => try writer.writeAll("\\\""),
-                        '\\' => try writer.writeAll("\\\\"),
-                        '\n' => try writer.writeAll("\\n"),
-                        '\r' => try writer.writeAll("\\r"),
-                        '\t' => try writer.writeAll("\\t"),
-                        else => try writer.writeByte(c),
-                    }
-                }
-                try writer.writeByte('"');
-            }
-        },
-        .array => |arr| {
-            try writer.writeByte('[');
-            for (arr.items, 0..) |item, i| {
-                if (i > 0) try writer.writeByte(',');
-                try writeJsonValueWithDecimalScale(writer, item, allocator);
-            }
-            try writer.writeByte(']');
-        },
-        .object => |obj| {
-            try writer.writeByte('{');
-            var first = true;
-            var it = obj.iterator();
-            while (it.next()) |entry| {
-                if (!first) try writer.writeByte(',');
-                first = false;
-
-                // Write key
-                try writer.writeByte('"');
-                try writer.writeAll(entry.key_ptr.*);
-                try writer.writeAll("\":");
-
-                // Write value
-                try writeJsonValueWithDecimalScale(writer, entry.value_ptr.*, allocator);
-            }
-            try writer.writeByte('}');
-        },
-    }
-}
-
-// Check if a string looks like a decimal number
-fn isDecimalString(s: []const u8) bool {
-    if (s.len == 0) return false;
-
-    var has_digit = false;
-    var has_dot = false;
-    var idx: usize = 0;
-
-    // Skip optional minus sign
-    if (s[0] == '-') idx = 1;
-
-    while (idx < s.len) : (idx += 1) {
-        const c = s[idx];
-        if (c >= '0' and c <= '9') {
-            has_digit = true;
-        } else if (c == '.') {
-            if (has_dot) return false; // Multiple dots
-            has_dot = true;
-        } else {
-            return false; // Non-digit, non-dot character
-        }
-    }
-
-    return has_digit;
-}
-
-// Server startup function - direct QUIC server implementation
-fn startServer(allocator: std.mem.Allocator, args: [][:0]u8) !void {
-    // Real QUIC server implementation using transport module
-    const QuicTransport = @import("transport/quic");
-
-    var ai: usize = 1;
-    var listen_addr: []const u8 = "0.0.0.0";
-    var listen_port: u16 = 3141;
-    var data_dir: ?[]const u8 = null;
-    var log_level_arg: ?[]const u8 = null;
-    var test_exit_after_first: bool = false;
-    var cert_path: ?[]const u8 = null;
-    var key_path: ?[]const u8 = null;
-    var no_tls: bool = false;
-
-    // Parse arguments
-    while (ai < args.len) : (ai += 1) {
-        const arg = args[ai];
-        if (std.mem.eql(u8, arg, "--listen") and ai + 1 < args.len) {
-            const addr_port = args[ai + 1];
-            // Parse address:port
-            if (std.mem.lastIndexOf(u8, addr_port, ":")) |colon_idx| {
-                listen_addr = addr_port[0..colon_idx];
-                listen_port = std.fmt.parseInt(u16, addr_port[colon_idx + 1 ..], 10) catch 3141;
-            }
-            ai += 1;
-        } else if ((std.mem.eql(u8, arg, "--data_dir") or std.mem.eql(u8, arg, "--data-dir")) and ai + 1 < args.len) {
-            data_dir = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, arg, "--log-level") and ai + 1 < args.len) {
-            log_level_arg = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, arg, "--cert") and ai + 1 < args.len) {
-            cert_path = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, arg, "--key") and ai + 1 < args.len) {
-            key_path = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, arg, "--no-tls")) {
-            no_tls = true;
-        } else if (std.mem.eql(u8, arg, "--test-exit-after-first")) {
-            test_exit_after_first = true;
-        }
-    }
-
-    std.debug.print("Geode Server v0.1.0\n", .{});
-    std.debug.print("Starting QUIC server...\n", .{});
-
-    // Set up data directory
-    const actual_data_dir = data_dir orelse "./data";
-    std.fs.cwd().makeDir(actual_data_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-
-    // CANARY: REQ=REQ-MULTI-GRAPH-030; FEATURE="MultiGraphIsolation"; ASPECT=DataDirEnvVar; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-    // Set GEODE_DATA_DIR environment variable so catalog and graph storage use the correct directory
-    // This is critical for multi-graph isolation - without it, the catalog loads from /tmp
-    const data_dir_z = try allocator.dupeZ(u8, actual_data_dir);
-    defer allocator.free(data_dir_z);
-    const result = setenv("GEODE_DATA_DIR", data_dir_z.ptr, 1);
-    if (result != 0) {
-        std.debug.print("Warning: Failed to set GEODE_DATA_DIR environment variable\n", .{});
-    }
-
-    // GAP-384 Fix: Set graph storage manager's data directory for named graph persistence
-    // CANARY: REQ=REQ-GRAPH-PERSIST-003; FEATURE="NamedGraphPersistence"; ASPECT=DataDirSetup; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-30
-    geode.graph_storage_manager.setDataDir(actual_data_dir);
-
-    // Set up certificate paths
-    const actual_cert_path = cert_path orelse try std.fmt.allocPrint(allocator, "{s}/server.crt", .{actual_data_dir});
-    defer if (cert_path == null) allocator.free(actual_cert_path);
-
-    const actual_key_path = key_path orelse try std.fmt.allocPrint(allocator, "{s}/server.key", .{actual_data_dir});
-    defer if (key_path == null) allocator.free(actual_key_path);
-
-    // Initialize QUIC transport
-    const config = QuicTransport.QuicTransport.Config{
-        .address = listen_addr,
-        .port = listen_port,
-        .cert_path = actual_cert_path,
-        .key_path = actual_key_path,
-    };
-
-    var quic_server = try QuicTransport.QuicTransport.init(allocator, config);
-    defer quic_server.deinit();
-
-    std.debug.print("✅ Data directory: {s}\n", .{actual_data_dir});
-    std.debug.print("✅ QUIC listener: {s}:{}\n", .{ listen_addr, listen_port });
-    if (!no_tls) {
-        std.debug.print("✅ TLS certificates: {s}, {s}\n", .{ actual_cert_path, actual_key_path });
-    }
-
-    // Start listening
-    quic_server.listen() catch |err| {
-        switch (err) {
-            error.AddressInUse => {
-                std.debug.print("\n❌ Error: Address {s}:{} is already in use.\n", .{ listen_addr, listen_port });
-                std.debug.print("   Another server may already be running on this port.\n\n", .{});
-                std.debug.print("   To find the process using this port:\n", .{});
-                switch (builtin.os.tag) {
-                    .linux => {
-                        std.debug.print("     lsof -i :{}\n", .{listen_port});
-                        std.debug.print("     ss -tlnp | grep {}\n", .{listen_port});
-                    },
-                    .macos => {
-                        std.debug.print("     lsof -i :{}\n", .{listen_port});
-                        std.debug.print("     netstat -anv | grep {}\n", .{listen_port});
-                    },
-                    .windows => {
-                        std.debug.print("     netstat -ano | findstr {}\n", .{listen_port});
-                        std.debug.print("     Get-Process -Id (Get-NetTCPConnection -LocalPort {}).OwningProcess\n", .{listen_port});
-                    },
-                    else => {
-                        std.debug.print("     netstat -an | grep {}\n", .{listen_port});
-                    },
-                }
-                std.debug.print("\n   To use a different port:\n", .{});
-                std.debug.print("     geode serve --listen {s}:3142\n", .{listen_addr});
-                std.process.exit(1);
-            },
-            error.AddressNotAvailable => {
-                std.debug.print("\n❌ Error: Address {s} is not available on this system.\n", .{listen_addr});
-                std.debug.print("   Check that the address is valid and the network interface exists.\n\n", .{});
-                std.debug.print("   To use a different address:\n", .{});
-                std.debug.print("     geode serve --listen 0.0.0.0:{}   # All interfaces\n", .{listen_port});
-                std.debug.print("     geode serve --listen 127.0.0.1:{} # Localhost only\n", .{listen_port});
-                std.process.exit(1);
-            },
-            error.PermissionDenied => {
-                std.debug.print("\n❌ Error: Permission denied to bind to {s}:{}.\n", .{ listen_addr, listen_port });
-                if (listen_port < 1024) {
-                    std.debug.print("   Ports below 1024 require elevated privileges.\n\n", .{});
-                    std.debug.print("   Options:\n", .{});
-                    switch (builtin.os.tag) {
-                        .linux, .macos => {
-                            std.debug.print("     sudo geode serve --listen {s}:{}\n", .{ listen_addr, listen_port });
-                        },
-                        .windows => {
-                            std.debug.print("     Run as Administrator\n", .{});
-                        },
-                        else => {},
-                    }
-                    std.debug.print("     geode serve --listen {s}:3141  # Use port >= 1024\n", .{listen_addr});
-                } else {
-                    std.debug.print("   Check file permissions and firewall settings.\n", .{});
-                }
-                std.process.exit(1);
-            },
-            else => return err,
-        }
-    };
-    std.debug.print("✅ Server ready - accepting QUIC connections\n", .{});
-
-    // Track active connections with per-stream state
-    var active_connections = std.ArrayList(ConnectionState).initCapacity(allocator, 16) catch return error.OutOfMemory;
-    defer {
-        for (active_connections.items) |*state| {
-            state.deinit(allocator);
-        }
-        active_connections.deinit(allocator);
-    }
-
-    // Accept and handle connections
-    var connection_count: u32 = 0;
-    var stream_count: u32 = 0;
-    var loop_iteration: u64 = 0;
-    // GAP-0201: Adaptive backoff for high throughput - only sleep when idle
-    // CANARY: REQ=REQ-PERF-ADAPTIVE-BACKOFF-001; FEATURE="AdaptiveBackoff"; ASPECT=MainLoopSleep; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=cli; UPDATED=2026-01-30
-    var idle_iterations: u32 = 0;
-    const max_idle_before_sleep: u32 = 10; // Start sleeping after 10 idle iterations
-    const min_sleep_us: u64 = 10; // 10μs minimum sleep
-    const max_sleep_us: u64 = 100; // 100μs maximum sleep (was 1ms)
-    main_loop: while (true) {
-        loop_iteration += 1;
-
-        if (test_exit_after_first and stream_count > 0) break :main_loop;
-
-        // Track if any work was done this iteration
-        var processed_any_data: bool = false;
-
-        // Poll to process packets and timers (critical for handshake completion)
-        // RFC 9000 §6 mandates timers for loss detection and idle timeout
-        // Note: poll() handles both packet processing AND timer events
-        // GAP-0201: Reduced poll timeout to 0 when active, use adaptive backoff for idle
-        const poll_timeout: u32 = if (idle_iterations > max_idle_before_sleep) 1 else 0;
-        quic_server.poll(poll_timeout) catch {};
-
-        // Try to accept newly-ready connections (non-blocking)
-        // Connections become available after QUIC handshake completes
-        while (quic_server.tryAccept()) |conn| {
-            // GAP-0200: Debug print removed from hot path for performance
-            connection_count += 1;
-            var conn_state = ConnectionState.init(allocator, conn, &quic_server);
-            active_connections.append(allocator, conn_state) catch {
-                conn_state.deinit(allocator);
-                continue;
-            };
-        }
-
-        // Poll streams from existing connections using direct stream ID polling
-        // RFC 9000 §2.1: Client-initiated bidirectional streams use IDs 0, 4, 8, 12, ...
-        var i: usize = 0;
-        while (i < active_connections.items.len) {
-            var conn_state = &active_connections.items[i];
-
-            // Check if connection is drained (closed) - remove it
-            if (conn_state.conn.isDrained()) {
-                var removed = active_connections.swapRemove(i);
-                removed.deinit(allocator);
-                continue; // Don't increment i since we removed an element
-            }
-
-            // Only try to read streams if handshake is confirmed
-            if (!conn_state.conn.isHandshakeConfirmed()) {
-                // Handshake still in progress - skip for now
-                // GAP-0200: Debug print removed from hot path for performance
-                i += 1;
-                continue;
-            }
-
-            // Accept new streams
-            while (true) {
-                const stream = conn_state.conn.acceptStream() catch |err| switch (err) {
-                    error.WouldBlock => break, // No more new streams
-                    else => {
-                        std.debug.print("[QUIC-CLI] acceptStream error: {}\n", .{err});
-                        break;
-                    },
-                };
-
-                const stream_id = stream.stream_id;
-                // CANARY: REQ=REQ-QUIC-STREAM-CLEANUP-002; FEATURE="StreamMemoryManagement"; ASPECT=DoubleFreePrevention; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-12-27
-                // Use destroyStream to properly remove from tracked list before destroying
-                // This prevents double-free when connection closes later
-                conn_state.conn.destroyStream(stream);
-
-                // GAP-0200: Debug print removed from hot path for performance
-
-                // Initialize state for this stream
-                if (!conn_state.streams.contains(stream_id)) {
-                    var new_state = StreamState.init(allocator) catch continue;
-                    conn_state.streams.put(stream_id, new_state) catch {
-                        new_state.deinit(allocator);
-                        continue;
-                    };
-                }
-            }
-
-            // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-005; FEATURE="ConnectionMemoryManagement"; ASPECT=GracefulDisconnect; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-12-28
-            // E01 Fix: Check for drained connection before stream operations to prevent panic
-            // Poll active streams - but first check if connection is still valid
-            if (conn_state.conn.isDrained()) {
-                // Connection became drained during iteration - skip stream polling
-                i += 1;
-                continue;
-            }
-
-            var stream_iter = conn_state.streams.keyIterator();
-            while (stream_iter.next()) |stream_id_ptr| {
-                const stream_id = stream_id_ptr.*;
-
-                // E01 Fix: Re-check connection state before each stream read
-                // Client disconnect can happen between iterations
-                if (conn_state.conn.isDrained()) break;
-
-                while (true) {
-                    // E01 Fix: Check drained state inside the read loop as well
-                    if (conn_state.conn.isDrained()) break;
-
-                    var buf: [MAX_LINE_SIZE]u8 = undefined;
-                    const n = conn_state.conn.inner.readStream(stream_id, buf[0..]) catch |err| {
-                        // E01 Fix: Log specific error for debugging disconnect issues
-                        if (err != error.WouldBlock) {
-                            std.debug.print("[QUIC-CLI] readStream error on stream {}: {}\n", .{ stream_id, err });
-                        }
-                        break;
-                    };
-
-                    if (n == 0) break;
-
-                    // GAP-0201: Mark that we processed data - reset idle counter
-                    processed_any_data = true;
-
-                    processStreamBuffer(allocator, &quic_server, conn_state, &stream_count, stream_id, buf[0..n]) catch |err| {
-                        // Keep error logging for debugging issues
-                        std.debug.print("[STREAM-POLL] Error processing stream {}: {}\n", .{ stream_id, err });
-                    };
-
-                    if (test_exit_after_first and stream_count > 0) break :main_loop;
-                }
-            }
-
-            i += 1;
-        }
-
-        // GAP-0201: Adaptive backoff - only sleep when idle to maximize throughput
-        // CANARY: REQ=REQ-PERF-ADAPTIVE-BACKOFF-002; FEATURE="AdaptiveBackoff"; ASPECT=IdleSleep; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=cli; UPDATED=2026-01-30
-        if (processed_any_data) {
-            // Data was processed - reset idle counter, no sleep needed
-            idle_iterations = 0;
-        } else {
-            // No data processed - increment idle counter
-            idle_iterations += 1;
-            if (idle_iterations > max_idle_before_sleep) {
-                // Exponential backoff up to max_sleep_us
-                // Start at min_sleep_us, double each iteration, cap at max_sleep_us
-                const backoff_multiplier: u6 = @intCast(@min(idle_iterations - max_idle_before_sleep, 4));
-                const sleep_us: u64 = @min(min_sleep_us << backoff_multiplier, max_sleep_us);
-                std.Thread.sleep(sleep_us * @as(u64, std.time.ns_per_us));
-            }
-            // When idle_iterations <= max_idle_before_sleep, no sleep - tight loop for responsiveness
-        }
-    }
-}
-// GAP-0138 CODE CLEANUP: Removed dead code runEmbeddedClient function
-// CANARY: REQ=REQ-CODE-QUALITY-001; FEATURE="DeadCodeRemoval"; ASPECT=Maintenance; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-13
-// This function was defined but never called anywhere in the codebase.
-// It was superseded by executeQuicQuery() which properly implements TLS certificate verification (GAP-0113).
-// The misleading TODO comment "add TLS certificate verification option" has been resolved by this removal.
-
 fn printShellUsage() void {
     std.debug.print("geode shell - Interactive GQL shell\n" ++
         "\n" ++
@@ -2633,6 +929,7 @@ fn printShellUsage() void {
         "  --no-history           Disable command history\n" ++
         "  --format <fmt>         Default output format: json|table|csv (default: table)\n" ++
         "  --keymap <mode>        Keymap mode: emacs|vi (default: emacs)\n" ++
+        "  --plain                Plain output mode (no ANSI escape codes, for testing)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Authentication:\n" ++
@@ -2936,7 +1233,6 @@ fn printRevokeUsage() void {
 
 // Subcommand implementations
 
-// JSON protocol handler for Go client compatibility (process/stdio mode)
 // CANARY: REQ=REQ-LSP-001; FEATURE="Language Server Protocol"; ASPECT=LSPServer; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-10-28
 fn cmdLsp(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Check for help flag
@@ -2979,313 +1275,6 @@ fn printLspUsage() void {
     std.debug.print("  geode lsp\n\n", .{});
 }
 
-fn cmdStdio(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = argv;
-    _ = start_idx;
-
-    // This implements the JSON protocol expected by the Go client
-    // Protocol: read JSON requests from stdin, write JSON responses to stdout
-    // Format: {"type": "RUN_GQL", "text": "query", "params": {...}}
-
-    const stdin_file = std.fs.File{ .handle = getStdinHandle() catch return error.StdioUnavailable }; // stdin
-    const stdout_fd = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable }; // stdout
-
-    // Use the geode module to execute queries
-
-    // Store the last query result and query text for PULL requests
-    var last_result: ?[]const u8 = null;
-    defer if (last_result) |r| allocator.free(r);
-    var last_query: ?[]const u8 = null;
-    defer if (last_query) |q| allocator.free(q);
-
-    // Read line by line from stdin
-    var line_buf: [65536]u8 = undefined;
-
-    while (true) {
-        // Read input byte by byte until we get a newline
-        var line_len: usize = 0;
-
-        while (line_len < line_buf.len) {
-            var one: [1]u8 = undefined;
-            const bytes_read = stdin_file.read(&one) catch |err| {
-                if (err == error.EndOfStream) break;
-                return err;
-            };
-            if (bytes_read == 0) break;
-
-            if (one[0] == '\n') break;
-            line_buf[line_len] = one[0];
-            line_len += 1;
-        }
-
-        if (line_len == 0) break;
-        const line = line_buf[0..line_len];
-
-        // Parse JSON request
-        const json = std.json;
-        const parsed = try json.parseFromSlice(json.Value, allocator, line, .{});
-        defer parsed.deinit();
-
-        const obj = parsed.value.object;
-        const msg_type = obj.get("type") orelse continue;
-
-        if (std.mem.eql(u8, msg_type.string, "HELLO")) {
-            // Respond to HELLO (handshake) with server info
-            const hello_resp = "{\"result\":{\"type\":\"HELLO\",\"server_name\":\"geode\",\"server_version\":\"" ++ VERSION ++ "\"}}\n";
-            _ = try stdout_fd.writeAll(hello_resp);
-            continue;
-        } else if (std.mem.eql(u8, msg_type.string, "RUN_GQL")) {
-            // Execute GQL query
-            const text = obj.get("text") orelse continue;
-            const query_text = text.string;
-
-            // Execute query using embedded server
-            const options = geode.test_harness.QueryOptions{
-                .token = null,
-                .user = null,
-                .strict_offset_validation = true, // Stdio mode enforces US001 (OFFSET requires ORDER BY)
-            };
-
-            var mut_ally = allocator;
-            const result = geode.test_harness.runQueryWithAuth(&mut_ally, query_text, options) catch |err| {
-                // Send error response
-                const err_resp = CliResultError{ .result = .{ .code = "00000", .message = @errorName(err) } };
-                const err_json = json_lib.encode(allocator, err_resp, .{}) catch {
-                    _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"ERROR\",\"code\":\"00000\",\"message\":\"encoding_error\"}}\n");
-                    continue;
-                };
-                defer allocator.free(err_json);
-                _ = try stdout_fd.writeAll(err_json);
-                _ = try stdout_fd.writeAll("\n");
-                continue;
-            };
-            defer mut_ally.free(result);
-
-            // Parse the result JSON to check for errors
-            const result_parsed = try json.parseFromSlice(json.Value, allocator, result, .{});
-            defer result_parsed.deinit();
-
-            const result_obj = result_parsed.value.object;
-
-            // Check if this is an error response (status_class != "00000")
-            if (result_obj.get("status_class")) |status_class| {
-                if (!std.mem.eql(u8, status_class.string, "00000")) {
-                    // This is an error - send ERROR response with the status code
-                    const error_msg = if (result_obj.get("message")) |msg| msg.string else "Query error";
-                    const err_resp = CliResultError{ .result = .{ .code = status_class.string, .message = error_msg } };
-                    const err_json = json_lib.encode(allocator, err_resp, .{}) catch {
-                        _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"ERROR\",\"code\":\"58000\",\"message\":\"encoding_error\"}}\n");
-                        continue;
-                    };
-                    defer allocator.free(err_json);
-                    _ = try stdout_fd.writeAll(err_json);
-                    _ = try stdout_fd.writeAll("\n");
-                    continue;
-                }
-            }
-
-            // Store result and query text for PULL request
-            if (last_result) |r| allocator.free(r);
-            last_result = try allocator.dupe(u8, result);
-            if (last_query) |q| allocator.free(q);
-            last_query = try allocator.dupe(u8, query_text);
-
-            const columns = result_obj.get("columns") orelse continue;
-
-            // Send SCHEMA response first
-            _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"SCHEMA\",\"columns\":[");
-
-            // Write column definitions
-            for (columns.array.items, 0..) |col, idx| {
-                if (idx > 0) _ = try stdout_fd.writeAll(",");
-                const col_def = CliColumnDef{ .name = col.string };
-                const col_json = json_lib.encode(allocator, col_def, .{}) catch {
-                    _ = try stdout_fd.writeAll("{\"name\":\"unknown\",\"type\":\"text\"}");
-                    continue;
-                };
-                defer allocator.free(col_json);
-                _ = try stdout_fd.writeAll(col_json);
-            }
-
-            _ = try stdout_fd.writeAll("]}}\n");
-
-            // Wait for PULL request to send data
-
-        } else if (std.mem.eql(u8, msg_type.string, "PULL")) {
-            // Handle PULL request - send BINDINGS with data from last query
-            if (last_result) |result_str| {
-                // Parse the stored result
-                const result_parsed = try json.parseFromSlice(json.Value, allocator, result_str, .{});
-                defer result_parsed.deinit();
-
-                const result_obj = result_parsed.value.object;
-                const columns = result_obj.get("columns") orelse {
-                    _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"END\"}}\n");
-                    continue;
-                };
-                const rows_array = result_obj.get("rows") orelse {
-                    _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"END\"}}\n");
-                    continue;
-                };
-
-                // Check if query has ORDER BY clause and extract order keys
-                var order_keys_list = std.ArrayList([]const u8).empty;
-                defer {
-                    for (order_keys_list.items) |key| allocator.free(key);
-                    order_keys_list.deinit(allocator);
-                }
-
-                const ordered_val = if (last_query) |query_text| blk: {
-                    // Simple heuristic: check if query contains "ORDER BY" (case insensitive)
-                    var query_upper = try allocator.alloc(u8, query_text.len);
-                    defer allocator.free(query_upper);
-                    for (query_text, 0..) |c, i| {
-                        query_upper[i] = if (c >= 'a' and c <= 'z') c - 32 else c;
-                    }
-                    const order_by_pos = std.mem.indexOf(u8, query_upper, "ORDER BY");
-                    if (order_by_pos) |pos| {
-                        // Extract columns between ORDER BY and next clause (LIMIT, OFFSET, etc.)
-                        const order_start = pos + "ORDER BY".len;
-                        var order_end = query_text.len;
-
-                        // Find the end of the ORDER BY clause
-                        for (&[_][]const u8{ "LIMIT", "OFFSET", "UNION", "EXCEPT", "INTERSECT" }) |keyword| {
-                            if (std.mem.indexOf(u8, query_upper[order_start..], keyword)) |kw_pos| {
-                                const abs_pos = order_start + kw_pos;
-                                if (abs_pos < order_end) order_end = abs_pos;
-                            }
-                        }
-
-                        const order_clause = std.mem.trim(u8, query_text[order_start..order_end], " \t\n\r");
-
-                        // Parse column names (simple: split by comma, take first token before space/ASC/DESC)
-                        var iter = std.mem.splitSequence(u8, order_clause, ",");
-                        while (iter.next()) |col_expr| {
-                            const trimmed = std.mem.trim(u8, col_expr, " \t\n\r");
-                            // Take just the column name (before space, ASC, or DESC)
-                            var col_name = trimmed;
-                            if (std.mem.indexOf(u8, trimmed, " ")) |space_pos| {
-                                col_name = trimmed[0..space_pos];
-                            }
-                            if (col_name.len > 0) {
-                                const col_copy = try allocator.dupe(u8, col_name);
-                                try order_keys_list.append(allocator, col_copy);
-                            }
-                        }
-                        break :blk true;
-                    }
-                    break :blk false;
-                } else false;
-
-                // Convert rows from array-of-arrays to array-of-objects
-                // Test harness returns: [[1, 2], [3, 4]]
-                // Go client expects: [{"col1": 1, "col2": 2}, {"col1": 3, "col2": 4}]
-                _ = try stdout_fd.writeAll("{\"result\":{\"type\":\"BINDINGS\",");
-                const ordered_str = try std.fmt.allocPrint(allocator, "\"ordered\":{s},", .{if (ordered_val) "true" else "false"});
-                defer allocator.free(ordered_str);
-                _ = try stdout_fd.writeAll(ordered_str);
-
-                // Add order_keys if present
-                if (order_keys_list.items.len > 0) {
-                    _ = try stdout_fd.writeAll("\"order_keys\":[");
-                    for (order_keys_list.items, 0..) |key, idx| {
-                        if (idx > 0) _ = try stdout_fd.writeAll(",");
-                        const key_str = try std.fmt.allocPrint(allocator, "\"{s}\"", .{key});
-                        defer allocator.free(key_str);
-                        _ = try stdout_fd.writeAll(key_str);
-                    }
-                    _ = try stdout_fd.writeAll("],");
-                }
-
-                _ = try stdout_fd.writeAll("\"final\":true,\"rows\":[");
-
-                // Convert each row
-                for (rows_array.array.items, 0..) |row_array, row_idx| {
-                    if (row_idx > 0) _ = try stdout_fd.writeAll(",");
-                    _ = try stdout_fd.writeAll("{");
-
-                    // Match each value with its column name
-                    for (columns.array.items, 0..) |col, col_idx| {
-                        if (col_idx > 0) _ = try stdout_fd.writeAll(",");
-                        const col_name = col.string;
-                        const val = row_array.array.items[col_idx];
-
-                        // Write column name and value
-                        const pair = try std.fmt.allocPrint(allocator, "\"{s}\":", .{col_name});
-                        defer allocator.free(pair);
-                        _ = try stdout_fd.writeAll(pair);
-
-                        // Write the value based on its type
-                        switch (val) {
-                            .integer => |i| {
-                                const val_str = try std.fmt.allocPrint(allocator, "{d}", .{i});
-                                defer allocator.free(val_str);
-                                _ = try stdout_fd.writeAll(val_str);
-                            },
-                            .string => |s| {
-                                const val_str = try std.fmt.allocPrint(allocator, "\"{s}\"", .{s});
-                                defer allocator.free(val_str);
-                                _ = try stdout_fd.writeAll(val_str);
-                            },
-                            .bool => |b| {
-                                _ = try stdout_fd.writeAll(if (b) "true" else "false");
-                            },
-                            .null => {
-                                _ = try stdout_fd.writeAll("null");
-                            },
-                            else => {
-                                _ = try stdout_fd.writeAll("null");
-                            },
-                        }
-                    }
-
-                    _ = try stdout_fd.writeAll("}");
-                }
-
-                _ = try stdout_fd.writeAll("]}}\n");
-            } else {
-                // No stored result, send END
-                try writeJsonLine(stdout_fd, allocator, CliEndResponse{ .status_class = null });
-            }
-        } else if (std.mem.eql(u8, msg_type.string, "BEGIN")) {
-            try handleControlStatement(stdout_fd, allocator, "BEGIN", null, null, null);
-            continue;
-        } else if (std.mem.eql(u8, msg_type.string, "COMMIT")) {
-            try handleControlStatement(stdout_fd, allocator, "COMMIT", null, null, null);
-            continue;
-        } else if (std.mem.eql(u8, msg_type.string, "ROLLBACK")) {
-            try handleControlStatement(stdout_fd, allocator, "ROLLBACK", null, null, null);
-            continue;
-        } else if (std.mem.eql(u8, msg_type.string, "SAVEPOINT")) {
-            const name_value = obj.get("name") orelse {
-                writeErrorJson(stdout_fd, allocator, "SAVEPOINT requires name");
-                continue;
-            };
-            if (name_value != .string) {
-                writeErrorJson(stdout_fd, allocator, "SAVEPOINT name must be string");
-                continue;
-            }
-            const savepoint_stmt = try std.fmt.allocPrint(allocator, "SAVEPOINT {s}", .{name_value.string});
-            defer allocator.free(savepoint_stmt);
-            try handleControlStatement(stdout_fd, allocator, savepoint_stmt, null, null, null);
-            continue;
-        } else if (std.mem.eql(u8, msg_type.string, "ROLLBACK_TO")) {
-            const name_value = obj.get("name") orelse {
-                writeErrorJson(stdout_fd, allocator, "ROLLBACK_TO requires name");
-                continue;
-            };
-            if (name_value != .string) {
-                writeErrorJson(stdout_fd, allocator, "ROLLBACK_TO name must be string");
-                continue;
-            }
-            const rollback_stmt = try std.fmt.allocPrint(allocator, "ROLLBACK TO {s}", .{name_value.string});
-            defer allocator.free(rollback_stmt);
-            try handleControlStatement(stdout_fd, allocator, rollback_stmt, null, null, null);
-            continue;
-        }
-    }
-}
-
 fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
@@ -3293,177 +1282,11 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             printServeUsage();
             std.process.exit(@intFromEnum(ExitCode.success));
         }
-        // If --stdio flag is present, redirect to cmdStdio
-        if (std.mem.eql(u8, argv[i], "--stdio")) {
-            return cmdStdio(allocator, argv, start_idx);
-        }
     }
-
-    var server_args = std.ArrayList([]const u8).initCapacity(allocator, argv.len + 16) catch return error.OutOfMemory;
-    defer server_args.deinit(allocator);
-
-    var passthrough = std.ArrayList([]const u8).initCapacity(allocator, argv.len + 16) catch return error.OutOfMemory;
-    defer passthrough.deinit(allocator);
-
-    // Try to find geoded in the same directory as this executable
-    const self_exe_path = try std.fs.selfExePathAlloc(allocator);
-    defer allocator.free(self_exe_path);
-
-    const self_dir_path = std.fs.path.dirname(self_exe_path) orelse ".";
-    const geoded_path = try std.fs.path.join(allocator, &.{ self_dir_path, "geoded" });
-
-    // Check if geoded exists in the same directory
-    if (std.fs.accessAbsolute(geoded_path, .{})) |_| {
-        // Use the full path to geoded (server_args owns this now)
-        try server_args.append(allocator, geoded_path);
-    } else |_| {
-        // geoded not found in same directory, free the path and fall back to PATH resolution
-        allocator.free(geoded_path);
-        try server_args.append(allocator, "geoded");
-    }
-
-    var data_dir: []const u8 = "./data";
-    var listen_addr: []const u8 = "0.0.0.0:3141";
-    var log_level: []const u8 = "info";
-    var use_stdio = false;
-    // GAP-0106 SECURITY FIX: Authentication enabled by default
-    var enable_auth = true;
-
-    i = start_idx;
-    while (i < argv.len) : (i += 1) {
-        const arg = argv[i];
-        if (std.mem.eql(u8, arg, "--data-dir") and i + 1 < argv.len) {
-            data_dir = argv[i + 1];
-            i += 1;
-        } else if (std.mem.eql(u8, arg, "--listen") and i + 1 < argv.len) {
-            listen_addr = argv[i + 1];
-            i += 1;
-        } else if (std.mem.eql(u8, arg, "--log-level") and i + 1 < argv.len) {
-            log_level = argv[i + 1];
-            i += 1;
-        } else if (std.mem.eql(u8, arg, "--stdio")) {
-            use_stdio = true;
-        } else if (std.mem.eql(u8, arg, "--disable-auth")) {
-            // GAP-0143: Block --disable-auth in production builds
-            // CANARY: REQ=REQ-AUTH-GUARD-001; FEATURE="Production Auth Guard"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
-            if (builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall) {
-                log.err("SECURITY ERROR: --disable-auth is blocked in production builds", &.{});
-                log.err("If this is intentional for testing, use a Debug build or set GEODE_ALLOW_NO_AUTH=1", &.{});
-                // Check for explicit override environment variable
-                const allow_no_auth = std.process.getEnvVarOwned(allocator, "GEODE_ALLOW_NO_AUTH") catch null;
-                if (allow_no_auth) |v| {
-                    allocator.free(v);
-                    if (std.mem.eql(u8, v, "1") or std.mem.eql(u8, v, "true")) {
-                        log.warn("SECURITY WARNING: Authentication disabled via GEODE_ALLOW_NO_AUTH override!", &.{});
-                        enable_auth = false;
-                    } else {
-                        return error.AuthenticationBypassBlockedInProduction;
-                    }
-                } else {
-                    return error.AuthenticationBypassBlockedInProduction;
-                }
-            } else {
-                // Debug builds allow --disable-auth with warning
-                log.warn("SECURITY WARNING: Authentication disabled. Do not use in production!", &.{});
-                enable_auth = false;
-            }
-        } else if (std.mem.eql(u8, arg, "--enable-auth")) {
-            // Keep for backward compatibility (now a no-op since auth is enabled by default)
-            enable_auth = true;
-        } else if (std.mem.eql(u8, arg, "--cert") and i + 1 < argv.len) {
-            try server_args.append(allocator, "--cert");
-            try server_args.append(allocator, argv[i + 1]);
-            i += 1;
-        } else if (std.mem.eql(u8, arg, "--key") and i + 1 < argv.len) {
-            try server_args.append(allocator, "--key");
-            try server_args.append(allocator, argv[i + 1]);
-            i += 1;
-        } else {
-            // passthrough unknown flags (and their value if present)
-            try passthrough.append(allocator, arg);
-            if (i + 1 < argv.len and !std.mem.startsWith(u8, argv[i + 1], "-")) {
-                try passthrough.append(allocator, argv[i + 1]);
-                i += 1;
-            }
-        }
-    }
-
-    try server_args.append(allocator, "--data_dir");
-    try server_args.append(allocator, data_dir);
-
-    // Always use --listen with the address from --listen
-    if (!use_stdio) {
-        try server_args.append(allocator, "--listen");
-        try server_args.append(allocator, listen_addr);
-    }
-
-    try server_args.append(allocator, "--log-level");
-    try server_args.append(allocator, log_level);
-
-    if (use_stdio) {
-        try server_args.append(allocator, "--stdio");
-    }
-
-    if (passthrough.items.len > 0) {
-        for (passthrough.items) |p| try server_args.append(allocator, p);
-    }
-
-    // Parse cert and key paths from server_args
-    var cert_path: ?[]const u8 = null;
-    var key_path: ?[]const u8 = null;
-    var force_no_tls = false;
-
-    // Look for cert/key args in server_args
-    i = 0;
-    while (i < server_args.items.len) : (i += 1) {
-        if (std.mem.eql(u8, server_args.items[i], "--cert") and i + 1 < server_args.items.len) {
-            cert_path = server_args.items[i + 1];
-            i += 1;
-        } else if (std.mem.eql(u8, server_args.items[i], "--key") and i + 1 < server_args.items.len) {
-            key_path = server_args.items[i + 1];
-            i += 1;
-        } else if (std.mem.eql(u8, server_args.items[i], "--no-tls")) {
-            force_no_tls = true;
-        }
-    }
-
-    // Create server config from parsed arguments
-    const config = ServerConfig{
-        .data_dir = if (std.mem.eql(u8, data_dir, "./data")) null else data_dir,
-        .listen_quic = if (!use_stdio) listen_addr else null,
-        .cert_path = cert_path,
-        .key_path = key_path,
-        .log_level = log_level,
-        .force_no_tls = force_no_tls,
-    };
-
-    // Initialize user management if auth is enabled (using global geode import)
-    if (enable_auth) {
-        const user_mgmt = geode.user_management;
-        user_mgmt.initUserStore(allocator) catch |err| {
-            std.debug.print("Failed to initialize user store: {}\n", .{err});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-        user_mgmt.setAuthEnabled(true);
-        user_mgmt.ensureDefaultUser(allocator) catch |err| {
-            std.debug.print("Failed to create default users: {}\n", .{err});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-        std.debug.print("Authentication enabled\n", .{});
-    }
-
-    std.debug.print("Starting Geode server...\n", .{});
-    std.debug.print("Version: " ++ VERSION ++ "\n", .{});
-    if (config.listen_quic) |addr| {
-        std.debug.print("Listening on: {s}\n", .{addr});
-    }
-    if (config.data_dir) |dd| {
-        std.debug.print("Data directory: {s}\n", .{dd});
-    }
-
-    // Run the QUIC server directly (unified binary - no subprocess spawning)
-    // This uses the startServer function which implements proper QUIC handling
-    try startServer(allocator, argv);
+    _ = allocator;
+    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedBinary; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+    // Direct call to server main - no subprocess spawning, unified binary
+    try server_main.main();
 }
 
 fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -4207,7 +2030,7 @@ fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic
 
     // Decode ServerPacket wrapper
     const packet = try protobuf.decode(schema.ServerPacket, &reader, allocator);
-    return packet.msg orelse error.InvalidMessage;
+    return packet.quic orelse error.InvalidMessage;
 }
 
 // Helper to write length-prefixed protobuf message
@@ -4299,7 +2122,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
     // Send query using Protobuf (ExecuteRequest)
     const run_gql_req = schema.ExecuteRequest{
         .query = try allocator.dupe(u8, final_query),
-        .parameters = .empty,
+        .params_json = "",
     };
     defer allocator.free(run_gql_req.query);
 
@@ -4343,7 +2166,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
 
         switch (resp) {
             .execute => |exec_resp| {
-                if (exec_resp.val) |val| {
+                if (exec_resp.payload) |val| {
                     switch (val) {
                         .schema => |s| {
                             // Store column names
@@ -4361,10 +2184,10 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                             if (p.rows.items.len == 1 and p.rows.items[0].values.items.len == 1) {
                                 if (p.rows.items[0].values.items[0].kind) |k| {
                                     if (k == .string_val) {
-                                        const json_str = k.string_val;
+                                        const json_str = k.string_val.value;
                                         // Try to parse as JSON and extract actual columns/rows
                                         if (parseWrappedJsonResponse(allocator, json_str, &columns, &all_rows)) |_| {
-                                            if (p.last_page) break;
+                                            if (p.final) break;
                                             continue;
                                         } else |_| {
                                             // Not a wrapped JSON response, fall through to normal processing
@@ -4383,11 +2206,12 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
 
                                 for (row.values.items) |v| {
                                     const cell_str = if (v.kind) |k| switch (k) {
-                                        .string_val => |str| try allocator.dupe(u8, str),
-                                        .int_val => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
-                                        .double_val => |d| try std.fmt.allocPrint(allocator, "{d}", .{d}),
+                                        .string_val => |str| try allocator.dupe(u8, str.value),
+                                        .int_val => |i| try std.fmt.allocPrint(allocator, "{d}", .{i.value}),
+                                        .double_val => |d| try std.fmt.allocPrint(allocator, "{d}", .{d.value}),
                                         .bool_val => |b| try allocator.dupe(u8, if (b) "true" else "false"),
                                         .null_val => try allocator.dupe(u8, "null"),
+                                        else => try allocator.dupe(u8, "?"),
                                     } else try allocator.dupe(u8, "null");
 
                                     try row_values.append(allocator, cell_str);
@@ -4396,7 +2220,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                                 // Row data is stored and formatted at the end for all formats
                                 try all_rows.append(allocator, row_values);
                             }
-                            if (p.last_page) break;
+                            if (p.final) break;
                         },
                         .@"error" => |e| {
                             has_error = true;
@@ -4406,8 +2230,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                             }
                             break;
                         },
-                        .metrics => {},
-                        .heartbeat => {},
+                        .metrics, .heartbeat, .explain, .profile => {},
                     }
                 }
             },
@@ -5430,6 +3253,9 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // Issue #387: Authentication credentials for shell command
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
+    // CANARY: REQ=REQ-SHELL-PLAIN-004; FEATURE="ShellPlainMode"; ASPECT=CLIParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+    // Plain mode for automated testing - disables terminal control sequences
+    var plain_mode = false;
 
     const stdin_handle = getStdinHandle() catch |err| {
         std.debug.print("Error: Cannot get stdin handle: {}\n", .{err});
@@ -5493,6 +3319,9 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             i += 1;
         } else if (std.mem.eql(u8, argv[i], "--no-history")) {
             history_enabled = false;
+        } else if (std.mem.eql(u8, argv[i], "--plain")) {
+            // CANARY: REQ=REQ-SHELL-PLAIN-005; FEATURE="ShellPlainMode"; ASPECT=FlagParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+            plain_mode = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             insecure = true;
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
@@ -5560,7 +3389,9 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    if (non_interactive) {
+    // CANARY: REQ=REQ-SHELL-PLAIN-008; FEATURE="ShellPlainMode"; ASPECT=NonInteractiveBypass; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+    // Plain mode allows non-interactive usage for automated testing
+    if (non_interactive and !plain_mode) {
         const stderr_file = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
         _ = stderr_file.writeAll("Non-interactive shell mode is not supported. Use 'geode query' for scripted execution.\n") catch {};
         std.process.exit(@intFromEnum(ExitCode.usage_error));
@@ -5632,6 +3463,8 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         // Issue #387: Pass authentication credentials to REPL
         .username = username,
         .password = password,
+        // CANARY: REQ=REQ-SHELL-PLAIN-006; FEATURE="ShellPlainMode"; ASPECT=PassToOptions; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+        .plain_mode = plain_mode,
     };
 
     repl_loop.ReplLoop.run(options) catch |err| {
@@ -5726,7 +3559,6 @@ pub fn main() !void {
         cmdQuery,
         cmdShell,
         cmdLsp,
-        cmdStdio,
         cmdAuth,
         cmdFLE,
     );

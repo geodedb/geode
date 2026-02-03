@@ -15,6 +15,7 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 const graph_storage_mgr = geode.graph_storage_manager;
+const graph_store = geode.graph_store;
 
 // ============================================================================
 // Test Utilities
@@ -44,9 +45,22 @@ fn cleanupTestDir(allocator: std.mem.Allocator, dir: []const u8) void {
 
 /// Reset global state between tests
 fn resetGlobalState() void {
-    graph_storage_mgr.setDataDir(null);
+    // Clear graph storage first (while store still exists)
     graph_storage_mgr.clearGraphStorage();
     graph_storage_mgr.clearMultiGraphStorage();
+    // Deinit the global store
+    graph_store.deinitGlobalStore();
+    // Clear data dir (this also clears the override in graph_store)
+    graph_storage_mgr.setDataDir(null);
+    // Clean up default persistence file to avoid test pollution
+    std.fs.cwd().deleteFile("/tmp/geode_graph_store.dat") catch {};
+}
+
+/// Force a fresh GraphStore instance loaded from disk for the given data dir
+fn reloadStore(allocator: std.mem.Allocator, data_dir: []const u8) *geode.graph_common.GraphStorage {
+    graph_store.deinitGlobalStore();
+    graph_storage_mgr.setDataDir(data_dir);
+    return graph_storage_mgr.getOrCreateGraphStorage(allocator);
 }
 
 // ============================================================================
@@ -54,13 +68,17 @@ fn resetGlobalState() void {
 // ============================================================================
 
 test "setDataDir and getDataDir work correctly" {
+    resetGlobalState();
     defer resetGlobalState();
+
+    const allocator = getTestAllocator();
+    const test_dir = try createTestDir(allocator, "setDataDir_test");
+    defer cleanupTestDir(allocator, test_dir);
 
     // Initially null
     try testing.expectEqual(@as(?[]const u8, null), graph_storage_mgr.getDataDir());
 
     // Set data directory
-    const test_dir = "/tmp/test_data_dir";
     graph_storage_mgr.setDataDir(test_dir);
 
     // Verify it was set
@@ -70,10 +88,15 @@ test "setDataDir and getDataDir work correctly" {
 }
 
 test "setDataDir can be set to null" {
+    resetGlobalState();
     defer resetGlobalState();
 
+    const allocator = getTestAllocator();
+    const test_dir = try createTestDir(allocator, "setDataDir_null_test");
+    defer cleanupTestDir(allocator, test_dir);
+
     // Set and then clear
-    graph_storage_mgr.setDataDir("/tmp/test");
+    graph_storage_mgr.setDataDir(test_dir);
     try testing.expect(graph_storage_mgr.getDataDir() != null);
 
     graph_storage_mgr.setDataDir(null);
@@ -85,24 +108,32 @@ test "setDataDir can be set to null" {
 // ============================================================================
 
 test "createGraphStorage creates new empty graph" {
-    const allocator = getTestAllocator();
-
+    resetGlobalState();
     defer resetGlobalState();
+
+    const allocator = getTestAllocator();
+    const test_dir = try createTestDir(allocator, "create_graph_test");
+    defer cleanupTestDir(allocator, test_dir);
+    graph_storage_mgr.setDataDir(test_dir);
 
     const graph = try graph_storage_mgr.createGraphStorage(allocator, "test_graph_create");
 
     // Verify graph is empty
     try testing.expectEqual(@as(usize, 0), graph.nodes.count());
-    try testing.expectEqual(@as(usize, 0), graph.edges.items.len);
+    try testing.expectEqual(@as(usize, 0), graph.edges.count());
 
     // Verify it exists in storage
     try testing.expect(graph_storage_mgr.graphExists("test_graph_create"));
 }
 
 test "createGraphStorage fails for duplicate graph name" {
-    const allocator = getTestAllocator();
-
+    resetGlobalState();
     defer resetGlobalState();
+
+    const allocator = getTestAllocator();
+    const test_dir = try createTestDir(allocator, "duplicate_graph_test");
+    defer cleanupTestDir(allocator, test_dir);
+    graph_storage_mgr.setDataDir(test_dir);
 
     // Create first graph
     _ = try graph_storage_mgr.createGraphStorage(allocator, "duplicate_test");
@@ -113,9 +144,13 @@ test "createGraphStorage fails for duplicate graph name" {
 }
 
 test "createGraphStorage allows multiple unique graphs" {
-    const allocator = getTestAllocator();
-
+    resetGlobalState();
     defer resetGlobalState();
+
+    const allocator = getTestAllocator();
+    const test_dir = try createTestDir(allocator, "multiple_graphs_test");
+    defer cleanupTestDir(allocator, test_dir);
+    graph_storage_mgr.setDataDir(test_dir);
 
     // Create multiple graphs with unique names
     _ = try graph_storage_mgr.createGraphStorage(allocator, "graph_alpha");
@@ -127,13 +162,27 @@ test "createGraphStorage allows multiple unique graphs" {
     try testing.expect(graph_storage_mgr.graphExists("graph_beta"));
     try testing.expect(graph_storage_mgr.graphExists("graph_gamma"));
 
-    // Verify list returns all
+    // Verify list contains at least our 3 graphs
     const names = try graph_storage_mgr.listGraphNames(allocator);
     defer {
         for (names) |name| allocator.free(name);
         allocator.free(names);
     }
-    try testing.expectEqual(@as(usize, 3), names.len);
+    // We created 3 graphs, so count should be at least 3
+    try testing.expect(names.len >= 3);
+
+    // Verify our specific graphs are in the list
+    var found_alpha = false;
+    var found_beta = false;
+    var found_gamma = false;
+    for (names) |name| {
+        if (std.mem.eql(u8, name, "graph_alpha")) found_alpha = true;
+        if (std.mem.eql(u8, name, "graph_beta")) found_beta = true;
+        if (std.mem.eql(u8, name, "graph_gamma")) found_gamma = true;
+    }
+    try testing.expect(found_alpha);
+    try testing.expect(found_beta);
+    try testing.expect(found_gamma);
 }
 
 // ============================================================================
@@ -141,64 +190,61 @@ test "createGraphStorage allows multiple unique graphs" {
 // ============================================================================
 
 test "saveNamedGraph creates directory and files" {
-    const allocator = getTestAllocator();
+    resetGlobalState();
+    defer resetGlobalState();
 
+    const allocator = getTestAllocator();
     const test_dir = try createTestDir(allocator, "save_graph");
     defer cleanupTestDir(allocator, test_dir);
-    defer resetGlobalState();
 
     // Set data directory
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create and populate a graph
     const graph = try graph_storage_mgr.createGraphStorage(allocator, "persist_test");
-    try graph.addNode(allocator, 1, &.{"Person"});
-    try graph.setNodeProperty(allocator, 1, "name", .{ .String = "Alice" });
+    var labels = [_][]const u8{"Person"};
+    const node_id = try graph.createNodeWithGraph(&labels, "persist_test");
+    try graph.setNodeProperty(node_id, "name", .{ .String = "Alice" });
 
     // Save the graph
     try graph_storage_mgr.saveNamedGraph(allocator, "persist_test");
 
-    // Verify directory was created
-    const graph_dir = try std.fmt.allocPrint(allocator, "{s}/graphs/persist_test", .{test_dir});
-    defer allocator.free(graph_dir);
-
-    var dir = std.fs.cwd().openDir(graph_dir, .{}) catch |err| {
-        std.debug.print("Failed to open graph dir: {}\n", .{err});
-        return err;
-    };
-    defer dir.close();
-
-    // Verify nodes.jsonl exists
-    const nodes_stat = try dir.statFile("nodes.jsonl");
-    try testing.expect(nodes_stat.size > 0);
-
-    // Verify edges.jsonl exists
-    const edges_stat = try dir.statFile("edges.jsonl");
-    try testing.expect(edges_stat.size >= 0); // Can be empty if no edges
+    // Verify unified store file was created
+    const store_path = try graph_storage_mgr.getGraphDataDir(allocator, "persist_test");
+    defer allocator.free(store_path);
+    const store_stat = try std.fs.cwd().statFile(store_path);
+    try testing.expect(store_stat.size > 0);
 }
 
-test "saveNamedGraph fails without data directory" {
-    const allocator = getTestAllocator();
-
+test "saveNamedGraph falls back to temp when no data directory" {
+    resetGlobalState();
     defer resetGlobalState();
 
-    // Ensure no data directory
+    const allocator = getTestAllocator();
+
+    // Ensure no data directory - will fall back to temp
     graph_storage_mgr.setDataDir(null);
 
     // Create a graph
     _ = try graph_storage_mgr.createGraphStorage(allocator, "no_dir_test");
 
-    // Should fail with NoDataDirectory
-    const result = graph_storage_mgr.saveNamedGraph(allocator, "no_dir_test");
-    try testing.expectError(error.NoDataDirectory, result);
+    // Should fall back to temp path and succeed
+    try graph_storage_mgr.saveNamedGraph(allocator, "no_dir_test");
+
+    const store_path = try graph_storage_mgr.getGraphDataDir(allocator, "no_dir_test");
+    defer allocator.free(store_path);
+    defer std.fs.cwd().deleteFile(store_path) catch {};
+    const store_stat = try std.fs.cwd().statFile(store_path);
+    try testing.expect(store_stat.size > 0);
 }
 
 test "saveNamedGraph fails for non-existent graph" {
-    const allocator = getTestAllocator();
+    resetGlobalState();
+    defer resetGlobalState();
 
+    const allocator = getTestAllocator();
     const test_dir = try createTestDir(allocator, "save_nonexistent");
     defer cleanupTestDir(allocator, test_dir);
-    defer resetGlobalState();
 
     graph_storage_mgr.setDataDir(test_dir);
 
@@ -208,73 +254,70 @@ test "saveNamedGraph fails for non-existent graph" {
 }
 
 test "saveNamedGraph preserves node data correctly" {
-    const allocator = getTestAllocator();
+    resetGlobalState();
+    defer resetGlobalState();
 
+    const allocator = getTestAllocator();
     const test_dir = try createTestDir(allocator, "preserve_nodes");
     defer cleanupTestDir(allocator, test_dir);
-    defer resetGlobalState();
 
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create graph with multiple nodes and properties
     const graph = try graph_storage_mgr.createGraphStorage(allocator, "node_data_test");
+    var alice_labels = [_][]const u8{"Person"};
+    const alice_id = try graph.createNodeWithGraph(&alice_labels, "node_data_test");
+    try graph.setNodeProperty(alice_id, "name", .{ .String = "Alice" });
+    try graph.setNodeProperty(alice_id, "age", .{ .Int = 30 });
 
-    try graph.addNode(allocator, 1, &.{"Person"});
-    try graph.setNodeProperty(allocator, 1, "name", .{ .String = "Alice" });
-    try graph.setNodeProperty(allocator, 1, "age", .{ .Int = 30 });
-
-    try graph.addNode(allocator, 2, &.{ "Person", "Employee" });
-    try graph.setNodeProperty(allocator, 2, "name", .{ .String = "Bob" });
-    try graph.setNodeProperty(allocator, 2, "active", .{ .Bool = true });
+    var bob_labels = [_][]const u8{ "Person", "Employee" };
+    const bob_id = try graph.createNodeWithGraph(&bob_labels, "node_data_test");
+    try graph.setNodeProperty(bob_id, "name", .{ .String = "Bob" });
+    try graph.setNodeProperty(bob_id, "active", .{ .Bool = true });
 
     // Save the graph
     try graph_storage_mgr.saveNamedGraph(allocator, "node_data_test");
 
-    // Read and verify nodes.jsonl content
-    const nodes_path = try std.fmt.allocPrint(allocator, "{s}/graphs/node_data_test/nodes.jsonl", .{test_dir});
-    defer allocator.free(nodes_path);
+    // Reload from disk and verify data
+    const loaded = reloadStore(allocator, test_dir);
+    try testing.expectEqual(@as(usize, 2), loaded.getNodeCount());
 
-    const content = try std.fs.cwd().readFileAlloc(allocator, nodes_path, 1024 * 1024);
-    defer allocator.free(content);
+    const alice_name = loaded.getNodeProperty(alice_id, "name");
+    try testing.expect(alice_name != null);
+    try testing.expectEqualStrings("Alice", alice_name.?.String);
 
-    // Verify content contains expected data
-    try testing.expect(std.mem.indexOf(u8, content, "\"id\":1") != null);
-    try testing.expect(std.mem.indexOf(u8, content, "\"id\":2") != null);
-    try testing.expect(std.mem.indexOf(u8, content, "\"Person\"") != null);
-    try testing.expect(std.mem.indexOf(u8, content, "Alice") != null);
-    try testing.expect(std.mem.indexOf(u8, content, "Bob") != null);
+    const bob_active = loaded.getNodeProperty(bob_id, "active");
+    try testing.expect(bob_active != null);
+    try testing.expect(bob_active.?.Bool);
 }
 
 test "saveNamedGraph preserves edge data correctly" {
-    const allocator = getTestAllocator();
+    resetGlobalState();
+    defer resetGlobalState();
 
+    const allocator = getTestAllocator();
     const test_dir = try createTestDir(allocator, "preserve_edges");
     defer cleanupTestDir(allocator, test_dir);
-    defer resetGlobalState();
 
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create graph with edges
     const graph = try graph_storage_mgr.createGraphStorage(allocator, "edge_data_test");
-
-    try graph.addNode(allocator, 1, &.{"Person"});
-    try graph.addNode(allocator, 2, &.{"Person"});
-    _ = try graph.addEdge(allocator, 1, 2, "KNOWS");
+    var labels = [_][]const u8{"Person"};
+    const from_id = try graph.createNodeWithGraph(&labels, "edge_data_test");
+    const to_id = try graph.createNodeWithGraph(&labels, "edge_data_test");
+    const edge_id = try graph.createEdgeWithGraph(from_id, to_id, "KNOWS", "edge_data_test");
 
     // Save the graph
     try graph_storage_mgr.saveNamedGraph(allocator, "edge_data_test");
 
-    // Read and verify edges.jsonl content
-    const edges_path = try std.fmt.allocPrint(allocator, "{s}/graphs/edge_data_test/edges.jsonl", .{test_dir});
-    defer allocator.free(edges_path);
-
-    const content = try std.fs.cwd().readFileAlloc(allocator, edges_path, 1024 * 1024);
-    defer allocator.free(content);
-
-    // Verify edge data
-    try testing.expect(std.mem.indexOf(u8, content, "\"source\":1") != null);
-    try testing.expect(std.mem.indexOf(u8, content, "\"target\":2") != null);
-    try testing.expect(std.mem.indexOf(u8, content, "KNOWS") != null);
+    // Reload and verify edge data
+    const loaded = reloadStore(allocator, test_dir);
+    const edge = loaded.getEdgePtr(edge_id);
+    try testing.expect(edge != null);
+    try testing.expectEqual(from_id, edge.?.from_id);
+    try testing.expectEqual(to_id, edge.?.to_id);
+    try testing.expectEqualStrings("KNOWS", edge.?.label);
 }
 
 // ============================================================================
@@ -282,41 +325,40 @@ test "saveNamedGraph preserves edge data correctly" {
 // ============================================================================
 
 test "loadNamedGraph loads persisted graph" {
-    const allocator = getTestAllocator();
+    resetGlobalState();
+    defer resetGlobalState();
 
+    const allocator = getTestAllocator();
     const test_dir = try createTestDir(allocator, "load_graph");
     defer cleanupTestDir(allocator, test_dir);
-    defer resetGlobalState();
 
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create, populate, and save a graph
     const original = try graph_storage_mgr.createGraphStorage(allocator, "load_test");
-    try original.addNode(allocator, 42, &.{"TestLabel"});
-    try original.setNodeProperty(allocator, 42, "value", .{ .Int = 12345 });
+    var labels = [_][]const u8{"TestLabel"};
+    const node_id = try original.createNodeWithGraph(&labels, "load_test");
+    try original.setNodeProperty(node_id, "value", .{ .Int = 12345 });
     try graph_storage_mgr.saveNamedGraph(allocator, "load_test");
 
-    // Clear the in-memory storage
-    resetGlobalState();
-    graph_storage_mgr.setDataDir(test_dir);
-
-    // Load the graph
-    const loaded = try graph_storage_mgr.loadNamedGraph(allocator, "load_test");
+    // Reload the store from disk
+    const loaded = reloadStore(allocator, test_dir);
+    _ = try graph_storage_mgr.loadNamedGraph(allocator, "load_test");
 
     // Verify loaded data
-    try testing.expectEqual(@as(usize, 1), loaded.nodes.count());
-
-    const node = loaded.nodes.get(42);
+    try testing.expectEqual(@as(usize, 1), loaded.getNodeCount());
+    const node = loaded.getNodePtr(node_id);
     try testing.expect(node != null);
-    try testing.expectEqual(@as(u64, 42), node.?.id);
+    try testing.expectEqual(node_id, node.?.id);
 }
 
 test "loadNamedGraph fails for non-existent graph directory" {
-    const allocator = getTestAllocator();
+    resetGlobalState();
+    defer resetGlobalState();
 
+    const allocator = getTestAllocator();
     const test_dir = try createTestDir(allocator, "load_missing");
     defer cleanupTestDir(allocator, test_dir);
-    defer resetGlobalState();
 
     graph_storage_mgr.setDataDir(test_dir);
 
@@ -330,11 +372,12 @@ test "loadNamedGraph fails for non-existent graph directory" {
 // ============================================================================
 
 test "multiple graphs can be created and persisted in sequence" {
-    const allocator = getTestAllocator();
+    resetGlobalState();
+    defer resetGlobalState();
 
+    const allocator = getTestAllocator();
     const test_dir = try createTestDir(allocator, "batch_create");
     defer cleanupTestDir(allocator, test_dir);
-    defer resetGlobalState();
 
     graph_storage_mgr.setDataDir(test_dir);
 
@@ -346,69 +389,53 @@ test "multiple graphs can be created and persisted in sequence" {
         try graph_storage_mgr.saveNamedGraph(allocator, name);
     }
 
-    // Verify all directories were created
+    // Verify unified store file exists
+    const store_path = try graph_storage_mgr.getGraphDataDir(allocator, graph_names[0]);
+    defer allocator.free(store_path);
+    const store_stat = try std.fs.cwd().statFile(store_path);
+    try testing.expect(store_stat.size > 0);
+
+    // Reload and verify graph registry contains all created graphs
+    _ = reloadStore(allocator, test_dir);
     for (graph_names) |name| {
-        const graph_dir = try std.fmt.allocPrint(allocator, "{s}/graphs/{s}", .{ test_dir, name });
-        defer allocator.free(graph_dir);
-
-        std.fs.cwd().access(graph_dir, .{}) catch |err| {
-            std.debug.print("Directory missing for {s}: {}\n", .{ name, err });
-            return err;
-        };
-
-        // Verify nodes.jsonl exists
-        const nodes_path = try std.fmt.allocPrint(allocator, "{s}/nodes.jsonl", .{graph_dir});
-        defer allocator.free(nodes_path);
-        std.fs.cwd().access(nodes_path, .{}) catch |err| {
-            std.debug.print("nodes.jsonl missing for {s}: {}\n", .{ name, err });
-            return err;
-        };
+        try testing.expect(graph_storage_mgr.graphExists(name));
     }
 }
 
 test "graphs persist independently in batch operations" {
-    const allocator = getTestAllocator();
+    resetGlobalState();
+    defer resetGlobalState();
 
+    const allocator = getTestAllocator();
     const test_dir = try createTestDir(allocator, "batch_independent");
     defer cleanupTestDir(allocator, test_dir);
-    defer resetGlobalState();
 
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create graphs with different data
     const g1 = try graph_storage_mgr.createGraphStorage(allocator, "independent_g1");
-    try g1.addNode(allocator, 1, &.{"TypeA"});
+    var g1_labels = [_][]const u8{"TypeA"};
+    _ = try g1.createNodeWithGraph(&g1_labels, "independent_g1");
     try graph_storage_mgr.saveNamedGraph(allocator, "independent_g1");
 
     const g2 = try graph_storage_mgr.createGraphStorage(allocator, "independent_g2");
-    try g2.addNode(allocator, 2, &.{"TypeB"});
-    try g2.addNode(allocator, 3, &.{"TypeB"});
+    var g2_labels = [_][]const u8{"TypeB"};
+    _ = try g2.createNodeWithGraph(&g2_labels, "independent_g2");
+    _ = try g2.createNodeWithGraph(&g2_labels, "independent_g2");
     try graph_storage_mgr.saveNamedGraph(allocator, "independent_g2");
 
-    // Verify each has its own data
-    const g1_path = try std.fmt.allocPrint(allocator, "{s}/graphs/independent_g1/nodes.jsonl", .{test_dir});
-    defer allocator.free(g1_path);
-    const g1_content = try std.fs.cwd().readFileAlloc(allocator, g1_path, 1024 * 1024);
-    defer allocator.free(g1_content);
+    // Reload and verify each has its own data
+    const loaded = reloadStore(allocator, test_dir);
+    const g1_nodes = loaded.getNodesByLabel("independent_g1", "TypeA");
+    try testing.expect(g1_nodes != null);
+    try testing.expectEqual(@as(usize, 1), g1_nodes.?.len);
 
-    const g2_path = try std.fmt.allocPrint(allocator, "{s}/graphs/independent_g2/nodes.jsonl", .{test_dir});
-    defer allocator.free(g2_path);
-    const g2_content = try std.fs.cwd().readFileAlloc(allocator, g2_path, 1024 * 1024);
-    defer allocator.free(g2_content);
+    const g2_nodes = loaded.getNodesByLabel("independent_g2", "TypeB");
+    try testing.expect(g2_nodes != null);
+    try testing.expectEqual(@as(usize, 2), g2_nodes.?.len);
 
-    // g1 should have TypeA, g2 should have TypeB
-    try testing.expect(std.mem.indexOf(u8, g1_content, "TypeA") != null);
-    try testing.expect(std.mem.indexOf(u8, g1_content, "TypeB") == null);
-    try testing.expect(std.mem.indexOf(u8, g2_content, "TypeB") != null);
-    try testing.expect(std.mem.indexOf(u8, g2_content, "TypeA") == null);
-
-    // g2 should have 2 nodes
-    var line_count: usize = 0;
-    var lines = std.mem.splitScalar(u8, g2_content, '\n');
-    while (lines.next()) |line| {
-        if (line.len > 0) line_count += 1;
-    }
-    try testing.expectEqual(@as(usize, 2), line_count);
+    try testing.expect(loaded.getNodesByLabel("independent_g1", "TypeB") == null);
+    try testing.expect(loaded.getNodesByLabel("independent_g2", "TypeA") == null);
 }
 
 // ============================================================================
@@ -416,27 +443,37 @@ test "graphs persist independently in batch operations" {
 // ============================================================================
 
 test "getGraphDataDir returns correct path format" {
-    const allocator = getTestAllocator();
-
+    resetGlobalState();
     defer resetGlobalState();
 
-    graph_storage_mgr.setDataDir("/data/geode");
+    const allocator = getTestAllocator();
+    const test_dir = try createTestDir(allocator, "path_format_test");
+    defer cleanupTestDir(allocator, test_dir);
+
+    graph_storage_mgr.setDataDir(test_dir);
 
     const path = try graph_storage_mgr.getGraphDataDir(allocator, "my_graph");
     defer allocator.free(path);
 
-    try testing.expectEqualStrings("/data/geode/graphs/my_graph", path);
+    // Verify path ends with graph_store.dat and contains our test dir
+    try testing.expect(std.mem.endsWith(u8, path, "graph_store.dat"));
+    try testing.expect(std.mem.containsAtLeast(u8, path, 1, "path_format_test"));
 }
 
-test "getGraphDataDir fails without data directory" {
-    const allocator = getTestAllocator();
-
+test "getGraphDataDir falls back to temp directory when unset" {
+    resetGlobalState();
     defer resetGlobalState();
+
+    const allocator = getTestAllocator();
 
     graph_storage_mgr.setDataDir(null);
 
-    const result = graph_storage_mgr.getGraphDataDir(allocator, "test");
-    try testing.expectError(error.NoDataDirectory, result);
+    // When no data directory is set, it falls back to temp directory
+    const path = try graph_storage_mgr.getGraphDataDir(allocator, "test");
+    defer allocator.free(path);
+
+    // Should fall back to temp path ending in geode_graph_store.dat
+    try testing.expect(std.mem.endsWith(u8, path, "geode_graph_store.dat"));
 }
 
 // ============================================================================
@@ -444,15 +481,25 @@ test "getGraphDataDir fails without data directory" {
 // ============================================================================
 
 test "graphExists returns false for non-existent graph" {
+    resetGlobalState();
     defer resetGlobalState();
+
+    const allocator = getTestAllocator();
+    const test_dir = try createTestDir(allocator, "graph_exists_false_test");
+    defer cleanupTestDir(allocator, test_dir);
+    graph_storage_mgr.setDataDir(test_dir);
 
     try testing.expect(!graph_storage_mgr.graphExists("completely_fake_graph"));
 }
 
 test "graphExists returns true after graph creation" {
-    const allocator = getTestAllocator();
-
+    resetGlobalState();
     defer resetGlobalState();
+
+    const allocator = getTestAllocator();
+    const test_dir = try createTestDir(allocator, "graph_exists_true_test");
+    defer cleanupTestDir(allocator, test_dir);
+    graph_storage_mgr.setDataDir(test_dir);
 
     // Before creation
     try testing.expect(!graph_storage_mgr.graphExists("existence_test"));
@@ -469,9 +516,13 @@ test "graphExists returns true after graph creation" {
 // ============================================================================
 
 test "dropGraphStorage removes graph" {
-    const allocator = getTestAllocator();
-
+    resetGlobalState();
     defer resetGlobalState();
+
+    const allocator = getTestAllocator();
+    const test_dir = try createTestDir(allocator, "drop_graph_test");
+    defer cleanupTestDir(allocator, test_dir);
+    graph_storage_mgr.setDataDir(test_dir);
 
     // Create and verify
     _ = try graph_storage_mgr.createGraphStorage(allocator, "drop_test");
@@ -485,14 +536,26 @@ test "dropGraphStorage removes graph" {
 }
 
 test "dropGraphStorage fails for non-existent graph" {
+    resetGlobalState();
     defer resetGlobalState();
+
+    const allocator = getTestAllocator();
+    const test_dir = try createTestDir(allocator, "drop_nonexistent_test");
+    defer cleanupTestDir(allocator, test_dir);
+    graph_storage_mgr.setDataDir(test_dir);
 
     const result = graph_storage_mgr.dropGraphStorage("never_existed_drop");
     try testing.expectError(error.GraphNotFound, result);
 }
 
 test "dropGraphStorage fails for default graph" {
+    resetGlobalState();
     defer resetGlobalState();
+
+    const allocator = getTestAllocator();
+    const test_dir = try createTestDir(allocator, "drop_default_test");
+    defer cleanupTestDir(allocator, test_dir);
+    graph_storage_mgr.setDataDir(test_dir);
 
     const result = graph_storage_mgr.dropGraphStorage(graph_storage_mgr.DEFAULT_GRAPH_NAME);
     try testing.expectError(error.CannotDropDefaultGraph, result);
@@ -503,11 +566,12 @@ test "dropGraphStorage fails for default graph" {
 // ============================================================================
 
 test "graph names with special characters" {
-    const allocator = getTestAllocator();
+    resetGlobalState();
+    defer resetGlobalState();
 
+    const allocator = getTestAllocator();
     const test_dir = try createTestDir(allocator, "special_chars");
     defer cleanupTestDir(allocator, test_dir);
-    defer resetGlobalState();
 
     graph_storage_mgr.setDataDir(test_dir);
 
@@ -519,11 +583,12 @@ test "graph names with special characters" {
 }
 
 test "empty graph persists correctly" {
-    const allocator = getTestAllocator();
+    resetGlobalState();
+    defer resetGlobalState();
 
+    const allocator = getTestAllocator();
     const test_dir = try createTestDir(allocator, "empty_graph");
     defer cleanupTestDir(allocator, test_dir);
-    defer resetGlobalState();
 
     graph_storage_mgr.setDataDir(test_dir);
 
@@ -531,42 +596,45 @@ test "empty graph persists correctly" {
     _ = try graph_storage_mgr.createGraphStorage(allocator, "empty_test");
     try graph_storage_mgr.saveNamedGraph(allocator, "empty_test");
 
-    // Verify files exist but are empty (or contain only newlines)
-    const nodes_path = try std.fmt.allocPrint(allocator, "{s}/graphs/empty_test/nodes.jsonl", .{test_dir});
-    defer allocator.free(nodes_path);
-
-    const stat = try std.fs.cwd().statFile(nodes_path);
-    // Empty graph should have 0 byte nodes.jsonl
-    try testing.expectEqual(@as(u64, 0), stat.size);
+    // Verify unified store file exists (header-only data for empty graph)
+    const store_path = try graph_storage_mgr.getGraphDataDir(allocator, "empty_test");
+    defer allocator.free(store_path);
+    const stat = try std.fs.cwd().statFile(store_path);
+    try testing.expect(stat.size > 0);
 }
 
 test "large graph with many nodes persists" {
-    const allocator = getTestAllocator();
+    resetGlobalState();
+    defer resetGlobalState();
 
+    const allocator = getTestAllocator();
     const test_dir = try createTestDir(allocator, "large_graph");
     defer cleanupTestDir(allocator, test_dir);
-    defer resetGlobalState();
 
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create graph with 100 nodes
     const graph = try graph_storage_mgr.createGraphStorage(allocator, "large_test");
 
+    var labels = [_][]const u8{"TestNode"};
     var i: u64 = 1;
     while (i <= 100) : (i += 1) {
-        try graph.addNode(allocator, i, &.{"TestNode"});
-        try graph.setNodeProperty(allocator, i, "index", .{ .Int = @intCast(i) });
+        const node_id = try graph.createNodeWithGraph(&labels, "large_test");
+        try graph.setNodeProperty(node_id, "index", .{ .Int = @intCast(i) });
     }
 
     try graph_storage_mgr.saveNamedGraph(allocator, "large_test");
 
     // Verify file size is substantial
-    const nodes_path = try std.fmt.allocPrint(allocator, "{s}/graphs/large_test/nodes.jsonl", .{test_dir});
-    defer allocator.free(nodes_path);
+    const store_path = try graph_storage_mgr.getGraphDataDir(allocator, "large_test");
+    defer allocator.free(store_path);
 
-    const stat = try std.fs.cwd().statFile(nodes_path);
-    // Should be at least 100 lines of JSON
+    const stat = try std.fs.cwd().statFile(store_path);
     try testing.expect(stat.size > 1000);
+
+    // Reload and verify node count is at least 100 (we created 100 nodes)
+    const loaded = reloadStore(allocator, test_dir);
+    try testing.expect(loaded.getNodeCount() >= 100);
 }
 
 // ============================================================================
@@ -574,22 +642,30 @@ test "large graph with many nodes persists" {
 // ============================================================================
 
 test "full lifecycle: create, modify, save, reload, verify" {
-    const allocator = getTestAllocator();
+    resetGlobalState();
+    defer resetGlobalState();
 
+    const allocator = getTestAllocator();
     const test_dir = try createTestDir(allocator, "lifecycle");
     defer cleanupTestDir(allocator, test_dir);
-    defer resetGlobalState();
 
     graph_storage_mgr.setDataDir(test_dir);
 
     // Phase 1: Create and populate
+    var user_id: u64 = 0;
+    var post_id: u64 = 0;
+    var edge_id: u64 = 0;
     {
         const graph = try graph_storage_mgr.createGraphStorage(allocator, "lifecycle_graph");
-        try graph.addNode(allocator, 1, &.{"User"});
-        try graph.setNodeProperty(allocator, 1, "name", .{ .String = "TestUser" });
-        try graph.addNode(allocator, 2, &.{"Post"});
-        try graph.setNodeProperty(allocator, 2, "title", .{ .String = "Hello World" });
-        _ = try graph.addEdge(allocator, 1, 2, "CREATED");
+        var user_labels = [_][]const u8{"User"};
+        user_id = try graph.createNodeWithGraph(&user_labels, "lifecycle_graph");
+        try graph.setNodeProperty(user_id, "name", .{ .String = "TestUser" });
+
+        var post_labels = [_][]const u8{"Post"};
+        post_id = try graph.createNodeWithGraph(&post_labels, "lifecycle_graph");
+        try graph.setNodeProperty(post_id, "title", .{ .String = "Hello World" });
+
+        edge_id = try graph.createEdgeWithGraph(user_id, post_id, "CREATED", "lifecycle_graph");
 
         // Save
         try graph_storage_mgr.saveNamedGraph(allocator, "lifecycle_graph");
@@ -601,22 +677,18 @@ test "full lifecycle: create, modify, save, reload, verify" {
 
     // Phase 3: Load and verify
     {
-        const loaded = try graph_storage_mgr.loadNamedGraph(allocator, "lifecycle_graph");
+        const loaded = reloadStore(allocator, test_dir);
+        _ = try graph_storage_mgr.loadNamedGraph(allocator, "lifecycle_graph");
 
         // Verify nodes
         try testing.expectEqual(@as(usize, 2), loaded.nodes.count());
+        try testing.expect(loaded.getNodePtr(user_id) != null);
+        try testing.expect(loaded.getNodePtr(post_id) != null);
 
-        const user = loaded.nodes.get(1);
-        try testing.expect(user != null);
-
-        const post = loaded.nodes.get(2);
-        try testing.expect(post != null);
-
-        // Verify edge
-        try testing.expectEqual(@as(usize, 1), loaded.edges.items.len);
-        const edge = loaded.edges.items[0];
-        try testing.expectEqual(@as(u64, 1), edge.source);
-        try testing.expectEqual(@as(u64, 2), edge.target);
-        try testing.expectEqualStrings("CREATED", edge.edge_type);
+        // Verify edge count and labels
+        try testing.expectEqual(@as(usize, 1), loaded.edges.count());
+        const edge = loaded.getEdgePtr(edge_id);
+        try testing.expect(edge != null);
+        try testing.expectEqualStrings("CREATED", edge.?.label);
     }
 }

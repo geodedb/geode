@@ -16,6 +16,7 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 const graph_store = geode.graph_store;
+const graph_storage_mgr = geode.graph_storage_manager;
 
 // ============================================================================
 // Test Utilities
@@ -35,15 +36,32 @@ fn cleanupTestDir(allocator: std.mem.Allocator, dir: []const u8) void {
     allocator.free(dir);
 }
 
+/// Reset global state between tests
+fn resetGlobalState() void {
+    // Clear graph storage first (while store still exists)
+    graph_storage_mgr.clearGraphStorage();
+    graph_storage_mgr.clearMultiGraphStorage();
+    // Deinit the global store
+    graph_store.deinitGlobalStore();
+    // Clear data dir (this also clears the override in graph_store)
+    graph_storage_mgr.setDataDir(null);
+    // Clean up default persistence file to avoid test pollution
+    std.fs.cwd().deleteFile("/tmp/geode_graph_store.dat") catch {};
+}
+
 // ============================================================================
 // Binary Persistence Basic Tests
 // ============================================================================
 
 // CANARY: REQ=REQ-BINARY-PERSIST-TEST-002; FEATURE="BinaryPersistence"; ASPECT=SaveLoadCycle; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-02
 test "binary persistence: basic save and load cycle" {
+    resetGlobalState();
+    defer resetGlobalState();
+
     const allocator = testing.allocator;
     const test_dir = try createTestDir(allocator, "basic_save_load");
     defer cleanupTestDir(allocator, test_dir);
+    graph_storage_mgr.setDataDir(test_dir);
 
     // Create a fresh store and add data
     var store = graph_store.GraphStore.init(allocator);
@@ -73,6 +91,18 @@ test "binary persistence: basic save and load cycle" {
     const active = store.getNodeProperty(node_id, "active");
     try testing.expect(active != null);
     try testing.expect(active.?.Bool);
+
+    // Save to disk and reload into a new store
+    try store.saveToFile();
+
+    var loaded = graph_store.GraphStore.init(allocator);
+    defer loaded.deinit();
+    try loaded.loadFromFile();
+
+    try testing.expectEqual(@as(usize, 1), loaded.getNodeCount());
+    const loaded_name = loaded.getNodeProperty(node_id, "name");
+    try testing.expect(loaded_name != null);
+    try testing.expectEqualStrings("Alice", loaded_name.?.String);
 }
 
 // CANARY: REQ=REQ-BINARY-PERSIST-TEST-003; FEATURE="BinaryPersistence"; ASPECT=MultipleNodes; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-02
@@ -398,7 +428,7 @@ test "binary persistence: getAllNodes returns all nodes" {
     _ = try store.createNodeWithGraph(&labels, "default");
     _ = try store.createNodeWithGraph(&labels, "default");
 
-    const all_nodes = store.getAllNodes();
+    const all_nodes = try store.getAllNodes(allocator);
     defer allocator.free(all_nodes);
     try testing.expectEqual(@as(usize, 3), all_nodes.len);
 }

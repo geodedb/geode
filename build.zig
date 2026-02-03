@@ -105,6 +105,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const enable_san = b.option(bool, "san", "Enable sentinel allocator in runtime components") orelse false;
     const enable_llvm_fuzzer = b.option(bool, "enable-llvm-fuzzer", "Enable LLVM libFuzzer fallback for fuzz tests") orelse false;
+    const enable_test_harness = b.option(bool, "enable-test-harness", "Enable test_harness in non-test builds") orelse false;
 
     // Get version from git tags
     const version = getGitVersion(b);
@@ -323,6 +324,7 @@ pub fn build(b: *std.Build) void {
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "enable_sentinel", enable_san);
     build_opts.addOption(bool, "enable_llvm_fuzzer", enable_llvm_fuzzer);
+    build_opts.addOption(bool, "enable_test_harness", enable_test_harness);
     build_opts.addOption([]const u8, "version", version);
 
     const lib = b.addLibrary(.{
@@ -381,9 +383,11 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("parallel/spice", spice_wrapper_mod);
 
     // Main unified CLI binary with server and client capabilities
+    // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedEntry; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
+    // Uses unified_entry.zig as root to allow both cli/main.zig and server/main.zig imports
     const geode_exe = b.addExecutable(.{
         .name = "geode",
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/cli/main.zig"), .target = target, .optimize = optimize }),
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/unified_entry.zig"), .target = target, .optimize = optimize }),
     });
     geode_exe.root_module.addOptions("build_options", build_opts);
     geode_exe.root_module.addImport("geode", root_mod);

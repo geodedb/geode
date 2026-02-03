@@ -1,14 +1,12 @@
 const std = @import("std");
 const geode = @import("geode");
-const protocol = geode.protocol;
 const diagnostics = geode.diagnostics;
-const eval = geode.eval;
 const quic_transport = @import("transport/quic");
 const query_plan_cache = @import("query_plan_cache.zig");
-const ServerState = @import("server_state.zig").ServerState;
-const SessionConfiguration = @import("server_state.zig").SessionConfiguration;
-const CatalogSchema = @import("server_state.zig").CatalogSchema;
-const CatalogGraph = @import("server_state.zig").CatalogGraph;
+const ServerState = geode.server_state.ServerState;
+const SessionConfiguration = geode.server_state.SessionConfiguration;
+const CatalogSchema = geode.server_state.CatalogSchema;
+const CatalogGraph = geode.server_state.CatalogGraph;
 const query_executor = @import("query_executor.zig");
 const execution = geode.execution;
 const cost_explain = @import("../planner/cost_explain.zig");
@@ -31,120 +29,42 @@ const logging = @import("logging");
 const log = logging.scoped("server");
 const Attr = logging.Attr;
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-065; FEATURE="JSON Library Migration"; ASPECT=QUICHandler; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-25
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-065; FEATURE="JSON Library Migration"; ASPECT=QUICHandler; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-25
-const json_lib = @import("json");
 const schema = @import("schema");
 const protobuf = @import("protobuf");
+const spice_wrapper = @import("parallel/spice");
+const value_types = geode.value_types;
+const json_lib = @import("json");
 
-// JSON row types for SHOW statement results (Legacy - might need to map to Proto or keep for internal logic)
-const ShowGraphRow = struct { name: []const u8 };
-const ShowIndexRow = struct { name: []const u8, type: []const u8, table: []const u8, columns: []const u8 };
-const ShowConstraintRow = struct { name: []const u8, type: []const u8, table: []const u8, columns: []const u8 };
-const ShowTableRow = struct { name: []const u8, type: []const u8 };
-const ShowFunctionRow = struct { name: []const u8, signature: []const u8, return_type: []const u8 };
+/// Build a protobuf error response
+fn buildErrorResponse(allocator: std.mem.Allocator, status_class: []const u8, message: []const u8) schema.ExecutionResponse {
+    _ = allocator;
+    return .{
+        .status = .ERROR,
+        .error_message = @constCast(message),
+        .status_class = @constCast(status_class),
+    };
+}
 
-// Error response type (Legacy JSON)
-const ErrorResponse = struct {
-    status_class: []const u8 = "58000",
-    @"error": []const u8,
-};
+/// Write a length-prefixed protobuf ServerPacket to the stream
+fn writeServerPacket(allocator: std.mem.Allocator, stream: *quic_transport.QuicStream, packet: schema.ServerPacket) !void {
+    // Encode the packet to protobuf bytes
+    var buf = std.ArrayList(u8).init(allocator);
+    defer buf.deinit(allocator);
 
-// CANARY: REQ=REQ-PROTOCOL-DETECT-001; FEATURE="ProtocolAutoDetect"; ASPECT=DualProtocol; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
-// Support both JSON line protocol (legacy REPL/CLI) and length-prefixed protobuf
-const ProtocolType = enum {
-    json_line, // JSON line protocol (newline-delimited JSON)
-    protobuf, // Length-prefixed protobuf (4-byte big-endian + protobuf bytes)
-};
+    const writer = buf.writer(allocator);
+    try packet.encode(writer);
 
-// CANARY: REQ=REQ-JSON-LINE-READER-001; FEATURE="JsonLineProtocol"; ASPECT=LegacySupport; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
-/// Buffered JSON line reader for legacy REPL/CLI clients
-const BufferedJsonLineReader = struct {
-    allocator: std.mem.Allocator,
-    transport: *quic_transport.QuicTransport,
-    stream: *quic_transport.QuicStream,
-    buffer: std.ArrayList(u8),
-    start_index: usize = 0,
-    read_buf: [4096]u8 = undefined,
+    const msg_bytes = buf.items;
+    const msg_len: u32 = @intCast(msg_bytes.len);
 
-    pub fn init(
-        allocator: std.mem.Allocator,
-        transport: *quic_transport.QuicTransport,
-        stream: *quic_transport.QuicStream,
-    ) !BufferedJsonLineReader {
-        return .{
-            .allocator = allocator,
-            .transport = transport,
-            .stream = stream,
-            .buffer = std.ArrayList(u8).init(allocator),
-        };
-    }
+    // Write 4-byte big-endian length prefix
+    var len_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &len_buf, msg_len, .big);
+    _ = try stream.write(&len_buf);
 
-    pub fn deinit(self: *BufferedJsonLineReader) void {
-        self.buffer.deinit(self.allocator);
-    }
-
-    /// Read next JSON line (newline-delimited)
-    pub fn nextLine(self: *BufferedJsonLineReader) !?[]const u8 {
-        var would_block_attempts: usize = 0;
-        const max_would_block_attempts: usize = 30000; // 30s at 1ms sleep
-
-        while (true) {
-            // Check if we have a complete line in buffer
-            const unread = self.buffer.items[self.start_index..];
-            if (std.mem.indexOf(u8, unread, "\n")) |newline_pos| {
-                // Found complete line
-                const line = unread[0..newline_pos];
-                self.start_index += newline_pos + 1;
-                self.compactBuffer();
-                return line;
-            }
-
-            // Need more data
-            const n = self.stream.read(&self.read_buf) catch |err| {
-                if (err == error.WouldBlock) {
-                    would_block_attempts += 1;
-                    if (would_block_attempts >= max_would_block_attempts) {
-                        return error.Timeout;
-                    }
-                    try self.transport.poll(0);
-                    std.Thread.sleep(1 * std.time.ns_per_ms);
-                    continue;
-                }
-                return err;
-            };
-
-            would_block_attempts = 0;
-
-            if (n == 0) {
-                if (self.start_index == self.buffer.items.len) {
-                    return null; // Clean EOF
-                }
-                return error.UnexpectedEndOfStream;
-            }
-
-            try self.buffer.appendSlice(self.allocator, self.read_buf[0..n]);
-        }
-    }
-
-    fn compactBuffer(self: *BufferedJsonLineReader) void {
-        if (self.start_index == 0) return;
-
-        const remaining = self.buffer.items.len - self.start_index;
-        if (remaining == 0) {
-            self.buffer.clearRetainingCapacity();
-            self.start_index = 0;
-            return;
-        }
-
-        // Compact when we've consumed a significant prefix
-        if (self.start_index > 4096 or self.start_index > remaining) {
-            std.mem.copyForwards(u8, self.buffer.items[0..remaining], self.buffer.items[self.start_index..]);
-            self.buffer.shrinkRetainingCapacity(remaining);
-            self.start_index = 0;
-        }
-    }
-};
+    // Write the protobuf bytes
+    _ = try stream.write(msg_bytes);
+}
 
 // CANARY: REQ=REQ-PERF-QUIC-READLINE-001; FEATURE="BufferedProtoReader"; ASPECT=TransportHotPath; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
 /// Buffered Protobuf reader that handles Length-Prefixed messages.
@@ -175,7 +95,7 @@ const BufferedProtoReader = struct {
 
     // Reads the next length-prefixed message.
     // Length is 4 bytes Big Endian.
-    pub fn nextMessage(self: *BufferedProtoReader) !?schema.QuicClientMessage {
+    pub fn nextMessage(self: *BufferedProtoReader) !?schema.ClientPacket {
         var would_block_attempts: usize = 0;
         const max_would_block_attempts: usize = 30000; // 30s at 1ms sleep
 
@@ -196,7 +116,7 @@ const BufferedProtoReader = struct {
                     // Decode using schema
                     var fbs = std.io.fixedBufferStream(msg_bytes);
                     const reader = protobuf.initReader(fbs.reader(), self.allocator);
-                    const msg = schema.QuicClientMessage.decode(self.allocator, reader) catch |err| {
+                    const msg = schema.ClientPacket.decode(self.allocator, reader) catch |err| {
                         log.warn("Failed to decode Protobuf message: {}", .{err});
                         return err;
                     };
@@ -276,68 +196,6 @@ const handleBackupRequest = protocol_handler.handleBackupRequest;
 const handleRestoreRequest = protocol_handler.handleRestoreRequest;
 const handleUploadBackupRequest = protocol_handler.handleUploadBackupRequest;
 
-/// Build JSON array for a slice of ExecutionResult rows without per-row allocations.
-fn buildRowsJsonFromResult(
-    allocator: std.mem.Allocator,
-    result: *const execution.ExecutionResult,
-    start: usize,
-    end: usize,
-) ![]u8 {
-    var arr_buf = std.ArrayList(u8).initCapacity(allocator, 256) catch return error.OutOfMemory;
-    errdefer arr_buf.deinit(allocator);
-    const w = arr_buf.writer(allocator);
-    w.writeAll("[") catch {};
-    var i: usize = start;
-    var first = true;
-    while (i < end) : (i += 1) {
-        if (!first) w.writeAll(",") catch {};
-        first = false;
-        const row = result.rows[i];
-        w.writeAll("{") catch {};
-        for (row, 0..) |val, idx| {
-            if (idx > 0) w.writeAll(",") catch {};
-            if (idx < result.columns.len) {
-                w.print("\"{s}\":", .{result.columns[idx]}) catch {};
-            }
-            execution.writeValue(allocator, w, val) catch {};
-        }
-        w.writeAll("}") catch {};
-    }
-    w.writeAll("]") catch {};
-    return arr_buf.toOwnedSlice(allocator) catch "[]";
-}
-
-/// Remove the `,"final":true|false` field from a bindings line for compatibility.
-fn stripFinalFlag(allocator: std.mem.Allocator, line: []u8) []u8 {
-    var s = line;
-    if (std.mem.indexOf(u8, s, ",\"final\":true")) |pos| {
-        const head = s[0..pos];
-        const tail = s[pos + ",\"final\":true".len ..];
-        var joined = std.ArrayList(u8).initCapacity(allocator, 0) catch return line;
-        defer joined.deinit(allocator);
-        joined.appendSlice(allocator, head) catch {};
-        joined.appendSlice(allocator, tail) catch {};
-        const out = joined.toOwnedSlice(allocator) catch line;
-        allocator.free(line);
-        return out;
-    } else if (std.mem.indexOf(u8, s, ",\"final\":false")) |pos2| {
-        const head2 = s[0..pos2];
-        const tail2 = s[pos2 + ",\"final\":false".len ..];
-        var joined2 = std.ArrayList(u8).initCapacity(allocator, 0) catch return line;
-        defer joined2.deinit(allocator);
-        joined2.appendSlice(allocator, head2) catch {};
-        joined2.appendSlice(allocator, tail2) catch {};
-        const out2 = joined2.toOwnedSlice(allocator) catch line;
-        allocator.free(line);
-        return out2;
-    }
-    return line;
-}
-
-// Protocol flag constants
-const F_PROPERTY_ORDER = "U:PropOrder=LexDecl";
-const F_ILLEGAL = "U:PropOrder=Illegal";
-const F_TIEBREAK = "U:OrderTiebreak=LexJSON";
 const DEBUG_PROFILE = false;
 
 // CANARY: REQ=REQ-ABAC-WIRE-013; FEATURE="ABAC Enforcement"; ASPECT=QUICHandler; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
@@ -390,38 +248,6 @@ pub fn handleQuicConnection(
     const stream = try conn.acceptStream();
     log.debug("Stream accepted successfully", &.{});
     defer stream.close();
-
-    // CANARY: REQ=REQ-PROTOCOL-DETECT-002; FEATURE="ProtocolAutoDetect"; ASPECT=PeekFirstByte; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
-    // Detect protocol type by peeking at first byte
-    // JSON line protocol starts with '{' (0x7B), protobuf starts with length prefix
-    var peek_buf: [1]u8 = undefined;
-    var peek_attempts: usize = 0;
-    const max_peek_attempts: usize = 1000; // 1 second timeout
-
-    while (peek_attempts < max_peek_attempts) : (peek_attempts += 1) {
-        const n = stream.read(&peek_buf) catch |err| {
-            if (err == error.WouldBlock) {
-                try transport.poll(10);
-                std.Thread.sleep(1 * std.time.ns_per_ms);
-                continue;
-            }
-            return err;
-        };
-        if (n > 0) break;
-        try transport.poll(10);
-        std.Thread.sleep(1 * std.time.ns_per_ms);
-    }
-
-    if (peek_attempts >= max_peek_attempts) {
-        log.warn("Timeout waiting for first byte from client", &.{});
-        return;
-    }
-
-    const detected_protocol: ProtocolType = if (peek_buf[0] == '{') .json_line else .protobuf;
-    log.debug("Detected protocol type", &.{
-        Attr.string("protocol", if (detected_protocol == .json_line) "json_line" else "protobuf"),
-        Attr.int("first_byte", @intCast(peek_buf[0])),
-    });
 
     // Initialize (or reuse) shared WAL manager.
     // This removes per-connection WAL open/close overhead.
@@ -495,98 +321,41 @@ pub fn handleQuicConnection(
     state.federation_manager = &federation_manager;
     state.distributed_planner = &dist_planner;
 
-    // CANARY: REQ=REQ-PROTOCOL-DISPATCH-001; FEATURE="ProtocolAutoDetect"; ASPECT=MessageLoop; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
-    // Process messages based on detected protocol type
-    if (detected_protocol == .json_line) {
-        // JSON line protocol - use JSON reader
-        var json_reader = try BufferedJsonLineReader.init(gpa, transport, stream);
-        defer json_reader.deinit();
+    // Protobuf protocol only - use protobuf reader
+    var line_reader = try BufferedProtoReader.init(gpa, transport, stream);
+    defer line_reader.deinit();
 
-        // Pre-populate buffer with the peeked byte
-        try json_reader.buffer.append(gpa, peek_buf[0]);
-
-        while (true) {
-            const line_opt = json_reader.nextLine() catch |err| {
-                if (err == error.EndOfStream) return;
-                if (err == error.WouldBlock) {
-                    try transport.poll(0);
-                    continue;
-                }
-                log.err("JSON read error: {}", .{err});
-                return err;
-            };
-
-            if (line_opt == null) return; // EOF
-            const line = line_opt.?;
-
-            // Process JSON message
-            const response = processJsonLineMessage(gpa, &state, line) catch |err| {
-                log.err("JSON process error: {}", .{err});
-                const err_response = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"58000\",\"error\":\"{s}\"}}\n", .{@errorName(err)});
-                defer gpa.free(err_response);
-                try stream.writeAll(err_response);
+    while (true) {
+        const packet_opt = line_reader.nextMessage() catch |err| {
+            if (err == error.EndOfStream) return;
+            if (err == error.WouldBlock) {
+                try transport.poll(0);
                 continue;
-            };
-            defer gpa.free(response);
+            }
+            log.err("Protobuf read error: {}", .{err});
+            return err;
+        };
 
-            try stream.writeAll(response);
-        }
-    } else {
-        // Protobuf protocol - use protobuf reader
-        var line_reader = try BufferedProtoReader.init(gpa, transport, stream);
-        defer line_reader.deinit();
+        if (packet_opt == null) return; // EOF
+        const packet = packet_opt.?;
+        defer packet.deinit(gpa);
 
-        // Pre-populate buffer with the peeked byte
-        try line_reader.buffer.append(gpa, peek_buf[0]);
+        const msg = packet.quic orelse {
+            log.err("Received empty ClientPacket", &.{});
+            const err_resp = buildErrorResponse(gpa, "58000", "Empty packet");
+            try writeServerPacket(gpa, stream, .{ .execute = err_resp });
+            continue;
+        };
 
-        while (true) {
-            const msg_opt = line_reader.nextMessage() catch |err| {
-                if (err == error.EndOfStream) return;
-                if (err == error.WouldBlock) {
-                    try transport.poll(0);
-                    continue;
-                }
-                log.err("Protobuf read error: {}", .{err});
-                return err;
-            };
+        // Process protobuf message
+        const response_msg = processMessage(gpa, &state, msg, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |err| {
+            log.err("Protobuf process error: {}", .{err});
+            const err_resp = buildErrorResponse(gpa, "58000", "Internal Server Error");
+            try writeServerPacket(gpa, stream, .{ .execute = err_resp });
+            continue;
+        };
 
-            if (msg_opt == null) return; // EOF
-            const msg = msg_opt.?;
-
-            // Process protobuf message
-            const response_msg = processMessage(gpa, &state, msg, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |err| {
-                log.err("Protobuf process error: {}", .{err});
-                const err_resp = schema.Error{
-                    .code = "58000",
-                    .message = "Internal Server Error",
-                };
-                const resp = schema.QuicServerMessage{ .execute = .{ .val = .{ .@"error" = err_resp } } };
-
-                var err_buf = std.ArrayList(u8).init(gpa);
-                defer err_buf.deinit();
-                const pb_writer = protobuf.initWriter(err_buf.writer());
-                try resp.encode(pb_writer);
-
-                const encoded = err_buf.items;
-                var len_buf: [4]u8 = undefined;
-                std.mem.writeInt(u32, len_buf[0..4], @intCast(encoded.len), .big);
-                try stream.writeAll(&len_buf);
-                try stream.writeAll(encoded);
-                continue;
-            };
-
-            // Encode Response
-            var resp_buf = std.ArrayList(u8).init(gpa);
-            defer resp_buf.deinit();
-            const pb_writer = protobuf.initWriter(resp_buf.writer());
-            try response_msg.encode(pb_writer);
-
-            const encoded_resp = resp_buf.items;
-            var len_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, len_buf[0..4], @intCast(encoded_resp.len), .big);
-            try stream.writeAll(&len_buf);
-            try stream.writeAll(encoded_resp);
-        }
+        try writeServerPacket(gpa, stream, response_msg);
     }
 }
 

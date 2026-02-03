@@ -6,13 +6,12 @@ const geode = @import("geode");
 fn buildSmallGraph(allocator: std.mem.Allocator, fanout: usize) geode.graph_common.GraphStorage {
     var g = geode.graph_common.GraphStorage.init(allocator);
     // Create star graph: 1 connected to 2..fanout+1
-    const center: u64 = 1;
-    try g.addNode(allocator, center, &.{});
+    var empty_labels = [_][]const u8{};
+    const center = try g.createNode(&empty_labels);
     var i: usize = 0;
     while (i < fanout) : (i += 1) {
-        const nid: u64 = @intCast(i + 2);
-        try g.addNode(allocator, nid, &.{});
-        _ = try g.addEdge(allocator, center, nid, "KNOWS");
+        const nid = try g.createNode(&empty_labels);
+        _ = try g.createEdge(center, nid, "KNOWS");
     }
     return g;
 }
@@ -23,7 +22,7 @@ test "TestCANARY_REQ_GQL_017_MatchGuardTrips frontier" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var g = buildSmallGraph(allocator, 5);
-    defer g.deinit(allocator);
+    defer g.deinit();
 
     const query_txt = "MATCH (a)-[:KNOWS*1..2]->(b) RETURN a, b";
     var parsed = try geode.parseGql(query_txt, allocator);
@@ -46,7 +45,7 @@ test "TestCANARY_REQ_GQL_017_MatchGuardTrips results" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var g = buildSmallGraph(allocator, 20);
-    defer g.deinit(allocator);
+    defer g.deinit();
 
     const query_txt = "MATCH (a)-[:KNOWS]->(b) RETURN a, b"; // single hop yields many edges
     var parsed = try geode.parseGql(query_txt, allocator);

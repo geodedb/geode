@@ -9,20 +9,20 @@ test "UNION basic operations" {
     defer exec.deinit();
 
     // Create test data
-    var graph = geode.graph.GraphStorage.init(allocator);
+    var graph = geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
-    const node1 = try graph.addNode();
-    try graph.setNodeProperty(node1, "type", "A");
-    try graph.setNodeProperty(node1, "value", "1");
+    const node1 = try graph.createNode(&.{});
+    try graph.setNodeProperty(node1, "type", .{ .String = "A" });
+    try graph.setNodeProperty(node1, "value", .{ .String = "1" });
 
-    const node2 = try graph.addNode();
-    try graph.setNodeProperty(node2, "type", "B");
-    try graph.setNodeProperty(node2, "value", "2");
+    const node2 = try graph.createNode(&.{});
+    try graph.setNodeProperty(node2, "type", .{ .String = "B" });
+    try graph.setNodeProperty(node2, "value", .{ .String = "2" });
 
-    const node3 = try graph.addNode();
-    try graph.setNodeProperty(node3, "type", "A");
-    try graph.setNodeProperty(node3, "value", "3");
+    const node3 = try graph.createNode(&.{});
+    try graph.setNodeProperty(node3, "type", .{ .String = "A" });
+    try graph.setNodeProperty(node3, "value", .{ .String = "3" });
 
     // Query 1: Find type A nodes
     const query1 = try geode.parse(allocator, "MATCH (n) WHERE n.type = 'A' RETURN n.value", .{});
@@ -60,21 +60,21 @@ test "UNION ALL with duplicates" {
     var exec = geode.server.graph.Executor.init(allocator);
     defer exec.deinit();
 
-    var graph = geode.graph.GraphStorage.init(allocator);
+    var graph = geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create nodes with duplicate values
-    const node1 = try graph.addNode();
-    try graph.setNodeProperty(node1, "group", "X");
-    try graph.setNodeProperty(node1, "value", "100");
+    const node1 = try graph.createNode(&.{});
+    try graph.setNodeProperty(node1, "group", .{ .String = "X" });
+    try graph.setNodeProperty(node1, "value", .{ .String = "100" });
 
-    const node2 = try graph.addNode();
-    try graph.setNodeProperty(node2, "group", "Y");
-    try graph.setNodeProperty(node2, "value", "100"); // Same value
+    const node2 = try graph.createNode(&.{});
+    try graph.setNodeProperty(node2, "group", .{ .String = "Y" });
+    try graph.setNodeProperty(node2, "value", .{ .String = "100" }); // Same value
 
-    const node3 = try graph.addNode();
-    try graph.setNodeProperty(node3, "group", "X");
-    try graph.setNodeProperty(node3, "value", "200");
+    const node3 = try graph.createNode(&.{});
+    try graph.setNodeProperty(node3, "group", .{ .String = "X" });
+    try graph.setNodeProperty(node3, "value", .{ .String = "200" });
 
     // Query both groups
     const query1 = try geode.parse(allocator, "MATCH (n) WHERE n.group = 'X' RETURN n.value", .{});
@@ -132,23 +132,23 @@ test "INTERSECT operations" {
     var exec = geode.server.graph.Executor.init(allocator);
     defer exec.deinit();
 
-    var graph = geode.graph.GraphStorage.init(allocator);
+    var graph = geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create nodes in different categories
     var i: u32 = 1;
     while (i <= 10) : (i += 1) {
-        const node = try graph.addNode();
+        const node = try graph.createNode(&.{});
         const val_str = try std.fmt.allocPrint(allocator, "{}", .{i});
         defer allocator.free(val_str);
 
-        try graph.setNodeProperty(node, "value", val_str);
+        try graph.setNodeProperty(node, "value", .{ .String = val_str });
 
         if (i % 2 == 0) {
-            try graph.setNodeProperty(node, "even", "true");
+            try graph.setNodeProperty(node, "even", .{ .String = "true" });
         }
         if (i % 3 == 0) {
-            try graph.setNodeProperty(node, "div3", "true");
+            try graph.setNodeProperty(node, "div3", .{ .String = "true" });
         }
     }
 
@@ -189,7 +189,7 @@ test "EXCEPT operations" {
     var exec = geode.server.graph.Executor.init(allocator);
     defer exec.deinit();
 
-    var graph = geode.graph.GraphStorage.init(allocator);
+    var graph = geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create employees and managers
@@ -197,9 +197,9 @@ test "EXCEPT operations" {
     const managers = [_][]const u8{ "Bob", "Dave" };
 
     for (employees) |name| {
-        const node = try graph.addNode();
-        try graph.setNodeProperty(node, "name", name);
-        try graph.setNodeProperty(node, "role", "employee");
+        const node = try graph.createNode(&.{});
+        try graph.setNodeProperty(node, "name", .{ .String = name });
+        try graph.setNodeProperty(node, "role", .{ .String = "employee" });
     }
 
     for (managers) |name| {
@@ -208,13 +208,16 @@ test "EXCEPT operations" {
         defer allocator.free(nodes);
 
         for (nodes) |node| {
-            const node_name = try graph.getNodeProperty(node, "name");
-            if (node_name) |n| {
-                if (std.mem.eql(u8, n, name)) {
-                    try graph.setNodeProperty(node, "role", "manager");
-                    break;
-                }
-            }
+            const node_name = graph.getNodeProperty(node, "name");
+            if (node_name) |n| switch (n) {
+                .String => |s| {
+                    if (std.mem.eql(u8, s, name)) {
+                        try graph.setNodeProperty(node, "role", .{ .String = "manager" });
+                        break;
+                    }
+                },
+                else => {},
+            };
         }
     }
 
@@ -254,7 +257,7 @@ test "Multiple set operations chained" {
     var exec = geode.server.graph.Executor.init(allocator);
     defer exec.deinit();
 
-    var graph = geode.graph.GraphStorage.init(allocator);
+    var graph = geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create three sets of numbers
@@ -264,20 +267,20 @@ test "Multiple set operations chained" {
 
     var n: u32 = 1;
     while (n <= 10) : (n += 1) {
-        const node = try graph.addNode();
+        const node = try graph.createNode(&.{});
         const val = try std.fmt.allocPrint(allocator, "{}", .{n});
         defer allocator.free(val);
 
-        try graph.setNodeProperty(node, "value", val);
+        try graph.setNodeProperty(node, "value", .{ .String = val });
 
         if (n >= 1 and n <= 5) {
-            try graph.setNodeProperty(node, "setA", "true");
+            try graph.setNodeProperty(node, "setA", .{ .String = "true" });
         }
         if (n >= 3 and n <= 7) {
-            try graph.setNodeProperty(node, "setB", "true");
+            try graph.setNodeProperty(node, "setB", .{ .String = "true" });
         }
         if (n >= 6 and n <= 10) {
-            try graph.setNodeProperty(node, "setC", "true");
+            try graph.setNodeProperty(node, "setC", .{ .String = "true" });
         }
     }
 
@@ -337,7 +340,7 @@ test "UNION with ORDER BY and LIMIT" {
     var exec = geode.server.graph.Executor.init(allocator);
     defer exec.deinit();
 
-    var graph = geode.graph.GraphStorage.init(allocator);
+    var graph = geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create products in different categories
@@ -350,13 +353,13 @@ test "UNION with ORDER BY and LIMIT" {
     };
 
     for (products) |product| {
-        const node = try graph.addNode();
-        try graph.setNodeProperty(node, "name", product.name);
-        try graph.setNodeProperty(node, "category", product.category);
+        const node = try graph.createNode(&.{});
+        try graph.setNodeProperty(node, "name", .{ .String = product.name });
+        try graph.setNodeProperty(node, "category", .{ .String = product.category });
 
         const price_str = try std.fmt.allocPrint(allocator, "{}", .{product.price});
         defer allocator.free(price_str);
-        try graph.setNodeProperty(node, "price", price_str);
+        try graph.setNodeProperty(node, "price", .{ .String = price_str });
     }
 
     // Query electronics and clothing, union them, then order by price and limit
@@ -385,7 +388,7 @@ test "CANARY: REQ=REQ-GQL-SET-OPERATIONS" {
     var exec = geode.server.graph.Executor.init(allocator);
     defer exec.deinit();
 
-    var graph = geode.graph.GraphStorage.init(allocator);
+    var graph = geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create test data for comprehensive set operations test
@@ -399,9 +402,9 @@ test "CANARY: REQ=REQ-GQL-SET-OPERATIONS" {
     };
 
     for (skills) |entry| {
-        const node = try graph.addNode();
-        try graph.setNodeProperty(node, "person", entry.person);
-        try graph.setNodeProperty(node, "skill", entry.skill);
+        const node = try graph.createNode(&.{});
+        try graph.setNodeProperty(node, "person", .{ .String = entry.person });
+        try graph.setNodeProperty(node, "skill", .{ .String = entry.skill });
     }
 
     // Test all set operations

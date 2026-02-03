@@ -869,23 +869,23 @@ test "Random walk generation" {
     const allocator = std.testing.allocator;
 
     // Create a simple test graph
-    var graph = geode.graph_common.GraphStorage.init(allocator, null);
+    var graph = geode.graph_common.GraphStorage.init(allocator);
     defer graph.deinit();
 
     // Add nodes and edges for testing
-    try graph.addNode(1);
-    try graph.addNode(2);
-    try graph.addNode(3);
-    try graph.addEdge(1, 2);
-    try graph.addEdge(2, 3);
-    try graph.addEdge(3, 1);
+    const n1 = try graph.createNode(&.{});
+    const n2 = try graph.createNode(&.{});
+    const n3 = try graph.createNode(&.{});
+    _ = try graph.createEdge(n1, n2, "CONNECTS");
+    _ = try graph.createEdge(n2, n3, "CONNECTS");
+    _ = try graph.createEdge(n3, n1, "CONNECTS");
 
     // Test random walk generation
-    var walk = RandomWalk.init(allocator, 1, 1.0, 1.0);
+    var walk = RandomWalk.init(allocator, n1, 1.0, 1.0);
     defer walk.deinit();
 
     try generateRandomWalk(&walk, &graph, 10);
 
     try expect(walk.path.items.len <= 10);
-    try expect(walk.path.items[0] == 1); // Should start with node 1
+    try expect(walk.path.items[0] == n1); // Should start with node 1
 }

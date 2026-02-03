@@ -19,21 +19,21 @@ test "backup and restore basic operations" {
     defer backup_mgr.deinit();
 
     // Create some test data
-    var graph = geode.graph.GraphStorage.init(allocator);
+    var graph = geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add nodes
-    const node1 = try graph.addNode();
-    try graph.setNodeProperty(node1, "name", "Alice");
-    try graph.setNodeProperty(node1, "age", "30");
+    const node1 = try graph.createNode(&.{});
+    try graph.setNodeProperty(node1, "name", .{ .String = "Alice" });
+    try graph.setNodeProperty(node1, "age", .{ .String = "30" });
 
-    const node2 = try graph.addNode();
-    try graph.setNodeProperty(node2, "name", "Bob");
-    try graph.setNodeProperty(node2, "age", "25");
+    const node2 = try graph.createNode(&.{});
+    try graph.setNodeProperty(node2, "name", .{ .String = "Bob" });
+    try graph.setNodeProperty(node2, "age", .{ .String = "25" });
 
     // Add edge
-    const edge = try graph.addEdge(node1, node2);
-    try graph.setEdgeProperty(edge, "type", "KNOWS");
+    const edge = try graph.createEdge(node1, node2, "KNOWS");
+    try graph.setEdgeProperty(edge, "type", .{ .String = "KNOWS" });
 
     // Perform backup
     try backup_mgr.backup(&graph, backup_path);
@@ -58,7 +58,7 @@ test "backup and restore basic operations" {
     try testing.expect(nodes.len == 2);
 
     // Check properties were restored
-    const name1 = try graph.getNodeProperty(nodes[0], "name");
+    const name1 = graph.getNodeProperty(nodes[0], "name");
     try testing.expect(name1 != null);
 }
 
@@ -90,7 +90,7 @@ test "backup with indexes" {
     try index_mgr.insertIntoPropertyIndex("age_idx", "25", 2);
 
     // Backup with indexes
-    var graph = geode.graph.GraphStorage.init(allocator);
+    var graph = geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     try backup_mgr.backupWithIndexes(&graph, &index_mgr, backup_path);
@@ -120,20 +120,20 @@ test "incremental backup" {
     var backup_mgr = geode.backup.BackupManager.init(allocator);
     defer backup_mgr.deinit();
 
-    var graph = geode.graph.GraphStorage.init(allocator);
+    var graph = geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Initial data
-    const node1 = try graph.addNode();
-    try graph.setNodeProperty(node1, "version", "1");
+    const node1 = try graph.createNode(&.{});
+    try graph.setNodeProperty(node1, "version", .{ .String = "1" });
 
     // Full backup
     const full_backup = "test_backup_incr/full.bak";
     try backup_mgr.backup(&graph, full_backup);
 
     // Add more data
-    const node2 = try graph.addNode();
-    try graph.setNodeProperty(node2, "version", "2");
+    const node2 = try graph.createNode(&.{});
+    try graph.setNodeProperty(node2, "version", .{ .String = "2" });
 
     // Incremental backup
     const incr_backup = "test_backup_incr/incr1.bak";
@@ -164,7 +164,7 @@ test "point-in-time recovery" {
     var backup_mgr = geode.backup.BackupManager.init(allocator);
     defer backup_mgr.deinit();
 
-    var graph = geode.graph.GraphStorage.init(allocator);
+    var graph = geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create timeline of changes
@@ -172,8 +172,8 @@ test "point-in-time recovery" {
     defer timestamps.deinit();
 
     // Time 1: Initial state
-    const node1 = try graph.addNode();
-    try graph.setNodeProperty(node1, "state", "initial");
+    const node1 = try graph.createNode(&.{});
+    try graph.setNodeProperty(node1, "state", .{ .String = "initial" });
     const time1 = std.time.timestamp();
     try timestamps.append(time1);
     try backup_mgr.backup(&graph, "test_backup_pitr/backup1.bak");
@@ -182,7 +182,7 @@ test "point-in-time recovery" {
     std.time.sleep(100_000_000); // 100ms
 
     // Time 2: Modified state
-    try graph.setNodeProperty(node1, "state", "modified");
+    try graph.setNodeProperty(node1, "state", .{ .String = "modified" });
     const time2 = std.time.timestamp();
     try timestamps.append(time2);
     try backup_mgr.backup(&graph, "test_backup_pitr/backup2.bak");
@@ -191,7 +191,7 @@ test "point-in-time recovery" {
     std.time.sleep(100_000_000); // 100ms
 
     // Time 3: Final state
-    try graph.setNodeProperty(node1, "state", "final");
+    try graph.setNodeProperty(node1, "state", .{ .String = "final" });
     const time3 = std.time.timestamp();
     try timestamps.append(time3);
     try backup_mgr.backup(&graph, "test_backup_pitr/backup3.bak");
@@ -201,9 +201,12 @@ test "point-in-time recovery" {
     try backup_mgr.restore(&graph, "test_backup_pitr/backup2.bak", time2);
 
     // Verify we got the modified state
-    const state = try graph.getNodeProperty(node1, "state");
+    const state = graph.getNodeProperty(node1, "state");
     try testing.expect(state != null);
-    try testing.expect(std.mem.eql(u8, state.?, "modified"));
+    if (state) |val| switch (val) {
+        .String => |s| try testing.expect(std.mem.eql(u8, s, "modified")),
+        else => try testing.expect(false),
+    };
 }
 
 test "backup compression" {
@@ -218,15 +221,15 @@ test "backup compression" {
     var backup_mgr = geode.backup.BackupManager.init(allocator);
     defer backup_mgr.deinit();
 
-    var graph = geode.graph.GraphStorage.init(allocator);
+    var graph = geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create repetitive data (good for compression)
     var i: u32 = 0;
     while (i < 100) : (i += 1) {
-        const node = try graph.addNode();
-        try graph.setNodeProperty(node, "type", "TestNode");
-        try graph.setNodeProperty(node, "data", "AAAAAAAAAA"); // Repetitive
+        const node = try graph.createNode(&.{});
+        try graph.setNodeProperty(node, "type", .{ .String = "TestNode" });
+        try graph.setNodeProperty(node, "data", .{ .String = "AAAAAAAAAA" }); // Repetitive
     }
 
     // Backup without compression
@@ -272,23 +275,23 @@ test "REQ-GQL-BACKUP-RESTORE validation" {
     var backup_mgr = geode.backup.BackupManager.init(allocator);
     defer backup_mgr.deinit();
 
-    var graph = geode.graph.GraphStorage.init(allocator);
+    var graph = geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     var index_mgr = geode.index.IndexManager.init(allocator);
     defer index_mgr.deinit();
 
     // Create complex graph with indexes
-    const alice = try graph.addNode();
-    try graph.setNodeProperty(alice, "name", "Alice");
-    try graph.setNodeLabel(alice, "Person");
+    const alice = try graph.createNode(&.{});
+    try graph.setNodeProperty(alice, "name", .{ .String = "Alice" });
+    try graph.addNodeLabel(alice, "Person");
 
-    const bob = try graph.addNode();
-    try graph.setNodeProperty(bob, "name", "Bob");
-    try graph.setNodeLabel(bob, "Person");
+    const bob = try graph.createNode(&.{});
+    try graph.setNodeProperty(bob, "name", .{ .String = "Bob" });
+    try graph.addNodeLabel(bob, "Person");
 
-    const edge = try graph.addEdge(alice, bob);
-    try graph.setEdgeProperty(edge, "since", "2020");
+    const edge = try graph.createEdge(alice, bob, "KNOWS");
+    try graph.setEdgeProperty(edge, "since", .{ .String = "2020" });
 
     try index_mgr.createPropertyIndex("person_name", "Person", "name", .btree, true);
     try index_mgr.insertIntoPropertyIndex("person_name", "Alice", alice);
@@ -309,7 +312,10 @@ test "REQ-GQL-BACKUP-RESTORE validation" {
     const alice_id = try index_mgr.lookupPropertyIndex("person_name", "Alice");
     try testing.expect(alice_id != null);
 
-    const alice_name = try graph.getNodeProperty(alice_id.?, "name");
+    const alice_name = graph.getNodeProperty(alice_id.?, "name");
     try testing.expect(alice_name != null);
-    try testing.expect(std.mem.eql(u8, alice_name.?, "Alice"));
+    if (alice_name) |val| switch (val) {
+        .String => |s| try testing.expect(std.mem.eql(u8, s, "Alice")),
+        else => try testing.expect(false),
+    };
 }

@@ -1,13 +1,14 @@
 const std = @import("std");
-const ServerState = @import("server_state.zig").ServerState;
+const geode = @import("geode");
+const ServerState = geode.server_state.ServerState;
 const wal_mod = @import("wal");
 const wal_manager = @import("wal_manager.zig");
 // CANARY: REQ=REQ-TXN-UNDO-SERVER-001; FEATURE="TransactionUndoLog"; ASPECT=ServerIntegration; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
-const txn_undo_log = @import("../txn_undo_log.zig");
-const graph_store = @import("../graph_store.zig");
+const txn_undo_log = geode.txn_undo_log;
+const graph_store = geode.graph_store;
 // CANARY: REQ=REQ-TXN-UNDO-SERVER-016; FEATURE="TransactionUndoLog"; ASPECT=GraphStorageImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
-const graph_storage_mgr = @import("graph_storage_manager.zig");
-const graph_exec = @import("graph/exec.zig");
+const graph_storage_mgr = geode.graph_storage_manager;
+const graph_exec = geode.graph_exec;
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-016; FEATURE="Structured Logging"; ASPECT=TransactionHandlers; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -79,8 +80,8 @@ fn getSessionGraphStorage(allocator: std.mem.Allocator, state: *ServerState) *gr
 }
 
 /// Get or create MVCC manager (helper function)
-fn getOrCreateMVCCManager(allocator: std.mem.Allocator) *@import("txn/mvcc.zig").MVCCManager {
-    const mvcc = @import("txn/mvcc.zig");
+fn getOrCreateMVCCManager(allocator: std.mem.Allocator) *geode.server_mvcc.MVCCManager {
+    const mvcc = geode.server_mvcc;
     // In a real implementation, this should be stored in ServerState
     // For now, we'll create a new one (this is prototype code)
     const manager = allocator.create(mvcc.MVCCManager) catch unreachable;

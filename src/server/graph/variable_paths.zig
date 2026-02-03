@@ -92,20 +92,20 @@ pub fn expandVariablePaths(
         if (state.length < max_len) {
             // Get outgoing edges based on pattern direction
             const edge_list = switch (pattern.dir) {
-                .right => graph.outgoing.get(state.current_node),
-                .left => graph.incoming.get(state.current_node),
+                .right => graph.getOutgoingEdgeIds(state.current_node),
+                .left => graph.getIncomingEdgeIds(state.current_node),
                 .both => null, // Handle both directions
             };
 
             if (edge_list) |edges| {
-                for (edges.items) |edge_id| {
-                    const edge = graph.edges.items[edge_id];
+                for (edges) |edge_id| {
+                    const edge = graph.edges.getPtr(edge_id) orelse continue;
 
                     // Check if edge type matches pattern
                     if (pattern.types.len > 0) {
                         var type_matches = false;
                         for (pattern.types) |ptype| {
-                            if (std.mem.eql(u8, edge.edge_type, ptype)) {
+                            if (std.mem.eql(u8, edge.label, ptype)) {
                                 type_matches = true;
                                 break;
                             }
@@ -115,9 +115,9 @@ pub fn expandVariablePaths(
 
                     // Get the next node
                     const next_node = switch (pattern.dir) {
-                        .right => edge.target,
-                        .left => edge.source,
-                        .both => if (edge.source == state.current_node) edge.target else edge.source,
+                        .right => edge.to_id,
+                        .left => edge.from_id,
+                        .both => if (edge.from_id == state.current_node) edge.to_id else edge.from_id,
                     };
 
                     // Check for cycles (don't revisit nodes in the same path)
@@ -152,10 +152,10 @@ pub fn expandVariablePaths(
             // Handle both directions
             if (pattern.dir == .both) {
                 // Process incoming edges too
-                if (graph.incoming.get(state.current_node)) |in_edges| {
-                    for (in_edges.items) |edge_id| {
-                        const edge = graph.edges.items[edge_id];
-                        const next_node = edge.source;
+                if (graph.getIncomingEdgeIds(state.current_node)) |in_edges| {
+                    for (in_edges) |edge_id| {
+                        const edge = graph.edges.getPtr(edge_id) orelse continue;
+                        const next_node = edge.from_id;
 
                         // Similar logic as above for incoming edges
                         // (omitted for brevity, but would follow same pattern)

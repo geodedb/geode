@@ -102,11 +102,12 @@ test "IndexOptimizer: executeOptimizedScan sequential" {
     defer graph.deinit();
 
     // Add test nodes
-    try graph.addNode(allocator, 1, &[_][]const u8{"Person"});
-    try graph.setNodeProperty(1, "name", .{ .String = "Alice" });
+    var labels_arr = [_][]const u8{"Person"};
+    const alice_id = try graph.createNode(&labels_arr);
+    try graph.setNodeProperty(alice_id, "name", .{ .String = "Alice" });
 
-    try graph.addNode(allocator, 2, &[_][]const u8{"Person"});
-    try graph.setNodeProperty(2, "name", .{ .String = "Bob" });
+    const bob_id = try graph.createNode(&labels_arr);
+    try graph.setNodeProperty(bob_id, "name", .{ .String = "Bob" });
 
     const labels = [_][]const u8{"Person"};
     const prop_val = graph_common.PropertyValue{ .String = "Alice" };
@@ -122,7 +123,7 @@ test "IndexOptimizer: executeOptimizedScan sequential" {
 
     try testing.expect(results.len == 1);
     try testing.expect(results[0].value == .Node);
-    try testing.expect(results[0].value.Node.id == 1);
+    try testing.expect(results[0].value.Node.id == alice_id);
 }
 
 test "IndexOptimizer: executeOptimizedScan index" {
@@ -143,8 +144,9 @@ test "IndexOptimizer: executeOptimizedScan index" {
     defer graph.deinit();
 
     // Add test nodes
-    try graph.addNode(allocator, 1, &[_][]const u8{"Person"});
-    try graph.setNodeProperty(1, "name", .{ .String = "Alice" });
+    var labels_arr = [_][]const u8{"Person"};
+    const alice_id = try graph.createNode(&labels_arr);
+    try graph.setNodeProperty(alice_id, "name", .{ .String = "Alice" });
 
     const labels = [_][]const u8{"Person"};
     const prop_val = graph_common.PropertyValue{ .String = "Alice" };
@@ -168,7 +170,7 @@ test "IndexOptimizer: executeOptimizedScan index" {
 
     try testing.expect(results.len == 1);
     try testing.expect(results[0].value == .Node);
-    try testing.expect(results[0].value.Node.id == 1);
+    try testing.expect(results[0].value.Node.id == alice_id);
 }
 
 test "IndexOptimizer: cost estimation comparison" {
@@ -293,11 +295,12 @@ test "IndexOptimizer: integration with graph execution" {
     defer graph.deinit();
 
     // Add test nodes
-    try graph.addNode(allocator, 1, &[_][]const u8{"Person"});
-    try graph.setNodeProperty(1, "name", .{ .String = "Alice" });
+    var labels_arr = [_][]const u8{"Person"};
+    const alice_id = try graph.createNode(&labels_arr);
+    try graph.setNodeProperty(alice_id, "name", .{ .String = "Alice" });
 
-    try graph.addNode(allocator, 2, &[_][]const u8{"Person"});
-    try graph.setNodeProperty(2, "name", .{ .String = "Bob" });
+    const bob_id = try graph.createNode(&labels_arr);
+    try graph.setNodeProperty(bob_id, "name", .{ .String = "Bob" });
 
     // Create IndexOptimizer interface for graph execution
     const exec_optimizer = graph_exec.IndexOptimizer{
@@ -314,6 +317,7 @@ test "IndexOptimizer: integration with graph execution" {
 
     try testing.expect(results.len == 1);
     try testing.expect(results[0].value == .Node);
+    try testing.expect(results[0].value.Node.id == alice_id);
 }
 
 // Wrapper functions to bridge the IndexOptimizer interface

@@ -149,7 +149,9 @@ pub const graph_common = @import("types/graph_common.zig");
 // Re-export materialized views
 pub const materialized_views = @import("query/materialized_views.zig");
 
-// Re-export test harness for CLI integration
+const builtin = @import("builtin");
+
+// Re-export test harness for all builds (needed for query execution)
 pub const test_harness = @import("test_harness.zig");
 
 // CANARY: REQ=REQ-TXN-UNDO-003; FEATURE="TransactionUndoLog"; ASPECT=LibExport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
@@ -170,6 +172,12 @@ pub const analytics = struct {
     pub const real_time = @import("analytics/real_time.zig");
 };
 // Re-export server graph executor for tests needing internal MATCH primitives
+pub const graph_exec = @import("server/graph/exec.zig");
+// Re-export server state for unified binary
+pub const server_state = @import("server/server_state.zig");
+// Re-export server txn/mvcc for unified binary
+pub const server_mvcc = @import("server/txn/mvcc.zig");
+
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {
     // Pagination ordered variance benchmark (exposed for variance runner)
@@ -325,6 +333,7 @@ pub const security = struct {
     pub const rls_enhanced = @import("security/rls_enhanced.zig");
     pub const auth = @import("geode_auth");
     pub const multi_graph_security = @import("security/multi_graph_security.zig");
+    pub const audit = @import("security/audit.zig");
 };
 pub const fts_advanced_stub = @import("fts/advanced.zig");
 pub const parallel_exec_stub = @import("execution/parallel.zig");

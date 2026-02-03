@@ -5,11 +5,11 @@ const exec = geode.exec;
 const protocol = geode.protocol;
 const diagnostics = geode.diagnostics;
 const ast = geode.ast;
-const graph_exec = @import("graph/exec.zig");
+const graph_exec = geode.graph_exec;
 const eval_extended = geode.eval_ext;
-const server_state = @import("server_state.zig");
+const server_state = geode.server_state;
 const server_flags = @import("server_flags.zig");
-const graph_storage_mgr = @import("graph_storage_manager.zig");
+const graph_storage_mgr = geode.graph_storage_manager;
 const union_advanced = geode.union_advanced;
 const ServerState = server_state.ServerState;
 const SessionConfiguration = server_state.SessionConfiguration;
@@ -56,7 +56,7 @@ fn evaluateSimpleQuery(
     return error.NotImplemented;
 }
 // CANARY: REQ=REQ-TXN-UNDO-SERVER-010; FEATURE="TransactionUndoLog"; ASPECT=QueryExecutorImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
-const txn_undo_log = @import("../txn_undo_log.zig");
+const txn_undo_log = geode.txn_undo_log;
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-018; FEATURE="Structured Logging"; ASPECT=QueryExecutor; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -890,8 +890,11 @@ pub fn convertEvalValueToBindingValue(val: eval.Value) graph_exec.BindingValue {
         .Null => .Null,
         .Bool => |b| .{ .Value = .{ .Bool = b } },
         .Int => |i| .{ .Value = .{ .Int = i } },
+        .Real => |f| .{ .Value = .{ .Float = @floatCast(f) } },
+        .Double => |f| .{ .Value = .{ .Float = f } },
         .Str => |s| .{ .Value = .{ .String = s } },
         .Decimal => |d| .{ .Value = .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } } },
+        .ExtValue => |ext| .{ .Value = .{ .ExtValue = ext } },
         else => .Null,
     };
 }
@@ -902,6 +905,8 @@ pub fn evalExprToPropertyValue(allocator: std.mem.Allocator, expr: ast.Expr) !gr
         .Null => .{ .Null = {} },
         .Bool => |b| .{ .Bool = b },
         .Int => |i| .{ .Int = i },
+        .RealLit => |f| .{ .Float = @floatCast(f) },
+        .DoubleLit => |f| .{ .Float = f },
         .String => |s| .{ .String = try allocator.dupe(u8, s) }, // Deep copy string to prevent dangling pointers
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
         .Call => |call| blk_call: {
@@ -959,8 +964,7 @@ pub fn evalExprToPropertyValue(allocator: std.mem.Allocator, expr: ast.Expr) !gr
                     .Int => |i| .{ .Int = i },
                     .Str => |s| .{ .String = try allocator.dupe(u8, s) },
                     .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-                    .VectorF32 => |v| .{ .VectorF32 = v },
-                    else => .{ .Null = {} },
+                    else => .{ .ExtValue = result },
                 };
             }
 
@@ -976,10 +980,19 @@ pub fn propertyValueToIndexKey(allocator: std.mem.Allocator, value: graph_exec.P
     switch (value) {
         .String => |s| return allocator.dupe(u8, s),
         .Int => |i| return std.fmt.allocPrint(allocator, "{d}", .{i}),
+        .Float => |f| return std.fmt.allocPrint(allocator, "{d}", .{f}),
         .Bool => |b| return allocator.dupe(u8, if (b) "true" else "false"),
         .Null => return allocator.dupe(u8, "null"),
         .Decimal => |d| return std.fmt.allocPrint(allocator, "{d}", .{d.coeff}),
-        .VectorF32 => |v| return std.fmt.allocPrint(allocator, "vector:{d}x{d}", .{ v.dim, v.data.len }),
+        .ExtValue => |ext| switch (ext) {
+            .Str => |s| return allocator.dupe(u8, s),
+            .Int => |i| return std.fmt.allocPrint(allocator, "{d}", .{i}),
+            .Bool => |b| return allocator.dupe(u8, if (b) "true" else "false"),
+            .Decimal => |d| return std.fmt.allocPrint(allocator, "{d}", .{d.coeff}),
+            .VectorF32 => |v| return std.fmt.allocPrint(allocator, "vector:{d}x{d}", .{ v.dim, v.data.len }),
+            .VectorI32 => |v| return std.fmt.allocPrint(allocator, "vector:{d}x{d}", .{ v.dim, v.data.len }),
+            else => return allocator.dupe(u8, "<ext>"),
+        },
     }
 }
 
@@ -1206,26 +1219,39 @@ pub fn evaluateBinarySet(
 // Helper function to count and delete edges connected to a node for DETACH DELETE
 fn countConnectedEdges(graph: *graph_exec.GraphStorage, node_id: u64) usize {
     var count: usize = 0;
-    if (graph.outgoing.get(node_id)) |edges| {
-        count += edges.items.len;
-    }
-    if (graph.incoming.get(node_id)) |edges| {
-        count += edges.items.len;
+    const outgoing = graph.getOutgoingEdgeIds(node_id) orelse &.{};
+    const incoming = graph.getIncomingEdgeIds(node_id) orelse &.{};
+
+    count += outgoing.len;
+    for (incoming) |edge_id| {
+        var found = false;
+        for (outgoing) |out_id| {
+            if (out_id == edge_id) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) count += 1;
     }
     return count;
 }
 
 // CANARY: REQ=REQ-NESTING-REFACTOR-019; FEATURE="NestingReduction"; ASPECT=DeleteValue; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
 // Helper function to handle deletion of a bound value (Node or Edge)
-fn deleteValueBinding(val: eval.Value, graph: *graph_exec.GraphStorage, detach: bool, deleted_count: *usize) void {
+fn deleteValueBinding(val: graph_exec.BindingValue, graph: *graph_exec.GraphStorage, detach: bool, deleted_count: *usize, undo_log: *txn_undo_log.UndoLog) void {
     switch (val) {
         .Node => |node| {
+            const connected = countConnectedEdges(graph, node.id);
             if (detach) {
-                deleted_count.* += countConnectedEdges(graph, node.id);
+                deleted_count.* += connected;
             }
+            undo_log.logDeleteNode(node.*) catch {};
+            graph.deleteNode(node.id);
             deleted_count.* += 1;
         },
-        .Edge => |_| {
+        .Edge => |edge| {
+            undo_log.logDeleteEdge(edge.*) catch {};
+            graph.deleteEdge(edge.id);
             deleted_count.* += 1;
         },
         else => {},
@@ -1257,6 +1283,7 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
     defer created_nodes.deinit(allocator);
     var created_edges = try std.ArrayList(graph_exec.EdgeId).initCapacity(allocator, 0);
     defer created_edges.deinit(allocator);
+    const graph_name = state.current_graph orelse graph_storage_mgr.DEFAULT_GRAPH_NAME;
 
     // Create nodes from the pattern
     for (stmt.pattern.chains) |chain| {
@@ -1264,8 +1291,7 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
             // Handle single node pattern: CREATE (n), CREATE (p:Person), etc.
             // Single node information is stored in chain.head
             if (chain.head) |head_node| {
-                const node_id = getNextNodeId(graph);
-                try graph.addNode(allocator, node_id, head_node.labels);
+                const node_id = try graph.createNodeWithGraph(head_node.labels, graph_name);
                 try created_nodes.append(allocator, node_id);
                 // Log node creation for rollback support
                 undo_log.logCreateNode(node_id, state.current_graph) catch {};
@@ -1274,7 +1300,7 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                 if (head_node.props) |props| {
                     for (props) |prop| {
                         const val = try evalExprToPropertyValue(allocator, prop.value.*);
-                        try graph.setNodeProperty(allocator, node_id, prop.key, val);
+                        try graph.setNodeProperty(node_id, prop.key, val);
                     }
                 }
             }
@@ -1282,8 +1308,7 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
             // Handle relationship patterns: CREATE (a)-[r]->(b)
             for (chain.hops) |hop| {
                 // Always create left node (CREATE statements should create all nodes in pattern)
-                const left_node_id = getNextNodeId(graph);
-                try graph.addNode(allocator, left_node_id, hop.left.labels);
+                const left_node_id = try graph.createNodeWithGraph(hop.left.labels, graph_name);
                 try created_nodes.append(allocator, left_node_id);
                 // Log left node creation for rollback support
                 undo_log.logCreateNode(left_node_id, state.current_graph) catch {};
@@ -1292,13 +1317,12 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                 if (hop.left.props) |props| {
                     for (props) |prop| {
                         const val = try evalExprToPropertyValue(allocator, prop.value.*);
-                        try graph.setNodeProperty(allocator, left_node_id, prop.key, val);
+                        try graph.setNodeProperty(left_node_id, prop.key, val);
                     }
                 }
 
                 // Always create right node (for relationship patterns)
-                const right_node_id = getNextNodeId(graph);
-                try graph.addNode(allocator, right_node_id, hop.right.labels);
+                const right_node_id = try graph.createNodeWithGraph(hop.right.labels, graph_name);
                 try created_nodes.append(allocator, right_node_id);
                 // Log right node creation for rollback support
                 undo_log.logCreateNode(right_node_id, state.current_graph) catch {};
@@ -1307,7 +1331,7 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                 if (hop.right.props) |props| {
                     for (props) |prop| {
                         const val = try evalExprToPropertyValue(allocator, prop.value.*);
-                        try graph.setNodeProperty(allocator, right_node_id, prop.key, val);
+                        try graph.setNodeProperty(right_node_id, prop.key, val);
                     }
                 }
 
@@ -1316,7 +1340,7 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                     const source = created_nodes.items[created_nodes.items.len - 2];
                     const target = created_nodes.items[created_nodes.items.len - 1];
                     const edge_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATED";
-                    const edge_id = try graph.addEdge(allocator, source, target, edge_type);
+                    const edge_id = try graph.createEdgeWithGraph(source, target, edge_type, graph_name);
                     try created_edges.append(allocator, edge_id);
                     // Log edge creation for rollback support
                     undo_log.logCreateEdge(edge_id, state.current_graph) catch {};
@@ -1325,7 +1349,7 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
                     if (hop.rel.props) |props| {
                         for (props) |prop| {
                             const val = try evalExprToPropertyValue(allocator, prop.value.*);
-                            try graph.setEdgeProperty(allocator, edge_id, prop.key, val);
+                            try graph.setEdgeProperty(edge_id, prop.key, val);
                         }
                     }
                 }
@@ -1372,6 +1396,7 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
 fn executeDeleteStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.DeleteStatement) ![]const u8 {
     // Get graph storage for current session
     const graph = getSessionGraphStorage(allocator, state);
+    const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
 
     // Start transaction if not already in one
     var started_auto = false;
@@ -1380,6 +1405,7 @@ fn executeDeleteStatement(allocator: std.mem.Allocator, state: *ServerState, stm
         state.active_txn = t;
         state.session_snapshot_ts = state.global_commit_ts;
         started_auto = true;
+        undo_log.begin();
     }
 
     // Execute MATCH if present to find items to delete
@@ -1408,7 +1434,7 @@ fn executeDeleteStatement(allocator: std.mem.Allocator, state: *ServerState, stm
             .Variable => |var_name| {
                 for (bindings) |binding| {
                     if (binding.vars.get(var_name)) |val| {
-                        deleteValueBinding(val, graph, stmt.detach, &deleted_count);
+                        deleteValueBinding(val, graph, stmt.detach, &deleted_count, undo_log);
                     }
                 }
             },
@@ -1422,10 +1448,12 @@ fn executeDeleteStatement(allocator: std.mem.Allocator, state: *ServerState, stm
             state.txn_manager.commit(txc) catch |err| {
                 state.txn_manager.rollback(txc);
                 state.active_txn = null;
+                undo_log.rollbackGraphStorage(graph);
                 return err;
             };
             state.global_commit_ts += 1;
             state.active_txn = null;
+            undo_log.commit();
         }
     }
 
@@ -1470,9 +1498,9 @@ fn executeMergeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt
                 // Apply SET operations for matched items
                 if (binding.vars.get(set_clause.target.object)) |val| {
                     switch (val) {
-                        .Node => |node_id| {
+                        .Node => |node| {
                             const prop_val = try evalExprToPropertyValue(allocator, set_clause.value);
-                            try graph.setNodeProperty(allocator, node_id, set_clause.target.property, prop_val);
+                            try graph.setNodeProperty(node.id, set_clause.target.property, prop_val);
                         },
                         else => {},
                     }
@@ -1488,18 +1516,18 @@ fn executeMergeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt
         var created_nodes = try std.ArrayList(graph_exec.NodeId).initCapacity(allocator, 0);
         defer created_nodes.deinit(allocator);
 
+        const graph_name = state.current_graph orelse graph_storage_mgr.DEFAULT_GRAPH_NAME;
         for (stmt.pattern.chains) |chain| {
             for (chain.hops) |hop| {
                 if (hop.left.name) |name| {
-                    const node_id = graph.nodes.count();
-                    try graph.addNode(allocator, node_id, hop.left.labels);
+                    const node_id = try graph.createNodeWithGraph(hop.left.labels, graph_name);
                     try created_nodes.append(allocator, node_id);
 
                     // Apply ON CREATE clauses
                     for (stmt.on_create) |set_clause| {
                         if (std.mem.eql(u8, set_clause.target.object, name)) {
                             const prop_val = try evalExprToPropertyValue(allocator, set_clause.value);
-                            try graph.setNodeProperty(allocator, node_id, set_clause.target.property, prop_val);
+                            try graph.setNodeProperty(node_id, set_clause.target.property, prop_val);
                         }
                     }
                 }
@@ -1627,13 +1655,16 @@ fn detectVectorDimension(allocator: std.mem.Allocator, state: *server_state.Serv
             // Check if node has the vector property
             if (node.properties.get(property_name)) |prop_value| {
                 switch (prop_value) {
-                    .VectorF32 => |vector| {
-                        log.info("Detected VectorF32 dimension from existing data", &.{Attr.int("dimension", @intCast(vector.dim))});
-                        return vector.dim;
-                    },
-                    .VectorI32 => |vector| {
-                        log.info("Detected VectorI32 dimension from existing data", &.{Attr.int("dimension", @intCast(vector.dim))});
-                        return vector.dim;
+                    .ExtValue => |ext| switch (ext) {
+                        .VectorF32 => |vector| {
+                            log.info("Detected VectorF32 dimension from existing data", &.{Attr.int("dimension", @intCast(vector.dim))});
+                            return vector.dim;
+                        },
+                        .VectorI32 => |vector| {
+                            log.info("Detected VectorI32 dimension from existing data", &.{Attr.int("dimension", @intCast(vector.dim))});
+                            return vector.dim;
+                        },
+                        else => continue,
                     },
                     else => continue,
                 }
@@ -1647,10 +1678,6 @@ fn detectVectorDimension(allocator: std.mem.Allocator, state: *server_state.Serv
 
 /// Convert a property value to a string key suitable for indexing
 // Removed: propertyValueToIndexKey() function (~10 lines) now in query_executor module (M3.3 Phase 3 seventh increment)
-
-pub fn getNextNodeId(g: *graph_exec.GraphStorage) u64 {
-    return g.nodes.count();
-}
 
 fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState, stmt: geode.ast.CreateIndexStatement) ![]const u8 {
     // Get or create index manager
@@ -1779,49 +1806,54 @@ fn executeCreateIndexStatement(allocator: std.mem.Allocator, state: *ServerState
                         .vector, .vector_f32 => {
                             // Handle vector index population for VectorF32 properties
                             switch (prop_value) {
-                                .VectorF32 => |vector| {
-                                    // Populate the HNSW vector index with the actual vector data
-                                    if (index_type == .vector_f32) {
-                                        // Use advanced vector index for vector_f32 type
-                                        _ = index_manager.insertIntoAdvancedVectorIndex(stmt.name, vector, node_id) catch |err| {
-                                            log.warn("Failed to insert vector into advanced index", &.{ Attr.string("index", stmt.name), Attr.string("error", @errorName(err)) });
+                                .ExtValue => |ext| switch (ext) {
+                                    .VectorF32 => |vector| {
+                                        // Populate the HNSW vector index with the actual vector data
+                                        if (index_type == .vector_f32) {
+                                            // Use advanced vector index for vector_f32 type
+                                            _ = index_manager.insertIntoAdvancedVectorIndex(stmt.name, vector, node_id) catch |err| {
+                                                log.warn("Failed to insert vector into advanced index", &.{ Attr.string("index", stmt.name), Attr.string("error", @errorName(err)) });
+                                            };
+                                        } else {
+                                            // Use regular vector index for backward compatibility
+                                            _ = index_manager.insertIntoVectorIndex(stmt.name, vector.data, node_id) catch |err| {
+                                                log.warn("Failed to insert vector into index", &.{ Attr.string("index", stmt.name), Attr.string("error", @errorName(err)) });
+                                            };
+                                        }
+                                        population_count += 1;
+                                        log.info("Added VectorF32 property to vector index", &.{ Attr.int("dim", @intCast(vector.dim)), Attr.int("data_len", @intCast(vector.data.len)) });
+                                    },
+                                    .VectorI32 => |vector| {
+                                        // Convert VectorI32 to VectorF32 for HNSW indexing
+                                        const vector_types = geode.types.vector;
+                                        const f32_data = allocator.alloc(f32, vector.dim) catch |err| {
+                                            log.warn("Failed to allocate memory for VectorI32 conversion", &.{Attr.string("error", @errorName(err))});
+                                            continue;
                                         };
-                                    } else {
-                                        // Use regular vector index for backward compatibility
-                                        _ = index_manager.insertIntoVectorIndex(stmt.name, vector.data, node_id) catch |err| {
-                                            log.warn("Failed to insert vector into index", &.{ Attr.string("index", stmt.name), Attr.string("error", @errorName(err)) });
-                                        };
-                                    }
-                                    population_count += 1;
-                                    log.info("Added VectorF32 property to vector index", &.{ Attr.int("dim", @intCast(vector.dim)), Attr.int("data_len", @intCast(vector.data.len)) });
-                                },
-                                .VectorI32 => |vector| {
-                                    // Convert VectorI32 to VectorF32 for HNSW indexing
-                                    const vector_types = @import("../types/vector.zig");
-                                    const f32_data = allocator.alloc(f32, vector.dim) catch |err| {
-                                        log.warn("Failed to allocate memory for VectorI32 conversion", &.{Attr.string("error", @errorName(err))});
-                                        continue;
-                                    };
-                                    defer allocator.free(f32_data);
+                                        defer allocator.free(f32_data);
 
-                                    for (0..vector.dim) |i| {
-                                        f32_data[i] = @floatFromInt(vector.data[i]);
-                                    }
+                                        for (0..vector.dim) |i| {
+                                            f32_data[i] = @floatFromInt(vector.data[i]);
+                                        }
 
-                                    if (index_type == .vector_f32) {
-                                        // Convert to VectorF32 for advanced vector index
-                                        const f32_vector = vector_types.VectorF32.fromSlice(f32_data);
-                                        _ = index_manager.insertIntoAdvancedVectorIndex(stmt.name, f32_vector, node_id) catch |err| {
-                                            log.warn("Failed to insert converted VectorI32 into advanced index", &.{ Attr.string("index", stmt.name), Attr.string("error", @errorName(err)) });
-                                        };
-                                    } else {
-                                        // Use regular vector index for backward compatibility
-                                        _ = index_manager.insertIntoVectorIndex(stmt.name, f32_data, node_id) catch |err| {
-                                            log.warn("Failed to insert converted VectorI32 into index", &.{ Attr.string("index", stmt.name), Attr.string("error", @errorName(err)) });
-                                        };
-                                    }
-                                    population_count += 1;
-                                    log.info("Added VectorI32 property to vector index", &.{ Attr.int("dim", @intCast(vector.dim)), Attr.int("data_len", @intCast(vector.data.len)) });
+                                        if (index_type == .vector_f32) {
+                                            // Convert to VectorF32 for advanced vector index
+                                            const f32_vector = vector_types.VectorF32.fromSlice(f32_data);
+                                            _ = index_manager.insertIntoAdvancedVectorIndex(stmt.name, f32_vector, node_id) catch |err| {
+                                                log.warn("Failed to insert converted VectorI32 into advanced index", &.{ Attr.string("index", stmt.name), Attr.string("error", @errorName(err)) });
+                                            };
+                                        } else {
+                                            // Use regular vector index for backward compatibility
+                                            _ = index_manager.insertIntoVectorIndex(stmt.name, f32_data, node_id) catch |err| {
+                                                log.warn("Failed to insert converted VectorI32 into index", &.{ Attr.string("index", stmt.name), Attr.string("error", @errorName(err)) });
+                                            };
+                                        }
+                                        population_count += 1;
+                                        log.info("Added VectorI32 property to vector index", &.{ Attr.int("dim", @intCast(vector.dim)), Attr.int("data_len", @intCast(vector.data.len)) });
+                                    },
+                                    else => {
+                                        // Property is not a vector type, skip
+                                    },
                                 },
                                 else => {
                                     // Property is not a vector type, skip
@@ -2213,156 +2245,23 @@ fn executeRestoreStatement(allocator: std.mem.Allocator, state: *ServerState, st
 // CANARY: REQ=REQ-PITR-LOAD-002; FEATURE="PITR Data Loading"; ASPECT=StateRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-10
 /// Load restored data from backup directory into active server state
 fn loadRestoredDataIntoState(allocator: std.mem.Allocator, state: *ServerState, restore_dir: []const u8) !void {
-    const restore_file_path = try std.fmt.allocPrint(allocator, "{s}/graph_store.dat", .{restore_dir});
-    defer allocator.free(restore_file_path);
-
-    // Check if restore file exists
-    const file = std.fs.cwd().openFile(restore_file_path, .{}) catch |err| {
-        if (err == error.FileNotFound) {
-            // No backup file to restore - this is OK for empty databases
-            return;
-        }
-        return err;
-    };
-    defer file.close();
-
     // Get graph storage and reload from restored file
     const graph_storage = getSessionGraphStorage(allocator, state);
 
-    // Read header to get counts
-    var header: [32]u8 = undefined;
-    const bytes_read = try file.read(&header);
-    if (bytes_read < 32) return error.InvalidBackupFormat;
-
-    const node_count = std.mem.readInt(u64, header[16..24], .little);
-    const edge_count = std.mem.readInt(u64, header[24..32], .little);
-
-    // Seek back to start for full reload
-    try file.seekTo(0);
-
-    // Clear existing graph data
-    graph_storage.nodes.clearRetainingCapacity();
-    graph_storage.edges.clearRetainingCapacity();
-
-    // Read and restore nodes
-    try file.seekTo(32); // Skip header
-
-    var nodes_read: u64 = 0;
-    while (nodes_read < node_count) : (nodes_read += 1) {
-        // Read node ID
-        var id_buf: [8]u8 = undefined;
-        if ((try file.read(&id_buf)) < 8) break;
-        const node_id = std.mem.readInt(u64, &id_buf, .little);
-
-        // Read label count
-        var label_count_buf: [4]u8 = undefined;
-        if ((try file.read(&label_count_buf)) < 4) break;
-        const label_count = std.mem.readInt(u32, &label_count_buf, .little);
-
-        // Read labels
-        var labels = try allocator.alloc([]const u8, label_count);
-        for (0..label_count) |i| {
-            var len_buf: [4]u8 = undefined;
-            if ((try file.read(&len_buf)) < 4) break;
-            const label_len = std.mem.readInt(u32, &len_buf, .little);
-
-            const label_data = try allocator.alloc(u8, label_len);
-            if ((try file.read(label_data)) < label_len) break;
-            labels[i] = label_data;
-        }
-
-        // Read property count
-        var prop_count_buf: [4]u8 = undefined;
-        if ((try file.read(&prop_count_buf)) < 4) break;
-        const prop_count = std.mem.readInt(u32, &prop_count_buf, .little);
-
-        // Create node with properties
-        var node = graph_exec.Node{
-            .id = node_id,
-            .labels = labels,
-            .properties = std.StringHashMap(graph_exec.PropertyValue).init(allocator),
-        };
-
-        // Read properties (simplified - read and skip for now)
-        var props_read: u32 = 0;
-        while (props_read < prop_count) : (props_read += 1) {
-            // Read key
-            var key_len_buf: [4]u8 = undefined;
-            if ((try file.read(&key_len_buf)) < 4) break;
-            const key_len = std.mem.readInt(u32, &key_len_buf, .little);
-
-            const key_data = try allocator.alloc(u8, key_len);
-            if ((try file.read(key_data)) < key_len) break;
-
-            // Read value type and value
-            var val_type_buf: [1]u8 = undefined;
-            if ((try file.read(&val_type_buf)) < 1) break;
-            const val_type = val_type_buf[0];
-
-            const value = switch (val_type) {
-                0 => blk: { // String
-                    var len_buf: [4]u8 = undefined;
-                    if ((try file.read(&len_buf)) < 4) break :blk graph_exec.PropertyValue{ .String = "" };
-                    const str_len = std.mem.readInt(u32, &len_buf, .little);
-                    const str_data = try allocator.alloc(u8, str_len);
-                    _ = try file.read(str_data);
-                    break :blk graph_exec.PropertyValue{ .String = str_data };
-                },
-                1 => blk: { // Int
-                    var int_buf: [8]u8 = undefined;
-                    _ = try file.read(&int_buf);
-                    break :blk graph_exec.PropertyValue{ .Int = std.mem.readInt(i64, &int_buf, .little) };
-                },
-                2 => blk: { // Bool
-                    var bool_buf: [1]u8 = undefined;
-                    _ = try file.read(&bool_buf);
-                    break :blk graph_exec.PropertyValue{ .Bool = bool_buf[0] != 0 };
-                },
-                else => graph_exec.PropertyValue{ .Null = {} },
-            };
-
-            try node.properties.put(key_data, value);
-        }
-
-        // Add node to graph
-        try graph_storage.nodes.put(node_id, node);
+    // Temporarily repoint GraphStore persistence path to the restore directory
+    var prev_dir_copy: ?[]u8 = null;
+    if (graph_storage_mgr.getDataDir()) |dir| {
+        prev_dir_copy = try allocator.dupe(u8, dir);
     }
+    defer if (prev_dir_copy) |dir| allocator.free(dir);
 
-    // Read and restore edges (similar pattern)
-    var edges_read: u64 = 0;
-    while (edges_read < edge_count) : (edges_read += 1) {
-        // Read edge ID and endpoints
-        var id_buf: [8]u8 = undefined;
-        if ((try file.read(&id_buf)) < 8) break;
-        const edge_id = std.mem.readInt(u64, &id_buf, .little);
+    graph_storage_mgr.setDataDir(restore_dir);
+    defer graph_storage_mgr.setDataDir(prev_dir_copy);
 
-        var from_buf: [8]u8 = undefined;
-        if ((try file.read(&from_buf)) < 8) break;
-        const from_id = std.mem.readInt(u64, &from_buf, .little);
-
-        var to_buf: [8]u8 = undefined;
-        if ((try file.read(&to_buf)) < 8) break;
-        const to_id = std.mem.readInt(u64, &to_buf, .little);
-
-        // Read label
-        var label_len_buf: [4]u8 = undefined;
-        if ((try file.read(&label_len_buf)) < 4) break;
-        const label_len = std.mem.readInt(u32, &label_len_buf, .little);
-
-        const label_data = try allocator.alloc(u8, label_len);
-        _ = try file.read(label_data);
-
-        // Create edge
-        const edge = graph_exec.Edge{
-            .id = edge_id,
-            .from_id = from_id,
-            .to_id = to_id,
-            .label = label_data,
-            .properties = std.StringHashMap(graph_exec.PropertyValue).init(allocator),
-        };
-
-        try graph_storage.edges.put(edge_id, edge);
-    }
+    // Load from restored file using GraphStore persistence
+    graph_storage.loadFromFile() catch |err| {
+        return err;
+    };
 
     // Update graph state counts
     if (state.graph_state != null) {

@@ -390,7 +390,7 @@ fn pow10(scale: u8) i128 {
 
 // CANARY: REQ=REQ-VALUE-EQUALITY-002; FEATURE="ExtValueEquality"; ASPECT=Helper; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=value_types; UPDATED=2026-01-10
 /// Compare two ExtValue instances for equality
-fn eqExtValues(a: @import("eval_extended.zig").ExtValue, b: @import("eval_extended.zig").ExtValue) bool {
+pub fn eqExtValues(a: @import("eval_extended.zig").ExtValue, b: @import("eval_extended.zig").ExtValue) bool {
     const ExtValue = @import("eval_extended.zig").ExtValue;
     // Must be same tag
     if (@as(std.meta.Tag(ExtValue), a) != @as(std.meta.Tag(ExtValue), b)) return false;

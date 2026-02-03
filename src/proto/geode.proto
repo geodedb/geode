@@ -1,89 +1,123 @@
 syntax = "proto3";
 package geode;
 
-service GeodeService {
-  // Handshake and Authentication
-  rpc Handshake (HelloRequest) returns (HelloResponse);
-
-  // Core Query Execution
-  rpc Execute (ExecuteRequest) returns (stream ExecutionResponse);
-
-  // Utilities
-  rpc Ping (PingRequest) returns (PingResponse);
-
-  // CDC / Internal
-  rpc GetCdcDiagnostics (CdcDiagnosticsRequest) returns (CdcDiagnosticsResponse);
-  rpc ControlCdc (CdcControlRequest) returns (CdcControlResponse);
+// ============================================================================
+// Transport Wrappers (QUIC framing)
+// ============================================================================
+message ClientPacket {
+  oneof msg {
+    QuicClientMessage quic = 1;
+  }
 }
 
-// ----------------------------------------------------------------------------
-// QUIC Transport Wrapper (Framing)
-// ----------------------------------------------------------------------------
-// Since QUIC stream is unstructured, we need a wrapper to distinguish message types.
+message ServerPacket {
+  oneof msg {
+    QuicServerMessage quic = 1;
+  }
+}
+
+// ============================================================================
+// QUIC Messages
+// ============================================================================
 message QuicClientMessage {
   oneof msg {
     HelloRequest hello = 1;
     ExecuteRequest execute = 2;
-    PingRequest ping = 3;
-    CdcDiagnosticsRequest cdc_diag = 4;
-    CdcControlRequest cdc_ctrl = 5;
-    BeginRequest begin = 6;
-    CommitRequest commit = 7;
-    RollbackRequest rollback = 8;
+    PullRequest pull = 3;
+    PingRequest ping = 4;
+    CdcDiagnosticsRequest cdc_diag = 5;
+    CdcControlRequest cdc_ctrl = 6;
+    BeginRequest begin = 7;
+    CommitRequest commit = 8;
+    RollbackRequest rollback = 9;
+    SavepointRequest savepoint = 10;
+    RollbackToRequest rollback_to = 11;
+    BackupRequest backup = 12;
+    RestoreRequest restore = 13;
+    UploadBackupRequest upload_backup = 14;
   }
 }
 
 message QuicServerMessage {
   oneof msg {
     HelloResponse hello = 1;
-    ExecutionResponse execute = 2; // Streamed responses will be individual QuicServerMessage packets
-    PingResponse ping = 3;
-    CdcDiagnosticsResponse cdc_diag = 4;
-    CdcControlResponse cdc_ctrl = 5;
-    BeginResponse begin = 6;
-    CommitResponse commit = 7;
-    RollbackResponse rollback = 8;
+    ExecutionResponse execute = 2;
+    PullResponse pull = 3;
+    PingResponse ping = 4;
+    CdcDiagnosticsResponse cdc_diag = 5;
+    CdcControlResponse cdc_ctrl = 6;
+    BeginResponse begin = 7;
+    CommitResponse commit = 8;
+    RollbackResponse rollback = 9;
+    SavepointResponse savepoint = 10;
+    RollbackToResponse rollback_to = 11;
+    BackupResponse backup = 12;
+    RestoreResponse restore = 13;
+    UploadBackupResponse upload_backup = 14;
   }
 }
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Authentication (HELLO)
-// ----------------------------------------------------------------------------
+// ============================================================================
 message HelloRequest {
   string username = 1;
-  string password = 2; // Supports plaintext password for now, parity with existing
+  string password = 2;
   optional string tenant_id = 3;
+  string client_name = 4;
+  string client_version = 5;
+  string wanted_conformance = 6;
 }
 
 message HelloResponse {
   bool success = 1;
   string session_id = 2;
   string error_message = 3;
-  repeated string capabilities = 4; // ["QUIC", "TLS1.3", "PROTOBUF"]
+  repeated string capabilities = 4;
 }
 
-// ----------------------------------------------------------------------------
-// Query Execution (RUN_GQL)
-// ----------------------------------------------------------------------------
+// ============================================================================
+// Query Execution (RUN_GQL + PULL)
+// ============================================================================
 message ExecuteRequest {
   string session_id = 1;
   string query = 2;
-  map<string, string> parameters = 3;
+  string params_json = 3; // Raw JSON string for parameters (legacy semantics preserved)
+}
+
+message PullRequest {
+  uint64 request_id = 1;
+  uint32 page_size = 2;
+}
+
+message PullResponse {
+  ExecutionResponse response = 1;
+}
+
+// ============================================================================
+// Execution Responses
+// ============================================================================
+message Status {
+  string status_class = 1; // e.g., "00000"
+  string status_subclass = 2;
+  repeated string additional_statuses = 3;
+  repeated string flagger_findings = 4;
 }
 
 message ExecutionResponse {
-  oneof result {
-    SchemaDefinition schema = 1;
-    DataPage page = 2;
-    Error error = 3;
-    ExecutionMetrics metrics = 4;
-    Heartbeat heartbeat = 5;
+  Status status = 1;
+  oneof payload {
+    SchemaDefinition schema = 2;
+    DataPage page = 3;
+    Error error = 4;
+    ExecutionMetrics metrics = 5;
+    ExplainPayload explain = 6;
+    ProfilePayload profile = 7;
+    Heartbeat heartbeat = 8;
   }
 }
 
 message SchemaDefinition {
-  // JSON representation of the schema for parity, or structured
-  // For now, mirroring existing "columns" logic
   repeated ColumnDefinition columns = 1;
 }
 
@@ -93,63 +127,251 @@ message ColumnDefinition {
 }
 
 message DataPage {
-  // Pages of rows. Each row is a list of cells.
-  // Using generic Value for flexibility
   repeated Row rows = 1;
-  bool last_page = 2;
+  bool final = 2;
+  bool ordered = 3;
+  repeated string order_keys = 4;
 }
 
 message Row {
   repeated Value values = 1;
 }
 
+// ----------------------------------------------------------------------------
+// Value Encoding
+// ----------------------------------------------------------------------------
 message Value {
   oneof kind {
-    string string_val = 1;
-    int64 int_val = 2;
-    double double_val = 3;
-    bool bool_val = 4;
-    // null is implicit in oneof missing, or explicit?
-    bool null_val = 5;
-    // Simplified, assuming major types.
+    NullValue null_val = 1;
+    IntValue int_val = 2;
+    DoubleValue double_val = 3;
+    BoolValue bool_val = 4;
+    StringValue string_val = 5;
+    DecimalValue decimal_val = 6;
+    BytesValue bytes_val = 7;
+    ListValue list_val = 8;
+    MapValue map_val = 9;
+    NodeValue node_val = 10;
+    EdgeValue edge_val = 11;
+    PathValue path_val = 12;
+    ExtendedValue ext_val = 13;
+  }
+}
+
+message NullValue {}
+
+enum IntKind {
+  INT_KIND_UNSPECIFIED = 0;
+  INT = 1;
+  SMALLINT = 2;
+  BIGINT = 3;
+}
+
+message IntValue {
+  int64 value = 1;
+  IntKind kind = 2;
+}
+
+enum FloatKind {
+  FLOAT_KIND_UNSPECIFIED = 0;
+  DOUBLE = 1;
+  REAL = 2;
+}
+
+message DoubleValue {
+  double value = 1;
+  FloatKind kind = 2;
+}
+
+enum StringKind {
+  STRING_KIND_UNSPECIFIED = 0;
+  STRING = 1;
+  CHAR = 2;
+  VARCHAR = 3;
+  TEXT = 4;
+}
+
+message StringValue {
+  string value = 1;
+  StringKind kind = 2;
+}
+
+message DecimalValue {
+  string coeff = 1; // i128 as decimal string
+  uint32 scale = 2;
+  uint32 orig_scale = 3;
+  string orig_repr = 4;
+}
+
+enum BytesKind {
+  BYTES_KIND_UNSPECIFIED = 0;
+  BYTEA = 1;
+  RAW = 2;
+}
+
+message BytesValue {
+  bytes value = 1;
+  BytesKind kind = 2;
+}
+
+message ListValue {
+  repeated Value values = 1;
+}
+
+message MapEntry {
+  string key = 1;
+  Value value = 2;
+}
+
+message MapValue {
+  repeated MapEntry entries = 1;
+}
+
+message NodeValue {
+  uint64 id = 1;
+  repeated string labels = 2;
+  repeated MapEntry properties = 3;
+}
+
+message EdgeValue {
+  uint64 id = 1;
+  uint64 from_id = 2;
+  uint64 to_id = 3;
+  string label = 4;
+  repeated MapEntry properties = 5;
+}
+
+message PathValue {
+  repeated NodeValue nodes = 1;
+  repeated EdgeValue edges = 2;
+}
+
+message ExtendedValue {
+  string type_name = 1;
+  oneof data {
+    string text = 2;
+    bytes bytes = 3;
+    int64 int_val = 4;
+    double double_val = 5;
+    bool bool_val = 6;
   }
 }
 
 message Error {
-  string code = 1; // e.g., "42000"
+  string code = 1;
   string message = 2;
   string type = 3; // "ERROR"
+  string anchor = 4;
 }
 
 message ExecutionMetrics {
-  // Parity with existing metrics profile
   int64 parse_duration_ns = 1;
   int64 plan_duration_ns = 2;
   int64 execute_duration_ns = 3;
   int64 total_duration_ns = 4;
 }
 
+message ExplainPayload {
+  string json_payload = 1;
+}
+
+message ProfilePayload {
+  string json_payload = 1;
+}
+
 message Heartbeat {}
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Utilities (PING)
-// ----------------------------------------------------------------------------
+// ============================================================================
 message PingRequest {}
 message PingResponse {
   bool ok = 1;
 }
 
-// ----------------------------------------------------------------------------
-// CDC
-// ----------------------------------------------------------------------------
-message CdcDiagnosticsRequest {}
-message CdcDiagnosticsResponse {
-  string json_payload = 1; // Existing code returns raw JSON
+// ============================================================================
+// Transactions
+// ============================================================================
+message BeginRequest {
+  bool read_only = 1;
+}
+message BeginResponse {
+  string session_id = 1;
+  string tx_id = 2;
+}
+message CommitRequest {}
+message CommitResponse {
+  bool success = 1;
+}
+message RollbackRequest {}
+message RollbackResponse {
+  bool success = 1;
+}
+message SavepointRequest {
+  string name = 1;
+}
+message SavepointResponse {
+  bool success = 1;
+}
+message RollbackToRequest {
+  string name = 1;
+}
+message RollbackToResponse {
+  bool success = 1;
 }
 
+// ============================================================================
+// CDC
+// ============================================================================
+message CdcDiagnosticsRequest {}
+message CdcDiagnosticsResponse {
+  string json_payload = 1;
+}
 message CdcControlRequest {
   string action = 1;
 }
 message CdcControlResponse {
   bool success = 1;
+  string status = 2;
+  uint64 guardrail_epoch = 3;
+}
+
+// ============================================================================
+// Backup / Restore
+// ============================================================================
+message BackupRequest {
+  string backup_type = 1; // "full" or "incremental"
+  string parent_id = 2; // hex backup id for incremental
+  bool compress = 3;
+}
+message BackupResponse {
+  bool success = 1;
+  string message = 2;
+  string backup_id = 3;
+  string backup_type = 4;
+  uint64 size_bytes = 5;
+  string compression = 6;
+  string checksum = 7;
+  uint64 start_lsn = 8;
+  uint64 end_lsn = 9;
+}
+message RestoreRequest {
+  string target_time = 1;
+  bool confirm = 2;
+}
+message RestoreResponse {
+  bool success = 1;
+  string message = 2;
+  string restore_dir = 3;
+  string target_time = 4;
+  uint64 restore_timestamp = 5;
+}
+message UploadBackupRequest {
+  uint64 size_bytes = 1;
+  string checksum = 2;
+}
+message UploadBackupResponse {
+  bool success = 1;
+  string message = 2;
+  string upload_path = 3;
 }

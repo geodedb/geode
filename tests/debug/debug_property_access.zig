@@ -13,9 +13,8 @@ pub fn main() !void {
     defer storage.deinit();
 
     // Add a test node with properties
-    const node_id: graph_exec.NodeId = 1;
     const labels = [_][]const u8{"Person"};
-    try storage.addNode(allocator, node_id, &labels);
+    const node_id: graph_exec.NodeId = try storage.createNode(&labels);
 
     // Set properties
     const name_prop = graph_exec.PropertyValue{ .String = "Alice" };

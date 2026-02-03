@@ -18,13 +18,14 @@ test "TestCANARY_REQ_GQL_UNION_INTEGRATION_001_PropertyAccessIntegration" {
     defer graph.deinit();
 
     // Add test nodes with properties
-    try graph.addNode(allocator, 1, &[_][]const u8{"Person"});
-    try graph.setNodeProperty(allocator, 1, "name", .{ .String = try allocator.dupe(u8, "Alice") });
-    try graph.setNodeProperty(allocator, 1, "age", .{ .Int = 30 });
+    var person_labels = [_][]const u8{"Person"};
+    const alice_id = try graph.createNode(&person_labels);
+    try graph.setNodeProperty(alice_id, "name", .{ .String = "Alice" });
+    try graph.setNodeProperty(alice_id, "age", .{ .Int = 30 });
 
-    try graph.addNode(allocator, 2, &[_][]const u8{"Person"});
-    try graph.setNodeProperty(allocator, 2, "name", .{ .String = try allocator.dupe(u8, "Bob") });
-    try graph.setNodeProperty(allocator, 2, "age", .{ .Int = 25 });
+    const bob_id = try graph.createNode(&person_labels);
+    try graph.setNodeProperty(bob_id, "name", .{ .String = "Bob" });
+    try graph.setNodeProperty(bob_id, "age", .{ .Int = 25 });
 
     // Test basic node scanning
     const results = try exec.nodeScan(allocator, &graph, &[_][]const u8{"Person"}, null, null);
@@ -80,18 +81,20 @@ test "TestCANARY_REQ_GQL_UNION_INTEGRATION_002_MemberExpressionEvaluation" {
     defer graph.deinit();
 
     // Add a test node
-    try graph.addNode(allocator, 1, &[_][]const u8{"Person"});
-    try graph.setNodeProperty(allocator, 1, "name", .{ .String = try allocator.dupe(u8, "TestUser") });
-    try graph.setNodeProperty(allocator, 1, "age", .{ .Int = 42 });
+    var person_labels = [_][]const u8{"Person"};
+    const node_id = try graph.createNode(&person_labels);
+    try graph.setNodeProperty(node_id, "name", .{ .String = "TestUser" });
+    try graph.setNodeProperty(node_id, "age", .{ .Int = 42 });
 
     // Create a binding with the node
     var binding = graph_common.Binding.init(allocator);
     defer binding.deinit();
 
+    const node_ptr = graph.getNodePtr(node_id).?;
     const test_node = graph_common.Node{
-        .id = 1,
-        .labels = &[_][]const u8{"Person"},
-        .properties = graph.nodes.get(1).?.properties,
+        .id = node_ptr.id,
+        .labels = node_ptr.labels,
+        .properties = node_ptr.properties,
     };
 
     try binding.vars.put("n", .{ .Node = test_node });
@@ -115,7 +118,7 @@ test "TestCANARY_REQ_GQL_UNION_INTEGRATION_002_MemberExpressionEvaluation" {
     // Verify the binding contains the expected node
     const bound_node = binding.vars.get("n").?;
     try testing.expect(bound_node == .Node);
-    try testing.expect(bound_node.Node.id == 1);
+    try testing.expect(bound_node.Node.id == node_id);
 
     // Verify the node has the expected properties
     const name_prop = bound_node.Node.properties.get("name").?;
@@ -141,13 +144,15 @@ test "TestCANARY_REQ_GQL_UNION_INTEGRATION_003_NodeSerialization" {
     defer graph.deinit();
 
     // Add test nodes
-    try graph.addNode(allocator, 1, &[_][]const u8{"Person"});
-    try graph.setNodeProperty(allocator, 1, "name", .{ .String = try allocator.dupe(u8, "Alice") });
-    try graph.setNodeProperty(allocator, 1, "age", .{ .Int = 30 });
+    var person_labels = [_][]const u8{"Person"};
+    const person_id = try graph.createNode(&person_labels);
+    try graph.setNodeProperty(person_id, "name", .{ .String = "Alice" });
+    try graph.setNodeProperty(person_id, "age", .{ .Int = 30 });
 
-    try graph.addNode(allocator, 2, &[_][]const u8{"Company"});
-    try graph.setNodeProperty(allocator, 2, "name", .{ .String = try allocator.dupe(u8, "TechCorp") });
-    try graph.setNodeProperty(allocator, 2, "founded", .{ .Int = 2010 });
+    var company_labels = [_][]const u8{"Company"};
+    const company_id = try graph.createNode(&company_labels);
+    try graph.setNodeProperty(company_id, "name", .{ .String = "TechCorp" });
+    try graph.setNodeProperty(company_id, "founded", .{ .Int = 2010 });
 
     // Test node scanning and binding creation
     const person_results = try exec.nodeScan(allocator, &graph, &[_][]const u8{"Person"}, null, null);
@@ -174,7 +179,7 @@ test "TestCANARY_REQ_GQL_UNION_INTEGRATION_003_NodeSerialization" {
     const person_binding = person_results[0];
     const person_node = person_binding.vars.get("n").?;
     try testing.expect(person_node == .Node);
-    try testing.expect(person_node.Node.id == 1);
+    try testing.expect(person_node.Node.id == person_id);
     try testing.expect(person_node.Node.labels.len == 1);
     try testing.expect(std.mem.eql(u8, person_node.Node.labels[0], "Person"));
     try testing.expect(person_node.Node.properties.count() == 2);
@@ -183,7 +188,7 @@ test "TestCANARY_REQ_GQL_UNION_INTEGRATION_003_NodeSerialization" {
     const company_binding = company_results[0];
     const company_node = company_binding.vars.get("n").?;
     try testing.expect(company_node == .Node);
-    try testing.expect(company_node.Node.id == 2);
+    try testing.expect(company_node.Node.id == company_id);
     try testing.expect(company_node.Node.labels.len == 1);
     try testing.expect(std.mem.eql(u8, company_node.Node.labels[0], "Company"));
     try testing.expect(company_node.Node.properties.count() == 2);
@@ -197,30 +202,31 @@ test "TestCANARY_REQ_GQL_UNION_INTEGRATION_004_PropertyPersistence" {
     defer graph.deinit();
 
     // Add nodes with various property types
-    try graph.addNode(allocator, 1, &[_][]const u8{"TestNode"});
-    try graph.setNodeProperty(allocator, 1, "string_prop", .{ .String = try allocator.dupe(u8, "test_string") });
-    try graph.setNodeProperty(allocator, 1, "int_prop", .{ .Int = 123 });
-    try graph.setNodeProperty(allocator, 1, "bool_prop", .{ .Bool = true });
-    try graph.setNodeProperty(allocator, 1, "null_prop", .Null);
+    var labels = [_][]const u8{"TestNode"};
+    const node_id = try graph.createNode(&labels);
+    try graph.setNodeProperty(node_id, "string_prop", .{ .String = "test_string" });
+    try graph.setNodeProperty(node_id, "int_prop", .{ .Int = 123 });
+    try graph.setNodeProperty(node_id, "bool_prop", .{ .Bool = true });
+    try graph.setNodeProperty(node_id, "null_prop", .Null);
 
     // Test property retrieval
-    const string_val = graph.getNodeProperty(1, "string_prop").?;
+    const string_val = graph.getNodeProperty(node_id, "string_prop").?;
     try testing.expect(string_val == .String);
     try testing.expect(std.mem.eql(u8, string_val.String, "test_string"));
 
-    const int_val = graph.getNodeProperty(1, "int_prop").?;
+    const int_val = graph.getNodeProperty(node_id, "int_prop").?;
     try testing.expect(int_val == .Int);
     try testing.expect(int_val.Int == 123);
 
-    const bool_val = graph.getNodeProperty(1, "bool_prop").?;
+    const bool_val = graph.getNodeProperty(node_id, "bool_prop").?;
     try testing.expect(bool_val == .Bool);
     try testing.expect(bool_val.Bool == true);
 
-    const null_val = graph.getNodeProperty(1, "null_prop").?;
+    const null_val = graph.getNodeProperty(node_id, "null_prop").?;
     try testing.expect(null_val == .Null);
 
     // Test non-existent property
-    const missing_val = graph.getNodeProperty(1, "missing_prop");
+    const missing_val = graph.getNodeProperty(node_id, "missing_prop");
     try testing.expect(missing_val == null);
 
     // Test property on non-existent node
@@ -236,16 +242,16 @@ test "TestCANARY_REQ_GQL_UNION_INTEGRATION_005_MemoryManagement" {
     defer graph.deinit();
 
     // Add multiple nodes with properties
+    var labels = [_][]const u8{"TestNode"};
     for (0..10) |i| {
-        const node_id: u64 = @intCast(i + 1);
-        try graph.addNode(allocator, node_id, &[_][]const u8{"TestNode"});
+        const node_id = try graph.createNode(&labels);
 
         // Add properties with dynamically allocated strings
         const name = try std.fmt.allocPrint(allocator, "node_{d}", .{i});
         defer allocator.free(name);
 
-        try graph.setNodeProperty(allocator, node_id, "name", .{ .String = try allocator.dupe(u8, name) });
-        try graph.setNodeProperty(allocator, node_id, "index", .{ .Int = @intCast(i) });
+        try graph.setNodeProperty(node_id, "name", .{ .String = name });
+        try graph.setNodeProperty(node_id, "index", .{ .Int = @intCast(i) });
     }
 
     // Verify all nodes were created correctly
@@ -263,7 +269,8 @@ test "TestCANARY_REQ_GQL_UNION_INTEGRATION_005_MemoryManagement" {
     try testing.expect(results.len == 10);
 
     // Verify properties are accessible
-    for (results, 0..) |result, i| {
+    var seen = [_]bool{false} ** 10;
+    for (results) |result| {
         const node = result.vars.get("n").?;
         try testing.expect(node == .Node);
 
@@ -272,6 +279,12 @@ test "TestCANARY_REQ_GQL_UNION_INTEGRATION_005_MemoryManagement" {
 
         const index_prop = node.Node.properties.get("index").?;
         try testing.expect(index_prop == .Int);
-        try testing.expect(index_prop.Int == @as(i64, @intCast(i)));
+        if (index_prop.Int >= 0 and index_prop.Int < 10) {
+            seen[@intCast(index_prop.Int)] = true;
+        }
+    }
+
+    for (seen) |flag| {
+        try testing.expect(flag);
     }
 }

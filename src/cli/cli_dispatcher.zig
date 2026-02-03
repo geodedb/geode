@@ -299,7 +299,6 @@ pub fn dispatch(
     cmdQuery: *const CommandHandler,
     cmdShell: *const CommandHandler,
     cmdLsp: *const CommandHandler,
-    cmdStdio: *const CommandHandler,
     cmdAuth: *const CommandHandler,
     cmdFLE: *const CommandHandler,
 ) !void {
@@ -308,7 +307,6 @@ pub fn dispatch(
         .{ .name = "serve", .handler = cmdServe, .description = "Start the Geode server" },
         .{ .name = "query", .handler = cmdQuery, .description = "Execute a GQL query" },
         .{ .name = "shell", .handler = cmdShell, .description = "Start interactive shell (REPL)" },
-        .{ .name = "stdio", .handler = cmdStdio, .description = "JSON protocol for process mode (Go client compatibility)" },
         .{ .name = "lsp", .handler = cmdLsp, .description = "Start Language Server Protocol server" },
         .{ .name = "backup", .handler = cmdBackup, .description = "Create database backup" },
         .{ .name = "restore", .handler = cmdRestore, .description = "Restore database from backup" },
@@ -675,7 +673,7 @@ fn printBashCompletions() void {
         \\    cur="${COMP_WORDS[COMP_CWORD]}"
         \\    prev="${COMP_WORDS[COMP_CWORD-1]}"
         \\
-        \\    commands="serve query shell stdio lsp backup restore migrate user role policy grant revoke auth fle storage audit completion mcp"
+        \\    commands="serve query shell lsp backup restore migrate user role policy grant revoke auth fle storage audit completion mcp"
         \\    opts="--help --version --verbose --json --config --audit --audit-syslog --audit-file"
         \\
         \\    case "${prev}" in
@@ -733,7 +731,6 @@ fn printZshCompletions() void {
         \\        'serve:Start the Geode server'
         \\        'query:Execute a GQL query'
         \\        'shell:Start interactive shell (REPL)'
-        \\        'stdio:JSON protocol for process mode'
         \\        'lsp:Start Language Server Protocol server'
         \\        'backup:Create database backup'
         \\        'restore:Restore database from backup'
@@ -796,7 +793,6 @@ fn printFishCompletions() void {
         \\complete -c geode -n "__fish_use_subcommand" -a serve -d 'Start the Geode server'
         \\complete -c geode -n "__fish_use_subcommand" -a query -d 'Execute a GQL query'
         \\complete -c geode -n "__fish_use_subcommand" -a shell -d 'Start interactive shell (REPL)'
-        \\complete -c geode -n "__fish_use_subcommand" -a stdio -d 'JSON protocol for process mode'
         \\complete -c geode -n "__fish_use_subcommand" -a lsp -d 'Start Language Server Protocol server'
         \\complete -c geode -n "__fish_use_subcommand" -a backup -d 'Create database backup'
         \\complete -c geode -n "__fish_use_subcommand" -a restore -d 'Restore database from backup'
@@ -840,7 +836,6 @@ fn printPowershellCompletions() void {
         \\        @{Name='serve'; Description='Start the Geode server'}
         \\        @{Name='query'; Description='Execute a GQL query'}
         \\        @{Name='shell'; Description='Start interactive shell (REPL)'}
-        \\        @{Name='stdio'; Description='JSON protocol for process mode'}
         \\        @{Name='lsp'; Description='Start Language Server Protocol server'}
         \\        @{Name='backup'; Description='Create database backup'}
         \\        @{Name='restore'; Description='Restore database from backup'}

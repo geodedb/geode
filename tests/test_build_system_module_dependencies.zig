@@ -74,11 +74,12 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_003_SharedTypeAccessibility" {
     // Test GraphStorage accessibility
     const allocator = testing.allocator;
     var graph = geode.graph_common.GraphStorage.init(allocator);
-    defer graph.deinit(allocator);
+    defer graph.deinit();
 
     // Test that we can create nodes and edges
-    const node_id = try graph.addNode(allocator, 1, &[_][]const u8{"TestNode"});
-    try testing.expect(node_id == 1);
+    var labels = [_][]const u8{"TestNode"};
+    const node_id = try graph.createNode(&labels);
+    try testing.expect(node_id != 0);
 
     // Test PropertyValue creation with different types
     const string_prop = geode.graph_common.PropertyValue{ .String = "test_value" };
@@ -107,7 +108,7 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_003_SharedTypeAccessibility" {
         .node_id = node_id,
     };
 
-    try testing.expect(binding_value.node_id == 1);
+    try testing.expect(binding_value.node_id == node_id);
     switch (binding_value.property_value) {
         .String => |val| try testing.expectEqualStrings("test_value", val),
         else => try testing.expect(false),
@@ -215,14 +216,14 @@ test "Cross-module type compatibility" {
 
     // Test that PropertyValue works with graph operations
     var graph = geode.graph_common.GraphStorage.init(allocator);
-    defer graph.deinit(allocator);
+    defer graph.deinit();
 
     // Test adding nodes with various property types
-    const node1_id = try graph.addNode(allocator, 1, &[_][]const u8{"User"});
-    const node2_id = try graph.addNode(allocator, 2, &[_][]const u8{"Post"});
+    const node1_id = try graph.createNode(&[_][]const u8{"User"});
+    const node2_id = try graph.createNode(&[_][]const u8{"Post"});
 
     // Test edge creation
-    const edge_id = try graph.addEdge(allocator, node1_id, node2_id, "CREATED");
+    const edge_id = try graph.createEdge(node1_id, node2_id, "CREATED");
 
     try testing.expect(node1_id == 1);
     try testing.expect(node2_id == 2);

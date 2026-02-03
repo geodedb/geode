@@ -63,13 +63,14 @@ test "TestCANARY_REQ_GQL_016_SetRemoveClauseImplementation" {
     defer graph.deinit();
 
     // Add a test node
-    try graph.addNode(allocator, 1, &[_][]const u8{"Person"});
+    var labels = [_][]const u8{"Person"};
+    const node_id = try graph.createNode(&labels);
 
     // Test setting and removing properties
-    try graph.setNodeProperty(1, "name", .{ .String = "Alice" });
+    try graph.setNodeProperty(node_id, "name", .{ .String = "Alice" });
 
     // Verify property was set
-    if (graph.getNodeProperty(1, "name")) |prop| {
+    if (graph.getNodeProperty(node_id, "name")) |prop| {
         try testing.expect(prop == .String);
         try testing.expect(std.mem.eql(u8, prop.String, "Alice"));
     } else {
@@ -77,10 +78,10 @@ test "TestCANARY_REQ_GQL_016_SetRemoveClauseImplementation" {
     }
 
     // Test removing property
-    try graph.removeNodeProperty(1, "name");
+    try graph.removeNodeProperty(node_id, "name");
 
     // Verify property was removed
-    try testing.expect(graph.getNodeProperty(1, "name") == null);
+    try testing.expect(graph.getNodeProperty(node_id, "name") == null);
 }
 
 // Test that WITH clause execution compiles

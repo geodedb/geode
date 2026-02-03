@@ -7,7 +7,7 @@ const testing = std.testing;
 
 const SocialNetworkData = struct {
     allocator: std.mem.Allocator,
-    graph: *geode.graph.GraphStorage,
+    graph: *geode.graph_store.GraphStore,
     index_mgr: *geode.index.IndexManager,
 
     // Node IDs
@@ -17,8 +17,8 @@ const SocialNetworkData = struct {
     groups: std.ArrayList(u64),
 
     pub fn init(allocator: std.mem.Allocator) !SocialNetworkData {
-        const graph = try allocator.create(geode.graph.GraphStorage);
-        graph.* = geode.graph.GraphStorage.init(allocator);
+        const graph = try allocator.create(geode.graph_store.GraphStore);
+        graph.* = geode.graph_store.GraphStore.init(allocator);
 
         const index_mgr = try allocator.create(geode.index.IndexManager);
         index_mgr.* = geode.index.IndexManager.init(allocator);
@@ -86,27 +86,27 @@ test "large social network - populate 10k users" {
 
     var i: u64 = 0;
     while (i < num_users) : (i += 1) {
-        const user = try data.graph.addNode();
+        const user = try data.graph.createNode(&.{});
         try data.users.append(user);
 
         const username = try std.fmt.allocPrint(allocator, "user_{}", .{i});
         defer allocator.free(username);
-        try data.graph.setNodeProperty(user, "username", username);
-        try data.graph.setNodeLabel(user, "User");
+        try data.graph.setNodeProperty(user, "username", .{ .String = username });
+        try data.graph.addNodeLabel(user, "User");
 
         const email = try std.fmt.allocPrint(allocator, "user_{}@example.com", .{i});
         defer allocator.free(email);
-        try data.graph.setNodeProperty(user, "email", email);
+        try data.graph.setNodeProperty(user, "email", .{ .String = email });
 
         const follower_count = random.intRangeAtMost(u32, 0, 100000);
         const followers_str = try std.fmt.allocPrint(allocator, "{}", .{follower_count});
         defer allocator.free(followers_str);
-        try data.graph.setNodeProperty(user, "follower_count", followers_str);
+        try data.graph.setNodeProperty(user, "follower_count", .{ .String = followers_str });
 
         const created = std.time.timestamp() - random.intRangeAtMost(i64, 0, 365 * 24 * 3600);
         const created_str = try std.fmt.allocPrint(allocator, "{}", .{created});
         defer allocator.free(created_str);
-        try data.graph.setNodeProperty(user, "created_at", created_str);
+        try data.graph.setNodeProperty(user, "created_at", .{ .String = created_str });
 
         // Add to indexes
         try data.index_mgr.insertIntoPropertyIndex("user_username_idx", username, user);
@@ -114,7 +114,7 @@ test "large social network - populate 10k users" {
 
         // Add verification status for some users (influencers)
         if (follower_count > 10000) {
-            try data.graph.setNodeProperty(user, "verified", "true");
+            try data.graph.setNodeProperty(user, "verified", .{ .String = "true" });
         }
     }
 
@@ -135,9 +135,9 @@ test "large social network - create follow relationships" {
     const num_users = 1000;
     var i: u64 = 0;
     while (i < num_users) : (i += 1) {
-        const user = try data.graph.addNode();
+        const user = try data.graph.createNode(&.{});
         try data.users.append(user);
-        try data.graph.setNodeLabel(user, "User");
+        try data.graph.addNodeLabel(user, "User");
     }
 
     var timer = try std.time.Timer.start();
@@ -158,13 +158,12 @@ test "large social network - create follow relationships" {
             const followed = data.users.items[followed_idx];
 
             if (follower != followed) {
-                const edge = try data.graph.addEdge(follower, followed);
-                try data.graph.setEdgeLabel(edge, "FOLLOWS");
+                const edge = try data.graph.createEdge(follower, followed, "FOLLOWS");
 
                 const timestamp = std.time.timestamp();
                 const ts_str = try std.fmt.allocPrint(allocator, "{}", .{timestamp});
                 defer allocator.free(ts_str);
-                try data.graph.setEdgeProperty(edge, "since", ts_str);
+                try data.graph.setEdgeProperty(edge, "since", .{ .String = ts_str });
 
                 relationships += 1;
             }
@@ -190,7 +189,7 @@ test "large social network - posts with embeddings" {
     const num_users = 100;
     var i: u64 = 0;
     while (i < num_users) : (i += 1) {
-        const user = try data.graph.addNode();
+        const user = try data.graph.createNode(&.{});
         try data.users.append(user);
     }
 
@@ -201,13 +200,13 @@ test "large social network - posts with embeddings" {
 
     i = 0;
     while (i < num_posts) : (i += 1) {
-        const post = try data.graph.addNode();
+        const post = try data.graph.createNode(&.{});
         try data.posts.append(post);
-        try data.graph.setNodeLabel(post, "Post");
+        try data.graph.addNodeLabel(post, "Post");
 
         const content = try std.fmt.allocPrint(allocator, "Post content {} with hashtags #geode #graphdb", .{i});
         defer allocator.free(content);
-        try data.graph.setNodeProperty(post, "content", content);
+        try data.graph.setNodeProperty(post, "content", .{ .String = content });
 
         // Create random embedding
         var embedding: [128]f32 = undefined;
@@ -231,8 +230,7 @@ test "large social network - posts with embeddings" {
         // Link post to author
         const author_idx = random.intRangeAtMost(usize, 0, num_users - 1);
         const author = data.users.items[author_idx];
-        const authored = try data.graph.addEdge(author, post);
-        try data.graph.setEdgeLabel(authored, "AUTHORED");
+        const authored = try data.graph.createEdge(author, post, "AUTHORED");
     }
 
     // Test vector similarity search
@@ -292,13 +290,13 @@ test "large social network - events with spatial data" {
 
     var i: u64 = 0;
     while (i < num_events) : (i += 1) {
-        const event = try data.graph.addNode();
+        const event = try data.graph.createNode(&.{});
         try data.events.append(event);
-        try data.graph.setNodeLabel(event, "Event");
+        try data.graph.addNodeLabel(event, "Event");
 
         const title = try std.fmt.allocPrint(allocator, "Event_{}", .{i});
         defer allocator.free(title);
-        try data.graph.setNodeProperty(event, "title", title);
+        try data.graph.setNodeProperty(event, "title", .{ .String = title });
 
         // Pick a random city and add some noise to coordinates
         const city_idx = random.intRangeAtMost(usize, 0, cities.len - 1);
@@ -321,15 +319,15 @@ test "large social network - events with spatial data" {
 
         try data.index_mgr.insertIntoSpatialIndex("event_location_idx", mbr, event);
 
-        try data.graph.setNodeProperty(event, "city", city.name);
+        try data.graph.setNodeProperty(event, "city", .{ .String = city.name });
 
         const lat_str = try std.fmt.allocPrint(allocator, "{d:.6}", .{lat});
         defer allocator.free(lat_str);
-        try data.graph.setNodeProperty(event, "latitude", lat_str);
+        try data.graph.setNodeProperty(event, "latitude", .{ .String = lat_str });
 
         const lon_str = try std.fmt.allocPrint(allocator, "{d:.6}", .{lon});
         defer allocator.free(lon_str);
-        try data.graph.setNodeProperty(event, "longitude", lon_str);
+        try data.graph.setNodeProperty(event, "longitude", .{ .String = lon_str });
     }
 
     // Search for events near New York
@@ -360,9 +358,9 @@ test "large social network - groups and memberships" {
     const num_users = 5000;
     var i: u64 = 0;
     while (i < num_users) : (i += 1) {
-        const user = try data.graph.addNode();
+        const user = try data.graph.createNode(&.{});
         try data.users.append(user);
-        try data.graph.setNodeLabel(user, "User");
+        try data.graph.addNodeLabel(user, "User");
     }
 
     // Create groups with various sizes
@@ -372,24 +370,24 @@ test "large social network - groups and memberships" {
 
     i = 0;
     while (i < num_groups) : (i += 1) {
-        const group = try data.graph.addNode();
+        const group = try data.graph.createNode(&.{});
         try data.groups.append(group);
-        try data.graph.setNodeLabel(group, "Group");
+        try data.graph.addNodeLabel(group, "Group");
 
         const name = try std.fmt.allocPrint(allocator, "Group_{}", .{i});
         defer allocator.free(name);
-        try data.graph.setNodeProperty(group, "name", name);
+        try data.graph.setNodeProperty(group, "name", .{ .String = name });
 
         // Categories: tech, sports, music, gaming, education, etc.
         const categories = [_][]const u8{ "tech", "sports", "music", "gaming", "education", "business", "health", "travel" };
         const category = categories[random.intRangeAtMost(usize, 0, categories.len - 1)];
-        try data.graph.setNodeProperty(group, "category", category);
+        try data.graph.setNodeProperty(group, "category", .{ .String = category });
 
         // Group size (power law distribution)
         const size = random.intRangeAtMost(u32, 10, 10000);
         const size_str = try std.fmt.allocPrint(allocator, "{}", .{size});
         defer allocator.free(size_str);
-        try data.graph.setNodeProperty(group, "member_count", size_str);
+        try data.graph.setNodeProperty(group, "member_count", .{ .String = size_str });
     }
 
     // Create memberships
@@ -403,21 +401,20 @@ test "large social network - groups and memberships" {
             const group_idx = random.intRangeAtMost(usize, 0, num_groups - 1);
             const group = data.groups.items[group_idx];
 
-            const membership = try data.graph.addEdge(user, group);
-            try data.graph.setEdgeLabel(membership, "MEMBER_OF");
+            const membership = try data.graph.createEdge(user, group, "MEMBER_OF");
 
             // Add join date
             const days_ago = random.intRangeAtMost(u32, 0, 730); // Up to 2 years
             const join_date = std.time.timestamp() - @as(i64, days_ago * 24 * 3600);
             const date_str = try std.fmt.allocPrint(allocator, "{}", .{join_date});
             defer allocator.free(date_str);
-            try data.graph.setEdgeProperty(membership, "joined_at", date_str);
+            try data.graph.setEdgeProperty(membership, "joined_at", .{ .String = date_str });
 
             // Some users are admins
             if (random.float(f32) < 0.05) { // 5% chance
-                try data.graph.setEdgeProperty(membership, "role", "admin");
+                try data.graph.setEdgeProperty(membership, "role", .{ .String = "admin" });
             } else {
-                try data.graph.setEdgeProperty(membership, "role", "member");
+                try data.graph.setEdgeProperty(membership, "role", .{ .String = "member" });
             }
 
             memberships += 1;
@@ -442,18 +439,18 @@ test "large social network - complex queries" {
     // Create users with properties
     var i: u64 = 0;
     while (i < num_users) : (i += 1) {
-        const user = try data.graph.addNode();
+        const user = try data.graph.createNode(&.{});
         try data.users.append(user);
-        try data.graph.setNodeLabel(user, "User");
+        try data.graph.addNodeLabel(user, "User");
 
         const username = try std.fmt.allocPrint(allocator, "user_{}", .{i});
         defer allocator.free(username);
-        try data.graph.setNodeProperty(user, "username", username);
+        try data.graph.setNodeProperty(user, "username", .{ .String = username });
 
         // Some users are influencers
         if (i < 10) {
-            try data.graph.setNodeProperty(user, "influencer", "true");
-            try data.graph.setNodeProperty(user, "follower_count", "50000");
+            try data.graph.setNodeProperty(user, "influencer", .{ .String = "true" });
+            try data.graph.setNodeProperty(user, "follower_count", .{ .String = "50000" });
         }
     }
 
@@ -465,8 +462,7 @@ test "large social network - complex queries" {
     for (data.users.items[10..]) |follower| {
         for (data.users.items[0..10]) |influencer| {
             if (random.float(f32) < 0.7) { // 70% chance
-                const edge = try data.graph.addEdge(follower, influencer);
-                try data.graph.setEdgeLabel(edge, "FOLLOWS");
+                _ = try data.graph.createEdge(follower, influencer, "FOLLOWS");
             }
         }
     }
@@ -480,8 +476,7 @@ test "large social network - complex queries" {
             const idx = random.intRangeAtMost(usize, 10, num_users - 1);
             const user2 = data.users.items[idx];
             if (user1 != user2) {
-                const edge = try data.graph.addEdge(user1, user2);
-                try data.graph.setEdgeLabel(edge, "FOLLOWS");
+                _ = try data.graph.createEdge(user1, user2, "FOLLOWS");
             }
         }
     }
@@ -489,18 +484,18 @@ test "large social network - complex queries" {
     // Test: Find mutual followers (users who follow each other)
     var mutual_follows: u64 = 0;
     for (data.users.items) |user1| {
-        const outgoing = try data.graph.getOutgoingEdges(user1, allocator);
+        const outgoing = try data.graph.getOutgoingEdges(allocator, user1);
         defer allocator.free(outgoing);
 
         for (outgoing) |edge| {
-            const target = try data.graph.getEdgeTarget(edge);
+            const target = edge.to_id;
 
             // Check if target also follows user1
-            const target_outgoing = try data.graph.getOutgoingEdges(target, allocator);
+            const target_outgoing = try data.graph.getOutgoingEdges(allocator, target);
             defer allocator.free(target_outgoing);
 
             for (target_outgoing) |reverse_edge| {
-                const reverse_target = try data.graph.getEdgeTarget(reverse_edge);
+                const reverse_target = reverse_edge.to_id;
                 if (reverse_target == user1) {
                     mutual_follows += 1;
                     break;
@@ -514,7 +509,7 @@ test "large social network - complex queries" {
     // Test: Find influencers (nodes with many incoming edges)
     var influencer_count: u64 = 0;
     for (data.users.items) |user| {
-        const incoming = try data.graph.getIncomingEdges(user, allocator);
+        const incoming = try data.graph.getIncomingEdges(allocator, user);
         defer allocator.free(incoming);
 
         if (incoming.len > 50) {
@@ -545,12 +540,12 @@ test "CANARY: REQ=REQ-GQL-LARGE-DATASET" {
     const num_nodes = 50000;
     var i: u64 = 0;
     while (i < num_nodes) : (i += 1) {
-        const node = try data.graph.addNode();
+        const node = try data.graph.createNode(&.{});
 
         const id_str = try std.fmt.allocPrint(allocator, "node_{}", .{i});
         defer allocator.free(id_str);
 
-        try data.graph.setNodeProperty(node, "id", id_str);
+        try data.graph.setNodeProperty(node, "id", .{ .String = id_str });
         try data.index_mgr.insertIntoPropertyIndex("user_id_idx", id_str, node);
 
         if (i % 10000 == 0) {
@@ -571,8 +566,7 @@ test "CANARY: REQ=REQ-GQL-LARGE-DATASET" {
         const target = random.intRangeAtMost(u64, 0, num_nodes - 1);
 
         if (source != target) {
-            const edge = try data.graph.addEdge(source, target);
-            try data.graph.setEdgeLabel(edge, "CONNECTED");
+            _ = try data.graph.createEdge(source, target, "CONNECTED");
         }
     }
     const edge_time = timer.read();

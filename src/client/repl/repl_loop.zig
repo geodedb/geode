@@ -28,9 +28,18 @@ pub const ReplLoop = struct {
         // Issue #387: Optional credentials for authenticated servers
         username: ?[]const u8 = null,
         password: ?[]const u8 = null,
+        // CANARY: REQ=REQ-SHELL-PLAIN-001; FEATURE="ShellPlainMode"; ASPECT=OptionsField; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+        // Plain mode disables terminal control sequences for automated testing
+        plain_mode: bool = false,
     };
 
     pub fn run(opts: Options) !void {
+        // CANARY: REQ=REQ-SHELL-PLAIN-007; FEATURE="ShellPlainMode"; ASPECT=PlainModeRun; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+        // In plain mode, use a simpler REPL loop without fancy terminal control
+        if (opts.plain_mode) {
+            return runPlainMode(opts);
+        }
+
         // Check for TTY
         const is_tty = if (builtin.os.tag == .windows) blk: {
             const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch break :blk false;
@@ -130,6 +139,7 @@ pub const ReplLoop = struct {
             .completion_ctx = repl_complete.CompletionContext.init(opts.allocator),
             .multi_line_buffer = std.ArrayList(u8).empty,
             .is_continuation = false,
+            .plain_mode = opts.plain_mode,
         };
         defer state.deinit();
 
@@ -138,6 +148,159 @@ pub const ReplLoop = struct {
             try renderPrompt(&state);
             try processInput(&state);
         }
+    }
+
+    /// CANARY: REQ=REQ-SHELL-PLAIN-008; FEATURE="ShellPlainMode"; ASPECT=PlainModeImpl; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+    /// Plain mode REPL - simplified for automated testing without fancy terminal control
+    fn runPlainMode(opts: Options) !void {
+        const stdout_file = platform.getStdoutHandle();
+        const stdin_file = platform.getStdinHandle();
+
+        // Simple welcome message without colors
+        try stdout_file.writeAll("Geode Shell (plain mode)\n");
+
+        // Initialize session
+        var session = try repl_dispatch.ClientSession.init(opts.allocator, opts.server, opts.transport);
+        defer session.deinit();
+        try session.connect();
+        try stdout_file.writeAll("Connected!\n");
+
+        // Authenticate if needed
+        if (opts.username != null and opts.password != null) {
+            const auth_result = try session.helloWithAuth(opts.username.?, opts.password.?);
+            if (!auth_result.success) {
+                try stdout_file.writeAll("Error: Authentication failed\n");
+                std.process.exit(21);
+            }
+            if (auth_result.session_token) |token| {
+                opts.allocator.free(token);
+            }
+            try session.cacheCredentials(opts.username.?, opts.password.?);
+        } else {
+            session.hello() catch |err| {
+                if (err == error.AuthenticationRequired) {
+                    try stdout_file.writeAll("Error: Server requires authentication\n");
+                    std.process.exit(22);
+                }
+                return err;
+            };
+        }
+
+        // Initialize minimal state for dispatch
+        var history = try repl_history.HistoryStore.init(opts.allocator, null, false);
+        defer history.deinit();
+
+        var state = ReplState{
+            .allocator = opts.allocator,
+            .buffer = std.ArrayList(u8).empty,
+            .cursor = 0,
+            .history = &history,
+            .history_index = null,
+            .keymap = opts.keymap,
+            .vi_mode = .insert,
+            .format = opts.format,
+            .verbose = opts.verbose,
+            .show_timing = opts.show_timing,
+            .session = &session,
+            .in_txn = false,
+            .quit_requested = false,
+            .kill_ring = std.ArrayList(u8).empty,
+            .last_was_kill = false,
+            .search_buffer = std.ArrayList(u8).empty,
+            .searching = false,
+            .completion_ctx = repl_complete.CompletionContext.init(opts.allocator),
+            .multi_line_buffer = std.ArrayList(u8).empty,
+            .is_continuation = false,
+            .plain_mode = true,
+        };
+        defer state.deinit();
+
+        // Enter a minimal raw mode that still echoes input and handles line editing
+        const original_termios = enterPlainRawMode() catch null;
+        defer if (original_termios) |term| restoreTerminalMode(term) catch {};
+
+        // Simple line buffer
+        var line_buf: [4096]u8 = undefined;
+
+        // Main loop - simple line-based input
+        while (!state.quit_requested) {
+            // Print prompt
+            const prompt = if (state.in_txn) "geode(txn)> " else "geode> ";
+            try stdout_file.writeAll(prompt);
+
+            // Read line
+            var pos: usize = 0;
+            while (pos < line_buf.len - 1) {
+                var byte: [1]u8 = undefined;
+                const n = stdin_file.read(&byte) catch break;
+                if (n == 0) {
+                    state.quit_requested = true;
+                    break;
+                }
+
+                // Handle special characters
+                if (byte[0] == '\n' or byte[0] == '\r') {
+                    try stdout_file.writeAll("\n");
+                    break;
+                } else if (byte[0] == 4) { // Ctrl+D
+                    if (pos == 0) {
+                        try stdout_file.writeAll("\n");
+                        state.quit_requested = true;
+                        break;
+                    }
+                } else if (byte[0] == 3) { // Ctrl+C
+                    try stdout_file.writeAll("^C\n");
+                    pos = 0;
+                    break;
+                } else if (byte[0] == 127 or byte[0] == 8) { // Backspace
+                    if (pos > 0) {
+                        pos -= 1;
+                        try stdout_file.writeAll("\x08 \x08"); // Erase character
+                    }
+                } else if (byte[0] >= 32 and byte[0] < 127) {
+                    line_buf[pos] = byte[0];
+                    pos += 1;
+                    // Echo character in plain mode (we disabled terminal echo)
+                    try stdout_file.writeAll(&byte);
+                }
+            }
+
+            if (state.quit_requested) break;
+            if (pos == 0) continue;
+
+            const line = line_buf[0..pos];
+
+            // CANARY: REQ=REQ-SHELL-PLAIN-012; FEATURE="ShellPlainMode"; ASPECT=MetaCommandDispatch; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+            // Handle meta-commands - use full dispatch for all supported commands
+            if (line.len > 0 and (line[0] == '/' or line[0] == '\\')) {
+                const cmd_part = std.mem.trim(u8, line[1..], " \t");
+                if (std.mem.startsWith(u8, cmd_part, "quit") or
+                    std.mem.startsWith(u8, cmd_part, "exit") or
+                    std.mem.eql(u8, cmd_part, "q"))
+                {
+                    state.quit_requested = true;
+                    break;
+                }
+                // Use the full handleMetaCommand for all other meta-commands
+                // This handles: help, format, timing, echo, source, begin, commit, rollback, etc.
+                // Note: handleMetaCommand expects input WITH the prefix, so pass the full line
+                repl_dispatch.handleMetaCommand(&state, line) catch |err| {
+                    var buf: [256]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "Error: {s}\n", .{@errorName(err)}) catch "Error\n";
+                    try stdout_file.writeAll(msg);
+                };
+                continue;
+            }
+
+            // Execute as GQL - use executeGql which handles running and pulling results
+            repl_dispatch.executeGql(&state, line) catch |err| {
+                var buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "Error: {s}\n", .{@errorName(err)}) catch "Error\n";
+                try stdout_file.writeAll(msg);
+            };
+        }
+
+        try stdout_file.writeAll("Goodbye!\n");
     }
 };
 
@@ -179,6 +342,9 @@ pub const ReplState = struct {
     // CANARY: REQ=REQ-SOURCE-CHUNKED-005; FEATURE="SourceChunkedExecution"; ASPECT=SuppressOutput; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
     // Suppress output during chunked execution (only show final summary)
     suppress_output: bool = false,
+    // CANARY: REQ=REQ-SHELL-PLAIN-002; FEATURE="ShellPlainMode"; ASPECT=StateField; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+    // Plain mode disables terminal control sequences for automated testing
+    plain_mode: bool = false,
 
     pub fn deinit(self: *ReplState) void {
         if (self.current_graph) |g| self.allocator.free(g);
@@ -368,6 +534,14 @@ fn renderPrompt(state: *ReplState) !void {
     const prompt = if (state.is_continuation)
         if (state.in_txn) "geode(txn)-> " else "geode-> "
     else if (state.in_txn) "geode(txn)> " else "geode> ";
+
+    // CANARY: REQ=REQ-SHELL-PLAIN-003; FEATURE="ShellPlainMode"; ASPECT=PlainPrompt; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+    // In plain mode, just print prompt without terminal control sequences
+    // This makes shell output predictable for automated testing
+    if (state.plain_mode) {
+        try stdout_file.writeAll(prompt);
+        return;
+    }
 
     // Always do full re-render for now - cursor-only optimization is complex
     // and error-prone with wrapped lines. Can optimize later.
@@ -1381,6 +1555,40 @@ fn enterRawMode() !TerminalState {
     // Enable bracketed paste mode - terminal will wrap pastes with escape sequences
     const stdout = platform.getStdoutHandle();
     try stdout.writeAll("\x1b[?2004h");
+
+    return original;
+}
+
+/// CANARY: REQ=REQ-SHELL-PLAIN-009; FEATURE="ShellPlainMode"; ASPECT=PlainRawMode; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
+/// Plain raw mode - disables canonical mode but keeps echo for simpler testing
+fn enterPlainRawMode() !TerminalState {
+    if (builtin.os.tag == .windows) {
+        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch {
+            std.process.exit(1);
+        };
+        var mode: std.os.windows.DWORD = undefined;
+        _ = std.os.windows.kernel32.GetConsoleMode(handle, &mode);
+        const original = mode;
+        // Disable line input but keep echo
+        mode &= ~@as(std.os.windows.DWORD, 0x0002); // ENABLE_LINE_INPUT
+        _ = std.os.windows.kernel32.SetConsoleMode(handle, mode);
+        return original;
+    }
+
+    const stdin = platform.getStdinHandle();
+    const original = try std.posix.tcgetattr(stdin.handle);
+
+    var raw = original;
+    // Keep most settings but disable canonical mode for character-by-character reading
+    raw.iflag.ICRNL = true; // Keep CR to NL translation
+    raw.oflag.OPOST = true; // Keep output processing (for \n -> \r\n)
+    raw.lflag.ECHO = false; // We'll handle echo manually
+    raw.lflag.ICANON = false; // Disable canonical mode
+    raw.lflag.ISIG = true; // Keep signals
+    raw.cc[@intFromEnum(std.posix.V.MIN)] = 1;
+    raw.cc[@intFromEnum(std.posix.V.TIME)] = 0;
+
+    try std.posix.tcsetattr(stdin.handle, .FLUSH, raw);
 
     return original;
 }

@@ -7,7 +7,7 @@ const testing = std.testing;
 
 const NetworkData = struct {
     allocator: std.mem.Allocator,
-    graph: *geode.graph.GraphStorage,
+    graph: *geode.graph_store.GraphStore,
     index_mgr: *geode.index.IndexManager,
 
     // Node IDs
@@ -18,8 +18,8 @@ const NetworkData = struct {
     datacenters: std.ArrayList(u64),
 
     pub fn init(allocator: std.mem.Allocator) !NetworkData {
-        const graph = try allocator.create(geode.graph.GraphStorage);
-        graph.* = geode.graph.GraphStorage.init(allocator);
+        const graph = try allocator.create(geode.graph_store.GraphStore);
+        graph.* = geode.graph_store.GraphStore.init(allocator);
 
         const index_mgr = try allocator.create(geode.index.IndexManager);
         index_mgr.* = geode.index.IndexManager.init(allocator);
@@ -87,19 +87,19 @@ test "IoT network - populate network topology" {
     };
 
     for (dc_locations) |dc| {
-        const datacenter = try data.graph.addNode();
+        const datacenter = try data.graph.createNode(&.{});
         try data.datacenters.append(datacenter);
-        try data.graph.setNodeLabel(datacenter, "Datacenter");
-        try data.graph.setNodeProperty(datacenter, "name", dc.name);
-        try data.graph.setNodeProperty(datacenter, "region", dc.region);
+        try data.graph.addNodeLabel(datacenter, "Datacenter");
+        try data.graph.setNodeProperty(datacenter, "name", .{ .String = dc.name });
+        try data.graph.setNodeProperty(datacenter, "region", .{ .String = dc.region });
 
         const lat_str = try std.fmt.allocPrint(allocator, "{d:.4}", .{dc.lat});
         defer allocator.free(lat_str);
-        try data.graph.setNodeProperty(datacenter, "latitude", lat_str);
+        try data.graph.setNodeProperty(datacenter, "latitude", .{ .String = lat_str });
 
         const lon_str = try std.fmt.allocPrint(allocator, "{d:.4}", .{dc.lon});
         defer allocator.free(lon_str);
-        try data.graph.setNodeProperty(datacenter, "longitude", lon_str);
+        try data.graph.setNodeProperty(datacenter, "longitude", .{ .String = lon_str });
     }
 
     // Create network subnets for each datacenter
@@ -108,23 +108,22 @@ test "IoT network - populate network topology" {
         // Create multiple subnets per datacenter
         var subnet_idx: u32 = 0;
         while (subnet_idx < 5) : (subnet_idx += 1) {
-            const subnet = try data.graph.addNode();
+            const subnet = try data.graph.createNode(&.{});
             try data.subnets.append(subnet);
-            try data.graph.setNodeLabel(subnet, "Subnet");
+            try data.graph.addNodeLabel(subnet, "Subnet");
 
             // Generate subnet CIDR (10.dc.subnet.0/24)
             const cidr = try std.fmt.allocPrint(allocator, "10.{}.{}.0/24", .{ dc_idx, subnet_idx });
             defer allocator.free(cidr);
-            try data.graph.setNodeProperty(subnet, "cidr", cidr);
+            try data.graph.setNodeProperty(subnet, "cidr", .{ .String = cidr });
             try data.index_mgr.insertIntoPropertyIndex("subnet_cidr_idx", cidr, subnet);
 
             const vlan_id = try std.fmt.allocPrint(allocator, "{}", .{100 + subnet_counter});
             defer allocator.free(vlan_id);
-            try data.graph.setNodeProperty(subnet, "vlan_id", vlan_id);
+            try data.graph.setNodeProperty(subnet, "vlan_id", .{ .String = vlan_id });
 
             // Link subnet to datacenter
-            const edge = try data.graph.addEdge(subnet, dc);
-            try data.graph.setEdgeLabel(edge, "LOCATED_IN");
+            _ = try data.graph.createEdge(subnet, dc, "LOCATED_IN");
 
             subnet_counter += 1;
         }
@@ -147,13 +146,13 @@ test "IoT network - create 10k devices with IP/MAC" {
     // Create subnets first
     var i: u32 = 0;
     while (i < 10) : (i += 1) {
-        const subnet = try data.graph.addNode();
+        const subnet = try data.graph.createNode(&.{});
         try data.subnets.append(subnet);
-        try data.graph.setNodeLabel(subnet, "Subnet");
+        try data.graph.addNodeLabel(subnet, "Subnet");
 
         const cidr = try std.fmt.allocPrint(allocator, "192.168.{}.0/24", .{i});
         defer allocator.free(cidr);
-        try data.graph.setNodeProperty(subnet, "cidr", cidr);
+        try data.graph.setNodeProperty(subnet, "cidr", .{ .String = cidr });
     }
 
     // Create devices
@@ -166,16 +165,16 @@ test "IoT network - create 10k devices with IP/MAC" {
 
     i = 0;
     while (i < num_devices) : (i += 1) {
-        const device = try data.graph.addNode();
+        const device = try data.graph.createNode(&.{});
         try data.devices.append(device);
-        try data.graph.setNodeLabel(device, "Device");
+        try data.graph.addNodeLabel(device, "Device");
 
         // Generate unique IP address
         const subnet_id = i / 250; // ~250 devices per subnet
         const host_id = (i % 250) + 2; // Start from .2 (reserve .1 for gateway)
         const ip = try std.fmt.allocPrint(allocator, "192.168.{}.{}", .{ subnet_id % 256, host_id });
         defer allocator.free(ip);
-        try data.graph.setNodeProperty(device, "ip_address", ip);
+        try data.graph.setNodeProperty(device, "ip_address", .{ .String = ip });
         try data.index_mgr.insertIntoPropertyIndex("device_ip_idx", ip, device);
 
         // Generate MAC address
@@ -185,35 +184,34 @@ test "IoT network - create 10k devices with IP/MAC" {
             i & 0xFF,
         });
         defer allocator.free(mac);
-        try data.graph.setNodeProperty(device, "mac_address", mac);
+        try data.graph.setNodeProperty(device, "mac_address", .{ .String = mac });
         try data.index_mgr.insertIntoPropertyIndex("device_mac_idx", mac, device);
 
         // Device hostname
         const hostname = try std.fmt.allocPrint(allocator, "device-{:0>5}", .{i});
         defer allocator.free(hostname);
-        try data.graph.setNodeProperty(device, "hostname", hostname);
+        try data.graph.setNodeProperty(device, "hostname", .{ .String = hostname });
 
         // Device type
         const types = [_][]const u8{ "server", "workstation", "printer", "switch", "ap", "camera", "sensor" };
         const device_type = types[random.intRangeAtMost(usize, 0, types.len - 1)];
-        try data.graph.setNodeProperty(device, "type", device_type);
+        try data.graph.setNodeProperty(device, "type", .{ .String = device_type });
 
         // Status
         const status = if (random.float(f32) < 0.95) "online" else "offline";
-        try data.graph.setNodeProperty(device, "status", status);
+        try data.graph.setNodeProperty(device, "status", .{ .String = status });
 
         // Trust score (0-100)
         const trust_score = random.intRangeAtMost(u32, 60, 100);
         const trust_str = try std.fmt.allocPrint(allocator, "{}", .{trust_score});
         defer allocator.free(trust_str);
-        try data.graph.setNodeProperty(device, "trust_score", trust_str);
+        try data.graph.setNodeProperty(device, "trust_score", .{ .String = trust_str });
 
         // Link to subnet
         if (data.subnets.items.len > 0) {
             const subnet_idx = @min(i / 1000, @as(u32, @intCast(data.subnets.items.len - 1)));
             const subnet = data.subnets.items[subnet_idx];
-            const edge = try data.graph.addEdge(device, subnet);
-            try data.graph.setEdgeLabel(edge, "IN_SUBNET");
+            _ = try data.graph.createEdge(device, subnet, "IN_SUBNET");
         }
     }
 
@@ -245,18 +243,18 @@ test "IoT network - sensor data with telemetry" {
 
     var i: u64 = 0;
     while (i < num_sensors) : (i += 1) {
-        const sensor = try data.graph.addNode();
+        const sensor = try data.graph.createNode(&.{});
         try data.sensors.append(sensor);
-        try data.graph.setNodeLabel(sensor, "Sensor");
+        try data.graph.addNodeLabel(sensor, "Sensor");
 
         const sensor_id = try std.fmt.allocPrint(allocator, "SENSOR-{:0>4}", .{i});
         defer allocator.free(sensor_id);
-        try data.graph.setNodeProperty(sensor, "sensor_id", sensor_id);
+        try data.graph.setNodeProperty(sensor, "sensor_id", .{ .String = sensor_id });
 
         // Sensor types
         const sensor_types = [_][]const u8{ "temperature", "humidity", "motion", "pressure", "light", "vibration" };
         const sensor_type = sensor_types[random.intRangeAtMost(usize, 0, sensor_types.len - 1)];
-        try data.graph.setNodeProperty(sensor, "type", sensor_type);
+        try data.graph.setNodeProperty(sensor, "type", .{ .String = sensor_type });
 
         // Location within facility
         const x = random.float(f64) * facility_width;
@@ -273,30 +271,30 @@ test "IoT network - sensor data with telemetry" {
 
         const x_str = try std.fmt.allocPrint(allocator, "{d:.2}", .{x});
         defer allocator.free(x_str);
-        try data.graph.setNodeProperty(sensor, "x_position", x_str);
+        try data.graph.setNodeProperty(sensor, "x_position", .{ .String = x_str });
 
         const y_str = try std.fmt.allocPrint(allocator, "{d:.2}", .{y});
         defer allocator.free(y_str);
-        try data.graph.setNodeProperty(sensor, "y_position", y_str);
+        try data.graph.setNodeProperty(sensor, "y_position", .{ .String = y_str });
 
         // Battery level
         const battery = random.intRangeAtMost(u32, 10, 100);
         const battery_str = try std.fmt.allocPrint(allocator, "{}", .{battery});
         defer allocator.free(battery_str);
-        try data.graph.setNodeProperty(sensor, "battery_level", battery_str);
+        try data.graph.setNodeProperty(sensor, "battery_level", .{ .String = battery_str });
 
         // Create recent readings for each sensor
         const num_readings = 10;
         var j: u32 = 0;
         while (j < num_readings) : (j += 1) {
-            const reading = try data.graph.addNode();
-            try data.graph.setNodeLabel(reading, "Reading");
+            const reading = try data.graph.createNode(&.{});
+            try data.graph.addNodeLabel(reading, "Reading");
 
             // Timestamp (last 24 hours)
             const timestamp = std.time.timestamp() - @as(i64, @intCast((num_readings - j) * 3600));
             const ts_str = try std.fmt.allocPrint(allocator, "{}", .{timestamp});
             defer allocator.free(ts_str);
-            try data.graph.setNodeProperty(reading, "timestamp", ts_str);
+            try data.graph.setNodeProperty(reading, "timestamp", .{ .String = ts_str });
             try data.index_mgr.insertIntoPropertyIndex("sensor_reading_idx", ts_str, reading);
 
             // Value based on sensor type
@@ -312,11 +310,10 @@ test "IoT network - sensor data with telemetry" {
 
             const value_str = try std.fmt.allocPrint(allocator, "{d:.2}", .{value});
             defer allocator.free(value_str);
-            try data.graph.setNodeProperty(reading, "value", value_str);
+            try data.graph.setNodeProperty(reading, "value", .{ .String = value_str });
 
             // Link reading to sensor
-            const edge = try data.graph.addEdge(sensor, reading);
-            try data.graph.setEdgeLabel(edge, "MEASURED");
+            _ = try data.graph.createEdge(sensor, reading, "MEASURED");
         }
     }
 
@@ -348,26 +345,26 @@ test "IoT network - network traffic patterns" {
     const num_devices = 100;
     var i: u64 = 0;
     while (i < num_devices) : (i += 1) {
-        const device = try data.graph.addNode();
+        const device = try data.graph.createNode(&.{});
         try data.devices.append(device);
-        try data.graph.setNodeLabel(device, "Device");
+        try data.graph.addNodeLabel(device, "Device");
 
         const ip = try std.fmt.allocPrint(allocator, "10.0.0.{}", .{i + 1});
         defer allocator.free(ip);
-        try data.graph.setNodeProperty(device, "ip_address", ip);
+        try data.graph.setNodeProperty(device, "ip_address", .{ .String = ip });
     }
 
     // Create routers
     const num_routers = 5;
     i = 0;
     while (i < num_routers) : (i += 1) {
-        const router = try data.graph.addNode();
+        const router = try data.graph.createNode(&.{});
         try data.routers.append(router);
-        try data.graph.setNodeLabel(router, "Router");
+        try data.graph.addNodeLabel(router, "Router");
 
         const router_id = try std.fmt.allocPrint(allocator, "RTR-{:0>2}", .{i});
         defer allocator.free(router_id);
-        try data.graph.setNodeProperty(router, "router_id", router_id);
+        try data.graph.setNodeProperty(router, "router_id", .{ .String = router_id });
     }
 
     // Create traffic flows between devices
@@ -385,23 +382,22 @@ test "IoT network - network traffic patterns" {
             const destination = data.devices.items[dest_idx];
 
             if (source != destination) {
-                const flow = try data.graph.addEdge(source, destination);
-                try data.graph.setEdgeLabel(flow, "TRAFFIC_FLOW");
+                const flow = try data.graph.createEdge(source, destination, "TRAFFIC_FLOW");
 
                 // Traffic properties
                 const protocol = if (random.float(f32) < 0.7) "TCP" else if (random.float(f32) < 0.5) "UDP" else "ICMP";
-                try data.graph.setEdgeProperty(flow, "protocol", protocol);
+                try data.graph.setEdgeProperty(flow, "protocol", .{ .String = protocol });
 
                 const port = random.intRangeAtMost(u32, 1, 65535);
                 const port_str = try std.fmt.allocPrint(allocator, "{}", .{port});
                 defer allocator.free(port_str);
-                try data.graph.setEdgeProperty(flow, "port", port_str);
+                try data.graph.setEdgeProperty(flow, "port", .{ .String = port_str });
 
                 // Bytes transferred
                 const bytes = random.intRangeAtMost(u64, 1000, 10000000);
                 const bytes_str = try std.fmt.allocPrint(allocator, "{}", .{bytes});
                 defer allocator.free(bytes_str);
-                try data.graph.setEdgeProperty(flow, "bytes", bytes_str);
+                try data.graph.setEdgeProperty(flow, "bytes", .{ .String = bytes_str });
 
                 // Anomaly score (0-100, higher is more suspicious)
                 const anomaly = if (random.float(f32) < 0.05)
@@ -411,7 +407,7 @@ test "IoT network - network traffic patterns" {
 
                 const anomaly_str = try std.fmt.allocPrint(allocator, "{}", .{anomaly});
                 defer allocator.free(anomaly_str);
-                try data.graph.setEdgeProperty(flow, "anomaly_score", anomaly_str);
+                try data.graph.setEdgeProperty(flow, "anomaly_score", .{ .String = anomaly_str });
 
                 total_flows += 1;
             }
@@ -422,13 +418,12 @@ test "IoT network - network traffic patterns" {
             const router_idx = random.intRangeAtMost(usize, 0, data.routers.items.len - 1);
             const router = data.routers.items[router_idx];
 
-            const route = try data.graph.addEdge(source, router);
-            try data.graph.setEdgeLabel(route, "ROUTES_THROUGH");
+            const route = try data.graph.createEdge(source, router, "ROUTES_THROUGH");
 
             const latency = random.intRangeAtMost(u32, 1, 100);
             const latency_str = try std.fmt.allocPrint(allocator, "{}ms", .{latency});
             defer allocator.free(latency_str);
-            try data.graph.setEdgeProperty(route, "latency", latency_str);
+            try data.graph.setEdgeProperty(route, "latency", .{ .String = latency_str });
         }
     }
 
@@ -472,13 +467,13 @@ test "IoT network - security alerts and incidents" {
     const num_devices = 500;
     var i: u64 = 0;
     while (i < num_devices) : (i += 1) {
-        const device = try data.graph.addNode();
+        const device = try data.graph.createNode(&.{});
         try data.devices.append(device);
-        try data.graph.setNodeLabel(device, "Device");
+        try data.graph.addNodeLabel(device, "Device");
 
         const hostname = try std.fmt.allocPrint(allocator, "host-{:0>4}", .{i});
         defer allocator.free(hostname);
-        try data.graph.setNodeProperty(device, "hostname", hostname);
+        try data.graph.setNodeProperty(device, "hostname", .{ .String = hostname });
     }
 
     // Generate security alerts
@@ -491,9 +486,9 @@ test "IoT network - security alerts and incidents" {
 
     i = 0;
     while (i < num_alerts) : (i += 1) {
-        const alert = try data.graph.addNode();
+        const alert = try data.graph.createNode(&.{});
         try alerts.append(alert);
-        try data.graph.setNodeLabel(alert, "Alert");
+        try data.graph.addNodeLabel(alert, "Alert");
 
         // Alert types
         const alert_types = [_][]const u8{
@@ -507,7 +502,7 @@ test "IoT network - security alerts and incidents" {
             "DOS_ATTACK",
         };
         const alert_type = alert_types[random.intRangeAtMost(usize, 0, alert_types.len - 1)];
-        try data.graph.setNodeProperty(alert, "type", alert_type);
+        try data.graph.setNodeProperty(alert, "type", .{ .String = alert_type });
 
         // Severity (1-5, 5 being critical)
         const severity_weights = [_]u32{ 40, 30, 20, 8, 2 }; // Weighted probabilities
@@ -524,25 +519,24 @@ test "IoT network - security alerts and incidents" {
 
         const severity_str = try std.fmt.allocPrint(allocator, "{}", .{severity});
         defer allocator.free(severity_str);
-        try data.graph.setNodeProperty(alert, "severity", severity_str);
+        try data.graph.setNodeProperty(alert, "severity", .{ .String = severity_str });
         try data.index_mgr.insertIntoPropertyIndex("alert_severity_idx", severity_str, alert);
 
         // Timestamp (last 7 days)
         const timestamp = std.time.timestamp() - random.intRangeAtMost(i64, 0, 7 * 24 * 3600);
         const ts_str = try std.fmt.allocPrint(allocator, "{}", .{timestamp});
         defer allocator.free(ts_str);
-        try data.graph.setNodeProperty(alert, "timestamp", ts_str);
+        try data.graph.setNodeProperty(alert, "timestamp", .{ .String = ts_str });
         try data.index_mgr.insertIntoPropertyIndex("alert_timestamp_idx", ts_str, alert);
 
         // Link to affected device
         const device_idx = random.intRangeAtMost(usize, 0, num_devices - 1);
         const device = data.devices.items[device_idx];
-        const edge = try data.graph.addEdge(alert, device);
-        try data.graph.setEdgeLabel(edge, "AFFECTS");
+        _ = try data.graph.createEdge(alert, device, "AFFECTS");
 
         // Add response status
         const status = if (severity >= 4) "investigating" else if (random.float(f32) < 0.7) "resolved" else "pending";
-        try data.graph.setNodeProperty(alert, "status", status);
+        try data.graph.setNodeProperty(alert, "status", .{ .String = status });
     }
 
     // Create incidents from related alerts
@@ -551,29 +545,31 @@ test "IoT network - security alerts and incidents" {
 
     // Group high-severity alerts into incidents
     for (alerts.items) |alert| {
-        const severity_str = try data.graph.getNodeProperty(alert, "severity");
-        if (severity_str) |sev_str| {
-            const severity = std.fmt.parseInt(u32, sev_str, 10) catch continue;
+        const severity_val = data.graph.getNodeProperty(alert, "severity");
+        if (severity_val) |sev| switch (sev) {
+            .String => |sev_str| {
+                const severity = std.fmt.parseInt(u32, sev_str, 10) catch continue;
 
-            if (severity >= 4) {
-                // Create or find incident
-                const incident = if (incidents.items.len < 10) blk: {
-                    const inc = try data.graph.addNode();
-                    try incidents.append(inc);
-                    try data.graph.setNodeLabel(inc, "Incident");
+                if (severity >= 4) {
+                    // Create or find incident
+                    const incident = if (incidents.items.len < 10) blk: {
+                        const inc = try data.graph.createNode(&.{});
+                        try incidents.append(inc);
+                        try data.graph.addNodeLabel(inc, "Incident");
 
-                    const inc_id = try std.fmt.allocPrint(allocator, "INC-{:0>4}", .{incidents.items.len});
-                    defer allocator.free(inc_id);
-                    try data.graph.setNodeProperty(inc, "incident_id", inc_id);
+                        const inc_id = try std.fmt.allocPrint(allocator, "INC-{:0>4}", .{incidents.items.len});
+                        defer allocator.free(inc_id);
+                        try data.graph.setNodeProperty(inc, "incident_id", .{ .String = inc_id });
 
-                    break :blk inc;
-                } else incidents.items[random.intRangeAtMost(usize, 0, incidents.items.len - 1)];
+                        break :blk inc;
+                    } else incidents.items[random.intRangeAtMost(usize, 0, incidents.items.len - 1)];
 
-                // Link alert to incident
-                const edge = try data.graph.addEdge(alert, incident);
-                try data.graph.setEdgeLabel(edge, "PART_OF");
-            }
-        }
+                    // Link alert to incident
+                    _ = try data.graph.createEdge(alert, incident, "PART_OF");
+                }
+            },
+            else => {},
+        };
     }
 
     std.debug.print("Created {} alerts and {} incidents\n", .{ num_alerts, incidents.items.len });
@@ -581,13 +577,16 @@ test "IoT network - security alerts and incidents" {
     // Count critical alerts
     var critical_count: u64 = 0;
     for (alerts.items) |alert| {
-        const severity_str = try data.graph.getNodeProperty(alert, "severity");
-        if (severity_str) |sev_str| {
-            const severity = std.fmt.parseInt(u32, sev_str, 10) catch continue;
-            if (severity == 5) {
-                critical_count += 1;
-            }
-        }
+        const severity_val = data.graph.getNodeProperty(alert, "severity");
+        if (severity_val) |sev| switch (sev) {
+            .String => |sev_str| {
+                const severity = std.fmt.parseInt(u32, sev_str, 10) catch continue;
+                if (severity == 5) {
+                    critical_count += 1;
+                }
+            },
+            else => {},
+        };
     }
 
     std.debug.print("Critical alerts (severity 5): {}\n", .{critical_count});
@@ -623,13 +622,13 @@ test "CANARY: REQ=REQ-GQL-IOT-NETWORK" {
 
     var i: u64 = 0;
     while (i < num_gateways) : (i += 1) {
-        const gateway = try data.graph.addNode();
+        const gateway = try data.graph.createNode(&.{});
         try gateways.append(gateway);
-        try data.graph.setNodeLabel(gateway, "Gateway");
+        try data.graph.addNodeLabel(gateway, "Gateway");
 
         const gw_id = try std.fmt.allocPrint(allocator, "GW-{:0>3}", .{i});
         defer allocator.free(gw_id);
-        try data.graph.setNodeProperty(gateway, "gateway_id", gw_id);
+        try data.graph.setNodeProperty(gateway, "gateway_id", .{ .String = gw_id });
 
         // Gateway location (distributed across facility)
         const x = @as(f64, @floatFromInt(i % 5)) * 50.0;
@@ -648,32 +647,31 @@ test "CANARY: REQ=REQ-GQL-IOT-NETWORK" {
     const num_iot_devices = 25000;
     i = 0;
     while (i < num_iot_devices) : (i += 1) {
-        const device = try data.graph.addNode();
+        const device = try data.graph.createNode(&.{});
         try data.devices.append(device);
-        try data.graph.setNodeLabel(device, "IoTDevice");
+        try data.graph.addNodeLabel(device, "IoTDevice");
 
         const device_id = try std.fmt.allocPrint(allocator, "IOT-{:0>8}", .{i});
         defer allocator.free(device_id);
-        try data.graph.setNodeProperty(device, "device_id", device_id);
+        try data.graph.setNodeProperty(device, "device_id", .{ .String = device_id });
 
         // Device metrics
         const trust_score = 50 + random.intRangeAtMost(u32, 0, 50);
         const trust_str = try std.fmt.allocPrint(allocator, "{}", .{trust_score});
         defer allocator.free(trust_str);
-        try data.graph.setNodeProperty(device, "trust_score", trust_str);
+        try data.graph.setNodeProperty(device, "trust_score", .{ .String = trust_str });
         try data.index_mgr.insertIntoPropertyIndex("device_trust_idx", trust_str, device);
 
         // Connect to nearest gateway
         const gateway_idx = i % num_gateways;
         const gateway = gateways.items[gateway_idx];
-        const edge = try data.graph.addEdge(device, gateway);
-        try data.graph.setEdgeLabel(edge, "CONNECTS_TO");
+        const edge = try data.graph.createEdge(device, gateway, "CONNECTS_TO");
 
         // Connection quality
         const rssi = -30 - random.intRangeAtMost(i32, 0, 70); // -30 to -100 dBm
         const rssi_str = try std.fmt.allocPrint(allocator, "{}dBm", .{rssi});
         defer allocator.free(rssi_str);
-        try data.graph.setEdgeProperty(edge, "rssi", rssi_str);
+        try data.graph.setEdgeProperty(edge, "rssi", .{ .String = rssi_str });
 
         if (i % 5000 == 0) {
             std.debug.print("Created {} IoT devices...\n", .{i});
@@ -688,8 +686,8 @@ test "CANARY: REQ=REQ-GQL-IOT-NETWORK" {
     const num_metrics = 50000;
     i = 0;
     while (i < num_metrics) : (i += 1) {
-        const metric = try data.graph.addNode();
-        try data.graph.setNodeLabel(metric, "Metric");
+        const metric = try data.graph.createNode(&.{});
+        try data.graph.addNodeLabel(metric, "Metric");
 
         // Random device
         const device_idx = random.intRangeAtMost(usize, 0, data.devices.items.len - 1);
@@ -699,22 +697,21 @@ test "CANARY: REQ=REQ-GQL-IOT-NETWORK" {
         const timestamp = std.time.timestamp() - random.intRangeAtMost(i64, 0, 3600);
         const ts_str = try std.fmt.allocPrint(allocator, "{}", .{timestamp});
         defer allocator.free(ts_str);
-        try data.graph.setNodeProperty(metric, "timestamp", ts_str);
+        try data.graph.setNodeProperty(metric, "timestamp", .{ .String = ts_str });
         try data.index_mgr.insertIntoPropertyIndex("metric_timestamp_idx", ts_str, metric);
 
         // Metric type and value
         const metric_types = [_][]const u8{ "cpu", "memory", "disk", "network", "temperature", "power" };
         const metric_type = metric_types[random.intRangeAtMost(usize, 0, metric_types.len - 1)];
-        try data.graph.setNodeProperty(metric, "type", metric_type);
+        try data.graph.setNodeProperty(metric, "type", .{ .String = metric_type });
 
         const value = random.float(f32) * 100;
         const value_str = try std.fmt.allocPrint(allocator, "{d:.2}", .{value});
         defer allocator.free(value_str);
-        try data.graph.setNodeProperty(metric, "value", value_str);
+        try data.graph.setNodeProperty(metric, "value", .{ .String = value_str });
 
         // Link to device
-        const edge = try data.graph.addEdge(device, metric);
-        try data.graph.setEdgeLabel(edge, "REPORTED");
+        _ = try data.graph.createEdge(device, metric, "REPORTED");
     }
 
     const telemetry_time = timer.read();

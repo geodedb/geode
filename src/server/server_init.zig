@@ -1,8 +1,9 @@
 const std = @import("std");
+const geode = @import("geode");
 const storage_pm = @import("storage_page_manager");
 const storage_catalog = @import("storage_catalog");
 const server_flags = @import("server_flags.zig");
-const graph_storage_mgr = @import("graph_storage_manager.zig");
+const graph_storage_mgr = geode.graph_storage_manager;
 // CANARY: REQ=REQ-BINARY-PERSIST-001; FEATURE="BinaryPersistence"; ASPECT=ServerInit; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
 const graph_store = @import("graph_store");
 const index_catalog = @import("index_catalog.zig");

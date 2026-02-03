@@ -7,6 +7,7 @@ const diagnostics = @import("../../diagnostics.zig");
 const eval_ext = @import("../../eval_extended.zig");
 const evaluator_functions = @import("../../types/evaluator_functions.zig");
 const heap = @import("../../storage/heap.zig");
+const value_types = @import("../../value_types.zig");
 
 // Import shared types from common module
 const graph_common = @import("../../types/graph_common.zig");
@@ -78,9 +79,10 @@ fn propertyValuesEqual(a: PropertyValue, b: PropertyValue) bool {
         .Null => b == .Null,
         .Bool => |av| b == .Bool and b.Bool == av,
         .Int => |ai| b == .Int and b.Int == ai,
+        .Float => |af| b == .Float and b.Float == af,
         .String => |as| b == .String and std.mem.eql(u8, as, b.String),
         .Decimal => |ad| b == .Decimal and ad.coeff == b.Decimal.coeff and ad.scale == b.Decimal.scale,
-        .VectorF32 => |av| b == .VectorF32 and av.dim == b.VectorF32.dim and std.mem.eql(f32, av.data, b.VectorF32.data),
+        .ExtValue => |av| b == .ExtValue and value_types.eqExtValues(av, b.ExtValue),
     };
 }
 
@@ -173,48 +175,22 @@ pub fn expand(
             else => continue,
         };
 
-        // If CSR is enabled at compile time and available, prefer it for outgoing traversal (right direction)
-        const use_csr = @hasDecl(@import("build_options"), "GEODE_USE_CSR") and @import("build_options").GEODE_USE_CSR;
-        if (use_csr and direction == .right) {
-            if (graph.csr) |c| {
-                if (c.getNeighbors(source_node.id)) |ns| {
-                    for (ns.neighbors) |entry| {
-                        // Get target node from graph storage
-                        const target_node = graph.nodes.getPtr(entry.target_node) orelse continue;
-
-                        // Create new binding for target
-                        var new_binding = Binding.init(allocator);
-                        new_binding.name = target_var orelse "target";
-                        new_binding.value = .{ .Node = target_node };
-                        try new_binding.vars.put(target_var orelse "target", .{ .Node = target_node });
-                        try results.append(allocator, new_binding);
-                    }
-                    continue;
-                }
-            }
-        }
-
-        // Fallback to adjacency list traversal
+        // Adjacency list traversal via GraphStore indexes
         const edge_ids = switch (direction) {
-            .right => graph.outgoing.get(source_node.id),
-            .left => graph.incoming.get(source_node.id),
-            .both => blk: {
-                // For both directions, we need to combine outgoing and incoming
-                // For simplicity, just use outgoing for now
-                break :blk graph.outgoing.get(source_node.id);
-            },
+            .right => graph.getOutgoingEdgeIds(source_node.id),
+            .left => graph.getIncomingEdgeIds(source_node.id),
+            .both => graph.getOutgoingEdgeIds(source_node.id),
         };
 
         if (edge_ids) |edges| {
-            for (edges.items) |edge_id| {
-                if (edge_id >= graph.edges.items.len) continue;
-                const edge = graph.edges.items[edge_id];
+            for (edges) |edge_id| {
+                const edge = graph.edges.getPtr(edge_id) orelse continue;
 
                 // Check if edge type matches filter
                 if (edge_types.len > 0) {
                     var type_matches = false;
                     for (edge_types) |required_type| {
-                        if (std.mem.eql(u8, edge.edge_type, required_type)) {
+                        if (std.mem.eql(u8, edge.label, required_type)) {
                             type_matches = true;
                             break;
                         }
@@ -224,9 +200,9 @@ pub fn expand(
 
                 // Determine target node based on direction
                 const target_id = switch (direction) {
-                    .right => edge.target,
-                    .left => edge.source,
-                    .both => if (edge.source == source_node.id) edge.target else edge.source,
+                    .right => edge.to_id,
+                    .left => edge.from_id,
+                    .both => if (edge.from_id == source_node.id) edge.to_id else edge.from_id,
                 };
 
                 // Get target node
@@ -416,28 +392,43 @@ fn evaluateWhereCondition(allocator: std.mem.Allocator, expr: ast.Expr, binding:
 
 /// Check if a BindingValue is truthy
 fn isTruthyValue(val: BindingValue) bool {
+    const extTruthy = struct {
+        fn check(ext: eval_ext.ExtValue) bool {
+            return switch (ext) {
+                .Null => false,
+                .Bool => |b| b,
+                .Int => |i| i != 0,
+                .Str => |s| s.len > 0,
+                .Decimal => |d| d.coeff != 0,
+                .List => |l| l.len > 0,
+                else => true,
+            };
+        }
+    }.check;
+
     return switch (val) {
         .Null => false,
         .Value => |v| switch (v) {
             .Null => false,
             .Bool => |b| b,
             .Int => |i| i != 0,
+            .Float => |f| f != 0,
             .String => |s| s.len > 0,
             .Decimal => |d| d.coeff != 0,
-            .VectorF32 => true,
+            .ExtValue => |ext| extTruthy(ext),
         },
         .Property => |p| switch (p) {
             .Null => false,
             .Bool => |b| b,
             .Int => |i| i != 0,
+            .Float => |f| f != 0,
             .String => |s| s.len > 0,
             .Decimal => |d| d.coeff != 0,
-            .VectorF32 => true,
+            .ExtValue => |ext| extTruthy(ext),
         },
         .Node => true,
         .Edge => true,
         .Path => true,
-        .List => |l| l.len > 0,
     };
 }
 
@@ -624,19 +615,8 @@ fn evaluateExpressionInBinding(
         // GAP-0120 FIX: Add support for more expression types
         // CANARY: REQ=REQ-EXPR-TYPE-003; FEATURE="ExprTypeCoverage"; ASPECT=Types; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system.yml; OWNER=exec; UPDATED=2026-01-25
         .Decimal => |d| .{ .Value = .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } } },
-        .DoubleLit => |f| blk_double: {
-            // Convert f64 to Decimal for PropertyValue (PropertyValue doesn't have Float)
-            // Use 6 decimal places of precision
-            const scale: u8 = 6;
-            const coeff: i128 = @intFromFloat(f * 1_000_000.0);
-            break :blk_double .{ .Value = .{ .Decimal = .{ .coeff = coeff, .scale = scale } } };
-        },
-        .RealLit => |f| blk_real: {
-            // Convert f32 to Decimal for PropertyValue
-            const scale: u8 = 6;
-            const coeff: i128 = @intFromFloat(@as(f64, f) * 1_000_000.0);
-            break :blk_real .{ .Value = .{ .Decimal = .{ .coeff = coeff, .scale = scale } } };
-        },
+        .DoubleLit => |f| .{ .Value = .{ .Float = f } },
+        .RealLit => |f| .{ .Value = .{ .Float = @floatCast(f) } },
         .Call => |call| blk_call: {
             // Handle function calls in binding context
             // This enables toString(n.name), type(n.property), etc.
@@ -673,18 +653,20 @@ fn evaluateExpressionInBinding(
                         .Value => |v| switch (v) {
                             .String => |s| eval_ext.ExtValue{ .Str = s },
                             .Int => |int_val| eval_ext.ExtValue{ .Int = int_val },
+                            .Float => |f| eval_ext.ExtValue{ .Decimal = .{ .coeff = @intFromFloat(f * 1_000_000.0), .scale = 6 } },
                             .Bool => |b| eval_ext.ExtValue{ .Bool = b },
                             .Null => eval_ext.ExtValue{ .Null = {} },
                             .Decimal => |dec| eval_ext.ExtValue{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
-                            .VectorF32 => |vec| eval_ext.ExtValue{ .VectorF32 = .{ .dim = vec.dim, .data = vec.data } },
+                            .ExtValue => |ext| ext,
                         },
                         .Property => |p| switch (p) {
                             .String => |s| eval_ext.ExtValue{ .Str = s },
                             .Int => |int_val| eval_ext.ExtValue{ .Int = int_val },
+                            .Float => |f| eval_ext.ExtValue{ .Decimal = .{ .coeff = @intFromFloat(f * 1_000_000.0), .scale = 6 } },
                             .Bool => |b| eval_ext.ExtValue{ .Bool = b },
                             .Null => eval_ext.ExtValue{ .Null = {} },
                             .Decimal => |dec| eval_ext.ExtValue{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
-                            .VectorF32 => |vec| eval_ext.ExtValue{ .VectorF32 = .{ .dim = vec.dim, .data = vec.data } },
+                            .ExtValue => |ext| ext,
                         },
                         .Node => eval_ext.ExtValue{ .Null = {} }, // Can't convert node to function arg
                         .Edge => eval_ext.ExtValue{ .Null = {} }, // Can't convert edge to function arg
@@ -702,7 +684,7 @@ fn evaluateExpressionInBinding(
                         .Bool => |b| PropertyValue{ .Bool = b },
                         .Null => PropertyValue{ .Null = {} },
                         .Decimal => |dec| PropertyValue{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
-                        else => PropertyValue{ .Null = {} }, // For advanced types, return null for now
+                        else => PropertyValue{ .ExtValue = result },
                     };
                     break :blk_call .{ .Value = property_value };
                 } else |_| {
@@ -724,18 +706,20 @@ fn evaluateExpressionInBinding(
                         .Value => |v| switch (v) {
                             .String => |s| eval.Value{ .Str = s },
                             .Int => |int_val| eval.Value{ .Int = int_val },
+                            .Float => |f| eval.Value{ .Double = f },
                             .Bool => |b| eval.Value{ .Bool = b },
                             .Null => eval.Value{ .Null = {} },
                             .Decimal => |dec| eval.Value{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
-                            .VectorF32 => eval.Value{ .Null = {} }, // VectorF32 not supported in eval.Value
+                            .ExtValue => |ext| eval.Value{ .ExtValue = ext },
                         },
                         .Property => |p| switch (p) {
                             .String => |s| eval.Value{ .Str = s },
                             .Int => |int_val| eval.Value{ .Int = int_val },
+                            .Float => |f| eval.Value{ .Double = f },
                             .Bool => |b| eval.Value{ .Bool = b },
                             .Null => eval.Value{ .Null = {} },
                             .Decimal => |dec| eval.Value{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
-                            .VectorF32 => eval.Value{ .Null = {} }, // VectorF32 not supported in eval.Value
+                            .ExtValue => |ext| eval.Value{ .ExtValue = ext },
                         },
                         .Node => eval.Value{ .Null = {} },
                         .Edge => eval.Value{ .Null = {} },
@@ -753,6 +737,45 @@ fn evaluateExpressionInBinding(
                             .Int => |i| heap.Value{ .Int = i },
                             .Str => |s| heap.Value{ .Str = s },
                             .Decimal => |dec| heap.Value{ .Decimal128 = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
+                            .Double => |f| heap.Value{ .Double = f },
+                            .Real => |f| heap.Value{ .Real = f },
+                            .ExtValue => |ext| switch (ext) {
+                                .Null => heap.Value{ .Null = {} },
+                                .Int => |i| heap.Value{ .Int = i },
+                                .Bool => |b| heap.Value{ .Bool = b },
+                                .Str => |s| heap.Value{ .Str = s },
+                                .Decimal => |dec| heap.Value{ .Decimal128 = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
+                                .IpAddr => |v| heap.Value{ .IpAddr = v },
+                                .Subnet => |v| heap.Value{ .Subnet = v },
+                                .Mac => |v| heap.Value{ .Mac = v },
+                                .Hash => |v| heap.Value{ .Hash = v },
+                                .Currency => |v| heap.Value{ .Currency = v },
+                                .LanguageTag => |v| heap.Value{ .LanguageTag = v },
+                                .LatLon => |v| heap.Value{ .LatLon = v },
+                                .LatLonAlt => |v| heap.Value{ .LatLonAlt = v },
+                                .Geometry => |v| heap.Value{ .Geometry = v },
+                                .Temperature => |v| heap.Value{ .Temperature = v },
+                                .Pressure => |v| heap.Value{ .Pressure = v },
+                                .VectorF32 => |v| heap.Value{ .VectorF32 = v },
+                                .VectorI32 => |v| heap.Value{ .VectorI32 = v },
+                                .Date => |v| heap.Value{ .Date = v },
+                                .Time => |v| heap.Value{ .Time = v },
+                                .TimestampTZ => |v| heap.Value{ .TimestampTZ = v },
+                                .Interval => |v| heap.Value{ .Interval = v },
+                                .UUID => |v| heap.Value{ .UUID = v },
+                                .Url => |v| heap.Value{ .Url = v },
+                                .Domain => |v| heap.Value{ .Domain = v },
+                                .Bytea => |v| heap.Value{ .Bytea = v },
+                                .Json => |v| heap.Value{ .Json = v },
+                                .Jsonb => |v| heap.Value{ .Jsonb = v },
+                                .Xml => |v| heap.Value{ .Xml = v },
+                                .BitString => |v| heap.Value{ .BitString = v },
+                                .VarBit => |v| heap.Value{ .VarBit = v },
+                                .IntRange => |v| heap.Value{ .IntRange = v },
+                                .Enum => |v| heap.Value{ .Enum = v },
+                                else => heap.Value{ .Null = {} },
+                            },
+                            else => heap.Value{ .Null = {} },
                         };
                     }
                 }.convert;
@@ -769,7 +792,7 @@ fn evaluateExpressionInBinding(
                             .Bool => |b| PropertyValue{ .Bool = b },
                             .Null => PropertyValue{ .Null = {} },
                             .Decimal128 => |dec| PropertyValue{ .Decimal = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
-                            .VectorF32 => |vec| PropertyValue{ .VectorF32 = .{ .dim = vec.dim, .data = vec.data } },
+                            .VectorF32 => |vec| PropertyValue{ .ExtValue = .{ .VectorF32 = vec } },
                             else => PropertyValue{ .Null = {} }, // Fallback for other types
                         };
                         break :blk_call .{ .Value = property_value };
@@ -785,7 +808,7 @@ fn evaluateExpressionInBinding(
                             .Bool => |b| PropertyValue{ .Bool = b },
                             .Null => PropertyValue{ .Null = {} },
                             .Decimal128 => |dec| PropertyValue{ .Decimal = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
-                            .VectorF32 => |vec| PropertyValue{ .VectorF32 = .{ .dim = vec.dim, .data = vec.data } },
+                            .VectorF32 => |vec| PropertyValue{ .ExtValue = .{ .VectorF32 = vec } },
                             else => PropertyValue{ .Null = {} }, // Fallback for other types
                         };
                         break :blk_call .{ .Value = property_value };
@@ -801,7 +824,7 @@ fn evaluateExpressionInBinding(
                             .Bool => |b| PropertyValue{ .Bool = b },
                             .Null => PropertyValue{ .Null = {} },
                             .Decimal128 => |dec| PropertyValue{ .Decimal = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
-                            .VectorF32 => |vec| PropertyValue{ .VectorF32 = .{ .dim = vec.dim, .data = vec.data } },
+                            .VectorF32 => |vec| PropertyValue{ .ExtValue = .{ .VectorF32 = vec } },
                             else => PropertyValue{ .Null = {} }, // Fallback for other types
                         };
                         break :blk_call .{ .Value = property_value };
@@ -855,10 +878,23 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
                             try result.append(allocator, '"');
                         },
                         .Int => |n| try result.writer(allocator).print("{d}", .{n}),
+                        .Float => |f| try result.writer(allocator).print("{d}", .{f}),
                         .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
                         .Null => try result.appendSlice(allocator, "null"),
                         .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
-                        .VectorF32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
+                        .ExtValue => |ext| switch (ext) {
+                            .Str => |s| {
+                                try result.append(allocator, '"');
+                                try result.appendSlice(allocator, s);
+                                try result.append(allocator, '"');
+                            },
+                            .Int => |n| try result.writer(allocator).print("{d}", .{n}),
+                            .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
+                            .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
+                            .VectorF32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
+                            .VectorI32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
+                            else => try result.appendSlice(allocator, "\"<ext>\""),
+                        },
                     }
                 },
                 .Value => |prop| {
@@ -869,10 +905,23 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
                             try result.append(allocator, '"');
                         },
                         .Int => |n| try result.writer(allocator).print("{d}", .{n}),
+                        .Float => |f| try result.writer(allocator).print("{d}", .{f}),
                         .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
                         .Null => try result.appendSlice(allocator, "null"),
                         .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
-                        .VectorF32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
+                        .ExtValue => |ext| switch (ext) {
+                            .Str => |s| {
+                                try result.append(allocator, '"');
+                                try result.appendSlice(allocator, s);
+                                try result.append(allocator, '"');
+                            },
+                            .Int => |n| try result.writer(allocator).print("{d}", .{n}),
+                            .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
+                            .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
+                            .VectorF32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
+                            .VectorI32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
+                            else => try result.appendSlice(allocator, "\"<ext>\""),
+                        },
                     }
                 },
                 .Node => |node| {
@@ -906,10 +955,23 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
                                 try result.append(allocator, '"');
                             },
                             .Int => |n| try result.writer(allocator).print("{d}", .{n}),
+                            .Float => |f| try result.writer(allocator).print("{d}", .{f}),
                             .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
                             .Null => try result.appendSlice(allocator, "null"),
                             .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
-                            .VectorF32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
+                            .ExtValue => |ext| switch (ext) {
+                                .Str => |s| {
+                                    try result.append(allocator, '"');
+                                    try result.appendSlice(allocator, s);
+                                    try result.append(allocator, '"');
+                                },
+                                .Int => |n| try result.writer(allocator).print("{d}", .{n}),
+                                .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
+                                .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
+                                .VectorF32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
+                                .VectorI32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
+                                else => try result.appendSlice(allocator, "\"<ext>\""),
+                            },
                         }
                         prop_count += 1;
                     }
@@ -922,9 +984,9 @@ pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, r
                     try result.appendSlice(allocator, "\"id\": ");
                     try result.writer(allocator).print("{d}", .{edge.id});
                     try result.appendSlice(allocator, ", \"source\": ");
-                    try result.writer(allocator).print("{d}", .{edge.source});
+                    try result.writer(allocator).print("{d}", .{edge.from_id});
                     try result.appendSlice(allocator, ", \"target\": ");
-                    try result.writer(allocator).print("{d}", .{edge.target});
+                    try result.writer(allocator).print("{d}", .{edge.to_id});
                     try result.append(allocator, '}');
                 },
                 .Null => try result.appendSlice(allocator, "null"),

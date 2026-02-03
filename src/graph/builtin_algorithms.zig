@@ -49,14 +49,14 @@ pub const BuiltinAlgorithms = struct {
             }
         }
 
-        const node_count = try self.graph.getNodeCount();
+        const node_count = self.graph.getNodeCount();
         var ranks = std.AutoHashMap(u64, f64).init(self.allocator);
         var new_ranks = std.AutoHashMap(u64, f64).init(self.allocator);
         defer new_ranks.deinit();
 
         // Initialize ranks
         const initial_rank = 1.0 / @as(f64, @floatFromInt(node_count));
-        var nodes = try self.graph.getAllNodes();
+        var nodes = try self.graph.getAllNodes(self.allocator);
         defer self.allocator.free(nodes);
 
         // Preload adjacency data for better cache performance
@@ -83,13 +83,13 @@ pub const BuiltinAlgorithms = struct {
                 var rank: f64 = (1.0 - damping_factor) / @as(f64, @floatFromInt(node_count));
 
                 // Get incoming edges with caching
-                const in_edges = try self.graph.getIncomingEdges(node);
+                const in_edges = try self.graph.getIncomingEdges(self.allocator, node);
                 defer self.allocator.free(in_edges);
 
                 for (in_edges) |edge| {
-                    const source_rank = ranks.get(edge.source) orelse initial_rank;
+                    const source_rank = ranks.get(edge.from_id) orelse initial_rank;
                     // Use cached degree if available
-                    const out_degree = try self.getDegreeCached(edge.source);
+                    const out_degree = try self.getDegreeCached(edge.from_id);
                     rank += damping_factor * source_rank / @as(f64, @floatFromInt(out_degree));
                 }
 
@@ -147,7 +147,7 @@ pub const BuiltinAlgorithms = struct {
 
         var centrality = std.AutoHashMap(u64, f64).init(self.allocator);
 
-        var nodes = try self.graph.getAllNodes();
+        var nodes = try self.graph.getAllNodes(self.allocator);
         defer self.allocator.free(nodes);
 
         // Preload adjacency data for large graphs
@@ -226,7 +226,7 @@ pub const BuiltinAlgorithms = struct {
                 try stack.append(v);
 
                 const v_dist = dist.get(v) orelse -1;
-                const neighbors = try self.graph.getNeighbors(v);
+                const neighbors = try self.graph.getNeighbors(self.allocator, v);
                 defer self.allocator.free(neighbors);
 
                 for (neighbors) |w| {
@@ -321,7 +321,7 @@ pub const BuiltinAlgorithms = struct {
         }
 
         var centrality = std.AutoHashMap(u64, f64).init(self.allocator);
-        const nodes = try self.graph.getAllNodes();
+        const nodes = try self.graph.getAllNodes(self.allocator);
         defer self.allocator.free(nodes);
 
         // Preload adjacency data
@@ -395,7 +395,7 @@ pub const BuiltinAlgorithms = struct {
             }
         }
 
-        const nodes = try self.graph.getAllNodes();
+        const nodes = try self.graph.getAllNodes(self.allocator);
         defer self.allocator.free(nodes);
 
         // Preload adjacency data for large graphs
@@ -474,7 +474,7 @@ pub const BuiltinAlgorithms = struct {
         resolution: f64,
         random_seed: ?u64,
     ) !std.AutoHashMap(u64, u64) {
-        const nodes = try self.graph.getAllNodes();
+        const nodes = try self.graph.getAllNodes(self.allocator);
         defer self.allocator.free(nodes);
 
         var communities = std.AutoHashMap(u64, u64).init(self.allocator);
@@ -504,7 +504,7 @@ pub const BuiltinAlgorithms = struct {
 
             for (shuffled) |node| {
                 const current_comm = node_to_comm.get(node) orelse continue;
-                const neighbors = try self.graph.getNeighbors(node);
+                const neighbors = try self.graph.getNeighbors(self.allocator, node);
                 defer self.allocator.free(neighbors);
 
                 // Find best community to move to
@@ -573,7 +573,7 @@ pub const BuiltinAlgorithms = struct {
         self: *BuiltinAlgorithms,
         max_iterations: u32,
     ) !std.AutoHashMap(u64, u64) {
-        const nodes = try self.graph.getAllNodes();
+        const nodes = try self.graph.getAllNodes(self.allocator);
         defer self.allocator.free(nodes);
 
         var labels = std.AutoHashMap(u64, u64).init(self.allocator);
@@ -590,7 +590,7 @@ pub const BuiltinAlgorithms = struct {
             changed = false;
 
             for (nodes) |node| {
-                const neighbors = try self.graph.getNeighbors(node);
+                const neighbors = try self.graph.getNeighbors(self.allocator, node);
                 defer self.allocator.free(neighbors);
 
                 if (neighbors.len == 0) continue;
@@ -700,13 +700,13 @@ pub const BuiltinAlgorithms = struct {
         _ = relationship_types;
         _ = direction;
 
-        const edges = try self.graph.getOutgoingEdges(node);
+        const edges = try self.graph.getOutgoingEdges(self.allocator, node);
         defer self.allocator.free(edges);
 
         var neighbors = try self.allocator.alloc(Neighbor, edges.len);
         for (edges, 0..) |edge, i| {
             neighbors[i] = .{
-                .node = edge.target,
+                .node = edge.to_id,
                 .edge = edge.id,
             };
         }
@@ -756,7 +756,7 @@ pub const BuiltinAlgorithms = struct {
         while (front < queue.items.len) : (front += 1) {
             const current = queue.items[front];
 
-            const neighbors = try self.graph.getNeighbors(current.node);
+            const neighbors = try self.graph.getNeighbors(self.allocator, current.node);
             defer self.allocator.free(neighbors);
 
             for (neighbors) |neighbor| {
@@ -769,7 +769,7 @@ pub const BuiltinAlgorithms = struct {
         }
 
         // Set unreachable nodes to max distance
-        const all_nodes = try self.graph.getAllNodes();
+        const all_nodes = try self.graph.getAllNodes(self.allocator);
         defer self.allocator.free(all_nodes);
 
         for (all_nodes) |node| {
@@ -807,7 +807,7 @@ pub const BuiltinAlgorithms = struct {
         const node_degree = try self.graph.getDegree(node);
         var to_comm_weight: f64 = 0;
 
-        const neighbors = try self.graph.getNeighbors(node);
+        const neighbors = try self.graph.getNeighbors(self.allocator, node);
         defer self.allocator.free(neighbors);
 
         for (neighbors) |neighbor| {
@@ -942,17 +942,17 @@ pub const BuiltinAlgorithms = struct {
         nodes: ?[]u64,
         direction: graph_exec.Direction,
     ) ![]CentralityResult {
-        const target_nodes = nodes orelse try self.graph.getAllNodes();
+        const target_nodes = nodes orelse try self.graph.getAllNodes(self.allocator);
         defer if (nodes == null) self.allocator.free(target_nodes);
 
         var results = std.ArrayList(CentralityResult){};
 
         for (target_nodes) |node| {
             const degree = switch (direction) {
-                .outgoing => try self.graph.getOutDegree(node),
+                .outgoing => self.graph.getOutDegree(node),
                 .incoming => try self.graph.getInDegree(node),
                 .both => blk: {
-                    const out = try self.graph.getOutDegree(node);
+                    const out = self.graph.getOutDegree(node);
                     const in = try self.graph.getInDegree(node);
                     break :blk out + in;
                 },
@@ -973,7 +973,7 @@ pub const BuiltinAlgorithms = struct {
         nodes: ?[]u64,
         normalized: bool,
     ) ![]CentralityResult {
-        const target_nodes = nodes orelse try self.graph.getAllNodes();
+        const target_nodes = nodes orelse try self.graph.getAllNodes(self.allocator);
         defer if (nodes == null) self.allocator.free(target_nodes);
 
         var results = std.ArrayList(CentralityResult){};
@@ -1019,7 +1019,7 @@ pub const BuiltinAlgorithms = struct {
         max_iterations: u32,
         tolerance: f64,
     ) ![]CentralityResult {
-        const nodes = try self.graph.getAllNodes();
+        const nodes = try self.graph.getAllNodes(self.allocator);
         defer self.allocator.free(nodes);
 
         const n = nodes.len;
@@ -1103,7 +1103,7 @@ pub const BuiltinAlgorithms = struct {
     //         self: *BuiltinAlgorithms,
     //         resolution: f64,
     //     ) ![]Community {
-    //         const nodes = try self.graph.getAllNodes();
+    //         const nodes = try self.graph.getAllNodes(self.allocator);
     //         defer self.allocator.free(nodes);
     //
     //         // Initialize each node in its own community
@@ -1128,7 +1128,7 @@ pub const BuiltinAlgorithms = struct {
     //                 var best_gain: f64 = 0;
     //
     //                 // Get neighbors
-    //                 const neighbors = try self.graph.getNeighbors(node);
+    //                 const neighbors = try self.graph.getNeighbors(self.allocator, node);
     //                 defer self.allocator.free(neighbors);
     //
     //                 // Try moving to each neighbor's community
@@ -1194,7 +1194,7 @@ pub const BuiltinAlgorithms = struct {
     //             var total_degree: u64 = 0;
     //
     //             for (community_node_list.items) |node| {
-    //                 const neighbors = try self.graph.getNeighbors(node);
+    //                 const neighbors = try self.graph.getNeighbors(self.allocator, node);
     //                 defer self.allocator.free(neighbors);
     //
     //                 total_degree += neighbors.len;
@@ -1335,7 +1335,7 @@ pub const BuiltinAlgorithms = struct {
         }
 
         // Cache miss - fetch and cache
-        const neighbors = try self.graph.getNeighbors(node);
+        const neighbors = try self.graph.getNeighbors(self.allocator, node);
         try self.cache.cacheNeighbors(node, neighbors);
         self.allocator.free(neighbors); // Original freed, cache holds copy
 
@@ -1349,7 +1349,7 @@ pub const BuiltinAlgorithms = struct {
         }
 
         // Cache miss - compute and cache
-        const neighbors = try self.graph.getNeighbors(node);
+        const neighbors = try self.graph.getNeighbors(self.allocator, node);
         defer self.allocator.free(neighbors);
         const degree = neighbors.len;
 
@@ -1363,7 +1363,7 @@ pub const BuiltinAlgorithms = struct {
             // Skip if already cached
             if (self.cache.getCachedNeighbors(node) != null) continue;
 
-            const neighbors = try self.graph.getNeighbors(node);
+            const neighbors = try self.graph.getNeighbors(self.allocator, node);
             try self.cache.cacheNeighbors(node, neighbors);
             try self.cache.cacheDegree(node, neighbors.len);
             self.allocator.free(neighbors);
@@ -1518,7 +1518,7 @@ pub const BuiltinAlgorithms = struct {
     //         while (front < queue.items.len) : (front += 1) {
     //             const current = queue.items[front];
     //
-    //             const neighbors = try self.graph.getNeighbors(current.node);
+    //             const neighbors = try self.graph.getNeighbors(self.allocator, current.node);
     //             defer self.allocator.free(neighbors);
     //
     //             for (neighbors) |neighbor| {
@@ -1546,11 +1546,11 @@ pub const BuiltinAlgorithms = struct {
     //         if (total_edges == 0) return 0;
     //
     //         const m = @as(f64, @floatFromInt(total_edges));
-    //         const node_degree = @as(f64, @floatFromInt((try self.graph.getNeighbors(node)).len));
+    //         const node_degree = @as(f64, @floatFromInt((try self.graph.getNeighbors(self.allocator, node)).len));
     //
     //         // Calculate sum of edges from node to nodes in to_community
     //         var edges_to_community: f64 = 0;
-    //         const neighbors = try self.graph.getNeighbors(node);
+    //         const neighbors = try self.graph.getNeighbors(self.allocator, node);
     //         defer self.allocator.free(neighbors);
     //
     //         for (neighbors) |neighbor| {
@@ -1566,7 +1566,7 @@ pub const BuiltinAlgorithms = struct {
     //         var it = communities.iterator();
     //         while (it.next()) |entry| {
     //             if (entry.value_ptr.* == to_community) {
-    //                 const degree = (try self.graph.getNeighbors(entry.key_ptr.*)).len;
+    //                 const degree = (try self.graph.getNeighbors(self.allocator, entry.key_ptr.*)).len;
     //                 self.allocator.free(degree);
     //                 community_degree += @as(f64, @floatFromInt(degree));
     //             }

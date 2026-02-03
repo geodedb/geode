@@ -116,21 +116,20 @@ fn createMockGraphWithVectors(allocator: std.mem.Allocator) !graph_common.GraphS
         &[_]f32{ 0.5, 0.0, 0.5 },
     };
 
+    var labels = [_][]const u8{"Document"};
     for (vectors, 1..) |vector, i| {
-        var properties = std.StringHashMap(graph_common.PropertyValue).init(allocator);
+        const node_id = try graph.createNode(&labels);
 
         // Create vector property
         const vector_data = try allocator.dupe(f32, vector);
-        try properties.put("embedding", .{ .VectorF32 = .{
+        try graph.setNodeProperty(node_id, "embedding", .{ .ExtValue = .{ .VectorF32 = .{
             .data = vector_data,
             .dim = @intCast(vector.len),
-        } });
-        try properties.put("name", .{ .String = try std.fmt.allocPrint(allocator, "node_{d}", .{i}) });
+        } } });
 
-        var labels = std.ArrayList([]const u8).init(allocator);
-        try labels.append("Document");
-
-        _ = try graph.addNode(@intCast(i), "Document", properties, labels);
+        const name = try std.fmt.allocPrint(allocator, "node_{d}", .{i});
+        defer allocator.free(name);
+        try graph.setNodeProperty(node_id, "name", .{ .String = name });
     }
 
     return graph;

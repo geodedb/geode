@@ -235,9 +235,8 @@ pub const UnionMetrics = struct {
 
 // Additional imports needed for ServerState (use geode module instead of relative imports)
 const geode = @import("geode");
-const protocol = geode.protocol;
 const execution = @import("../execution.zig");
-const mvcc = @import("txn/mvcc.zig");
+const mvcc = geode.server_mvcc;
 const query_plan_cache = @import("query_plan_cache.zig");
 const query_ast_cache = @import("query_ast_cache.zig");
 const txn_mgr = @import("txn");
@@ -250,30 +249,16 @@ const geode_auth = @import("geode_auth");
 pub const ServerState = struct {
     // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
     query_mem_limit_bytes: usize = 0,
-    last_columns: []const protocol.SchemaCol = &.{},
-    last_ordered: bool = false,
-    last_order_keys: []const []const u8 = &.{},
-    last_distinct: bool = false,
-    page_items: [][]const u8 = &.{}, // each: JSON row fragment {..}
-    page_index: usize = 0,
+    result_ordered: bool = false,
+    result_order_keys: []const []const u8 = &.{},
+    result_page_index: usize = 0,
     active_result: bool = false,
-    // Optional value-backed result set for streaming JSON serialization (avoids per-row JSON allocation).
+    // Optional value-backed result set for protobuf paging.
     active_result_values: ?execution.ExecutionResult = null,
-    // Inline RUN+PULL optimization flag for small results (suppresses next PULL response).
-    inline_pull_pending: bool = false,
-    inline_results_enabled: bool = false,
-    inline_results_max_rows: usize = 32,
-    // Internal suppression flag: when true, QUIC handler skips fallback response.
-    suppress_response: bool = false,
-    // Advisory diagnostic flags for current active result set (cleared after first page emission)
-    guard_trip: bool = false, // set when ExecutionGuardTrip occurred during evaluation
     // Transaction session state: single active txn baseline
     in_txn: bool = false,
     txn_id: u64 = 0,
     allocator: std.mem.Allocator,
-    // PROFILE mode staging: we emit SCHEMA immediately and defer PROFILE frame until first PULL.
-    profile_json: ?[]const u8 = null,
-    profile_flags: []const []const u8 = &.{},
     // Simulated spill counters (future: real spill logic). Populated from env vars GEODE_FORCE_*.
     spill_sort: usize = 0,
     spill_distinct: usize = 0,
@@ -308,6 +293,8 @@ pub const ServerState = struct {
 
     // Session management state
     session_config: ?SessionConfiguration = null,
+    // Execution session state (SESSION SET/RESET/CLOSE)
+    exec_session: ?execution.SessionState = null,
 
     // Index manager for managing database indexes
     index_manager_ptr: ?*anyopaque = null,
@@ -363,25 +350,17 @@ pub const ServerState = struct {
     current_graph: ?[]const u8 = null,
 
     pub fn resetResult(self: *ServerState) void {
-        // Free row fragments
-        var i: usize = 0;
-        while (i < self.page_items.len) : (i += 1) self.allocator.free(self.page_items[i]);
-        self.page_items = &.{};
-        self.page_index = 0;
-        self.active_result = false;
         if (self.active_result_values) |*res| {
             res.deinit(self.allocator);
             self.active_result_values = null;
         }
-        self.inline_pull_pending = false;
-        self.suppress_response = false;
-        self.last_columns = &.{};
-        self.last_order_keys = &.{};
-        self.last_ordered = false;
-        self.last_distinct = false;
-        if (self.profile_json) |pj| self.allocator.free(pj);
-        self.profile_json = null;
-        self.profile_flags = &.{};
+        for (self.result_order_keys) |key| {
+            self.allocator.free(key);
+        }
+        self.result_order_keys = &.{};
+        self.result_ordered = false;
+        self.result_page_index = 0;
+        self.active_result = false;
         if (self.query_text) |qt| self.allocator.free(qt);
         self.query_text = null;
     }

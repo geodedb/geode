@@ -13,6 +13,18 @@ const heap = geode.heap;
 const graph_storage = geode.graph_storage;
 const index_manager = geode.index_manager;
 
+fn toHeapVectorF32(vec: vector_types.VectorF32) heap.VectorF32 {
+    return .{ .dim = vec.dim, .data = vec.data };
+}
+
+fn toHeapVectorI32(vec: vector_types.VectorI32) heap.VectorI32 {
+    return .{ .dim = vec.dim, .data = vec.data };
+}
+
+fn toVectorF32(vec: heap.VectorF32) vector_types.VectorF32 {
+    return .{ .dim = vec.dim, .data = vec.data };
+}
+
 // Mock server state for testing
 const MockServerState = struct {
     allocator: std.mem.Allocator,
@@ -68,14 +80,11 @@ test "integration vector index population on CREATE INDEX" {
     }
 
     // Create nodes with VectorF32 properties
-    const node_id1 = try graph.createNode();
-    const node_id2 = try graph.createNode();
-    const node_id3 = try graph.createNode();
-
-    // Add labels to nodes
-    try graph.addNodeLabel(node_id1, "Document");
-    try graph.addNodeLabel(node_id2, "Document");
-    try graph.addNodeLabel(node_id3, "Person"); // Different label - should not be indexed
+    var doc_labels = [_][]const u8{"Document"};
+    var person_labels = [_][]const u8{"Person"};
+    const node_id1 = try graph.createNode(&doc_labels);
+    const node_id2 = try graph.createNode(&doc_labels);
+    const node_id3 = try graph.createNode(&person_labels); // Different label - should not be indexed
 
     // Create test vectors with different dimensions
     const vec1 = vector_types.VectorF32.fromSlice(&[_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0 });
@@ -83,9 +92,9 @@ test "integration vector index population on CREATE INDEX" {
     const vec3 = vector_types.VectorF32.fromSlice(&[_]f32{ 11.0, 12.0, 13.0, 14.0, 15.0 });
 
     // Add vector properties to nodes
-    try graph.setNodeProperty(node_id1, "embedding", heap.Value{ .VectorF32 = vec1 });
-    try graph.setNodeProperty(node_id2, "embedding", heap.Value{ .VectorF32 = vec2 });
-    try graph.setNodeProperty(node_id3, "embedding", heap.Value{ .VectorF32 = vec3 });
+    try graph.setNodeProperty(node_id1, "embedding", .{ .ExtValue = .{ .VectorF32 = toHeapVectorF32(vec1) } });
+    try graph.setNodeProperty(node_id2, "embedding", .{ .ExtValue = .{ .VectorF32 = toHeapVectorF32(vec2) } });
+    try graph.setNodeProperty(node_id3, "embedding", .{ .ExtValue = .{ .VectorF32 = toHeapVectorF32(vec3) } });
 
     // Create mock server state
     var server_state = MockServerState.init(allocator);
@@ -127,13 +136,17 @@ test "integration vector index population on CREATE INDEX" {
             for (create_stmt.properties) |prop_name| {
                 if (node.properties.get(prop_name)) |prop_value| {
                     switch (prop_value) {
-                        .VectorF32 => |vector| {
-                            // Use advanced vector index for vector_f32 type
-                            _ = idx_mgr.insertIntoAdvancedVectorIndex(create_stmt.name, vector, node_id) catch |err| {
-                                std.log.warn("Failed to insert vector into advanced index {s}: {}", .{ create_stmt.name, err });
-                            };
-                            population_count += 1;
-                            std.log.info("Added VectorF32 property to vector index: dim={d}, data_len={d}", .{ vector.dim, vector.data.len });
+                        .ExtValue => |ext| switch (ext) {
+                            .VectorF32 => |vector| {
+                                const vec = toVectorF32(vector);
+                                // Use advanced vector index for vector_f32 type
+                                _ = idx_mgr.insertIntoAdvancedVectorIndex(create_stmt.name, vec, node_id) catch |err| {
+                                    std.log.warn("Failed to insert vector into advanced index {s}: {}", .{ create_stmt.name, err });
+                                };
+                                population_count += 1;
+                                std.log.info("Added VectorF32 property to vector index: dim={d}, data_len={d}", .{ vector.dim, vector.data.len });
+                            },
+                            else => {},
                         },
                         else => {},
                     }
@@ -175,20 +188,17 @@ test "integration vector index population VectorI32 conversion" {
     }
 
     // Create nodes with VectorI32 properties
-    const node_id1 = try graph.createNode();
-    const node_id2 = try graph.createNode();
-
-    // Add labels to nodes
-    try graph.addNodeLabel(node_id1, "Feature");
-    try graph.addNodeLabel(node_id2, "Feature");
+    var feature_labels = [_][]const u8{"Feature"};
+    const node_id1 = try graph.createNode(&feature_labels);
+    const node_id2 = try graph.createNode(&feature_labels);
 
     // Create test integer vectors
     const vec1 = vector_types.VectorI32.fromSlice(&[_]i32{ 10, 20, 30 });
     const vec2 = vector_types.VectorI32.fromSlice(&[_]i32{ 40, 50, 60 });
 
     // Add vector properties to nodes
-    try graph.setNodeProperty(node_id1, "features", heap.Value{ .VectorI32 = vec1 });
-    try graph.setNodeProperty(node_id2, "features", heap.Value{ .VectorI32 = vec2 });
+    try graph.setNodeProperty(node_id1, "features", .{ .ExtValue = .{ .VectorI32 = toHeapVectorI32(vec1) } });
+    try graph.setNodeProperty(node_id2, "features", .{ .ExtValue = .{ .VectorI32 = toHeapVectorI32(vec2) } });
 
     // Create mock server state
     var server_state = MockServerState.init(allocator);
@@ -229,24 +239,27 @@ test "integration vector index population VectorI32 conversion" {
             for (create_stmt.properties) |prop_name| {
                 if (node.properties.get(prop_name)) |prop_value| {
                     switch (prop_value) {
-                        .VectorI32 => |vector| {
-                            // Convert VectorI32 to VectorF32 for HNSW indexing
-                            const f32_data = try allocator.alloc(f32, vector.dim);
-                            defer allocator.free(f32_data);
+                        .ExtValue => |ext| switch (ext) {
+                            .VectorI32 => |vector| {
+                                // Convert VectorI32 to VectorF32 for HNSW indexing
+                                const f32_data = try allocator.alloc(f32, vector.dim);
+                                defer allocator.free(f32_data);
 
-                            for (0..vector.dim) |i| {
-                                f32_data[i] = @floatFromInt(vector.data[i]);
-                            }
+                                for (0..vector.dim) |i| {
+                                    f32_data[i] = @floatFromInt(vector.data[i]);
+                                }
 
-                            // Create VectorF32 from converted data
-                            const f32_vector = vector_types.VectorF32.fromSlice(f32_data);
+                                // Create VectorF32 from converted data
+                                const f32_vector = vector_types.VectorF32.fromSlice(f32_data);
 
-                            // Insert into advanced vector index
-                            _ = idx_mgr.insertIntoAdvancedVectorIndex(create_stmt.name, f32_vector, node_id) catch |err| {
-                                std.log.warn("Failed to insert converted VectorI32 into advanced index {s}: {}", .{ create_stmt.name, err });
-                            };
-                            population_count += 1;
-                            std.log.info("Added VectorI32 property to vector index: dim={d}, data_len={d}", .{ vector.dim, vector.data.len });
+                                // Insert into advanced vector index
+                                _ = idx_mgr.insertIntoAdvancedVectorIndex(create_stmt.name, f32_vector, node_id) catch |err| {
+                                    std.log.warn("Failed to insert converted VectorI32 into advanced index {s}: {}", .{ create_stmt.name, err });
+                                };
+                                population_count += 1;
+                                std.log.info("Added VectorI32 property to vector index: dim={d}, data_len={d}", .{ vector.dim, vector.data.len });
+                            },
+                            else => {},
                         },
                         else => {},
                     }
@@ -293,12 +306,12 @@ test "integration vector index population dimension mismatch handling" {
     }
 
     // Create node with wrong dimension vector
-    const node_id = try graph.createNode();
-    try graph.addNodeLabel(node_id, "TestNode");
+    var labels = [_][]const u8{"TestNode"};
+    const node_id = try graph.createNode(&labels);
 
     // Create vector with wrong dimension (index expects 5D, vector is 3D)
     const wrong_dim_vec = vector_types.VectorF32.fromSlice(&[_]f32{ 1.0, 2.0, 3.0 });
-    try graph.setNodeProperty(node_id, "vector_prop", heap.Value{ .VectorF32 = wrong_dim_vec });
+    try graph.setNodeProperty(node_id, "vector_prop", .{ .ExtValue = .{ .VectorF32 = toHeapVectorF32(wrong_dim_vec) } });
 
     // Create mock server state
     var server_state = MockServerState.init(allocator);
@@ -337,14 +350,18 @@ test "integration vector index population dimension mismatch handling" {
             for (create_stmt.properties) |prop_name| {
                 if (node.properties.get(prop_name)) |prop_value| {
                     switch (prop_value) {
-                        .VectorF32 => |vector| {
-                            // This should fail due to dimension mismatch but not crash
-                            _ = idx_mgr.insertIntoAdvancedVectorIndex(create_stmt.name, vector, node_id_iter) catch |err| {
-                                // Expected error - log it and continue
-                                std.log.info("Expected dimension mismatch error: {}", .{err});
-                                continue; // Don't increment population_count
-                            };
-                            population_count += 1; // This should not execute
+                        .ExtValue => |ext| switch (ext) {
+                            .VectorF32 => |vector| {
+                                const vec = toVectorF32(vector);
+                                // This should fail due to dimension mismatch but not crash
+                                _ = idx_mgr.insertIntoAdvancedVectorIndex(create_stmt.name, vec, node_id_iter) catch |err| {
+                                    // Expected error - log it and continue
+                                    std.log.info("Expected dimension mismatch error: {}", .{err});
+                                    continue; // Don't increment population_count
+                                };
+                                population_count += 1; // This should not execute
+                            },
+                            else => {},
                         },
                         else => {},
                     }
@@ -381,14 +398,18 @@ test "integration vector index population performance" {
     const num_nodes = 50; // Reasonable number for test
     var node_ids: [num_nodes]u64 = undefined;
 
+    var labels = [_][]const u8{"DataPoint"};
     for (0..num_nodes) |i| {
-        node_ids[i] = try graph.createNode();
-        try graph.addNodeLabel(node_ids[i], "DataPoint");
+        node_ids[i] = try graph.createNode(&labels);
 
         // Create unique vector for each node
-        const vec_data = [_]f32{ @floatFromInt(i), @floatFromInt(i + 1), @floatFromInt(i + 2), @floatFromInt(i + 3) };
-        const vector = vector_types.VectorF32.fromSlice(&vec_data);
-        try graph.setNodeProperty(node_ids[i], "coordinates", heap.Value{ .VectorF32 = vector });
+        const vec_data = try allocator.alloc(f32, 4);
+        vec_data[0] = @floatFromInt(i);
+        vec_data[1] = @floatFromInt(i + 1);
+        vec_data[2] = @floatFromInt(i + 2);
+        vec_data[3] = @floatFromInt(i + 3);
+        const vector = vector_types.VectorF32.fromSlice(vec_data);
+        try graph.setNodeProperty(node_ids[i], "coordinates", .{ .ExtValue = .{ .VectorF32 = toHeapVectorF32(vector) } });
     }
 
     // Create mock server state
@@ -431,9 +452,13 @@ test "integration vector index population performance" {
             for (create_stmt.properties) |prop_name| {
                 if (node.properties.get(prop_name)) |prop_value| {
                     switch (prop_value) {
-                        .VectorF32 => |vector| {
-                            try idx_mgr.insertIntoAdvancedVectorIndex(create_stmt.name, vector, node_id);
-                            population_count += 1;
+                        .ExtValue => |ext| switch (ext) {
+                            .VectorF32 => |vector| {
+                                const vec = toVectorF32(vector);
+                                try idx_mgr.insertIntoAdvancedVectorIndex(create_stmt.name, vec, node_id);
+                                population_count += 1;
+                            },
+                            else => {},
                         },
                         else => {},
                     }
@@ -484,24 +509,19 @@ test "integration vector index population mixed data types" {
     }
 
     // Create nodes with different property types
-    const node_id1 = try graph.createNode();
-    const node_id2 = try graph.createNode();
-    const node_id3 = try graph.createNode();
-    const node_id4 = try graph.createNode();
-
-    // Add same label to all nodes
-    try graph.addNodeLabel(node_id1, "MixedData");
-    try graph.addNodeLabel(node_id2, "MixedData");
-    try graph.addNodeLabel(node_id3, "MixedData");
-    try graph.addNodeLabel(node_id4, "MixedData");
+    var labels = [_][]const u8{"MixedData"};
+    const node_id1 = try graph.createNode(&labels);
+    const node_id2 = try graph.createNode(&labels);
+    const node_id3 = try graph.createNode(&labels);
+    const node_id4 = try graph.createNode(&labels);
 
     // Create different property types with same property name
     const vector_prop = vector_types.VectorF32.fromSlice(&[_]f32{ 1.0, 2.0, 3.0 });
 
-    try graph.setNodeProperty(node_id1, "data", heap.Value{ .VectorF32 = vector_prop });
-    try graph.setNodeProperty(node_id2, "data", heap.Value{ .String = "not a vector" });
-    try graph.setNodeProperty(node_id3, "data", heap.Value{ .Int = 42 });
-    try graph.setNodeProperty(node_id4, "data", heap.Value{ .Bool = true });
+    try graph.setNodeProperty(node_id1, "data", .{ .ExtValue = .{ .VectorF32 = toHeapVectorF32(vector_prop) } });
+    try graph.setNodeProperty(node_id2, "data", .{ .String = "not a vector" });
+    try graph.setNodeProperty(node_id3, "data", .{ .Int = 42 });
+    try graph.setNodeProperty(node_id4, "data", .{ .Bool = true });
 
     // Create mock server state
     var server_state = MockServerState.init(allocator);
@@ -540,13 +560,17 @@ test "integration vector index population mixed data types" {
             for (create_stmt.properties) |prop_name| {
                 if (node.properties.get(prop_name)) |prop_value| {
                     switch (prop_value) {
-                        .VectorF32 => |vector| {
-                            try idx_mgr.insertIntoAdvancedVectorIndex(create_stmt.name, vector, node_id);
-                            population_count += 1;
+                        .ExtValue => |ext| switch (ext) {
+                            .VectorF32 => |vector| {
+                                const vec = toVectorF32(vector);
+                                try idx_mgr.insertIntoAdvancedVectorIndex(create_stmt.name, vec, node_id);
+                                population_count += 1;
+                            },
+                            else => {
+                                // Non-vector properties should be skipped
+                            },
                         },
-                        else => {
-                            // Non-vector properties should be skipped
-                        },
+                        else => {},
                     }
                 }
             }
@@ -582,17 +606,15 @@ test "TestCANARY_REQ_VECTOR_INDEX_POPULATION_INTEGRATION_001" {
     }
 
     // Create test data similar to real-world usage
-    const doc_id1 = try graph.createNode();
-    const doc_id2 = try graph.createNode();
-
-    try graph.addNodeLabel(doc_id1, "Document");
-    try graph.addNodeLabel(doc_id2, "Document");
+    var doc_labels = [_][]const u8{"Document"};
+    const doc_id1 = try graph.createNode(&doc_labels);
+    const doc_id2 = try graph.createNode(&doc_labels);
 
     const embedding1 = vector_types.VectorF32.fromSlice(&[_]f32{ 0.1, 0.2, 0.3, 0.4, 0.5 });
     const embedding2 = vector_types.VectorF32.fromSlice(&[_]f32{ 0.6, 0.7, 0.8, 0.9, 1.0 });
 
-    try graph.setNodeProperty(doc_id1, "text_embedding", heap.Value{ .VectorF32 = embedding1 });
-    try graph.setNodeProperty(doc_id2, "text_embedding", heap.Value{ .VectorF32 = embedding2 });
+    try graph.setNodeProperty(doc_id1, "text_embedding", .{ .ExtValue = .{ .VectorF32 = toHeapVectorF32(embedding1) } });
+    try graph.setNodeProperty(doc_id2, "text_embedding", .{ .ExtValue = .{ .VectorF32 = toHeapVectorF32(embedding2) } });
 
     // Create mock server state and index manager
     var server_state = MockServerState.init(allocator);
@@ -630,9 +652,13 @@ test "TestCANARY_REQ_VECTOR_INDEX_POPULATION_INTEGRATION_001" {
             for (create_stmt.properties) |prop_name| {
                 if (node.properties.get(prop_name)) |prop_value| {
                     switch (prop_value) {
-                        .VectorF32 => |vector| {
-                            try idx_mgr.insertIntoAdvancedVectorIndex(create_stmt.name, vector, node_id);
-                            population_count += 1;
+                        .ExtValue => |ext| switch (ext) {
+                            .VectorF32 => |vector| {
+                                const vec = toVectorF32(vector);
+                                try idx_mgr.insertIntoAdvancedVectorIndex(create_stmt.name, vec, node_id);
+                                population_count += 1;
+                            },
+                            else => {},
                         },
                         else => {},
                     }

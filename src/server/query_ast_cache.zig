@@ -1,6 +1,6 @@
 const std = @import("std");
 const geode = @import("geode");
-const token = @import("../gql/token.zig");
+const token = geode.gql.token;
 
 // CANARY: REQ=REQ-PERF-AST-CACHE-001; FEATURE="QueryASTCache"; ASPECT=ParseHotPath; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
 /// Cache parsed ASTs keyed by query text and parse options to avoid repeat parsing.

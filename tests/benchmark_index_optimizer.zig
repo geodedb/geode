@@ -41,16 +41,17 @@ fn createBenchmarkGraph(allocator: std.mem.Allocator, node_count: usize) !graph_
     var graph = graph_common.GraphStorage.init(allocator);
 
     // Add nodes with varying properties
+    var labels = [_][]const u8{"Person"};
     var i: usize = 0;
     while (i < node_count) : (i += 1) {
-        try graph.addNode(allocator, i, &[_][]const u8{"Person"});
+        const node_id = try graph.createNode(&labels);
 
         // Add name property with pattern
         const name = if (i % 10 == 0) "Alice" else "Other";
-        try graph.setNodeProperty(i, "name", .{ .String = name });
+        try graph.setNodeProperty(node_id, "name", .{ .String = name });
 
         // Add age property
-        try graph.setNodeProperty(i, "age", .{ .Int = @intCast(20 + (i % 50)) });
+        try graph.setNodeProperty(node_id, "age", .{ .Int = @intCast(20 + (i % 50)) });
     }
 
     return graph;

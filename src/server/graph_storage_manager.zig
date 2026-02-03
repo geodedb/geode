@@ -1,6 +1,8 @@
 const std = @import("std");
-const graph_exec = @import("graph/exec.zig");
-const audit = @import("../security/audit.zig");
+const geode = @import("geode");
+const graph_exec = geode.graph_exec;
+const graph_store = geode.graph_store;
+const audit = geode.security.audit;
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-013; FEATURE="Structured Logging"; ASPECT=GraphStorageManager; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -8,301 +10,55 @@ const log = logging.scoped("server");
 const Attr = logging.Attr;
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-005; FEATURE="ServerRefactoring"; ASPECT=GRAPH_STORAGE; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-12
-// CANARY: REQ=REQ-MULTI-GRAPH-002; FEATURE="MultiGraphSupport"; ASPECT=PerGraphStorage; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-20
-// Phase 3 M3.1 - Graph Storage Management Module (Incremental Extraction)
-// Extended to support multiple named graphs with per-graph storage
-
+// CANARY: REQ=REQ-MULTI-GRAPH-002; FEATURE="MultiGraphSupport"; ASPECT=GraphRegistry; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2026-02-03
 /// Default graph name used when no graph is selected
 pub const DEFAULT_GRAPH_NAME = "default";
 
-/// Global graph storage singleton (legacy - now points to default graph)
-var g_graph_storage: ?*graph_exec.GraphStorage = null;
-/// Global data directory for persistence
-var g_data_dir: ?[]const u8 = null;
-/// Per-graph storage map (graph_name -> GraphStorage)
-var g_graph_storages: ?std.StringHashMap(*graph_exec.GraphStorage) = null;
-/// Allocator for graph storage map
+/// Allocator for graph storage manager operations
 var g_allocator: ?std.mem.Allocator = null;
+/// Global data directory for persistence (mirrors GEODE_DATA_DIR)
+var g_data_dir: ?[]u8 = null;
+/// Dedicated allocator for global state (avoids page_allocator)
+var g_state_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var g_state_inited = false;
 /// Global audit logger (optional)
 var g_audit_logger: ?*audit.AuditLogger = null;
+
+fn getStateAllocator() std.mem.Allocator {
+    if (!g_state_inited) {
+        g_state_inited = true;
+    }
+    return g_state_gpa.allocator();
+}
+
+fn ensureAllocator() std.mem.Allocator {
+    if (g_allocator) |alloc| return alloc;
+    const alloc = getStateAllocator();
+    g_allocator = alloc;
+    return alloc;
+}
 
 /// Set the global audit logger for new graph storages
 pub fn setAuditLogger(logger: *audit.AuditLogger) void {
     g_audit_logger = logger;
-}
-
-/// Get or create the global graph storage instance
-/// Attempts to load from persistent storage if data directory is set
-/// Falls back to creating new graph with sample data
-pub fn getOrCreateGraphStorage(allocator: std.mem.Allocator) *graph_exec.GraphStorage {
-    log.debug("getOrCreateGraphStorage called", &.{Attr.string("g_graph_storage", if (g_graph_storage == null) "null" else "set")});
-    if (g_graph_storage) |graph| {
-        log.debug("Returning existing graph", &.{Attr.int("nodes", @intCast(graph.nodes.count()))});
-        return graph;
-    }
-
-    // Try to load from persistent data first if data directory is available
-    if (g_data_dir) |data_dir| {
-        if (tryLoadGraphFromDir(allocator, data_dir)) |loaded_graph| {
-            log.debug("Loaded graph from persistent data", &.{ Attr.int("nodes", @intCast(loaded_graph.nodes.count())), Attr.int("edges", @intCast(loaded_graph.edges.items.len)) });
-            g_graph_storage = loaded_graph;
-            return loaded_graph;
-        } else |err| {
-            log.debug("Failed to load graph from persistent data", &.{Attr.string("error", @errorName(err))});
-            // Loading failed, continue to create new graph
-        }
-    } else {
-        log.debug("No data directory available for persistence", &.{});
-    }
-
-    // Create new graph and initialize with sample data if no persistent data
-    const graph = allocator.create(graph_exec.GraphStorage) catch unreachable;
-    graph.* = graph_exec.GraphStorage.init(allocator, g_audit_logger);
-    initializeSampleGraph(allocator, graph) catch {};
-    g_graph_storage = graph;
-    return graph;
-}
-
-/// Get the next available node ID by finding max existing ID + 1
-pub fn getNextNodeId(graph: *graph_exec.GraphStorage) graph_exec.NodeId {
-    var max_id: graph_exec.NodeId = 0;
-    var iterator = graph.nodes.iterator();
-    while (iterator.next()) |entry| {
-        if (entry.key_ptr.* > max_id) {
-            max_id = entry.key_ptr.*;
-        }
-    }
-    return max_id + 1;
-}
-
-/// Try to load graph from persistent storage directory
-/// Reads nodes.jsonl and edges.jsonl in JSON Lines format
-/// Returns newly allocated GraphStorage on success
-pub fn tryLoadGraphFromDir(allocator: std.mem.Allocator, dir_path: []const u8) !*graph_exec.GraphStorage {
-    const g = allocator.create(graph_exec.GraphStorage) catch return error.OutOfMemory;
-    g.* = graph_exec.GraphStorage.init(allocator, g_audit_logger);
-    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
-    defer dir.close();
-    // nodes.jsonl and edges.jsonl simple line-delimited json
-    // GAP-0117 SECURITY FIX: JSON parsing with proper limits and error logging
-    // Note: max_depth is controlled via Scanner, not ParseOptions in std.json
-
-    if (dir.openFile("nodes.jsonl", .{})) |nf| {
-        defer nf.close();
-        const content = try nf.readToEndAlloc(allocator, 1024 * 1024 * 10); // 10MB max
-        defer allocator.free(content);
-        var lines = std.mem.tokenizeScalar(u8, content, '\n');
-        while (lines.next()) |line| {
-            // GAP-0117: Add error logging instead of silent continue
-            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch |err| {
-                log.warn("JSON parse error in nodes.jsonl", &.{Attr.string("error", @errorName(err))});
-                continue;
-            };
-            defer parsed.deinit();
-            if (parsed.value != .object) continue;
-            const obj = parsed.value.object;
-            const idv = obj.get("id") orelse continue;
-            const id: u64 = switch (idv) {
-                .integer => |iv| @intCast(iv),
-                else => 0,
-            };
-            if (id == 0) continue;
-            var labels: []const []const u8 = &.{};
-            if (obj.get("labels")) |lv| if (lv == .array) {
-                const arr = lv.array.items;
-                var tmp = try allocator.alloc([]const u8, arr.len);
-                var i: usize = 0;
-                while (i < arr.len) : (i += 1) tmp[i] = if (arr[i] == .string) arr[i].string else "";
-                labels = tmp;
-            };
-            try g.addNode(allocator, id, labels);
-            if (obj.get("properties")) |pv| {
-                if (pv == .object) {
-                    var it = pv.object.iterator();
-                    while (it.next()) |e| {
-                        const key = e.key_ptr.*;
-                        const val = e.value_ptr.*;
-                        const pv2: graph_exec.PropertyValue = switch (val) {
-                            .null => .{ .Null = {} },
-                            .bool => |b| .{ .Bool = b },
-                            .integer => |n| .{ .Int = @intCast(n) },
-                            .string => |s| .{ .String = allocator.dupe(u8, s) catch s },
-                            else => .{ .Null = {} },
-                        };
-                        g.setNodeProperty(allocator, id, key, pv2) catch {};
-                    }
-                }
-            }
-        }
-    } else |_| {}
-    if (dir.openFile("edges.jsonl", .{})) |ef| {
-        defer ef.close();
-        const content = try ef.readToEndAlloc(allocator, 1024 * 1024 * 10); // 10MB max
-        defer allocator.free(content);
-        var lines = std.mem.tokenizeScalar(u8, content, '\n');
-        while (lines.next()) |line| {
-            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch continue;
-            defer parsed.deinit();
-            if (parsed.value != .object) continue;
-            const obj = parsed.value.object;
-            const sv = obj.get("source") orelse continue;
-            const tv = obj.get("target") orelse continue;
-            const tyv = obj.get("type") orelse continue;
-            const sid: u64 = switch (sv) {
-                .integer => |iv| @intCast(iv),
-                else => 0,
-            };
-            const tid: u64 = switch (tv) {
-                .integer => |iv| @intCast(iv),
-                else => 0,
-            };
-            const ety: []const u8 = switch (tyv) {
-                .string => |s| s,
-                else => "",
-            };
-            if (sid == 0 or tid == 0) continue;
-            const eid = try g.addEdge(allocator, sid, tid, ety);
-            if (obj.get("properties")) |pv| {
-                if (pv == .object) {
-                    var it = pv.object.iterator();
-                    while (it.next()) |e| {
-                        const key = e.key_ptr.*;
-                        const val = e.value_ptr.*;
-                        const pv2: graph_exec.PropertyValue = switch (val) {
-                            .null => .{ .Null = {} },
-                            .bool => |b| .{ .Bool = b },
-                            .integer => |n| .{ .Int = @intCast(n) },
-                            .string => |s| .{ .String = allocator.dupe(u8, s) catch s },
-                            else => .{ .Null = {} },
-                        };
-                        g.setEdgeProperty(allocator, @intCast(eid), key, pv2) catch {};
-                    }
-                }
-            }
-        }
-    } else |_| {}
-    return g;
-}
-
-/// Save graph to persistent storage directory
-/// Writes nodes.jsonl and edges.jsonl in JSON Lines format
-pub fn saveGraphToDir(allocator: std.mem.Allocator, g: *const graph_exec.GraphStorage, dir_path: []const u8) void {
-    // Create directory with error handling
-    std.fs.cwd().makePath(dir_path) catch |err| {
-        log.warn("Failed to create directory", &.{ Attr.string("path", dir_path), Attr.string("error", @errorName(err)) });
-        return;
-    };
-
-    // Save nodes with comprehensive error handling
-    const nodes_path = std.mem.concat(allocator, u8, &.{ dir_path, "/nodes.jsonl" }) catch {
-        log.warn("Failed to allocate nodes path", &.{});
-        return;
-    };
-    defer allocator.free(nodes_path);
-
-    var nodes_content = std.ArrayList(u8).initCapacity(allocator, 0) catch {
-        log.warn("Failed to allocate nodes content buffer", &.{});
-        return;
-    };
-    defer nodes_content.deinit(allocator);
-
-    var node_count: usize = 0;
-    var it = g.nodes.iterator();
-    while (it.next()) |entry| {
-        node_count += 1;
-        const node = entry.value_ptr.*;
-
-        // Validate node structure before processing
-        if (node_count > 10000) {
-            log.warn("Too many nodes, stopping save", &.{Attr.int("node_count", @intCast(node_count))});
-            break;
-        }
-
-        std.fmt.format(nodes_content.writer(allocator), "{{\"id\":{d},\"labels\":[", .{node.id}) catch continue;
-
-        // Safe label processing with validation
-        if (node.labels.len > 0 and node.labels.len < 100) { // Reasonable label count limit
-            for (node.labels, 0..) |label, li| {
-                if (li > 0) nodes_content.appendSlice(allocator, ",") catch continue;
-
-                // Validate label string
-                if (label.len > 0 and label.len < 256) { // Reasonable label length
-                    std.fmt.format(nodes_content.writer(allocator), "\"{s}\"", .{label}) catch {
-                        nodes_content.appendSlice(allocator, "\"\"") catch continue;
-                    };
-                } else {
-                    nodes_content.appendSlice(allocator, "\"\"") catch continue;
-                }
-            }
-        }
-        nodes_content.appendSlice(allocator, "],\"properties\":{") catch {};
-        var pit = node.properties.iterator();
-        var firstp = true;
-        while (pit.next()) |p| {
-            if (!firstp) nodes_content.appendSlice(allocator, ",") catch {} else firstp = false;
-            const k = p.key_ptr.*;
-            const v = p.value_ptr.*;
-            std.fmt.format(nodes_content.writer(allocator), "\"{s}\":", .{k}) catch {};
-            switch (v) {
-                .Null => nodes_content.appendSlice(allocator, "null") catch {},
-                .Bool => |b| std.fmt.format(nodes_content.writer(allocator), "{}", .{b}) catch {},
-                .Int => |iv| std.fmt.format(nodes_content.writer(allocator), "{d}", .{iv}) catch {},
-                .String => |s| std.fmt.format(nodes_content.writer(allocator), "\"{s}\"", .{s}) catch {},
-                .Decimal => nodes_content.appendSlice(allocator, "null") catch {},
-                .VectorF32 => |vec| std.fmt.format(nodes_content.writer(allocator), "\"[vector:{d}x{d}]\"", .{ vec.dim, vec.data.len }) catch {},
-            }
-        }
-        nodes_content.appendSlice(allocator, "}}\n") catch {};
-    }
-
-    std.fs.cwd().writeFile(.{ .sub_path = nodes_path, .data = nodes_content.items }) catch {};
-
-    // Save edges
-    const edges_path = std.mem.concat(allocator, u8, &.{ dir_path, "/edges.jsonl" }) catch return;
-    defer allocator.free(edges_path);
-
-    var edges_content = std.ArrayList(u8).initCapacity(allocator, 0) catch return;
-    defer edges_content.deinit(allocator);
-
-    var i: usize = 0;
-    while (i < g.edges.items.len) : (i += 1) {
-        const e = g.edges.items[i];
-        std.fmt.format(edges_content.writer(allocator), "{{\"source\":{d},\"target\":{d},\"type\":\"{s}\",\"properties\":{{}}}}\n", .{ e.source, e.target, e.edge_type }) catch {};
-    }
-
-    std.fs.cwd().writeFile(.{ .sub_path = edges_path, .data = edges_content.items }) catch {};
-}
-
-/// Initialize graph with sample data (3 Person nodes with relationships)
-/// Used when no persistent storage is available
-pub fn initializeSampleGraph(allocator: std.mem.Allocator, graph: *graph_exec.GraphStorage) !void {
-    // Add sample nodes
-    try graph.addNode(allocator, 1, &.{"Person"});
-    try graph.setNodeProperty(allocator, 1, "name", .{ .String = "Alice" });
-    try graph.setNodeProperty(allocator, 1, "age", .{ .Int = 30 });
-
-    try graph.addNode(allocator, 2, &.{"Person"});
-    try graph.setNodeProperty(allocator, 2, "name", .{ .String = "Bob" });
-    try graph.setNodeProperty(allocator, 2, "age", .{ .Int = 25 });
-
-    try graph.addNode(allocator, 3, &.{"Person"});
-    try graph.setNodeProperty(allocator, 3, "name", .{ .String = "Charlie" });
-    try graph.setNodeProperty(allocator, 3, "age", .{ .Int = 35 });
-
-    // Add sample edges
-    const e1 = try graph.addEdge(allocator, 1, 2, "KNOWS");
-    try graph.setEdgeProperty(allocator, e1, "since", .{ .Int = 2020 });
-
-    const e2 = try graph.addEdge(allocator, 2, 3, "KNOWS");
-    try graph.setEdgeProperty(allocator, e2, "since", .{ .Int = 2021 });
-
-    const e3 = try graph.addEdge(allocator, 1, 3, "WORKS_WITH");
-    try graph.setEdgeProperty(allocator, e3, "department", .{ .String = "Engineering" });
+    // GraphStore no longer accepts audit logger directly; keep for API compatibility.
 }
 
 /// Set the global data directory for persistence
 pub fn setDataDir(dir: ?[]const u8) void {
-    g_data_dir = dir;
+    const allocator = ensureAllocator();
+
+    if (g_data_dir) |existing| {
+        allocator.free(existing);
+        g_data_dir = null;
+    }
+
+    if (dir) |path| {
+        g_data_dir = allocator.dupe(u8, path) catch null;
+    }
+
+    // Also set the override in graph_store so persistence uses the correct path
+    graph_store.setDataDirOverride(allocator, dir);
 }
 
 /// Get the global data directory
@@ -310,157 +66,87 @@ pub fn getDataDir() ?[]const u8 {
     return g_data_dir;
 }
 
-/// Get the current graph storage instance (may be null)
+/// Get or create the global graph storage instance
+pub fn getOrCreateGraphStorage(allocator: std.mem.Allocator) *graph_exec.GraphStorage {
+    g_allocator = allocator;
+    _ = g_audit_logger; // retained for API compatibility
+    return graph_store.getGlobalStore(allocator);
+}
+
+/// Get the current graph storage instance (always available once initialized)
 pub fn getCurrentGraphStorage() ?*graph_exec.GraphStorage {
-    return g_graph_storage;
+    const allocator = ensureAllocator();
+    return graph_store.getGlobalStore(allocator);
 }
 
 /// Clear the global graph storage instance (for testing)
 pub fn clearGraphStorage() void {
-    g_graph_storage = null;
+    // Only clear if there's an existing store - don't create one just to clear it
+    if (graph_store.getCurrentGlobalStore()) |store| {
+        store.clearNodes();
+        store.clearGraphRegistry();
+        store.dirty = true;
+    }
 }
 
-/// Clear the multi-graph storage map (for testing)
-/// This resets the global state so tests start fresh
+/// Clear the multi-graph storage state (for testing)
+/// GraphStore uses a single unified store, so this is equivalent to clearGraphStorage.
 pub fn clearMultiGraphStorage() void {
-    if (g_graph_storages) |*storages| {
-        // Free all graph storages and their keys
-        if (g_allocator) |alloc| {
-            var it = storages.iterator();
-            while (it.next()) |entry| {
-                entry.value_ptr.*.deinit();
-                alloc.destroy(entry.value_ptr.*);
-                alloc.free(entry.key_ptr.*);
-            }
-        }
-        storages.deinit();
-    }
-    g_graph_storages = null;
-    g_allocator = null;
+    clearGraphStorage();
 }
 
 // ============================================================================
-// Multi-Graph Storage Support
+// Multi-Graph Storage Support (GraphStore-backed)
 // ============================================================================
 
-/// Initialize the multi-graph storage system
-/// Must be called before using getGraphStorageByName or createGraphStorage
+/// Initialize the graph storage system
 pub fn initMultiGraphStorage(allocator: std.mem.Allocator) void {
-    if (g_graph_storages == null) {
-        g_allocator = allocator;
-        g_graph_storages = std.StringHashMap(*graph_exec.GraphStorage).init(allocator);
-
-        // Register the default graph (created by getOrCreateGraphStorage)
-        if (g_graph_storage) |default_storage| {
-            const name_copy = allocator.dupe(u8, DEFAULT_GRAPH_NAME) catch return;
-            g_graph_storages.?.put(name_copy, default_storage) catch {};
-        }
-    }
+    g_allocator = allocator;
+    _ = graph_store.getGlobalStore(allocator);
 }
 
 /// Get graph storage by name
-/// Returns the storage for the specified graph, or the default graph if name is null
-/// Returns null if the graph doesn't exist
+/// Returns the storage if the graph exists; null otherwise
 pub fn getGraphStorageByName(name: ?[]const u8) ?*graph_exec.GraphStorage {
+    const allocator = ensureAllocator();
     const graph_name = name orelse DEFAULT_GRAPH_NAME;
-
-    // Check multi-graph storage first
-    if (g_graph_storages) |storages| {
-        if (storages.get(graph_name)) |storage| {
-            return storage;
-        }
-    }
-
-    // Fall back to default for legacy compatibility
-    if (std.mem.eql(u8, graph_name, DEFAULT_GRAPH_NAME)) {
-        return g_graph_storage;
-    }
-
-    return null;
+    const store = graph_store.getGlobalStore(allocator);
+    if (!store.graphExists(graph_name)) return null;
+    return store;
 }
 
-/// Create a new empty graph storage with the given name
+/// Create a new empty graph with the given name
 /// Returns error if graph already exists
 pub fn createGraphStorage(allocator: std.mem.Allocator, name: []const u8) !*graph_exec.GraphStorage {
-    log.debug("createGraphStorage called", &.{
-        Attr.string("name", name),
-    });
-
-    // Initialize multi-graph storage if needed
-    if (g_graph_storages == null) {
-        log.debug("createGraphStorage: initializing multi-graph storage", &.{});
-        initMultiGraphStorage(allocator);
-    }
-
-    // Check if graph already exists
-    if (g_graph_storages) |storages| {
-        log.debug("createGraphStorage: checking if graph exists", &.{
-            Attr.int("entries", @intCast(storages.count())),
-        });
-        if (storages.contains(name)) {
-            log.debug("createGraphStorage: graph already exists", &.{
-                Attr.string("name", name),
-            });
-            return error.GraphAlreadyExists;
-        }
-    }
-
-    // Create new empty graph storage
-    const graph = try allocator.create(graph_exec.GraphStorage);
-    graph.* = graph_exec.GraphStorage.init(allocator, g_audit_logger);
-
-    // Register in multi-graph storage
-    if (g_graph_storages) |*storages| {
-        const name_copy = try allocator.dupe(u8, name);
-        try storages.put(name_copy, graph);
-        log.debug("createGraphStorage: added to storage", &.{
-            Attr.string("name", name),
-            Attr.int("entries", @intCast(storages.count())),
-        });
-    }
-
-    log.debug("createGraphStorage: SUCCESS", &.{
-        Attr.string("name", name),
-    });
-    return graph;
+    g_allocator = allocator;
+    const store = graph_store.getGlobalStore(allocator);
+    try store.createGraph(name);
+    return store;
 }
 
 /// Check if a graph exists
 pub fn graphExists(name: []const u8) bool {
-    if (g_graph_storages) |storages| {
-        return storages.contains(name);
-    }
-    return std.mem.eql(u8, name, DEFAULT_GRAPH_NAME) and g_graph_storage != null;
+    const allocator = ensureAllocator();
+    const store = graph_store.getGlobalStore(allocator);
+    return store.graphExists(name);
 }
 
-/// List all graph names
+/// List all graph names (caller owns returned strings)
 pub fn listGraphNames(allocator: std.mem.Allocator) ![][]const u8 {
-    log.debug("listGraphNames called", &.{});
-    var names = try std.ArrayList([]const u8).initCapacity(allocator, 32);
-    errdefer names.deinit(allocator);
+    const store = graph_store.getGlobalStore(allocator);
+    const names = try store.listGraphNames(allocator);
 
-    if (g_graph_storages) |storages| {
-        log.debug("listGraphNames: has entries", &.{
-            Attr.int("count", @intCast(storages.count())),
-        });
-        var it = storages.keyIterator();
-        while (it.next()) |key| {
-            log.debug("listGraphNames: listing", &.{
-                Attr.string("name", key.*),
-            });
-            try names.append(allocator, try allocator.dupe(u8, key.*));
-        }
-    } else if (g_graph_storage != null) {
-        log.debug("listGraphNames: using default", &.{});
-        try names.append(allocator, try allocator.dupe(u8, DEFAULT_GRAPH_NAME));
-    } else {
-        log.debug("listGraphNames: no storages", &.{});
+    var out = try allocator.alloc([]const u8, names.len);
+    errdefer {
+        for (out) |name| allocator.free(name);
+        allocator.free(out);
     }
 
-    log.debug("listGraphNames returning", &.{
-        Attr.int("count", @intCast(names.items.len)),
-    });
-    return names.toOwnedSlice(allocator);
+    for (names, 0..) |name, i| {
+        out[i] = try allocator.dupe(u8, name);
+    }
+
+    return out;
 }
 
 // GAP-0139: SHOW TABLES implementation helper
@@ -471,44 +157,20 @@ pub fn listNodeLabels(allocator: std.mem.Allocator) ![][]const u8 {
     var label_set = std.StringHashMap(void).init(allocator);
     defer label_set.deinit();
 
-    // Collect labels from all graphs
-    if (g_graph_storages) |storages| {
-        var it = storages.valueIterator();
-        while (it.next()) |storage_ptr| {
-            // Dereference the pointer to GraphStorage
-            const storage = storage_ptr.*;
-            // Iterate over all nodes in this graph storage
-            var node_it = storage.nodes.iterator();
-            while (node_it.next()) |entry| {
-                const node = entry.value_ptr.*;
-                for (node.labels) |label| {
-                    // Use put to track unique labels
-                    const label_copy = try allocator.dupe(u8, label);
-                    errdefer allocator.free(label_copy);
-                    const result = try label_set.getOrPut(label_copy);
-                    if (result.found_existing) {
-                        // Already have this label, free the copy
-                        allocator.free(label_copy);
-                    }
-                }
-            }
-        }
-    } else if (g_graph_storage) |storage| {
-        var node_it = storage.nodes.iterator();
-        while (node_it.next()) |entry| {
-            const node = entry.value_ptr.*;
-            for (node.labels) |label| {
-                const label_copy = try allocator.dupe(u8, label);
-                errdefer allocator.free(label_copy);
-                const result = try label_set.getOrPut(label_copy);
-                if (result.found_existing) {
-                    allocator.free(label_copy);
-                }
+    const store = graph_store.getGlobalStore(allocator);
+    var node_it = store.nodes.iterator();
+    while (node_it.next()) |entry| {
+        const node = entry.value_ptr.*;
+        for (node.labels) |label| {
+            const label_copy = try allocator.dupe(u8, label);
+            errdefer allocator.free(label_copy);
+            const result = try label_set.getOrPut(label_copy);
+            if (result.found_existing) {
+                allocator.free(label_copy);
             }
         }
     }
 
-    // Convert label set to array
     var labels = try std.ArrayList([]const u8).initCapacity(allocator, label_set.count());
     errdefer labels.deinit(allocator);
 
@@ -520,196 +182,60 @@ pub fn listNodeLabels(allocator: std.mem.Allocator) ![][]const u8 {
     return labels.toOwnedSlice(allocator);
 }
 
-/// Drop a graph storage by name
+/// Drop a graph by name
 pub fn dropGraphStorage(name: []const u8) !void {
-    log.debug("dropGraphStorage called", &.{
-        Attr.string("name", name),
-        Attr.int("len", @intCast(name.len)),
-    });
-
-    if (std.mem.eql(u8, name, DEFAULT_GRAPH_NAME)) {
-        log.debug("dropGraphStorage: refusing to drop default graph", &.{});
-        return error.CannotDropDefaultGraph;
-    }
-
-    if (g_graph_storages) |*storages| {
-        log.debug("dropGraphStorage: checking storages", &.{
-            Attr.int("entries", @intCast(storages.count())),
-        });
-        var it = storages.keyIterator();
-        while (it.next()) |key| {
-            log.debug("dropGraphStorage: stored key", &.{
-                Attr.string("key", key.*),
-                Attr.int("len", @intCast(key.*.len)),
-            });
-        }
-
-        if (storages.fetchRemove(name)) |entry| {
-            // Free the graph storage
-            const alloc = g_allocator orelse return;
-            entry.value.deinit();
-            alloc.destroy(entry.value);
-            alloc.free(entry.key);
-            log.debug("dropGraphStorage: SUCCESS", &.{
-                Attr.string("name", name),
-            });
-        } else {
-            log.debug("dropGraphStorage: fetchRemove returned null", &.{
-                Attr.string("name", name),
-            });
-            return error.GraphNotFound;
-        }
-    } else {
-        log.debug("dropGraphStorage: g_graph_storages is null", &.{});
-        return error.GraphNotFound;
-    }
+    const allocator = ensureAllocator();
+    const store = graph_store.getGlobalStore(allocator);
+    try store.dropGraph(name);
 }
 
 // ============================================================================
-// GAP-384: Named Graph Persistence
+// Graph Store Persistence (Unified)
 // ============================================================================
 
-// CANARY: REQ=REQ-GRAPH-PERSIST-001; FEATURE="NamedGraphPersistence"; ASPECT=SaveLoad; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-29
+// CANARY: REQ=REQ-GRAPH-PERSIST-001; FEATURE="GraphStorePersistence"; ASPECT=SaveLoad; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-03
 
-/// Get the directory path for a named graph's data
-/// Returns: {data_dir}/graphs/{graph_name}/
+/// Get the persistence file path for the graph store
+/// Note: graph_name is ignored in the unified GraphStore format
 pub fn getGraphDataDir(allocator: std.mem.Allocator, graph_name: []const u8) ![]const u8 {
-    const data_dir = g_data_dir orelse return error.NoDataDirectory;
-    return std.fmt.allocPrint(allocator, "{s}/graphs/{s}", .{ data_dir, graph_name });
+    _ = graph_name;
+    return graph_store.getPersistenceFilePath(allocator);
 }
 
-/// Save a named graph's data to its specific directory
-/// Creates {data_dir}/graphs/{graph_name}/nodes.jsonl and edges.jsonl
+/// Save a named graph's data (unified store persistence)
 pub fn saveNamedGraph(allocator: std.mem.Allocator, graph_name: []const u8) !void {
-    log.debug("saveNamedGraph called", &.{Attr.string("name", graph_name)});
-
-    // Get the graph storage
-    const storage = getGraphStorageByName(graph_name) orelse return error.GraphNotFound;
-
-    // Get the graph-specific directory
-    const graph_dir = try getGraphDataDir(allocator, graph_name);
-    defer allocator.free(graph_dir);
-
-    // Save the graph data to the directory
-    saveGraphToDir(allocator, storage, graph_dir);
-
-    log.info("Saved named graph", &.{
-        Attr.string("name", graph_name),
-        Attr.string("dir", graph_dir),
-        Attr.int("nodes", @intCast(storage.nodes.count())),
-        Attr.int("edges", @intCast(storage.edges.items.len)),
-    });
+    const store = graph_store.getGlobalStore(allocator);
+    if (!store.graphExists(graph_name)) return error.GraphNotFound;
+    store.saveIfDirty();
 }
 
-/// Load a named graph's data from its specific directory
-/// Reads from {data_dir}/graphs/{graph_name}/nodes.jsonl and edges.jsonl
+/// Load a named graph's data (unified store persistence)
 pub fn loadNamedGraph(allocator: std.mem.Allocator, graph_name: []const u8) !*graph_exec.GraphStorage {
-    log.debug("loadNamedGraph called", &.{Attr.string("name", graph_name)});
-
-    // Get the graph-specific directory
-    const graph_dir = try getGraphDataDir(allocator, graph_name);
-    defer allocator.free(graph_dir);
-
-    // Check if directory exists
-    std.fs.cwd().access(graph_dir, .{}) catch |err| {
-        if (err == error.FileNotFound) {
-            log.debug("No persistent data for graph", &.{Attr.string("name", graph_name)});
-            return error.GraphNotFound;
-        }
-        return err;
-    };
-
-    // Load the graph data from the directory
-    const storage = try tryLoadGraphFromDir(allocator, graph_dir);
-
-    log.info("Loaded named graph from disk", &.{
-        Attr.string("name", graph_name),
-        Attr.string("dir", graph_dir),
-        Attr.int("nodes", @intCast(storage.nodes.count())),
-        Attr.int("edges", @intCast(storage.edges.items.len)),
-    });
-
-    return storage;
+    const store = graph_store.getGlobalStore(allocator);
+    if (!store.graphExists(graph_name)) return error.GraphNotFound;
+    return store;
 }
 
-/// Save all named graphs to their respective directories
-/// Called on server shutdown to persist all graph data
+/// Save all graphs (single store file)
 pub fn saveAllNamedGraphs(allocator: std.mem.Allocator) void {
-    log.info("Saving all named graphs to disk", &.{});
-
-    if (g_graph_storages) |storages| {
-        var it = storages.iterator();
-        while (it.next()) |entry| {
-            const name = entry.key_ptr.*;
-            saveNamedGraph(allocator, name) catch |err| {
-                log.err("Failed to save named graph", &.{
-                    Attr.string("name", name),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
-        }
-    }
-
-    // Also save the default graph if it exists
-    if (g_graph_storage) |default_storage| {
-        if (g_data_dir) |data_dir| {
-            saveGraphToDir(allocator, default_storage, data_dir);
-            log.info("Saved default graph", &.{
-                Attr.string("dir", data_dir),
-                Attr.int("nodes", @intCast(default_storage.nodes.count())),
-                Attr.int("edges", @intCast(default_storage.edges.items.len)),
-            });
-        }
-    }
+    const store = graph_store.getGlobalStore(allocator);
+    store.saveIfDirty();
 }
 
-/// Load all named graphs that are registered in the catalog
-/// Called during server startup after catalog is loaded
+/// Ensure all catalog graphs exist in the store
 pub fn loadAllNamedGraphs(allocator: std.mem.Allocator, graph_names: []const []const u8) void {
-    log.info("Loading named graphs from disk", &.{Attr.int("count", @intCast(graph_names.len))});
-
-    // Initialize multi-graph storage if needed
-    if (g_graph_storages == null) {
-        initMultiGraphStorage(allocator);
-    }
+    const store = graph_store.getGlobalStore(allocator);
 
     for (graph_names) |name| {
-        // Skip the default graph (handled separately)
-        if (std.mem.eql(u8, name, DEFAULT_GRAPH_NAME)) continue;
-
-        // Try to load the graph data
-        const storage = loadNamedGraph(allocator, name) catch |err| {
-            // If no persistent data exists, create an empty storage
-            if (err == error.GraphNotFound or err == error.FileNotFound) {
-                log.debug("No persistent data for graph, creating empty", &.{Attr.string("name", name)});
-                _ = createGraphStorage(allocator, name) catch |create_err| {
-                    if (create_err != error.GraphAlreadyExists) {
-                        log.err("Failed to create empty graph storage", &.{
-                            Attr.string("name", name),
-                            Attr.string("error", @errorName(create_err)),
-                        });
-                    }
-                };
-            } else {
-                log.err("Failed to load named graph", &.{
-                    Attr.string("name", name),
-                    Attr.string("error", @errorName(err)),
-                });
-            }
-            continue;
-        };
-
-        // Register the loaded storage in the multi-graph map
-        if (g_graph_storages) |*storages| {
-            const name_copy = allocator.dupe(u8, name) catch continue;
-            storages.put(name_copy, storage) catch {
-                allocator.free(name_copy);
-                continue;
+        if (!store.graphExists(name)) {
+            _ = store.createGraph(name) catch |err| {
+                if (err != error.GraphAlreadyExists) {
+                    log.err("Failed to ensure graph in store", &.{
+                        Attr.string("name", name),
+                        Attr.string("error", @errorName(err)),
+                    });
+                }
             };
-            log.debug("Registered loaded graph in storage map", &.{
-                Attr.string("name", name),
-                Attr.int("nodes", @intCast(storage.nodes.count())),
-            });
         }
     }
 }
@@ -718,82 +244,32 @@ pub fn loadAllNamedGraphs(allocator: std.mem.Allocator, graph_names: []const []c
 // Unit Tests
 // ============================================================================
 
-// CANARY: REQ=REQ-GRAPH-PERSIST-004; FEATURE="NamedGraphPersistence"; ASPECT=UnitTests; STATUS=TESTED; OWNER=storage; UPDATED=2026-01-29
-
 const testing = std.testing;
 
-test "GAP384_getGraphDataDir_constructs_correct_path" {
-    // Issue #384: Test that graph data directory path is correctly constructed
+test "GraphStorageManager_getGraphDataDir_returns_store_path" {
     const allocator = testing.allocator;
 
-    // Set up test data directory
-    const test_data_dir = "/tmp/geode_test_data";
-    g_data_dir = test_data_dir;
-    defer g_data_dir = null;
+    setDataDir("/tmp/geode_test_data");
+    defer setDataDir(null);
 
-    // Test path construction
     const path = try getGraphDataDir(allocator, "my_test_graph");
     defer allocator.free(path);
 
-    try testing.expectEqualStrings("/tmp/geode_test_data/graphs/my_test_graph", path);
+    try testing.expect(std.mem.endsWith(u8, path, "graph_store.dat"));
+    try testing.expect(std.mem.containsAtLeast(u8, path, 1, "/tmp/geode_test_data"));
 }
 
-test "GAP384_getGraphDataDir_errors_without_data_dir" {
-    // Issue #384: Test that getGraphDataDir returns error when data dir not set
+test "GraphStorageManager_getGraphDataDir_falls_back_when_unset" {
     const allocator = testing.allocator;
 
-    // Ensure no data directory is set
-    g_data_dir = null;
+    setDataDir(null);
 
-    // Should return NoDataDirectory error
-    const result = getGraphDataDir(allocator, "test_graph");
-    try testing.expectError(error.NoDataDirectory, result);
+    const path = try getGraphDataDir(allocator, "any_graph");
+    defer allocator.free(path);
+
+    try testing.expect(std.mem.endsWith(u8, path, "geode_graph_store.dat"));
 }
 
-test "GAP384_getGraphDataDir_handles_special_graph_names" {
-    // Issue #384: Test path construction with special graph names
-    const allocator = testing.allocator;
-
-    g_data_dir = "/data";
-    defer g_data_dir = null;
-
-    // Test default graph name
-    const default_path = try getGraphDataDir(allocator, DEFAULT_GRAPH_NAME);
-    defer allocator.free(default_path);
-    try testing.expectEqualStrings("/data/graphs/default", default_path);
-
-    // Test graph with underscores
-    const underscore_path = try getGraphDataDir(allocator, "my_graph_v2");
-    defer allocator.free(underscore_path);
-    try testing.expectEqualStrings("/data/graphs/my_graph_v2", underscore_path);
-}
-
-test "GAP384_saveNamedGraph_errors_for_nonexistent_graph" {
-    // Issue #384: Test that saveNamedGraph returns error for non-existent graph
-    const allocator = testing.allocator;
-
-    g_data_dir = "/tmp/test_persist";
-    defer g_data_dir = null;
-
-    // Attempt to save a graph that doesn't exist
-    const result = saveNamedGraph(allocator, "nonexistent_graph_xyz123");
-    try testing.expectError(error.GraphNotFound, result);
-}
-
-test "GAP384_loadNamedGraph_errors_for_missing_directory" {
-    // Issue #384: Test that loadNamedGraph returns error when directory doesn't exist
-    const allocator = testing.allocator;
-
-    g_data_dir = "/tmp/geode_nonexistent_test_dir_xyz789";
-    defer g_data_dir = null;
-
-    // Attempt to load a graph that doesn't have persistent data
-    const result = loadNamedGraph(allocator, "missing_graph");
-    // Should return either GraphNotFound or FileNotFound
-    try testing.expect(result == error.GraphNotFound or result == error.FileNotFound);
-}
-
-test "GAP384_DEFAULT_GRAPH_NAME_is_default" {
-    // Issue #384: Verify the default graph name constant
+test "DEFAULT_GRAPH_NAME_is_default" {
     try testing.expectEqualStrings("default", DEFAULT_GRAPH_NAME);
 }

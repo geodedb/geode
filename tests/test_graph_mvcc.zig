@@ -11,11 +11,12 @@ test "MATCH pattern execution - basic node scan" {
     defer graph.deinit();
 
     // Add test nodes
-    try graph.addNode(allocator, 1, &.{"Person"});
-    try graph.setNodeProperty(1, "name", .{ .String = "Alice" });
+    var person_labels = [_][]const u8{"Person"};
+    const alice_id = try graph.createNode(&person_labels);
+    try graph.setNodeProperty(alice_id, "name", .{ .String = "Alice" });
 
-    try graph.addNode(allocator, 2, &.{"Person"});
-    try graph.setNodeProperty(2, "name", .{ .String = "Bob" });
+    const bob_id = try graph.createNode(&person_labels);
+    try graph.setNodeProperty(bob_id, "name", .{ .String = "Bob" });
 
     // Create a simple MATCH pattern: MATCH (n:Person)
     const pattern = geode.ast.GraphPattern{
@@ -62,14 +63,15 @@ test "MATCH pattern with edge traversal" {
     defer graph.deinit();
 
     // Add nodes
-    try graph.addNode(allocator, 1, &.{"Person"});
-    try graph.setNodeProperty(1, "name", .{ .String = "Alice" });
+    var person_labels = [_][]const u8{"Person"};
+    const alice_id = try graph.createNode(&person_labels);
+    try graph.setNodeProperty(alice_id, "name", .{ .String = "Alice" });
 
-    try graph.addNode(allocator, 2, &.{"Person"});
-    try graph.setNodeProperty(2, "name", .{ .String = "Bob" });
+    const bob_id = try graph.createNode(&person_labels);
+    try graph.setNodeProperty(bob_id, "name", .{ .String = "Bob" });
 
     // Add edge
-    const edge_id = try graph.addEdge(allocator, 1, 2, "KNOWS");
+    const edge_id = try graph.createEdge(alice_id, bob_id, "KNOWS");
     try graph.setEdgeProperty(edge_id, "since", .{ .Int = 2020 });
 
     // Create pattern: MATCH (a:Person)-[r:KNOWS]->(b:Person)
@@ -119,9 +121,9 @@ test "MATCH pattern with edge traversal" {
         try std.testing.expectEqual(graph_exec.BindingValue.Node, std.meta.activeTag(b_val));
         try std.testing.expectEqual(graph_exec.BindingValue.Edge, std.meta.activeTag(r_val));
 
-        try std.testing.expectEqual(@as(graph_exec.NodeId, 1), a_val.Node);
-        try std.testing.expectEqual(@as(graph_exec.NodeId, 2), b_val.Node);
-        try std.testing.expectEqual(@as(graph_exec.EdgeId, 0), r_val.Edge);
+        try std.testing.expectEqual(@as(graph_exec.NodeId, alice_id), a_val.Node);
+        try std.testing.expectEqual(@as(graph_exec.NodeId, bob_id), b_val.Node);
+        try std.testing.expectEqual(@as(graph_exec.EdgeId, edge_id), r_val.Edge);
     }
 }
 

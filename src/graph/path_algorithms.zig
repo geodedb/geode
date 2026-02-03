@@ -1,7 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const storage_mod = @import("storage_page_manager");
-const storage = storage_mod.interface;
+const graph_store = @import("../graph_store.zig");
 
 // Advanced path algorithms for graph traversal
 // GAP-0084: Extended to collect edge IDs during path finding
@@ -34,7 +33,7 @@ pub const PathAlgorithms = struct {
     // GAP-0084: Now collects edge IDs for RELATIONSHIPS(path) function support
     pub fn dijkstraShortestPath(
         self: *PathAlgorithms,
-        graph: *storage.GraphStorage,
+        graph: *graph_store.GraphStore,
         start: u64,
         end: u64,
         edge_weights: ?std.AutoHashMap(u64, f64),
@@ -97,11 +96,10 @@ pub const PathAlgorithms = struct {
             }
 
             // Get neighbors with edge info
-            const neighbors = try graph.getNeighbors(item.node);
+            const neighbors = try graph.getNeighbors(self.allocator, item.node);
             defer self.allocator.free(neighbors);
 
-            // GAP-0084: Try to get edge-aware neighbor info if available
-            const edge_info = if (graph.getEdgeInfo) |get_edges| try get_edges(item.node) else null;
+            const outgoing_edge_ids = graph.getOutgoingEdgeIds(item.node) orelse &.{};
 
             for (neighbors, 0..) |neighbor, idx| {
                 if (visited.contains(neighbor)) continue;
@@ -118,10 +116,18 @@ pub const PathAlgorithms = struct {
                     try distances.put(neighbor, new_distance);
                     try previous.put(neighbor, item.node);
                     // GAP-0084: Store edge ID if available
-                    if (edge_info) |info| {
-                        if (idx < info.len) {
-                            try previous_edge.put(neighbor, info[idx].edge_id);
+                    _ = idx;
+                    var resolved_edge: ?u64 = null;
+                    for (outgoing_edge_ids) |edge_id| {
+                        if (graph.getEdgePtr(edge_id)) |edge| {
+                            if (edge.to_id == neighbor) {
+                                resolved_edge = edge_id;
+                                break;
+                            }
                         }
+                    }
+                    if (resolved_edge) |edge_id| {
+                        try previous_edge.put(neighbor, edge_id);
                     } else {
                         // Synthetic edge ID based on node pair for fallback
                         const synthetic_edge_id = (item.node << 32) | neighbor;
@@ -138,12 +144,12 @@ pub const PathAlgorithms = struct {
     // PageRank algorithm
     pub fn pageRank(
         self: *PathAlgorithms,
-        graph: *storage.GraphStorage,
+        graph: *graph_store.GraphStore,
         damping_factor: f64,
         max_iterations: usize,
         tolerance: f64,
     ) ![]CentralityResult {
-        const nodes = try graph.getAllNodes();
+        const nodes = try graph.getAllNodes(self.allocator);
         defer self.allocator.free(nodes);
 
         const n = @as(f64, @floatFromInt(nodes.len));
@@ -164,11 +170,12 @@ pub const PathAlgorithms = struct {
                 var rank: f64 = (1.0 - damping_factor) / n;
 
                 // Get incoming edges
-                const incoming = try graph.getIncomingEdges(node);
-                defer self.allocator.free(incoming);
+                const incoming_edges = try graph.getIncomingEdges(self.allocator, node);
+                defer self.allocator.free(incoming_edges);
 
-                for (incoming) |source| {
-                    const out_degree = try graph.getOutDegree(source);
+                for (incoming_edges) |edge| {
+                    const source = edge.from_id;
+                    const out_degree = graph.getOutDegree(source);
                     if (out_degree > 0) {
                         const source_rank = ranks.get(source) orelse (1.0 / n);
                         rank += damping_factor * source_rank / @as(f64, @floatFromInt(out_degree));
