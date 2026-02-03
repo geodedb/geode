@@ -4015,16 +4015,29 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                                 const col_copy = try allocator.dupe(u8, col.name);
                                 try columns.append(allocator, col_copy);
                             }
-                            // For table format, print header immediately
-                            if (std.mem.eql(u8, format, "table")) {
-                                for (columns.items, 0..) |col, i| {
-                                    if (i > 0) _ = stdout.writeAll("\t") catch {};
-                                    _ = stdout.writeAll(col) catch {};
-                                }
-                                _ = stdout.writeAll("\n") catch {};
-                            }
+                            // Table format is no longer streamed - it's formatted at the end
+                            // to calculate proper column widths
                         },
                         .page => |p| {
+                            // CANARY: REQ=REQ-CLI-PROTO-001; FEATURE="ProtoMigration"; ASPECT=ParseWrappedJson; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+                            // Server sends entire JSON result as a single string value - we need to parse it
+                            // Check if this is a wrapped JSON response (single row, single string value containing JSON)
+                            if (p.rows.items.len == 1 and p.rows.items[0].values.items.len == 1) {
+                                if (p.rows.items[0].values.items[0].kind) |k| {
+                                    if (k == .string_val) {
+                                        const json_str = k.string_val;
+                                        // Try to parse as JSON and extract actual columns/rows
+                                        if (parseWrappedJsonResponse(allocator, json_str, &columns, &all_rows)) |_| {
+                                            if (p.last_page) break;
+                                            continue;
+                                        } else |_| {
+                                            // Not a wrapped JSON response, fall through to normal processing
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Normal processing for properly structured protobuf responses
                             for (p.rows.items) |row| {
                                 var row_values = try std.ArrayList([]const u8).initCapacity(allocator, 16);
                                 errdefer {
@@ -4044,15 +4057,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                                     try row_values.append(allocator, cell_str);
                                 }
 
-                                // For table format, print row immediately
-                                if (std.mem.eql(u8, format, "table")) {
-                                    for (row_values.items, 0..) |cell, i| {
-                                        if (i > 0) _ = stdout.writeAll("\t") catch {};
-                                        _ = stdout.writeAll(cell) catch {};
-                                    }
-                                    _ = stdout.writeAll("\n") catch {};
-                                }
-
+                                // Row data is stored and formatted at the end for all formats
                                 try all_rows.append(allocator, row_values);
                             }
                             if (p.last_page) break;
@@ -4170,8 +4175,89 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
             }
             _ = stdout.writeAll("\n") catch {};
         }
+    } else if (std.mem.eql(u8, format, "table")) {
+        // CANARY: REQ=REQ-CLI-TABLE-001; FEATURE="TableFormat"; ASPECT=PostgreSQLStyle; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+        // PostgreSQL-style table format with borders
+        // Calculate column widths
+        var col_widths = try std.ArrayList(usize).initCapacity(allocator, columns.items.len);
+        defer col_widths.deinit(allocator);
+
+        for (columns.items) |col| {
+            try col_widths.append(allocator, col.len);
+        }
+
+        // Expand widths based on row data
+        for (all_rows.items) |row| {
+            for (row.items, 0..) |cell, i| {
+                if (i < col_widths.items.len) {
+                    if (cell.len > col_widths.items[i]) {
+                        col_widths.items[i] = cell.len;
+                    }
+                }
+            }
+        }
+
+        // Helper function to print a separator line
+        const printSeparator = struct {
+            fn f(out: anytype, widths: []const usize) void {
+                _ = out.writeAll("+") catch {};
+                for (widths) |w| {
+                    for (0..w + 2) |_| _ = out.writeAll("-") catch {};
+                    _ = out.writeAll("+") catch {};
+                }
+                _ = out.writeAll("\n") catch {};
+            }
+        }.f;
+
+        // Print top separator
+        printSeparator(stdout, col_widths.items);
+
+        // Print header row
+        _ = stdout.writeAll("|") catch {};
+        for (columns.items, 0..) |col, i| {
+            _ = stdout.writeAll(" ") catch {};
+            _ = stdout.writeAll(col) catch {};
+            // Pad to column width
+            const width = if (i < col_widths.items.len) col_widths.items[i] else col.len;
+            for (col.len..width) |_| _ = stdout.writeAll(" ") catch {};
+            _ = stdout.writeAll(" |") catch {};
+        }
+        _ = stdout.writeAll("\n") catch {};
+
+        // Print separator after header
+        printSeparator(stdout, col_widths.items);
+
+        // Print data rows
+        for (all_rows.items) |row| {
+            _ = stdout.writeAll("|") catch {};
+            for (row.items, 0..) |cell, i| {
+                _ = stdout.writeAll(" ") catch {};
+                _ = stdout.writeAll(cell) catch {};
+                // Pad to column width
+                const width = if (i < col_widths.items.len) col_widths.items[i] else cell.len;
+                for (cell.len..width) |_| _ = stdout.writeAll(" ") catch {};
+                _ = stdout.writeAll(" |") catch {};
+            }
+            _ = stdout.writeAll("\n") catch {};
+        }
+
+        // Print bottom separator
+        printSeparator(stdout, col_widths.items);
+
+        // Print row count
+        const row_count = all_rows.items.len;
+        if (row_count == 1) {
+            _ = stdout.writeAll("(1 row)\n") catch {};
+        } else {
+            const count_str = std.fmt.allocPrint(allocator, "({d} rows)\n", .{row_count}) catch "(? rows)\n";
+            defer if (count_str.len > 0 and count_str[0] == '(') allocator.free(count_str);
+            _ = stdout.writeAll(count_str) catch {};
+        }
+    } else if (std.mem.eql(u8, format, "dot")) {
+        // CANARY: REQ=REQ-CLI-DOT-002; FEATURE="DotFormat"; ASPECT=GraphvizOutput; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+        // DOT format for Graphviz visualization
+        try outputDotFormatFromRows(allocator, columns.items, all_rows.items, stdout);
     }
-    // Note: table format was already printed during streaming
 
     // Free error strings if allocated
     if (has_error and error_message.len > 0) {
@@ -4200,6 +4286,77 @@ fn isNumericString(s: []const u8) bool {
         }
     }
     return has_digit;
+}
+
+// CANARY: REQ=REQ-CLI-PROTO-002; FEATURE="ProtoMigration"; ASPECT=ParseWrappedJson; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+/// Parse wrapped JSON response from server and extract columns/rows
+/// Server sends entire result as JSON string in a single protobuf value
+fn parseWrappedJsonResponse(
+    allocator: std.mem.Allocator,
+    json_str: []const u8,
+    columns: *std.ArrayList([]const u8),
+    all_rows: *std.ArrayList(std.ArrayList([]const u8)),
+) !void {
+    // Parse the JSON string
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    if (parsed.value != .object) return error.InvalidJson;
+    const root = parsed.value.object;
+
+    // Extract columns
+    if (root.get("columns")) |cols_val| {
+        if (cols_val == .array) {
+            for (cols_val.array.items) |col| {
+                const col_name = switch (col) {
+                    .string => |s| try allocator.dupe(u8, s),
+                    .object => |obj| blk: {
+                        if (obj.get("name")) |name| {
+                            if (name == .string) break :blk try allocator.dupe(u8, name.string);
+                        }
+                        break :blk try allocator.dupe(u8, "?");
+                    },
+                    else => try allocator.dupe(u8, "?"),
+                };
+                try columns.append(allocator, col_name);
+            }
+        }
+    }
+
+    // Extract rows
+    if (root.get("rows")) |rows_val| {
+        if (rows_val == .array) {
+            for (rows_val.array.items) |row_item| {
+                if (row_item == .array) {
+                    var row_values = try std.ArrayList([]const u8).initCapacity(allocator, 16);
+                    errdefer {
+                        for (row_values.items) |cell| allocator.free(cell);
+                        row_values.deinit(allocator);
+                    }
+
+                    for (row_item.array.items) |cell| {
+                        const cell_str = try jsonValueToString(allocator, cell);
+                        try row_values.append(allocator, cell_str);
+                    }
+
+                    try all_rows.append(allocator, row_values);
+                }
+            }
+        }
+    }
+}
+
+/// Convert JSON value to string representation
+fn jsonValueToString(allocator: std.mem.Allocator, val: std.json.Value) ![]const u8 {
+    return switch (val) {
+        .null => try allocator.dupe(u8, "null"),
+        .bool => |b| try allocator.dupe(u8, if (b) "true" else "false"),
+        .integer => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
+        .float => |f| try std.fmt.allocPrint(allocator, "{d}", .{f}),
+        .string => |s| try allocator.dupe(u8, s),
+        .array, .object => try std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(val, .{})}),
+        .number_string => |s| try allocator.dupe(u8, s),
+    };
 }
 
 // CANARY: REQ=REQ-CLI-DOT-001; FEATURE="DotGraphOutput"; ASPECT=FormatConversion; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
@@ -4412,6 +4569,98 @@ fn getDotNodeLabel(allocator: std.mem.Allocator, obj: std.json.ObjectMap, labels
     }
 
     return try allocator.dupe(u8, label_parts.items);
+}
+
+/// Output DOT format from pre-collected row data
+/// CANARY: REQ=REQ-CLI-DOT-003; FEATURE="DotFormat"; ASPECT=RowBasedOutput; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+fn outputDotFormatFromRows(allocator: std.mem.Allocator, columns: []const []const u8, rows: []const std.ArrayList([]const u8), stdout: std.fs.File) !void {
+    // Start DOT graph
+    _ = stdout.writeAll("digraph G {\n") catch {};
+    _ = stdout.writeAll("  rankdir=LR;\n") catch {};
+    _ = stdout.writeAll("  node [shape=ellipse, style=filled, fillcolor=lightblue];\n") catch {};
+    _ = stdout.writeAll("  edge [fontsize=10];\n") catch {};
+    _ = stdout.writeAll("\n") catch {};
+
+    // Track nodes and edges to avoid duplicates
+    var seen_nodes = std.StringHashMap(void).init(allocator);
+    defer {
+        var key_iter = seen_nodes.keyIterator();
+        while (key_iter.next()) |key| allocator.free(key.*);
+        seen_nodes.deinit();
+    }
+
+    // For simple queries (like RETURN 1 AS x), there may be no graph data
+    // In that case, just output the empty graph structure with data as comments
+    var has_graph_data = false;
+
+    // Process each row looking for node/edge data
+    for (rows) |row| {
+        for (row.items, 0..) |cell, col_idx| {
+            // Try to parse cell as JSON (might be a serialized node/edge)
+            const parsed = std.json.parseFromSlice(std.json.Value, allocator, cell, .{}) catch continue;
+            defer parsed.deinit();
+
+            if (parsed.value != .object) continue;
+            const obj = parsed.value.object;
+
+            // Check if this is a node (has labels)
+            if (obj.get("labels")) |labels_val| {
+                has_graph_data = true;
+                const node_id = getDotNodeId(allocator, obj) orelse continue;
+                defer allocator.free(node_id);
+
+                if (!seen_nodes.contains(node_id)) {
+                    try seen_nodes.put(try allocator.dupe(u8, node_id), {});
+
+                    const label = getDotNodeLabel(allocator, obj, labels_val) catch node_id;
+                    defer if (!std.mem.eql(u8, label, node_id)) allocator.free(label);
+
+                    _ = stdout.writeAll("  \"") catch {};
+                    _ = stdout.writeAll(node_id) catch {};
+                    _ = stdout.writeAll("\" [label=\"") catch {};
+                    _ = stdout.writeAll(label) catch {};
+                    _ = stdout.writeAll("\"];\n") catch {};
+                }
+            }
+            // Check if this is a relationship
+            else if (obj.get("type")) |type_val| {
+                if (type_val != .string) continue;
+                has_graph_data = true;
+                const rel_type = type_val.string;
+
+                const start_id = getDotIdString(allocator, obj.get("from")) orelse
+                    getDotIdString(allocator, obj.get("start_node")) orelse continue;
+                defer allocator.free(start_id);
+                const end_id = getDotIdString(allocator, obj.get("to")) orelse
+                    getDotIdString(allocator, obj.get("end_node")) orelse continue;
+                defer allocator.free(end_id);
+
+                _ = stdout.writeAll("  \"") catch {};
+                _ = stdout.writeAll(start_id) catch {};
+                _ = stdout.writeAll("\" -> \"") catch {};
+                _ = stdout.writeAll(end_id) catch {};
+                _ = stdout.writeAll("\" [label=\"") catch {};
+                _ = stdout.writeAll(rel_type) catch {};
+                _ = stdout.writeAll("\"];\n") catch {};
+            }
+
+            _ = col_idx; // Suppress unused variable warning
+        }
+    }
+
+    // If no graph data was found, add columns as comment for debugging
+    if (!has_graph_data and columns.len > 0) {
+        _ = stdout.writeAll("  // Query returned tabular data, not graph data\n") catch {};
+        _ = stdout.writeAll("  // Columns: ") catch {};
+        for (columns, 0..) |col, i| {
+            if (i > 0) _ = stdout.writeAll(", ") catch {};
+            _ = stdout.writeAll(col) catch {};
+        }
+        _ = stdout.writeAll("\n") catch {};
+    }
+
+    // End DOT graph
+    _ = stdout.writeAll("}\n") catch {};
 }
 
 /// Extract column name from either string or object format

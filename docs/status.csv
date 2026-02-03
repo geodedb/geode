@@ -464,6 +464,8 @@ REQ-CLI-CHUNKED-EXEC-TEST-001,ChunkedExecution,E2ETests,TESTED,,,test,2026-02-02
 REQ-CLI-COMPAT-001,Legacy Binary Symlinks,ML,IMPL,,,cli,2026-01-14,build.zig
 REQ-CLI-COMPLETE-001,REPL Tab Completion,Testing,TESTED,,,cli,2026-01-30,src/client/repl/repl_complete.zig
 REQ-CLI-DOT-001,DotGraphOutput,FormatConversion,IMPL,,,cli,2026-01-28,src/cli/main.zig
+REQ-CLI-DOT-002,DotFormat,GraphvizOutput,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-CLI-DOT-003,DotFormat,RowBasedOutput,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-EXIT-001,CLI Exit Code Mapping,ErrorHandling,TESTED,,,cli,2025-10-04,tests/exit_code_mapping_regression_test.sh
 REQ-CLI-FILE-FLAG-001,QueryFileFlag,FileInput,IMPL,,,cli,2026-01-31,src/cli/main.zig
 REQ-CLI-FILE-FLAG-002,QueryFileFlag,FlagParsing,IMPL,,,cli,2026-01-31,src/cli/main.zig
@@ -483,6 +485,8 @@ REQ-CLI-MIGRATE-STATUS-001,CLIMigrateStatus,MigrationModule,TESTED,,,cli,2026-01
 REQ-CLI-MOD-001,CLI Modularization,SubcommandParsing,TESTED,,,cli,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-CLI-PASSWORD-PROMPT-001,PasswordPrompt,QueryCommand,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-POLICY-CMD-001,Policy CLI Commands,PolicyManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig
+REQ-CLI-PROTO-001,ProtoMigration,ParseWrappedJson,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-CLI-PROTO-002,ProtoMigration,ParseWrappedJson,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig
 REQ-CLI-ROUTE-001,Query Option Auto-routing,CommandDispatch,TESTED,,,cli,2025-10-04,tests/query_option_autorouting_regression_test.sh
@@ -499,6 +503,7 @@ REQ-CLI-SUBPROCESS-INTEGRATION-003,CLI Subprocess Elimination,IntegrationTesting
 REQ-CLI-SUBPROCESS-INTEGRATION-003,CLISubprocess,Integration3,TESTED,,,claude,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-CLI-SUBPROCESS-UNIT-001,CLI Subprocess Elimination,UnitTesting,EXEMPT,,,claude,2025-10-05,tests/test_cli_subprocess_elimination_unit.zig
 REQ-CLI-SUBPROCESS-UNIT-002,CLI Subprocess Elimination,UnitTesting,EXEMPT,,,claude,2025-10-05,tests/test_cli_subprocess_elimination_unit_simple.zig
+REQ-CLI-TABLE-001,TableFormat,PostgreSQLStyle,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-USER-CMD-001,User CLI Commands,UserManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig
 REQ-CLI-WD-001,CLI Working Directory Handling,TestInfrastructure,TESTED,,,cli,2025-10-04,tests/cli_working_directory_regression_test.sh
 REQ-CLIENT-ENV-001,ClientEnvironmentVariables,IntegrationTests,TESTED,,,clients,2025-10-04,tests/test_environment_variables_integration.zig

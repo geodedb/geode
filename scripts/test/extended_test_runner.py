@@ -253,8 +253,59 @@ def run_test(
     # Note: Persistence files are now cleared at spec level (before setup) in main()
     # This ensures setup data created in spec-level setup persists across all tests
 
+    # Handle setup which can be a list or a dict with 'files', 'commands', 'script' keys
+    setup_data = test_case.get("setup", [])
+    setup_commands = []
+
+    # Handle setup.files - create test files before running the test
+    if isinstance(setup_data, dict):
+        # Create files specified in setup.files
+        setup_files = setup_data.get("files", [])
+        for file_spec in setup_files:
+            try:
+                file_path = file_spec.get("path")
+                file_content = file_spec.get("content", "")
+                if file_path:
+                    # Expand ~ in path
+                    file_path = os.path.expanduser(file_path)
+                    # Create parent directories if needed
+                    os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
+                    # Write file content
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(file_content)
+                    # Handle optional mode/permissions
+                    mode = file_spec.get("mode")
+                    if mode:
+                        os.chmod(file_path, int(mode, 8))
+            except Exception as e:
+                return False, f"setup file creation failed: {e}"
+
+        # Execute setup script if present
+        setup_script = setup_data.get("script")
+        if setup_script:
+            try:
+                result = subprocess.run(
+                    setup_script,
+                    shell=True,
+                    capture_output=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=30,
+                )
+                if result.returncode != 0:
+                    return (
+                        False,
+                        f"setup script failed (exit {result.returncode}): {result.stderr[:200] if result.stderr else ''}",
+                    )
+            except Exception as e:
+                return False, f"setup script error: {e}"
+
+        # Get setup commands from dict
+        setup_commands = setup_data.get("commands", [])
+    elif isinstance(setup_data, list):
+        setup_commands = setup_data
+
     # Execute setup commands if present
-    setup_commands = test_case.get("setup", [])
     if setup_commands:
         import shlex
 
@@ -648,25 +699,55 @@ def run_test(
         if cleanup_commands:
             import shlex
 
-            for cmd_str in cleanup_commands:
-                try:
-                    cleanup_args = shlex.split(cmd_str)
-                    # Apply variable substitution
-                    cleanup_processed = []
-                    for arg in cleanup_args:
-                        if not isinstance(arg, str):
-                            cleanup_processed.append(arg)
-                            continue
-                        processed_arg = arg
-                        if "${server_address}" in processed_arg:
-                            processed_arg = processed_arg.replace("${server_address}", "127.0.0.1:8443")
-                        if instance_id is not None and "${instance_id}" in processed_arg:
-                            processed_arg = processed_arg.replace("${instance_id}", str(instance_id))
-                        if loop_index is not None and "${loop_index}" in processed_arg:
-                            processed_arg = processed_arg.replace("${loop_index}", str(loop_index))
-                        cleanup_processed.append(processed_arg)
+            # Shell commands that should be run directly, not via geode binary
+            shell_commands = {"rm", "mkdir", "cp", "mv", "touch", "chmod", "ls", "cat", "echo"}
 
-                    subprocess.run([binary] + cleanup_processed, capture_output=True, text=True, timeout=5)
+            for cmd_item in cleanup_commands:
+                try:
+                    # Handle list format (e.g., ["rm", "-f", "file"])
+                    if isinstance(cmd_item, list):
+                        cleanup_processed = []
+                        for arg in cmd_item:
+                            if not isinstance(arg, str):
+                                cleanup_processed.append(str(arg))
+                                continue
+                            processed_arg = arg
+                            if "${server_address}" in processed_arg:
+                                processed_arg = processed_arg.replace("${server_address}", "127.0.0.1:8443")
+                            if instance_id is not None and "${instance_id}" in processed_arg:
+                                processed_arg = processed_arg.replace("${instance_id}", str(instance_id))
+                            if loop_index is not None and "${loop_index}" in processed_arg:
+                                processed_arg = processed_arg.replace("${loop_index}", str(loop_index))
+                            cleanup_processed.append(processed_arg)
+
+                        # Check if first arg is a shell command
+                        if cleanup_processed and cleanup_processed[0] in shell_commands:
+                            subprocess.run(cleanup_processed, capture_output=True, text=True, timeout=5)
+                        else:
+                            subprocess.run([binary] + cleanup_processed, capture_output=True, text=True, timeout=5)
+                    # Handle string format (legacy)
+                    elif isinstance(cmd_item, str):
+                        cleanup_args = shlex.split(cmd_item)
+                        # Apply variable substitution
+                        cleanup_processed = []
+                        for arg in cleanup_args:
+                            if not isinstance(arg, str):
+                                cleanup_processed.append(arg)
+                                continue
+                            processed_arg = arg
+                            if "${server_address}" in processed_arg:
+                                processed_arg = processed_arg.replace("${server_address}", "127.0.0.1:8443")
+                            if instance_id is not None and "${instance_id}" in processed_arg:
+                                processed_arg = processed_arg.replace("${instance_id}", str(instance_id))
+                            if loop_index is not None and "${loop_index}" in processed_arg:
+                                processed_arg = processed_arg.replace("${loop_index}", str(loop_index))
+                            cleanup_processed.append(processed_arg)
+
+                        # Check if first arg is a shell command
+                        if cleanup_processed and cleanup_processed[0] in shell_commands:
+                            subprocess.run(cleanup_processed, capture_output=True, text=True, timeout=5)
+                        else:
+                            subprocess.run([binary] + cleanup_processed, capture_output=True, text=True, timeout=5)
                 except Exception:
                     pass  # Ignore cleanup errors
 
