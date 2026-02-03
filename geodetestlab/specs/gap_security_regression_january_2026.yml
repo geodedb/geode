@@ -157,12 +157,9 @@ tests:
   # =============================================================================
 
   - name: "gap-0069-key-generation-random"
-    description: "Generated keys are non-deterministic"
-    args: ["query", "-"]
-    stdin: |
-      CREATE (n:KeyGen_0069 {created_at: timestamp()});
-      CREATE (m:KeyGen_0069 {created_at: timestamp()});
-      MATCH (n:KeyGen_0069) RETURN count(n) AS keys
+    description: "Generated keys are non-deterministic (using timestamp)"
+    # Using inline multi-statement instead of stdin for reliable execution
+    args: ["query", "CREATE (n:KeyGen_0069 {created_at: timestamp()}); CREATE (m:KeyGen_0069 {created_at: timestamp()}); MATCH (n:KeyGen_0069) RETURN count(n) AS keys"]
     expect:
       exit_code: 0
       stdout_contains: ["2"]

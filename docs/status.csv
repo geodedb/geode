@@ -571,6 +571,8 @@ REQ-DATETIME-003,DateTimeFunctions,DateTime,TESTED,,,eval,2026-01-15,tests/test_
 REQ-DECIMAL-OVERFLOW-001,Decimal Overflow Guard,DataIntegrity,TESTED,,,core,2026-01-25,src/exec.zig
 REQ-DECIMAL-OVERFLOW-002,Decimal Avg Overflow Guard,DataIntegrity,TESTED,,,core,2026-01-25,src/exec.zig
 REQ-DEFAULT-PASSWORD-001,Secure Default Password,Security,TESTED,,,security,2026-01-13,src/security/geode_auth_lib.zig
+REQ-DELETE-PROPS-001,DeletePropertyFilter,PropertyMatching,TESTED,,,crud_operations,2026-02-02,src/execution/crud_operations.zig
+REQ-DELETE-PROPS-002,DeletePropertyFilter,PropertyEvaluation,TESTED,,,crud_operations,2026-02-02,src/execution/crud_operations.zig
 REQ-DELETE-WHERE-001,DeleteWhereEvaluation,WhereClause,TESTED,,,crud_operations,2026-01-09,src/execution/crud_operations.zig
 REQ-DISK-AES-001,AES-256 Disk Encryption,Security,TESTED,,,storage,2026-01-10,src/storage/disk.zig
 REQ-DISK-AES-001,AES-256 XTS Page Decryption,Security,TESTED,,,storage,2026-01-10,src/storage/disk.zig

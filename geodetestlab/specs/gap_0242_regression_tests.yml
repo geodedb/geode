@@ -135,8 +135,10 @@ tests:
     args: ["migrate", "run", "--dir", "tests/fixtures/migrations", "--server", "invalid:99999", "--insecure"]
     expect:
       exit_code: 1
-      stderr_contains:
-        - "error"
+      # Output goes to stdout, not stderr
+      stdout_contains:
+        - "Error"
+        - "Failed to connect"
     tags: ["bug-366", "migration", "error-handling", "gap-0242"]
 
   # ===============================

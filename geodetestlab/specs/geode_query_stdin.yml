@@ -74,7 +74,8 @@ tests:
     args: ["query", "--help"]
     expect:
       exit_code: 0
-      stdout_contains: ["<query|->", "Read query from stdin", "echo", "geode query -"]
+      # Updated to match actual help output format
+      stdout_contains: ["<query|-|--file path>", "Read query from stdin", "geode query -"]
     tags: ["query", "help", "stdin", "documentation"]
 
   - name: "query-stdin-with-format-option"

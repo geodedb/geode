@@ -2234,10 +2234,13 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
     if (d.match_clause) |match_pattern| {
         // Extract pattern information from MATCH
         var match_labels: [][]const u8 = &.{};
+        // CANARY: REQ=REQ-DELETE-PROPS-001; FEATURE="DeletePropertyFilter"; ASPECT=PropertyMatching; STATUS=TESTED; TEST=geodetestlab/specs/merge_performance_january_2026.yml; OWNER=crud_operations; UPDATED=2026-02-02
+        var match_props: ?[]ast.Property = null;
 
         if (match_pattern.chains.len > 0) {
             if (match_pattern.chains[0].head) |node_pattern| {
                 match_labels = node_pattern.labels;
+                match_props = node_pattern.props;
             }
         }
 
@@ -2272,6 +2275,36 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                     }
                 }
                 if (!has_all_labels) should_delete = false;
+            }
+
+            // CANARY: REQ=REQ-DELETE-PROPS-002; FEATURE="DeletePropertyFilter"; ASPECT=PropertyEvaluation; STATUS=TESTED; TEST=geodetestlab/specs/merge_performance_january_2026.yml; OWNER=crud_operations; UPDATED=2026-02-02
+            // Filter by inline properties if specified (e.g., MATCH (n:Label {id: 'value'}) DELETE n)
+            if (should_delete) {
+                if (match_props) |props| {
+                    for (props) |prop| {
+                        if (node.properties.get(prop.key)) |node_prop_val| {
+                            // Evaluate the expected property value from pattern
+                            const empty_env = Env{
+                                .names = &.{},
+                                .values = &.{},
+                                .allocator = allocator,
+                            };
+                            const prop_val = eval.evalExpr(allocator, prop.value.*, empty_env) catch {
+                                should_delete = false;
+                                break;
+                            };
+                            // Compare using existing valuesEqual helper
+                            if (!valuesEqual(node_prop_val, prop_val)) {
+                                should_delete = false;
+                                break;
+                            }
+                        } else {
+                            // Property doesn't exist on node, so it doesn't match
+                            should_delete = false;
+                            break;
+                        }
+                    }
+                }
             }
 
             // CANARY: REQ=REQ-DELETE-WHERE-001; FEATURE="DeleteWhereEvaluation"; ASPECT=WhereClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_data_modification_comprehensive.yml; OWNER=crud_operations; UPDATED=2026-01-09

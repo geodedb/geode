@@ -75,7 +75,8 @@ tests:
   # Issue #392: Test edge adjacency (implicitly through DELETE DETACH)
   - name: "delete-detach-with-adjacency"
     description: "Test DELETE DETACH performance with adjacency index"
-    args: ["query", "--insecure", "CREATE GRAPH test392; USE GRAPH test392; CREATE (a:Node {id: 'A'})-[:CONNECTS]->(b:Node {id: 'B'})-[:CONNECTS]->(c:Node {id: 'C'}); DELETE a DETACH; MATCH (n) RETURN count(n) AS cnt"]
+    # Fixed: Use MATCH clause with property filter for proper DETACH DELETE syntax
+    args: ["query", "--insecure", "CREATE GRAPH test392; USE GRAPH test392; CREATE (a:Node {id: 'A'})-[:CONNECTS]->(b:Node {id: 'B'})-[:CONNECTS]->(c:Node {id: 'C'}); MATCH (a:Node {id: 'A'}) DETACH DELETE a; MATCH (n) RETURN count(n) AS cnt"]
     expect:
       exit_code: 0
       # After deleting node A with DETACH, only B and C should remain
