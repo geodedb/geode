@@ -15,7 +15,6 @@ const cost_explain = @import("../planner/cost_explain.zig");
 const server_flags = @import("server_flags.zig");
 const message_handlers = @import("message_handlers.zig");
 const protocol_handler = @import("protocol_handler.zig");
-const graph_storage_mgr = @import("graph_storage_manager.zig");
 const wal_manager = @import("wal_manager.zig");
 const query_ast_cache = @import("query_ast_cache.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
@@ -49,6 +48,102 @@ const ShowFunctionRow = struct { name: []const u8, signature: []const u8, return
 const ErrorResponse = struct {
     status_class: []const u8 = "58000",
     @"error": []const u8,
+};
+
+// CANARY: REQ=REQ-PROTOCOL-DETECT-001; FEATURE="ProtocolAutoDetect"; ASPECT=DualProtocol; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
+// Support both JSON line protocol (legacy REPL/CLI) and length-prefixed protobuf
+const ProtocolType = enum {
+    json_line, // JSON line protocol (newline-delimited JSON)
+    protobuf, // Length-prefixed protobuf (4-byte big-endian + protobuf bytes)
+};
+
+// CANARY: REQ=REQ-JSON-LINE-READER-001; FEATURE="JsonLineProtocol"; ASPECT=LegacySupport; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
+/// Buffered JSON line reader for legacy REPL/CLI clients
+const BufferedJsonLineReader = struct {
+    allocator: std.mem.Allocator,
+    transport: *quic_transport.QuicTransport,
+    stream: *quic_transport.QuicStream,
+    buffer: std.ArrayList(u8),
+    start_index: usize = 0,
+    read_buf: [4096]u8 = undefined,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        transport: *quic_transport.QuicTransport,
+        stream: *quic_transport.QuicStream,
+    ) !BufferedJsonLineReader {
+        return .{
+            .allocator = allocator,
+            .transport = transport,
+            .stream = stream,
+            .buffer = std.ArrayList(u8).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *BufferedJsonLineReader) void {
+        self.buffer.deinit(self.allocator);
+    }
+
+    /// Read next JSON line (newline-delimited)
+    pub fn nextLine(self: *BufferedJsonLineReader) !?[]const u8 {
+        var would_block_attempts: usize = 0;
+        const max_would_block_attempts: usize = 30000; // 30s at 1ms sleep
+
+        while (true) {
+            // Check if we have a complete line in buffer
+            const unread = self.buffer.items[self.start_index..];
+            if (std.mem.indexOf(u8, unread, "\n")) |newline_pos| {
+                // Found complete line
+                const line = unread[0..newline_pos];
+                self.start_index += newline_pos + 1;
+                self.compactBuffer();
+                return line;
+            }
+
+            // Need more data
+            const n = self.stream.read(&self.read_buf) catch |err| {
+                if (err == error.WouldBlock) {
+                    would_block_attempts += 1;
+                    if (would_block_attempts >= max_would_block_attempts) {
+                        return error.Timeout;
+                    }
+                    try self.transport.poll(0);
+                    std.Thread.sleep(1 * std.time.ns_per_ms);
+                    continue;
+                }
+                return err;
+            };
+
+            would_block_attempts = 0;
+
+            if (n == 0) {
+                if (self.start_index == self.buffer.items.len) {
+                    return null; // Clean EOF
+                }
+                return error.UnexpectedEndOfStream;
+            }
+
+            try self.buffer.appendSlice(self.allocator, self.read_buf[0..n]);
+        }
+    }
+
+    fn compactBuffer(self: *BufferedJsonLineReader) void {
+        if (self.start_index == 0) return;
+
+        const remaining = self.buffer.items.len - self.start_index;
+        if (remaining == 0) {
+            self.buffer.clearRetainingCapacity();
+            self.start_index = 0;
+            return;
+        }
+
+        // Compact when we've consumed a significant prefix
+        if (self.start_index > 4096 or self.start_index > remaining) {
+            std.mem.copyForwards(u8, self.buffer.items[0..remaining], self.buffer.items[self.start_index..]);
+            self.buffer.shrinkRetainingCapacity(remaining);
+            self.start_index = 0;
+        }
+    }
 };
 
 // CANARY: REQ=REQ-PERF-QUIC-READLINE-001; FEATURE="BufferedProtoReader"; ASPECT=TransportHotPath; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
@@ -296,8 +391,37 @@ pub fn handleQuicConnection(
     log.debug("Stream accepted successfully", &.{});
     defer stream.close();
 
-    var line_reader = try BufferedProtoReader.init(gpa, transport, stream);
-    defer line_reader.deinit();
+    // CANARY: REQ=REQ-PROTOCOL-DETECT-002; FEATURE="ProtocolAutoDetect"; ASPECT=PeekFirstByte; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
+    // Detect protocol type by peeking at first byte
+    // JSON line protocol starts with '{' (0x7B), protobuf starts with length prefix
+    var peek_buf: [1]u8 = undefined;
+    var peek_attempts: usize = 0;
+    const max_peek_attempts: usize = 1000; // 1 second timeout
+
+    while (peek_attempts < max_peek_attempts) : (peek_attempts += 1) {
+        const n = stream.read(&peek_buf) catch |err| {
+            if (err == error.WouldBlock) {
+                try transport.poll(10);
+                std.Thread.sleep(1 * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+        if (n > 0) break;
+        try transport.poll(10);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
+
+    if (peek_attempts >= max_peek_attempts) {
+        log.warn("Timeout waiting for first byte from client", &.{});
+        return;
+    }
+
+    const detected_protocol: ProtocolType = if (peek_buf[0] == '{') .json_line else .protobuf;
+    log.debug("Detected protocol type", &.{
+        Attr.string("protocol", if (detected_protocol == .json_line) "json_line" else "protobuf"),
+        Attr.int("first_byte", @intCast(peek_buf[0])),
+    });
 
     // Initialize (or reuse) shared WAL manager.
     // This removes per-connection WAL open/close overhead.
@@ -371,64 +495,98 @@ pub fn handleQuicConnection(
     state.federation_manager = &federation_manager;
     state.distributed_planner = &dist_planner;
 
-    // Process messages
-    while (true) {
-        const msg_opt = line_reader.nextMessage() catch |err| {
-            if (err == error.EndOfStream) return; // Clean EOF
-            if (err == error.WouldBlock) {
-                try transport.poll(0);
-                continue;
-            }
-            log.err("Read error: {}", .{err});
-            return err; // Propagate other errors
-        };
+    // CANARY: REQ=REQ-PROTOCOL-DISPATCH-001; FEATURE="ProtocolAutoDetect"; ASPECT=MessageLoop; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
+    // Process messages based on detected protocol type
+    if (detected_protocol == .json_line) {
+        // JSON line protocol - use JSON reader
+        var json_reader = try BufferedJsonLineReader.init(gpa, transport, stream);
+        defer json_reader.deinit();
 
-        if (msg_opt == null) return; // EOF
-        const msg = msg_opt.?;
-        // Note: msg is allocated with gpa, need to handle cleanup if decoder allocates structure?
-        // schema.zig decode likely uses allocator for strings. We should define cleanup logic if needed.
-        // For now, Arwalk/zig-protobuf typically doesn't provide deinit, relying on allocator.
-        // If we used an Arena for the message processing, we could free it all at once.
-        // Let's wrap processing in an arena loop if we want per-message cleanup, OR just handle it carefully.
-        // For existing logic, processMessage takes allocator.
+        // Pre-populate buffer with the peeked byte
+        try json_reader.buffer.append(gpa, peek_buf[0]);
 
-        // Process
-        const response_msg = processMessage(gpa, &state, msg, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |err| {
-            log.err("Process error: {}", .{err});
-            // Send generic error
-            const err_resp = schema.Error{
-                .code = "58000",
-                .message = "Internal Server Error", // Simplified
+        while (true) {
+            const line_opt = json_reader.nextLine() catch |err| {
+                if (err == error.EndOfStream) return;
+                if (err == error.WouldBlock) {
+                    try transport.poll(0);
+                    continue;
+                }
+                log.err("JSON read error: {}", .{err});
+                return err;
             };
-            const resp = schema.QuicServerMessage{ .execute = .{ .@"error" = err_resp } }; // Assuming Execute context or generic?
-            // Ideally we mirror the request type, but for fatal error, Execute response is safe fallback
 
-            // Encode and send
-            var err_buf = std.ArrayList(u8).init(gpa);
-            defer err_buf.deinit();
-            const pb_writer = protobuf.initWriter(err_buf.writer());
-            try resp.encode(pb_writer);
+            if (line_opt == null) return; // EOF
+            const line = line_opt.?;
 
-            // Write Length + Bytes
-            const encoded = err_buf.items;
+            // Process JSON message
+            const response = processJsonLineMessage(gpa, &state, line) catch |err| {
+                log.err("JSON process error: {}", .{err});
+                const err_response = try std.fmt.allocPrint(gpa, "{{\"status_class\":\"58000\",\"error\":\"{s}\"}}\n", .{@errorName(err)});
+                defer gpa.free(err_response);
+                try stream.writeAll(err_response);
+                continue;
+            };
+            defer gpa.free(response);
+
+            try stream.writeAll(response);
+        }
+    } else {
+        // Protobuf protocol - use protobuf reader
+        var line_reader = try BufferedProtoReader.init(gpa, transport, stream);
+        defer line_reader.deinit();
+
+        // Pre-populate buffer with the peeked byte
+        try line_reader.buffer.append(gpa, peek_buf[0]);
+
+        while (true) {
+            const msg_opt = line_reader.nextMessage() catch |err| {
+                if (err == error.EndOfStream) return;
+                if (err == error.WouldBlock) {
+                    try transport.poll(0);
+                    continue;
+                }
+                log.err("Protobuf read error: {}", .{err});
+                return err;
+            };
+
+            if (msg_opt == null) return; // EOF
+            const msg = msg_opt.?;
+
+            // Process protobuf message
+            const response_msg = processMessage(gpa, &state, msg, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |err| {
+                log.err("Protobuf process error: {}", .{err});
+                const err_resp = schema.Error{
+                    .code = "58000",
+                    .message = "Internal Server Error",
+                };
+                const resp = schema.QuicServerMessage{ .execute = .{ .val = .{ .@"error" = err_resp } } };
+
+                var err_buf = std.ArrayList(u8).init(gpa);
+                defer err_buf.deinit();
+                const pb_writer = protobuf.initWriter(err_buf.writer());
+                try resp.encode(pb_writer);
+
+                const encoded = err_buf.items;
+                var len_buf: [4]u8 = undefined;
+                std.mem.writeInt(u32, len_buf[0..4], @intCast(encoded.len), .big);
+                try stream.writeAll(&len_buf);
+                try stream.writeAll(encoded);
+                continue;
+            };
+
+            // Encode Response
+            var resp_buf = std.ArrayList(u8).init(gpa);
+            defer resp_buf.deinit();
+            const pb_writer = protobuf.initWriter(resp_buf.writer());
+            try response_msg.encode(pb_writer);
+
+            const encoded_resp = resp_buf.items;
             var len_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, len_buf[0..4], @intCast(encoded.len), .big);
+            std.mem.writeInt(u32, len_buf[0..4], @intCast(encoded_resp.len), .big);
             try stream.writeAll(&len_buf);
-            try stream.writeAll(encoded);
-            continue;
-        };
-
-        // Encode Response
-        var resp_buf = std.ArrayList(u8).init(gpa);
-        defer resp_buf.deinit();
-        const pb_writer = protobuf.initWriter(resp_buf.writer());
-        try response_msg.encode(pb_writer);
-
-        const encoded_resp = resp_buf.items;
-        var len_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, len_buf[0..4], @intCast(encoded_resp.len), .big);
-        try stream.writeAll(&len_buf);
-        try stream.writeAll(encoded_resp);
+            try stream.writeAll(encoded_resp);
+        }
     }
 }
 
@@ -497,6 +655,10 @@ pub fn processMessage(
             } };
         },
         .execute => |exec_req| {
+            log.info("PROTOBUF .execute received", &.{
+                Attr.int("query_len", @intCast(exec_req.query.len)),
+            });
+
             // Execute the query using test_harness
             const user_mgmt = geode.user_management;
 
@@ -517,12 +679,21 @@ pub fn processMessage(
                 .output_format = "json",
             };
 
+            log.info("Executing query via test_harness", &.{});
             const result = geode.test_harness.runQueryWithAuth(&gpa, exec_req.query, options) catch |err| {
+                log.err("Query execution failed", &.{Attr.err("error", err)});
                 const err_msg = @errorName(err);
                 const err_resp = schema.Error{ .code = "58000", .message = err_msg };
                 return schema.QuicServerMessage{ .execute = .{ .val = .{ .@"error" = err_resp } } };
             };
             defer gpa.free(result);
+
+            log.info("Query executed successfully, calling saveIfDirty", &.{});
+            // CANARY: REQ=REQ-QUIC-PERSIST-001; FEATURE="QUICDataPersistence"; ASPECT=PostExecutionPersist; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
+            // Save graph store if dirty after query execution
+            // Mutations mark the store as dirty; we save once per query to avoid O(n²) overhead
+            const global_store = geode.graph_store.getGlobalStore(gpa);
+            global_store.saveIfDirty();
 
             // Build response with result data
             // For now, return the result as a single string value in a page
@@ -563,5 +734,112 @@ pub fn processMessage(
             };
             return schema.QuicServerMessage{ .rollback = .{ .success = true } };
         },
+    }
+}
+
+// CANARY: REQ=REQ-JSON-LINE-PROCESS-001; FEATURE="JsonLineProtocol"; ASPECT=MessageProcessing; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
+/// Process a JSON line protocol message and return JSON response
+/// This handles legacy REPL/CLI clients that send JSON instead of protobuf
+pub fn processJsonLineMessage(
+    gpa: std.mem.Allocator,
+    state: *ServerState,
+    json_line: []const u8,
+) ![]u8 {
+    log.info("processJsonLineMessage called", &.{
+        Attr.int("line_len", @intCast(json_line.len)),
+    });
+
+    // Parse the JSON message
+    const trimmed = std.mem.trim(u8, json_line, " \t\r\n");
+    if (trimmed.len == 0) {
+        return try gpa.dupe(u8, "{\"status_class\":\"42000\",\"error\":\"Empty message\"}\n");
+    }
+
+    // Parse JSON using json_lib
+    const parsed = json_lib.decode(gpa, trimmed, .{}) catch {
+        return try gpa.dupe(u8, "{\"status_class\":\"42000\",\"error\":\"Invalid JSON\"}\n");
+    };
+    defer if (parsed.arena) |a| a.deinit();
+
+    const obj = parsed.value.object;
+
+    // Get message type
+    const msg_type = obj.get("type") orelse {
+        return try gpa.dupe(u8, "{\"status_class\":\"42000\",\"error\":\"Missing type field\"}\n");
+    };
+
+    if (msg_type != .string) {
+        return try gpa.dupe(u8, "{\"status_class\":\"42000\",\"error\":\"Invalid type field\"}\n");
+    }
+
+    const type_str = msg_type.string;
+
+    // Handle different message types
+    if (std.mem.eql(u8, type_str, "HELLO")) {
+        // Simple HELLO acknowledgment for JSON protocol
+        return try gpa.dupe(u8, "{\"type\":\"HELLO\",\"status\":\"ok\",\"capabilities\":[\"QUIC\",\"TLS1.3\"]}\n");
+    } else if (std.mem.eql(u8, type_str, "RUN_GQL")) {
+        // Execute GQL query
+        const text_val = obj.get("text") orelse {
+            return try gpa.dupe(u8, "{\"status_class\":\"42000\",\"error\":\"Missing text field\"}\n");
+        };
+
+        if (text_val != .string) {
+            return try gpa.dupe(u8, "{\"status_class\":\"42000\",\"error\":\"Invalid text field\"}\n");
+        }
+
+        const query = text_val.string;
+
+        // Execute query via test_harness
+        const options = geode.test_harness.QueryOptions{
+            .user = state.authenticated_user,
+            .password = state.authenticated_password,
+            .pre_validated_role = if (state.authenticated_role) |role| .{
+                .username = state.authenticated_user orelse "",
+                .role = role,
+            } else null,
+            .output_format = "json",
+        };
+
+        const result = geode.test_harness.runQueryWithAuth(&gpa, query, options) catch |err| {
+            const err_msg = @errorName(err);
+            return try std.fmt.allocPrint(gpa, "{{\"status_class\":\"58000\",\"error\":\"{s}\"}}\n", .{err_msg});
+        };
+        defer gpa.free(result);
+
+        // Save graph store if dirty after query execution
+        const global_store = geode.graph_store.getGlobalStore(gpa);
+        global_store.saveIfDirty();
+
+        // Return the result with newline
+        var response = try gpa.alloc(u8, result.len + 1);
+        @memcpy(response[0..result.len], result);
+        response[result.len] = '\n';
+        return response;
+    } else if (std.mem.eql(u8, type_str, "PULL")) {
+        // For JSON protocol, PULL just returns empty bindings (results are inlined with RUN_GQL)
+        return try gpa.dupe(u8, "{\"type\":\"BINDINGS\",\"bindings\":[],\"has_more\":false}\n");
+    } else if (std.mem.eql(u8, type_str, "PING")) {
+        return try gpa.dupe(u8, "{\"type\":\"PONG\",\"ok\":true}\n");
+    } else if (std.mem.eql(u8, type_str, "BEGIN")) {
+        const tx_id = state.txn_manager.beginTransaction(false) catch {
+            return try gpa.dupe(u8, "{\"status_class\":\"25000\",\"error\":\"Failed to begin transaction\"}\n");
+        };
+        return try std.fmt.allocPrint(gpa, "{{\"type\":\"BEGIN_OK\",\"tx_id\":{d}}}\n", .{tx_id});
+    } else if (std.mem.eql(u8, type_str, "COMMIT")) {
+        state.txn_manager.commitTransaction() catch {
+            return try gpa.dupe(u8, "{\"status_class\":\"25000\",\"error\":\"Failed to commit transaction\"}\n");
+        };
+        // Save graph store after commit
+        const global_store = geode.graph_store.getGlobalStore(gpa);
+        global_store.saveIfDirty();
+        return try gpa.dupe(u8, "{\"type\":\"COMMIT_OK\"}\n");
+    } else if (std.mem.eql(u8, type_str, "ROLLBACK")) {
+        state.txn_manager.rollbackTransaction() catch {
+            return try gpa.dupe(u8, "{\"status_class\":\"25000\",\"error\":\"Failed to rollback transaction\"}\n");
+        };
+        return try gpa.dupe(u8, "{\"type\":\"ROLLBACK_OK\"}\n");
+    } else {
+        return try std.fmt.allocPrint(gpa, "{{\"status_class\":\"42000\",\"error\":\"Unknown message type: {s}\"}}\n", .{type_str});
     }
 }

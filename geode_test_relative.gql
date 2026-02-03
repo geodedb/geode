@@ -1,0 +1,2 @@
+USE GRAPH file_test_graph;
+CREATE (n:RelPathTest {id: 41});

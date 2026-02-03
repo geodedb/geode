@@ -31,7 +31,8 @@ fn generateTimeBasedId() u64 {
 
 /// Get the persistence file path, respecting GEODE_DATA_DIR environment variable
 /// Returns an allocated path that must be freed by the caller
-fn getPersistenceFilePath(allocator: std.mem.Allocator) ![]u8 {
+// CANARY: REQ=REQ-BINARY-PERSIST-PATH-001; FEATURE="BinaryPersistence"; ASPECT=PathResolution; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-02
+pub fn getPersistenceFilePath(allocator: std.mem.Allocator) ![]u8 {
     const builtin = @import("builtin");
 
     // Helper to get fallback temp directory path
@@ -138,6 +139,9 @@ pub const GraphStore = struct {
     // Issue #392: Adjacency lists for fast edge lookups during DELETE DETACH
     outgoing_edges: std.AutoHashMap(u64, std.ArrayList(u64)), // from_node_id -> edge_ids
     incoming_edges: std.AutoHashMap(u64, std.ArrayList(u64)), // to_node_id -> edge_ids
+    // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
+    // Track if store has unsaved changes - avoids O(n²) persistence during batch operations
+    dirty: bool = false,
 
     /// Initialize GraphStore with default tenant
     pub fn init(allocator: std.mem.Allocator) GraphStore {
@@ -363,6 +367,15 @@ pub const GraphStore = struct {
             try self.addToLabelIndex(graph_name, label, id);
         }
 
+        // CANARY: REQ=REQ-BINARY-PERSIST-NODE-002; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
+        // Mark store as dirty - persistence happens at query completion, not per-node
+        // This avoids O(n²) serialization overhead during batch operations
+        self.dirty = true;
+        log.info("Node created, dirty=true", &.{
+            Attr.int("node_id", @intCast(id)),
+            Attr.int("total_nodes", @intCast(self.nodes.count())),
+        });
+
         return id;
     }
 
@@ -459,13 +472,8 @@ pub const GraphStore = struct {
             }
             result.value_ptr.* = value_copy;
 
-            // Save to persistent storage
-            self.saveToFile() catch |err| {
-                log.err("CRITICAL: Failed to persist graph after node property set", &.{
-                    Attr.int("node_id", @intCast(node_id)),
-                    Attr.err("error", err),
-                });
-            };
+            // Mark as dirty - persistence happens at query completion
+            self.dirty = true;
         }
     }
 
@@ -517,13 +525,8 @@ pub const GraphStore = struct {
     pub fn removeNodeProperty(self: *GraphStore, node_id: u64, key: []const u8) void {
         if (self.nodes.getPtr(node_id)) |node| {
             _ = node.properties.remove(key);
-            // Save to persistent storage
-            self.saveToFile() catch |err| {
-                log.err("CRITICAL: Failed to persist graph after node property removal", &.{
-                    Attr.int("node_id", @intCast(node_id)),
-                    Attr.err("error", err),
-                });
-            };
+            // Mark as dirty - persistence happens at query completion
+            self.dirty = true;
         }
     }
 
@@ -549,12 +552,8 @@ pub const GraphStore = struct {
 
             node.labels = new_labels;
 
-            // Save to persistent storage
-            self.saveToFile() catch |err| {
-                log.err("CRITICAL: Failed to persist graph store", &.{
-                    Attr.err("error", err),
-                });
-            };
+            // Mark as dirty - persistence happens at query completion
+            self.dirty = true;
         }
     }
 
@@ -587,12 +586,8 @@ pub const GraphStore = struct {
 
                 node.labels = new_labels;
 
-                // Save to persistent storage
-                self.saveToFile() catch |err| {
-                    log.err("CRITICAL: Failed to persist graph store", &.{
-                        Attr.err("error", err),
-                    });
-                };
+                // Mark as dirty - persistence happens at query completion
+                self.dirty = true;
             }
         }
     }
@@ -636,12 +631,9 @@ pub const GraphStore = struct {
         // Issue #392: Maintain adjacency indexes for fast DELETE DETACH
         try self.addToAdjacencyIndex(from_id, to_id, id);
 
-        // Save to persistent storage
-        self.saveToFile() catch |err| {
-            log.err("CRITICAL: Failed to persist graph store", &.{
-                Attr.err("error", err),
-            });
-        };
+        // CANARY: REQ=REQ-BINARY-PERSIST-EDGE-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
+        // Mark store as dirty - persistence happens at query completion, not per-edge
+        self.dirty = true;
 
         return id;
     }
@@ -723,12 +715,8 @@ pub const GraphStore = struct {
             }
             result.value_ptr.* = value_copy;
 
-            // Save to persistent storage
-            self.saveToFile() catch |err| {
-                log.err("CRITICAL: Failed to persist graph store", &.{
-                    Attr.err("error", err),
-                });
-            };
+            // Mark as dirty - persistence happens at query completion
+            self.dirty = true;
         }
     }
 
@@ -1246,10 +1234,32 @@ pub const GraphStore = struct {
 
         // Encrypt and write to file using TDE
         try tde.writeEncryptedFile(self.allocator, file_path, buffer.items);
+
+        // Clear dirty flag after successful save
+        self.dirty = false;
+    }
+
+    // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-002; FEATURE="BinaryPersistence"; ASPECT=ConditionalSave; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
+    /// Save to file only if there are unsaved changes (dirty flag is set)
+    /// This should be called after query completion, not after every individual mutation
+    pub fn saveIfDirty(self: *GraphStore) void {
+        log.info("saveIfDirty called", &.{
+            Attr.string("dirty", if (self.dirty) "true" else "false"),
+            Attr.int("node_count", @intCast(self.nodes.count())),
+        });
+        if (self.dirty) {
+            log.info("Saving graph store (dirty=true)", &.{});
+            self.saveToFile() catch |err| {
+                log.err("CRITICAL: Failed to persist graph store", &.{
+                    Attr.err("error", err),
+                });
+            };
+        }
     }
 
     // CANARY: REQ=REQ-TDE-GRAPHSTORE-003; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStoreLoad; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
-    fn loadFromFile(self: *GraphStore) !void {
+    // CANARY: REQ=REQ-BINARY-PERSIST-LOAD-001; FEATURE="BinaryPersistence"; ASPECT=LoadFromFile; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-02
+    pub fn loadFromFile(self: *GraphStore) !void {
         const file_path = try getPersistenceFilePath(self.allocator);
         defer self.allocator.free(file_path);
 

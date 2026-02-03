@@ -280,47 +280,365 @@ const QuicTransportConnection = struct {
     client: *quic.QuicClient,
     stream: *quic.QuicClientStream,
     owns_client: bool,
+    // CANARY: REQ=REQ-SHELL-PROTO-003; FEATURE="ShellProtobufTransport"; ASPECT=PullSkip; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+    // Track if last write was PULL - server doesn't use PULL in Protobuf protocol
+    // Data is returned with Execute, so PULL should return empty/success
+    pending_pull: bool = false,
 };
 
+// CANARY: REQ=REQ-SHELL-PROTO-001; FEATURE="ShellProtobufTransport"; ASPECT=WriteAll; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+// Convert JSON messages from REPL to Protobuf with length-prefix framing for server
 fn quicWriteAll(self: *repl_dispatch.TransportConnection, data: []const u8) !void {
     const ctx = self.context orelse return error.NotConnected;
     const impl: *QuicTransportConnection = @ptrCast(@alignCast(ctx));
-    impl.stream.writeAll(data) catch |err| {
+    const allocator = impl.allocator;
+
+    // Strip trailing newline for JSON parsing
+    const trimmed = std.mem.trimRight(u8, data, "\r\n");
+    if (trimmed.len == 0) return;
+
+    // Parse JSON to determine message type
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{}) catch {
+        // Not valid JSON, send as-is (shouldn't happen but fallback)
+        impl.stream.writeAll(data) catch |err| return err;
+        return;
+    };
+    defer parsed.deinit();
+
+    if (parsed.value != .object) {
+        impl.stream.writeAll(data) catch |err| return err;
+        return;
+    }
+
+    const obj = parsed.value.object;
+    const msg_type = obj.get("type") orelse {
+        impl.stream.writeAll(data) catch |err| return err;
+        return;
+    };
+
+    if (msg_type != .string) {
+        impl.stream.writeAll(data) catch |err| return err;
+        return;
+    }
+
+    // Convert JSON to Protobuf based on message type
+    const proto_msg: schema.QuicClientMessage = blk: {
+        if (std.mem.eql(u8, msg_type.string, "HELLO")) {
+            // Extract optional username/password for authenticated HELLO
+            const username = if (obj.get("username")) |u| (if (u == .string) u.string else "") else "";
+            const password = if (obj.get("password")) |p| (if (p == .string) p.string else "") else "";
+            break :blk .{ .hello = .{
+                .username = username,
+                .password = password,
+                .tenant_id = null,
+            } };
+        } else if (std.mem.eql(u8, msg_type.string, "RUN_GQL")) {
+            const text = if (obj.get("text")) |t| (if (t == .string) t.string else "") else "";
+            break :blk .{ .execute = .{
+                .session_id = "",
+                .query = text,
+                .parameters = .empty,
+            } };
+        } else if (std.mem.eql(u8, msg_type.string, "BEGIN")) {
+            break :blk .{ .begin = .{ .read_only = false } };
+        } else if (std.mem.eql(u8, msg_type.string, "COMMIT")) {
+            break :blk .{ .commit = .{} };
+        } else if (std.mem.eql(u8, msg_type.string, "ROLLBACK")) {
+            break :blk .{ .rollback = .{} };
+        } else if (std.mem.eql(u8, msg_type.string, "PING")) {
+            break :blk .{ .ping = .{} };
+        } else if (std.mem.eql(u8, msg_type.string, "PULL")) {
+            // CANARY: REQ=REQ-SHELL-PROTO-004; FEATURE="ShellProtobufTransport"; ASPECT=PullNoOp; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+            // PULL doesn't exist in Protobuf protocol - server returns all data with Execute
+            // Mark pending_pull so readLine returns empty success without server round-trip
+            impl.pending_pull = true;
+            return; // Don't send anything to server
+        } else {
+            // Unknown message type, try sending as-is
+            impl.stream.writeAll(data) catch |err| return err;
+            return;
+        }
+    };
+
+    // Encode to Protobuf
+    var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 4096) catch return error.OutOfMemory;
+    defer aw.deinit();
+
+    protobuf.encode(&aw.writer, allocator, proto_msg) catch |err| {
+        log.err("Failed to encode protobuf message", &.{Attr.err("error", err)});
         return err;
     };
+
+    const encoded = aw.writer.buffer[0..aw.writer.end];
+
+    // Write length prefix (4 bytes big-endian)
+    var len_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &len_buf, @intCast(encoded.len), .big);
+    impl.stream.writeAll(&len_buf) catch |err| return err;
+
+    // Write message body
+    impl.stream.writeAll(encoded) catch |err| return err;
 }
 
-// CANARY: REQ=REQ-SHELL-INTERRUPT-049; FEATURE="SourceInterrupt"; ASPECT=QuicReadLineInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
-// Added interrupt checking during QUIC read polling to allow Ctrl+C cancellation
+// CANARY: REQ=REQ-SHELL-PROTO-002; FEATURE="ShellProtobufTransport"; ASPECT=ReadLine; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+// Read length-prefixed Protobuf responses and convert to JSON for REPL compatibility
 fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
+    _ = max_size;
     const ctx = self.context orelse return error.NotConnected;
     const impl: *QuicTransportConnection = @ptrCast(@alignCast(ctx));
 
-    // Use polling approach for QUIC (async transport)
+    // CANARY: REQ=REQ-SHELL-PROTO-005; FEATURE="ShellProtobufTransport"; ASPECT=PullResponse; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+    // If we sent PULL, return empty success - data was already returned with Execute
+    if (impl.pending_pull) {
+        impl.pending_pull = false;
+        // Return empty BINDINGS response - no more data (it was all in Execute response)
+        return try allocator.dupe(u8, "{\"type\":\"BINDINGS\",\"rows\":[],\"final\":true}");
+    }
+
     const start = std.time.milliTimestamp();
     const timeout_ms: i64 = 30000; // 30 second timeout for REPL
-    while (true) {
-        // CANARY: REQ=REQ-SHELL-INTERRUPT-050; FEATURE="SourceInterrupt"; ASPECT=QuicReadLineInterruptCheck; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
-        // Check for Ctrl+C interrupt during polling to allow cancellation of long-running operations
+
+    // Read 4-byte length prefix
+    var len_buf: [4]u8 = undefined;
+    var len_read: usize = 0;
+    while (len_read < 4) {
         if (repl_dispatch.checkForInterrupt()) {
             return error.Interrupted;
         }
 
-        const line = impl.stream.readLine(max_size) catch |err| {
-            if (err == error.WouldBlock or err == error.EndOfStream) {
-                if (std.time.milliTimestamp() - start >= timeout_ms) return err;
-                // GAP-0200: Reduced poll/sleep from 50ms to 5ms for higher throughput
+        const n = impl.stream.read(len_buf[len_read..]) catch |err| {
+            if (err == error.WouldBlock) {
+                if (std.time.milliTimestamp() - start >= timeout_ms) return error.WouldBlock;
                 impl.client.poll(5) catch {};
                 std.Thread.sleep(5 * std.time.ns_per_ms);
                 continue;
             }
             return err;
         };
-        // Copy line to provided allocator since stream uses internal allocator
-        const result = try allocator.dupe(u8, line);
-        impl.client.allocator.free(line);
-        return result;
+        if (n == 0) return error.EndOfStream;
+        len_read += n;
     }
+
+    const msg_len = std.mem.readInt(u32, &len_buf, .big);
+    if (msg_len > 16 * 1024 * 1024) return error.MessageTooLarge; // 16MB limit
+
+    // Read message body
+    const body = try allocator.alloc(u8, msg_len);
+    errdefer allocator.free(body);
+
+    var body_read: usize = 0;
+    while (body_read < msg_len) {
+        if (repl_dispatch.checkForInterrupt()) {
+            allocator.free(body);
+            return error.Interrupted;
+        }
+
+        const n = impl.stream.read(body[body_read..]) catch |err| {
+            if (err == error.WouldBlock) {
+                if (std.time.milliTimestamp() - start >= timeout_ms) {
+                    allocator.free(body);
+                    return error.WouldBlock;
+                }
+                impl.client.poll(5) catch {};
+                std.Thread.sleep(5 * std.time.ns_per_ms);
+                continue;
+            }
+            allocator.free(body);
+            return err;
+        };
+        if (n == 0) {
+            allocator.free(body);
+            return error.EndOfStream;
+        }
+        body_read += n;
+    }
+
+    // Decode Protobuf
+    var reader: std.Io.Reader = .fixed(body);
+    var packet = protobuf.decode(schema.ServerPacket, &reader, allocator) catch |err| {
+        allocator.free(body);
+        log.err("Failed to decode protobuf response", &.{Attr.err("error", err)});
+        return err;
+    };
+    allocator.free(body);
+    defer packet.deinit(allocator);
+
+    const msg = packet.msg orelse return error.InvalidMessage;
+
+    // Convert Protobuf response to JSON for REPL compatibility
+    var json_buf = std.ArrayList(u8).initCapacity(allocator, 1024) catch return error.OutOfMemory;
+    errdefer json_buf.deinit(allocator);
+    const writer = json_buf.writer(allocator);
+
+    switch (msg) {
+        .hello => |h| {
+            // HELLO response
+            writer.writeAll("{\"type\":\"HELLO\",\"success\":") catch {};
+            if (h.success) {
+                writer.writeAll("true") catch {};
+            } else {
+                writer.writeAll("false") catch {};
+            }
+            if (h.error_message.len > 0) {
+                writer.writeAll(",\"error\":\"") catch {};
+                // Escape the error message
+                for (h.error_message) |c| {
+                    switch (c) {
+                        '"' => writer.writeAll("\\\"") catch {},
+                        '\\' => writer.writeAll("\\\\") catch {},
+                        '\n' => writer.writeAll("\\n") catch {},
+                        '\r' => writer.writeAll("\\r") catch {},
+                        '\t' => writer.writeAll("\\t") catch {},
+                        else => writer.writeByte(c) catch {},
+                    }
+                }
+                writer.writeAll("\"") catch {};
+            }
+            writer.writeAll("}") catch {};
+        },
+        .execute => |exec| {
+            // Query execution response - exec.val is optional ExecutionResponseUnion
+            if (exec.val) |exec_val| {
+                switch (exec_val) {
+                    .schema => |s| {
+                        // Schema definition response
+                        writer.writeAll("{\"type\":\"SCHEMA\",\"columns\":[") catch {};
+                        var first = true;
+                        for (s.columns.items) |col| {
+                            if (!first) writer.writeAll(",") catch {};
+                            first = false;
+                            writer.writeAll("{\"name\":\"") catch {};
+                            writer.writeAll(col.name) catch {};
+                            writer.writeAll("\",\"type\":\"") catch {};
+                            writer.writeAll(col.type) catch {};
+                            writer.writeAll("\"}") catch {};
+                        }
+                        writer.writeAll("]}") catch {};
+                    },
+                    .page => |p| {
+                        // Data page response - server returns JSON result as string_val
+                        // Check if first row first value is a complete JSON response (server wraps result in string)
+                        const handled_passthrough = handle_blk: {
+                            if (p.rows.items.len == 1 and p.rows.items[0].values.items.len == 1) {
+                                if (p.rows.items[0].values.items[0].kind) |kind| {
+                                    switch (kind) {
+                                        .string_val => |json_str| {
+                                            // Check if it looks like a complete JSON response
+                                            if (std.mem.startsWith(u8, json_str, "{\"status_class\"") or
+                                                std.mem.startsWith(u8, json_str, "{\"type\":"))
+                                            {
+                                                // Server already returned complete JSON - pass through directly
+                                                writer.writeAll(json_str) catch {};
+                                                break :handle_blk true;
+                                            }
+                                        },
+                                        .null_val, .int_val, .double_val, .bool_val => {},
+                                    }
+                                }
+                            }
+                            break :handle_blk false;
+                        };
+
+                        if (!handled_passthrough) {
+                            // Fallback: convert DataPage to BINDINGS format
+                            writer.writeAll("{\"type\":\"BINDINGS\",\"rows\":[") catch {};
+                            var first_row = true;
+                            for (p.rows.items) |row| {
+                                if (!first_row) writer.writeAll(",") catch {};
+                                first_row = false;
+                                writer.writeAll("[") catch {};
+                                var first_val = true;
+                                for (row.values.items) |val| {
+                                    if (!first_val) writer.writeAll(",") catch {};
+                                    first_val = false;
+                                    // Serialize value based on kind (optional)
+                                    if (val.kind) |kind| {
+                                        switch (kind) {
+                                            .null_val => writer.writeAll("null") catch {},
+                                            .string_val => |s| {
+                                                writer.writeAll("\"") catch {};
+                                                for (s) |c| {
+                                                    switch (c) {
+                                                        '"' => writer.writeAll("\\\"") catch {},
+                                                        '\\' => writer.writeAll("\\\\") catch {},
+                                                        '\n' => writer.writeAll("\\n") catch {},
+                                                        else => writer.writeByte(c) catch {},
+                                                    }
+                                                }
+                                                writer.writeAll("\"") catch {};
+                                            },
+                                            .int_val => |i| {
+                                                var num_buf: [32]u8 = undefined;
+                                                const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch "0";
+                                                writer.writeAll(num_str) catch {};
+                                            },
+                                            .double_val => |d| {
+                                                var num_buf: [64]u8 = undefined;
+                                                const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{d}) catch "0";
+                                                writer.writeAll(num_str) catch {};
+                                            },
+                                            .bool_val => |b| {
+                                                writer.writeAll(if (b) "true" else "false") catch {};
+                                            },
+                                        }
+                                    } else {
+                                        writer.writeAll("null") catch {};
+                                    }
+                                }
+                                writer.writeAll("]") catch {};
+                            }
+                            writer.writeAll("],\"final\":") catch {};
+                            writer.writeAll(if (p.last_page) "true" else "false") catch {};
+                            writer.writeAll("}") catch {};
+                        }
+                    },
+                    .@"error" => |e| {
+                        writer.writeAll("{\"type\":\"ERROR\",\"status_class\":\"") catch {};
+                        writer.writeAll(e.code) catch {};
+                        writer.writeAll("\",\"error\":\"") catch {};
+                        for (e.message) |c| {
+                            switch (c) {
+                                '"' => writer.writeAll("\\\"") catch {},
+                                '\\' => writer.writeAll("\\\\") catch {},
+                                '\n' => writer.writeAll("\\n") catch {},
+                                else => writer.writeByte(c) catch {},
+                            }
+                        }
+                        writer.writeAll("\"}") catch {};
+                    },
+                    .metrics, .heartbeat => {
+                        // Ignore metrics/heartbeat messages
+                        writer.writeAll("{\"type\":\"OK\"}") catch {};
+                    },
+                }
+            } else {
+                writer.writeAll("{\"type\":\"ERROR\",\"error\":\"Empty response\"}") catch {};
+            }
+        },
+        .ping => |p| {
+            writer.writeAll("{\"type\":\"PING\",\"ok\":") catch {};
+            writer.writeAll(if (p.ok) "true" else "false") catch {};
+            writer.writeAll("}") catch {};
+        },
+        .begin => |b| {
+            // BeginResponse has session_id and tx_id, not success
+            writer.writeAll("{\"type\":\"BEGIN\",\"success\":true,\"tx_id\":\"") catch {};
+            writer.writeAll(b.tx_id) catch {};
+            writer.writeAll("\"}") catch {};
+        },
+        .commit => |c| {
+            writer.writeAll("{\"type\":\"COMMIT\",\"success\":") catch {};
+            writer.writeAll(if (c.success) "true" else "false") catch {};
+            writer.writeAll("}") catch {};
+        },
+        .rollback => |r| {
+            writer.writeAll("{\"type\":\"ROLLBACK\",\"success\":") catch {};
+            writer.writeAll(if (r.success) "true" else "false") catch {};
+            writer.writeAll("}") catch {};
+        },
+    }
+
+    return json_buf.toOwnedSlice(allocator) catch return error.OutOfMemory;
 }
 
 fn quicDeinit(self: *repl_dispatch.TransportConnection) void {
@@ -1080,6 +1398,12 @@ fn processProtocolMessage(
             } else |_| {}
         }
 
+        // CANARY: REQ=REQ-QUIC-PERSIST-003; FEATURE="QUICDataPersistence"; ASPECT=JsonRpcPersist; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
+        // Save graph store if dirty after query execution (RUN_GQL JSON handler)
+        // This ensures data created via JSON protocol (shell /source) is persisted to disk
+        const global_store = geode.graph_store.getGlobalStore(allocator);
+        global_store.saveIfDirty();
+
         // Parse the result JSON to extract columns for SCHEMA response
         const result_parsed = try std.json.parseFromSlice(std.json.Value, allocator, result, .{});
         defer result_parsed.deinit();
@@ -1388,6 +1712,12 @@ fn processProtobufMessage(allocator: std.mem.Allocator, transport: *quic.QuicTra
                 return;
             };
 
+            // CANARY: REQ=REQ-QUIC-PERSIST-002; FEATURE="QUICDataPersistence"; ASPECT=PostExecutionPersist; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
+            // Save graph store if dirty after query execution
+            // This ensures data created via QUIC protocol is persisted to disk
+            const global_store = geode.graph_store.getGlobalStore(allocator);
+            global_store.saveIfDirty();
+
             // Result is probably JSON text.
             // Wrap in ExecutionResponse?
             // Existing CLI runSimpleStatement returns JSON (I think).
@@ -1671,6 +2001,12 @@ fn handleQuicStream(allocator: std.mem.Allocator, conn_state: anytype, stream: a
                 continue;
             };
             defer mut_ally.free(result);
+
+            // CANARY: REQ=REQ-QUIC-PERSIST-004; FEATURE="QUICDataPersistence"; ASPECT=StreamJsonRpcPersist; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
+            // Save graph store if dirty after query execution (RUN_GQL stream handler)
+            // This ensures data created via JSON protocol (shell /source) is persisted to disk
+            const global_store = geode.graph_store.getGlobalStore(allocator);
+            global_store.saveIfDirty();
 
             // Parse the result JSON to extract columns for SCHEMA response
             const result_parsed = try std.json.parseFromSlice(std.json.Value, allocator, result, .{});
@@ -4304,17 +4640,27 @@ fn parseWrappedJsonResponse(
     if (parsed.value != .object) return error.InvalidJson;
     const root = parsed.value.object;
 
+    // CANARY: REQ=REQ-CLI-PROTO-002; FEATURE="ProtoMigration"; ASPECT=NestedResultParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+    // Server returns JSON wrapped in: {"status_class":"00000","result":{"type":"BINDINGS",...,"columns":[...],"rows":[...]}}
+    // Get the actual data container - either nested under 'result' or at root level
+    const data_obj = blk: {
+        if (root.get("result")) |result_val| {
+            if (result_val == .object) break :blk result_val.object;
+        }
+        break :blk root;
+    };
+
     // Extract columns
-    if (root.get("columns")) |cols_val| {
+    if (data_obj.get("columns")) |cols_val| {
         if (cols_val == .array) {
             for (cols_val.array.items) |col| {
                 const col_name = switch (col) {
                     .string => |s| try allocator.dupe(u8, s),
-                    .object => |obj| blk: {
+                    .object => |obj| obj_blk: {
                         if (obj.get("name")) |name| {
-                            if (name == .string) break :blk try allocator.dupe(u8, name.string);
+                            if (name == .string) break :obj_blk try allocator.dupe(u8, name.string);
                         }
-                        break :blk try allocator.dupe(u8, "?");
+                        break :obj_blk try allocator.dupe(u8, "?");
                     },
                     else => try allocator.dupe(u8, "?"),
                 };
@@ -4324,22 +4670,38 @@ fn parseWrappedJsonResponse(
     }
 
     // Extract rows
-    if (root.get("rows")) |rows_val| {
+    if (data_obj.get("rows")) |rows_val| {
         if (rows_val == .array) {
             for (rows_val.array.items) |row_item| {
-                if (row_item == .array) {
-                    var row_values = try std.ArrayList([]const u8).initCapacity(allocator, 16);
-                    errdefer {
-                        for (row_values.items) |cell| allocator.free(cell);
-                        row_values.deinit(allocator);
-                    }
+                var row_values = try std.ArrayList([]const u8).initCapacity(allocator, 16);
+                errdefer {
+                    for (row_values.items) |cell| allocator.free(cell);
+                    row_values.deinit(allocator);
+                }
 
+                // Handle both array rows (legacy) and object rows (standard format)
+                if (row_item == .array) {
                     for (row_item.array.items) |cell| {
                         const cell_str = try jsonValueToString(allocator, cell);
                         try row_values.append(allocator, cell_str);
                     }
+                } else if (row_item == .object) {
+                    // Object row format: {"col1": val1, "col2": val2}
+                    // Extract values in column order
+                    for (columns.items) |col_name| {
+                        if (row_item.object.get(col_name)) |cell| {
+                            const cell_str = try jsonValueToString(allocator, cell);
+                            try row_values.append(allocator, cell_str);
+                        } else {
+                            try row_values.append(allocator, try allocator.dupe(u8, "null"));
+                        }
+                    }
+                }
 
+                if (row_values.items.len > 0) {
                     try all_rows.append(allocator, row_values);
+                } else {
+                    row_values.deinit(allocator);
                 }
             }
         }

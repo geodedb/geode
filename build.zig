@@ -709,6 +709,11 @@ pub fn build(b: *std.Build) void {
     graph_persist_tests.root_module.addImport("geode", root_mod);
     const run_graph_persist_tests = b.addRunArtifact(graph_persist_tests);
 
+    // Binary persistence tests (REQ-BINARY-PERSIST-TEST-001)
+    const binary_persist_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/tests/test_binary_persistence.zig"), .target = target, .optimize = optimize }) });
+    binary_persist_tests.root_module.addImport("geode", root_mod);
+    const run_binary_persist_tests = b.addRunArtifact(binary_persist_tests);
+
     // Compile Vulkan shaders to SPIR-V (Phase 2)
     const shader_compile_step = b.step("shaders", "Compile Vulkan shaders to SPIR-V");
 
@@ -829,6 +834,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_integration_tests.step);
     test_step.dependOn(&run_gap0203_tests.step);
     test_step.dependOn(&run_graph_persist_tests.step);
+    test_step.dependOn(&run_binary_persist_tests.step);
 
     // Extended built-ins CANARY adapter + decimal formatter tests
     const canary_extended_builtins_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_extended_builtins.zig"), .target = target, .optimize = optimize }) });

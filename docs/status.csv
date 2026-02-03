@@ -328,6 +328,29 @@ REQ-BENCHMARK-AUDIT-001,AuditBenchmark,LatencyBenchmark,TESTED,,,monitoring,2026
 REQ-BENCHMARK-AUDIT-002,Audit Latency Benchmark,Documentation,EXEMPT,,,monitoring,2026-01-14,BENCHMARK_REPORT.md
 REQ-BENCHMARK-EVIDENCE-001,Performance Evidence,Documentation,EXEMPT,,,monitoring,2026-01-14*,BENCHMARK_REPORT.md
 REQ-BENCHMARK-TDE-001,TDE Overhead Benchmark,Documentation,EXEMPT,,,security,2026-01-14,BENCHMARK_REPORT.md
+REQ-BINARY-PERSIST-001,BinaryPersistence,ServerInit,IMPL,,,server,2026-02-02,src/server/server_init.zig
+REQ-BINARY-PERSIST-002,BinaryPersistence,ServerStartup,IMPL,,,server,2026-02-02,src/server/server_init.zig
+REQ-BINARY-PERSIST-003,BinaryPersistence,MainImports,IMPL,,,server,2026-02-02,src/server/main.zig
+REQ-BINARY-PERSIST-DIRTY-001,BinaryPersistence,DirtyTracking,IMPL,,,storage,2026-02-02,src/graph_store.zig
+REQ-BINARY-PERSIST-DIRTY-002,BinaryPersistence,ConditionalSave,IMPL,,,storage,2026-02-02,src/graph_store.zig
+REQ-BINARY-PERSIST-EDGE-001,BinaryPersistence,DirtyTracking,IMPL,,,storage,2026-02-02,src/graph_store.zig
+REQ-BINARY-PERSIST-LOAD-001,BinaryPersistence,LoadFromFile,TESTED,,,storage,2026-02-02,src/graph_store.zig
+REQ-BINARY-PERSIST-NODE-002,BinaryPersistence,DirtyTracking,IMPL,,,storage,2026-02-02,src/graph_store.zig
+REQ-BINARY-PERSIST-PATH-001,BinaryPersistence,PathResolution,TESTED,,,storage,2026-02-02,src/graph_store.zig
+REQ-BINARY-PERSIST-TEST-001,BinaryPersistence,UnitTests,TESTED,,,storage,2026-02-02,src/tests/test_binary_persistence.zig
+REQ-BINARY-PERSIST-TEST-002,BinaryPersistence,SaveLoadCycle,TESTED,,,storage,2026-02-02,src/tests/test_binary_persistence.zig
+REQ-BINARY-PERSIST-TEST-003,BinaryPersistence,MultipleNodes,TESTED,,,storage,2026-02-02,src/tests/test_binary_persistence.zig
+REQ-BINARY-PERSIST-TEST-004,BinaryPersistence,EdgePersistence,TESTED,,,storage,2026-02-02,src/tests/test_binary_persistence.zig
+REQ-BINARY-PERSIST-TEST-005,BinaryPersistence,NullProperties,TESTED,,,storage,2026-02-02,src/tests/test_binary_persistence.zig
+REQ-BINARY-PERSIST-TEST-006,BinaryPersistence,EmptyStore,TESTED,,,storage,2026-02-02,src/tests/test_binary_persistence.zig
+REQ-BINARY-PERSIST-TEST-007,BinaryPersistence,LargeDataset,TESTED,,,storage,2026-02-02,src/tests/test_binary_persistence.zig
+REQ-BINARY-PERSIST-TEST-008,BinaryPersistence,SpecialCharacters,TESTED,,,storage,2026-02-02,src/tests/test_binary_persistence.zig
+REQ-BINARY-PERSIST-TEST-009,BinaryPersistence,MultiGraph,TESTED,,,storage,2026-02-02,src/tests/test_binary_persistence.zig
+REQ-BINARY-PERSIST-TEST-010,BinaryPersistence,UniqueIds,TESTED,,,storage,2026-02-02,src/tests/test_binary_persistence.zig
+REQ-BINARY-PERSIST-TEST-011,BinaryPersistence,PropertyTypes,TESTED,,,storage,2026-02-02,src/tests/test_binary_persistence.zig
+REQ-BINARY-PERSIST-TEST-012,BinaryPersistence,PropertyUpdate,TESTED,,,storage,2026-02-02,src/tests/test_binary_persistence.zig
+REQ-BINARY-PERSIST-TEST-013,BinaryPersistence,GetAllNodes,TESTED,,,storage,2026-02-02,src/tests/test_binary_persistence.zig
+REQ-BINARY-PERSIST-TEST-014,BinaryPersistence,EdgeTypes,TESTED,,,storage,2026-02-02,src/tests/test_binary_persistence.zig
 REQ-BINDING-VALUE-001,ComplexTypeBinding,Types,TESTED,,,core,2026-01-25,src/exec.zig
 REQ-BM25-INDEX-OPTIMIZER-001,BM25 IndexOptimizer Integration,CostEstimation,TESTED,,,fts,2025-10-05,tests/test_bm25_index_optimizer.zig
 REQ-BM25-INDEX-OPTIMIZER-002,BM25 IndexOptimizer Integration,FulltextOptimization,TESTED,,,fts,2025-10-05,tests/test_bm25_index_optimizer.zig
@@ -486,6 +509,7 @@ REQ-CLI-MOD-001,CLI Modularization,SubcommandParsing,TESTED,,,cli,2026-01-15,tes
 REQ-CLI-PASSWORD-PROMPT-001,PasswordPrompt,QueryCommand,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-POLICY-CMD-001,Policy CLI Commands,PolicyManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig
 REQ-CLI-PROTO-001,ProtoMigration,ParseWrappedJson,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-CLI-PROTO-002,ProtoMigration,NestedResultParsing,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-PROTO-002,ProtoMigration,ParseWrappedJson,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig
@@ -2458,8 +2482,8 @@ REQ-GRAPH-META-005,GraphMetadataPersistence,Remove,EXEMPT,,,multi_graph,2026-01-
 REQ-GRAPH-PERSIST-001,NamedGraphPersistence,SaveLoad,IMPL,,,storage,2026-01-29,src/server/graph_storage_manager.zig
 REQ-GRAPH-PERSIST-002,NamedGraphPersistence,CatalogLoad,IMPL,,,storage,2026-01-29,src/schema/catalog.zig
 REQ-GRAPH-PERSIST-002,NamedGraphPersistence,PostExecution,IMPL,,,storage,2026-01-30,src/cli/main.zig
+REQ-GRAPH-PERSIST-003,BinaryPersistence,Shutdown,IMPL,,,storage,2026-02-02,src/server/main.zig
 REQ-GRAPH-PERSIST-003,NamedGraphPersistence,DataDirSetup,IMPL,,,storage,2026-01-30,src/cli/main.zig
-REQ-GRAPH-PERSIST-003,NamedGraphPersistence,Shutdown,IMPL,,,storage,2026-01-29,src/server/main.zig
 REQ-GRAPH-PERSIST-004,NamedGraphPersistence,UnitTests,TESTED,,,storage,2026-01-29,src/server/graph_storage_manager.zig
 REQ-GRAPH-PERSIST-005,NamedGraphPersistence,CatalogTests,TESTED,,,schema,2026-01-29,src/schema/catalog.zig
 REQ-GRAPH-PERSIST-TEST-001,NamedGraphPersistence,IntegrationTest,TESTED,,,storage,2026-01-29,geodetestlab/specs/gap_384_391_392_graph_persistence.yml
@@ -2511,6 +2535,8 @@ REQ-INTTEST-E2E-001,IntegrationTesting,E2E,TESTED,,,testing,2026-01-16,tests/tes
 REQ-INTTEST-FULL-001,IntegrationTesting,FullStackTest,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-INTTEST-SRV-001,IntegrationTesting,ServerClient,TESTED,,,testing,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-INTTEST-TRANS-001,IntegrationTesting,TransportIntegration,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
+REQ-JSON-LINE-PROCESS-001,JsonLineProtocol,MessageProcessing,IMPL,,,wire,2026-02-02,src/server/quic_connection_handler.zig
+REQ-JSON-LINE-READER-001,JsonLineProtocol,LegacySupport,IMPL,,,wire,2026-02-02,src/server/quic_connection_handler.zig
 REQ-JSON-PARSE-KMS-001,Safe JSON Parsing,Security,TESTED,,,security,2026-01-13,src/security/kms_remote.zig
 REQ-KEY-ROTATION-001,SecureKeyGeneration,Security,EXEMPT,,,security,2026-01-10,src/security/key_rotation.zig
 REQ-KEY-ROTATION-002,SecureKeyRotation,Security,EXEMPT,,,security,2026-01-10,src/security/key_rotation.zig
@@ -3394,6 +3420,9 @@ REQ-PROMETHEUS-WIRE-004,Prometheus Metrics Endpoint,ServerInit,TESTED,,,monitori
 REQ-PROMETHEUS-WIRE-005,Prometheus Metrics Endpoint Testing,Integration,TESTED,,,monitoring,2026-01-14,geodetestlab/specs/gap_0166_prometheus_metrics.yml
 REQ-PROP-PATTERN-VAR-001,PropertyPatternVariableReference,VarRef,TESTED,,,parser,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-PROTO-001,Protocol,MessageProtocol,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
+REQ-PROTOCOL-DETECT-001,ProtocolAutoDetect,DualProtocol,IMPL,,,wire,2026-02-02,src/server/quic_connection_handler.zig
+REQ-PROTOCOL-DETECT-002,ProtocolAutoDetect,PeekFirstByte,IMPL,,,wire,2026-02-02,src/server/quic_connection_handler.zig
+REQ-PROTOCOL-DISPATCH-001,ProtocolAutoDetect,MessageLoop,IMPL,,,wire,2026-02-02,src/server/quic_connection_handler.zig
 REQ-PROTOCOL-MSG-001,Protocol,MessageProtocol,TESTED,,,protocol,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-PROTOCOL-TYPES-001,Protocol Type Definitions,Protocol,TESTED,,,protocol,2026-01-25,src/protocol.zig
 REQ-QEXEC-PIPE-001,QueryExecution,Pipeline,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
@@ -3453,6 +3482,10 @@ REQ-QUIC-FLOW-001,QUICProtocol,FlowControl,TESTED,,,transport,2026-01-16,tests/t
 REQ-QUIC-LOCALHOST-001,LocalhostNormalization,ClientConnect,IMPL,,,transport,2026-01-28,src/transport/quic.zig
 REQ-QUIC-LOCALHOST-002,LocalhostNormalization,ClientConnectEx,IMPL,,,transport,2026-01-28,src/transport/quic.zig
 REQ-QUIC-MSG-001,QUICProtocol,Messaging,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
+REQ-QUIC-PERSIST-001,QUICDataPersistence,PostExecutionPersist,IMPL,,,server,2026-02-02,src/server/quic_connection_handler.zig
+REQ-QUIC-PERSIST-002,QUICDataPersistence,PostExecutionPersist,IMPL,,,server,2026-02-02,src/cli/main.zig
+REQ-QUIC-PERSIST-003,QUICDataPersistence,JsonRpcPersist,IMPL,,,server,2026-02-02,src/cli/main.zig
+REQ-QUIC-PERSIST-004,QUICDataPersistence,StreamJsonRpcPersist,IMPL,,,server,2026-02-02,src/cli/main.zig
 REQ-QUIC-PROTOCOL-001,QUICProtocol,Connection,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch2_misc.zig
 REQ-QUIC-PROTOCOL-002,QUICProtocol,Streaming,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch2_misc.zig
 REQ-QUIC-PROTOCOL-003,QUICProtocol,Security,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch2_misc.zig
@@ -3712,8 +3745,11 @@ REQ-SHELL-INTERRUPT-047,SourceInterrupt,SearchSigintCheck,IMPL,,,cli,2026-01-30,
 REQ-SHELL-INTERRUPT-047,SourceInterrupt,SearchSigintTests,TESTED,,,cli,2026-01-30,tests/test_repl.zig
 REQ-SHELL-INTERRUPT-048,SourceInterrupt,PollBasedInputTests,TESTED,,,cli,2026-01-30,tests/test_repl.zig
 REQ-SHELL-INTERRUPT-048,SourceInterrupt,PollForInput,IMPL,,,cli,2026-01-30,src/client/repl/repl_loop.zig
-REQ-SHELL-INTERRUPT-049,SourceInterrupt,QuicReadLineInterrupt,IMPL,,,cli,2026-01-30,src/cli/main.zig
-REQ-SHELL-INTERRUPT-050,SourceInterrupt,QuicReadLineInterruptCheck,IMPL,,,cli,2026-01-30,src/cli/main.zig
+REQ-SHELL-PROTO-001,ShellProtobufTransport,WriteAll,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-SHELL-PROTO-002,ShellProtobufTransport,ReadLine,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-SHELL-PROTO-003,ShellProtobufTransport,PullSkip,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-SHELL-PROTO-004,ShellProtobufTransport,PullNoOp,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-SHELL-PROTO-005,ShellProtobufTransport,PullResponse,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-SHELL-RECONNECT-001,ShellAutoReconnect,ReconnectionConfig,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-002,ShellAutoReconnect,TransactionState,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-003,ShellAutoReconnect,SessionState,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig

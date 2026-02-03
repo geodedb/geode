@@ -3,6 +3,8 @@ const storage_pm = @import("storage_page_manager");
 const storage_catalog = @import("storage_catalog");
 const server_flags = @import("server_flags.zig");
 const graph_storage_mgr = @import("graph_storage_manager.zig");
+// CANARY: REQ=REQ-BINARY-PERSIST-001; FEATURE="BinaryPersistence"; ASPECT=ServerInit; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
+const graph_store = @import("graph_store");
 const index_catalog = @import("index_catalog.zig");
 const wal_manager = @import("wal_manager.zig");
 const query_ast_cache = @import("query_ast_cache.zig");
@@ -173,25 +175,25 @@ pub fn initializeStorage(
             catalog.createTable(tname, &.{}) catch {};
         }
 
-        // Try to load graph from catalog
-        if (graph_storage_mgr.getCurrentGraphStorage() == null) {
-            const loaded = graph_storage_mgr.tryLoadGraphFromDir(allocator, dd) catch null;
-            if (loaded) |lg| {
-                _ = lg; // Graph is loaded via tryLoadGraphFromDir
-                // Update catalog metadata
-                if (catalog.graph_metadata == null) {
-                    catalog.initGraphMetadata() catch {};
-                }
-                if (graph_storage_mgr.getCurrentGraphStorage()) |gs| {
-                    const max_edge_id = if (gs.edges.items.len > 0) gs.edges.items.len - 1 else 0;
-                    catalog.saveGraphMetadata(
-                        @intCast(gs.nodes.count()),
-                        @intCast(gs.edges.items.len),
-                        0, // max_node_id - would need to calculate
-                        max_edge_id,
-                    ) catch {};
-                }
+        // CANARY: REQ=REQ-BINARY-PERSIST-002; FEATURE="BinaryPersistence"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
+        // Load graph data from binary format (graph_store.dat) - this is the primary persistence format
+        // getGlobalStore() triggers loadFromFile() which reads from {GEODE_DATA_DIR}/graph_store.dat
+        const global_store = graph_store.getGlobalStore(allocator);
+        const node_count = global_store.getNodeCount();
+        if (node_count > 0) {
+            log.info("Loaded graph data from binary persistence", &.{
+                Attr.int("node_count", @intCast(node_count)),
+            });
+            // Update catalog metadata with loaded graph stats
+            if (catalog.graph_metadata == null) {
+                catalog.initGraphMetadata() catch {};
             }
+            catalog.saveGraphMetadata(
+                @intCast(node_count),
+                0, // edge_count - would need to iterate
+                0, // max_node_id
+                0, // max_edge_id
+            ) catch {};
         }
     }
 

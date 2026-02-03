@@ -196,11 +196,11 @@ const initImplDefinedFlags = server_flags.initImplDefinedFlags;
 const computeBaseFlags = server_flags.computeBaseFlags;
 const computeFlagsExtended = server_flags.computeFlagsExtended;
 // Import graph storage management (M3.1 Phase 3 graph persistence extraction)
+// CANARY: REQ=REQ-BINARY-PERSIST-003; FEATURE="BinaryPersistence"; ASPECT=MainImports; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
+// Note: JSON Lines persistence (tryLoadGraphFromDir, saveGraphToDir) removed - using binary persistence via graph_store
 const getOrCreateGraphStorage = graph_storage_mgr.getOrCreateGraphStorage;
 const getNextNodeId = graph_storage_mgr.getNextNodeId;
-const tryLoadGraphFromDir = graph_storage_mgr.tryLoadGraphFromDir;
-const saveGraphToDir = graph_storage_mgr.saveGraphToDir;
-const initializeSampleGraph = graph_storage_mgr.initializeSampleGraph;
+const graph_store = geode.graph_store;
 // Import protocol handler functions (M3.2 Phase 3 backup protocol extraction)
 const handleBackupRequest = protocol_handler.handleBackupRequest;
 const handleRestoreRequest = protocol_handler.handleRestoreRequest;
@@ -774,24 +774,18 @@ pub fn main() !void {
         );
         if (!should_continue) break;
     }
-    // Graceful shutdown: persist all graphs if data_dir provided
-    // CANARY: REQ=REQ-GRAPH-PERSIST-003; FEATURE="NamedGraphPersistence"; ASPECT=Shutdown; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-29
-    if (data_dir) |ddir| {
-        // GAP-384 FIX: Save all named graphs to their respective directories
-        graph_storage_mgr.saveAllNamedGraphs(gpa);
-
-        // Also save the default graph to the root data directory (backward compatibility)
-        if (graph_storage_mgr.getCurrentGraphStorage()) |gg| {
-            // Save to JSONL files
-            saveGraphToDir(gpa, gg, ddir);
-
-            // Update catalog metadata if initialized
-            if (catalog_inited) {
-                catalog.saveGraphMetadata(@intCast(gg.nodes.count()), @intCast(gg.edges.items.len), 0, // max_node_id - would need to calculate
-                    if (gg.edges.items.len > 0) gg.edges.items.len - 1 else 0) catch |err| {
-                    log.warn("Failed to save graph metadata to catalog", &.{Attr.string("error", @errorName(err))});
-                };
-            }
+    // Graceful shutdown: binary persistence is handled automatically by graph_store.zig
+    // CANARY: REQ=REQ-GRAPH-PERSIST-003; FEATURE="BinaryPersistence"; ASPECT=Shutdown; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
+    // Note: graph_store.saveToFile() is called automatically after each data modification
+    // so no explicit save is needed on shutdown. Just update catalog metadata.
+    if (data_dir) |_| {
+        // Update catalog metadata if initialized
+        if (catalog_inited) {
+            const global_store = graph_store.getGlobalStore(gpa);
+            const node_count = global_store.getNodeCount();
+            catalog.saveGraphMetadata(@intCast(node_count), 0, 0, 0) catch |err| {
+                log.warn("Failed to save graph metadata to catalog", &.{Attr.string("error", @errorName(err))});
+            };
         }
     }
     // Flush WAL if present before exiting.
