@@ -114,8 +114,8 @@ const evalEndsWith = string_helpers.evalEndsWith;
 const evalContains = string_helpers.evalContains;
 
 // CANARY: REQ=REQ-REFACTOR-EVAL-004; FEATURE="EvalRefactoring"; ASPECT=TypeHelpersImport; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
-// Import type helpers module for type name functions
-const type_helpers = @import("eval/type_helpers.zig");
+// Import type helpers module for type name functions (pub for cross-module access)
+pub const type_helpers = @import("eval/type_helpers.zig");
 const getTypeName = type_helpers.getTypeName;
 const getExtTypeName = type_helpers.getExtTypeName;
 

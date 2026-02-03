@@ -229,7 +229,6 @@ fn readLineAlloc(allocator: std.mem.Allocator, file: std.fs.File, max: usize) ![
 }
 
 pub fn main() !void {
-    var test_wal_skip_ratio: ?[]const u8 = null;
     const build_options = @import("build_options");
     const sentinel = @import("sentinel");
     // P2-3: Use GeneralPurposeAllocator instead of page_allocator for client main
@@ -304,12 +303,7 @@ pub fn main() !void {
     var allow_insecure = false;
 
     while (i < argv.len) : (i += 1) {
-        if (std.mem.eql(u8, argv[i], "--test-wal-skip-ratio")) {
-            if (i + 1 < argv.len) {
-                test_wal_skip_ratio = argv[i + 1];
-                i += 1;
-            }
-        } else if (std.mem.eql(u8, argv[i], "--server")) {
+        if (std.mem.eql(u8, argv[i], "--server")) {
             if (i + 1 >= argv.len) break;
             const server_str = argv[i + 1];
             // Parse host:port for QUIC
@@ -725,10 +719,6 @@ pub fn main() !void {
     var server_args = std.ArrayList([]const u8).initCapacity(gpa, 6 + server_extra_args.items.len) catch return error.OutOfMemory;
     defer server_args.deinit(gpa);
     try server_args.append(gpa, server_path);
-    if (test_wal_skip_ratio) |val| {
-        try server_args.append(gpa, "--test-wal-skip-ratio");
-        try server_args.append(gpa, val);
-    }
 
     // Add default data directory for embedded server persistence
     // Check if data directory is already specified in server_extra_args

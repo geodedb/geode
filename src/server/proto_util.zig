@@ -1,0 +1,438 @@
+const std = @import("std");
+const geode = @import("geode");
+const schema = @import("schema");
+const spice_wrapper = @import("parallel/spice");
+const value_types = geode.value_types;
+const execution = geode.execution;
+const graph_store = geode.graph_store;
+// Use geode module exports to avoid cross-module file ownership conflicts
+const type_helpers = geode.eval.type_helpers;
+const eval_extended = geode.eval_ext;
+
+pub const ParamBindings = struct {
+    names: []const []const u8,
+    values: []const value_types.Value,
+};
+
+pub const ErrorInfo = struct {
+    code: []const u8,
+    message: []const u8,
+};
+
+pub fn parseParamsJson(allocator: std.mem.Allocator, params_json: []const u8) !ParamBindings {
+    const trimmed = std.mem.trim(u8, params_json, " \t\r\n");
+    if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "null")) {
+        return .{ .names = &.{}, .values = &.{} };
+    }
+    if (trimmed.len > 1_048_576) return error.ParamsTooLarge;
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{});
+    defer parsed.deinit();
+
+    if (parsed.value != .object) return error.InvalidParams;
+
+    const obj = parsed.value.object;
+    var names = try allocator.alloc([]const u8, obj.count());
+    errdefer allocator.free(names);
+    var values = try allocator.alloc(value_types.Value, obj.count());
+    errdefer allocator.free(values);
+
+    var i: usize = 0;
+    var it = obj.iterator();
+    while (it.next()) |entry| : (i += 1) {
+        names[i] = try allocator.dupe(u8, entry.key_ptr.*);
+        values[i] = try jsonToValue(allocator, entry.value_ptr.*, 0);
+    }
+
+    return .{ .names = names, .values = values };
+}
+
+pub fn freeParamBindings(allocator: std.mem.Allocator, bindings: ParamBindings) void {
+    for (bindings.names) |name| allocator.free(name);
+    for (bindings.values) |val| freeJsonValue(allocator, val);
+    allocator.free(bindings.names);
+    allocator.free(bindings.values);
+}
+
+fn jsonToValue(allocator: std.mem.Allocator, val: std.json.Value, depth: usize) !value_types.Value {
+    if (depth > 64) return error.JsonTooDeep;
+    return switch (val) {
+        .null => .Null,
+        .bool => |b| .{ .Bool = b },
+        .integer => |i| .{ .Int = i },
+        .float => |f| .{ .Double = f },
+        .number_string => |s| .{ .Str = try allocator.dupe(u8, s) },
+        .string => |s| .{ .Str = try allocator.dupe(u8, s) },
+        .array => |arr| blk: {
+            const list = try allocator.alloc(value_types.Value, arr.items.len);
+            for (arr.items, 0..) |item, idx| {
+                list[idx] = try jsonToValue(allocator, item, depth + 1);
+            }
+            break :blk .{ .List = list };
+        },
+        .object => |obj| blk: {
+            var map = std.StringHashMap(value_types.Value).init(allocator);
+            errdefer map.deinit();
+            var it = obj.iterator();
+            while (it.next()) |entry| {
+                const key = try allocator.dupe(u8, entry.key_ptr.*);
+                const value = try jsonToValue(allocator, entry.value_ptr.*, depth + 1);
+                try map.put(key, value);
+            }
+            break :blk .{ .Map = map };
+        },
+    };
+}
+
+fn freeJsonValue(allocator: std.mem.Allocator, value: value_types.Value) void {
+    switch (value) {
+        .Str => |s| allocator.free(s),
+        .List => |list| {
+            for (list) |item| freeJsonValue(allocator, item);
+            allocator.free(list);
+        },
+        .Map => |map| {
+            var iter = map.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            map.deinit();
+        },
+        else => {},
+    }
+}
+
+pub fn mapError(err: anyerror) ErrorInfo {
+    return switch (err) {
+        error.GroupingError => .{ .code = "42000", .message = "grouping error: non-aggregated expression not in GROUP BY" },
+        error.UnorderedPagination => .{ .code = "US001", .message = "OFFSET requires ORDER BY clause" },
+        error.TransactionAlreadyActive => .{ .code = "25001", .message = "Transaction already active" },
+        error.NoActiveTransaction => .{ .code = "25000", .message = "No active transaction" },
+        error.UnionColumnCountMismatch => .{ .code = "42601", .message = "UNION column count mismatch" },
+        error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
+        error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
+        error.DuplicateSchema => .{ .code = "42P07", .message = "Duplicate schema name" },
+        error.SchemaNotFound => .{ .code = "3F000", .message = "Schema does not exist" },
+        error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name" },
+        error.IncompatibleIndexDataType => .{ .code = "42804", .message = "Incompatible index data type" },
+        error.InvalidTypeConversion => .{ .code = "22003", .message = "Invalid type conversion" },
+        error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
+        error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },
+        error.InvalidGuardrailConfiguration => .{ .code = "42704", .message = "Invalid CDC guardrail configuration" },
+        error.UnknownProcedure => .{ .code = "42883", .message = "Unknown procedure" },
+        error.Unauthenticated => .{ .code = "28000", .message = "Authentication required" },
+        error.Unauthorized => .{ .code = "42501", .message = "Permission denied" },
+        error.SearchNotPermitted => .{ .code = "42501", .message = "Access denied: READ_PLAINTEXT privilege required for encrypted searchable field" },
+        error.InvalidIpAddress => .{ .code = "22P02", .message = "Invalid IP address format" },
+        error.InvalidMac, error.InvalidMacFormat, error.InvalidMacTag => .{ .code = "22P02", .message = "Invalid MAC address format" },
+        error.DivisionByZero => .{ .code = "22012", .message = "Division by zero" },
+        error.NotImplemented, error.Unsupported => .{ .code = "0A000", .message = @errorName(err) },
+        else => .{ .code = "58000", .message = @errorName(err) },
+    };
+}
+
+pub fn buildStatus(allocator: std.mem.Allocator, status_class: []const u8, flagger_findings: []const []const u8) !schema.Status {
+    var flags = std.ArrayList([]const u8).initCapacity(allocator, flagger_findings.len) catch return error.OutOfMemory;
+    for (flagger_findings) |flag| {
+        try flags.append(allocator, try allocator.dupe(u8, flag));
+    }
+    return .{
+        .status_class = try allocator.dupe(u8, status_class),
+        .status_subclass = "",
+        .additional_statuses = std.ArrayList([]const u8){},
+        .flagger_findings = flags,
+    };
+}
+
+pub fn buildSchemaDefinition(allocator: std.mem.Allocator, result: *const execution.ExecutionResult) !schema.SchemaDefinition {
+    var cols = std.ArrayList(schema.ColumnDefinition).initCapacity(allocator, result.columns.len) catch return error.OutOfMemory;
+    for (result.columns, 0..) |name, idx| {
+        const type_name = inferColumnType(result.rows, idx);
+        const col = schema.ColumnDefinition{
+            .name = try allocator.dupe(u8, name),
+            .type = try allocator.dupe(u8, type_name),
+        };
+        try cols.append(allocator, col);
+    }
+    return .{ .columns = cols };
+}
+
+pub fn buildDataPage(
+    allocator: std.mem.Allocator,
+    result: *const execution.ExecutionResult,
+    start: usize,
+    page_size: usize,
+    ordered: bool,
+    order_keys: []const []const u8,
+) !schema.DataPage {
+    const page_len = if (page_size == 0) 1000 else page_size;
+    if (start >= result.rows.len) {
+        return schema.DataPage{
+            .rows = std.ArrayList(schema.Row){},
+            .final = true,
+            .ordered = ordered,
+            .order_keys = try dupOrderKeys(allocator, order_keys),
+        };
+    }
+
+    const end = @min(start + page_len, result.rows.len);
+    const row_count = end - start;
+
+    var rows = std.ArrayList(schema.Row).initCapacity(allocator, row_count) catch return error.OutOfMemory;
+    try rows.resize(allocator, row_count);
+
+    if (spice_wrapper.shouldUseParallelism(row_count, spice_wrapper.Thresholds.map)) {
+        var pool = spice_wrapper.SpicePool.init(allocator, null);
+        pool.start();
+        defer pool.deinit();
+
+        var ts_alloc = std.heap.ThreadSafeAllocator{ .child_allocator = allocator };
+        const safe_alloc = ts_alloc.allocator();
+
+        const RowInput = struct {
+            row: []const value_types.Value,
+            allocator: std.mem.Allocator,
+        };
+
+        const RowResult = struct {
+            row: schema.Row,
+            err: ?anyerror,
+        };
+
+        const items = try allocator.alloc(RowInput, row_count);
+        defer allocator.free(items);
+        for (start..end, 0..) |row_idx, i| {
+            items[i] = .{ .row = result.rows[row_idx], .allocator = safe_alloc };
+        }
+
+        const mapFn = struct {
+            fn map(_: *spice_wrapper.Task, input: RowInput) RowResult {
+                var values = std.ArrayList(schema.Value).initCapacity(input.allocator, input.row.len) catch {
+                    return .{ .row = .{ .values = std.ArrayList(schema.Value){} }, .err = error.OutOfMemory };
+                };
+                for (input.row) |val| {
+                    const proto_val = valueToProto(input.allocator, val) catch |err| {
+                        values.deinit(input.allocator);
+                        return .{ .row = .{ .values = std.ArrayList(schema.Value){} }, .err = err };
+                    };
+                    values.append(input.allocator, proto_val) catch |err| {
+                        values.deinit(input.allocator);
+                        return .{ .row = .{ .values = std.ArrayList(schema.Value){} }, .err = err };
+                    };
+                }
+                return .{ .row = .{ .values = values }, .err = null };
+            }
+        }.map;
+
+        const results = try spice_wrapper.parallelMap(RowInput, RowResult, &pool, items, mapFn, spice_wrapper.Thresholds.map);
+        defer allocator.free(results);
+
+        for (results, 0..) |res, i| {
+            if (res.err) |err| {
+                for (results[0..i]) |prev| {
+                    prev.row.values.deinit(allocator);
+                }
+                return err;
+            }
+            rows.items[i] = res.row;
+        }
+    } else {
+        for (start..end, 0..) |row_idx, i| {
+            var values = std.ArrayList(schema.Value).initCapacity(allocator, result.rows[row_idx].len) catch return error.OutOfMemory;
+            for (result.rows[row_idx]) |val| {
+                const proto_val = try valueToProto(allocator, val);
+                try values.append(allocator, proto_val);
+            }
+            rows.items[i] = .{ .values = values };
+        }
+    }
+
+    return schema.DataPage{
+        .rows = rows,
+        .final = end == result.rows.len,
+        .ordered = ordered,
+        .order_keys = try dupOrderKeys(allocator, order_keys),
+    };
+}
+
+fn dupOrderKeys(allocator: std.mem.Allocator, keys: []const []const u8) !std.ArrayList([]const u8) {
+    var list = std.ArrayList([]const u8).initCapacity(allocator, keys.len) catch return error.OutOfMemory;
+    for (keys) |key| {
+        try list.append(allocator, try allocator.dupe(u8, key));
+    }
+    return list;
+}
+
+fn inferColumnType(rows: [][]value_types.Value, col_idx: usize) []const u8 {
+    for (rows) |row| {
+        if (col_idx >= row.len) continue;
+        const val = row[col_idx];
+        if (val == .Null) continue;
+        return type_helpers.getTypeName(val);
+    }
+    return "NULL";
+}
+
+fn valueToProto(allocator: std.mem.Allocator, value: value_types.Value) !schema.Value {
+    return switch (value) {
+        .Null => .{ .kind = .{ .null_val = .{} } },
+        .Bool => |b| .{ .kind = .{ .bool_val = b } },
+        .Int => |i| .{ .kind = .{ .int_val = .{ .value = i, .kind = .INT } } },
+        .SmallInt => |i| .{ .kind = .{ .int_val = .{ .value = i, .kind = .SMALLINT } } },
+        .BigInt => |i| .{ .kind = .{ .int_val = .{ .value = i, .kind = .BIGINT } } },
+        .Real => |f| .{ .kind = .{ .double_val = .{ .value = @floatCast(f), .kind = .REAL } } },
+        .Double => |f| .{ .kind = .{ .double_val = .{ .value = f, .kind = .DOUBLE } } },
+        .Str => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
+        .Char => |c| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, c.data), .kind = .CHAR } } },
+        .Varchar => |v| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, v.data), .kind = .VARCHAR } } },
+        .Text => |t| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, t), .kind = .TEXT } } },
+        .Decimal => |d| blk: {
+            const coeff_str = try std.fmt.allocPrint(allocator, "{d}", .{d.coeff});
+            const orig_repr = if (d.orig_repr) |repr| try allocator.dupe(u8, repr) else "";
+            break :blk .{ .kind = .{ .decimal_val = .{
+                .coeff = coeff_str,
+                .scale = d.scale,
+                .orig_scale = d.orig_scale,
+                .orig_repr = orig_repr,
+            } } };
+        },
+        .Bytea => |b| .{ .kind = .{ .bytes_val = .{ .value = try allocator.dupe(u8, b), .kind = .BYTEA } } },
+        .List => |list| blk: {
+            var values = std.ArrayList(schema.Value).initCapacity(allocator, list.len) catch return error.OutOfMemory;
+            for (list) |item| {
+                try values.append(allocator, try valueToProto(allocator, item));
+            }
+            break :blk .{ .kind = .{ .list_val = .{ .values = values } } };
+        },
+        .Map => |map| blk: {
+            var entries = std.ArrayList(schema.MapEntry).initCapacity(allocator, map.count()) catch return error.OutOfMemory;
+            var it = map.iterator();
+            while (it.next()) |entry| {
+                const key = try allocator.dupe(u8, entry.key_ptr.*);
+                const val = try valueToProto(allocator, entry.value_ptr.*);
+                try entries.append(allocator, .{ .key = key, .value = val });
+            }
+            break :blk .{ .kind = .{ .map_val = .{ .entries = entries } } };
+        },
+        .Node => |node| .{ .kind = .{ .node_val = try nodeToProto(allocator, node) } },
+        .Edge => |edge| .{ .kind = .{ .edge_val = try edgeToProto(allocator, edge) } },
+        .Path => |path| blk: {
+            var nodes = std.ArrayList(schema.NodeValue).initCapacity(allocator, path.nodes.len) catch return error.OutOfMemory;
+            for (path.nodes) |n| {
+                try nodes.append(allocator, try nodeToProto(allocator, n));
+            }
+            var edges = std.ArrayList(schema.EdgeValue).initCapacity(allocator, path.edges.len) catch return error.OutOfMemory;
+            for (path.edges) |e| {
+                try edges.append(allocator, try edgeToProto(allocator, e));
+            }
+            break :blk .{ .kind = .{ .path_val = .{ .nodes = nodes, .edges = edges } } };
+        },
+        .ExtValue => |ext| .{ .kind = .{ .ext_val = try extValueToProto(allocator, ext) } },
+        .Date => |d| .{ .kind = .{ .ext_val = try textExt(allocator, "DATE", try d.toString(allocator)) } },
+        .Time => |t| .{ .kind = .{ .ext_val = try textExt(allocator, "TIME", try t.toString(allocator)) } },
+        .TimeTZ => |t| .{ .kind = .{ .ext_val = try textExt(allocator, "TIMETZ", try t.toString(allocator)) } },
+        .Timestamp => |t| .{ .kind = .{ .ext_val = try textExt(allocator, "TIMESTAMP", try t.toString(allocator)) } },
+        .TimestampTZ => |t| .{ .kind = .{ .ext_val = try textExt(allocator, "TIMESTAMPTZ", try t.toString(allocator)) } },
+        .Interval => |i| .{ .kind = .{ .ext_val = try textExt(allocator, "INTERVAL", try i.toString(allocator)) } },
+        .Json => |j| .{ .kind = .{ .ext_val = try textExt(allocator, "JSON", try allocator.dupe(u8, j)) } },
+        .Jsonb => |jb| .{ .kind = .{ .ext_val = try textExt(allocator, "JSONB", try allocator.dupe(u8, jb.data)) } },
+        .Xml => |x| .{ .kind = .{ .ext_val = try textExt(allocator, "XML", try allocator.dupe(u8, x.data)) } },
+        .Url => |u| .{ .kind = .{ .ext_val = try textExt(allocator, "URL", try u.toString(allocator)) } },
+        .Domain => |d| .{ .kind = .{ .ext_val = try textExt(allocator, "DOMAIN", try d.toString(allocator)) } },
+        .UUID => |u| .{ .kind = .{ .ext_val = try textExt(allocator, "UUID", try u.toString(allocator)) } },
+        .BitString => |b| .{ .kind = .{ .ext_val = try textExt(allocator, "BIT", try b.toString(allocator)) } },
+        .VarBit => |b| .{ .kind = .{ .ext_val = try textExt(allocator, "VARBIT", try b.toString(allocator)) } },
+        .IntRange => |r| .{ .kind = .{ .ext_val = try textExt(allocator, "INT4RANGE", try r.toString(allocator)) } },
+        .Enum => |e| .{ .kind = .{ .ext_val = try textExt(allocator, "ENUM", try std.fmt.allocPrint(allocator, "{d}:{d}", .{ e.type_id, e.value_ordinal })) } },
+    };
+}
+
+fn nodeToProto(allocator: std.mem.Allocator, node: graph_store.Node) !schema.NodeValue {
+    var labels = std.ArrayList([]const u8).initCapacity(allocator, node.labels.len) catch return error.OutOfMemory;
+    for (node.labels) |label| {
+        try labels.append(allocator, try allocator.dupe(u8, label));
+    }
+    var props = std.ArrayList(schema.MapEntry).initCapacity(allocator, node.properties.count()) catch return error.OutOfMemory;
+    var it = node.properties.iterator();
+    while (it.next()) |entry| {
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+        const val = try propertyValueToProto(allocator, entry.value_ptr.*);
+        try props.append(allocator, .{ .key = key, .value = val });
+    }
+    return .{
+        .id = node.id,
+        .labels = labels,
+        .properties = props,
+    };
+}
+
+fn edgeToProto(allocator: std.mem.Allocator, edge: graph_store.Edge) !schema.EdgeValue {
+    var props = std.ArrayList(schema.MapEntry).initCapacity(allocator, edge.properties.count()) catch return error.OutOfMemory;
+    var it = edge.properties.iterator();
+    while (it.next()) |entry| {
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+        const val = try propertyValueToProto(allocator, entry.value_ptr.*);
+        try props.append(allocator, .{ .key = key, .value = val });
+    }
+    return .{
+        .id = edge.id,
+        .from_id = edge.from_id,
+        .to_id = edge.to_id,
+        .label = try allocator.dupe(u8, edge.label),
+        .properties = props,
+    };
+}
+
+fn propertyValueToProto(allocator: std.mem.Allocator, value: graph_store.PropertyValue) !schema.Value {
+    return switch (value) {
+        .Null => .{ .kind = .{ .null_val = .{} } },
+        .Bool => |b| .{ .kind = .{ .bool_val = b } },
+        .Int => |i| .{ .kind = .{ .int_val = .{ .value = i, .kind = .INT } } },
+        .Float => |f| .{ .kind = .{ .double_val = .{ .value = f, .kind = .DOUBLE } } },
+        .String => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
+        .Decimal => |d| blk: {
+            const coeff_str = try std.fmt.allocPrint(allocator, "{d}", .{d.coeff});
+            break :blk .{ .kind = .{ .decimal_val = .{
+                .coeff = coeff_str,
+                .scale = d.scale,
+                .orig_scale = d.scale,
+                .orig_repr = "",
+            } } };
+        },
+        .ExtValue => |ext| .{ .kind = .{ .ext_val = try extValueToProto(allocator, ext) } },
+    };
+}
+
+fn extValueToProto(allocator: std.mem.Allocator, ext: eval_extended.ExtValue) !schema.ExtendedValue {
+    const type_name = type_helpers.getExtTypeName(ext);
+    return switch (ext) {
+        .Null => .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = "null" } },
+        .Int => |i| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .int_val = i } },
+        .Bool => |b| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .bool_val = b } },
+        .Str => |s| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, s) } },
+        .Decimal => |d| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try std.fmt.allocPrint(allocator, "{d}.{d}", .{ d.coeff, d.scale }) } },
+        .Bytea => |b| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .bytes = try allocator.dupe(u8, b) } },
+        .Json => |j| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, j) } },
+        .Jsonb => |jb| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, jb.data) } },
+        .Xml => |x| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, x.data) } },
+        .Date => |d| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try d.toString(allocator) } },
+        .Time => |t| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try t.toString(allocator) } },
+        .TimestampTZ => |t| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try t.toString(allocator) } },
+        .Interval => |i| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try i.toString(allocator) } },
+        .UUID => |u| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try u.toString(allocator) } },
+        .Url => |u| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try u.toString(allocator) } },
+        .Domain => |d| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try d.toString(allocator) } },
+        .BitString => |b| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try b.toString(allocator) } },
+        .VarBit => |b| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try b.toString(allocator) } },
+        .IntRange => |r| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try r.toString(allocator) } },
+        else => .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try std.fmt.allocPrint(allocator, "{any}", .{ext}) } },
+    };
+}
+
+fn textExt(allocator: std.mem.Allocator, type_name: []const u8, text: []const u8) !schema.ExtendedValue {
+    return .{
+        .type_name = try allocator.dupe(u8, type_name),
+        .data = .{ .text = text },
+    };
+}

@@ -24,7 +24,6 @@ const schema = @import("schema");
 // Set to true only when debugging protocol/query issues. In production, keep false.
 const HOT_PATH_LOGGING = false;
 
-
 // C library function for setting environment variables
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 // const auth = @import("../security/auth.zig"); // Not needed for current implementation
@@ -852,7 +851,6 @@ fn printQueryUsage() void {
 // (server-only helpers removed; unified CLI delegates to src/server/main.zig)
 
 // (embedded server state/types removed)
-
 
 // CANARY: REQ=REQ-PERF-WRITE-STALL-001; FEATURE="WriteStallOptimization"; ASPECT=StreamWrite; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=cli; UPDATED=2026-01-30
 // GAP-0203: Three-phase write stall handling:

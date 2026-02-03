@@ -135,8 +135,6 @@ fn getSessionGraphStorage(allocator: std.mem.Allocator, state: *server_state.Ser
 }
 
 // Global configuration for MATCH query execution guards (set by server initialization)
-pub var g_match_max_results_override: ?usize = null;
-pub var g_match_max_frontier_override: ?usize = null;
 
 // Import nulls ordering flag from server_flags
 const g_nulls_last = &server_flags.g_nulls_last;

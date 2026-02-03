@@ -32,12 +32,6 @@ pub const ServerConfig = struct {
     // Logging
     log_level_arg: ?[]const u8 = null,
 
-    // Test overrides
-    test_wal_skip_ratio: ?f64 = null,
-    test_exit_after_first: bool = false,
-    match_max_results_override: ?usize = null,
-    match_max_frontier_override: ?usize = null,
-
     // Query behavior
     order_keys_mode_expr: bool = true, // enable property-based ordering by default
 
@@ -135,8 +129,6 @@ pub fn printHelp() void {
     std.debug.print("  --profile-compact            Enable compact profiling\n", .{});
     std.debug.print("  --profile-memcurve           Enable memory curve profiling\n", .{});
     std.debug.print("  --order-keys expr            Allow expressions in ORDER BY\n", .{});
-    std.debug.print("  --match-max-results <N>      Override MATCH guard max_results (test/deterministic)\n", .{});
-    std.debug.print("  --match-max-frontier <N>     Override MATCH guard max_frontier (test/deterministic)\n", .{});
     std.debug.print("  --log-level <lvl>            Set log level trace|debug|info|warn|error|critical (default info)\n", .{});
     std.debug.print("  --disable-auth               Disable authentication (debug builds only)\n", .{});
     std.debug.print("  --enable-auth                Enable authentication (default)\n", .{});
@@ -216,21 +208,17 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
             config.compact_profile = true;
         } else if (std.mem.eql(u8, arg, "--profile-memcurve")) {
             config.memcurve_profile = true;
-        } else if (std.mem.eql(u8, arg, "--test-wal-skip-ratio") and ai + 1 < args.len) {
-            const v = std.fmt.parseFloat(f64, args[ai + 1]) catch -1.0;
-            if (v >= 0.0) config.test_wal_skip_ratio = v;
-            ai += 1;
         } else if ((std.mem.eql(u8, arg, "--listen-quic") or std.mem.eql(u8, arg, "--listen")) and ai + 1 < args.len) {
-            config.listen_quic = args[ai + 1];
+            config.listen_quic = try allocator.dupe(u8, args[ai + 1]);
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--cert") and ai + 1 < args.len) {
-            config.cert_path = args[ai + 1];
+            config.cert_path = try allocator.dupe(u8, args[ai + 1]);
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--key") and ai + 1 < args.len) {
-            config.key_path = args[ai + 1];
+            config.key_path = try allocator.dupe(u8, args[ai + 1]);
             ai += 1;
         } else if ((std.mem.eql(u8, arg, "--data_dir") or std.mem.eql(u8, arg, "--data-dir")) and ai + 1 < args.len) {
-            config.data_dir = args[ai + 1];
+            config.data_dir = try allocator.dupe(u8, args[ai + 1]);
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--disable-auth")) {
             config.auth_enabled = false;
@@ -244,23 +232,13 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
                 config.order_keys_mode_expr = false;
             }
             ai += 1;
-        } else if (std.mem.eql(u8, arg, "--test-exit-after-first-request")) {
-            config.test_exit_after_first = true;
         } else if (std.mem.eql(u8, arg, "--no-tls")) {
             config.force_no_tls = true;
         } else if (std.mem.eql(u8, arg, "--log-level") and ai + 1 < args.len) {
-            config.log_level_arg = args[ai + 1];
+            config.log_level_arg = try allocator.dupe(u8, args[ai + 1]);
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--catalog-create") and ai + 1 < args.len) {
-            config.catalog_create_name = args[ai + 1];
-            ai += 1;
-        } else if (std.mem.eql(u8, arg, "--match-max-results") and ai + 1 < args.len) {
-            const mv = std.fmt.parseInt(usize, args[ai + 1], 10) catch 0;
-            if (mv > 0) config.match_max_results_override = mv;
-            ai += 1;
-        } else if (std.mem.eql(u8, arg, "--match-max-frontier") and ai + 1 < args.len) {
-            const fv = std.fmt.parseInt(usize, args[ai + 1], 10) catch 0;
-            if (fv > 0) config.match_max_frontier_override = fv;
+            config.catalog_create_name = try allocator.dupe(u8, args[ai + 1]);
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--config") or std.mem.eql(u8, arg, "-c")) {
             // Already processed in first pass, skip value

@@ -136,9 +136,6 @@ pub const Wal = struct {
     // Metrics captured on last recovery run (for PROFILE / tests).
     last_skip_count: usize = 0,
     last_total_records: usize = 0,
-    // Test-only override: when >=0.0 this value is returned by skipRatio() instead of computed metric.
-    // Allows deterministic PROFILE tests without crafting large patterned logs.
-    test_skip_ratio_override: f64 = -1.0,
     // Distinct committed txn ids discovered during initial scan (persisted segments)
     recovered_committed: usize = 0,
     // Compaction cadence management
@@ -303,7 +300,6 @@ pub const Wal = struct {
     }
 
     pub fn skipRatio(self: *const Wal) f64 {
-        if (self.test_skip_ratio_override >= 0.0) return self.test_skip_ratio_override;
         if (self.last_total_records == 0) return 0.0;
         return @as(f64, @floatFromInt(self.last_skip_count)) / @as(f64, @floatFromInt(self.last_total_records));
     }

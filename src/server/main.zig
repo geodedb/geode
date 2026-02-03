@@ -72,7 +72,6 @@ const ConnectionContext = struct {
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
-    test_wal_skip_ratio: ?f64,
     env_spill_sort: usize,
     env_spill_distinct: usize,
     env_spill_union: usize,
@@ -94,7 +93,6 @@ fn handleConnectionAsync(context: *anyopaque) void {
         ctx.disable_estimates,
         ctx.compact_profile,
         ctx.memcurve_profile,
-        ctx.test_wal_skip_ratio,
         ctx.env_spill_sort,
         ctx.env_spill_distinct,
         ctx.env_spill_union,
@@ -277,11 +275,6 @@ const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 // Removed: AllocTracker struct (~1 line) now in query_executor module (M3.3 Phase 3 sixth increment)
 // Removed: trackerGet() function (~5 lines) now in query_executor module (M3.3 Phase 3 sixth increment)
 
-// Global test override for MATCH guard max results (set via --match-max-results)
-var g_match_max_results_override: ?usize = null;
-// Global test override for MATCH guard max frontier (set via --match-max-frontier)
-var g_match_max_frontier_override: ?usize = null;
-
 // Centralized CDC_CONTROL handler to eliminate duplicated logic between processMessage
 // (network path) and stdio loop. Returns a newly allocated response line or null slice on OOM.
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC_CONTROL"; ASPECT=Refactor; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ControlReset; OWNER=server; UPDATED=2025-09-20
@@ -307,11 +300,9 @@ pub fn main() !void {
     const disable_estimates = config.disable_estimates;
     const compact_profile = config.compact_profile;
     var memcurve_profile = config.memcurve_profile;
-    const test_wal_skip_ratio = config.test_wal_skip_ratio;
     const listen_quic = config.listen_quic;
     const order_keys_mode_expr = config.order_keys_mode_expr;
     const data_dir = config.data_dir;
-    const test_exit_after_first = config.test_exit_after_first;
     _ = config.force_no_tls; // Reserved for future TLS configuration
     const catalog_create_name = config.catalog_create_name;
     const log_level_arg = config.log_level_arg;
@@ -360,9 +351,6 @@ pub fn main() !void {
         user_mgmt.setAuthEnabled(false);
     }
 
-    if (config.match_max_results_override) |mmr| g_match_max_results_override = mmr;
-    if (config.match_max_frontier_override) |mfr| g_match_max_frontier_override = mfr;
-
     // Resolve certificate paths and ensure they exist
     const cert_paths = try cli_args.resolveCertPaths(gpa, &config);
     var cert_path = cert_paths.cert_path;
@@ -384,6 +372,17 @@ pub fn main() !void {
 
     // Initialize AuditLogger (Phase 2 Spec Compliance)
     var audit_config = audit.AuditLogger.Config{};
+
+    // Check for audit disable flag (for testing only)
+    const audit_disable_env = std.process.getEnvVarOwned(gpa, "GEODE_DISABLE_AUDIT") catch null;
+    defer if (audit_disable_env) |d| gpa.free(d);
+    if (audit_disable_env) |d| {
+        if (std.mem.eql(u8, d, "1") or std.mem.eql(u8, d, "true")) {
+            audit_config.enabled = false;
+            log.warn("SECURITY WARNING: Audit logging disabled via GEODE_DISABLE_AUDIT!", &.{});
+        }
+    }
+
     const audit_path_env = std.process.getEnvVarOwned(gpa, "GEODE_AUDIT_LOG_PATH") catch null;
     defer if (audit_path_env) |p| gpa.free(p);
     if (audit_path_env) |p| {
@@ -407,7 +406,6 @@ pub fn main() !void {
         order_keys_mode_expr,
         data_dir,
         catalog_create_name,
-        test_wal_skip_ratio,
         &memcurve_profile,
     );
     defer init_ctx.deinit();
@@ -464,13 +462,13 @@ pub fn main() !void {
             .key_path = key_path,
         });
         // In short-lived test runs we avoid tearing down the QUIC endpoint to sidestep
-        // vendor teardown crashes; enable passive teardown when --test-exit-after-first
-        // or GEODE_QUIC_PASSIVE_TEARDOWN=1 is present.
+        // vendor teardown crashes; enable passive teardown when
+        // GEODE_QUIC_PASSIVE_TEARDOWN=1 is present.
         const passive_teardown_env = if (std.process.getEnvVarOwned(gpa, "GEODE_QUIC_PASSIVE_TEARDOWN")) |v| blk: {
             defer gpa.free(v);
             break :blk true;
         } else |_| false;
-        const passive_teardown = passive_teardown_env or test_exit_after_first;
+        const passive_teardown = passive_teardown_env;
         defer {
             if (!passive_teardown) transport.deinit();
         }
@@ -483,113 +481,94 @@ pub fn main() !void {
             Attr.string("tls", "1.3"),
         });
 
-        if (test_exit_after_first) {
-            // For testing: handle a single connection without blocking on second accept
-            log.debug("Test mode enabled - calling transport.accept() ONCE", &.{});
-            const conn = transport.accept() catch |err| {
-                log.err("Failed to accept QUIC connection", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-                return;
-            };
-
-            // QUIC transport uses event-driven callbacks, no polling needed
-            log.debug("Test mode - calling handleQuicConnection", &.{});
-
-            // CANARY: REQ=REQ-ABAC-WIRE-015; FEATURE="ABAC Enforcement"; ASPECT=QUICCall; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
-            // GAP-0165: Pass SecurityManager to handleQuicConnection for ABAC enforcement
-            quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err| {
-                log.err("Error handling QUIC connection", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-            };
-        } else {
-            // CANARY: REQ=REQ-PERF-ASYNC-CONN-002; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPoolInit; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
-            // GAP-0202: Initialize thread pool for async connection handling
-            // This allows accepting new connections while previous ones are being processed
-            const pool = thread_pool.ThreadPool.init(gpa, .{
-                .num_threads = 0, // Auto-detect based on CPU count
-            }) catch |err| {
-                log.err("Failed to initialize connection thread pool, falling back to sync mode", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-                // Fallback to synchronous mode
-                while (true) {
-                    const conn = transport.accept() catch |err2| {
-                        log.warn("Failed to accept QUIC connection", &.{
-                            Attr.string("error", @errorName(err2)),
-                        });
-                        continue;
-                    };
-                    quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err2| {
-                        log.err("Error handling QUIC connection", &.{
-                            Attr.string("error", @errorName(err2)),
-                        });
-                    };
-                }
-                return;
-            };
-            defer pool.deinit();
-
-            log.info("Async connection handling enabled", &.{
-                Attr.int("worker_threads", @intCast(pool.workers.len)),
+        // CANARY: REQ=REQ-PERF-ASYNC-CONN-002; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPoolInit; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
+        // GAP-0202: Initialize thread pool for async connection handling
+        // This allows accepting new connections while previous ones are being processed
+        const pool = thread_pool.ThreadPool.init(gpa, .{
+            .num_threads = 0, // Auto-detect based on CPU count
+        }) catch |err| {
+            log.err("Failed to initialize connection thread pool, falling back to sync mode", &.{
+                Attr.string("error", @errorName(err)),
             });
-
-            // Production mode: accept connections in a loop and dispatch to thread pool
+            // Fallback to synchronous mode
             while (true) {
-                const conn = transport.accept() catch |err| {
+                const conn = transport.accept() catch |err2| {
+                    log.warn("Failed to accept QUIC connection", &.{
+                        Attr.string("error", @errorName(err2)),
+                    });
+                    continue;
+                };
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err2| {
+                    log.err("Error handling QUIC connection", &.{
+                        Attr.string("error", @errorName(err2)),
+                    });
+                };
+            }
+            return;
+        };
+        defer pool.deinit();
+
+        log.info("Async connection handling enabled", &.{
+            Attr.int("worker_threads", @intCast(pool.workers.len)),
+        });
+
+        // Production mode: accept connections in a loop and dispatch to thread pool
+        // The accept() function polls internally to receive packets and complete handshakes
+        while (true) {
+            const conn = transport.accept() catch |err| {
+                // WouldBlock is expected when no connections are pending
+                if (err != quic_transport.QuicError.WouldBlock) {
                     std.debug.print("DEBUG_TRACE: Failed to accept connection: {}\n", .{err});
                     log.warn("Failed to accept QUIC connection", &.{
                         Attr.string("error", @errorName(err)),
                     });
-                    continue;
-                };
-                std.debug.print("DEBUG_TRACE: Accepted connection\n", .{});
-
-                // CANARY: REQ=REQ-ABAC-WIRE-016; FEATURE="ABAC Enforcement"; ASPECT=QUICLoop; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
-                // GAP-0202: Create context for async connection handling
-                const ctx = gpa.create(ConnectionContext) catch {
-                    log.err("Failed to allocate connection context, handling sync", &.{});
-                    quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, test_wal_skip_ratio, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err| {
-                        log.err("Error handling QUIC connection", &.{
-                            Attr.string("error", @errorName(err)),
-                        });
-                    };
-                    continue;
-                };
-
-                ctx.* = .{
-                    .allocator = gpa,
-                    .transport = &transport,
-                    .conn = conn,
-                    .result_format_txt = result_format_txt,
-                    .disable_estimates = disable_estimates,
-                    .compact_profile = compact_profile,
-                    .memcurve_profile = memcurve_profile,
-                    .test_wal_skip_ratio = test_wal_skip_ratio,
-                    .env_spill_sort = env_spill_sort,
-                    .env_spill_distinct = env_spill_distinct,
-                    .env_spill_union = env_spill_union,
-                    .env_spill_threshold = env_spill_threshold,
-                    .env_storage_checksum_error = env_storage_checksum_error,
-                    .env_wal_compact_interval = env_wal_compact_interval,
-                    .security_manager = init_ctx.security_manager,
-                    .shared_ast_cache = init_ctx.shared_ast_cache,
-                };
-
-                // Submit to thread pool for async handling
-                const work_item = thread_pool.WorkItem{
-                    .context = @ptrCast(ctx),
-                    .callback = handleConnectionAsync,
-                };
-
-                if (!pool.submit(work_item)) {
-                    // Queue full - handle synchronously as fallback
-                    log.warn("Thread pool queue full, handling connection sync", &.{});
-                    handleConnectionAsync(@ptrCast(ctx));
-                } else {
-                    log.debug("Connection submitted to thread pool", &.{});
                 }
+                continue;
+            };
+            std.debug.print("DEBUG_TRACE: Accepted connection\n", .{});
+
+            // CANARY: REQ=REQ-ABAC-WIRE-016; FEATURE="ABAC Enforcement"; ASPECT=QUICLoop; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
+            // GAP-0202: Create context for async connection handling
+            const ctx = gpa.create(ConnectionContext) catch {
+                log.err("Failed to allocate connection context, handling sync", &.{});
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err| {
+                    log.err("Error handling QUIC connection", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
+                continue;
+            };
+
+            ctx.* = .{
+                .allocator = gpa,
+                .transport = &transport,
+                .conn = conn,
+                .result_format_txt = result_format_txt,
+                .disable_estimates = disable_estimates,
+                .compact_profile = compact_profile,
+                .memcurve_profile = memcurve_profile,
+                .env_spill_sort = env_spill_sort,
+                .env_spill_distinct = env_spill_distinct,
+                .env_spill_union = env_spill_union,
+                .env_spill_threshold = env_spill_threshold,
+                .env_storage_checksum_error = env_storage_checksum_error,
+                .env_wal_compact_interval = env_wal_compact_interval,
+                .security_manager = init_ctx.security_manager,
+                .shared_ast_cache = init_ctx.shared_ast_cache,
+            };
+
+            // Submit to thread pool for async handling
+            const work_item = thread_pool.WorkItem{
+                .context = @ptrCast(ctx),
+                .callback = handleConnectionAsync,
+            };
+
+            if (!pool.submit(work_item)) {
+                // Queue full - handle synchronously as fallback
+                log.warn("Thread pool queue full, handling connection sync", &.{});
+                handleConnectionAsync(@ptrCast(ctx));
+            } else {
+                log.debug("Connection submitted to thread pool", &.{});
             }
         }
         return;

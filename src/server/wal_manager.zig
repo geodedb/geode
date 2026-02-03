@@ -8,12 +8,9 @@ pub const WalManager = struct {
     wal: wal_mod.Wal,
     mutex: std.Thread.Mutex = .{},
 
-    pub fn init(allocator: std.mem.Allocator, test_wal_skip_ratio: ?f64) WalManager {
+    pub fn init(allocator: std.mem.Allocator) WalManager {
         var wal = wal_mod.Wal.init(allocator);
         wal.openFile("/tmp/geode_ephemeral_wal") catch {};
-        if (test_wal_skip_ratio) |ov| {
-            wal.test_skip_ratio_override = ov;
-        }
         return .{
             .allocator = allocator,
             .wal = wal,
@@ -60,7 +57,7 @@ var g_wal_manager: ?*WalManager = null;
 var g_wal_init_mutex: std.Thread.Mutex = .{};
 
 /// Get or create the shared WAL manager.
-pub fn getOrCreateWalManager(allocator: std.mem.Allocator, test_wal_skip_ratio: ?f64) !*WalManager {
+pub fn getOrCreateWalManager(allocator: std.mem.Allocator) !*WalManager {
     g_wal_init_mutex.lock();
     defer g_wal_init_mutex.unlock();
 
@@ -69,7 +66,7 @@ pub fn getOrCreateWalManager(allocator: std.mem.Allocator, test_wal_skip_ratio: 
     }
 
     const mgr = try allocator.create(WalManager);
-    mgr.* = WalManager.init(allocator, test_wal_skip_ratio);
+    mgr.* = WalManager.init(allocator);
     g_wal_manager = mgr;
     return mgr;
 }

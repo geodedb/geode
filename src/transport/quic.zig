@@ -176,24 +176,42 @@ pub const QuicTransport = struct {
 
     pub fn accept(self: *QuicTransport) !*QuicConnection {
         if (self.endpoint) |*ep| {
-            const conn = try api.accept(ep);
-            const wrapper = try self.allocator.create(QuicConnection);
-            wrapper.* = QuicConnection{
-                .allocator = self.allocator,
-                .inner = conn,
-                .streams = try std.ArrayList(*QuicStream).initCapacity(self.allocator, 0),
-            };
-            // GAP-0202: Thread-safe connection list append
-            self.connections_mutex.lock();
-            defer self.connections_mutex.unlock();
-            try self.connections.append(self.allocator, wrapper);
-            return wrapper;
+            // Poll the endpoint to process incoming UDP packets and complete handshakes
+            // This is required before connections can be accepted
+            // Keep polling until a connection is ready with available streams
+            var poll_count: usize = 0;
+            while (poll_count < 100) : (poll_count += 1) {
+                try ep.poll(10);
+                // Try to get an accepted connection
+                if (api.tryAccept(ep)) |conn| {
+                    // Check if streams are available; if not, keep polling
+                    if (conn.hasIncomingStreams() or poll_count > 50) {
+                        const wrapper = try self.allocator.create(QuicConnection);
+                        wrapper.* = QuicConnection{
+                            .allocator = self.allocator,
+                            .inner = conn,
+                            .streams = try std.ArrayList(*QuicStream).initCapacity(self.allocator, 0),
+                        };
+                        // GAP-0202: Thread-safe connection list append
+                        self.connections_mutex.lock();
+                        defer self.connections_mutex.unlock();
+                        try self.connections.append(self.allocator, wrapper);
+                        return wrapper;
+                    }
+                    // Connection accepted but no streams yet - need to keep polling
+                    // Put connection back (it's already tracked by the endpoint)
+                }
+            }
+            // No connections ready after polling
+            return QuicError.WouldBlock;
         }
         return QuicError.InvalidState;
     }
 
     pub fn tryAccept(self: *QuicTransport) ?*QuicConnection {
         if (self.endpoint) |*ep| {
+            // Poll the endpoint to process incoming UDP packets and complete handshakes
+            ep.poll(10) catch return null;
             const conn = api.tryAccept(ep) orelse return null;
             const wrapper = self.allocator.create(QuicConnection) catch return null;
             wrapper.* = QuicConnection{
@@ -501,7 +519,9 @@ pub const QuicClient = struct {
         defer self.allocator.free(server_addr);
 
         // Connect to server using public API
-        self.connection = try api.connect(&self.endpoint.?, server_addr, normalized_address);
+        // When allow_insecure is true, use "localhost" as SNI to match self-signed cert CN
+        const sni = if (allow_insecure) "localhost" else normalized_address;
+        self.connection = try api.connect(&self.endpoint.?, server_addr, sni);
     }
 
     pub fn connectEx(self: *QuicClient, address: []const u8, port: u16, ca_cert_path: ?[]const u8, client_cert_path: ?[]const u8, client_key_path: ?[]const u8) !void {

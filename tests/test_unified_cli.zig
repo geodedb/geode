@@ -15,7 +15,6 @@ test "ServerConfig initialization with defaults" {
         compact_profile: bool = false,
         memcurve_profile: bool = false,
         force_no_tls: bool = false,
-        test_exit_after_first: bool = false,
     };
 
     const config = ServerConfig{};

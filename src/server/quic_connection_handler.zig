@@ -1,19 +1,24 @@
 const std = @import("std");
 const geode = @import("geode");
-const diagnostics = geode.diagnostics;
 const quic_transport = @import("transport/quic");
 const query_plan_cache = geode.query_plan_cache;
 const ServerState = geode.server_state.ServerState;
-const SessionConfiguration = geode.server_state.SessionConfiguration;
 const CatalogSchema = geode.server_state.CatalogSchema;
 const CatalogGraph = geode.server_state.CatalogGraph;
-const query_executor = geode.query_executor;
 const execution = geode.execution;
-const cost_explain = geode.cost_explain;
 const server_flags = geode.server_flags;
+const wal_manager = geode.wal_manager;
+const graph_store = geode.graph_store;
+const proto_util = @import("proto_util.zig");
+const gql_print = geode.printer;
+const gql_ast = geode.gql.ast;
+const backup_manager = geode.backup_manager;
+const SimplifiedBackupManager = backup_manager.SimplifiedBackupManager;
+const txn_undo_log = geode.txn_undo_log;
+const query_executor = geode.query_executor;
 const message_handlers = geode.message_handlers;
 const protocol_handler = geode.protocol_handler;
-const wal_manager = geode.wal_manager;
+const json_lib = @import("json");
 // Note: query_ast_cache type is opaque to avoid circular dependency with lib.zig
 // CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager type in QUIC connection handling
@@ -31,9 +36,6 @@ const Attr = logging.Attr;
 
 const schema = @import("schema");
 const protobuf = @import("protobuf");
-const spice_wrapper = @import("parallel/spice");
-const value_types = geode.value_types;
-const json_lib = @import("json");
 
 /// Build a protobuf error response
 fn buildErrorResponse(allocator: std.mem.Allocator, status_class: []const u8, message: []const u8) schema.ExecutionResponse {
@@ -217,7 +219,6 @@ pub fn handleQuicConnection(
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
-    test_wal_skip_ratio: ?f64,
     env_spill_sort: usize,
     env_spill_distinct: usize,
     env_spill_union: usize,
@@ -236,18 +237,18 @@ pub fn handleQuicConnection(
     std.debug.print("DEBUG_TRACE: Entering handleQuicConnection\n", .{});
     log.debug("Entering handleQuicConnection", &.{});
 
-    // Poll the endpoint to process incoming STREAM frames before accepting
-    // vendor/quic requires explicit polling to receive packets and populate stream queues
-    // Try polling with retries to ensure we receive the client's initial STREAM frame
-    // GAP-0200: Reduced poll timeout from 50ms to 5ms for high throughput
+    // Wait for incoming STREAM frames using a simple retry loop
+    // Note: transport.poll() is NOT thread-safe and must only be called from the main accept loop
+    // The main accept loop's poll() already processes incoming packets, so streams should be queued
+    // GAP-0200: Use simple sleep-based retry instead of transport.poll() for thread safety
     var poll_attempts: usize = 0;
-    while (poll_attempts < 10) : (poll_attempts += 1) {
-        try transport.poll(5); // Poll for up to 5ms
+    while (poll_attempts < 50) : (poll_attempts += 1) {
         if (conn.inner.hasIncomingStreams()) break;
-        if (poll_attempts > 0) {
+        std.Thread.sleep(1 * std.time.ns_per_ms); // Sleep 1ms and check again
+        if (poll_attempts > 0 and poll_attempts % 10 == 0) {
             log.debug("No streams yet, retrying", &.{
                 Attr.int("attempt", @intCast(poll_attempts + 1)),
-                Attr.int("max_attempts", 10),
+                Attr.int("max_attempts", 50),
             });
         }
     }
@@ -260,13 +261,13 @@ pub fn handleQuicConnection(
 
     // Initialize (or reuse) shared WAL manager.
     // This removes per-connection WAL open/close overhead.
-    const wal_mgr = try wal_manager.getOrCreateWalManager(gpa, test_wal_skip_ratio);
+    const wal_mgr = try wal_manager.getOrCreateWalManager(gpa);
 
     // Initialize state
     var state = ServerState{
         .allocator = gpa,
-        .session_config = SessionConfiguration.init(gpa),
     };
+    state.exec_session = execution.SessionState.init(gpa);
     state.telemetry_paging = if (std.process.getEnvVarOwned(gpa, "GEODE_TELEMETRY_PAGING")) |v| blk: {
         defer gpa.free(v);
         break :blk true;
@@ -275,6 +276,7 @@ pub fn handleQuicConnection(
     state.inserted_values = .{};
     state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
+    state.graph_types = std.HashMap([]const u8, geode.server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.wal_ptr = @ptrCast(wal_mgr);
     state.spill_sort = env_spill_sort;
     state.spill_distinct = env_spill_distinct;
@@ -284,6 +286,31 @@ pub fn handleQuicConnection(
     // CANARY: REQ=REQ-ABAC-WIRE-014; FEATURE="ABAC Enforcement"; ASPECT=QUICState; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
     // GAP-0165: Wire SecurityManager into ServerState for QUIC connection ABAC enforcement
     state.security_manager = security_manager;
+
+    // Initialize evaluator callbacks for execution engine.
+    execution.initEvaluator();
+
+    // Ensure cleanup of per-connection state.
+    defer {
+        state.resetResult();
+        if (state.exec_session) |*sess| sess.deinit();
+        if (state.session_config) |*cfg| cfg.deinit();
+        if (state.authenticated_user) |u| gpa.free(u);
+        if (state.authenticated_password) |p| gpa.free(p);
+        state.txn_manager.deinit();
+        for (state.inserted_values.items) |item| {
+            state.allocator.free(item.value);
+        }
+        state.inserted_values.deinit(state.allocator);
+        state.catalog_schemas.deinit();
+        state.catalog_graphs.deinit();
+        var gt_iter = state.graph_types.iterator();
+        while (gt_iter.next()) |entry| {
+            state.allocator.free(entry.key_ptr.*);
+            state.allocator.free(entry.value_ptr.name);
+        }
+        state.graph_types.deinit();
+    }
 
     // Query optimizer gating: enable only when explicitly requested.
     // PROFILE/EXPLAIN will still enable it per-query.
@@ -443,7 +470,7 @@ pub fn processMessage(
             // Check if authentication is required but no user is authenticated
             if (user_mgmt.isAuthEnabled() and state.authenticated_user == null) {
                 const err_resp = schema.Error{ .code = "28000", .message = "Authentication required" };
-                return schema.QuicServerMessage{ .execute = .{ .payload =.{ .@"error" = err_resp } } };
+                return schema.QuicServerMessage{ .execute = .{ .payload = .{ .@"error" = err_resp } } };
             }
 
             // Execute query via test_harness
@@ -454,14 +481,14 @@ pub fn processMessage(
                     .username = state.authenticated_user orelse "",
                     .role = @enumFromInt(role_u8),
                 } else null,
-                            };
+            };
 
             log.info("Executing query via test_harness", &.{});
             const result = geode.test_harness.runQueryWithAuth(@constCast(&gpa), exec_req.query, options) catch |err| {
                 log.err("Query execution failed", &.{Attr.err("error", err)});
                 const err_msg = @errorName(err);
                 const err_resp = schema.Error{ .code = "58000", .message = err_msg };
-                return schema.QuicServerMessage{ .execute = .{ .payload =.{ .@"error" = err_resp } } };
+                return schema.QuicServerMessage{ .execute = .{ .payload = .{ .@"error" = err_resp } } };
             };
             defer gpa.free(result);
 
@@ -480,7 +507,7 @@ pub fn processMessage(
             try rows.append(gpa, .{ .values = values });
 
             const page = schema.DataPage{ .rows = rows, .final = true, .order_keys = std.ArrayList([]const u8){} };
-            return schema.QuicServerMessage{ .execute = .{ .payload =.{ .page = page } } };
+            return schema.QuicServerMessage{ .execute = .{ .payload = .{ .page = page } } };
         },
         .ping => |_| {
             return schema.QuicServerMessage{ .ping = .{ .ok = true } };
@@ -607,7 +634,7 @@ pub fn processJsonLineMessage(
                 .username = state.authenticated_user orelse "",
                 .role = @enumFromInt(role_u8),
             } else null,
-                    };
+        };
 
         const result = geode.test_harness.runQueryWithAuth(@constCast(&gpa), query, options) catch |err| {
             const err_msg = @errorName(err);

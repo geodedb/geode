@@ -31,14 +31,13 @@ endif
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test client-test-zig
 .PHONY: transport-parity-smokes status-generate no-feature-flags cluster-test
-.PHONY: geodetestlab geodetestlab-spec geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25
-.PHONY: geodetestlab-parallel geodetestlab-quick geodetestlab-report geodetestlab-compare geodetestlab-export geodetestlab-trends
-# Note: client-test-harness moved to separate repository (geode-test-harness)
+# Note: geodetestlab and client-test-harness moved to separate repository (geode-test-harness)
 .PHONY: deps deps-check
 .PHONY: pre-commit pre-commit-install pre-commit-update pre-commit-all setup-dev
 
 # Default target - build everything including cross-compilation checks (non-blocking)
-all: sub build test cross-test no-feature-flags status-generate geodetestlab
+# Note: Integration tests (geodetestlab) moved to ../geode-test-harness
+all: sub build test cross-test no-feature-flags status-generate
 
 # Help target - show all available targets
 help:
@@ -67,7 +66,7 @@ help:
 	@echo "  make fuzz        - Run fuzz tests"
 	@echo "  make bench       - Run benchmarks"
 	@echo ""
-	@echo "Note: Go, Python, Rust clients moved to separate repos"
+	@echo "Note: Integration tests and clients moved to ../geode-test-harness"
 	@echo ""
 	@echo "Cross-compilation targets:"
 	@echo "  make cross-compile      - Build for all platforms"
@@ -309,12 +308,13 @@ db-test: build
 
 # Run ALL integration and regression tests
 test-all-integration: build integration-test regression-test property-ordering-test pagination-test aggregation-test
-	@echo "Core integration tests complete (comprehensive tests excluded for performance)"
-	@echo "Note: graph-test, db-test, and geodetestlab disabled temporarily due to timeout issues"
+	@echo "Core integration tests complete"
+	@echo "Note: For comprehensive integration tests, use ../geode-test-harness"
 
 # Run comprehensive integration tests (including long-running tests)
-test-all-integration-comprehensive: build integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test geodetestlab
-	@echo "All integration tests complete"
+test-all-integration-comprehensive: build integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test
+	@echo "All local integration tests complete"
+	@echo "Note: For geodetestlab tests, use ../geode-test-harness"
 
 # Load example dataset (for development/testing)
 load-dataset: build
@@ -326,150 +326,8 @@ load-dataset: build
 		exit 1; \
 	fi
 
-# Geodetestlab test suite targets
-geodetestlab: build geodetestlab-comprehensive geodetestlab-auth geodetestlab-user-management geodetestlab-backup geodetestlab-vector-knn geodetestlab-fulltext-bm25
-	@echo "All geodetestlab tests complete"
-
-# Run a specific geodetestlab spec file
-# Usage: make geodetestlab-spec SPEC=fle_comprehensive_security.yml
-#        make geodetestlab-spec SPEC=fle_comprehensive  (partial match)
-#        make geodetestlab-spec SPEC=geodetestlab/specs/geode_auth.yml (full path)
-SPEC ?=
-geodetestlab-spec: build
-	@if [ -z "$(SPEC)" ]; then \
-		echo "Error: SPEC variable required"; \
-		echo "Usage: make geodetestlab-spec SPEC=<spec_name_or_path>"; \
-		echo ""; \
-		echo "Examples:"; \
-		echo "  make geodetestlab-spec SPEC=fle_comprehensive_security.yml"; \
-		echo "  make geodetestlab-spec SPEC=fle_comprehensive"; \
-		echo "  make geodetestlab-spec SPEC=geode_auth"; \
-		echo ""; \
-		echo "Available specs:"; \
-		ls -1 geodetestlab/specs/*.yml | xargs -n1 basename | head -20; \
-		echo "  ... (use 'ls geodetestlab/specs/' to see all)"; \
-		exit 1; \
-	fi
-	@echo "Running geodetestlab spec: $(SPEC)"
-	@python3 scripts/test/extended_test_runner.py "$(SPEC)"
-
-# Run comprehensive geodetestlab test suite
-geodetestlab-comprehensive: build
-	@echo "Running comprehensive geodetestlab tests..."
-	@if [ -x "scripts/test/parallel_test_runner.py" ]; then \
-		echo "Using parallel test runner with default settings..."; \
-		python3 scripts/test/parallel_test_runner.py --max-workers 4 --timeout 120; \
-	elif [ -x "scripts/test/extended_test_runner.py" ]; then \
-		echo "Using extended test runner..."; \
-		python3 scripts/test/extended_test_runner.py; \
-	elif [ -f "geodetestlab/geodetestlab/core/runner.py" ]; then \
-		echo "Using geodetestlab core runner..."; \
-		python3 -m geodetestlab.geodetestlab.core.runner --config geodetestlab/config.yml; \
-	else \
-		echo "No geodetestlab runner found or not executable"; \
-		exit 1; \
-	fi
-
-# Run authentication and authorization tests
-geodetestlab-auth: build
-	@echo "Running geodetestlab authentication tests..."
-	@python3 scripts/test/extended_test_runner.py geode_auth
-
-# Run user management tests
-geodetestlab-user-management: build
-	@echo "Running geodetestlab user management tests..."
-	@python3 scripts/test/extended_test_runner.py geode_user_management
-
-# Run backup and restore tests
-geodetestlab-backup: build
-	@echo "Running geodetestlab backup tests..."
-	@python3 scripts/test/extended_test_runner.py geode_backup
-
-# Run vector K-NN and similarity search tests
-geodetestlab-vector-knn: build
-	@echo "Running geodetestlab vector K-NN tests..."
-	@python3 scripts/test/extended_test_runner.py vector
-
-# Run full-text search and BM25 tests
-geodetestlab-fulltext-bm25: build
-	@echo "Running geodetestlab full-text BM25 tests..."
-	@python3 scripts/test/extended_test_runner.py fulltext bm25
-
-# Parallel testing infrastructure targets
-WORKERS ?= 4
-TIMEOUT ?= 10
-RUNS ?= 5
-FILE ?= failures.csv
-
-# Run parallel geodetestlab tests with configurable workers and timeout
-geodetestlab-parallel: build
-	@echo "Running parallel geodetestlab tests (workers=$(WORKERS), timeout=$(TIMEOUT)s)..."
-	@if [ -x "scripts/test/parallel_test_runner.py" ]; then \
-		python3 scripts/test/parallel_test_runner.py --max-workers $(WORKERS) --timeout $(TIMEOUT); \
-	else \
-		echo "scripts/test/parallel_test_runner.py not found or not executable"; \
-		echo "Please ensure the parallel test runner is available"; \
-		exit 1; \
-	fi
-
-# Run quick subset of tests for rapid development iteration
-geodetestlab-quick: build
-	@echo "Running quick geodetestlab subset tests..."
-	@if [ -x "quick_test_runner.py" ]; then \
-		python3 quick_test_runner.py; \
-	else \
-		echo "quick_test_runner.py not found or not executable"; \
-		echo "Please ensure the quick test runner is available"; \
-		exit 1; \
-	fi
-
-# Generate comprehensive progress report from test logs
-geodetestlab-report:
-	@echo "Generating geodetestlab progress report..."
-	@if [ -x "failure_tracker.py" ]; then \
-		python3 failure_tracker.py --report; \
-	else \
-		echo "failure_tracker.py not found or not executable"; \
-		echo "Please ensure the failure tracker is available"; \
-		exit 1; \
-	fi
-
-# Compare last two test runs
-geodetestlab-compare:
-	@echo "Comparing last two geodetestlab test runs..."
-	@if [ -x "failure_tracker.py" ]; then \
-		python3 failure_tracker.py --compare; \
-	else \
-		echo "failure_tracker.py not found or not executable"; \
-		echo "Please ensure the failure tracker is available"; \
-		exit 1; \
-	fi
-
-# Export failure data to CSV for external analysis
-geodetestlab-export:
-	@echo "Exporting geodetestlab failure data to $(FILE)..."
-	@if [ -x "failure_tracker.py" ]; then \
-		python3 failure_tracker.py --export-csv $(FILE) --trends 0; \
-		echo "Failure data exported to $(FILE)"; \
-	else \
-		echo "failure_tracker.py not found or not executable"; \
-		echo "Please ensure the failure tracker is available"; \
-		exit 1; \
-	fi
-
-# Analyze failure trends over multiple runs
-geodetestlab-trends:
-	@echo "Analyzing geodetestlab failure trends over $(RUNS) runs..."
-	@if [ -x "failure_tracker.py" ]; then \
-		python3 failure_tracker.py --trends $(RUNS); \
-	else \
-		echo "failure_tracker.py not found or not executable"; \
-		echo "Please ensure the failure tracker is available"; \
-		exit 1; \
-	fi
-
-# Note: Client test harness moved to separate repository (geode-test-harness)
-# See: https://gitlab.com/devnw/geode-test-harness
+# Note: Geodetestlab and client test harness moved to separate repository
+# See: ../geode-test-harness
 
 fuzz:
 	$(ZIG) build fuzz $(ZIG_FLAGS)
@@ -566,11 +424,12 @@ canary-verify: canary
 .PHONY: verify-all verify-fast ci-verify
 
 # Full, strict E2E verification. Fails on vendoring issues immediately.
-verify-all: clean sub quic-init fmt build test integration-test dataset-integration-test geodetestlab cross-compile-strict no-feature-flags status-generate governance-check docker-ci
+# Note: For geodetestlab integration tests, use ../geode-test-harness
+verify-all: clean sub quic-init fmt build test integration-test dataset-integration-test cross-compile-strict no-feature-flags status-generate governance-check docker-ci
 	@echo "==> E2E verification: PASSED"
 
 # Faster dev loop (no fuzz/bench/docker/governance)
-verify-fast: build test geodetestlab-comprehensive cross-compile-required
+verify-fast: build test cross-compile-required
 	@echo "==> Fast verification: PASSED"
 
 # CI-friendly alias
@@ -672,7 +531,8 @@ clean:
 	rm -rf zig-cache
 
 # Run build, test, fuzz, bench, strict cross, governance, docker
-ci: clean build test geodetestlab fuzz bench cross-compile-strict no-feature-flags status-generate governance-check docker-ci
+# Note: For geodetestlab integration tests, use ../geode-test-harness
+ci: clean build test fuzz bench cross-compile-strict no-feature-flags status-generate governance-check docker-ci
 	@echo "CI pipeline completed successfully"
 
 # Strict cross-compilation for CI (fails on any error)
@@ -1214,7 +1074,8 @@ docker-ci:
 DOCKER_INTEGRATION_DIR := docker-integration
 DOCKER_COMPOSE_INTEGRATION := docker compose -f $(DOCKER_INTEGRATION_DIR)/docker-compose.integration.yml
 
-# Build Docker integration images (Go, Python, Rust clients moved to separate repos)
+# Build Docker integration images
+# Note: Full integration testing moved to ../geode-test-harness
 docker-integration-build:
 	@echo "==== Building Docker Integration Images ===="
 	@if ! command -v docker >/dev/null 2>&1; then \
@@ -1222,15 +1083,13 @@ docker-integration-build:
 	fi
 	@echo "Building Geode server image..."
 	docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.server -t geode-integration-server:latest .
-	@echo "Building GeodeTestLab image..."
-	docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.geodetestlab -t geode-integration-testlab:latest .
 	@echo "Building Zig client image..."
 	@if [ -f "$(DOCKER_INTEGRATION_DIR)/Dockerfile.client-zig" ]; then \
 		docker build -f $(DOCKER_INTEGRATION_DIR)/Dockerfile.client-zig -t geode-integration-client-zig:latest .; \
 	else \
 		echo "⚠ Zig client Dockerfile not found, skipping"; \
 	fi
-	@echo "==== Integration images built (note: Go/Python/Rust clients moved to separate repos) ===="
+	@echo "==== Integration images built (note: Full integration tests moved to ../geode-test-harness) ===="
 
 # Start Docker integration environment
 docker-integration-up: docker-integration-build
@@ -1242,11 +1101,12 @@ docker-integration-up: docker-integration-build
 	$(DOCKER_COMPOSE_INTEGRATION) run --rm migration-runner
 	@echo "==== Integration environment ready ===="
 
-# Run full integration test suite (Go, Python, Rust clients moved to separate repos)
+# Run integration test suite
+# Note: Full integration tests (geodetestlab) moved to ../geode-test-harness
 docker-integration-test: docker-integration-up
 	@echo "==== Running Docker Integration Tests ===="
 	@echo "Starting client test containers..."
-	$(DOCKER_COMPOSE_INTEGRATION) up -d client-zig geodetestlab
+	$(DOCKER_COMPOSE_INTEGRATION) up -d client-zig
 	@echo "Running results collector..."
 	$(DOCKER_COMPOSE_INTEGRATION) run --rm results-collector
 	@echo "==== Integration tests complete ===="

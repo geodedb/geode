@@ -75,8 +75,8 @@ pub const InitContext = struct {
 };
 
 /// Initialize WAL (Write-Ahead Log)
-pub fn initializeWAL(allocator: std.mem.Allocator, test_wal_skip_ratio: ?f64) !*wal_manager.WalManager {
-    return wal_manager.getOrCreateWalManager(allocator, test_wal_skip_ratio);
+pub fn initializeWAL(allocator: std.mem.Allocator) !*wal_manager.WalManager {
+    return wal_manager.getOrCreateWalManager(allocator);
 }
 
 /// Process environment variables and return configuration
@@ -219,11 +219,10 @@ pub fn initialize(
     order_keys_mode_expr: bool,
     data_dir: ?[]const u8,
     catalog_create_name: ?[]const u8,
-    test_wal_skip_ratio: ?f64,
     memcurve_profile_ref: *bool,
 ) !InitContext {
     // Initialize WAL
-    const wal = try initializeWAL(allocator, test_wal_skip_ratio);
+    const wal = try initializeWAL(allocator);
     errdefer wal.deinit();
 
     // Initialize index catalog (idempotent)
