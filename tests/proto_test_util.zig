@@ -203,6 +203,9 @@ pub fn spawnServer(
         if (map.get("GEODE_ADMIN_USERNAME") == null) {
             map.put("GEODE_ADMIN_USERNAME", DefaultAuth.username) catch {};
         }
+        if (map.get("GEODE_ADMIN_PASSWORD") == null) {
+            map.put("GEODE_ADMIN_PASSWORD", DefaultAuth.password) catch {};
+        }
         if (map.get("GEODE_DEFAULT_PASSWORD") == null) {
             map.put("GEODE_DEFAULT_PASSWORD", DefaultAuth.password) catch {};
         }

@@ -1,37 +1,18 @@
 const std = @import("std");
+const cli_test_util = @import("cli_test_util.zig");
+const proto_test_util = @import("proto_test_util.zig");
 const testing = std.testing;
 
 fn run(args: []const []const u8, env_last: bool) !struct { out: []u8 } {
-    var child = std.process.Child.init(args, testing.allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    if (env_last) {
-        var env = try std.process.getEnvMap(testing.allocator);
-        defer env.deinit();
-        try env.put("GEODE_NULLS_LAST", "1");
-        var it = env.iterator();
-        var arr = std.ArrayList([]const u8).init(testing.allocator);
-        defer arr.deinit();
-        while (it.next()) |e| {
-            const kv = try std.fmt.allocPrint(testing.allocator, "{s}={s}", .{ e.key_ptr.*, e.value_ptr.* });
-            try arr.append(kv);
-        }
-        child.env_map = &arr;
-        try child.spawn();
-        const out = try child.stdout.?.readToEndAlloc(testing.allocator, 1 << 15);
-        _ = try child.stderr.?.readToEndAlloc(testing.allocator, 1 << 15);
-        const term = try child.wait();
-        try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, term);
-        for (arr.items) |kv| testing.allocator.free(kv);
-        return .{ .out = out };
-    } else {
-        try child.spawn();
-        const out = try child.stdout.?.readToEndAlloc(testing.allocator, 1 << 15);
-        _ = try child.stderr.?.readToEndAlloc(testing.allocator, 1 << 15);
-        const term = try child.wait();
-        try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, term);
-        return .{ .out = out };
-    }
+    const allocator = testing.allocator;
+    const env = if (env_last) &.{ "GEODE_NULLS_LAST=1" } else null;
+    var server = try proto_test_util.spawnServerRandom(allocator, env);
+    defer server.deinit();
+
+    const res = try cli_test_util.runAgainstServer(allocator, server.getAddr(), args);
+    defer allocator.free(res.err);
+    try testing.expectEqual(@as(i32, 0), res.code);
+    return .{ .out = res.out };
 }
 
 // Query returns explicit values with a NULL in between; ordering by the column should show
