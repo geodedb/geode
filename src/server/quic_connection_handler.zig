@@ -270,57 +270,6 @@ fn buildOrderKeys(
     return keys;
 }
 
-const BackupHeader = extern struct {
-    magic: u32,
-    version: u16,
-    backup_type: u8,
-    timestamp: i64,
-    compression: u8,
-    encrypted: bool = false,
-    _padding: [2]u8 = .{0} ** 2,
-    start_lsn: u64 = 0,
-    end_lsn: u64 = 0,
-    parent_backup_id: u128 = 0,
-};
-
-const BACKUP_MAGIC: u32 = 0x47454F42; // "GEOB"
-
-fn getParentBackupLsn(allocator: std.mem.Allocator, backup_dir: []const u8, parent_id_hex: []const u8) !u64 {
-    const parent_id = std.fmt.parseUnsigned(u128, parent_id_hex, 16) catch {
-        return error.InvalidParentId;
-    };
-
-    const full_path = try std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ backup_dir, parent_id });
-    defer allocator.free(full_path);
-    const incr_path = try std.fmt.allocPrint(allocator, "{s}/incr_{x}.backup", .{ backup_dir, parent_id });
-    defer allocator.free(incr_path);
-
-    var backup_file: std.fs.File = undefined;
-    if (std.fs.cwd().openFile(full_path, .{})) |f| {
-        backup_file = f;
-    } else |_| {
-        if (std.fs.cwd().openFile(incr_path, .{})) |f| {
-            backup_file = f;
-        } else |_| {
-            return error.ParentBackupNotFound;
-        }
-    }
-    defer backup_file.close();
-
-    var header_bytes: [@sizeOf(BackupHeader)]u8 = undefined;
-    const bytes_read = backup_file.readAll(&header_bytes) catch {
-        return error.BackupReadError;
-    };
-    if (bytes_read < @sizeOf(BackupHeader)) {
-        return @intCast(parent_id);
-    }
-    const header = @as(*const BackupHeader, @ptrCast(@alignCast(&header_bytes))).*;
-    if (header.magic != BACKUP_MAGIC) {
-        return error.InvalidBackupFormat;
-    }
-    return if (header.end_lsn > 0) header.end_lsn else @intCast(parent_id);
-}
-
 const DEBUG_PROFILE = false;
 
 // CANARY: REQ=REQ-ABAC-WIRE-013; FEATURE="ABAC Enforcement"; ASPECT=QUICHandler; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
@@ -693,19 +642,17 @@ fn handleClientMessage(
 
                     switch (analysis.kind) {
                         .explain => {
-                            const explain_json = try explain_payload.buildExplainJson(
+                            const explain_msg = try explain_payload.buildExplainPayload(
                                 gpa,
                                 traits,
                                 analysis.union_part_count,
                                 normalized.explain_calibrated,
                             );
-                            // Note: Do NOT defer free here - the protobuf message takes ownership
-                            // and will free json_payload when the message is deinit'd
 
                             const status = try proto_util.buildStatus(gpa, "00000", flags.items);
                             const resp = schema.ExecutionResponse{
                                 .status = status,
-                                .payload = .{ .explain = .{ .json_payload = explain_json } },
+                                .payload = .{ .explain = explain_msg },
                             };
                             try sendQuicMessage(gpa, stream, .{ .execute = resp });
                         },
@@ -725,7 +672,8 @@ fn handleClientMessage(
                                 try appendFlagIfMissing(gpa, &exec_result.flags, flag);
                             }
 
-                            const profile_json = try profile_payload.buildProfileJson(gpa, traits, exec_result.rows.len, .{
+                            const store = graph_store.getGlobalStore(gpa);
+                            const profile_msg = try profile_payload.buildProfilePayload(gpa, traits, exec_result.rows.len, .{
                                 .compact = compact_profile,
                                 .include_mem_curve = memcurve_profile,
                                 .disable_estimates = disable_estimates,
@@ -734,17 +682,18 @@ fn handleClientMessage(
                                 .spill_union = state.spill_union,
                                 .spill_hashagg = state.spill_hashagg,
                                 .spill_threshold = state.query_mem_limit_bytes,
-                                .wal_skip_ratio = -1,
                                 .committed_txns = state.global_commit_ts,
+                                .graph_store_nodes = @intCast(store.getNodeCount()),
+                                .graph_store_edges = @intCast(store.getEdgeCount()),
+                                .graph_store_dirty = store.isDirty(),
                                 .flagger_findings = exec_result.flags.items,
                                 .union_part_count = analysis.union_part_count,
                             });
-                            defer gpa.free(profile_json);
 
                             const status = try proto_util.buildStatus(gpa, "00000", exec_result.flags.items);
                             const resp = schema.ExecutionResponse{
                                 .status = status,
-                                .payload = .{ .profile = .{ .json_payload = profile_json } },
+                                .payload = .{ .profile = profile_msg },
                             };
                             try sendQuicMessage(gpa, stream, .{ .execute = resp });
 
@@ -912,10 +861,17 @@ fn handleClientMessage(
         .cdc_diag => |_| {
             if (state.cdc_engine) |eng| {
                 const payload = try eng.exportDiagnostics(gpa);
-                try sendQuicMessage(gpa, stream, .{ .cdc_diag = .{ .json_payload = payload } });
+                try sendQuicMessage(gpa, stream, .{ .cdc_diag = payload });
             } else {
-                const payload = try gpa.dupe(u8, "{\"cdc\":{\"enabled\":false}}");
-                try sendQuicMessage(gpa, stream, .{ .cdc_diag = .{ .json_payload = payload } });
+                const payload = schema.CdcDiagnosticsResponse{
+                    .config = .{ .enabled = false },
+                    .engine = .{ .is_running = false },
+                    .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot){},
+                    .malformed_hashes = std.ArrayList(schema.CdcMalformedHash){},
+                    .version = try gpa.dupe(u8, "v0.1.0"),
+                    .timestamp_ms = std.time.milliTimestamp(),
+                };
+                try sendQuicMessage(gpa, stream, .{ .cdc_diag = payload });
             }
         },
         .cdc_ctrl => |ctrl| {
@@ -951,20 +907,8 @@ fn handleClientMessage(
                     try sendQuicMessage(gpa, stream, .{ .backup = .{ .success = false, .message = msg_text } });
                     return;
                 })
-            else if (std.ascii.eqlIgnoreCase(backup_req.backup_type, "incremental")) blk: {
-                if (backup_req.parent_id.len == 0) {
-                    const msg_text = try gpa.dupe(u8, "Incremental backup requires parent_id");
-                    try sendQuicMessage(gpa, stream, .{ .backup = .{ .success = false, .message = msg_text } });
-                    return;
-                }
-                const parent_lsn = getParentBackupLsn(gpa, backup_dir, backup_req.parent_id) catch 0;
-                break :blk mgr.createIncrementalBackup(parent_lsn) catch |err| {
-                    const msg_text = try std.fmt.allocPrint(gpa, "Backup failed: {s}", .{@errorName(err)});
-                    try sendQuicMessage(gpa, stream, .{ .backup = .{ .success = false, .message = msg_text } });
-                    return;
-                };
-            } else {
-                const msg_text = try gpa.dupe(u8, "Unknown backup type");
+            else {
+                const msg_text = try gpa.dupe(u8, "Only full backups are supported with GraphStore");
                 try sendQuicMessage(gpa, stream, .{ .backup = .{ .success = false, .message = msg_text } });
                 return;
             };
@@ -981,16 +925,11 @@ fn handleClientMessage(
                 .size_bytes = metadata.size_bytes,
                 .compression = compression,
                 .checksum = checksum,
-                .start_lsn = metadata.start_lsn,
-                .end_lsn = metadata.end_lsn,
             } });
 
             // Stream backup file bytes after sending metadata response.
             if (metadata.size_bytes > 0) {
-                const backup_path = if (metadata.backup_type == .full)
-                    try std.fmt.allocPrint(gpa, "{s}/full_{x}.backup", .{ backup_dir, metadata.backup_id })
-                else
-                    try std.fmt.allocPrint(gpa, "{s}/incr_{x}.backup", .{ backup_dir, metadata.backup_id });
+                const backup_path = try std.fmt.allocPrint(gpa, "{s}/full_{x}.backup", .{ backup_dir, metadata.backup_id });
                 defer gpa.free(backup_path);
 
                 if (std.fs.cwd().openFile(backup_path, .{})) |file| {

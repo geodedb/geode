@@ -29,17 +29,6 @@ pub const EntryRecord = extern struct {
     has_child: u8,
 };
 
-pub const WalOp = enum(u8) {
-    INSERT = 1,
-    DELETE = 2,
-};
-
-pub const WalEntry = struct {
-    op: WalOp,
-    mbr: rtree.MBR,
-    id: u64,
-};
-
 pub fn saveSnapshot(tree: *const rtree.RTree, path: []const u8) !void {
     // Buffer all data to memory first for TDE encryption
     var buffer = try std.ArrayList(u8).initCapacity(tree.allocator, 4096);
@@ -153,51 +142,11 @@ fn readNodeStream(allocator: std.mem.Allocator, stream: anytype) !*rtree.RTreeNo
     return node;
 }
 
-pub fn appendWal(path: []const u8, entry: WalEntry) !void {
-    const file = try std.fs.cwd().openFile(path, .{ .mode = .write_only });
-    defer file.close();
-    try file.seekFromEnd(0);
-
-    try file.writeAll(&[_]u8{@intFromEnum(entry.op)});
-    try file.writeAll(std.mem.asBytes(&entry.mbr));
-    try file.writeAll(std.mem.asBytes(&entry.id));
-}
-
-pub fn replayWal(tree: *rtree.RTree, path: []const u8) !void {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-
-    while (true) {
-        var op_byte: [1]u8 = undefined;
-        if (try file.read(&op_byte) == 0) break;
-
-        const op = std.meta.intToEnum(WalOp, op_byte[0]) catch return error.InvalidWalOp;
-
-        var mbr: rtree.MBR = undefined;
-        _ = try file.read(std.mem.asBytes(&mbr));
-
-        var id: u64 = undefined;
-        _ = try file.read(std.mem.asBytes(&id));
-
-        switch (op) {
-            .INSERT => try tree.insert(mbr, id),
-            .DELETE => _ = tree.remove(mbr, id),
-        }
-    }
-}
-
-pub fn checkpoint(tree: *const rtree.RTree, snapshot_path: []const u8, wal_path: []const u8) !void {
+pub fn checkpoint(tree: *const rtree.RTree, snapshot_path: []const u8) !void {
     const temp_path = try std.fmt.allocPrint(tree.allocator, "{s}.tmp", .{snapshot_path});
     defer tree.allocator.free(temp_path);
 
     try saveSnapshot(tree, temp_path);
 
     try std.fs.cwd().rename(temp_path, snapshot_path);
-
-    if (std.fs.cwd().openFile(wal_path, .{ .mode = .write_only })) |file| {
-        file.close();
-        try std.fs.cwd().deleteFile(wal_path);
-    } else |_| {}
-
-    _ = try std.fs.cwd().createFile(wal_path, .{});
 }

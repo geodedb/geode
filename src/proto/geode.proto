@@ -277,12 +277,141 @@ message ExecutionMetrics {
   int64 total_duration_ns = 4;
 }
 
+message ExplainOp {
+  uint32 idx = 1;
+  string kind = 2;
+  int64 est_rows = 3;
+  int64 cost = 4;
+}
+
+message ExplainTotals {
+  int64 est_rows = 1;
+  int64 cost = 2;
+}
+
+message ExplainProperties {
+  bool ordered = 1;
+  uint64 limit = 2;
+  uint64 offset = 3;
+  bool distinct = 4;
+  string union_mode = 5;
+  uint32 union_part_count = 6;
+}
+
+message ExplainCalibrationEntry {
+  uint32 idx = 1;
+  double est_rows = 2;
+  double actual_rows = 3;
+}
+
+message ExplainCalibration {
+  double mape = 1;
+  repeated ExplainCalibrationEntry entries = 2;
+}
+
 message ExplainPayload {
-  string json_payload = 1;
+  string schema = 1;
+  repeated ExplainOp ops = 2;
+  ExplainTotals totals = 3;
+  ExplainProperties properties = 4;
+  ExplainCalibration calibration = 5;
+  uint32 profile_version = 6;
+}
+
+message ProfileOp {
+  string op = 1;
+  string phase = 2;
+  uint32 id = 3;
+  uint32 op_index = 4;
+  uint64 input_rows = 5;
+  uint64 rows = 6;
+  uint64 time_ns = 7;
+  uint64 cpu_time_ns = 8;
+  uint64 bytes_out = 9;
+  uint64 bytes_alloc = 10;
+  uint64 estimate_bytes = 11;
+  uint64 estimate_vs_actual = 12;
+  uint64 percent_peak = 13;
+  uint64 percent_net = 14;
+  uint64 cumulative_time_ns = 15;
+  uint64 freed_bytes = 16;
+  uint64 net_after_op = 17;
+  uint64 error_bytes = 18;
+  uint64 error_abs_pct = 19;
+  string index_name = 20;
+  double selectivity_est = 21;
+}
+
+message ProfilePeakContributor {
+  string op = 1;
+  uint64 bytes_alloc = 2;
+}
+
+message ProfileTotals {
+  uint64 time_ns = 1;
+  uint64 peak_bytes = 2;
+}
+
+message ProfileSpills {
+  uint64 sort_spills = 1;
+  uint64 distinct_spills = 2;
+  uint64 union_spills = 3;
+  string spill_reason = 4;
+  uint64 peak_bytes_at_spill = 5;
+  uint32 first_spill_op_index = 6;
+}
+
+message ProfileMemory {
+  uint64 net_bytes = 1;
+  uint64 peak_bytes = 2;
+  uint64 total_alloc_bytes = 3;
+}
+
+message ProfilePlannerEstimates {
+  uint64 sum_estimate_bytes = 1;
+  uint64 sum_actual_bytes = 2;
+  uint32 count_estimated_ops = 3;
+  double min_error_abs_pct = 4;
+  double max_error_abs_pct = 5;
+  double mean_error_abs_pct = 6;
+  double median_error_abs_pct = 7;
+  double stddev_error_abs_pct = 8;
+  double adjusted_estimate_factor = 9;
+}
+
+message ProfileMemCurvePoint {
+  uint32 op_index = 1;
+  uint64 net_after_op = 2;
+}
+
+message ProfileSetOp {
+  string type = 1;
+  string mode = 2;
+  uint64 input_rows = 3;
+  uint64 output_rows = 4;
+  uint64 hash_dedup_size = 5;
+  uint64 distinct_fill_pct = 6;
 }
 
 message ProfilePayload {
-  string json_payload = 1;
+  uint32 profile_version = 1;
+  repeated ProfileOp ops = 2;
+  repeated ProfilePeakContributor peak_contributors = 3;
+  ProfileTotals totals = 4;
+  uint64 total_time_ns = 5;
+  ProfileSpills spills = 6;
+  ProfileMemory memory = 7;
+  ProfilePlannerEstimates planner_estimates = 8;
+  repeated ProfileMemCurvePoint mem_curve = 9;
+  ProfileSetOp setop = 10;
+  uint64 hashagg_spills = 11;
+  string hashagg_spill_reason = 12;
+  uint64 committed_txns = 13;
+  uint64 graph_store_nodes = 14;
+  uint64 graph_store_edges = 15;
+  bool graph_store_dirty = 16;
+  repeated string flagger_findings = 17;
+  bool compact = 18;
 }
 
 message Heartbeat {}
@@ -337,8 +466,55 @@ message RollbackToResponse {
 // CDC
 // ============================================================================
 message CdcDiagnosticsRequest {}
+message CdcDiagnosticsConfig {
+  bool enabled = 1;
+  uint64 malformed_snapshot_interval = 2;
+  uint32 malformed_hash_retain = 3;
+  double malformed_warn_pct = 4;
+  double malformed_abort_pct = 5;
+  uint32 flush_interval_ms = 6;
+  uint32 batch_size = 7;
+  uint64 pending_backpressure_watermark = 8;
+}
+
+message CdcDiagnosticsEngine {
+  bool is_running = 1;
+  int64 last_flush_ms = 2;
+  uint64 peak_buffer = 3;
+  uint64 current_buffer = 4;
+  uint32 dynamic_batch_size = 5;
+  uint32 batch_adjustments = 6;
+}
+
+message CdcMalformedSnapshot {
+  uint64 count = 1;
+  int64 ts_ms = 2;
+}
+
+message CdcMalformedHash {
+  uint64 count = 1;
+  uint64 hash = 2;
+  int64 ts_ms = 3;
+  string prefix_hex = 4;
+}
+
 message CdcDiagnosticsResponse {
-  string json_payload = 1;
+  uint64 malformed_change_records = 1;
+  uint64 total_change_attempts = 2;
+  double malformed_ratio = 3;
+  bool guardrail_warn_triggered = 4;
+  bool guardrail_abort_triggered = 5;
+  int64 first_warn_ts_ms = 6;
+  int64 first_abort_ts_ms = 7;
+  uint64 guardrail_epoch = 8;
+  int64 uptime_ms = 9;
+  bool backpressure = 10;
+  CdcDiagnosticsConfig config = 11;
+  CdcDiagnosticsEngine engine = 12;
+  repeated CdcMalformedSnapshot malformed_snapshots = 13;
+  repeated CdcMalformedHash malformed_hashes = 14;
+  string version = 15;
+  int64 timestamp_ms = 16;
 }
 message CdcControlRequest {
   string action = 1;
@@ -353,8 +529,7 @@ message CdcControlResponse {
 // Backup / Restore
 // ============================================================================
 message BackupRequest {
-  string backup_type = 1; // "full" or "incremental"
-  string parent_id = 2; // hex backup id for incremental
+  string backup_type = 1; // "full"
   bool compress = 3;
 }
 message BackupResponse {
@@ -365,8 +540,6 @@ message BackupResponse {
   uint64 size_bytes = 5;
   string compression = 6;
   string checksum = 7;
-  uint64 start_lsn = 8;
-  uint64 end_lsn = 9;
 }
 message RestoreRequest {
   string target_time = 1;

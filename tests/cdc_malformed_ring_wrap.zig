@@ -1,10 +1,6 @@
 const std = @import("std");
 const cdc = @import("cdc_enhanced");
 
-fn expectContains(h: []const u8, n: []const u8) !void {
-    if (std.mem.indexOf(u8, h, n) == null) return error.NotFound;
-}
-
 // The MalformedRing capacity is 32. We configure snapshot interval = 1 so every malformed increments ring.
 // Feed 40 malformed records; confirm diagnostics has a snapshot array of size 32 and DOES NOT contain count 1 (overwritten).
 // We can't easily parse JSON without pulling in a parser, so we do substring heuristics:
@@ -33,23 +29,24 @@ test "CDC malformed ring wraps after capacity" {
     const bad = "BAD";
     var i: usize = 0;
     while (i < 40) : (i += 1) {
-        try engine.ingestFromWalRecord(1, .node, @intCast(i), bad);
+        try engine.ingestChangeRecord(1, .node, @intCast(i), bad);
     }
 
-    const diag = try engine.exportDiagnostics(allocator);
-    defer allocator.free(diag);
+    var diag = try engine.exportDiagnostics(allocator);
+    defer diag.deinit(allocator);
 
-    // Heuristic checks
-    // Count 40 (latest) should appear
-    try expectContains(diag, "\"count\":40");
-    // Early count 1 likely overwritten -> absence is a weak signal; allow either outcome if ring not yet fully filled earlier.
-    // We'll still attempt absence; if future changes break this assumption test can be adjusted.
-    if (std.mem.indexOf(u8, diag, "\"count\":1,") != null) {
-        // If present, ensure wrap at least occurred by seeing absence of count 8 (arbitrary) after exceeding capacity; fallback.
-        // Not failing hard to keep test resilient; but still assert capacity snapshot present.
-        try expectContains(diag, "\"count\":32");
-    } else {
-        // Ideal path: count 1 gone; assert a mid-to-late count exists.
-        try expectContains(diag, "\"count\":32");
+    try std.testing.expectEqual(@as(usize, cdc.CDCEngine.MalformedRing.CAP), diag.malformed_snapshots.items.len);
+
+    var has40 = false;
+    var has32 = false;
+    var has1 = false;
+    for (diag.malformed_snapshots.items) |snap| {
+        if (snap.count == 40) has40 = true;
+        if (snap.count == 32) has32 = true;
+        if (snap.count == 1) has1 = true;
     }
+    try std.testing.expect(has40);
+    try std.testing.expect(has32);
+    // Count 1 should have been overwritten after wrap; keep as soft assertion.
+    try std.testing.expect(!has1);
 }

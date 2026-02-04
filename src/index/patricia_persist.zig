@@ -1,6 +1,5 @@
 const std = @import("std");
 const patricia = @import("patricia.zig");
-const heap = @import("../storage/heap.zig");
 const tde = @import("../storage/tde_file_encryption.zig");
 
 // CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=PatriciaTrie; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
@@ -21,17 +20,6 @@ pub const NodeRecord = extern struct {
     child0_off: u64,
     child1_off: u64,
     payload_count: u32,
-};
-
-pub const WalOp = enum(u8) {
-    PUT = 1,
-    DEL = 2,
-};
-
-pub const WalEntry = struct {
-    op: WalOp,
-    subnet: heap.Subnet,
-    payload: u64,
 };
 
 pub fn saveSnapshot(trie: *const patricia.PatriciaTrie, path: []const u8) !void {
@@ -129,76 +117,11 @@ fn readNodeStream(allocator: std.mem.Allocator, stream: anytype) !*patricia.Patr
     return node;
 }
 
-/// P2-3: Static GPA for WAL encoding (small temporary allocation)
-var wal_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
-var wal_gpa_init = false;
-
-pub fn appendWal(path: []const u8, entry: WalEntry) !void {
-    // P2-3: Use static GPA for temporary encoding
-    if (!wal_gpa_init) {
-        wal_gpa_init = true;
-    }
-
-    const file = try std.fs.cwd().openFile(path, .{ .mode = .write_only });
-    defer file.close();
-    try file.seekFromEnd(0);
-
-    try file.writeAll(&[_]u8{@intFromEnum(entry.op)});
-
-    const subnet_bytes = try heap.encodeValue(wal_gpa.allocator(), .{ .Subnet = entry.subnet });
-    defer wal_gpa.allocator().free(subnet_bytes);
-
-    var len_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &len_buf, @intCast(subnet_bytes.len), .little);
-    try file.writeAll(&len_buf);
-    try file.writeAll(subnet_bytes);
-
-    try file.writeAll(std.mem.asBytes(&entry.payload));
-}
-
-pub fn replayWal(trie: *patricia.PatriciaTrie, path: []const u8) !void {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-
-    while (true) {
-        var op_byte: [1]u8 = undefined;
-        if (try file.read(&op_byte) == 0) break;
-
-        const op = std.meta.intToEnum(WalOp, op_byte[0]) catch return error.InvalidWalOp;
-
-        var len_buf: [4]u8 = undefined;
-        _ = try file.read(&len_buf);
-        const len = std.mem.readInt(u32, &len_buf, .little);
-
-        const subnet_bytes = try trie.allocator.alloc(u8, len);
-        defer trie.allocator.free(subnet_bytes);
-        _ = try file.read(subnet_bytes);
-
-        const val = try heap.decodeValue(trie.allocator, subnet_bytes);
-        if (val != .Subnet) return error.InvalidWalEntry;
-
-        var payload: u64 = undefined;
-        _ = try file.read(std.mem.asBytes(&payload));
-
-        switch (op) {
-            .PUT => try trie.insert(val.Subnet, payload),
-            .DEL => _ = trie.remove(val.Subnet, payload),
-        }
-    }
-}
-
-pub fn checkpoint(trie: *const patricia.PatriciaTrie, snapshot_path: []const u8, wal_path: []const u8) !void {
+pub fn checkpoint(trie: *const patricia.PatriciaTrie, snapshot_path: []const u8) !void {
     const temp_path = try std.fmt.allocPrint(trie.allocator, "{s}.tmp", .{snapshot_path});
     defer trie.allocator.free(temp_path);
 
     try saveSnapshot(trie, temp_path);
 
     try std.fs.cwd().rename(temp_path, snapshot_path);
-
-    if (std.fs.cwd().openFile(wal_path, .{ .mode = .write_only })) |file| {
-        file.close();
-        try std.fs.cwd().deleteFile(wal_path);
-    } else |_| {}
-
-    _ = try std.fs.cwd().createFile(wal_path, .{});
 }

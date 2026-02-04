@@ -12,8 +12,8 @@ test "TestCANARY_REQ_GQL_042_CDC_WalIngest" {
     defer engine.deinit();
     try engine.start();
 
-    try engine.ingestFromWalRecord(99, .node, 7, "{\"id\":7,\"v\":1}");
-    try engine.ingestFromWalRecord(100, .node, 7, "{\"id\":7,\"v\":2}");
+    try engine.ingestChangeRecord(99, .node, 7, "{\"id\":7,\"v\":1}");
+    try engine.ingestChangeRecord(100, .node, 7, "{\"id\":7,\"v\":2}");
     try engine.flushNow();
 
     const st = engine.getStatus();

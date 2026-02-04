@@ -972,6 +972,14 @@ pub const GraphStore = struct {
         return self.nodes.count();
     }
 
+    pub fn getEdgeCount(self: *GraphStore) usize {
+        return self.edges.count();
+    }
+
+    pub fn isDirty(self: *const GraphStore) bool {
+        return self.dirty;
+    }
+
     pub fn getNodePtr(self: *const GraphStore, node_id: u64) ?*const Node {
         return self.nodes.getPtr(node_id);
     }

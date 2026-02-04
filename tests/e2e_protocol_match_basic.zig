@@ -1,6 +1,5 @@
 const std = @import("std");
 const geode = @import("geode");
-const protocol = @import("protocol");
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="E2EMatchBasic"; ASPECT=Protocol; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_E2EMatchBasic; OWNER=engine; UPDATED=2025-09-24
 

@@ -5,7 +5,7 @@ const cdc = @import("../src/streaming/cdc_enhanced.zig");
 
 fn feedMalformed(engine: *cdc.CDCEngine, n: usize) void {
     var i: usize = 0;
-    while (i < n) : (i += 1) engine.ingestFromWalRecord(1, .node, @as(u64, i), "{bad") catch unreachable;
+    while (i < n) : (i += 1) engine.ingestChangeRecord(1, .node, @as(u64, i), "{bad") catch unreachable;
 }
 
 test "TestCANARY_REQ_GQL_042_CDC_WalTailMalformedLogBufferWrap" {

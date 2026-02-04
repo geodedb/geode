@@ -1,18 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
 const cdc = @import("../src/streaming/cdc_enhanced.zig");
-const protocol = @import("../src/protocol.zig");
 const posix = std.posix;
-
-// Helper to count occurrences of a substring in a haystack
-fn countOccurrences(hay: []const u8, needle: []const u8) usize {
-    var i: usize = 0;
-    var count: usize = 0;
-    while (i + needle.len <= hay.len) : (i += 1) {
-        if (std.mem.eql(u8, hay[i .. i + needle.len], needle)) count += 1;
-    }
-    return count;
-}
+const protobuf = @import("protobuf");
+const schema = @import("schema");
 
 test "TestCANARY_REQ_GQL_042_CDC_MalformedSnapshotIntervalEnv" {
     // Set env overrides
@@ -22,32 +13,39 @@ test "TestCANARY_REQ_GQL_042_CDC_MalformedSnapshotIntervalEnv" {
     defer engine.deinit();
     try testing.expectEqual(@as(u64, 2), engine.config.malformed_snapshot_interval);
     // Ingest malformed records (payload without braces)
-    try engine.ingestFromWalRecord(1, .node, 1, "bad"); // count 1 (recorded)
-    try engine.ingestFromWalRecord(1, .node, 2, "bad"); // count 2 (interval)
-    try engine.ingestFromWalRecord(1, .node, 3, "bad"); // count 3 (not interval)
-    try engine.ingestFromWalRecord(1, .node, 4, "bad"); // count 4 (interval)
-    const diag = try engine.exportDiagnostics(testing.allocator);
-    defer testing.allocator.free(diag);
+    try engine.ingestChangeRecord(1, .node, 1, "bad"); // count 1 (recorded)
+    try engine.ingestChangeRecord(1, .node, 2, "bad"); // count 2 (interval)
+    try engine.ingestChangeRecord(1, .node, 3, "bad"); // count 3 (not interval)
+    try engine.ingestChangeRecord(1, .node, 4, "bad"); // count 4 (interval)
+    var diag = try engine.exportDiagnostics(testing.allocator);
+    defer diag.deinit(testing.allocator);
     // Expect snapshots for counts 1,2,4 (at least)
-    try testing.expect(std.mem.indexOf(u8, diag, "\"count\":1") != null);
-    try testing.expect(std.mem.indexOf(u8, diag, "\"count\":2") != null);
-    try testing.expect(std.mem.indexOf(u8, diag, "\"count\":4") != null);
+    var has1 = false;
+    var has2 = false;
+    var has4 = false;
+    for (diag.malformed_snapshots.items) |snap| {
+        if (snap.count == 1) has1 = true;
+        if (snap.count == 2) has2 = true;
+        if (snap.count == 4) has4 = true;
+    }
+    try testing.expect(has1);
+    try testing.expect(has2);
+    try testing.expect(has4);
 }
 
 test "TestCANARY_REQ_GQL_042_CDC_MalformedPayloadHash" {
     var engine = try cdc.CDCEngine.init(testing.allocator, .{ .enabled = true, .sinks = &.{.memory}, .malformed_hash_retain = 3 });
     defer engine.deinit();
     // Ingest 5 malformed payloads
-    try engine.ingestFromWalRecord(1, .node, 1, "x");
-    try engine.ingestFromWalRecord(1, .node, 2, "y");
-    try engine.ingestFromWalRecord(1, .node, 3, "z");
-    try engine.ingestFromWalRecord(1, .node, 4, "q");
-    try engine.ingestFromWalRecord(1, .node, 5, "r");
-    const diag = try engine.exportDiagnostics(testing.allocator);
-    defer testing.allocator.free(diag);
+    try engine.ingestChangeRecord(1, .node, 1, "x");
+    try engine.ingestChangeRecord(1, .node, 2, "y");
+    try engine.ingestChangeRecord(1, .node, 3, "z");
+    try engine.ingestChangeRecord(1, .node, 4, "q");
+    try engine.ingestChangeRecord(1, .node, 5, "r");
+    var diag = try engine.exportDiagnostics(testing.allocator);
+    defer diag.deinit(testing.allocator);
     // Count hash entries; should be 3 (retention)
-    const hashes = countOccurrences(diag, "\"hash\":");
-    try testing.expectEqual(@as(usize, 3), hashes);
+    try testing.expectEqual(@as(usize, 3), diag.malformed_hashes.items.len);
 }
 
 test "TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv" {
@@ -61,29 +59,34 @@ test "TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv" {
     try testing.expectApproxEqAbs(@as(f64, 0.10), engine.config.malformed_warn_pct, 0.0001);
     try testing.expectApproxEqAbs(@as(f64, 0.20), engine.config.malformed_abort_pct, 0.0001);
     // Produce 1 malformed + 4 valid (ratio 0.2 triggers both warn & abort)
-    try engine.ingestFromWalRecord(1, .node, 1, "b"); // malformed
-    try engine.ingestFromWalRecord(1, .node, 2, "{}");
-    try engine.ingestFromWalRecord(1, .node, 3, "{}");
-    try engine.ingestFromWalRecord(1, .node, 4, "{}");
-    try engine.ingestFromWalRecord(1, .node, 5, "{}");
+    try engine.ingestChangeRecord(1, .node, 1, "b"); // malformed
+    try engine.ingestChangeRecord(1, .node, 2, "{}");
+    try engine.ingestChangeRecord(1, .node, 3, "{}");
+    try engine.ingestChangeRecord(1, .node, 4, "{}");
+    try engine.ingestChangeRecord(1, .node, 5, "{}");
     try testing.expect(engine.guardrail_warn_triggered);
     try testing.expect(engine.guardrail_abort_triggered);
-    const diag = try engine.exportDiagnostics(testing.allocator);
-    defer testing.allocator.free(diag);
-    try testing.expect(std.mem.indexOf(u8, diag, "\"guardrail_warn_triggered\":true") != null);
-    try testing.expect(std.mem.indexOf(u8, diag, "\"guardrail_abort_triggered\":true") != null);
+    var diag = try engine.exportDiagnostics(testing.allocator);
+    defer diag.deinit(testing.allocator);
+    try testing.expect(diag.guardrail_warn_triggered);
+    try testing.expect(diag.guardrail_abort_triggered);
 }
 
 test "TestCANARY_REQ_GQL_042_CDC_DiagnosticsProtocol" {
-    // Parse CDC_DIAGNOSTICS message
-    const line = "{\"type\":\"CDC_DIAGNOSTICS\"}";
+    // Encode/decode CDC diagnostics request as protobuf client packet
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const msg = try protocol.parseClientMessage(arena.allocator(), line);
-    try testing.expect(msg == .CDC_DIAGNOSTICS);
-    // Build diagnostics frame
-    const payload = "{\"cdc\":{\"malformed_wal_records\":0}}";
-    const frame = try protocol.buildCdcDiagnosticsLine(testing.allocator, payload);
-    defer testing.allocator.free(frame);
-    try testing.expect(std.mem.indexOf(u8, frame, "\"type\":\"CDC_DIAGNOSTICS\"") != null);
+    const allocator = arena.allocator();
+
+    const msg = schema.ClientPacket{ .quic = .{ .cdc_diag = .{} } };
+    var buf = std.ArrayList(u8).init(allocator);
+    defer buf.deinit(allocator);
+    var writer = buf.writer(allocator);
+    try protobuf.encode(&writer, allocator, msg);
+
+    var reader = std.io.fixedBufferStream(buf.items).reader();
+    var decoded = try protobuf.decode(schema.ClientPacket, &reader, allocator);
+    defer decoded.deinit(allocator);
+    try testing.expect(decoded.quic != null);
+    try testing.expect(decoded.quic.? == .cdc_diag);
 }

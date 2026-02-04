@@ -1,6 +1,7 @@
 const std = @import("std");
 const spice_wrapper = @import("parallel/spice");
 const query_traits = @import("../query/query_traits.zig");
+const schema = @import("schema");
 
 pub const ProfileOptions = struct {
     compact: bool = false,
@@ -11,8 +12,10 @@ pub const ProfileOptions = struct {
     spill_union: usize = 0,
     spill_hashagg: usize = 0,
     spill_threshold: usize = 0,
-    wal_skip_ratio: f64 = -1.0,
     committed_txns: u64 = 0,
+    graph_store_nodes: u64 = 0,
+    graph_store_edges: u64 = 0,
+    graph_store_dirty: bool = false,
     flagger_findings: []const []const u8 = &.{},
     union_part_count: usize = 0,
 };
@@ -23,12 +26,12 @@ const OpSpec = struct {
     has_index_meta: bool = false,
 };
 
-pub fn buildProfileJson(
+pub fn buildProfilePayload(
     allocator: std.mem.Allocator,
     traits: query_traits.QueryTraits,
     row_count: usize,
     opts: ProfileOptions,
-) ![]u8 {
+) !schema.ProfilePayload {
     var ops = std.ArrayList(OpSpec).initCapacity(allocator, 10) catch return error.OutOfMemory;
     defer ops.deinit(allocator);
 
@@ -150,15 +153,13 @@ pub fn buildProfileJson(
     peak_bytes = total_alloc_bytes;
     const total_time_ns = cumulative_time;
 
-    var buf = std.ArrayList(u8).initCapacity(allocator, 1024) catch return error.OutOfMemory;
-    errdefer buf.deinit(allocator);
-    var w = buf.writer(allocator);
+    var op_list = std.ArrayList(schema.ProfileOp).initCapacity(allocator, op_count) catch return error.OutOfMemory;
+    errdefer {
+        for (op_list.items) |*item| item.deinit(allocator);
+        op_list.deinit(allocator);
+    }
 
-    try w.writeAll("{\"profile_version\":1,\"ops\":[");
-    var op_idx: usize = 0;
-    while (op_idx < op_count) : (op_idx += 1) {
-        if (op_idx != 0) try w.writeByte(',');
-        const spec = ops.items[op_idx];
+    for (ops.items, 0..) |spec, op_idx| {
         const input_rows = @as(u64, @intCast(row_count));
         const rows = @as(u64, @intCast(row_count));
         const percent_peak = if (peak_bytes > 0 and bytes_alloc[op_idx] > 0)
@@ -170,129 +171,104 @@ pub fn buildProfileJson(
         else
             0;
 
-        try w.writeAll("{\"op\":\"");
-        try w.writeAll(spec.name);
-        try w.writeAll("\",\"phase\":\"");
-        try w.writeAll(spec.phase);
-        try w.writeAll("\",\"id\":0,\"op_index\":");
-        try w.print("{d}", .{op_idx});
-        try w.writeAll(",\"input_rows\":");
-        try w.print("{d}", .{input_rows});
-        try w.writeAll(",\"rows\":");
-        try w.print("{d}", .{rows});
-        try w.writeAll(",\"time_ns\":");
-        try w.print("{d}", .{time_ns[op_idx]});
-        try w.writeAll(",\"cpu_time_ns\":");
-        try w.print("{d}", .{cpu_time_ns[op_idx]});
-        try w.writeAll(",\"bytes_out\":");
-        try w.print("{d}", .{bytes_out[op_idx]});
-        try w.writeAll(",\"bytes_alloc\":");
-        try w.print("{d}", .{bytes_alloc[op_idx]});
-
-        if (!opts.compact or estimate_bytes[op_idx] != 0) {
-            try w.writeAll(",\"estimate_bytes\":");
-            try w.print("{d}", .{estimate_bytes[op_idx]});
-        }
-        if (!opts.compact or estimate_vs_actual[op_idx] != 0) {
-            try w.writeAll(",\"estimate_vs_actual\":");
-            try w.print("{d}", .{estimate_vs_actual[op_idx]});
-        }
-        if (!opts.compact or percent_peak != 0) {
-            try w.writeAll(",\"percent_peak\":");
-            try w.print("{d}", .{percent_peak});
-        }
-        if (!opts.compact or percent_net != 0) {
-            try w.writeAll(",\"percent_net\":");
-            try w.print("{d}", .{percent_net});
-        }
-        try w.writeAll(",\"cumulative_time_ns\":");
-        try w.print("{d}", .{cumulative_timeFor(op_idx, time_ns)});
-        if (!opts.compact or true) {
-            try w.writeAll(",\"freed_bytes\":0");
-        }
-        try w.writeAll(",\"net_after_op\":");
-        try w.print("{d}", .{net_after_op[op_idx]});
-        if (!opts.compact or true) {
-            try w.writeAll(",\"error_bytes\":0,\"error_abs_pct\":0");
-        }
-        if (spec.has_index_meta) {
-            try w.writeAll(",\"index_name\":\"heuristic_index\"");
-            try w.writeAll(",\"selectivity_est\":0.50");
-        }
-        try w.writeByte('}');
+        const op_entry = schema.ProfileOp{
+            .op = try allocator.dupe(u8, spec.name),
+            .phase = try allocator.dupe(u8, spec.phase),
+            .id = 0,
+            .op_index = @intCast(op_idx),
+            .input_rows = input_rows,
+            .rows = rows,
+            .time_ns = time_ns[op_idx],
+            .cpu_time_ns = cpu_time_ns[op_idx],
+            .bytes_out = bytes_out[op_idx],
+            .bytes_alloc = bytes_alloc[op_idx],
+            .estimate_bytes = estimate_bytes[op_idx],
+            .estimate_vs_actual = estimate_vs_actual[op_idx],
+            .percent_peak = percent_peak,
+            .percent_net = percent_net,
+            .cumulative_time_ns = cumulative_timeFor(op_idx, time_ns),
+            .freed_bytes = 0,
+            .net_after_op = net_after_op[op_idx],
+            .error_bytes = 0,
+            .error_abs_pct = 0,
+            .index_name = if (spec.has_index_meta) try allocator.dupe(u8, "heuristic_index") else "",
+            .selectivity_est = if (spec.has_index_meta) 0.50 else 0,
+        };
+        try op_list.append(allocator, op_entry);
     }
-    try w.writeAll("],\"peak_contributors\":[");
-    writePeakContributors(&w, ops.items, bytes_alloc) catch return error.OutOfMemory;
-    try w.writeAll("],\"totals\":{\"time_ns\":");
-    try w.print("{d}", .{total_time_ns});
-    try w.writeAll(",\"peak_bytes\":");
-    try w.print("{d}", .{peak_bytes});
-    try w.writeAll("},\"total_time_ns\":");
-    try w.print("{d}", .{total_time_ns});
 
-    // spills
+    var peak_contributors = try buildPeakContributors(allocator, ops.items, bytes_alloc);
+    errdefer {
+        for (peak_contributors.items) |*item| item.deinit(allocator);
+        peak_contributors.deinit(allocator);
+    }
+
+    const totals = schema.ProfileTotals{
+        .time_ns = total_time_ns,
+        .peak_bytes = peak_bytes,
+    };
+
     var spill_reason: ?[]const u8 = null;
     if (opts.spill_threshold > 0 and peak_bytes > opts.spill_threshold) {
         spill_reason = "threshold";
     } else if (opts.spill_sort > 0 or opts.spill_distinct > 0 or opts.spill_union > 0 or opts.spill_hashagg > 0) {
         spill_reason = "forced";
     }
-    try w.writeAll(",\"spills\":{\"sort_spills\":");
-    try w.print("{d}", .{opts.spill_sort});
-    try w.writeAll(",\"distinct_spills\":");
-    try w.print("{d}", .{opts.spill_distinct});
-    try w.writeAll(",\"union_spills\":");
-    try w.print("{d}", .{opts.spill_union});
+
+    var spills = schema.ProfileSpills{
+        .sort_spills = opts.spill_sort,
+        .distinct_spills = opts.spill_distinct,
+        .union_spills = opts.spill_union,
+        .spill_reason = "",
+        .peak_bytes_at_spill = 0,
+        .first_spill_op_index = 0,
+    };
     if (spill_reason) |reason| {
-        try w.writeAll(",\"spill_reason\":\"");
-        try w.writeAll(reason);
-        try w.writeAll("\"");
-        try w.writeAll(",\"peak_bytes_at_spill\":");
-        try w.print("{d}", .{peak_bytes});
+        spills.spill_reason = try allocator.dupe(u8, reason);
+        spills.peak_bytes_at_spill = peak_bytes;
         if (firstSpillIndex(ops.items, opts)) |first_idx| {
-            try w.writeAll(",\"first_spill_op_index\":");
-            try w.print("{d}", .{first_idx});
+            spills.first_spill_op_index = @intCast(first_idx);
         }
     }
-    try w.writeAll("}");
+    errdefer spills.deinit(allocator);
 
-    // memory
-    try w.writeAll(",\"memory\":{\"net_bytes\":");
-    try w.print("{d}", .{total_alloc_bytes});
-    try w.writeAll(",\"peak_bytes\":");
-    try w.print("{d}", .{peak_bytes});
-    try w.writeAll(",\"total_alloc_bytes\":");
-    try w.print("{d}", .{total_alloc_bytes});
-    try w.writeAll("}");
+    const memory = schema.ProfileMemory{
+        .net_bytes = total_alloc_bytes,
+        .peak_bytes = peak_bytes,
+        .total_alloc_bytes = total_alloc_bytes,
+    };
 
-    // planner estimates
+    var planner_estimates_opt: ?schema.ProfilePlannerEstimates = null;
     if (!opts.disable_estimates) {
         const sum_est = sumU64(estimate_bytes);
         const sum_actual = sumU64(bytes_out);
-        try w.writeAll(",\"planner_estimates\":{");
-        try w.writeAll("\"sum_estimate_bytes\":");
-        try w.print("{d}", .{sum_est});
-        try w.writeAll(",\"sum_actual_bytes\":");
-        try w.print("{d}", .{sum_actual});
-        try w.writeAll(",\"count_estimated_ops\":");
-        try w.print("{d}", .{op_count});
-        try w.writeAll(",\"min_error_abs_pct\":0,\"max_error_abs_pct\":0,\"mean_error_abs_pct\":0,\"median_error_abs_pct\":0,\"stddev_error_abs_pct\":0,\"adjusted_estimate_factor\":1}");
+        planner_estimates_opt = schema.ProfilePlannerEstimates{
+            .sum_estimate_bytes = sum_est,
+            .sum_actual_bytes = sum_actual,
+            .count_estimated_ops = @intCast(op_count),
+            .min_error_abs_pct = 0,
+            .max_error_abs_pct = 0,
+            .mean_error_abs_pct = 0,
+            .median_error_abs_pct = 0,
+            .stddev_error_abs_pct = 0,
+            .adjusted_estimate_factor = 1,
+        };
     }
 
+    var mem_curve = std.ArrayList(schema.ProfileMemCurvePoint).initCapacity(allocator, if (opts.include_mem_curve) op_count else 0) catch return error.OutOfMemory;
+    errdefer mem_curve.deinit(allocator);
     if (opts.include_mem_curve) {
-        try w.writeAll(",\"mem_curve\":[");
         var i: usize = 0;
         while (i < op_count) : (i += 1) {
-            if (i != 0) try w.writeByte(',');
-            try w.writeAll("{\"op_index\":");
-            try w.print("{d}", .{i});
-            try w.writeAll(",\"net_after_op\":");
-            try w.print("{d}", .{net_after_op[i]});
-            try w.writeByte('}');
+            const point = schema.ProfileMemCurvePoint{
+                .op_index = @intCast(i),
+                .net_after_op = net_after_op[i],
+            };
+            try mem_curve.append(allocator, point);
         }
-        try w.writeByte(']');
     }
 
+    var setop_opt: ?schema.ProfileSetOp = null;
     if (traits.has_union) {
         const mode_str = unionModeToString(traits.union_mode);
         const input_rows = if (opts.union_part_count > 0)
@@ -300,52 +276,267 @@ pub fn buildProfileJson(
         else
             @as(u64, @intCast(row_count));
         const output_rows = @as(u64, @intCast(row_count));
-        try w.writeAll(",\"setop\":{\"type\":\"UNION\",\"mode\":\"");
-        try w.writeAll(mode_str);
-        try w.writeAll("\",\"input_rows\":");
-        try w.print("{d}", .{input_rows});
-        try w.writeAll(",\"output_rows\":");
-        try w.print("{d}", .{output_rows});
+
+        var setop = schema.ProfileSetOp{
+            .type = try allocator.dupe(u8, "UNION"),
+            .mode = try allocator.dupe(u8, mode_str),
+            .input_rows = input_rows,
+            .output_rows = output_rows,
+            .hash_dedup_size = 0,
+            .distinct_fill_pct = 0,
+        };
         if (traits.union_mode == .distinct) {
-            const dedup = output_rows;
-            try w.writeAll(",\"hash_dedup_size\":");
-            try w.print("{d}", .{dedup});
+            setop.hash_dedup_size = output_rows;
             if (input_rows > 0) {
-                const fill_pct = @min(@as(u64, 100), (output_rows * 100) / input_rows);
-                try w.writeAll(",\"distinct_fill_pct\":");
-                try w.print("{d}", .{fill_pct});
+                setop.distinct_fill_pct = @min(@as(u64, 100), (output_rows * 100) / input_rows);
+            }
+        }
+        setop_opt = setop;
+    }
+    if (setop_opt != null) errdefer setop_opt.?.deinit(allocator);
+
+    var hashagg_spills: u64 = 0;
+    var hashagg_reason: []const u8 = "";
+    if (traits.has_group_by) {
+        if (spill_reason) |reason| {
+            hashagg_spills = 1;
+            hashagg_reason = try allocator.dupe(u8, reason);
+        } else {
+            hashagg_spills = 0;
+        }
+    }
+    if (hashagg_reason.len > 0) errdefer allocator.free(hashagg_reason);
+
+    var findings = std.ArrayList([]const u8).initCapacity(allocator, opts.flagger_findings.len) catch return error.OutOfMemory;
+    errdefer {
+        for (findings.items) |flag| allocator.free(flag);
+        findings.deinit(allocator);
+    }
+    for (opts.flagger_findings) |flag| {
+        try findings.append(allocator, try allocator.dupe(u8, flag));
+    }
+
+    return schema.ProfilePayload{
+        .profile_version = 1,
+        .ops = op_list,
+        .peak_contributors = peak_contributors,
+        .totals = totals,
+        .total_time_ns = total_time_ns,
+        .spills = spills,
+        .memory = memory,
+        .planner_estimates = planner_estimates_opt,
+        .mem_curve = mem_curve,
+        .setop = setop_opt,
+        .hashagg_spills = hashagg_spills,
+        .hashagg_spill_reason = hashagg_reason,
+        .committed_txns = opts.committed_txns,
+        .graph_store_nodes = opts.graph_store_nodes,
+        .graph_store_edges = opts.graph_store_edges,
+        .graph_store_dirty = opts.graph_store_dirty,
+        .flagger_findings = findings,
+        .compact = opts.compact,
+    };
+}
+
+pub fn buildProfileJson(
+    allocator: std.mem.Allocator,
+    traits: query_traits.QueryTraits,
+    row_count: usize,
+    opts: ProfileOptions,
+) ![]u8 {
+    var payload = try buildProfilePayload(allocator, traits, row_count, opts);
+    defer payload.deinit(allocator);
+    return try profilePayloadToJson(allocator, payload);
+}
+
+pub fn profilePayloadToJson(allocator: std.mem.Allocator, payload: schema.ProfilePayload) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 1024) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
+    var w = buf.writer(allocator);
+
+    const compact = payload.compact;
+    try w.writeAll("{\"profile_version\":");
+    try w.print("{d}", .{payload.profile_version});
+    try w.writeAll(",\"ops\":[");
+    for (payload.ops.items, 0..) |op, op_idx| {
+        if (op_idx != 0) try w.writeByte(',');
+        try w.writeAll("{\"op\":\"");
+        try w.writeAll(op.op);
+        try w.writeAll("\",\"phase\":\"");
+        try w.writeAll(op.phase);
+        try w.writeAll("\",\"id\":0,\"op_index\":");
+        try w.print("{d}", .{op.op_index});
+        try w.writeAll(",\"input_rows\":");
+        try w.print("{d}", .{op.input_rows});
+        try w.writeAll(",\"rows\":");
+        try w.print("{d}", .{op.rows});
+        try w.writeAll(",\"time_ns\":");
+        try w.print("{d}", .{op.time_ns});
+        try w.writeAll(",\"cpu_time_ns\":");
+        try w.print("{d}", .{op.cpu_time_ns});
+        try w.writeAll(",\"bytes_out\":");
+        try w.print("{d}", .{op.bytes_out});
+        try w.writeAll(",\"bytes_alloc\":");
+        try w.print("{d}", .{op.bytes_alloc});
+
+        if (!compact or op.estimate_bytes != 0) {
+            try w.writeAll(",\"estimate_bytes\":");
+            try w.print("{d}", .{op.estimate_bytes});
+        }
+        if (!compact or op.estimate_vs_actual != 0) {
+            try w.writeAll(",\"estimate_vs_actual\":");
+            try w.print("{d}", .{op.estimate_vs_actual});
+        }
+        if (!compact or op.percent_peak != 0) {
+            try w.writeAll(",\"percent_peak\":");
+            try w.print("{d}", .{op.percent_peak});
+        }
+        if (!compact or op.percent_net != 0) {
+            try w.writeAll(",\"percent_net\":");
+            try w.print("{d}", .{op.percent_net});
+        }
+        try w.writeAll(",\"cumulative_time_ns\":");
+        try w.print("{d}", .{op.cumulative_time_ns});
+        try w.writeAll(",\"freed_bytes\":");
+        try w.print("{d}", .{op.freed_bytes});
+        try w.writeAll(",\"net_after_op\":");
+        try w.print("{d}", .{op.net_after_op});
+        try w.writeAll(",\"error_bytes\":");
+        try w.print("{d}", .{op.error_bytes});
+        try w.writeAll(",\"error_abs_pct\":");
+        try w.print("{d}", .{op.error_abs_pct});
+        if (op.index_name.len > 0) {
+            try w.writeAll(",\"index_name\":\"");
+            try w.writeAll(op.index_name);
+            try w.writeAll("\",\"selectivity_est\":");
+            try w.print("{d:.2}", .{op.selectivity_est});
+        }
+        try w.writeByte('}');
+    }
+    try w.writeAll("],\"peak_contributors\":[");
+    for (payload.peak_contributors.items, 0..) |pc, idx| {
+        if (idx != 0) try w.writeByte(',');
+        try w.writeAll("{\"op\":\"");
+        try w.writeAll(pc.op);
+        try w.writeAll("\",\"bytes_alloc\":");
+        try w.print("{d}", .{pc.bytes_alloc});
+        try w.writeByte('}');
+    }
+
+    const totals = payload.totals orelse schema.ProfileTotals{ .time_ns = 0, .peak_bytes = 0 };
+    try w.writeAll("],\"totals\":{\"time_ns\":");
+    try w.print("{d}", .{totals.time_ns});
+    try w.writeAll(",\"peak_bytes\":");
+    try w.print("{d}", .{totals.peak_bytes});
+    try w.writeAll("},\"total_time_ns\":");
+    try w.print("{d}", .{payload.total_time_ns});
+
+    if (payload.spills) |spills| {
+        try w.writeAll(",\"spills\":{\"sort_spills\":");
+        try w.print("{d}", .{spills.sort_spills});
+        try w.writeAll(",\"distinct_spills\":");
+        try w.print("{d}", .{spills.distinct_spills});
+        try w.writeAll(",\"union_spills\":");
+        try w.print("{d}", .{spills.union_spills});
+        if (spills.spill_reason.len > 0) {
+            try w.writeAll(",\"spill_reason\":\"");
+            try w.writeAll(spills.spill_reason);
+            try w.writeAll("\"");
+            try w.writeAll(",\"peak_bytes_at_spill\":");
+            try w.print("{d}", .{spills.peak_bytes_at_spill});
+            if (spills.first_spill_op_index != 0) {
+                try w.writeAll(",\"first_spill_op_index\":");
+                try w.print("{d}", .{spills.first_spill_op_index});
             }
         }
         try w.writeAll("}");
     }
 
-    if (traits.has_group_by) {
-        if (spill_reason) |reason| {
-            try w.writeAll(",\"hashagg_spills\":1,\"hashagg_spill_reason\":\"");
-            try w.writeAll(reason);
-            try w.writeByte('"');
-        } else {
-            try w.writeAll(",\"hashagg_spills\":0");
+    if (payload.memory) |memory| {
+        try w.writeAll(",\"memory\":{\"net_bytes\":");
+        try w.print("{d}", .{memory.net_bytes});
+        try w.writeAll(",\"peak_bytes\":");
+        try w.print("{d}", .{memory.peak_bytes});
+        try w.writeAll(",\"total_alloc_bytes\":");
+        try w.print("{d}", .{memory.total_alloc_bytes});
+        try w.writeAll("}");
+    }
+
+    if (payload.planner_estimates) |est| {
+        try w.writeAll(",\"planner_estimates\":{");
+        try w.writeAll("\"sum_estimate_bytes\":");
+        try w.print("{d}", .{est.sum_estimate_bytes});
+        try w.writeAll(",\"sum_actual_bytes\":");
+        try w.print("{d}", .{est.sum_actual_bytes});
+        try w.writeAll(",\"count_estimated_ops\":");
+        try w.print("{d}", .{est.count_estimated_ops});
+        try w.writeAll(",\"min_error_abs_pct\":");
+        try w.print("{d}", .{@as(u64, @intFromFloat(est.min_error_abs_pct))});
+        try w.writeAll(",\"max_error_abs_pct\":");
+        try w.print("{d}", .{@as(u64, @intFromFloat(est.max_error_abs_pct))});
+        try w.writeAll(",\"mean_error_abs_pct\":");
+        try w.print("{d}", .{@as(u64, @intFromFloat(est.mean_error_abs_pct))});
+        try w.writeAll(",\"median_error_abs_pct\":");
+        try w.print("{d}", .{@as(u64, @intFromFloat(est.median_error_abs_pct))});
+        try w.writeAll(",\"stddev_error_abs_pct\":");
+        try w.print("{d}", .{@as(u64, @intFromFloat(est.stddev_error_abs_pct))});
+        try w.writeAll(",\"adjusted_estimate_factor\":");
+        try w.print("{d}", .{@as(u64, @intFromFloat(est.adjusted_estimate_factor))});
+        try w.writeAll("}");
+    }
+
+    if (payload.mem_curve.items.len > 0) {
+        try w.writeAll(",\"mem_curve\":[");
+        for (payload.mem_curve.items, 0..) |point, i| {
+            if (i != 0) try w.writeByte(',');
+            try w.writeAll("{\"op_index\":");
+            try w.print("{d}", .{point.op_index});
+            try w.writeAll(",\"net_after_op\":");
+            try w.print("{d}", .{point.net_after_op});
+            try w.writeByte('}');
         }
+        try w.writeByte(']');
     }
 
-    if (opts.committed_txns > 0) {
-        try w.writeAll(",\"committed_txns\":");
-        try w.print("{d}", .{opts.committed_txns});
-    } else {
-        try w.writeAll(",\"committed_txns\":0");
+    if (payload.setop) |setop| {
+        try w.writeAll(",\"setop\":{\"type\":\"");
+        try w.writeAll(setop.type);
+        try w.writeAll("\",\"mode\":\"");
+        try w.writeAll(setop.mode);
+        try w.writeAll("\",\"input_rows\":");
+        try w.print("{d}", .{setop.input_rows});
+        try w.writeAll(",\"output_rows\":");
+        try w.print("{d}", .{setop.output_rows});
+        if (std.mem.eql(u8, setop.mode, "DISTINCT")) {
+            try w.writeAll(",\"hash_dedup_size\":");
+            try w.print("{d}", .{setop.hash_dedup_size});
+            if (setop.distinct_fill_pct > 0) {
+                try w.writeAll(",\"distinct_fill_pct\":");
+                try w.print("{d}", .{setop.distinct_fill_pct});
+            }
+        }
+        try w.writeAll("}");
     }
 
-    if (opts.wal_skip_ratio >= 0) {
-        var ratio_buf: [32]u8 = undefined;
-        const ratio_str = std.fmt.bufPrint(&ratio_buf, "{d:.4}", .{opts.wal_skip_ratio}) catch "0.0000";
-        try w.writeAll(",\"wal_skip_ratio\":");
-        try w.writeAll(ratio_str);
+    try w.writeAll(",\"hashagg_spills\":");
+    try w.print("{d}", .{payload.hashagg_spills});
+    if (payload.hashagg_spill_reason.len > 0) {
+        try w.writeAll(",\"hashagg_spill_reason\":\"");
+        try w.writeAll(payload.hashagg_spill_reason);
+        try w.writeByte('"');
     }
 
-    // flagger findings
+    try w.writeAll(",\"committed_txns\":");
+    try w.print("{d}", .{payload.committed_txns});
+    try w.writeAll(",\"graph_store_nodes\":");
+    try w.print("{d}", .{payload.graph_store_nodes});
+    try w.writeAll(",\"graph_store_edges\":");
+    try w.print("{d}", .{payload.graph_store_edges});
+    try w.writeAll(",\"graph_store_dirty\":");
+    try w.writeAll(if (payload.graph_store_dirty) "true" else "false");
+
     try w.writeAll(",\"flagger_findings\":[");
-    for (opts.flagger_findings, 0..) |flag, fi| {
+    for (payload.flagger_findings.items, 0..) |flag, fi| {
         if (fi != 0) try w.writeByte(',');
         try w.writeByte('"');
         try w.writeAll(flag);
@@ -371,12 +562,21 @@ fn cumulative_timeFor(idx: usize, times: []const u64) u64 {
     return total;
 }
 
-fn writePeakContributors(w: anytype, ops: []const OpSpec, bytes_alloc: []const u64) !void {
+fn buildPeakContributors(
+    allocator: std.mem.Allocator,
+    ops: []const OpSpec,
+    bytes_alloc: []const u64,
+) !std.ArrayList(schema.ProfilePeakContributor) {
     const count = @min(@as(usize, 2), ops.len);
-    if (count == 0) return;
+    var list = std.ArrayList(schema.ProfilePeakContributor).initCapacity(allocator, count) catch return error.OutOfMemory;
+    errdefer {
+        for (list.items) |*item| item.deinit(allocator);
+        list.deinit(allocator);
+    }
+    if (count == 0) return list;
+
     var indices = [_]usize{0, 1};
     if (ops.len < 2) indices[1] = 0;
-    // simple selection for top 2 by bytes_alloc
     var i: usize = 0;
     while (i < ops.len) : (i += 1) {
         if (bytes_alloc[i] > bytes_alloc[indices[0]]) {
@@ -388,14 +588,14 @@ fn writePeakContributors(w: anytype, ops: []const OpSpec, bytes_alloc: []const u
     }
     var emitted: usize = 0;
     while (emitted < count) : (emitted += 1) {
-        if (emitted != 0) try w.writeByte(',');
         const idx = indices[emitted];
-        try w.writeAll("{\"op\":\"");
-        try w.writeAll(ops[idx].name);
-        try w.writeAll("\",\"bytes_alloc\":");
-        try w.print("{d}", .{bytes_alloc[idx]});
-        try w.writeByte('}');
+        const entry = schema.ProfilePeakContributor{
+            .op = try allocator.dupe(u8, ops[idx].name),
+            .bytes_alloc = bytes_alloc[idx],
+        };
+        try list.append(allocator, entry);
     }
+    return list;
 }
 
 fn firstSpillIndex(ops: []const OpSpec, opts: ProfileOptions) ?usize {

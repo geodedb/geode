@@ -1,41 +1,45 @@
 const std = @import("std");
-const protocol = @import("../src/protocol.zig");
+const protobuf = @import("protobuf");
+const schema = @import("schema");
 
 // Negative wire tests exercising malformed frame parse and unsupported capability negotiation.
 // These expand coverage for REQ-GQL-001 / REQ-GQL-002 beyond the happy HELLO round trip.
 
-fn parse(line: []const u8) !protocol.ClientMessage {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    return protocol.parseClientMessage(gpa.allocator(), line);
+fn decodePacket(bytes: []const u8, allocator: std.mem.Allocator) !schema.ClientPacket {
+    var reader: std.Io.Reader = .fixed(bytes);
+    return try protobuf.decode(schema.ClientPacket, &reader, allocator);
 }
 
 // TestCANARY_REQ_GQL_001_WireMalformedFrame - ensures invalid JSON / structure is rejected.
 test "TestCANARY_REQ_GQL_001_WireMalformedFrame" {
-    // Missing closing brace and wrong field types
+    // Truncated/invalid protobuf frames should not decode.
     const bads = [_][]const u8{
-        "{\"type\":123}", // type must be string
-        "{\"type\":\"HELLO\",\"client_name\":1}", // client_name must be string
-        "{\"typo\":\"HELLO\"}", // missing type key
+        &[_]u8{0x0a}, // missing length
+        &[_]u8{0x0a, 0x05, 0x08}, // length says 5 but data truncated
+        &[_]u8{0xff, 0xff, 0xff}, // invalid varint
     };
-    var any_err: bool = false;
+
     for (bads) |b| {
-        const res = parse(b);
-        if (res) |_| {
-            // Should not succeed
-            any_err = true; // mark failure
-        } else |_| {
-            // Expected path
-        }
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        if (decodePacket(b, arena.allocator())) |_| {
+            return error.UnexpectedSuccess;
+        } else |_| {}
     }
-    // Expect zero successes
-    try std.testing.expect(!any_err);
 }
 
 // TestCANARY_REQ_GQL_002_WireUnsupportedCapability - unknown type should be invalid.
 test "TestCANARY_REQ_GQL_002_WireUnsupportedCapability" {
-    const line = "{\"type\":\"UNSUPPORTED_FOO\"}";
-    if (parse(line)) |_| {
+    // Encode a packet with only unknown fields; decode should yield no QUIC message.
+    const bytes = &[_]u8{ 0xC8, 0x06, 0x01 }; // field 99, varint 1
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const packet = decodePacket(bytes, arena.allocator()) catch return;
+    defer packet.deinit(arena.allocator());
+
+    if (packet.quic != null) {
         return error.UnexpectedSuccess;
-    } else |_| {}
+    }
 }

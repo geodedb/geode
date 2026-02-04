@@ -1,5 +1,5 @@
 const std = @import("std");
-const crypto = @import("crypto");
+const tde = @import("tde_file_encryption");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -28,7 +28,7 @@ pub fn main() !void {
         if (key.len != 64) return error.InvalidKey;
         var i: usize = 0;
         while (i < 32) : (i += 1) _ = try std.fmt.parseInt(u8, key[i * 2 .. i * 2 + 2], 16);
-        std.debug.print("export GEODE_DISK_KEY_HEX={s}\n", .{key});
+        std.debug.print("export GEODE_TDE_KEY={s}\n", .{key});
     }
 }
 
@@ -37,19 +37,21 @@ fn printUsage() !void {
         \\Usage: key_rotate <command> [options]
         \\
         \\Commands:
-        \\  generate        Generate a new encryption key
-        \\  rotate          Rotate encryption keys for data files
-        \\  verify          Verify encryption of data files
+        \\  generate        Generate a new TDE key
+        \\  rotate          Rotate TDE keys for encrypted files
+        \\  verify          Verify TDE encryption header
         \\
         \\Options:
-        \\  --algorithm     Encryption algorithm (aes_256_gcm)
+        \\  --algorithm     Encryption algorithm (aes_256_gcm only)
         \\  --kms           KMS provider (aws_kms, azure_key_vault, hashicorp_vault)
         \\  --input         Input data file path
         \\  --output        Output data file path
         \\  --old-key       Path to old key file
         \\  --new-key       Path to new key file
+        \\  --file          File path for verification
+        \\  --key           Key path for verification
         \\
-        \\Legacy mode: key_rotate <64-char-hex-key>
+        \\Legacy mode: key_rotate <64-char-hex-key> (prints GEODE_TDE_KEY export)
         \\
     , .{});
 }
@@ -58,7 +60,6 @@ fn generateKey(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     _ = allocator;
 
     var output_path: ?[]const u8 = null;
-    var algorithm: crypto.EncryptionAlgorithm = .aes_256_gcm;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -68,30 +69,14 @@ fn generateKey(allocator: std.mem.Allocator, args: [][:0]u8) !void {
                 output_path = args[i];
             }
         } else if (std.mem.eql(u8, args[i], "--algorithm")) {
+            // File-level encryption currently supports AES-256-GCM only.
             i += 1;
-            if (i < args.len) {
-                if (std.mem.eql(u8, args[i], "aes_256_gcm")) {
-                    algorithm = .aes_256_gcm;
-                }
-            }
         }
     }
 
     // Generate random key
-    var key_data: [32]u8 = undefined;
+    var key_data: [tde.KEY_BYTES]u8 = undefined;
     std.crypto.random.bytes(&key_data);
-
-    const key = crypto.EncryptionKey{
-        .data = key_data,
-        .algorithm = algorithm,
-        .provenance = .{
-            .source = .local_file,
-            .key_id = "generated-key",
-            .created_at = std.time.milliTimestamp(),
-            .rotated_at = null,
-            .version = 1,
-        },
-    };
 
     if (output_path) |path| {
         const file = try std.fs.cwd().createFile(path, .{ .mode = 0o600 });
@@ -108,7 +93,6 @@ fn generateKey(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         std.debug.print("\n", .{});
     }
 
-    _ = key;
 }
 
 fn rotateKeys(allocator: std.mem.Allocator, args: [][:0]u8) !void {
@@ -151,52 +135,35 @@ fn rotateKeys(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     // Read old key
     const old_key_file = try std.fs.cwd().openFile(old_key_path.?, .{});
     defer old_key_file.close();
-    var old_key_data: [32]u8 = undefined;
+    var old_key_data: [tde.KEY_BYTES]u8 = undefined;
     _ = try old_key_file.read(&old_key_data);
-
-    const old_key = crypto.EncryptionKey{
-        .data = old_key_data,
-        .algorithm = .aes_256_gcm,
-        .provenance = .{
-            .source = .local_file,
-            .key_id = "old-key",
-            .created_at = 0,
-            .rotated_at = null,
-            .version = 1,
-        },
-    };
 
     // Read new key
     const new_key_file = try std.fs.cwd().openFile(new_key_path.?, .{});
     defer new_key_file.close();
-    var new_key_data: [32]u8 = undefined;
+    var new_key_data: [tde.KEY_BYTES]u8 = undefined;
     _ = try new_key_file.read(&new_key_data);
 
-    const new_key = crypto.EncryptionKey{
-        .data = new_key_data,
-        .algorithm = .aes_256_gcm,
-        .provenance = .{
-            .source = .local_file,
-            .key_id = "new-key",
-            .created_at = std.time.milliTimestamp(),
-            .rotated_at = null,
-            .version = 2,
-        },
-    };
+    // Read input file
+    const in_file = try std.fs.cwd().openFile(input_path.?, .{});
+    defer in_file.close();
+    const in_size = try in_file.getEndPos();
+    const raw = try allocator.alloc(u8, @intCast(in_size));
+    defer allocator.free(raw);
+    const read_bytes = try in_file.readAll(raw);
 
-    // Initialize crypto engines
-    var old_crypto = try crypto.PageCrypto.init(allocator, old_key, null);
-    defer old_crypto.deinit();
+    // Decrypt with old key (passes through if not encrypted)
+    const plaintext = try tde.decryptWithKey(allocator, raw[0..read_bytes], old_key_data);
+    defer allocator.free(plaintext);
 
-    var new_crypto = try crypto.PageCrypto.init(allocator, new_key, null);
-    defer new_crypto.deinit();
+    // Encrypt with new key
+    const encrypted = try tde.encryptWithKey(allocator, plaintext, new_key_data);
+    defer allocator.free(encrypted);
 
-    // Create rotation tool
-    var rotation_tool = crypto.KeyRotationTool.init(allocator, &old_crypto, &new_crypto);
-    rotation_tool.progress_callback = printProgress;
-
-    // Perform rotation
-    try rotation_tool.rotateDataFile(input_path.?, output_path.?);
+    // Write output
+    const out_file = try std.fs.cwd().createFile(output_path.?, .{});
+    defer out_file.close();
+    try out_file.writeAll(encrypted);
 
     std.debug.print("\nKey rotation completed successfully\n", .{});
 }
@@ -228,24 +195,16 @@ fn verifyEncryption(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         return;
     }
 
-    // Verify file is encrypted
     const file = try std.fs.cwd().openFile(file_path.?, .{});
     defer file.close();
 
-    var header: [28]u8 = undefined;
-    _ = try file.read(&header);
+    var header: [tde.MAGIC.len]u8 = undefined;
+    const read_len = try file.read(&header);
+    const encrypted = read_len >= tde.MAGIC.len and tde.isEncrypted(header[0..tde.MAGIC.len]);
 
-    // Check for encryption header (nonce + tag)
-    const is_encrypted = header[0] != 0 or header[1] != 0;
-
-    if (is_encrypted) {
-        std.debug.print("File appears to be encrypted (AES-256-GCM)\n", .{});
+    if (encrypted) {
+        std.debug.print("File appears to be TDE encrypted (AES-256-GCM)\n", .{});
     } else {
-        std.debug.print("Warning: File does not appear to be encrypted\n", .{});
+        std.debug.print("Warning: File does not appear to be TDE encrypted\n", .{});
     }
-}
-
-fn printProgress(pages_processed: u64, total_pages: u64) void {
-    const percent = (pages_processed * 100) / total_pages;
-    std.debug.print("\rProgress: {d}/{d} pages ({d}%%)", .{ pages_processed, total_pages, percent });
 }

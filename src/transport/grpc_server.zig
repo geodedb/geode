@@ -626,18 +626,17 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
 
             switch (analysis.kind) {
                 .explain => {
-                    const explain_json = try explain_payload.buildExplainJson(
+                    const explain_msg = try explain_payload.buildExplainPayload(
                         allocator,
                         traits,
                         analysis.union_part_count,
                         normalized.explain_calibrated,
                     );
-                    defer allocator.free(explain_json);
 
                     const status = try proto_util.buildStatus(allocator, "00000", flags.items);
                     var resp = schema.ExecutionResponse{
                         .status = status,
-                        .payload = .{ .explain = .{ .json_payload = explain_json } },
+                        .payload = .{ .explain = explain_msg },
                     };
                     defer resp.deinit(allocator);
                     return encodeMessage(allocator, resp);
@@ -660,7 +659,8 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                         try appendFlagIfMissing(allocator, &exec_result.flags, flag);
                     }
 
-                    const profile_json = try profile_payload.buildProfileJson(allocator, traits, exec_result.rows.len, .{
+                    const store_ptr = graph_store.getGlobalStore(allocator);
+                    const profile_msg = try profile_payload.buildProfilePayload(allocator, traits, exec_result.rows.len, .{
                         .compact = store.config.compact_profile,
                         .include_mem_curve = store.config.memcurve_profile,
                         .disable_estimates = store.config.disable_estimates,
@@ -669,17 +669,18 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                         .spill_union = state.spill_union,
                         .spill_hashagg = state.spill_hashagg,
                         .spill_threshold = state.query_mem_limit_bytes,
-                        .wal_skip_ratio = -1,
                         .committed_txns = state.global_commit_ts,
+                        .graph_store_nodes = @intCast(store_ptr.getNodeCount()),
+                        .graph_store_edges = @intCast(store_ptr.getEdgeCount()),
+                        .graph_store_dirty = store_ptr.isDirty(),
                         .flagger_findings = exec_result.flags.items,
                         .union_part_count = analysis.union_part_count,
                     });
-                    defer allocator.free(profile_json);
 
                     const status = try proto_util.buildStatus(allocator, "00000", exec_result.flags.items);
                     var resp = schema.ExecutionResponse{
                         .status = status,
-                        .payload = .{ .profile = .{ .json_payload = profile_json } },
+                        .payload = .{ .profile = profile_msg },
                     };
                     defer resp.deinit(allocator);
 

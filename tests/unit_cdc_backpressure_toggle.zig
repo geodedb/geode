@@ -33,14 +33,14 @@ test "unit: CDC backpressure toggles when threshold crossed" {
     while (i < 2) : (i += 1) {
         try eng.captureEvent(gpa, .{ .kind = .InsertNode, .payload = "{}" });
     }
-    const diag1 = try eng.exportDiagnostics(gpa);
-    defer gpa.free(diag1);
-    try testing.expect(std.mem.indexOf(u8, diag1, "\"backpressure\":false") != null);
+    var diag1 = try eng.exportDiagnostics(gpa);
+    defer diag1.deinit(gpa);
+    try testing.expect(!diag1.backpressure);
 
     // Cross watermark
     try eng.captureEvent(gpa, .{ .kind = .InsertNode, .payload = "{}" });
     try eng.captureEvent(gpa, .{ .kind = .InsertNode, .payload = "{}" });
-    const diag2 = try eng.exportDiagnostics(gpa);
-    defer gpa.free(diag2);
-    try testing.expect(std.mem.indexOf(u8, diag2, "\"backpressure\":true") != null);
+    var diag2 = try eng.exportDiagnostics(gpa);
+    defer diag2.deinit(gpa);
+    try testing.expect(diag2.backpressure);
 }

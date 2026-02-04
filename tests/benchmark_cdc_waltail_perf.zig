@@ -15,7 +15,7 @@ test "BenchmarkCANARY_REQ_GQL_042_CDC_WalTailPerf" {
     const start = std.time.nanoTimestamp();
     var i: usize = 0;
     while (i < total) : (i += 1) {
-        try engine.ingestFromWalRecord(100 + @as(u64, @intCast(i)), .node, @as(u64, @intCast(i)), "{\"id\":1}");
+        try engine.ingestChangeRecord(100 + @as(u64, @intCast(i)), .node, @as(u64, @intCast(i)), "{\"id\":1}");
     }
     try engine.flushNow();
     const end = std.time.nanoTimestamp();

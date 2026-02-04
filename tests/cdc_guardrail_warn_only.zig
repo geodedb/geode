@@ -1,13 +1,6 @@
 const std = @import("std");
 const cdc = @import("cdc_enhanced");
 
-fn expectContains(haystack: []const u8, needle: []const u8) !void {
-    if (std.mem.indexOf(u8, haystack, needle) == null) {
-        std.debug.print("Expected substring '{s}' in diagnostics: {s}\n", .{ needle, haystack });
-        return error.NotFound;
-    }
-}
-
 // This test configures low malformed warn threshold and higher abort threshold.
 // It then feeds malformed WAL payloads to cross warn but not abort and validates flag states.
 // We choose warn=0.3 abort=0.8 and create a sequence of attempts where malformed ratio ~0.5 would exceed abort if we pushed further.
@@ -43,30 +36,27 @@ test "CDC guardrail warn only triggers before abort" {
 
     // Strategy: accumulate attempts keeping ratio < warn until we choose to cross it.
     // Start with 3 good, 1 bad -> ratio = 1/4 = 0.25 (<0.30)
-    try engine.ingestFromWalRecord(1, .node, 1, good_payload); // good 1
-    try engine.ingestFromWalRecord(1, .node, 2, good_payload); // good 2
-    try engine.ingestFromWalRecord(1, .node, 3, good_payload); // good 3
-    try engine.ingestFromWalRecord(1, .node, 4, malformed_payload); // bad 1 (ratio 1/4 = 0.25)
+    try engine.ingestChangeRecord(1, .node, 1, good_payload); // good 1
+    try engine.ingestChangeRecord(1, .node, 2, good_payload); // good 2
+    try engine.ingestChangeRecord(1, .node, 3, good_payload); // good 3
+    try engine.ingestChangeRecord(1, .node, 4, malformed_payload); // bad 1 (ratio 1/4 = 0.25)
 
     // Add one more good: ratio 1/5 = 0.20
-    try engine.ingestFromWalRecord(1, .node, 5, good_payload);
+    try engine.ingestChangeRecord(1, .node, 5, good_payload);
 
     // Add second malformed: ratio 2/6 = 0.333... -> crosses warn (>=0.30) but < abort (0.80)
-    try engine.ingestFromWalRecord(1, .node, 6, malformed_payload); // bad 2
+    try engine.ingestChangeRecord(1, .node, 6, malformed_payload); // bad 2
 
     // Ensure we did not accidentally trigger abort by keeping malformed far from 80%.
     // Add two more good: ratio 2/8 = 0.25 (drops below warn but flag stays latched true; expected behavior)
-    try engine.ingestFromWalRecord(1, .node, 7, good_payload);
-    try engine.ingestFromWalRecord(1, .node, 8, good_payload);
+    try engine.ingestChangeRecord(1, .node, 7, good_payload);
+    try engine.ingestChangeRecord(1, .node, 8, good_payload);
 
-    const diag = try engine.exportDiagnostics(allocator);
-    defer allocator.free(diag);
+    var diag = try engine.exportDiagnostics(allocator);
+    defer diag.deinit(allocator);
 
-    try expectContains(diag, "\"guardrail_warn_triggered\":true");
-    // Abort must remain false
-    try expectContains(diag, "\"guardrail_abort_triggered\":false");
-    // Timestamp expectations: warn ts > 0, abort ts = 0
-    // We can't easily parse; just assert keys exist and abort ts shows ':0,' pattern while warn ts not zero.
-    try expectContains(diag, "\"first_warn_ts_ms\":");
-    try expectContains(diag, "\"first_abort_ts_ms\":0");
+    try std.testing.expect(diag.guardrail_warn_triggered);
+    try std.testing.expect(!diag.guardrail_abort_triggered);
+    try std.testing.expect(diag.first_warn_ts_ms > 0);
+    try std.testing.expect(diag.first_abort_ts_ms == 0);
 }

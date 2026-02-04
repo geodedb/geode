@@ -11,7 +11,7 @@ fn feedMalformed(engine: *cdc.CDCEngine, n: usize) void {
     var i: usize = 0;
     while (i < n) : (i += 1) {
         // malformed string missing trailing brace
-        engine.ingestFromWalRecord(1, .node, @as(u64, i), "{not_json") catch unreachable;
+        engine.ingestChangeRecord(1, .node, @as(u64, i), "{not_json") catch unreachable;
     }
 }
 

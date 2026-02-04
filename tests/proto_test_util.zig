@@ -328,14 +328,14 @@ pub const QuicProtoClient = struct {
         return msg.ping.ok;
     }
 
-    pub fn cdcDiagnostics(self: *QuicProtoClient, allocator: std.mem.Allocator) ![]u8 {
+    pub fn cdcDiagnostics(self: *QuicProtoClient, allocator: std.mem.Allocator) !schema.CdcDiagnosticsResponse {
         try self.ensureHello(allocator);
         try self.writeMessage(.{ .cdc_diag = .{} });
         var packet = try self.readPacket(allocator, 5000);
         defer packet.deinit(allocator);
         const msg = packet.quic orelse return error.InvalidMessage;
         if (msg != .cdc_diag) return error.InvalidMessage;
-        return try allocator.dupe(u8, msg.cdc_diag.json_payload);
+        return try copyCdcDiagnostics(allocator, msg.cdc_diag);
     }
 
     pub fn begin(self: *QuicProtoClient, allocator: std.mem.Allocator) !BeginResult {
@@ -386,6 +386,53 @@ pub const QuicProtoClient = struct {
             flagger[i] = try allocator.dupe(u8, s);
         }
         return .{ .status_class = status_class, .additional = additional, .flagger = flagger };
+    }
+
+    fn copyCdcDiagnostics(
+        allocator: std.mem.Allocator,
+        diag: schema.CdcDiagnosticsResponse,
+    ) !schema.CdcDiagnosticsResponse {
+        var snapshots = std.ArrayList(schema.CdcMalformedSnapshot).initCapacity(allocator, diag.malformed_snapshots.items.len) catch return error.OutOfMemory;
+        errdefer snapshots.deinit(allocator);
+        for (diag.malformed_snapshots.items) |snap| {
+            try snapshots.append(allocator, snap);
+        }
+
+        var hashes = std.ArrayList(schema.CdcMalformedHash).initCapacity(allocator, diag.malformed_hashes.items.len) catch return error.OutOfMemory;
+        errdefer {
+            for (hashes.items) |*item| item.deinit(allocator);
+            hashes.deinit(allocator);
+        }
+        for (diag.malformed_hashes.items) |hash| {
+            const entry = schema.CdcMalformedHash{
+                .count = hash.count,
+                .hash = hash.hash,
+                .ts_ms = hash.ts_ms,
+                .prefix_hex = if (hash.prefix_hex.len > 0) try allocator.dupe(u8, hash.prefix_hex) else "",
+            };
+            try hashes.append(allocator, entry);
+        }
+
+        const version = if (diag.version.len > 0) try allocator.dupe(u8, diag.version) else "";
+
+        return schema.CdcDiagnosticsResponse{
+            .malformed_change_records = diag.malformed_change_records,
+            .total_change_attempts = diag.total_change_attempts,
+            .malformed_ratio = diag.malformed_ratio,
+            .guardrail_warn_triggered = diag.guardrail_warn_triggered,
+            .guardrail_abort_triggered = diag.guardrail_abort_triggered,
+            .first_warn_ts_ms = diag.first_warn_ts_ms,
+            .first_abort_ts_ms = diag.first_abort_ts_ms,
+            .guardrail_epoch = diag.guardrail_epoch,
+            .uptime_ms = diag.uptime_ms,
+            .backpressure = diag.backpressure,
+            .config = if (diag.config) |cfg| cfg else null,
+            .engine = if (diag.engine) |eng| eng else null,
+            .malformed_snapshots = snapshots,
+            .malformed_hashes = hashes,
+            .version = version,
+            .timestamp_ms = diag.timestamp_ms,
+        };
     }
 
     fn valueToTest(allocator: std.mem.Allocator, val: schema.Value) !TestValue {

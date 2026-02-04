@@ -530,11 +530,105 @@ pub const ExecutionMetrics = struct {
     }
 };
 
-pub const ExplainPayload = struct {
-    json_payload: []const u8 = "",
+pub const ExplainOp = struct {
+    idx: u32 = 0,
+    kind: []const u8 = "",
+    est_rows: i64 = 0,
+    cost: i64 = 0,
 
     pub const _desc_table = .{
-        .json_payload = fd(1, .{ .scalar = .string }),
+        .idx = fd(1, .{ .scalar = .uint32 }),
+        .kind = fd(2, .{ .scalar = .string }),
+        .est_rows = fd(3, .{ .scalar = .int64 }),
+        .cost = fd(4, .{ .scalar = .int64 }),
+    };
+
+    pub fn deinit(self: *ExplainOp, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const ExplainTotals = struct {
+    est_rows: i64 = 0,
+    cost: i64 = 0,
+
+    pub const _desc_table = .{
+        .est_rows = fd(1, .{ .scalar = .int64 }),
+        .cost = fd(2, .{ .scalar = .int64 }),
+    };
+
+    pub fn deinit(self: *ExplainTotals, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const ExplainProperties = struct {
+    ordered: bool = false,
+    limit: u64 = 0,
+    offset: u64 = 0,
+    distinct: bool = false,
+    union_mode: []const u8 = "",
+    union_part_count: u32 = 0,
+
+    pub const _desc_table = .{
+        .ordered = fd(1, .{ .scalar = .bool }),
+        .limit = fd(2, .{ .scalar = .uint64 }),
+        .offset = fd(3, .{ .scalar = .uint64 }),
+        .distinct = fd(4, .{ .scalar = .bool }),
+        .union_mode = fd(5, .{ .scalar = .string }),
+        .union_part_count = fd(6, .{ .scalar = .uint32 }),
+    };
+
+    pub fn deinit(self: *ExplainProperties, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const ExplainCalibrationEntry = struct {
+    idx: u32 = 0,
+    est_rows: f64 = 0,
+    actual_rows: f64 = 0,
+
+    pub const _desc_table = .{
+        .idx = fd(1, .{ .scalar = .uint32 }),
+        .est_rows = fd(2, .{ .scalar = .double }),
+        .actual_rows = fd(3, .{ .scalar = .double }),
+    };
+
+    pub fn deinit(self: *ExplainCalibrationEntry, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const ExplainCalibration = struct {
+    mape: f64 = 0,
+    entries: std.ArrayList(ExplainCalibrationEntry),
+
+    pub const _desc_table = .{
+        .mape = fd(1, .{ .scalar = .double }),
+        .entries = fd(2, .{ .repeated = .{ .submessage = {} } }),
+    };
+
+    pub fn deinit(self: *ExplainCalibration, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const ExplainPayload = struct {
+    schema: []const u8 = "",
+    ops: std.ArrayList(ExplainOp),
+    totals: ?ExplainTotals = null,
+    properties: ?ExplainProperties = null,
+    calibration: ?ExplainCalibration = null,
+    profile_version: u32 = 0,
+
+    pub const _desc_table = .{
+        .schema = fd(1, .{ .scalar = .string }),
+        .ops = fd(2, .{ .repeated = .{ .submessage = {} } }),
+        .totals = fd(3, .{ .submessage = {} }),
+        .properties = fd(4, .{ .submessage = {} }),
+        .calibration = fd(5, .{ .submessage = {} }),
+        .profile_version = fd(6, .{ .scalar = .uint32 }),
     };
 
     pub fn deinit(self: *ExplainPayload, allocator: std.mem.Allocator) void {
@@ -542,11 +636,227 @@ pub const ExplainPayload = struct {
     }
 };
 
-pub const ProfilePayload = struct {
-    json_payload: []const u8 = "",
+pub const ProfileOp = struct {
+    op: []const u8 = "",
+    phase: []const u8 = "",
+    id: u32 = 0,
+    op_index: u32 = 0,
+    input_rows: u64 = 0,
+    rows: u64 = 0,
+    time_ns: u64 = 0,
+    cpu_time_ns: u64 = 0,
+    bytes_out: u64 = 0,
+    bytes_alloc: u64 = 0,
+    estimate_bytes: u64 = 0,
+    estimate_vs_actual: u64 = 0,
+    percent_peak: u64 = 0,
+    percent_net: u64 = 0,
+    cumulative_time_ns: u64 = 0,
+    freed_bytes: u64 = 0,
+    net_after_op: u64 = 0,
+    error_bytes: u64 = 0,
+    error_abs_pct: u64 = 0,
+    index_name: []const u8 = "",
+    selectivity_est: f64 = 0,
 
     pub const _desc_table = .{
-        .json_payload = fd(1, .{ .scalar = .string }),
+        .op = fd(1, .{ .scalar = .string }),
+        .phase = fd(2, .{ .scalar = .string }),
+        .id = fd(3, .{ .scalar = .uint32 }),
+        .op_index = fd(4, .{ .scalar = .uint32 }),
+        .input_rows = fd(5, .{ .scalar = .uint64 }),
+        .rows = fd(6, .{ .scalar = .uint64 }),
+        .time_ns = fd(7, .{ .scalar = .uint64 }),
+        .cpu_time_ns = fd(8, .{ .scalar = .uint64 }),
+        .bytes_out = fd(9, .{ .scalar = .uint64 }),
+        .bytes_alloc = fd(10, .{ .scalar = .uint64 }),
+        .estimate_bytes = fd(11, .{ .scalar = .uint64 }),
+        .estimate_vs_actual = fd(12, .{ .scalar = .uint64 }),
+        .percent_peak = fd(13, .{ .scalar = .uint64 }),
+        .percent_net = fd(14, .{ .scalar = .uint64 }),
+        .cumulative_time_ns = fd(15, .{ .scalar = .uint64 }),
+        .freed_bytes = fd(16, .{ .scalar = .uint64 }),
+        .net_after_op = fd(17, .{ .scalar = .uint64 }),
+        .error_bytes = fd(18, .{ .scalar = .uint64 }),
+        .error_abs_pct = fd(19, .{ .scalar = .uint64 }),
+        .index_name = fd(20, .{ .scalar = .string }),
+        .selectivity_est = fd(21, .{ .scalar = .double }),
+    };
+
+    pub fn deinit(self: *ProfileOp, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const ProfilePeakContributor = struct {
+    op: []const u8 = "",
+    bytes_alloc: u64 = 0,
+
+    pub const _desc_table = .{
+        .op = fd(1, .{ .scalar = .string }),
+        .bytes_alloc = fd(2, .{ .scalar = .uint64 }),
+    };
+
+    pub fn deinit(self: *ProfilePeakContributor, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const ProfileTotals = struct {
+    time_ns: u64 = 0,
+    peak_bytes: u64 = 0,
+
+    pub const _desc_table = .{
+        .time_ns = fd(1, .{ .scalar = .uint64 }),
+        .peak_bytes = fd(2, .{ .scalar = .uint64 }),
+    };
+
+    pub fn deinit(self: *ProfileTotals, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const ProfileSpills = struct {
+    sort_spills: u64 = 0,
+    distinct_spills: u64 = 0,
+    union_spills: u64 = 0,
+    spill_reason: []const u8 = "",
+    peak_bytes_at_spill: u64 = 0,
+    first_spill_op_index: u32 = 0,
+
+    pub const _desc_table = .{
+        .sort_spills = fd(1, .{ .scalar = .uint64 }),
+        .distinct_spills = fd(2, .{ .scalar = .uint64 }),
+        .union_spills = fd(3, .{ .scalar = .uint64 }),
+        .spill_reason = fd(4, .{ .scalar = .string }),
+        .peak_bytes_at_spill = fd(5, .{ .scalar = .uint64 }),
+        .first_spill_op_index = fd(6, .{ .scalar = .uint32 }),
+    };
+
+    pub fn deinit(self: *ProfileSpills, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const ProfileMemory = struct {
+    net_bytes: u64 = 0,
+    peak_bytes: u64 = 0,
+    total_alloc_bytes: u64 = 0,
+
+    pub const _desc_table = .{
+        .net_bytes = fd(1, .{ .scalar = .uint64 }),
+        .peak_bytes = fd(2, .{ .scalar = .uint64 }),
+        .total_alloc_bytes = fd(3, .{ .scalar = .uint64 }),
+    };
+
+    pub fn deinit(self: *ProfileMemory, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const ProfilePlannerEstimates = struct {
+    sum_estimate_bytes: u64 = 0,
+    sum_actual_bytes: u64 = 0,
+    count_estimated_ops: u32 = 0,
+    min_error_abs_pct: f64 = 0,
+    max_error_abs_pct: f64 = 0,
+    mean_error_abs_pct: f64 = 0,
+    median_error_abs_pct: f64 = 0,
+    stddev_error_abs_pct: f64 = 0,
+    adjusted_estimate_factor: f64 = 0,
+
+    pub const _desc_table = .{
+        .sum_estimate_bytes = fd(1, .{ .scalar = .uint64 }),
+        .sum_actual_bytes = fd(2, .{ .scalar = .uint64 }),
+        .count_estimated_ops = fd(3, .{ .scalar = .uint32 }),
+        .min_error_abs_pct = fd(4, .{ .scalar = .double }),
+        .max_error_abs_pct = fd(5, .{ .scalar = .double }),
+        .mean_error_abs_pct = fd(6, .{ .scalar = .double }),
+        .median_error_abs_pct = fd(7, .{ .scalar = .double }),
+        .stddev_error_abs_pct = fd(8, .{ .scalar = .double }),
+        .adjusted_estimate_factor = fd(9, .{ .scalar = .double }),
+    };
+
+    pub fn deinit(self: *ProfilePlannerEstimates, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const ProfileMemCurvePoint = struct {
+    op_index: u32 = 0,
+    net_after_op: u64 = 0,
+
+    pub const _desc_table = .{
+        .op_index = fd(1, .{ .scalar = .uint32 }),
+        .net_after_op = fd(2, .{ .scalar = .uint64 }),
+    };
+
+    pub fn deinit(self: *ProfileMemCurvePoint, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const ProfileSetOp = struct {
+    type: []const u8 = "",
+    mode: []const u8 = "",
+    input_rows: u64 = 0,
+    output_rows: u64 = 0,
+    hash_dedup_size: u64 = 0,
+    distinct_fill_pct: u64 = 0,
+
+    pub const _desc_table = .{
+        .type = fd(1, .{ .scalar = .string }),
+        .mode = fd(2, .{ .scalar = .string }),
+        .input_rows = fd(3, .{ .scalar = .uint64 }),
+        .output_rows = fd(4, .{ .scalar = .uint64 }),
+        .hash_dedup_size = fd(5, .{ .scalar = .uint64 }),
+        .distinct_fill_pct = fd(6, .{ .scalar = .uint64 }),
+    };
+
+    pub fn deinit(self: *ProfileSetOp, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const ProfilePayload = struct {
+    profile_version: u32 = 0,
+    ops: std.ArrayList(ProfileOp),
+    peak_contributors: std.ArrayList(ProfilePeakContributor),
+    totals: ?ProfileTotals = null,
+    total_time_ns: u64 = 0,
+    spills: ?ProfileSpills = null,
+    memory: ?ProfileMemory = null,
+    planner_estimates: ?ProfilePlannerEstimates = null,
+    mem_curve: std.ArrayList(ProfileMemCurvePoint),
+    setop: ?ProfileSetOp = null,
+    hashagg_spills: u64 = 0,
+    hashagg_spill_reason: []const u8 = "",
+    committed_txns: u64 = 0,
+    graph_store_nodes: u64 = 0,
+    graph_store_edges: u64 = 0,
+    graph_store_dirty: bool = false,
+    flagger_findings: std.ArrayList([]const u8),
+    compact: bool = false,
+
+    pub const _desc_table = .{
+        .profile_version = fd(1, .{ .scalar = .uint32 }),
+        .ops = fd(2, .{ .repeated = .{ .submessage = {} } }),
+        .peak_contributors = fd(3, .{ .repeated = .{ .submessage = {} } }),
+        .totals = fd(4, .{ .submessage = {} }),
+        .total_time_ns = fd(5, .{ .scalar = .uint64 }),
+        .spills = fd(6, .{ .submessage = {} }),
+        .memory = fd(7, .{ .submessage = {} }),
+        .planner_estimates = fd(8, .{ .submessage = {} }),
+        .mem_curve = fd(9, .{ .repeated = .{ .submessage = {} } }),
+        .setop = fd(10, .{ .submessage = {} }),
+        .hashagg_spills = fd(11, .{ .scalar = .uint64 }),
+        .hashagg_spill_reason = fd(12, .{ .scalar = .string }),
+        .committed_txns = fd(13, .{ .scalar = .uint64 }),
+        .graph_store_nodes = fd(14, .{ .scalar = .uint64 }),
+        .graph_store_edges = fd(15, .{ .scalar = .uint64 }),
+        .graph_store_dirty = fd(16, .{ .scalar = .bool }),
+        .flagger_findings = fd(17, .{ .repeated = .{ .scalar = .string } }),
+        .compact = fd(18, .{ .scalar = .bool }),
     };
 
     pub fn deinit(self: *ProfilePayload, allocator: std.mem.Allocator) void {
@@ -722,11 +1032,121 @@ pub const CdcDiagnosticsRequest = struct {
     }
 };
 
-pub const CdcDiagnosticsResponse = struct {
-    json_payload: []const u8 = "",
+pub const CdcDiagnosticsConfig = struct {
+    enabled: bool = false,
+    malformed_snapshot_interval: u64 = 0,
+    malformed_hash_retain: u32 = 0,
+    malformed_warn_pct: f64 = 0,
+    malformed_abort_pct: f64 = 0,
+    flush_interval_ms: u32 = 0,
+    batch_size: u32 = 0,
+    pending_backpressure_watermark: u64 = 0,
 
     pub const _desc_table = .{
-        .json_payload = fd(1, .{ .scalar = .string }),
+        .enabled = fd(1, .{ .scalar = .bool }),
+        .malformed_snapshot_interval = fd(2, .{ .scalar = .uint64 }),
+        .malformed_hash_retain = fd(3, .{ .scalar = .uint32 }),
+        .malformed_warn_pct = fd(4, .{ .scalar = .double }),
+        .malformed_abort_pct = fd(5, .{ .scalar = .double }),
+        .flush_interval_ms = fd(6, .{ .scalar = .uint32 }),
+        .batch_size = fd(7, .{ .scalar = .uint32 }),
+        .pending_backpressure_watermark = fd(8, .{ .scalar = .uint64 }),
+    };
+
+    pub fn deinit(self: *CdcDiagnosticsConfig, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const CdcDiagnosticsEngine = struct {
+    is_running: bool = false,
+    last_flush_ms: i64 = 0,
+    peak_buffer: u64 = 0,
+    current_buffer: u64 = 0,
+    dynamic_batch_size: u32 = 0,
+    batch_adjustments: u32 = 0,
+
+    pub const _desc_table = .{
+        .is_running = fd(1, .{ .scalar = .bool }),
+        .last_flush_ms = fd(2, .{ .scalar = .int64 }),
+        .peak_buffer = fd(3, .{ .scalar = .uint64 }),
+        .current_buffer = fd(4, .{ .scalar = .uint64 }),
+        .dynamic_batch_size = fd(5, .{ .scalar = .uint32 }),
+        .batch_adjustments = fd(6, .{ .scalar = .uint32 }),
+    };
+
+    pub fn deinit(self: *CdcDiagnosticsEngine, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const CdcMalformedSnapshot = struct {
+    count: u64 = 0,
+    ts_ms: i64 = 0,
+
+    pub const _desc_table = .{
+        .count = fd(1, .{ .scalar = .uint64 }),
+        .ts_ms = fd(2, .{ .scalar = .int64 }),
+    };
+
+    pub fn deinit(self: *CdcMalformedSnapshot, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const CdcMalformedHash = struct {
+    count: u64 = 0,
+    hash: u64 = 0,
+    ts_ms: i64 = 0,
+    prefix_hex: []const u8 = "",
+
+    pub const _desc_table = .{
+        .count = fd(1, .{ .scalar = .uint64 }),
+        .hash = fd(2, .{ .scalar = .uint64 }),
+        .ts_ms = fd(3, .{ .scalar = .int64 }),
+        .prefix_hex = fd(4, .{ .scalar = .string }),
+    };
+
+    pub fn deinit(self: *CdcMalformedHash, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const CdcDiagnosticsResponse = struct {
+    malformed_change_records: u64 = 0,
+    total_change_attempts: u64 = 0,
+    malformed_ratio: f64 = 0,
+    guardrail_warn_triggered: bool = false,
+    guardrail_abort_triggered: bool = false,
+    first_warn_ts_ms: i64 = 0,
+    first_abort_ts_ms: i64 = 0,
+    guardrail_epoch: u64 = 0,
+    uptime_ms: i64 = 0,
+    backpressure: bool = false,
+    config: ?CdcDiagnosticsConfig = null,
+    engine: ?CdcDiagnosticsEngine = null,
+    malformed_snapshots: std.ArrayList(CdcMalformedSnapshot),
+    malformed_hashes: std.ArrayList(CdcMalformedHash),
+    version: []const u8 = "",
+    timestamp_ms: i64 = 0,
+
+    pub const _desc_table = .{
+        .malformed_change_records = fd(1, .{ .scalar = .uint64 }),
+        .total_change_attempts = fd(2, .{ .scalar = .uint64 }),
+        .malformed_ratio = fd(3, .{ .scalar = .double }),
+        .guardrail_warn_triggered = fd(4, .{ .scalar = .bool }),
+        .guardrail_abort_triggered = fd(5, .{ .scalar = .bool }),
+        .first_warn_ts_ms = fd(6, .{ .scalar = .int64 }),
+        .first_abort_ts_ms = fd(7, .{ .scalar = .int64 }),
+        .guardrail_epoch = fd(8, .{ .scalar = .uint64 }),
+        .uptime_ms = fd(9, .{ .scalar = .int64 }),
+        .backpressure = fd(10, .{ .scalar = .bool }),
+        .config = fd(11, .{ .submessage = {} }),
+        .engine = fd(12, .{ .submessage = {} }),
+        .malformed_snapshots = fd(13, .{ .repeated = .{ .submessage = {} } }),
+        .malformed_hashes = fd(14, .{ .repeated = .{ .submessage = {} } }),
+        .version = fd(15, .{ .scalar = .string }),
+        .timestamp_ms = fd(16, .{ .scalar = .int64 }),
     };
 
     pub fn deinit(self: *CdcDiagnosticsResponse, allocator: std.mem.Allocator) void {
@@ -767,12 +1187,10 @@ pub const CdcControlResponse = struct {
 // ============================================================================
 pub const BackupRequest = struct {
     backup_type: []const u8 = "",
-    parent_id: []const u8 = "",
     compress: bool = false,
 
     pub const _desc_table = .{
         .backup_type = fd(1, .{ .scalar = .string }),
-        .parent_id = fd(2, .{ .scalar = .string }),
         .compress = fd(3, .{ .scalar = .bool }),
     };
 
@@ -789,8 +1207,6 @@ pub const BackupResponse = struct {
     size_bytes: u64 = 0,
     compression: []const u8 = "",
     checksum: []const u8 = "",
-    start_lsn: u64 = 0,
-    end_lsn: u64 = 0,
 
     pub const _desc_table = .{
         .success = fd(1, .{ .scalar = .bool }),
@@ -800,8 +1216,6 @@ pub const BackupResponse = struct {
         .size_bytes = fd(5, .{ .scalar = .uint64 }),
         .compression = fd(6, .{ .scalar = .string }),
         .checksum = fd(7, .{ .scalar = .string }),
-        .start_lsn = fd(8, .{ .scalar = .uint64 }),
-        .end_lsn = fd(9, .{ .scalar = .uint64 }),
     };
 
     pub fn deinit(self: *BackupResponse, allocator: std.mem.Allocator) void {

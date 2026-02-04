@@ -22,16 +22,6 @@ pub const NodeRecord = extern struct {
     level: u8,
 };
 
-pub const WalOp = enum(u8) {
-    ADD = 1,
-};
-
-pub const WalEntry = struct {
-    op: WalOp,
-    id: u64,
-    vector: []const f32,
-};
-
 pub fn saveSnapshot(index: *const hnsw.Hnsw, snapshot_path: []const u8, vec_path: []const u8) !void {
     // Buffer all snapshot data to memory first for TDE encryption
     var snap_buffer = try std.ArrayList(u8).initCapacity(index.allocator, 4096);
@@ -141,72 +131,4 @@ pub fn loadSnapshot(allocator: std.mem.Allocator, snapshot_path: []const u8, vec
     }
 
     return index;
-}
-
-pub fn appendWal(path: []const u8, entry: WalEntry) !void {
-    const file = try std.fs.cwd().openFile(path, .{ .mode = .write_only });
-    defer file.close();
-    try file.seekFromEnd(0);
-
-    try file.writeAll(&[_]u8{@intFromEnum(entry.op)});
-    try file.writeAll(std.mem.asBytes(&entry.id));
-
-    var dim: u16 = @intCast(entry.vector.len);
-    try file.writeAll(std.mem.asBytes(&dim));
-
-    for (entry.vector) |v| {
-        var bits: u32 = @bitCast(v);
-        try file.writeAll(std.mem.asBytes(&bits));
-    }
-}
-
-pub fn replayWal(index: *hnsw.Hnsw, path: []const u8) !void {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-
-    while (true) {
-        var op_byte: [1]u8 = undefined;
-        if (try file.read(&op_byte) == 0) break;
-
-        const op = std.meta.intToEnum(WalOp, op_byte[0]) catch return error.InvalidWalOp;
-
-        var id: u64 = undefined;
-        _ = try file.read(std.mem.asBytes(&id));
-
-        var dim: u16 = undefined;
-        _ = try file.read(std.mem.asBytes(&dim));
-
-        const vector = try index.allocator.alloc(f32, dim);
-        defer index.allocator.free(vector);
-
-        for (vector) |*v| {
-            var bits: u32 = undefined;
-            _ = try file.read(std.mem.asBytes(&bits));
-            v.* = @bitCast(bits);
-        }
-
-        switch (op) {
-            .ADD => try index.insert(id, vector),
-        }
-    }
-}
-
-pub fn checkpoint(index: *const hnsw.Hnsw, snapshot_path: []const u8, vec_path: []const u8, wal_path: []const u8) !void {
-    const temp_snap = try std.fmt.allocPrint(index.allocator, "{s}.tmp", .{snapshot_path});
-    defer index.allocator.free(temp_snap);
-
-    const temp_vec = try std.fmt.allocPrint(index.allocator, "{s}.tmp", .{vec_path});
-    defer index.allocator.free(temp_vec);
-
-    try saveSnapshot(index, temp_snap, temp_vec);
-
-    try std.fs.cwd().rename(temp_snap, snapshot_path);
-    try std.fs.cwd().rename(temp_vec, vec_path);
-
-    if (std.fs.cwd().openFile(wal_path, .{ .mode = .write_only })) |file| {
-        file.close();
-        try std.fs.cwd().deleteFile(wal_path);
-    } else |_| {}
-
-    _ = try std.fs.cwd().createFile(wal_path, .{});
 }

@@ -140,7 +140,6 @@ fn printBackupUsage() void {
 fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var output: ?[]const u8 = null;
     var backup_type: []const u8 = "full";
-    const parent_id: ?[]const u8 = null;
     var server: []const u8 = "127.0.0.1:3141";
     var compress: bool = false;
     // GAP-0137: TLS configuration options
@@ -190,7 +189,7 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
             i += 1;
             backup_type = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--parent")) {
-            std.debug.print("Error: incremental backups are not supported with GraphStore\n", .{});
+            std.debug.print("Error: --parent is not supported with GraphStore backups\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         } else if (std.mem.eql(u8, argv[i], "--server")) {
             if (i + 1 >= argv.len) {
@@ -245,7 +244,7 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
     }
 
     // Execute backup
-    try executeBackup(allocator, output.?, backup_type, parent_id, server, compress, tls_config);
+    try executeBackup(allocator, output.?, backup_type, server, compress, tls_config);
 
     std.debug.print("Backup created successfully: {s}\n", .{output.?});
     if (compress) {
@@ -344,11 +343,6 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                         .timestamp = 0,
                         .compression = .none,
                     };
-
-                    // Determine backup type from filename
-                    if (std.mem.indexOf(u8, entry.name, "incremental") != null) {
-                        info.backup_type = .incremental;
-                    }
 
                     // Determine compression from extension
                     if (std.mem.endsWith(u8, entry.name, ".gz")) {
@@ -495,12 +489,7 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.debug.print("  Format:        Geode Backup (gzip compressed)\n", .{});
         std.debug.print("  compression:   gzip\n", .{});
 
-        // Infer type from filename
-        if (std.mem.indexOf(u8, filepath, "incremental") != null) {
-            std.debug.print("  type:          incremental\n", .{});
-        } else {
-            std.debug.print("  type:          full\n", .{});
-        }
+        std.debug.print("  type:          full\n", .{});
 
         // Get timestamp from file modification time
         const mtime_ns = stat.mtime;
@@ -511,11 +500,7 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.debug.print("  Format:        Geode Backup (zstd compressed)\n", .{});
         std.debug.print("  compression:   zstd\n", .{});
 
-        if (std.mem.indexOf(u8, filepath, "incremental") != null) {
-            std.debug.print("  type:          incremental\n", .{});
-        } else {
-            std.debug.print("  type:          full\n", .{});
-        }
+        std.debug.print("  type:          full\n", .{});
 
         const mtime_ns = stat.mtime;
         const mtime_s = @divFloor(mtime_ns, 1_000_000_000);
@@ -623,7 +608,6 @@ fn cmdBackupCleanup(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 fn cmdBackupCreateLegacy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var dest: ?[]const u8 = null;
     var mode: []const u8 = "full";
-    var parent_id: ?[]const u8 = null;
     var server: []const u8 = "127.0.0.1:3141";
     // GAP-0137: TLS configuration options
     var tls_config = TlsConfig{};
@@ -646,12 +630,8 @@ fn cmdBackupCreateLegacy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx
             i += 1;
             mode = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--parent")) {
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --parent requires a value\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
-            i += 1;
-            parent_id = argv[i];
+            std.debug.print("Error: --parent is not supported with GraphStore backups\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
         } else if (std.mem.eql(u8, argv[i], "--server")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --server requires a value\n", .{});
@@ -697,13 +677,13 @@ fn cmdBackupCreateLegacy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx
     }
 
     // Validate mode
-    if (!std.mem.eql(u8, mode, "full") and !std.mem.eql(u8, mode, "incremental")) {
-        std.debug.print("Error: --mode must be 'full' or 'incremental'\n", .{});
+    if (!std.mem.eql(u8, mode, "full")) {
+        std.debug.print("Error: --mode must be 'full' (GraphStore does not support incremental backups)\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
     // Execute backup (legacy call without compression)
-    try executeBackup(allocator, dest.?, mode, parent_id, server, false, tls_config);
+    try executeBackup(allocator, dest.?, mode, server, false, tls_config);
 
     std.debug.print("Backup completed successfully\n", .{});
     std.process.exit(@intFromEnum(ExitCode.success));
@@ -1440,7 +1420,7 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 // CANARY: REQ=REQ-BACKUP-REMOTE-001; FEATURE="RemoteBackup"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=geodetestlab/specs/backup_operations_basic.yml; OWNER=cli; UPDATED=2026-01-09
 // GAP-0137: Updated to support TLS certificate verification
 // Remote server backup execution function using QUIC protocol
-fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool, tls_config: TlsConfig) !void {
+fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, server: []const u8, compress: bool, tls_config: TlsConfig) !void {
     // Parse server address
     const colon_idx = std.mem.lastIndexOf(u8, server, ":") orelse return error.InvalidAddress;
     const host = server[0..colon_idx];
@@ -1517,7 +1497,6 @@ fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []c
     // Send BACKUP request (Protobuf)
     const backup_req = schema.BackupRequest{
         .backup_type = mode,
-        .parent_id = parent_id orelse "",
         .compress = compress,
     };
     writeProtoMessage(allocator, stream, .{ .backup = backup_req }) catch |err| {
@@ -1589,17 +1568,17 @@ fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []c
 }
 
 // GAP-0137: Updated to support TLS certificate verification
-fn executeBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, server: []const u8, compress: bool, tls_config: TlsConfig) !void {
+fn executeBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, server: []const u8, compress: bool, tls_config: TlsConfig) !void {
     std.debug.print("Creating {s} backup to: {s}\n", .{ mode, dest });
 
     // CANARY: REQ=REQ-BACKUP-CLI-001; FEATURE="CLI Backup"; ASPECT=ServerConnection; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-10
     // Always try to connect to server via QUIC first - this ensures we get real data
-    executeRemoteBackup(allocator, dest, mode, parent_id, server, compress, tls_config) catch |err| {
+    executeRemoteBackup(allocator, dest, mode, server, compress, tls_config) catch |err| {
         std.debug.print("Warning: Could not connect to server {s}: {}\n", .{ server, err });
         std.debug.print("Attempting local data directory backup...\n", .{});
 
         // Try local data directory backup if server connection failed
-        executeLocalDirectoryBackup(allocator, dest, mode, parent_id, compress) catch |local_err| {
+        executeLocalDirectoryBackup(allocator, dest, mode, compress) catch |local_err| {
             std.debug.print("Error: Local backup also failed: {}\n", .{local_err});
             return local_err;
         };
@@ -1609,8 +1588,7 @@ fn executeBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u
 
 // CANARY: REQ=REQ-BACKUP-LOCAL-001; FEATURE="Local Directory Backup"; ASPECT=DataExport; STATUS=TESTED; TEST=geodetestlab/specs/backup_operations_basic.yml; OWNER=cli; UPDATED=2026-01-10
 // Local directory backup - reads from Geode data directory when server not available
-fn executeLocalDirectoryBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, compress: bool) !void {
-    _ = parent_id;
+fn executeLocalDirectoryBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, compress: bool) !void {
     if (!std.mem.eql(u8, mode, "full")) {
         return error.UnsupportedBackupMode;
     }

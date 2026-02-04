@@ -407,8 +407,8 @@ pub const Thresholds = struct {
     /// Threshold for CBO join enumeration subsets
     pub const cboSubsets: usize = 4;
 
-    /// Threshold for WAL segment parallel processing
-    pub const walSegments: usize = 2;
+    /// Threshold for GraphStore snapshot chunk processing
+    pub const graphStoreSegments: usize = 2;
 };
 
 // Unit tests

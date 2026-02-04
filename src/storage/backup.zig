@@ -43,12 +43,6 @@ fn parseHexKey(hex_str: []const u8) ![32]u8 {
 
 /// Backup configuration
 pub const BackupConfig = struct {
-    /// Maximum size of incremental backup before triggering full backup
-    max_incremental_size: u64 = 1024 * 1024 * 1024, // 1GB
-
-    /// Number of incremental backups before forcing full backup
-    max_incremental_count: u32 = 10,
-
     /// Compression for backup files
     compression: CompressionType = .zstd,
 
@@ -71,13 +65,10 @@ pub const BackupMetadata = struct {
     backup_id: u128,
     timestamp: i64,
     backup_type: BackupType,
-    start_lsn: u64,
-    end_lsn: u64,
     size_bytes: u64,
     compression: CompressionType,
     encrypted: bool,
     checksum: u64,
-    parent_backup_id: ?u128, // For incremental backups
 
     pub fn toJSON(self: BackupMetadata, writer: anytype) !void {
         try std.json.stringify(self, .{}, writer);
@@ -96,14 +87,11 @@ pub const BackupMetadata = struct {
 
 pub const BackupType = enum(u32) {
     full = 0,
-    incremental = 1,
-    differential = 2,
 };
 
 /// Point-in-time recovery information
 pub const RecoveryPoint = struct {
     timestamp: i64,
-    lsn: u64,
     backup_chain: []const u128, // Backup IDs needed for recovery
 };
 
@@ -129,7 +117,6 @@ pub const BackupManager = struct {
     config: BackupConfig,
     backup_dir: []const u8,
     metadata_log: std.ArrayList(BackupMetadata),
-    current_backup_chain: std.ArrayList(u128),
     store: *graph_store.GraphStore,
     enc_key: [32]u8,
 
@@ -164,7 +151,6 @@ pub const BackupManager = struct {
             .config = config,
             .backup_dir = try allocator.dupe(u8, backup_dir),
             .metadata_log = .{},
-            .current_backup_chain = .{},
             .store = store,
             .enc_key = enc_key,
         };
@@ -173,7 +159,6 @@ pub const BackupManager = struct {
     /// Clean up backup manager resources
     pub fn deinit(self: *BackupManager) void {
         self.metadata_log.deinit(self.allocator);
-        self.current_backup_chain.deinit(self.allocator);
         self.allocator.free(self.backup_dir);
     }
 
@@ -223,25 +208,15 @@ pub const BackupManager = struct {
             .backup_id = backup_id,
             .timestamp = timestamp,
             .backup_type = .full,
-            .start_lsn = 0,
-            .end_lsn = 0,
             .size_bytes = @as(u64, @intCast(@sizeOf(BackupHeader) + final_payload.len)),
             .compression = self.config.compression,
             .encrypted = self.config.encryption,
             .checksum = checksum,
-            .parent_backup_id = null,
         };
 
         try self.metadata_log.append(self.allocator, metadata);
-        try self.current_backup_chain.append(self.allocator, backup_id);
         try self.writeMetadata();
         return metadata;
-    }
-
-    /// Incremental backups are unsupported with GraphStore snapshots.
-    pub fn createIncrementalBackup(self: *BackupManager, _: u64) !BackupMetadata {
-        _ = self;
-        return error.UnsupportedBackupMode;
     }
 
     /// Restore to a point in time using the latest full backup before the timestamp.
@@ -397,7 +372,6 @@ pub const BackupManager = struct {
         const chain_slice = try chain.toOwnedSlice(self.allocator);
         return .{
             .timestamp = chosen.?.timestamp,
-            .lsn = 0,
             .backup_chain = chain_slice,
         };
     }

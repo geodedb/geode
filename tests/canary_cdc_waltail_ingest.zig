@@ -9,7 +9,7 @@ test "TestCANARY_REQ_GQL_042_CDC_WalTailPromote" {
     var engine = try cdc_mod.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 10 });
     defer engine.deinit();
 
-    try engine.ingestFromWalRecord(42, .node, 999, "{\"id\":999,\"val\":1}");
+    try engine.ingestChangeRecord(42, .node, 999, "{\"id\":999,\"val\":1}");
     try engine.flushNow();
     try std.testing.expect(engine.total_events == 1);
 

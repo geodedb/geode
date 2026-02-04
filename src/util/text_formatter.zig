@@ -544,50 +544,36 @@ pub const TextFormatter = struct {
 
         var has_storage_info = false;
 
-        // WAL information
-        if (root.get("wal_writes")) |wal_writes| {
-            if (wal_writes == .integer and wal_writes.integer > 0) {
+        if (root.get("graph_store_nodes")) |nodes| {
+            if (nodes == .integer) {
                 if (!has_storage_info) {
-                    try writer.writeAll("Storage & WAL:\n");
-                    try writer.writeAll("--------------\n");
+                    try writer.writeAll("Storage:\n");
+                    try writer.writeAll("--------\n");
                     has_storage_info = true;
                 }
-                try writer.print("WAL Writes: {d}\n", .{wal_writes.integer});
+                try writer.print("GraphStore Nodes: {d}\n", .{nodes.integer});
             }
         }
 
-        if (root.get("wal_bytes")) |wal_bytes| {
-            if (wal_bytes == .integer and wal_bytes.integer > 0) {
+        if (root.get("graph_store_edges")) |edges| {
+            if (edges == .integer) {
                 if (!has_storage_info) {
-                    try writer.writeAll("Storage & WAL:\n");
-                    try writer.writeAll("--------------\n");
+                    try writer.writeAll("Storage:\n");
+                    try writer.writeAll("--------\n");
                     has_storage_info = true;
                 }
-                const kb = @as(f64, @floatFromInt(wal_bytes.integer)) / 1024.0;
-                try writer.print("WAL Bytes Written: {d:.1} KB\n", .{kb});
+                try writer.print("GraphStore Edges: {d}\n", .{edges.integer});
             }
         }
 
-        // Page I/O
-        if (root.get("pages_read")) |pages_read| {
-            if (pages_read == .integer and pages_read.integer > 0) {
+        if (root.get("graph_store_dirty")) |dirty| {
+            if (dirty == .bool) {
                 if (!has_storage_info) {
-                    try writer.writeAll("Storage & WAL:\n");
-                    try writer.writeAll("--------------\n");
+                    try writer.writeAll("Storage:\n");
+                    try writer.writeAll("--------\n");
                     has_storage_info = true;
                 }
-                try writer.print("Pages Read: {d}\n", .{pages_read.integer});
-            }
-        }
-
-        if (root.get("pages_written")) |pages_written| {
-            if (pages_written == .integer and pages_written.integer > 0) {
-                if (!has_storage_info) {
-                    try writer.writeAll("Storage & WAL:\n");
-                    try writer.writeAll("--------------\n");
-                    has_storage_info = true;
-                }
-                try writer.print("Pages Written: {d}\n", .{pages_written.integer});
+                try writer.print("GraphStore Dirty: {s}\n", .{if (dirty.bool) "true" else "false"});
             }
         }
 

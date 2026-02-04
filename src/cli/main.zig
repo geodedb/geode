@@ -19,6 +19,8 @@ const protobuf = @import("protobuf");
 const json_lib = @import("json");
 const schema = @import("schema");
 const spice_wrapper = @import("parallel/spice");
+const explain_payload = @import("server/explain_payload.zig");
+const profile_payload = @import("server/profile_payload.zig");
 
 // GAP-0203: Gate hot-path debug logging to eliminate overhead in production
 // CANARY: REQ=REQ-PERF-LOG-GATE-001; FEATURE="HotPathLogGating"; ASPECT=DebugLogControl; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
@@ -2013,13 +2015,13 @@ fn executeQueryOnConnection(
                         .explain => |ex| {
                             result_kind = .explain;
                             if (result_payload) |prev| allocator.free(prev);
-                            result_payload = try allocator.dupe(u8, ex.json_payload);
+                            result_payload = try explain_payload.explainPayloadToJson(allocator, ex);
                             schema_received = true;
                         },
                         .profile => |prof| {
                             result_kind = .profile;
                             if (result_payload) |prev| allocator.free(prev);
-                            result_payload = try allocator.dupe(u8, prof.json_payload);
+                            result_payload = try profile_payload.profilePayloadToJson(allocator, prof);
                             schema_received = true;
                         },
                         .metrics, .heartbeat => {},

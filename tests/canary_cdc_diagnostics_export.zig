@@ -9,13 +9,12 @@ test "TestCANARY_REQ_GQL_042_CDC_DiagnosticsExport" {
     defer engine.deinit();
 
     // Feed some malformed and valid events
-    try engine.ingestFromWalRecord(1, .node, 1, "{bad"); // malformed
-    try engine.ingestFromWalRecord(1, .node, 2, "{also_bad"); // malformed
-    try engine.ingestFromWalRecord(1, .node, 3, "{\"ok\":true}"); // valid
+    try engine.ingestChangeRecord(1, .node, 1, "{bad"); // malformed
+    try engine.ingestChangeRecord(1, .node, 2, "{also_bad"); // malformed
+    try engine.ingestChangeRecord(1, .node, 3, "{\"ok\":true}"); // valid
 
-    const diag = try engine.exportDiagnostics(allocator);
-    defer allocator.free(diag);
-    // Expect keys and counts
-    try std.testing.expect(std.mem.indexOf(u8, diag, "\"malformed_wal_records\":2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, diag, "\"malformed_snapshots\":[") != null);
+    var diag = try engine.exportDiagnostics(allocator);
+    defer diag.deinit(allocator);
+    try std.testing.expectEqual(@as(u64, 2), diag.malformed_change_records);
+    try std.testing.expect(diag.malformed_snapshots.items.len > 0);
 }

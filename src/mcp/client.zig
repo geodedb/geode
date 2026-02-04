@@ -6,6 +6,8 @@ const std = @import("std");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
 const spice_wrapper = @import("parallel/spice");
+const explain_payload = @import("server/explain_payload.zig");
+const profile_payload = @import("server/profile_payload.zig");
 
 // Import quic_transport through the parent module to ensure module resolution
 const quic_transport = @import("mod.zig").quic_transport;
@@ -521,19 +523,23 @@ pub const GeodeClient = struct {
                     error_message = try a.dupe(u8, e.message);
                 },
                 .explain => |expl| {
-                    if (std.json.parseFromSlice(std.json.Value, a, expl.json_payload, .{})) |parsed| {
+                    const explain_json = try explain_payload.explainPayloadToJson(a, expl);
+                    if (std.json.parseFromSlice(std.json.Value, a, explain_json, .{})) |parsed| {
+                        defer a.free(explain_json);
                         explain_value = parsed.value;
                     } else |_| {
-                        explain_value = .{ .string = try a.dupe(u8, expl.json_payload) };
+                        explain_value = .{ .string = explain_json };
                     }
                     result_kind = .explain;
                     schema_received = true;
                 },
                 .profile => |profile| {
-                    if (std.json.parseFromSlice(std.json.Value, a, profile.json_payload, .{})) |parsed| {
+                    const profile_json = try profile_payload.profilePayloadToJson(a, profile);
+                    if (std.json.parseFromSlice(std.json.Value, a, profile_json, .{})) |parsed| {
+                        defer a.free(profile_json);
                         profile_value = parsed.value;
                     } else |_| {
-                        profile_value = .{ .string = try a.dupe(u8, profile.json_payload) };
+                        profile_value = .{ .string = profile_json };
                     }
                     result_kind = .profile;
                     schema_received = true;

@@ -1,7 +1,12 @@
-pub const PageManager = @import("page_manager.zig").PageManager;
-pub const PageType = @import("page_manager.zig").PageType;
-pub const HybridTopology = @import("hybrid_topology.zig").HybridTopology;
-pub const types = @import("types");
-pub const NodeLocation = types.NodeLocation;
-pub const RecordId = types.RecordId;
-pub const fs_fsync = @import("fs_fsync.zig");
+const graph_store_mod = @import("../graph_store.zig");
+
+/// GraphStore is the sole storage layer (legacy PageManager/WAL removed).
+pub const GraphStore = graph_store_mod.GraphStore;
+pub const Node = graph_store_mod.Node;
+pub const Edge = graph_store_mod.Edge;
+pub const PropertyValue = graph_store_mod.PropertyValue;
+
+/// Storage utilities for GraphStore
+pub const backup = @import("backup.zig");
+pub const tde_file_encryption = @import("tde_file_encryption.zig");
+pub const heap = @import("heap.zig");

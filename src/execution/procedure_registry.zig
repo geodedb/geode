@@ -3851,7 +3851,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
         if (global_cdc_engine) |engine| {
             event_count = @intCast(engine.total_events);
-            malformed_count = @intCast(engine.malformed_wal_records);
+            malformed_count = @intCast(engine.malformed_change_records);
             last_seq_id = @intCast(engine.next_sequence);
         }
 
@@ -4105,7 +4105,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         var record_count: i64 = 0;
 
         if (global_cdc_engine) |engine| {
-            record_count = @intCast(engine.malformed_wal_records);
+            record_count = @intCast(engine.malformed_change_records);
         }
 
         const columns = try allocator.alloc([]const u8, 3);
@@ -4167,35 +4167,37 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-    } else if (std.mem.eql(u8, proc_name, "cdc.get_wal_status")) {
-        // CANARY: REQ=REQ-CDC-PROC-019; FEATURE="CDCProcedures"; ASPECT=GetWalStatus; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
+    } else if (std.mem.eql(u8, proc_name, "cdc.get_change_status")) {
+        // CANARY: REQ=REQ-CDC-PROC-019; FEATURE="CDCProcedures"; ASPECT=GetChangeStatus; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-02-04
         global_cdc_mutex.lock();
         defer global_cdc_mutex.unlock();
 
-        var wal_position: i64 = 0;
+        var change_position: i64 = 0;
+        var pending_events: i64 = 0;
 
         if (global_cdc_engine) |engine| {
-            wal_position = @intCast(engine.total_wal_attempts);
+            change_position = @intCast(engine.total_change_attempts);
+            pending_events = @intCast(engine.event_buffer.items.len);
         }
 
         const columns = try allocator.alloc([]const u8, 4);
-        columns[0] = try allocator.dupe(u8, "wal_position");
+        columns[0] = try allocator.dupe(u8, "change_position");
         columns[1] = try allocator.dupe(u8, "ingest_lag_ms");
         columns[2] = try allocator.dupe(u8, "processed_bytes");
-        columns[3] = try allocator.dupe(u8, "pending_wal_segments");
+        columns[3] = try allocator.dupe(u8, "pending_events");
         const row = try allocator.alloc(Value, 4);
-        row[0] = Value{ .Int = wal_position };
+        row[0] = Value{ .Int = change_position };
         row[1] = Value{ .Int = 0 };
         row[2] = Value{ .Int = 0 };
-        row[3] = Value{ .Int = 0 };
+        row[3] = Value{ .Int = pending_events };
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-    } else if (std.mem.eql(u8, proc_name, "cdc.configure_wal_tail")) {
-        // CANARY: REQ=REQ-CDC-PROC-020; FEATURE="CDCProcedures"; ASPECT=ConfigureWalTail; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
+    } else if (std.mem.eql(u8, proc_name, "cdc.configure_change_stream")) {
+        // CANARY: REQ=REQ-CDC-PROC-020; FEATURE="CDCProcedures"; ASPECT=ConfigureChangeStream; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-02-04
         const columns = try allocator.alloc([]const u8, 2);
         columns[0] = try allocator.dupe(u8, "status");
-        columns[1] = try allocator.dupe(u8, "tail_position");
+        columns[1] = try allocator.dupe(u8, "stream_position");
         const row = try allocator.alloc(Value, 2);
         row[0] = Value{ .Str = "configured" };
         row[1] = Value{ .Int = 0 };

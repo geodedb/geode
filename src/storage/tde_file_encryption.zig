@@ -79,19 +79,10 @@ pub fn isEnabled(allocator: std.mem.Allocator) bool {
     return std.process.hasEnvVar(allocator, "GEODE_TDE_KEY") catch false;
 }
 
-/// Encrypt data using AES-256-GCM
+/// Encrypt data using AES-256-GCM with an explicit key.
 /// Layout: [MAGIC(8)][nonce(12)][tag(16)][ciphertext]
-/// Returns a new buffer that must be freed by the caller
-pub fn encrypt(allocator: std.mem.Allocator, plaintext: []const u8) ![]u8 {
-    const key_opt = try loadKey(allocator);
-    if (key_opt == null) {
-        // TDE not enabled, return copy of plaintext
-        const copy = try allocator.alloc(u8, plaintext.len);
-        @memcpy(copy, plaintext);
-        return copy;
-    }
-    const key = key_opt.?;
-
+/// Returns a new buffer that must be freed by the caller.
+pub fn encryptWithKey(allocator: std.mem.Allocator, plaintext: []const u8, key: [KEY_BYTES]u8) ![]u8 {
     // Generate deterministic nonce from content hash (for reproducibility)
     var nonce: [NONCE_BYTES]u8 = undefined;
     const hash_input = if (plaintext.len >= 64) plaintext[0..64] else plaintext;
@@ -119,10 +110,24 @@ pub fn encrypt(allocator: std.mem.Allocator, plaintext: []const u8) ![]u8 {
     return output;
 }
 
-/// Decrypt data using AES-256-GCM
-/// Detects encrypted files by MAGIC header, returns copy of plaintext as-is if not encrypted
+/// Encrypt data using AES-256-GCM
+/// Layout: [MAGIC(8)][nonce(12)][tag(16)][ciphertext]
 /// Returns a new buffer that must be freed by the caller
-pub fn decrypt(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
+pub fn encrypt(allocator: std.mem.Allocator, plaintext: []const u8) ![]u8 {
+    const key_opt = try loadKey(allocator);
+    if (key_opt == null) {
+        // TDE not enabled, return copy of plaintext
+        const copy = try allocator.alloc(u8, plaintext.len);
+        @memcpy(copy, plaintext);
+        return copy;
+    }
+    return try encryptWithKey(allocator, plaintext, key_opt.?);
+}
+
+/// Decrypt data using AES-256-GCM with an explicit key.
+/// Detects encrypted files by MAGIC header, returns copy of plaintext as-is if not encrypted.
+/// Returns a new buffer that must be freed by the caller.
+pub fn decryptWithKey(allocator: std.mem.Allocator, data: []const u8, key: [KEY_BYTES]u8) ![]u8 {
     // Check for encryption magic header
     if (data.len < MAGIC.len or !std.mem.eql(u8, data[0..MAGIC.len], &MAGIC)) {
         // Not encrypted or too small, return copy of original
@@ -139,13 +144,6 @@ pub fn decrypt(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
         });
         return TdeError.CorruptedFile;
     }
-
-    const key_opt = try loadKey(allocator);
-    if (key_opt == null) {
-        log.err("TDE: File is encrypted but GEODE_TDE_KEY not set", &.{});
-        return TdeError.KeyRequired;
-    }
-    const key = key_opt.?;
 
     // Extract nonce, tag, and ciphertext
     var nonce: [NONCE_BYTES]u8 = undefined;
@@ -166,6 +164,24 @@ pub fn decrypt(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
     };
 
     return plaintext;
+}
+
+/// Decrypt data using AES-256-GCM
+/// Detects encrypted files by MAGIC header, returns copy of plaintext as-is if not encrypted
+/// Returns a new buffer that must be freed by the caller
+pub fn decrypt(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
+    if (!isEncrypted(data)) {
+        const copy = try allocator.alloc(u8, data.len);
+        @memcpy(copy, data);
+        return copy;
+    }
+
+    const key_opt = try loadKey(allocator);
+    if (key_opt == null) {
+        log.err("TDE: File is encrypted but GEODE_TDE_KEY not set", &.{});
+        return TdeError.KeyRequired;
+    }
+    return try decryptWithKey(allocator, data, key_opt.?);
 }
 
 /// Check if data is TDE encrypted (has magic header)

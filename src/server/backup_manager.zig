@@ -29,18 +29,6 @@ pub const SimplifiedBackupManager = struct {
         return self.inner.createFullBackup();
     }
 
-    /// Incremental backups are unsupported with GraphStore snapshots.
-    pub fn createIncrementalBackup(self: *SimplifiedBackupManager, parent_lsn: u64) !BackupMetadata {
-        _ = parent_lsn;
-        return self.inner.createIncrementalBackup(0);
-    }
-
-    /// Read backup end LSN (GraphStore snapshots have no WAL).
-    pub fn readBackupEndLsn(self: *SimplifiedBackupManager, _: u128) !u64 {
-        _ = self;
-        return 0;
-    }
-
     /// Restore to a point in time using latest full backup before the timestamp.
     pub fn restoreToPointInTime(self: *SimplifiedBackupManager, target_time: i64, restore_dir: []const u8) !void {
         return self.inner.restoreToPointInTime(restore_dir, target_time);

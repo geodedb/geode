@@ -266,45 +266,14 @@ pub fn build(b: *std.Build) void {
 
     // Modules - Level 0 (No dependencies on other internal modules)
 
-    const fsm_mod = b.createModule(.{ .root_source_file = b.path("src/storage/free_space_map.zig") });
-    const commit_coord_mod = b.createModule(.{ .root_source_file = b.path("src/transactions/commit_coordinator.zig") });
-    // Storage page manager module - created early, imports added after logging_mod is defined
-    const storage_page_manager_shared = b.createModule(.{ .root_source_file = b.path("src/storage/mod.zig"), .target = target, .optimize = optimize });
     const tde_hierarchy_mod = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
     const key_provider_mod = b.createModule(.{ .root_source_file = b.path("src/security/key_provider.zig"), .target = target, .optimize = optimize });
-
-    // Storage Catalog Module (moved from test section to be shared)
-    const storage_catalog_mod = b.createModule(.{ .root_source_file = b.path("src/storage/catalog.zig"), .target = target, .optimize = optimize });
-    storage_catalog_mod.addImport("storage_page_manager", storage_page_manager_shared);
 
     // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-004; FEATURE="Centralized Structured Logging"; ASPECT=BuildConfig; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
     // Centralized logging module using external slog library
     const logging_mod = b.createModule(.{ .root_source_file = b.path("src/logging/logger.zig"), .target = target, .optimize = optimize });
     logging_mod.addImport("slog", slog_mod);
 
-    // Add logging to storage_page_manager_shared (defined earlier in Level 0)
-    storage_page_manager_shared.addImport("logging", logging_mod);
-
-    // Storage types module for PageId and other shared types
-    const storage_types_mod = b.createModule(.{ .root_source_file = b.path("src/storage/types.zig"), .target = target, .optimize = optimize });
-    storage_page_manager_shared.addImport("types", storage_types_mod);
-
-    // Modules - Level 1 (Depends on Level 0)
-
-    // WAL Mod
-    const wal_mod = b.createModule(.{ .root_source_file = b.path("src/wal/wal.zig"), .target = target, .optimize = optimize });
-    wal_mod.addImport("tde_hierarchy", tde_hierarchy_mod);
-    wal_mod.addImport("storage_page_manager", storage_page_manager_shared);
-    wal_mod.addImport("key_provider", key_provider_mod);
-
-    wal_mod.addImport("commit_coordinator", commit_coord_mod);
-    wal_mod.addImport("logging", logging_mod);
-
-    // Modules - Level 2 (Depends on Level 1)
-
-    // Vacuum mod depends on WAL
-    const vacuum_mod = b.createModule(.{ .root_source_file = b.path("src/storage/page_vacuum.zig") });
-    vacuum_mod.addImport("wal", wal_mod);
 
     // QUIC Transport Module - Uses external QUIC library (Phase 2 migration complete)
     // The external quic library provides the same API as the vendored version
@@ -342,8 +311,6 @@ pub fn build(b: *std.Build) void {
 
     // Create root module early so it can be used by executables
     const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
-    root_mod.addImport("wal", wal_mod);
-    root_mod.addImport("storage_page_manager", storage_page_manager_shared);
     // Transport/QUIC for kms_remote dependency chain (lib -> execution -> procedure_registry -> kms -> kms_remote)
     root_mod.addImport("transport/quic", transport_quic_mod);
     root_mod.addImport("vendor_quic", quic_ext_mod); // External library replaces vendored QUIC
@@ -394,9 +361,6 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addOptions("build_options", build_opts);
     geode_exe.root_module.addImport("geode", root_mod);
 
-    geode_exe.root_module.addImport("fsm", fsm_mod);
-    geode_exe.root_module.addImport("page_vacuum", vacuum_mod);
-    geode_exe.root_module.addImport("commit_coord", commit_coord_mod);
 
     // Phase 1 External Library Imports for CLI
     geode_exe.root_module.addImport("uri", uri_mod);
@@ -493,22 +457,7 @@ pub fn build(b: *std.Build) void {
     mcp_cli_mod.addImport("parallel/spice", spice_wrapper_mod);
     geode_exe.root_module.addImport("geode_mcp", mcp_cli_mod);
 
-    // M12: Add storage/stress_test module for CLI
-    const storage_stress_mod = b.createModule(.{ .root_source_file = b.path("src/storage/stress_test.zig"), .target = target, .optimize = optimize });
-    storage_stress_mod.addImport("geode", root_mod);
-    // root_mod (src/lib.zig) already exports storage sub-modules (wal, page_manager), so stress test uses them via 'geode' import.
-    // However, fsm, page_vacuum, commit_coord are top-level in build.zig but not all exposed via lib.zig as public modules (only fields).
-    // Let's check src/lib.zig again... it doesn't expose commit_coord or vacuum as sub-structs usually, only wal/page_manager.
-    // Wait, src/storage/stress_test.zig uses:
-    // const fsm = @import("fsm");
-    // const page_vacuum = @import("page_vacuum");
-    // const commit_coord = @import("commit_coord");
-    // So we must direct-link these.
-    storage_stress_mod.addImport("fsm", fsm_mod);
-    storage_stress_mod.addImport("page_vacuum", vacuum_mod);
-    storage_stress_mod.addImport("commit_coord", commit_coord_mod);
-
-    geode_exe.root_module.addImport("storage_stress_test", storage_stress_mod);
+    // Legacy storage stress test removed (GraphStore-only storage).
 
     if (target.result.os.tag == .windows) {
         geode_exe.linkLibC();
@@ -604,16 +553,15 @@ pub fn build(b: *std.Build) void {
     // --- Benchmarks ---
     // TDE overhead simulation benchmark (placeholder until real encryption path integrated)
     const tde_bench_exe = b.addExecutable(.{ .name = "benchmark_tde_overhead", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_tde_overhead.zig"), .target = target, .optimize = optimize }) });
-    tde_bench_exe.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     const run_tde_bench = b.addRunArtifact(tde_bench_exe);
     const bench_step = b.step("bench", "Run performance benchmarks (subset)");
     bench_step.dependOn(&run_tde_bench.step);
 
-    // Real path encryption benchmark skeleton (invokes placeholder hashing until wired to encryptPage)
+    // File-level TDE encryption benchmark (GraphStore storage layer)
     const tde_encrypt_pages_exe = b.addExecutable(.{ .name = "benchmark_tde_encrypt_pages", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_tde_encrypt_pages.zig"), .target = target, .optimize = optimize }) });
-    const storage_crypto_mod = b.createModule(.{ .root_source_file = b.path("src/storage/crypto.zig"), .target = target, .optimize = optimize });
-    storage_crypto_mod.addImport("logging", logging_mod);
-    tde_encrypt_pages_exe.root_module.addImport("storage_crypto", storage_crypto_mod);
+    const tde_file_encryption_mod = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize });
+    tde_file_encryption_mod.addImport("logging", logging_mod);
+    tde_encrypt_pages_exe.root_module.addImport("tde_file_encryption", tde_file_encryption_mod);
     const run_tde_encrypt_pages = b.addRunArtifact(tde_encrypt_pages_exe);
     bench_step.dependOn(&run_tde_encrypt_pages.step);
 
@@ -767,32 +715,8 @@ pub fn build(b: *std.Build) void {
     // Logging module shared (uses centralized slog-based logging)
     custom_tests.root_module.addImport("logging", logging_mod);
     custom_tests.root_module.addImport("log/logger.zig", logging_mod);
-    // Provide WAL module for recovery optimization benchmarks
-    // Use the global wal_mod defined earlier
-
-    // Provide supporting modules required by wal for tests
-    // (These are already linked into the global wal_mod, but some tests import them directly too)
-
-    // Determine if we need to reconstruct for tests or can reuse.
-    // The global wal_mod has all dependencies. Let's reuse it as 'wal_mod_for_tests' alias if needed, or just use wal_mod.
-    custom_tests.root_module.addImport("wal", wal_mod);
-
-    // Provide storage page manager to test redo optimization
-    custom_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
-    // CDC enhanced is available through the geode module, no need for standalone module import
-
-    // Use shared storage catalog and backup modules
-    custom_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
-    custom_tests.root_module.addImport("storage_catalog", storage_catalog_mod);
-    // custom_tests.root_module.addImport("storage_csr", storage_csr_mod_tests);
-    // Backup & restore module for tests (uses shared module)
+    // Backup & restore module for tests (GraphStore snapshots)
     custom_tests.root_module.addImport("storage_backup", storage_backup_mod);
-
-    // WAL compaction pipeline module (checkpoint selection / compaction orchestration / archival hook)
-    const wal_compaction_pipeline_mod_tests = b.createModule(.{ .root_source_file = b.path("src/storage/wal_compaction_pipeline.zig"), .target = target, .optimize = optimize });
-    wal_compaction_pipeline_mod_tests.addImport("wal", wal_mod);
-    wal_compaction_pipeline_mod_tests.addImport("logging", logging_mod);
-    custom_tests.root_module.addImport("storage/wal_compaction_pipeline.zig", wal_compaction_pipeline_mod_tests);
 
     // Selectivity estimator module (frequency sampler + adaptive feedback)
     const selectivity_estimator_mod_tests = b.createModule(.{ .root_source_file = b.path("src/optimizer/selectivity_estimator.zig"), .target = target, .optimize = optimize });
@@ -983,11 +907,7 @@ pub fn build(b: *std.Build) void {
         const run_hnsw_snapshot_fuzz = b.addRunArtifact(hnsw_snapshot_fuzz_tests);
         test_step.dependOn(&run_hnsw_snapshot_fuzz.step);
 
-        const hnsw_wal_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/hnsw_wal_fuzz.zig"), .target = target, .optimize = .Debug }) });
-        hnsw_wal_fuzz_tests.root_module.addImport("hnsw_persist", hnsw_persist_mod);
-        hnsw_wal_fuzz_tests.root_module.addImport("hnsw", hnsw_mod);
-        const run_hnsw_wal_fuzz = b.addRunArtifact(hnsw_wal_fuzz_tests);
-        test_step.dependOn(&run_hnsw_wal_fuzz.step);
+        // Legacy WAL fuzz target removed (GraphStore-only storage).
 
         // GAP-0201: Transport layer performance fuzz tests
         // CANARY: REQ=REQ-PERF-FUZZ-BUILD-001; FEATURE="TransportFuzzing"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
@@ -1000,8 +920,6 @@ pub fn build(b: *std.Build) void {
 
     // Attach physiological redo canary tests after test_step defined
     const redo_canary_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_physiological_redo.zig"), .target = target, .optimize = optimize }) });
-    redo_canary_test.root_module.addImport("wal", wal_mod);
-    redo_canary_test.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     // Provide tde_hierarchy for encryption import (even if disabled)
     const tde_hierarchy_mod_tests = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
     redo_canary_test.root_module.addImport("tde_hierarchy", tde_hierarchy_mod_tests);
@@ -1052,8 +970,6 @@ pub fn build(b: *std.Build) void {
     write_skew_tests.root_module.addImport("txn", txn_manager_mod_for_write_skew);
     const redo_delta_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_storage_redo_delta.zig"), .target = target, .optimize = optimize }) });
     const recovery_corrupt_latency_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_recovery_corrupt_latency.zig"), .target = target, .optimize = optimize }) });
-    recovery_corrupt_latency_tests.root_module.addImport("wal", wal_mod);
-    recovery_corrupt_latency_tests.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     const planner_plan_selection_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_plan_selection.zig"), .target = target, .optimize = optimize }) });
     planner_plan_selection_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
     // Planner enumeration pruning tests
@@ -1166,8 +1082,7 @@ pub fn build(b: *std.Build) void {
 
     //    const storage_mem_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
 
-    const storage_csr_mod = b.createModule(.{ .root_source_file = b.path("src/storage/csr_adjacency.zig"), .target = target, .optimize = optimize });
-    storage_csr_mod.addImport("storage_page_manager", storage_page_manager_shared);
+    // Legacy CSR adjacency module removed with PageManager storage.
 
     const mvcc_adv_mod = b.createModule(.{ .root_source_file = b.path("src/transactions/mvcc_adv/mod.zig"), .target = target, .optimize = optimize });
     const txn_mod = b.createModule(.{ .root_source_file = b.path("src/transactions/manager.zig"), .target = target, .optimize = optimize });
@@ -1181,8 +1096,7 @@ pub fn build(b: *std.Build) void {
     // const tde_hierarchy_mod = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
     // const key_provider_mod = b.createModule(.{ .root_source_file = b.path("src/security/key_provider.zig"), .target = target, .optimize = optimize });
 
-    // Provide page manager dependency for WAL and additional imports (fs sync, commit coord)
-    // wal_mod imports already configured globally at top of build function
+    // Legacy WAL dependencies removed; GraphStore is the sole storage layer.
     //    const distributed_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/mod.zig"), .target = target, .optimize = optimize });
     //    const federation_flag_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize });
 
@@ -1195,8 +1109,6 @@ pub fn build(b: *std.Build) void {
 
     // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-002; FEATURE="CLI Subprocess Elimination"; ASPECT=ServerModules; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
     // Add server-required modules for unified binary (server/main.zig imports)
-    geode_exe.root_module.addImport("storage_page_manager", storage_page_manager_shared);
-    geode_exe.root_module.addImport("storage_catalog", storage_catalog_mod);
     geode_exe.root_module.addImport("txn", txn_mod);
     // Create and add index_selectivity module for server
     const index_selectivity_mod = b.createModule(.{ .root_source_file = b.path("src/index/selectivity.zig"), .target = target, .optimize = optimize });
@@ -1311,8 +1223,6 @@ pub fn build(b: *std.Build) void {
 
     // Redo optimization delta variance benchmark (S-016)
     const redo_opt_delta_bench = b.addExecutable(.{ .name = "bench_redo_optimization_delta", .root_module = b.createModule(.{ .root_source_file = b.path("tests/benchmark_redo_optimization_delta.zig"), .target = target, .optimize = optimize }) });
-    redo_opt_delta_bench.root_module.addImport("wal", wal_mod);
-    redo_opt_delta_bench.root_module.addImport("storage_page_manager", storage_page_manager_shared);
     redo_opt_delta_bench.root_module.addImport("geode", root_mod);
     b.installArtifact(redo_opt_delta_bench);
     const run_redo_opt_delta_bench = b.addRunArtifact(redo_opt_delta_bench);
@@ -1552,15 +1462,7 @@ pub fn build(b: *std.Build) void {
     const delta_step = b.step("delta", "Append implementation reality delta section");
     delta_step.dependOn(&delta_run.step);
 
-    const wal_compact_exe = b.addExecutable(.{
-        .name = "wal_compact",
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/wal_compact.zig"), .target = target, .optimize = optimize }),
-    });
-
-    wal_compact_exe.root_module.addImport("wal", wal_mod);
-    wal_compact_exe.root_module.addImport("storage_page_manager", storage_page_manager_shared);
-    b.installArtifact(wal_compact_exe);
-    tools_step.dependOn(&wal_compact_exe.step);
+    // WAL compaction tool removed (GraphStore-only storage).
 
     const cert_gen_exe = b.addExecutable(.{
         .name = "cert_gen",
@@ -1573,9 +1475,9 @@ pub fn build(b: *std.Build) void {
         .name = "key_rotate",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/key_rotate.zig"), .target = target, .optimize = optimize }),
     });
-    const crypto_mod = b.createModule(.{ .root_source_file = b.path("src/storage/crypto_simple.zig"), .target = target, .optimize = optimize });
-    crypto_mod.addImport("logging", logging_mod);
-    key_rotate_exe.root_module.addImport("crypto", crypto_mod);
+    const key_rotate_tde_mod = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize });
+    key_rotate_tde_mod.addImport("logging", logging_mod);
+    key_rotate_exe.root_module.addImport("tde_file_encryption", key_rotate_tde_mod);
     b.installArtifact(key_rotate_exe);
     tools_step.dependOn(&key_rotate_exe.step);
 
@@ -1629,11 +1531,11 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&fle_enforcement_test.step);
 
     // Add unit tests for new modules
-    const crypto_test = b.addTest(.{
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/storage/crypto.zig"), .target = target, .optimize = optimize }),
+    const tde_file_encryption_test = b.addTest(.{
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize }),
     });
-    crypto_test.root_module.addImport("logging", logging_mod);
-    test_step.dependOn(&crypto_test.step);
+    tde_file_encryption_test.root_module.addImport("logging", logging_mod);
+    test_step.dependOn(&tde_file_encryption_test.step);
 
     const ml_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/ml/integration.zig"), .target = target, .optimize = optimize }),
@@ -1641,9 +1543,10 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&ml_test.step);
 
     const streaming_test = b.addTest(.{
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc.zig"), .target = target, .optimize = optimize }),
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize }),
     });
     streaming_test.root_module.addImport("logging", logging_mod);
+    streaming_test.root_module.addImport("json", json_mod);
     test_step.dependOn(&streaming_test.step);
 
     const temporal_test = b.addTest(.{
@@ -1664,17 +1567,7 @@ pub fn build(b: *std.Build) void {
         .name = "stress_storage_massive", // Set name to allow filtering
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/stress_storage_massive.zig"), .target = target, .optimize = optimize }),
     });
-    stress_storage_massive.root_module.addImport("wal", wal_mod);
-    stress_storage_massive.root_module.addImport("storage_page_manager", storage_page_manager_shared);
-    stress_storage_massive.root_module.addImport("fsm", fsm_mod);
-    stress_storage_massive.root_module.addImport("page_vacuum", vacuum_mod);
-    stress_storage_massive.root_module.addImport("commit_coordinator", commit_coord_mod);
-    stress_storage_massive.linkLibC(); // WAL uses libc
-    // Link with OpenSSL (skip on Windows where it's not available in CI)
-    if (target.result.os.tag != .windows) {
-        stress_storage_massive.linkSystemLibrary("ssl"); // Crypto dependency
-        stress_storage_massive.linkSystemLibrary("crypto");
-    }
+    // GraphStore stress test - no legacy storage imports required.
 
     const run_stress_storage = b.addRunArtifact(stress_storage_massive);
     // Only run if explicitly requested via filter or a separate step (optional: create "stress" step)

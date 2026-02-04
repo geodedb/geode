@@ -10,14 +10,14 @@ test "TestCANARY_REQ_GQL_042_CDC_WalTailMalformed" {
     defer engine.deinit();
 
     // Good record
-    try engine.ingestFromWalRecord(1, .node, 1, "{\"id\":1}");
+    try engine.ingestChangeRecord(1, .node, 1, "{\"id\":1}");
     // Malformed records (101 total to trigger logging at 1 and 100)
     var i: usize = 0;
     while (i < 101) : (i += 1) {
         if (i % 2 == 0) {
-            try engine.ingestFromWalRecord(1000 + @as(u64, @intCast(i)), .node, 2 + i, "id:bad");
+            try engine.ingestChangeRecord(1000 + @as(u64, @intCast(i)), .node, 2 + i, "id:bad");
         } else {
-            try engine.ingestFromWalRecord(1000 + @as(u64, @intCast(i)), .node, 2 + i, "{bad");
+            try engine.ingestChangeRecord(1000 + @as(u64, @intCast(i)), .node, 2 + i, "{bad");
         }
     }
 

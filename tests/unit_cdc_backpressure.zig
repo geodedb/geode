@@ -22,7 +22,7 @@ test "CDC backpressure flag toggles when pending exceeds watermark" {
         try engine.captureChange(.insert, .node, i, null, "{\"id\":1}");
     }
 
-    const diag = try engine.exportDiagnostics(allocator);
-    defer allocator.free(diag);
-    try testing.expect(std.mem.indexOf(u8, diag, "\"backpressure\":true") != null);
+    var diag = try engine.exportDiagnostics(allocator);
+    defer diag.deinit(allocator);
+    try testing.expect(diag.backpressure);
 }

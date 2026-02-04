@@ -1,7 +1,6 @@
 const std = @import("std");
 const backup = @import("backup.zig");
-const wal = @import("../wal/wal.zig");
-const raft = @import("../distributed/raft.zig");
+const graph_store = @import("../graph_store.zig");
 
 /// S3 backup configuration
 pub const S3Config = struct {
@@ -43,199 +42,107 @@ pub const S3BackupManager = struct {
         self.http_client.deinit();
     }
 
-    /// Perform a full backup to S3
+    /// Perform a full backup to S3 (GraphStore snapshots only).
     pub fn fullBackup(
         self: *Self,
-        wal_manager: *wal.WALManager,
-        raft_node: *raft.RaftNode,
-        source_dir: []const u8,
+        store: *graph_store.GraphStore,
+        backup_dir: []const u8,
     ) !backup.BackupMetadata {
         const start_time = std.time.milliTimestamp();
-        const backup_id = generateBackupId();
 
-        // Take a Raft snapshot for consistency
-        const snapshot = try raft_node.createSnapshot();
-        defer snapshot.release();
+        var mgr = try backup.BackupManager.init(self.allocator, backup_dir, self.backup_config, store);
+        defer mgr.deinit();
 
-        // Create backup metadata
-        var metadata = backup.BackupMetadata{
-            .backup_id = backup_id,
-            .timestamp = start_time,
-            .backup_type = .full,
-            .start_lsn = snapshot.start_lsn,
-            .end_lsn = snapshot.end_lsn,
-            .size_bytes = 0,
-            .compression = self.backup_config.compression,
-            .encrypted = self.backup_config.encryption,
-            .checksum = 0,
-            .parent_backup_id = null,
-        };
+        const metadata = try mgr.createFullBackup();
 
-        // Archive all data files
-        const archive_path = try self.createArchive(source_dir, backup_id);
-        defer self.allocator.free(archive_path);
+        const backup_path = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/full_{x}.backup",
+            .{ backup_dir, metadata.backup_id },
+        );
+        defer self.allocator.free(backup_path);
 
-        // Calculate checksum
-        metadata.checksum = try self.calculateChecksum(archive_path);
-
-        // Upload to S3 with multipart if needed
         const s3_key = try std.fmt.allocPrint(
             self.allocator,
-            "{s}/full/{x}.tar.zst",
-            .{ self.config.prefix, backup_id },
+            "{s}/full/{x}.backup",
+            .{ self.config.prefix, metadata.backup_id },
         );
         defer self.allocator.free(s3_key);
 
-        const file_info = try std.fs.cwd().statFile(archive_path);
-        metadata.size_bytes = file_info.size;
-
+        const file_info = try std.fs.cwd().statFile(backup_path);
         if (file_info.size > self.config.multipart_threshold) {
-            try self.multipartUpload(archive_path, s3_key, metadata.checksum);
+            try self.multipartUpload(backup_path, s3_key, metadata.checksum);
         } else {
-            try self.simpleUpload(archive_path, s3_key, metadata.checksum);
+            try self.simpleUpload(backup_path, s3_key, metadata.checksum);
         }
 
-        // Upload metadata
         const metadata_key = try std.fmt.allocPrint(
             self.allocator,
             "{s}/metadata/{x}.json",
-            .{ self.config.prefix, backup_id },
+            .{ self.config.prefix, metadata.backup_id },
         );
         defer self.allocator.free(metadata_key);
 
         try self.uploadMetadata(metadata, metadata_key);
 
-        // Record metrics
         const duration = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
         self.metrics.recordBackup(.full, metadata.size_bytes, duration);
 
         return metadata;
     }
 
-    /// Perform an incremental backup to S3
-    pub fn incrementalBackup(
-        self: *Self,
-        wal_manager: *wal.WALManager,
-        parent_backup_id: u128,
-        start_lsn: u64,
-    ) !backup.BackupMetadata {
-        const start_time = std.time.milliTimestamp();
-        const backup_id = generateBackupId();
-
-        // Get WAL segments since last backup
-        const end_lsn = try wal_manager.getCurrentLSN();
-        const wal_segments = try wal_manager.getSegmentsSince(start_lsn);
-        defer self.allocator.free(wal_segments);
-
-        // Create incremental archive
-        const archive_path = try self.createWALArchive(wal_segments, backup_id);
-        defer self.allocator.free(archive_path);
-
-        const file_info = try std.fs.cwd().statFile(archive_path);
-        const checksum = try self.calculateChecksum(archive_path);
-
-        // Upload to S3
-        const s3_key = try std.fmt.allocPrint(
-            self.allocator,
-            "{s}/incremental/{x}.wal.zst",
-            .{ self.config.prefix, backup_id },
-        );
-        defer self.allocator.free(s3_key);
-
-        try self.simpleUpload(archive_path, s3_key, checksum);
-
-        // Create and upload metadata
-        const metadata = backup.BackupMetadata{
-            .backup_id = backup_id,
-            .timestamp = start_time,
-            .backup_type = .incremental,
-            .start_lsn = start_lsn,
-            .end_lsn = end_lsn,
-            .size_bytes = file_info.size,
-            .compression = self.backup_config.compression,
-            .encrypted = self.backup_config.encryption,
-            .checksum = checksum,
-            .parent_backup_id = parent_backup_id,
-        };
-
-        const metadata_key = try std.fmt.allocPrint(
-            self.allocator,
-            "{s}/metadata/{x}.json",
-            .{ self.config.prefix, backup_id },
-        );
-        defer self.allocator.free(metadata_key);
-
-        try self.uploadMetadata(metadata, metadata_key);
-
-        // Record metrics
-        const duration = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
-        self.metrics.recordBackup(.incremental, metadata.size_bytes, duration);
-
-        return metadata;
-    }
-
-    /// Restore from S3 backup
+    /// Restore from S3 backup (GraphStore snapshots only).
     pub fn restore(
         self: *Self,
         backup_id: u128,
         target_dir: []const u8,
-        wal_manager: *wal.WALManager,
+        store: *graph_store.GraphStore,
     ) !void {
         const start_time = std.time.milliTimestamp();
 
-        // Download and parse metadata
         const metadata = try self.downloadMetadata(backup_id);
 
-        // Build restore chain (full + incrementals)
-        const chain = try self.buildRestoreChain(metadata);
-        defer self.allocator.free(chain);
+        const tmp_dir = try std.fmt.allocPrint(self.allocator, "/tmp/geode_s3_restore_{x}", .{backup_id});
+        defer self.allocator.free(tmp_dir);
+        std.fs.cwd().makePath(tmp_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => return err,
+        };
+        defer std.fs.cwd().deleteTree(tmp_dir) catch {};
 
-        // Restore each backup in order
-        for (chain) |backup_meta| {
-            const s3_key = if (backup_meta.backup_type == .full)
-                try std.fmt.allocPrint(
-                    self.allocator,
-                    "{s}/full/{x}.tar.zst",
-                    .{ self.config.prefix, backup_meta.backup_id },
-                )
-            else
-                try std.fmt.allocPrint(
-                    self.allocator,
-                    "{s}/incremental/{x}.wal.zst",
-                    .{ self.config.prefix, backup_meta.backup_id },
-                );
-            defer self.allocator.free(s3_key);
+        const s3_key = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/full/{x}.backup",
+            .{ self.config.prefix, metadata.backup_id },
+        );
+        defer self.allocator.free(s3_key);
 
-            // Download from S3
-            const local_path = try std.fmt.allocPrint(
-                self.allocator,
-                "/tmp/restore_{x}",
-                .{backup_meta.backup_id},
-            );
-            defer self.allocator.free(local_path);
+        const local_path = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/full_{x}.backup",
+            .{ tmp_dir, metadata.backup_id },
+        );
+        defer self.allocator.free(local_path);
 
-            try self.downloadFile(s3_key, local_path);
+        try self.downloadFile(s3_key, local_path);
 
-            // Verify checksum
-            const actual_checksum = try self.calculateChecksum(local_path);
-            if (actual_checksum != backup_meta.checksum) {
-                return error.ChecksumMismatch;
-            }
-
-            // Extract archive
-            if (backup_meta.backup_type == .full) {
-                try self.extractArchive(local_path, target_dir);
-            } else {
-                try self.applyWALArchive(local_path, wal_manager);
-            }
-
-            // Clean up temp file
-            try std.fs.cwd().deleteFile(local_path);
+        // Write metadata log expected by BackupManager
+        const metadata_path = try std.fmt.allocPrint(self.allocator, "{s}/metadata.json", .{tmp_dir});
+        defer self.allocator.free(metadata_path);
+        {
+            const file = try std.fs.cwd().createFile(metadata_path, .{});
+            defer file.close();
+            const json_str = try std.json.Stringify.valueAlloc(self.allocator, &[_]backup.BackupMetadata{metadata}, .{});
+            defer self.allocator.free(json_str);
+            try file.writeAll(json_str);
         }
 
-        // Record metrics
+        var mgr = try backup.BackupManager.init(self.allocator, tmp_dir, self.backup_config, store);
+        defer mgr.deinit();
+        try mgr.restoreToPointInTime(target_dir, metadata.timestamp);
+
         const duration = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
-        self.metrics.recordRestore(chain.len, duration);
+        self.metrics.recordRestore(1, duration);
     }
 
     /// Multipart upload for large files
@@ -326,145 +233,6 @@ pub const S3BackupManager = struct {
         }
     }
 
-    // Helper functions
-    fn generateBackupId() u128 {
-        var bytes: [16]u8 = undefined;
-        std.crypto.random.bytes(&bytes);
-        return std.mem.readInt(u128, &bytes, .little);
-    }
-
-    fn calculateChecksum(self: *Self, file_path: []const u8) !u64 {
-        _ = self;
-        const file = try std.fs.cwd().openFile(file_path, .{});
-        defer file.close();
-
-        var hasher = std.hash.Wyhash.init(0);
-        var buffer: [4096]u8 = undefined;
-
-        while (true) {
-            const bytes_read = try file.read(&buffer);
-            if (bytes_read == 0) break;
-            hasher.update(buffer[0..bytes_read]);
-        }
-
-        return hasher.final();
-    }
-
-    fn createArchive(self: *Self, source_dir: []const u8, backup_id: u128) ![]const u8 {
-        const archive_path = try std.fmt.allocPrint(
-            self.allocator,
-            "/tmp/backup_{x}.tar.gz",
-            .{backup_id},
-        );
-
-        // Create a simple tar archive using system tar command
-        // In production, use a proper tar library
-        const tar_cmd = try std.fmt.allocPrint(
-            self.allocator,
-            "tar -czf {s} -C {s} .",
-            .{ archive_path, source_dir },
-        );
-        defer self.allocator.free(tar_cmd);
-
-        var process = std.process.Child.init(&[_][]const u8{ "sh", "-c", tar_cmd }, self.allocator);
-        const result = try process.spawnAndWait();
-
-        if (result != .Exited or result.Exited != 0) {
-            return error.ArchiveCreationFailed;
-        }
-
-        return archive_path;
-    }
-
-    fn createWALArchive(self: *Self, wal_segments: []const []const u8, backup_id: u128) ![]const u8 {
-        const archive_path = try std.fmt.allocPrint(
-            self.allocator,
-            "/tmp/wal_{x}.tar.gz",
-            .{backup_id},
-        );
-
-        // Create temporary directory for WAL segments
-        const tmp_dir = try std.fmt.allocPrint(self.allocator, "/tmp/wal_staging_{x}", .{backup_id});
-        defer self.allocator.free(tmp_dir);
-
-        try std.fs.cwd().makeDir(tmp_dir);
-        defer std.fs.cwd().deleteTree(tmp_dir) catch {};
-
-        // Copy WAL segments to staging directory
-        for (wal_segments, 0..) |segment_path, i| {
-            const dest_path = try std.fmt.allocPrint(self.allocator, "{s}/wal_{d}.log", .{ tmp_dir, i });
-            defer self.allocator.free(dest_path);
-
-            try std.fs.cwd().copyFile(segment_path, std.fs.cwd(), dest_path, .{});
-        }
-
-        // Create archive
-        const tar_cmd = try std.fmt.allocPrint(
-            self.allocator,
-            "tar -czf {s} -C {s} .",
-            .{ archive_path, tmp_dir },
-        );
-        defer self.allocator.free(tar_cmd);
-
-        var process = std.process.Child.init(&[_][]const u8{ "sh", "-c", tar_cmd }, self.allocator);
-        const result = try process.spawnAndWait();
-
-        if (result != .Exited or result.Exited != 0) {
-            return error.WALArchiveCreationFailed;
-        }
-
-        return archive_path;
-    }
-
-    fn extractArchive(self: *Self, archive_path: []const u8, target_dir: []const u8) !void {
-        // Ensure target directory exists
-        std.fs.cwd().makeDir(target_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => return err,
-        };
-
-        // Extract using system tar command
-        const tar_cmd = try std.fmt.allocPrint(
-            self.allocator,
-            "tar -xzf {s} -C {s}",
-            .{ archive_path, target_dir },
-        );
-        defer self.allocator.free(tar_cmd);
-
-        var process = std.process.Child.init(&[_][]const u8{ "sh", "-c", tar_cmd }, self.allocator);
-        const result = try process.spawnAndWait();
-
-        if (result != .Exited or result.Exited != 0) {
-            return error.ArchiveExtractionFailed;
-        }
-    }
-
-    fn applyWALArchive(self: *Self, archive_path: []const u8, wal_manager: *wal.WALManager) !void {
-        // Create temporary directory for extraction
-        const tmp_dir = try std.fmt.allocPrint(self.allocator, "/tmp/wal_extract_{d}", .{std.time.timestamp()});
-        defer self.allocator.free(tmp_dir);
-        defer std.fs.cwd().deleteTree(tmp_dir) catch {};
-
-        try std.fs.cwd().makeDir(tmp_dir);
-
-        // Extract WAL archive
-        try self.extractArchive(archive_path, tmp_dir);
-
-        // Apply each WAL segment in order
-        var dir = try std.fs.cwd().openDir(tmp_dir, .{ .iterate = true });
-        defer dir.close();
-
-        var iterator = dir.iterate();
-        while (try iterator.next()) |entry| {
-            if (entry.kind == .file and std.mem.startsWith(u8, entry.name, "wal_")) {
-                const wal_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ tmp_dir, entry.name });
-                defer self.allocator.free(wal_path);
-
-                try wal_manager.replayWAL(wal_path);
-            }
-        }
-    }
-
     fn uploadMetadata(self: *Self, metadata: backup.BackupMetadata, s3_key: []const u8) !void {
         var buffer = std.ArrayList(u8).init(self.allocator);
         defer buffer.deinit();
@@ -486,25 +254,6 @@ pub const S3BackupManager = struct {
 
         var stream = std.io.fixedBufferStream(content);
         return try backup.BackupMetadata.fromJSON(stream.reader(), self.allocator);
-    }
-
-    fn buildRestoreChain(self: *Self, target_metadata: backup.BackupMetadata) ![]backup.BackupMetadata {
-        var chain = std.ArrayList(backup.BackupMetadata).init(self.allocator);
-
-        var current = target_metadata;
-        try chain.append(current);
-
-        // Walk back to find full backup
-        while (current.backup_type != .full) {
-            if (current.parent_backup_id) |parent_id| {
-                current = try self.downloadMetadata(parent_id);
-                try chain.insert(0, current);
-            } else {
-                return error.IncompleteBackupChain;
-            }
-        }
-
-        return try chain.toOwnedSlice();
     }
 
     // S3 API operations

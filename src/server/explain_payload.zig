@@ -1,7 +1,75 @@
 const std = @import("std");
-const cost_explain = @import("../planner/cost_explain.zig");
 const cost_seed = @import("../planner/cost_seed.zig");
 const query_traits = @import("../query/query_traits.zig");
+const schema = @import("schema");
+
+pub fn buildExplainPayload(
+    allocator: std.mem.Allocator,
+    traits: query_traits.QueryTraits,
+    union_part_count: usize,
+    calibrated: bool,
+) !schema.ExplainPayload {
+    const ops = try buildOps(allocator, traits);
+    defer allocator.free(ops);
+
+    const cfg = cost_seed.EstimatorConfig{};
+    var op_list = std.ArrayList(schema.ExplainOp).initCapacity(allocator, ops.len) catch return error.OutOfMemory;
+    errdefer {
+        for (op_list.items) |*item| item.deinit(allocator);
+        op_list.deinit(allocator);
+    }
+
+    var total_cost: f64 = 0;
+    var total_est_rows: f64 = 0;
+    var prev_est: ?cost_seed.CardinalityEstimate = null;
+    for (ops, 0..) |op, idx| {
+        const children_slice: []const cost_seed.CardinalityEstimate = if (prev_est) |pe| &[_]cost_seed.CardinalityEstimate{pe} else &[_]cost_seed.CardinalityEstimate{};
+        const est_card = cost_seed.estimate(op, children_slice, cfg);
+        const op_cost = cost_seed.cost(op, est_card, cfg).total();
+        if (idx == 0) total_est_rows = est_card.rows;
+        total_cost += op_cost;
+        const kind_name = @tagName(op.kind);
+        const op_entry = schema.ExplainOp{
+            .idx = @intCast(idx),
+            .kind = try allocator.dupe(u8, kind_name),
+            .est_rows = @intCast(@floor(est_card.rows)),
+            .cost = @intCast(@floor(op_cost)),
+        };
+        try op_list.append(allocator, op_entry);
+        prev_est = est_card;
+    }
+
+    const properties = schema.ExplainProperties{
+        .ordered = traits.ordered,
+        .limit = if (traits.limit) |lim| @intCast(lim) else 0,
+        .offset = if (traits.offset) |off| @intCast(off) else 0,
+        .distinct = traits.distinct,
+        .union_mode = if (traits.has_union) try allocator.dupe(u8, unionModeToString(traits.union_mode)) else try allocator.dupe(u8, ""),
+        .union_part_count = if (traits.has_union) @intCast(union_part_count) else 0,
+    };
+
+    var calibration_opt: ?schema.ExplainCalibration = null;
+    if (calibrated) {
+        var entries = std.ArrayList(schema.ExplainCalibrationEntry).initCapacity(allocator, 0) catch return error.OutOfMemory;
+        calibration_opt = schema.ExplainCalibration{
+            .mape = 0,
+            .entries = entries,
+        };
+    }
+
+    const schema_name = if (calibrated) "cost_explain.v2" else "cost_explain.v1";
+    var payload = schema.ExplainPayload{
+        .schema = try allocator.dupe(u8, schema_name),
+        .ops = op_list,
+        .totals = .{ .est_rows = @intCast(@floor(total_est_rows)), .cost = @intCast(@floor(total_cost)) },
+        .properties = properties,
+        .calibration = calibration_opt,
+        .profile_version = 2,
+    };
+    errdefer payload.deinit(allocator);
+
+    return payload;
+}
 
 pub fn buildExplainJson(
     allocator: std.mem.Allocator,
@@ -9,15 +77,91 @@ pub fn buildExplainJson(
     union_part_count: usize,
     calibrated: bool,
 ) ![]u8 {
-    const ops = try buildOps(allocator, traits);
-    defer allocator.free(ops);
+    var payload = try buildExplainPayload(allocator, traits, union_part_count, calibrated);
+    defer payload.deinit(allocator);
+    return try explainPayloadToJson(allocator, payload);
+}
 
-    const base = if (calibrated)
-        try cost_explain.explainChainWithCalibration(allocator, ops, null, null)
-    else
-        try cost_explain.explainChain(allocator, ops);
+pub fn explainPayloadToJson(allocator: std.mem.Allocator, payload: schema.ExplainPayload) ![]u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 1024) catch return error.OutOfMemory;
+    errdefer buf.deinit(allocator);
+    var w = buf.writer(allocator);
 
-    return try appendProperties(allocator, base, traits, union_part_count);
+    try w.writeAll("{\"schema\":\"");
+    try w.writeAll(payload.schema);
+    try w.writeAll("\",\"ops\":[");
+    for (payload.ops.items, 0..) |op, idx| {
+        if (idx != 0) try w.writeByte(',');
+        try w.writeAll("{\"idx\":");
+        try w.print("{d}", .{op.idx});
+        try w.writeAll(",\"kind\":\"");
+        try w.writeAll(op.kind);
+        try w.writeAll("\",\"est_rows\":");
+        try w.print("{d}", .{op.est_rows});
+        try w.writeAll(",\"cost\":");
+        try w.print("{d}", .{op.cost});
+        try w.writeAll("}");
+    }
+    try w.writeAll("],\"totals\":{");
+    const totals = payload.totals orelse schema.ExplainTotals{ .est_rows = 0, .cost = 0 };
+    try w.writeAll("\"est_rows\":");
+    try w.print("{d}", .{totals.est_rows});
+    try w.writeAll(",\"cost\":");
+    try w.print("{d}", .{totals.cost});
+    try w.writeAll("},\"profile_version\":");
+    try w.print("{d}", .{payload.profile_version});
+
+    if (payload.calibration) |cal| {
+        try w.writeAll(",\"calibration\":{\"mape\":");
+        try w.print("{d}", .{cal.mape});
+        try w.writeAll(",\"entries\":[");
+        for (cal.entries.items, 0..) |entry, i| {
+            if (i != 0) try w.writeByte(',');
+            try w.writeAll("{\"idx\":");
+            try w.print("{d}", .{entry.idx});
+            try w.writeAll(",\"est_rows\":");
+            try w.print("{d}", .{entry.est_rows});
+            try w.writeAll(",\"actual_rows\":");
+            try w.print("{d}", .{entry.actual_rows});
+            try w.writeAll("}");
+        }
+        try w.writeAll("]}");
+    }
+
+    const props = payload.properties orelse schema.ExplainProperties{
+        .ordered = false,
+        .limit = 0,
+        .offset = 0,
+        .distinct = false,
+        .union_mode = "",
+        .union_part_count = 0,
+    };
+    try w.writeAll(",\"properties\":{");
+    try w.writeAll("\"ordered\":");
+    try w.writeAll(if (props.ordered) "true" else "false");
+    if (props.limit > 0) {
+        try w.writeAll(",\"limit\":");
+        try w.print("{d}", .{props.limit});
+    }
+    if (props.offset > 0) {
+        try w.writeAll(",\"offset\":");
+        try w.print("{d}", .{props.offset});
+    }
+    if (props.distinct) {
+        try w.writeAll(",\"distinct\":true");
+    }
+    if (props.union_mode.len > 0) {
+        try w.writeAll(",\"union_mode\":\"");
+        try w.writeAll(props.union_mode);
+        try w.writeAll("\"");
+        if (props.union_part_count > 0) {
+            try w.writeAll(",\"union_part_count\":");
+            try w.print("{d}", .{props.union_part_count});
+        }
+    }
+    try w.writeAll("}}");
+
+    return buf.toOwnedSlice(allocator);
 }
 
 fn buildOps(allocator: std.mem.Allocator, traits: query_traits.QueryTraits) ![]cost_seed.OpDescriptor {
@@ -47,58 +191,6 @@ fn buildOps(allocator: std.mem.Allocator, traits: query_traits.QueryTraits) ![]c
     }
 
     return list.toOwnedSlice(allocator);
-}
-
-fn appendProperties(
-    allocator: std.mem.Allocator,
-    base_json: []u8,
-    traits: query_traits.QueryTraits,
-    union_part_count: usize,
-) ![]u8 {
-    // Early return without freeing - caller retains ownership of base_json
-    if (base_json.len == 0 or base_json[base_json.len - 1] != '}') {
-        return base_json;
-    }
-
-    // From here on, we'll create a new allocation and free the original
-    var props = std.ArrayList(u8).initCapacity(allocator, 128) catch return error.OutOfMemory;
-    defer props.deinit(allocator);
-    var w = props.writer(allocator);
-    try w.writeAll(",\"properties\":{");
-    try w.writeAll("\"ordered\":");
-    try w.writeAll(if (traits.ordered) "true" else "false");
-
-    if (traits.limit) |lim| {
-        try w.writeAll(",\"limit\":");
-        try w.print("{d}", .{lim});
-    }
-    if (traits.offset) |off| {
-        try w.writeAll(",\"offset\":");
-        try w.print("{d}", .{off});
-    }
-    if (traits.distinct) {
-        try w.writeAll(",\"distinct\":true");
-    }
-    if (traits.has_union) {
-        try w.writeAll(",\"union_mode\":\"");
-        try w.writeAll(unionModeToString(traits.union_mode));
-        try w.writeAll("\"");
-        try w.writeAll(",\"union_part_count\":");
-        try w.print("{d}", .{union_part_count});
-    }
-    try w.writeAll("}");
-
-    const prefix_len = base_json.len - 1;
-    const final_len = prefix_len + props.items.len + 1;
-    var out = try allocator.alloc(u8, final_len);
-    std.mem.copyForwards(u8, out[0..prefix_len], base_json[0..prefix_len]);
-    std.mem.copyForwards(u8, out[prefix_len .. prefix_len + props.items.len], props.items);
-    out[final_len - 1] = '}';
-
-    // Free the original base_json now that we've copied the data
-    allocator.free(base_json);
-
-    return out;
 }
 
 fn unionModeToString(mode: query_traits.UnionMode) []const u8 {

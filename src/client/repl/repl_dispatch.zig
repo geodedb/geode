@@ -7,6 +7,8 @@ const spinner_mod = @import("spinner.zig");
 
 const protobuf = @import("protobuf");
 const proto_schema = @import("schema");
+const explain_payload = @import("server/explain_payload.zig");
+const profile_payload = @import("server/profile_payload.zig");
 
 const spice_wrapper = @import("parallel/spice");
 
@@ -433,17 +435,21 @@ fn executionResponseToJson(
                 try root.put("metrics", .{ .object = metrics_obj });
             },
             .explain => |explain| {
-                if (std.json.parseFromSlice(std.json.Value, a, explain.json_payload, .{})) |parsed| {
+                const explain_json = try explain_payload.explainPayloadToJson(a, explain);
+                if (std.json.parseFromSlice(std.json.Value, a, explain_json, .{})) |parsed| {
+                    defer a.free(explain_json);
                     try root.put("explain", parsed.value);
                 } else |_| {
-                    try root.put("explain", .{ .string = try a.dupe(u8, explain.json_payload) });
+                    try root.put("explain", .{ .string = explain_json });
                 }
             },
             .profile => |profile| {
-                if (std.json.parseFromSlice(std.json.Value, a, profile.json_payload, .{})) |parsed| {
+                const profile_json = try profile_payload.profilePayloadToJson(a, profile);
+                if (std.json.parseFromSlice(std.json.Value, a, profile_json, .{})) |parsed| {
+                    defer a.free(profile_json);
                     try root.put("profile", parsed.value);
                 } else |_| {
-                    try root.put("profile", .{ .string = try a.dupe(u8, profile.json_payload) });
+                    try root.put("profile", .{ .string = profile_json });
                 }
             },
             .heartbeat => |_| {
