@@ -9,7 +9,7 @@ echo "=== Regression Test: EXISTS Function vs Predicate Parsing ==="
 
 # Test 1: EXISTS predicate syntax should parse and execute
 echo "Test 1: EXISTS predicate parsing..."
-EXISTS_PREDICATE_RESULT=$(./zig-out/bin/geode query "MATCH (p:Person) WHERE EXISTS { (p)-[:KNOWS]->() } RETURN count(p) AS result" --insecure 2>/dev/null | grep '"result"' || echo "no results")
+EXISTS_PREDICATE_RESULT=$(./zig-out/bin/geode query "MATCH (p:Person) WHERE EXISTS { (p)-[:KNOWS]->() } RETURN count(p) AS result" --insecure 2>/dev/null | grep '"status_class":"00000"' || echo "no results")
 if [[ "$EXISTS_PREDICATE_RESULT" != "no results" ]]; then
     echo "✓ EXISTS predicate syntax works: EXISTS { (p)-[:KNOWS]->() }"
 else
@@ -19,7 +19,7 @@ fi
 
 # Test 2: exists() function call syntax should parse without errors
 echo "Test 2: exists() function call parsing..."
-EXISTS_FUNCTION_RESULT=$(./zig-out/bin/geode query "MATCH (n)-[r]->(m) WHERE exists(n.name) RETURN {k: 1, v: n.age} AS map_result" --insecure 2>/dev/null | grep '"type":"SCHEMA"' || echo "parse error")
+EXISTS_FUNCTION_RESULT=$(./zig-out/bin/geode query "MATCH (n)-[r]->(m) WHERE exists(n.name) RETURN {k: 1, v: n.age} AS map_result" --insecure 2>/dev/null | grep '"status_class":"00000"' || echo "parse error")
 if [[ "$EXISTS_FUNCTION_RESULT" != "parse error" ]]; then
     echo "✓ exists() function call syntax works: exists(n.name)"
 else
@@ -29,7 +29,7 @@ fi
 
 # Test 3: Mixed usage in same query should work
 echo "Test 3: Mixed EXISTS predicate and exists() function usage..."
-MIXED_RESULT=$(./zig-out/bin/geode query "MATCH (p:Person) WHERE EXISTS { (p)-[:KNOWS]->() } AND exists(p.name) RETURN p.name" --insecure 2>/dev/null | grep '"type":"SCHEMA"' || echo "parse error")
+MIXED_RESULT=$(./zig-out/bin/geode query "MATCH (p:Person) WHERE EXISTS { (p)-[:KNOWS]->() } AND exists(p.name) RETURN p.name" --insecure 2>/dev/null | grep '"status_class":"00000"' || echo "parse error")
 if [[ "$MIXED_RESULT" != "parse error" ]]; then
     echo "✓ Mixed EXISTS predicate and exists() function works"
 else

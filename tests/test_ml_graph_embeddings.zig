@@ -10,6 +10,7 @@ const expectApproxEqRel = testing.expectApproxEqRel;
 
 const geode = @import("../src/lib.zig");
 const graph_embeddings = @import("../src/ml/graph_embeddings.zig");
+const graph_store = geode.graph_store;
 
 test "GraphEmbeddingsManager initialization and cleanup" {
     const allocator = testing.allocator;
@@ -106,7 +107,7 @@ test "Random walk generation and transition probabilities" {
     const allocator = testing.allocator;
 
     // Create a simple graph for testing: 1 -> 2 -> 3 -> 1 (cycle)
-    var graph = graph_storage.GraphStorage.init(allocator);
+    var graph = graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     try graph.addNode(1);
@@ -144,7 +145,7 @@ test "Node2Vec training with small graph" {
     const allocator = testing.allocator;
 
     // Create test graph
-    var graph = graph_storage.GraphStorage.init(allocator);
+    var graph = graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add nodes
@@ -201,7 +202,7 @@ test "GraphSAGE training and neighbor aggregation" {
     const allocator = testing.allocator;
 
     // Create test graph with more connections for aggregation testing
-    var graph = graph_storage.GraphStorage.init(allocator);
+    var graph = graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create star graph: central node (1) connected to all others
@@ -476,7 +477,7 @@ test "DeepWalk algorithm training" {
     const allocator = testing.allocator;
 
     // Create simple path graph: 1-2-3-4
-    var graph = graph_storage.GraphStorage.init(allocator);
+    var graph = graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     for (1..5) |i| {

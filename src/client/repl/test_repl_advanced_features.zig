@@ -270,7 +270,7 @@ test "result pager: page out of bounds returns false" {
     defer pager.deinit();
 
     // Create simple test data
-    const json_data = "{\"columns\":[\"id\"],\"data\":[[1],[2],[3]]}";
+    const json_data = "{\"columns\":[{\"name\":\"id\",\"type\":\"INTEGER\"}],\"rows\":[{\"id\":1},{\"id\":2},{\"id\":3}]}";
     const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json_data, .{});
     defer parsed.deinit();
 

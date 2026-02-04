@@ -1,18 +1,42 @@
 #!/usr/bin/env python3
 """Test specific features that were recently implemented."""
 
+import json
+import os
 import subprocess
 import sys
 
+ADMIN_USER = os.getenv("GEODE_ADMIN_USERNAME", "geode")
+ADMIN_PASS = os.getenv("GEODE_DEFAULT_PASSWORD", "geode-test-password")
 
-def run_query(query, user=None, password=None):
+
+def run_query(query, user=ADMIN_USER, password=ADMIN_PASS, server="127.0.0.1:3141"):
     """Run a query and return stdout."""
-    cmd = ["./zig-out/bin/geode", "query", "--server 127.0.0.1:3141 --insecure", "--format", "json", "-"]
-    if user:
+    cmd = ["./zig-out/bin/geode", "query", "--server", server, "--insecure", "--format", "json", "-"]
+    if user is not None:
         cmd.extend(["--user", user, "--password", password or ""])
 
     result = subprocess.run(cmd, input=query, capture_output=True, text=True, timeout=10)
     return result.returncode, result.stdout, result.stderr
+
+
+def json_rows_contain_value(stdout, expected):
+    for line in stdout.splitlines():
+        if not line.startswith("{"):
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        rows = data.get("rows", [])
+        for row in rows:
+            if isinstance(row, dict):
+                if expected in row.values():
+                    return True
+            elif isinstance(row, list):
+                if expected in row:
+                    return True
+    return False
 
 
 def test_split_node():
@@ -34,7 +58,7 @@ def test_split_node():
 
     code, stdout, stderr = run_query(query)
 
-    if code == 0 and '"1"' in stdout or "[[1]]" in stdout:
+    if code == 0 and json_rows_contain_value(stdout, 1):
         print("  ✓ split-node-into-multiple: PASSED")
         return True
     else:
@@ -59,7 +83,7 @@ def test_not_pattern():
 
     code, stdout, stderr = run_query(query)
 
-    if code == 0 and ('"1"' in stdout or "[[1]]" in stdout):
+    if code == 0 and json_rows_contain_value(stdout, 1):
         print("  ✓ NOT (pattern): PASSED")
         return True
     else:
@@ -84,7 +108,7 @@ def test_batch_create_relationships():
 
     code, stdout, stderr = run_query(query)
 
-    if code == 0 and ('"3"' in stdout or "[[3]]" in stdout):
+    if code == 0 and json_rows_contain_value(stdout, 3):
         print("  ✓ batch-create-relationships: PASSED")
         return True
     else:
@@ -98,15 +122,13 @@ def test_auth_system():
     """Test authentication system."""
     print("Testing authentication system...")
 
-    # Start server with auth enabled
+    # Start server with auth enabled (default)
     server = subprocess.Popen(
         [
             "./zig-out/bin/geode",
             "serve",
             "--listen",
             "127.0.0.1:9999",
-            "--server 127.0.0.1:3141 --insecure",
-            "--enable-auth",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -119,13 +141,20 @@ def test_auth_system():
     try:
         # Test 1: Unauthenticated query should fail
         print("  Testing unauthenticated access...")
-        code, stdout, stderr = run_query("RETURN 1")
+        code, stdout, stderr = run_query("RETURN 1", user=None, password=None, server="127.0.0.1:9999")
+        combined = stdout + stderr
+        if "Authentication required" in combined or code != 0:
+            print("  ✓ Unauthenticated access blocked")
+        else:
+            print("  ✗ Unauthenticated access not blocked as expected")
+            return False
 
-        # Note: In --server 127.0.0.1:3141 --insecure mode without server, auth isn't enforced
-        # We need to test with actual server mode
-        print("  ⊘ Auth tests require server mode (skipped in --server 127.0.0.1:3141 --insecure)")
-
-        return None  # Skipped
+        code, stdout, stderr = run_query("RETURN 1", user=ADMIN_USER, password=ADMIN_PASS, server="127.0.0.1:9999")
+        if code == 0 and '"status_class":"00000"' in stdout:
+            print("  ✓ Authenticated access allowed")
+            return True
+        print("  ✗ Authenticated access failed")
+        return False
 
     finally:
         server.terminate()

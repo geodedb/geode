@@ -87,28 +87,28 @@ The migration files create a rich social network graph with:
 1. **Start Geode server:**
 
 ```bash
-./zig-out/bin/geoded --data_dir ./data --log_json
+./zig-out/bin/geode serve --data_dir ./data --log_json
 ```
 
 1. **Run migrations in order:**
 
 ```bash
 # Using the Geode client
-./zig-out/bin/geodec --migrate migrations/
+./zig-out/bin/geode query --migrate migrations/
 
 # Or run individually
-./zig-out/bin/geodec < migrations/001_social_network_schema.gql
-./zig-out/bin/geodec < migrations/002_social_network_data.gql
-./zig-out/bin/geodec < migrations/003_social_network_relationships.gql
-./zig-out/bin/geodec < migrations/004_social_network_events_products.gql
+./zig-out/bin/geode query < migrations/001_social_network_schema.gql
+./zig-out/bin/geode query < migrations/002_social_network_data.gql
+./zig-out/bin/geode query < migrations/003_social_network_relationships.gql
+./zig-out/bin/geode query < migrations/004_social_network_events_products.gql
 ```
 
 1. **Verify the data:**
 
 ```bash
 # Count nodes and edges
-./zig-out/bin/geodec "MATCH (n) RETURN count(n) AS node_count"
-./zig-out/bin/geodec "MATCH ()-[r]->() RETURN count(r) AS edge_count"
+./zig-out/bin/geode query "MATCH (n) RETURN count(n) AS node_count"
+./zig-out/bin/geode query "MATCH ()-[r]->() RETURN count(r) AS edge_count"
 ```
 
 ## Example Queries
@@ -307,7 +307,7 @@ Ensure QUIC+TLS is properly configured:
 ls -la certs/
 
 # Test connection
-./zig-out/bin/geodec "RETURN 1"
+./zig-out/bin/geode query "RETURN 1"
 ```
 
 ## License

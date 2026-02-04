@@ -53,18 +53,11 @@ fn contains(hay: []const u8, needle: []const u8) bool {
 }
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Diagnostics US001"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_US001; OWNER=engine; UPDATED=2025-09-24
-test "protocol: transport parity diagnostics (US001) stdio vs QUIC (gated)" {
+test "protocol: transport parity diagnostics (US001) QUIC (gated)" {
     if (std.posix.getenv("GEODE_CI_QUIC_SMOKE") == null) return error.SkipZigTest;
 
     const exe = "./zig-out/bin/geode";
     const q = "RETURN 1 LIMIT 10 OFFSET 5";
-
-    const sres = try run(&.{ exe, q, "--format", "json" });
-    defer std.testing.allocator.free(sres.out);
-    defer std.testing.allocator.free(sres.err);
-    try std.testing.expectEqual(@as(i32, 2), sres.code);
-    try std.testing.expect(contains(sres.err, "US001"));
-    try std.testing.expect(contains(sres.err, "16.18"));
 
     var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17667", "--result-format", "json" });
     defer {
@@ -72,10 +65,17 @@ test "protocol: transport parity diagnostics (US001) stdio vs QUIC (gated)" {
     }
     std.Thread.sleep(300 * std.time.ns_per_ms);
 
-    const qres = try run(&.{ exe, q, "--server", "127.0.0.1:17667", "--quic", "--format", "json" });
+    const qres = try run(&.{ exe, q, "--server", "127.0.0.1:17667", "--format", "json" });
     defer std.testing.allocator.free(qres.out);
     defer std.testing.allocator.free(qres.err);
     try std.testing.expectEqual(@as(i32, 2), qres.code);
     try std.testing.expect(contains(qres.err, "US001"));
     try std.testing.expect(contains(qres.err, "16.18"));
+
+    const qres2 = try run(&.{ exe, q, "--server", "127.0.0.1:17667", "--format", "json" });
+    defer std.testing.allocator.free(qres2.out);
+    defer std.testing.allocator.free(qres2.err);
+    try std.testing.expectEqual(@as(i32, 2), qres2.code);
+    try std.testing.expect(contains(qres2.err, "US001"));
+    try std.testing.expect(contains(qres2.err, "16.18"));
 }

@@ -9,6 +9,8 @@ HOST="127.0.0.1"
 PORT="8443"
 DATA_DIR="./data"
 GEODE="./zig-out/bin/geode"
+ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -67,10 +69,10 @@ fi
 
 # Test connection
 echo -e "${YELLOW}Testing connection to Geode server...${NC}"
-if ! $GEODE query "RETURN 1 AS test" --server "${HOST}:${PORT}" --insecure > /dev/null 2>&1; then
+if ! $GEODE query "RETURN 1 AS test" --server "${HOST}:${PORT}" --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" > /dev/null 2>&1; then
     echo -e "${RED}Error: Cannot connect to Geode server${NC}"
     echo "Is the server running? Start it with:"
-    echo "  ./zig-out/bin/geode serve --listen-quic ${HOST}:${PORT} --data-dir ${DATA_DIR} --disable-auth"
+    echo "  GEODE_ADMIN_USERNAME=${ADMIN_USER} GEODE_DEFAULT_PASSWORD=${ADMIN_PASS} ./zig-out/bin/geode serve --listen-quic ${HOST}:${PORT} --data-dir ${DATA_DIR}"
     exit 1
 fi
 echo -e "${GREEN}✓ Connection successful${NC}"
@@ -82,7 +84,7 @@ run_migration() {
 
     echo -e "${YELLOW}Loading ${name}...${NC}"
 
-    if $GEODE query "-" --server "${HOST}:${PORT}" --insecure < "$file" > /dev/null 2>&1; then
+    if $GEODE query "-" --server "${HOST}:${PORT}" --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" < "$file" > /dev/null 2>&1; then
         echo -e "${GREEN}✓ ${name} loaded successfully${NC}"
         return 0
     else
@@ -117,17 +119,17 @@ echo ""
 echo -e "${GREEN}Verifying dataset:${NC}"
 
 # Count nodes
-NODE_COUNT=$($GEODE query "MATCH (n) RETURN count(n) AS count" --server "${HOST}:${PORT}" --insecure 2>/dev/null | grep -o '"count":[0-9]*' | cut -d: -f2)
+NODE_COUNT=$($GEODE query "MATCH (n) RETURN count(n) AS count" --server "${HOST}:${PORT}" --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" 2>/dev/null | grep -o '"count":[0-9]*' | cut -d: -f2)
 echo "  Nodes created: ${NODE_COUNT:-0}"
 
 # Count edges
-EDGE_COUNT=$($GEODE query "MATCH ()-[r]->() RETURN count(r) AS count" --server "${HOST}:${PORT}" --insecure 2>/dev/null | grep -o '"count":[0-9]*' | cut -d: -f2)
+EDGE_COUNT=$($GEODE query "MATCH ()-[r]->() RETURN count(r) AS count" --server "${HOST}:${PORT}" --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" 2>/dev/null | grep -o '"count":[0-9]*' | cut -d: -f2)
 echo "  Edges created: ${EDGE_COUNT:-0}"
 
 # Count by type
 echo ""
 echo -e "${GREEN}Node distribution:${NC}"
-$GEODE query "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS count ORDER BY count DESC" --server "${HOST}:${PORT}" --insecure 2>/dev/null | \
+$GEODE query "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS count ORDER BY count DESC" --server "${HOST}:${PORT}" --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" 2>/dev/null | \
     grep -o '"label":"[^"]*","count":[0-9]*' | \
     sed 's/"label":"\([^"]*\)","count":\([0-9]*\)/  \1: \2/' || echo "  Unable to get node distribution"
 
@@ -136,12 +138,12 @@ echo -e "${GREEN}=== Dataset loaded successfully! ===${NC}"
 echo ""
 echo "Try these example queries:"
 echo "  # Find top influencers:"
-echo "  $GEODE query \"MATCH (u:User) WHERE u.follower_count > 1000 RETURN u.username, u.follower_count ORDER BY u.follower_count DESC LIMIT 5\" --server ${HOST}:${PORT} --insecure"
+echo "  $GEODE query \"MATCH (u:User) WHERE u.follower_count > 1000 RETURN u.username, u.follower_count ORDER BY u.follower_count DESC LIMIT 5\" --server ${HOST}:${PORT} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
 echo ""
 echo "  # Network security analysis:"
-echo "  $GEODE query \"MATCH (d:Device)-[:CONNECTED_FROM]->(u:User) WHERE ip_is_private(d.ip_address) RETURN u.username, d.ip_address, d.trust_score\" --server ${HOST}:${PORT} --insecure"
+echo "  $GEODE query \"MATCH (d:Device)-[:CONNECTED_FROM]->(u:User) WHERE ip_is_private(d.ip_address) RETURN u.username, d.ip_address, d.trust_score\" --server ${HOST}:${PORT} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
 echo ""
 echo "  # Geographic search (events near SF):"
-echo "  $GEODE query \"MATCH (e:Event) WHERE distance_haversine(e.location, LatLon(37.7749, -122.4194)) < 100000 RETURN e.title, e.venue\" --server ${HOST}:${PORT} --insecure"
+echo "  $GEODE query \"MATCH (e:Event) WHERE distance_haversine(e.location, LatLon(37.7749, -122.4194)) < 100000 RETURN e.title, e.venue\" --server ${HOST}:${PORT} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
 echo ""
 echo "For more examples, see migrations/README.md"

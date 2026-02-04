@@ -26,14 +26,14 @@ test_quotes() {
     local exit_code=0
 
     # Use timeout to prevent hangs
-    output=$(echo "$input" | timeout $timeout_sec ./zig-out/bin/geode serve 2>&1) || exit_code=$?
+    output=$(timeout $timeout_sec $QUERY_CMD "$input" 2>&1) || exit_code=$?
 
     if [ $exit_code -eq 124 ]; then
         # Timeout occurred
         echo -e "${RED}HANG DETECTED${NC}"
         echo "  Query hangs with: $input"
         ((FAILED++))
-    elif echo "$output" | grep -qE "status_class|SCHEMA|error"; then
+    elif echo "$output" | grep -qE "status_class|error"; then
         # Query processed (either success or error)
         echo -e "${GREEN}PASS${NC} (processed without hanging)"
         ((PASSED++))
@@ -48,6 +48,25 @@ test_quotes() {
 # Build
 echo "Building Geode..."
 make build > /dev/null 2>&1 || { echo -e "${RED}Build failed${NC}"; exit 1; }
+
+SERVER_PORT=8453
+ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+DATA_DIR=$(mktemp -d /tmp/geode_double_quote_XXXXXX)
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+    ./zig-out/bin/geode serve --listen 127.0.0.1:${SERVER_PORT} --data-dir "${DATA_DIR}" > /tmp/geode_double_quote.log 2>&1 &
+SERVER_PID=$!
+sleep 2
+
+cleanup() {
+    kill $SERVER_PID 2>/dev/null || true
+    wait $SERVER_PID 2>/dev/null || true
+    rm -rf "${DATA_DIR}"
+    rm -f /tmp/geode_double_quote.log
+}
+trap cleanup EXIT
+
+QUERY_CMD="./zig-out/bin/geode query --server 127.0.0.1:${SERVER_PORT} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
 
 echo
 echo "Testing string literal handling..."

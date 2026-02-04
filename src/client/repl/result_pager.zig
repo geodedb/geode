@@ -50,10 +50,10 @@ pub const ResultPager = struct {
     ) !bool {
         const root = parsed_result.object;
         const columns_value = root.get("columns") orelse return error.MissingColumns;
-        const data_value = root.get("data") orelse return error.MissingData;
+        const rows_value = root.get("rows") orelse return error.MissingRows;
 
         const columns = columns_value.array;
-        const all_rows = data_value.array;
+        const all_rows = rows_value.array;
 
         self.total_rows = all_rows.items.len;
         self.current_page = page;
@@ -75,8 +75,12 @@ pub const ResultPager = struct {
             try page_data.append(self.allocator, row);
         }
 
+        // Extract column names for tabular formats
+        const column_names = try extractColumnNames(self.allocator, columns);
+        defer self.allocator.free(column_names);
+
         // Display using the selected format
-        try self.displayFormattedPage(writer, columns, page_data.items, format);
+        try self.displayFormattedPage(writer, columns, column_names, page_data.items, format);
 
         // Display pagination info
         const total_pages = (all_rows.items.len + self.config.page_size - 1) / self.config.page_size;
@@ -89,12 +93,13 @@ pub const ResultPager = struct {
         self: *ResultPager,
         writer: anytype,
         columns: std.json.Array,
+        column_names: []const []const u8,
         rows: []std.json.Value,
         format: Format,
     ) !void {
         switch (format) {
-            .table => try displayAsTable(writer, self.allocator, columns, rows),
-            .csv => try displayAsCsv(writer, columns, rows),
+            .table => try displayAsTable(writer, self.allocator, column_names, rows),
+            .csv => try displayAsCsv(writer, self.allocator, column_names, rows),
             .json => try displayAsJson(writer, self.allocator, columns, rows),
         }
     }
@@ -138,36 +143,30 @@ pub const ResultPager = struct {
     }
 };
 
-fn displayAsTable(writer: anytype, allocator: std.mem.Allocator, columns: std.json.Array, rows: []std.json.Value) !void {
+fn displayAsTable(writer: anytype, allocator: std.mem.Allocator, columns: []const []const u8, rows: []std.json.Value) !void {
     // Calculate column widths
-    var col_widths = try allocator.alloc(usize, columns.items.len);
+    var col_widths = try allocator.alloc(usize, columns.len);
     defer allocator.free(col_widths);
 
-    for (columns.items, 0..) |col, i| {
-        col_widths[i] = col.string.len;
+    for (columns, 0..) |col_name, i| {
+        col_widths[i] = col_name.len;
     }
 
     for (rows) |row| {
-        const row_array = row.array;
-        for (row_array.items, 0..) |cell, i| {
+        for (columns, 0..) |col_name, i| {
             if (i >= col_widths.len) continue;
-            const width: usize = switch (cell) {
-                .string => |s| s.len,
-                .integer => 10,
-                .float => 10,
-                .bool => 5,
-                .null => 4,
-                else => 0,
-            };
-            col_widths[i] = @max(col_widths[i], width);
+            const cell_value = getRowValue(row, col_name);
+            const rendered = try renderCell(allocator, cell_value);
+            defer allocator.free(rendered);
+            col_widths[i] = @max(col_widths[i], rendered.len);
         }
     }
 
     // Print header
     try writer.writeAll("| ");
-    for (columns.items, 0..) |col, i| {
-        try writer.writeAll(col.string);
-        const padding = col_widths[i] - col.string.len;
+    for (columns, 0..) |col_name, i| {
+        try writer.writeAll(col_name);
+        const padding = col_widths[i] - col_name.len;
         for (0..padding) |_| try writer.writeAll(" ");
         try writer.writeAll(" | ");
     }
@@ -185,38 +184,13 @@ fn displayAsTable(writer: anytype, allocator: std.mem.Allocator, columns: std.js
     // Print data rows
     for (rows) |row| {
         try writer.writeAll("| ");
-        const row_array = row.array;
-        for (row_array.items, 0..) |cell, i| {
+        for (columns, 0..) |col_name, i| {
             if (i >= col_widths.len) continue;
-            var printed_len: usize = 0;
-            switch (cell) {
-                .string => |s| {
-                    try writer.writeAll(s);
-                    printed_len = s.len;
-                },
-                .integer => |n| {
-                    var buf: [32]u8 = undefined;
-                    const str = try std.fmt.bufPrint(&buf, "{d}", .{n});
-                    try writer.writeAll(str);
-                    printed_len = str.len;
-                },
-                .float => |f| {
-                    var buf: [32]u8 = undefined;
-                    const str = try std.fmt.bufPrint(&buf, "{d}", .{f});
-                    try writer.writeAll(str);
-                    printed_len = str.len;
-                },
-                .bool => |b| {
-                    const str = if (b) "true" else "false";
-                    try writer.writeAll(str);
-                    printed_len = str.len;
-                },
-                .null => {
-                    try writer.writeAll("NULL");
-                    printed_len = 4;
-                },
-                else => {},
-            }
+            const cell_value = getRowValue(row, col_name);
+            const rendered = try renderCell(allocator, cell_value);
+            defer allocator.free(rendered);
+            try writer.writeAll(rendered);
+            const printed_len = rendered.len;
             const padding = col_widths[i] - printed_len;
             for (0..padding) |_| try writer.writeAll(" ");
             try writer.writeAll(" | ");
@@ -225,44 +199,29 @@ fn displayAsTable(writer: anytype, allocator: std.mem.Allocator, columns: std.js
     }
 }
 
-fn displayAsCsv(writer: anytype, columns: std.json.Array, rows: []std.json.Value) !void {
+fn displayAsCsv(writer: anytype, allocator: std.mem.Allocator, columns: []const []const u8, rows: []std.json.Value) !void {
     // Header
-    for (columns.items, 0..) |col, i| {
+    for (columns, 0..) |col, i| {
         if (i > 0) try writer.writeAll(",");
         try writer.writeAll("\"");
-        try writer.writeAll(col.string);
+        try writer.writeAll(col);
         try writer.writeAll("\"");
     }
     try writer.writeAll("\r\n");
 
     // Data rows
     for (rows) |row| {
-        const row_array = row.array;
-        for (row_array.items, 0..) |cell, i| {
+        for (columns, 0..) |col_name, i| {
             if (i > 0) try writer.writeAll(",");
-            switch (cell) {
-                .string => |s| {
-                    try writer.writeAll("\"");
-                    try writer.writeAll(s);
-                    try writer.writeAll("\"");
-                },
-                .integer => |n| {
-                    var buf: [32]u8 = undefined;
-                    const str = try std.fmt.bufPrint(&buf, "{d}", .{n});
-                    try writer.writeAll(str);
-                },
-                .float => |f| {
-                    var buf: [32]u8 = undefined;
-                    const str = try std.fmt.bufPrint(&buf, "{d}", .{f});
-                    try writer.writeAll(str);
-                },
-                .bool => |b| {
-                    try writer.writeAll(if (b) "true" else "false");
-                },
-                .null => {
-                    try writer.writeAll("NULL");
-                },
-                else => {},
+            const cell_value = getRowValue(row, col_name);
+            const rendered = try renderCell(allocator, cell_value);
+            defer allocator.free(rendered);
+            if (cell_value == .string) {
+                try writer.writeAll("\"");
+                try writer.writeAll(rendered);
+                try writer.writeAll("\"");
+            } else {
+                try writer.writeAll(rendered);
             }
         }
         try writer.writeAll("\r\n");
@@ -270,55 +229,57 @@ fn displayAsCsv(writer: anytype, columns: std.json.Array, rows: []std.json.Value
 }
 
 fn displayAsJson(writer: anytype, allocator: std.mem.Allocator, columns: std.json.Array, rows: []std.json.Value) !void {
-    // Create a JSON object with columns and data
-    var output = std.ArrayList(u8){};
-    defer output.deinit(allocator);
+    // Create a JSON object with columns and rows
+    var root = std.json.ObjectMap.init(allocator);
+    try root.put("columns", .{ .array = columns });
 
-    try output.appendSlice(allocator, "{\"columns\":[");
+    var rows_arr = std.json.Array.init(allocator);
+    for (rows) |row| {
+        try rows_arr.append(row);
+    }
+    try root.put("rows", .{ .array = rows_arr });
+
+    const root_value = std.json.Value{ .object = root };
+    const json_out = try std.json.Stringify.valueAlloc(allocator, root_value, .{});
+    defer allocator.free(json_out);
+
+    try writer.writeAll(json_out);
+}
+
+fn extractColumnNames(allocator: std.mem.Allocator, columns: std.json.Array) ![]const []const u8 {
+    var names = try allocator.alloc([]const u8, columns.items.len);
     for (columns.items, 0..) |col, i| {
-        if (i > 0) try output.appendSlice(allocator, ",");
-        try output.appendSlice(allocator, "\"");
-        try output.appendSlice(allocator, col.string);
-        try output.appendSlice(allocator, "\"");
-    }
-    try output.appendSlice(allocator, "],\"data\":[");
-
-    for (rows, 0..) |row, row_idx| {
-        if (row_idx > 0) try output.appendSlice(allocator, ",");
-        try output.appendSlice(allocator, "[");
-        const row_array = row.array;
-        for (row_array.items, 0..) |cell, i| {
-            if (i > 0) try output.appendSlice(allocator, ",");
-            switch (cell) {
-                .string => |s| {
-                    try output.appendSlice(allocator, "\"");
-                    try output.appendSlice(allocator, s);
-                    try output.appendSlice(allocator, "\"");
-                },
-                .integer => |n| {
-                    var buf: [32]u8 = undefined;
-                    const str = try std.fmt.bufPrint(&buf, "{d}", .{n});
-                    try output.appendSlice(allocator, str);
-                },
-                .float => |f| {
-                    var buf: [32]u8 = undefined;
-                    const str = try std.fmt.bufPrint(&buf, "{d}", .{f});
-                    try output.appendSlice(allocator, str);
-                },
-                .bool => |b| {
-                    try output.appendSlice(allocator, if (b) "true" else "false");
-                },
-                .null => {
-                    try output.appendSlice(allocator, "null");
-                },
-                else => {},
-            }
+        switch (col) {
+            .object => |obj| {
+                const name_val = obj.get("name") orelse return error.MissingColumnName;
+                if (name_val != .string) return error.InvalidColumnName;
+                names[i] = name_val.string;
+            },
+            .string => |s| {
+                names[i] = s;
+            },
+            else => return error.InvalidColumnName,
         }
-        try output.appendSlice(allocator, "]");
     }
-    try output.appendSlice(allocator, "]}");
+    return names;
+}
 
-    try writer.writeAll(output.items);
+fn getRowValue(row: std.json.Value, column_name: []const u8) std.json.Value {
+    if (row == .object) {
+        if (row.object.get(column_name)) |val| return val;
+    }
+    return std.json.Value{ .null = {} };
+}
+
+fn renderCell(allocator: std.mem.Allocator, cell: std.json.Value) ![]u8 {
+    return switch (cell) {
+        .string => |s| allocator.dupe(u8, s),
+        .integer => |n| std.fmt.allocPrint(allocator, "{d}", .{n}),
+        .float => |f| std.fmt.allocPrint(allocator, "{d}", .{f}),
+        .bool => |b| allocator.dupe(u8, if (b) "true" else "false"),
+        .null => allocator.dupe(u8, "NULL"),
+        else => std.json.Stringify.valueAlloc(allocator, cell, .{}),
+    };
 }
 
 test "shouldPage respects configuration" {

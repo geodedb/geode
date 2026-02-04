@@ -7,6 +7,10 @@ CLUSTER_SIZE=${CLUSTER_SIZE:-3}
 BASE_PORT=${BASE_PORT:-8443}
 BASE_DIR=${BASE_DIR:-"/tmp/geode_cluster"}
 BINARY=${BINARY:-"./zig-out/bin/geode"}
+ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+LEADER_NODE=${LEADER_NODE:-1}
+FOLLOWER_NODE=${FOLLOWER_NODE:-2}
 
 # Colors for output
 RED='\033[0;31m'
@@ -43,7 +47,8 @@ for ((i=1; i<=CLUSTER_SIZE; i++)); do
     # Start the node
     echo -e "${YELLOW}Starting node ${i} on port ${PORT}...${NC}"
 
-    $BINARY serve --listen-quic "127.0.0.1:${PORT}" --data-dir "$NODE_DIR/data" --disable-auth 2>&1 | sed "s/^/[node${i}] /" &
+    GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+        $BINARY serve --listen-quic "127.0.0.1:${PORT}" --data-dir "$NODE_DIR/data" 2>&1 | sed "s/^/[node${i}] /" &
 
     PIDS+=($!)
 
@@ -59,7 +64,7 @@ sleep 3
 echo -e "${YELLOW}Testing node connectivity...${NC}"
 for ((i=1; i<=CLUSTER_SIZE; i++)); do
     PORT=$((BASE_PORT + i - 1))
-    if $BINARY query "RETURN 1 AS x" --server "127.0.0.1:${PORT}" --insecure >/dev/null 2>&1; then
+    if $BINARY query "RETURN 1 AS x" --server "127.0.0.1:${PORT}" --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" >/dev/null 2>&1; then
         echo -e "${GREEN}Node ${i} OK${NC}"
     else
         echo -e "${RED}Node ${i} query failed${NC}"

@@ -29,6 +29,11 @@ pub const EnvironmentConfig = struct {
     spill_threshold: usize = 0,
     storage_checksum_error: bool = false,
     wal_compact_interval: usize = 5,
+    wal_skip_ratio_override: ?f64 = null,
+    memcurve_profile: bool = false,
+    compact_profile: bool = false,
+    disable_estimates: bool = false,
+    order_keys_expr: bool = false,
     // CANARY: REQ=REQ-ABAC-WIRE-005; FEATURE="ABAC Enforcement"; ASPECT=EnvConfig; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
     // GAP-0165: Environment flag to enable ABAC enforcement
     abac_enabled: bool = false,
@@ -99,13 +104,25 @@ pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profil
         if (env.get("GEODE_WAL_COMPACT_INTERVAL")) |ci| {
             config.wal_compact_interval = std.fmt.parseInt(usize, ci, 10) catch 5;
         }
+        if (env.get("GEODE_WAL_SKIP_RATIO_OVERRIDE")) |sr| {
+            config.wal_skip_ratio_override = std.fmt.parseFloat(f64, sr) catch config.wal_skip_ratio_override;
+        }
 
         if (env.get("GEODE_NULLS_LAST")) |_| {
             server_flags.setNullsLast(true);
         }
 
         if (env.get("GEODE_PROFILE_MEMCURVE")) |_| {
+            config.memcurve_profile = true;
             memcurve_profile_ref.* = true;
+        }
+
+        if (env.get("GEODE_PROFILE_COMPACT")) |_| {
+            config.compact_profile = true;
+        }
+
+        if (env.get("GEODE_DISABLE_ESTIMATES")) |_| {
+            config.disable_estimates = true;
         }
 
         if (env.get("GEODE_ADAPT_ESTIMATES")) |_| {
@@ -116,23 +133,22 @@ pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profil
             index_catalog.setDisableCatalog(true);
         }
 
+        if (env.get("GEODE_ORDER_KEYS_EXPR")) |val| {
+            if (val.len == 0) {
+                config.order_keys_expr = true;
+            } else if (std.ascii.eqlIgnoreCase(val, "1") or std.ascii.eqlIgnoreCase(val, "true") or std.ascii.eqlIgnoreCase(val, "on")) {
+                config.order_keys_expr = true;
+            } else {
+                config.order_keys_expr = false;
+            }
+        }
+
         // CANARY: REQ=REQ-ABAC-WIRE-008; FEATURE="ABAC Enforcement"; ASPECT=EnvVar; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
         // GAP-0165: Check for GEODE_ENABLE_ABAC environment variable to enable ABAC enforcement
         if (env.get("GEODE_ENABLE_ABAC")) |val| {
             config.abac_enabled = val.len > 0 and (val[0] == '1' or std.ascii.eqlIgnoreCase(val, "true"));
         }
 
-        if (env.get("GEODE_CHECKSUM_TEST_PATH")) |p| {
-            var pm = storage_pm.PageManager.initPersistent(allocator, 4096, p);
-            defer pm.deinit();
-            pm.loadPage(p, 0) catch |e| switch (e) {
-                error.PageChecksumMismatch => {
-                    config.storage_checksum_error = true;
-                    log.err("Storage page checksum mismatch detected during startup", &.{Attr.string("path", p)});
-                },
-                else => {},
-            };
-        }
     } else |_| {}
 
     return config;
@@ -228,16 +244,22 @@ pub fn initialize(
     index_catalog.initIndexCatalog(allocator);
 
     // Process environment variables
-    const env_config = try processEnvironmentVariables(allocator, memcurve_profile_ref);
+    var env_config = try processEnvironmentVariables(allocator, memcurve_profile_ref);
 
     // Apply ORDER BY key policy
-    server_flags.setOrderKeysExpr(order_keys_mode_expr);
+    const order_expr = if (order_keys_mode_expr) true else env_config.order_keys_expr;
+    server_flags.setOrderKeysExpr(order_expr);
 
     // CANARY: REQ=REQ-QUIC-CATALOG-003; FEATURE="CatalogDataDirIsolation"; ASPECT=ServerInit; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
     // Note: GEODE_DATA_DIR environment variable is read at startup if needed;
     // direct configuration via graph_store.setDataDirOverride() is preferred
     // Set data directory for GraphStore persistence (canonical configuration for isolation)
     graph_store.setDataDirOverride(allocator, data_dir);
+    // Initialize GraphStore so we can surface checksum diagnostics if needed.
+    _ = graph_store.getGlobalStore(allocator);
+    if (graph_store.lastLoadHadChecksumError()) {
+        env_config.storage_checksum_error = true;
+    }
 
     // Initialize persistent storage and catalog
     const storage = try initializeStorage(allocator, data_dir, catalog_create_name);

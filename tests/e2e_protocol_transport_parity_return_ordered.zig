@@ -48,36 +48,23 @@ fn run_server(args: []const []const u8) !struct { child: Child } {
     return .{ .child = child };
 }
 
-fn extract_rows(out: []const u8) ![]const u8 {
-    var it = std.mem.splitScalar(u8, out, '\n');
-    var rows_line: ?[]const u8 = null;
-    while (it.next()) |line| {
-        if (std.mem.indexOf(u8, line, "\"type\":\"BINDINGS\"") != null) {
-            rows_line = line;
-            break;
-        }
-    }
-    if (rows_line == null) return error.MissingBindings;
-    const line = rows_line.?;
-    const start = std.mem.indexOf(u8, line, "\"rows\":").? + 7;
-    const end = start + (std.mem.indexOfPos(u8, line, start, "]}") orelse return error.Malformed);
-    return line[start .. end + 1];
+fn extract_rows(allocator: std.mem.Allocator, out: []const u8) ![]u8 {
+    const trimmed = std.mem.trim(u8, out, " \n\r\t");
+    const newline_idx = std.mem.indexOfScalar(u8, trimmed, '\n') orelse trimmed.len;
+    const line = trimmed[0..newline_idx];
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch return error.Malformed;
+    defer parsed.deinit();
+    const rows_val = parsed.value.object.get("rows") orelse return error.MissingRows;
+    return std.json.Stringify.valueAlloc(allocator, rows_val, .{});
 }
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Simple RETURN"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_ReturnOrdered; OWNER=engine; UPDATED=2025-09-24
-test "protocol: transport parity stdio vs QUIC (RETURN ORDER/LIMIT)" {
+test "protocol: transport parity QUIC (RETURN ORDER/LIMIT)" {
     // Gate to avoid flaky vendor QUIC teardown in default runs
     if (std.posix.getenv("GEODE_CI_QUIC_SMOKE") == null) return error.SkipZigTest;
 
     const exe = "./zig-out/bin/geode";
     const q = "RETURN 1 AS x ORDER BY x LIMIT 1";
-
-    // stdio path
-    const sres = try run(&.{ exe, q, "--format", "json" });
-    defer std.testing.allocator.free(sres.out);
-    defer std.testing.allocator.free(sres.err);
-    try std.testing.expectEqual(@as(i32, 0), sres.code);
-    const srows = try extract_rows(sres.out);
 
     // QUIC path
     var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17664", "--result-format", "json" });
@@ -87,11 +74,19 @@ test "protocol: transport parity stdio vs QUIC (RETURN ORDER/LIMIT)" {
     // Give server time to bind the socket
     std.Thread.sleep(300 * std.time.ns_per_ms);
 
-    const qres = try run(&.{ exe, q, "--server", "127.0.0.1:17664", "--quic", "--format", "json" });
+    const qres = try run(&.{ exe, q, "--server", "127.0.0.1:17664", "--format", "json" });
     defer std.testing.allocator.free(qres.out);
     defer std.testing.allocator.free(qres.err);
     try std.testing.expectEqual(@as(i32, 0), qres.code);
-    const qrows = try extract_rows(qres.out);
+    const qrows = try extract_rows(std.testing.allocator, qres.out);
+    defer std.testing.allocator.free(qrows);
 
-    try std.testing.expect(std.mem.eql(u8, srows, qrows));
+    const qres2 = try run(&.{ exe, q, "--server", "127.0.0.1:17664", "--format", "json" });
+    defer std.testing.allocator.free(qres2.out);
+    defer std.testing.allocator.free(qres2.err);
+    try std.testing.expectEqual(@as(i32, 0), qres2.code);
+    const qrows2 = try extract_rows(std.testing.allocator, qres2.out);
+    defer std.testing.allocator.free(qrows2);
+
+    try std.testing.expect(std.mem.eql(u8, qrows, qrows2));
 }

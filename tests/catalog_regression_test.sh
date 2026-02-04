@@ -23,6 +23,25 @@ if [ ! -f "$GEODE_BIN" ]; then
     exit 1
 fi
 
+SERVER_PORT=8454
+ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+DATA_DIR=$(mktemp -d /tmp/geode_catalog_regression_XXXXXX)
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+    "$GEODE_BIN" serve --listen 127.0.0.1:${SERVER_PORT} --data-dir "${DATA_DIR}" > /tmp/geode_catalog_regression.log 2>&1 &
+SERVER_PID=$!
+sleep 2
+
+cleanup() {
+    kill $SERVER_PID 2>/dev/null || true
+    wait $SERVER_PID 2>/dev/null || true
+    rm -rf "${DATA_DIR}"
+    rm -f /tmp/geode_catalog_regression.log
+}
+trap cleanup EXIT
+
+SERVER_ADDR="127.0.0.1:${SERVER_PORT}"
+
 # Test counter
 TOTAL_TESTS=0
 PASSED_TESTS=0
@@ -41,7 +60,7 @@ run_test() {
     # Run the query
     if [ "$should_fail" = "true" ]; then
         # Test should fail
-        if "$GEODE_BIN" query "$query" --insecure >/dev/null 2>&1; then
+        if "$GEODE_BIN" query --server "$SERVER_ADDR" "$query" --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" >/dev/null 2>&1; then
             echo -e "${RED}FAIL${NC} (expected failure but succeeded)"
             FAILED_TESTS=$((FAILED_TESTS + 1))
             return 1
@@ -53,7 +72,7 @@ run_test() {
     else
         # Test should succeed
         local output
-        output=$("$GEODE_BIN" query "$query" --insecure 2>&1)
+        output=$("$GEODE_BIN" query --server "$SERVER_ADDR" "$query" --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" 2>&1)
         local exit_code=$?
 
         if [ $exit_code -eq 0 ]; then
@@ -83,40 +102,40 @@ echo
 # Test 1: TYPED clause
 run_test "CREATE GRAPH with TYPED ANY" \
     "CREATE GRAPH typed_regression_test TYPED ANY" \
-    "property graph typed_regression_test created successfully"
+    "\"status_class\":\"00000\""
 
 # Test 2: AS COPY OF clause (need source graph first)
 run_test "CREATE source graph for COPY OF test" \
     "CREATE GRAPH copy_source_regression ANY" \
-    "property graph copy_source_regression created successfully"
+    "\"status_class\":\"00000\""
 
 run_test "CREATE GRAPH with AS COPY OF" \
     "CREATE GRAPH copy_target_regression ANY AS COPY OF copy_source_regression" \
-    "property graph copy_target_regression created successfully"
+    "\"status_class\":\"00000\""
 
 # Test 3: OR REPLACE with TYPED
 run_test "CREATE initial graph for REPLACE test" \
     "CREATE GRAPH replace_regression_test TYPED ANY" \
-    "property graph replace_regression_test created successfully"
+    "\"status_class\":\"00000\""
 
 run_test "CREATE OR REPLACE GRAPH with TYPED" \
     "CREATE OR REPLACE GRAPH replace_regression_test TYPED ANY" \
-    "property graph replace_regression_test replaced successfully"
+    "\"status_class\":\"00000\""
 
 # Test 4: PROPERTY GRAPH with TYPED
 run_test "CREATE PROPERTY GRAPH with TYPED" \
     "CREATE PROPERTY GRAPH property_regression_test TYPED ANY PROPERTY GRAPH" \
-    "property graph property_regression_test created successfully"
+    "\"status_class\":\"00000\""
 
 # Test 5: Backward compatibility
 run_test "Traditional CREATE GRAPH (backward compatibility)" \
     "CREATE GRAPH backward_regression_test ANY" \
-    "property graph backward_regression_test created successfully"
+    "\"status_class\":\"00000\""
 
 # Test 6: IF NOT EXISTS with TYPED
 run_test "CREATE GRAPH IF NOT EXISTS with TYPED" \
     "CREATE GRAPH IF NOT EXISTS conditional_regression_test TYPED ANY" \
-    "property graph conditional_regression_test created successfully"
+    "\"status_class\":\"00000\""
 
 # Test 7: Error cases
 echo
@@ -145,11 +164,11 @@ echo
 
 run_test "CREATE SCHEMA" \
     "CREATE SCHEMA regression_test_schema" \
-    "Schema regression_test_schema created successfully"
+    "\"status_class\":\"00000\""
 
 run_test "CREATE and DROP SCHEMA (single operation)" \
     "CREATE SCHEMA temp_schema; DROP SCHEMA temp_schema" \
-    ""
+    "\"status_class\":\"00000\""
 
 # Test 9: Basic graph operations (ensure still working)
 echo
@@ -158,11 +177,11 @@ echo
 
 run_test "CREATE basic GRAPH" \
     "CREATE GRAPH basic_regression_test ANY" \
-    "property graph basic_regression_test created successfully"
+    "\"status_class\":\"00000\""
 
 run_test "DROP GRAPH IF EXISTS" \
     "DROP GRAPH IF EXISTS basic_regression_test" \
-    ""
+    "\"status_class\":\"00000\""
 
 # Summary
 echo

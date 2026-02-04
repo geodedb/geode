@@ -4,7 +4,7 @@
 //!
 //! Test Coverage:
 //! - Data directory management (setDataDir/getDataDir)
-//! - Graph storage creation (createGraphStorage)
+//! - Graph storage creation (createGraphStore)
 //! - Graph persistence (saveNamedGraph)
 //! - Graph loading (loadNamedGraph)
 //! - Multi-graph isolation
@@ -27,7 +27,7 @@ const graph_storage_mgr = struct {
         return graph_store.getDataDirOverride();
     }
 
-    pub fn clearGraphStorage() void {
+    pub fn clearGraphStore() void {
         if (graph_store.getCurrentGlobalStore()) |store| {
             store.clearNodes();
             store.clearGraphRegistry();
@@ -35,15 +35,15 @@ const graph_storage_mgr = struct {
         }
     }
 
-    pub fn clearMultiGraphStorage() void {
-        clearGraphStorage();
+    pub fn clearMultiGraphStore() void {
+        clearGraphStore();
     }
 
-    pub fn getOrCreateGraphStorage(allocator: std.mem.Allocator) *geode.graph_common.GraphStorage {
+    pub fn getOrCreateGraphStore(allocator: std.mem.Allocator) *geode.graph_common.GraphStore {
         return graph_store.getGlobalStore(allocator);
     }
 
-    pub fn createGraphStorage(allocator: std.mem.Allocator, name: []const u8) !*geode.graph_common.GraphStorage {
+    pub fn createGraphStore(allocator: std.mem.Allocator, name: []const u8) !*geode.graph_common.GraphStore {
         const store = graph_store.getGlobalStore(allocator);
         try store.createGraph(name);
         return store;
@@ -64,13 +64,13 @@ const graph_storage_mgr = struct {
         store.saveIfDirty();
     }
 
-    pub fn loadNamedGraph(allocator: std.mem.Allocator, graph_name: []const u8) !*geode.graph_common.GraphStorage {
+    pub fn loadNamedGraph(allocator: std.mem.Allocator, graph_name: []const u8) !*geode.graph_common.GraphStore {
         const store = graph_store.getGlobalStore(allocator);
         if (!store.graphExists(graph_name)) return error.GraphNotFound;
         return store;
     }
 
-    pub fn dropGraphStorage(name: []const u8) !void {
+    pub fn dropGraphStore(name: []const u8) !void {
         const store = graph_store.getGlobalStore(std.heap.page_allocator);
         try store.dropGraph(name);
     }
@@ -85,7 +85,7 @@ const graph_storage_mgr = struct {
 // Test Utilities
 // ============================================================================
 
-/// Get test allocator - use page_allocator to avoid false positives from GraphStorage
+/// Get test allocator - use page_allocator to avoid false positives from GraphStore
 /// internal allocations that aren't fully freed by deinit (pre-existing issue).
 fn getTestAllocator() std.mem.Allocator {
     return std.heap.page_allocator;
@@ -110,8 +110,8 @@ fn cleanupTestDir(allocator: std.mem.Allocator, dir: []const u8) void {
 /// Reset global state between tests
 fn resetGlobalState() void {
     // Clear graph storage first (while store still exists)
-    graph_storage_mgr.clearGraphStorage();
-    graph_storage_mgr.clearMultiGraphStorage();
+    graph_storage_mgr.clearGraphStore();
+    graph_storage_mgr.clearMultiGraphStore();
     // Deinit the global store
     graph_store.deinitGlobalStore();
     // Clear data dir (this also clears the override in graph_store)
@@ -121,10 +121,10 @@ fn resetGlobalState() void {
 }
 
 /// Force a fresh GraphStore instance loaded from disk for the given data dir
-fn reloadStore(allocator: std.mem.Allocator, data_dir: []const u8) *geode.graph_common.GraphStorage {
+fn reloadStore(allocator: std.mem.Allocator, data_dir: []const u8) *geode.graph_common.GraphStore {
     graph_store.deinitGlobalStore();
     graph_storage_mgr.setDataDir(data_dir);
-    return graph_storage_mgr.getOrCreateGraphStorage(allocator);
+    return graph_storage_mgr.getOrCreateGraphStore(allocator);
 }
 
 // ============================================================================
@@ -171,7 +171,7 @@ test "setDataDir can be set to null" {
 // Graph Storage Creation Tests
 // ============================================================================
 
-test "createGraphStorage creates new empty graph" {
+test "createGraphStore creates new empty graph" {
     resetGlobalState();
     defer resetGlobalState();
 
@@ -180,7 +180,7 @@ test "createGraphStorage creates new empty graph" {
     defer cleanupTestDir(allocator, test_dir);
     graph_storage_mgr.setDataDir(test_dir);
 
-    const graph = try graph_storage_mgr.createGraphStorage(allocator, "test_graph_create");
+    const graph = try graph_storage_mgr.createGraphStore(allocator, "test_graph_create");
 
     // Verify graph is empty
     try testing.expectEqual(@as(usize, 0), graph.nodes.count());
@@ -190,7 +190,7 @@ test "createGraphStorage creates new empty graph" {
     try testing.expect(graph_storage_mgr.graphExists("test_graph_create"));
 }
 
-test "createGraphStorage fails for duplicate graph name" {
+test "createGraphStore fails for duplicate graph name" {
     resetGlobalState();
     defer resetGlobalState();
 
@@ -200,14 +200,14 @@ test "createGraphStorage fails for duplicate graph name" {
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create first graph
-    _ = try graph_storage_mgr.createGraphStorage(allocator, "duplicate_test");
+    _ = try graph_storage_mgr.createGraphStore(allocator, "duplicate_test");
 
     // Try to create another with same name - should fail
-    const result = graph_storage_mgr.createGraphStorage(allocator, "duplicate_test");
+    const result = graph_storage_mgr.createGraphStore(allocator, "duplicate_test");
     try testing.expectError(error.GraphAlreadyExists, result);
 }
 
-test "createGraphStorage allows multiple unique graphs" {
+test "createGraphStore allows multiple unique graphs" {
     resetGlobalState();
     defer resetGlobalState();
 
@@ -217,9 +217,9 @@ test "createGraphStorage allows multiple unique graphs" {
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create multiple graphs with unique names
-    _ = try graph_storage_mgr.createGraphStorage(allocator, "graph_alpha");
-    _ = try graph_storage_mgr.createGraphStorage(allocator, "graph_beta");
-    _ = try graph_storage_mgr.createGraphStorage(allocator, "graph_gamma");
+    _ = try graph_storage_mgr.createGraphStore(allocator, "graph_alpha");
+    _ = try graph_storage_mgr.createGraphStore(allocator, "graph_beta");
+    _ = try graph_storage_mgr.createGraphStore(allocator, "graph_gamma");
 
     // All should exist
     try testing.expect(graph_storage_mgr.graphExists("graph_alpha"));
@@ -262,7 +262,7 @@ test "saveNamedGraph creates directory and files" {
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create and populate a graph
-    const graph = try graph_storage_mgr.createGraphStorage(allocator, "persist_test");
+    const graph = try graph_storage_mgr.createGraphStore(allocator, "persist_test");
     var labels = [_][]const u8{"Person"};
     const node_id = try graph.createNodeWithGraph(&labels, "persist_test");
     try graph.setNodeProperty(node_id, "name", .{ .String = "Alice" });
@@ -287,7 +287,7 @@ test "saveNamedGraph falls back to temp when no data directory" {
     graph_storage_mgr.setDataDir(null);
 
     // Create a graph
-    _ = try graph_storage_mgr.createGraphStorage(allocator, "no_dir_test");
+    _ = try graph_storage_mgr.createGraphStore(allocator, "no_dir_test");
 
     // Should fall back to temp path and succeed
     try graph_storage_mgr.saveNamedGraph(allocator, "no_dir_test");
@@ -325,7 +325,7 @@ test "saveNamedGraph preserves node data correctly" {
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create graph with multiple nodes and properties
-    const graph = try graph_storage_mgr.createGraphStorage(allocator, "node_data_test");
+    const graph = try graph_storage_mgr.createGraphStore(allocator, "node_data_test");
     var alice_labels = [_][]const u8{"Person"};
     const alice_id = try graph.createNodeWithGraph(&alice_labels, "node_data_test");
     try graph.setNodeProperty(alice_id, "name", .{ .String = "Alice" });
@@ -363,7 +363,7 @@ test "saveNamedGraph preserves edge data correctly" {
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create graph with edges
-    const graph = try graph_storage_mgr.createGraphStorage(allocator, "edge_data_test");
+    const graph = try graph_storage_mgr.createGraphStore(allocator, "edge_data_test");
     var labels = [_][]const u8{"Person"};
     const from_id = try graph.createNodeWithGraph(&labels, "edge_data_test");
     const to_id = try graph.createNodeWithGraph(&labels, "edge_data_test");
@@ -396,7 +396,7 @@ test "loadNamedGraph loads persisted graph" {
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create, populate, and save a graph
-    const original = try graph_storage_mgr.createGraphStorage(allocator, "load_test");
+    const original = try graph_storage_mgr.createGraphStore(allocator, "load_test");
     var labels = [_][]const u8{"TestLabel"};
     const node_id = try original.createNodeWithGraph(&labels, "load_test");
     try original.setNodeProperty(node_id, "value", .{ .Int = 12345 });
@@ -446,7 +446,7 @@ test "multiple graphs can be created and persisted in sequence" {
     const graph_names = [_][]const u8{ "batch_g1", "batch_g2", "batch_g3" };
 
     for (graph_names) |name| {
-        _ = try graph_storage_mgr.createGraphStorage(allocator, name);
+        _ = try graph_storage_mgr.createGraphStore(allocator, name);
         try graph_storage_mgr.saveNamedGraph(allocator, name);
     }
 
@@ -474,12 +474,12 @@ test "graphs persist independently in batch operations" {
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create graphs with different data
-    const g1 = try graph_storage_mgr.createGraphStorage(allocator, "independent_g1");
+    const g1 = try graph_storage_mgr.createGraphStore(allocator, "independent_g1");
     var g1_labels = [_][]const u8{"TypeA"};
     _ = try g1.createNodeWithGraph(&g1_labels, "independent_g1");
     try graph_storage_mgr.saveNamedGraph(allocator, "independent_g1");
 
-    const g2 = try graph_storage_mgr.createGraphStorage(allocator, "independent_g2");
+    const g2 = try graph_storage_mgr.createGraphStore(allocator, "independent_g2");
     var g2_labels = [_][]const u8{"TypeB"};
     _ = try g2.createNodeWithGraph(&g2_labels, "independent_g2");
     _ = try g2.createNodeWithGraph(&g2_labels, "independent_g2");
@@ -566,7 +566,7 @@ test "graphExists returns true after graph creation" {
     try testing.expect(!graph_storage_mgr.graphExists("existence_test"));
 
     // Create
-    _ = try graph_storage_mgr.createGraphStorage(allocator, "existence_test");
+    _ = try graph_storage_mgr.createGraphStore(allocator, "existence_test");
 
     // After creation
     try testing.expect(graph_storage_mgr.graphExists("existence_test"));
@@ -576,7 +576,7 @@ test "graphExists returns true after graph creation" {
 // Drop Graph Tests
 // ============================================================================
 
-test "dropGraphStorage removes graph" {
+test "dropGraphStore removes graph" {
     resetGlobalState();
     defer resetGlobalState();
 
@@ -586,17 +586,17 @@ test "dropGraphStorage removes graph" {
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create and verify
-    _ = try graph_storage_mgr.createGraphStorage(allocator, "drop_test");
+    _ = try graph_storage_mgr.createGraphStore(allocator, "drop_test");
     try testing.expect(graph_storage_mgr.graphExists("drop_test"));
 
     // Drop
-    try graph_storage_mgr.dropGraphStorage("drop_test");
+    try graph_storage_mgr.dropGraphStore("drop_test");
 
     // Verify removed
     try testing.expect(!graph_storage_mgr.graphExists("drop_test"));
 }
 
-test "dropGraphStorage fails for non-existent graph" {
+test "dropGraphStore fails for non-existent graph" {
     resetGlobalState();
     defer resetGlobalState();
 
@@ -605,11 +605,11 @@ test "dropGraphStorage fails for non-existent graph" {
     defer cleanupTestDir(allocator, test_dir);
     graph_storage_mgr.setDataDir(test_dir);
 
-    const result = graph_storage_mgr.dropGraphStorage("never_existed_drop");
+    const result = graph_storage_mgr.dropGraphStore("never_existed_drop");
     try testing.expectError(error.GraphNotFound, result);
 }
 
-test "dropGraphStorage fails for default graph" {
+test "dropGraphStore fails for default graph" {
     resetGlobalState();
     defer resetGlobalState();
 
@@ -618,7 +618,7 @@ test "dropGraphStorage fails for default graph" {
     defer cleanupTestDir(allocator, test_dir);
     graph_storage_mgr.setDataDir(test_dir);
 
-    const result = graph_storage_mgr.dropGraphStorage(graph_storage_mgr.DEFAULT_GRAPH_NAME);
+    const result = graph_storage_mgr.dropGraphStore(graph_storage_mgr.DEFAULT_GRAPH_NAME);
     try testing.expectError(error.CannotDropDefaultGraph, result);
 }
 
@@ -637,7 +637,7 @@ test "graph names with special characters" {
     graph_storage_mgr.setDataDir(test_dir);
 
     // Test with underscores and numbers (valid identifiers)
-    _ = try graph_storage_mgr.createGraphStorage(allocator, "graph_with_underscores_123");
+    _ = try graph_storage_mgr.createGraphStore(allocator, "graph_with_underscores_123");
     try graph_storage_mgr.saveNamedGraph(allocator, "graph_with_underscores_123");
 
     try testing.expect(graph_storage_mgr.graphExists("graph_with_underscores_123"));
@@ -654,7 +654,7 @@ test "empty graph persists correctly" {
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create empty graph
-    _ = try graph_storage_mgr.createGraphStorage(allocator, "empty_test");
+    _ = try graph_storage_mgr.createGraphStore(allocator, "empty_test");
     try graph_storage_mgr.saveNamedGraph(allocator, "empty_test");
 
     // Verify unified store file exists (header-only data for empty graph)
@@ -675,7 +675,7 @@ test "large graph with many nodes persists" {
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create graph with 100 nodes
-    const graph = try graph_storage_mgr.createGraphStorage(allocator, "large_test");
+    const graph = try graph_storage_mgr.createGraphStore(allocator, "large_test");
 
     var labels = [_][]const u8{"TestNode"};
     var i: u64 = 1;
@@ -717,7 +717,7 @@ test "full lifecycle: create, modify, save, reload, verify" {
     var post_id: u64 = 0;
     var edge_id: u64 = 0;
     {
-        const graph = try graph_storage_mgr.createGraphStorage(allocator, "lifecycle_graph");
+        const graph = try graph_storage_mgr.createGraphStore(allocator, "lifecycle_graph");
         var user_labels = [_][]const u8{"User"};
         user_id = try graph.createNodeWithGraph(&user_labels, "lifecycle_graph");
         try graph.setNodeProperty(user_id, "name", .{ .String = "TestUser" });

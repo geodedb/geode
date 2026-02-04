@@ -17,7 +17,7 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_001_ModuleStructure" {
     _ = geode.materialized_views;
 
     // Test that graph_common types are accessible
-    _ = geode.graph_common.GraphStorage;
+    _ = geode.graph_common.GraphStore;
     _ = geode.graph_common.PropertyValue;
     _ = geode.graph_common.Binding;
     _ = geode.graph_common.BindingValue;
@@ -71,9 +71,9 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_002_CircularDependencyPrevention" 
 test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_003_SharedTypeAccessibility" {
     // Test that shared types are accessible from all required locations
 
-    // Test GraphStorage accessibility
+    // Test GraphStore accessibility
     const allocator = testing.allocator;
-    var graph = geode.graph_common.GraphStorage.init(allocator);
+    var graph = geode.graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Test that we can create nodes and edges
@@ -215,7 +215,7 @@ test "Cross-module type compatibility" {
     try testing.expect(schema.items.len == 5);
 
     // Test that PropertyValue works with graph operations
-    var graph = geode.graph_common.GraphStorage.init(allocator);
+    var graph = geode.graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Test adding nodes with various property types

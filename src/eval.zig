@@ -2076,15 +2076,8 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             const v = try evalExpr(allocator, isq.value.*, env);
             if (isNull(v)) return Value{ .Null = {} };
 
-            // Execute the subquery
-            // M2: Use default context with global catalog for legacy code path
-            const context = getExecutionCallbacks().getDefaultContext(allocator) catch |err| {
-                return switch (err) {
-                    error.OutOfMemory => error.OutOfMemory,
-                    else => error.Unsupported,
-                };
-            };
-            var result = getExecutionCallbacks().executeQueryWithContext(allocator, isq.subquery.*, context) catch |err| {
+            // Execute the subquery using the caller-provided execution context
+            var result = getExecutionCallbacks().executeQueryWithEnv(allocator, isq.subquery.*, env) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
                     else => error.Unsupported,
@@ -2123,15 +2116,8 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             const v = try evalExpr(allocator, nisq.value.*, env);
             if (isNull(v)) return Value{ .Null = {} };
 
-            // Execute the subquery
-            // M2: Use default context with global catalog for legacy code path
-            const context = getExecutionCallbacks().getDefaultContext(allocator) catch |err| {
-                return switch (err) {
-                    error.OutOfMemory => error.OutOfMemory,
-                    else => error.Unsupported,
-                };
-            };
-            var result = getExecutionCallbacks().executeQueryWithContext(allocator, nisq.subquery.*, context) catch |err| {
+            // Execute the subquery using the caller-provided execution context
+            var result = getExecutionCallbacks().executeQueryWithEnv(allocator, nisq.subquery.*, env) catch |err| {
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
                     else => error.Unsupported,

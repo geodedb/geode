@@ -8,7 +8,6 @@ const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
 const valuesEqual = execution.valuesEqual;
-const executeQueryNoLimit = execution.executeQueryNoLimit;
 const executeQueryNoLimitWithContext = execution.executeQueryNoLimitWithContext;
 const executeQueryWithBindings = execution.executeQueryWithBindings;
 const sortRows = execution.sortRows;
@@ -31,18 +30,13 @@ pub fn rowsEqual(a: []Value, b: []Value) bool {
     return true;
 }
 
-/// Execute UNION query (wrapper)
-pub fn executeUnion(allocator: std.mem.Allocator, union_query: ast.UnionQuery) !ExecutionResult {
-    return executeUnionWithContext(allocator, union_query, .{});
-}
-
 /// Execute INTERSECT query
-pub fn executeIntersect(allocator: std.mem.Allocator, intersect_query: ast.BinarySet) !ExecutionResult {
+pub fn executeIntersect(allocator: std.mem.Allocator, intersect_query: ast.BinarySet, context: ExecutionContext) !ExecutionResult {
     // Execute left and right queries
-    var left_result = try executeQueryNoLimit(allocator, intersect_query.left);
+    var left_result = try executeQueryNoLimitWithContext(allocator, intersect_query.left, context);
     errdefer left_result.deinit(allocator);
 
-    var right_result = try executeQueryNoLimit(allocator, intersect_query.right);
+    var right_result = try executeQueryNoLimitWithContext(allocator, intersect_query.right, context);
     defer right_result.deinit(allocator);
 
     // Validate column count match
@@ -123,12 +117,12 @@ pub fn executeIntersect(allocator: std.mem.Allocator, intersect_query: ast.Binar
 }
 
 /// Execute EXCEPT query
-pub fn executeExcept(allocator: std.mem.Allocator, except_query: ast.BinarySet) !ExecutionResult {
+pub fn executeExcept(allocator: std.mem.Allocator, except_query: ast.BinarySet, context: ExecutionContext) !ExecutionResult {
     // Execute left and right queries
-    var left_result = try executeQueryNoLimit(allocator, except_query.left);
+    var left_result = try executeQueryNoLimitWithContext(allocator, except_query.left, context);
     errdefer left_result.deinit(allocator);
 
-    var right_result = try executeQueryNoLimit(allocator, except_query.right);
+    var right_result = try executeQueryNoLimitWithContext(allocator, except_query.right, context);
     defer right_result.deinit(allocator);
 
     // Validate column count match

@@ -82,8 +82,8 @@ When a safety guard trips during MATCH evaluation (result/frontier/hops), the se
 Guard threshold overrides (test/support use only):
 
 - CLI (preferred for determinism):
-  - `geoded --match-max-results <N>` lowers the `max_results` guard at process start.
-  - `geoded --match-max-frontier <N>` lowers the `max_frontier` guard at process start.
+  - `geode serve --match-max-results <N>` lowers the `max_results` guard at process start.
+  - `geode serve --match-max-frontier <N>` lowers the `max_frontier` guard at process start.
 - Environment (legacy/fallback): `GEODE_MATCH_MAX_RESULTS` and `GEODE_MATCH_MAX_FRONTIER` may still be set; if both CLI and env are provided, the CLI flags win.
 
 Production deployments SHOULD leave these unset (defaults: 100_000). Frames emitted under overridden thresholds still carry the additional status for transparency.

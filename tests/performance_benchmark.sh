@@ -86,28 +86,34 @@ make release > /dev/null 2>&1 || make build > /dev/null 2>&1
 
 # Start server
 echo "Starting server..."
-./zig-out/bin/geode serve --listen 0.0.0.0:8443 > /tmp/perf_server.log 2>&1 &
+ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+DATA_DIR=$(mktemp -d /tmp/geode_perf_XXXXXX)
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+    ./zig-out/bin/geode serve --listen 0.0.0.0:8443 --data-dir "${DATA_DIR}" > /tmp/perf_server.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
 # Cleanup on exit
-trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null; rm -f /tmp/perf_server.log" EXIT
+trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null; rm -f /tmp/perf_server.log; rm -rf ${DATA_DIR}" EXIT
+
+QUERY_CMD="./zig-out/bin/geode query --server 127.0.0.1:8443 --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
 
 echo
 echo -e "${BLUE}=== Phase 1: Basic Operation Benchmarks ===${NC}"
 
 benchmark "Simple RETURN query" \
-    "./zig-out/bin/geode query 'RETURN 1 AS x' --insecure" \
+    "$QUERY_CMD 'RETURN 1 AS x'" \
     50 \
     $THRESHOLD_SIMPLE_QUERY
 
 benchmark "Simple CREATE node" \
-    "./zig-out/bin/geode query 'CREATE (n:BenchNode {id: \$RANDOM})' --insecure" \
+    "$QUERY_CMD 'CREATE (n:BenchNode {id: \$RANDOM})'" \
     50 \
     $THRESHOLD_INSERT
 
 benchmark "Simple MATCH query" \
-    "./zig-out/bin/geode query 'MATCH (n) RETURN count(n) AS cnt' --insecure" \
+    "$QUERY_CMD 'MATCH (n) RETURN count(n) AS cnt'" \
     50 \
     $THRESHOLD_SIMPLE_QUERY
 
@@ -118,24 +124,24 @@ echo -e "${BLUE}=== Phase 2: Data Insertion Performance ===${NC}"
 echo -n "Creating test dataset (1000 nodes)... "
 START=$(date +%s%N)
 for i in $(seq 1 1000); do
-    ./zig-out/bin/geode query "CREATE (p:Person {id: $i, name: 'Person$i', age: $((20 + i % 60))})" --insecure 2>/dev/null
+    $QUERY_CMD "CREATE (p:Person {id: $i, name: 'Person$i', age: $((20 + i % 60))})" 2>/dev/null
 done
 END=$(date +%s%N)
 SETUP_TIME=$(( (END - START) / 1000000 ))
 echo "${SETUP_TIME}ms"
 
 benchmark "Single node insertion" \
-    "./zig-out/bin/geode query 'CREATE (n:TestNode {id: \$RANDOM, timestamp: timestamp()})' --insecure" \
+    "$QUERY_CMD 'CREATE (n:TestNode {id: \$RANDOM, timestamp: timestamp()})'" \
     100 \
     $THRESHOLD_INSERT
 
 benchmark "Node with multiple properties" \
-    "./zig-out/bin/geode query 'CREATE (n:Complex {id: \$RANDOM, name: '\''test'\'', age: 25, active: true, score: 3.14})' --insecure" \
+    "$QUERY_CMD 'CREATE (n:Complex {id: \$RANDOM, name: '\''test'\'', age: 25, active: true, score: 3.14})'" \
     50 \
     $((THRESHOLD_INSERT * 2))
 
 benchmark "Batch insertion (10 nodes)" \
-    "for i in {1..10}; do ./zig-out/bin/geode query 'CREATE (n:Batch {id: '\$i'})' --insecure; done" \
+    "for i in {1..10}; do $QUERY_CMD 'CREATE (n:Batch {id: '\$i'})'; done" \
     10 \
     $((THRESHOLD_INSERT * 10))
 
@@ -143,22 +149,22 @@ echo
 echo -e "${BLUE}=== Phase 3: Query Performance ===${NC}"
 
 benchmark "Point query (exact match)" \
-    "./zig-out/bin/geode query 'MATCH (p:Person {id: 500}) RETURN p.name' --insecure" \
+    "$QUERY_CMD 'MATCH (p:Person {id: 500}) RETURN p.name'" \
     50 \
     $THRESHOLD_SIMPLE_QUERY
 
 benchmark "Range query" \
-    "./zig-out/bin/geode query 'MATCH (p:Person) WHERE p.age >= 30 AND p.age <= 40 RETURN count(p)' --insecure" \
+    "$QUERY_CMD 'MATCH (p:Person) WHERE p.age >= 30 AND p.age <= 40 RETURN count(p)'" \
     30 \
     $THRESHOLD_COMPLEX_QUERY
 
 benchmark "Pattern matching" \
-    "./zig-out/bin/geode query 'MATCH (p:Person) WHERE p.name STARTS WITH '\''Person1'\'' RETURN count(p)' --insecure" \
+    "$QUERY_CMD 'MATCH (p:Person) WHERE p.name STARTS WITH '\''Person1'\'' RETURN count(p)'" \
     30 \
     $THRESHOLD_COMPLEX_QUERY
 
 benchmark "Aggregation query" \
-    "./zig-out/bin/geode query 'MATCH (p:Person) RETURN avg(p.age) AS avg_age, min(p.age) AS min_age, max(p.age) AS max_age' --insecure" \
+    "$QUERY_CMD 'MATCH (p:Person) RETURN avg(p.age) AS avg_age, min(p.age) AS min_age, max(p.age) AS max_age'" \
     20 \
     $THRESHOLD_COMPLEX_QUERY
 
@@ -169,22 +175,22 @@ echo -e "${BLUE}=== Phase 4: Graph Traversal Performance ===${NC}"
 echo -n "Creating relationships... "
 for i in $(seq 1 100); do
     j=$((i + 1))
-    ./zig-out/bin/geode query "MATCH (a:Person {id: $i}), (b:Person {id: $j}) CREATE (a)-[:KNOWS]->(b)" --insecure 2>/dev/null
+    $QUERY_CMD "MATCH (a:Person {id: $i}), (b:Person {id: $j}) CREATE (a)-[:KNOWS]->(b)" 2>/dev/null
 done
 echo "Done"
 
 benchmark "Single-hop traversal" \
-    "./zig-out/bin/geode query 'MATCH (p:Person {id: 1})-[:KNOWS]->(friend) RETURN count(friend)' --insecure" \
+    "$QUERY_CMD 'MATCH (p:Person {id: 1})-[:KNOWS]->(friend) RETURN count(friend)'" \
     30 \
     $THRESHOLD_TRAVERSAL
 
 benchmark "Two-hop traversal" \
-    "./zig-out/bin/geode query 'MATCH (p:Person {id: 1})-[:KNOWS*2]->(foaf) RETURN count(foaf)' --insecure" \
+    "$QUERY_CMD 'MATCH (p:Person {id: 1})-[:KNOWS*2]->(foaf) RETURN count(foaf)'" \
     20 \
     $((THRESHOLD_TRAVERSAL * 2))
 
 benchmark "Variable-length path" \
-    "./zig-out/bin/geode query 'MATCH path = (p:Person {id: 1})-[:KNOWS*1..3]->() RETURN count(path)' --insecure" \
+    "$QUERY_CMD 'MATCH path = (p:Person {id: 1})-[:KNOWS*1..3]->() RETURN count(path)'" \
     10 \
     $((THRESHOLD_TRAVERSAL * 3))
 
@@ -192,17 +198,17 @@ echo
 echo -e "${BLUE}=== Phase 5: Update Operations ===${NC}"
 
 benchmark "Simple property update" \
-    "./zig-out/bin/geode query 'MATCH (p:Person {id: 100}) SET p.updated = true' --insecure" \
+    "$QUERY_CMD 'MATCH (p:Person {id: 100}) SET p.updated = true'" \
     50 \
     $THRESHOLD_UPDATE
 
 benchmark "Computed property update" \
-    "./zig-out/bin/geode query 'MATCH (p:Person {id: 100}) SET p.age = p.age + 1' --insecure" \
+    "$QUERY_CMD 'MATCH (p:Person {id: 100}) SET p.age = p.age + 1'" \
     50 \
     $THRESHOLD_UPDATE
 
 benchmark "Multiple property update" \
-    "./zig-out/bin/geode query 'MATCH (p:Person {id: 100}) SET p.updated = true, p.timestamp = timestamp(), p.version = 2' --insecure" \
+    "$QUERY_CMD 'MATCH (p:Person {id: 100}) SET p.updated = true, p.timestamp = timestamp(), p.version = 2'" \
     30 \
     $((THRESHOLD_UPDATE * 2))
 
@@ -210,17 +216,17 @@ echo
 echo -e "${BLUE}=== Phase 6: Delete Operations ===${NC}"
 
 benchmark "Delete single node" \
-    "./zig-out/bin/geode query 'MATCH (n:TestNode) DELETE n LIMIT 1' --insecure" \
+    "$QUERY_CMD 'MATCH (n:TestNode) DELETE n LIMIT 1'" \
     20 \
     $THRESHOLD_DELETE
 
 benchmark "Delete relationship" \
-    "./zig-out/bin/geode query 'MATCH ()-[r:KNOWS]->() DELETE r LIMIT 1' --insecure" \
+    "$QUERY_CMD 'MATCH ()-[r:KNOWS]->() DELETE r LIMIT 1'" \
     20 \
     $THRESHOLD_DELETE
 
 benchmark "DETACH DELETE" \
-    "./zig-out/bin/geode query 'MATCH (n:Batch) DETACH DELETE n LIMIT 1' --insecure" \
+    "$QUERY_CMD 'MATCH (n:Batch) DETACH DELETE n LIMIT 1'" \
     20 \
     $THRESHOLD_DELETE
 
@@ -228,17 +234,17 @@ echo
 echo -e "${BLUE}=== Phase 7: Sorting and Pagination ===${NC}"
 
 benchmark "ORDER BY single property" \
-    "./zig-out/bin/geode query 'MATCH (p:Person) RETURN p.name ORDER BY p.age LIMIT 10' --insecure" \
+    "$QUERY_CMD 'MATCH (p:Person) RETURN p.name ORDER BY p.age LIMIT 10'" \
     20 \
     $THRESHOLD_COMPLEX_QUERY
 
 benchmark "ORDER BY multiple properties" \
-    "./zig-out/bin/geode query 'MATCH (p:Person) RETURN p ORDER BY p.age DESC, p.name ASC LIMIT 10' --insecure" \
+    "$QUERY_CMD 'MATCH (p:Person) RETURN p ORDER BY p.age DESC, p.name ASC LIMIT 10'" \
     20 \
     $((THRESHOLD_COMPLEX_QUERY * 2))
 
 benchmark "SKIP and LIMIT" \
-    "./zig-out/bin/geode query 'MATCH (p:Person) RETURN p ORDER BY p.id SKIP 100 LIMIT 50' --insecure" \
+    "$QUERY_CMD 'MATCH (p:Person) RETURN p ORDER BY p.id SKIP 100 LIMIT 50'" \
     20 \
     $THRESHOLD_COMPLEX_QUERY
 
@@ -246,17 +252,17 @@ echo
 echo -e "${BLUE}=== Phase 8: Complex Query Patterns ===${NC}"
 
 benchmark "Multiple MATCH clauses" \
-    "./zig-out/bin/geode query 'MATCH (a:Person) WHERE a.age > 30 MATCH (b:Person) WHERE b.age < 25 RETURN count(a) + count(b)' --insecure" \
+    "$QUERY_CMD 'MATCH (a:Person) WHERE a.age > 30 MATCH (b:Person) WHERE b.age < 25 RETURN count(a) + count(b)'" \
     10 \
     $((THRESHOLD_COMPLEX_QUERY * 2))
 
 benchmark "OPTIONAL MATCH" \
-    "./zig-out/bin/geode query 'MATCH (p:Person) OPTIONAL MATCH (p)-[:KNOWS]->(friend) RETURN p.name, friend.name LIMIT 10' --insecure" \
+    "$QUERY_CMD 'MATCH (p:Person) OPTIONAL MATCH (p)-[:KNOWS]->(friend) RETURN p.name, friend.name LIMIT 10'" \
     10 \
     $((THRESHOLD_COMPLEX_QUERY * 2))
 
 benchmark "WITH clause chain" \
-    "./zig-out/bin/geode query 'MATCH (p:Person) WITH p WHERE p.age > 30 WITH p ORDER BY p.age LIMIT 10 RETURN p.name' --insecure" \
+    "$QUERY_CMD 'MATCH (p:Person) WITH p WHERE p.age > 30 WITH p ORDER BY p.age LIMIT 10 RETURN p.name'" \
     10 \
     $((THRESHOLD_COMPLEX_QUERY * 2))
 
@@ -266,7 +272,7 @@ echo -e "${BLUE}=== Phase 9: Concurrent Operations ===${NC}"
 echo -n "Testing concurrent reads (100 queries)... "
 START=$(date +%s%N)
 for i in {1..100}; do
-    ./zig-out/bin/geode query 'MATCH (p:Person) RETURN count(p)' --insecure 2>/dev/null &
+    $QUERY_CMD 'MATCH (p:Person) RETURN count(p)' 2>/dev/null &
 done
 wait
 END=$(date +%s%N)
@@ -276,7 +282,7 @@ echo "${CONCURRENT_READ_TIME}ms total, $((CONCURRENT_READ_TIME / 100))ms avg per
 echo -n "Testing concurrent writes (50 inserts)... "
 START=$(date +%s%N)
 for i in {1..50}; do
-    ./zig-out/bin/geode query "CREATE (n:ConcurrentTest {id: $i})" --insecure 2>/dev/null &
+    $QUERY_CMD "CREATE (n:ConcurrentTest {id: $i})" 2>/dev/null &
 done
 wait
 END=$(date +%s%N)
@@ -304,7 +310,7 @@ fi
 echo -n "  Testing memory stability (creating 1000 nodes)... "
 START_MEM=$MEM_KB
 for i in {1..1000}; do
-    ./zig-out/bin/geode query "CREATE (n:MemTest {id: $i, data: 'x'})" --insecure 2>/dev/null
+    $QUERY_CMD "CREATE (n:MemTest {id: $i, data: 'x'})" 2>/dev/null
 done
 if [ -f /proc/$SERVER_PID/status ]; then
     END_MEM=$(grep VmRSS /proc/$SERVER_PID/status | awk '{print $2}')
@@ -394,8 +400,8 @@ GEODE PERFORMANCE BENCHMARK REPORT
 Generated: $(date)
 
 ENVIRONMENT:
-- Server: geoded
-- Transport: stdio/QUIC
+- Server: geode serve
+- Transport: QUIC
 - Dataset: 1000+ nodes with relationships
 
 PERFORMANCE GRADES:

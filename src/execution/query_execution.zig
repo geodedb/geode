@@ -39,6 +39,7 @@ const Env = value_types.Env;
 // CANARY: REQ=REQ-EXEC-REFACTOR-011; FEATURE="FileModularization"; ASPECT=QueryExecution; STATUS=EXEMPT; OWNER=refactoring; UPDATED=2025-10-17
 // CANARY: REQ=REQ-0003; FEATURE="Engine Contract Requirements"; ASPECT=Execution; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=execution; UPDATED=2026-01-15
 pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, next_query_ptr: *ast.Query, context: ExecutionContext) anyerror!ExecutionResult {
+    const exec_ctx: *ExecutionContext = @constCast(&context);
     // Execute the current query (without the next_query link to avoid infinite recursion)
     var current_query_standalone = current_query;
     current_query_standalone.next_query = null;
@@ -118,6 +119,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                 .values = env_values,
                 .param_names = &.{},
                 .param_values = &.{},
+                .exec_context = exec_ctx,
             });
         }
 
@@ -305,6 +307,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                         .values = row,
                         .param_names = &.{},
                         .param_values = &.{},
+                        .exec_context = exec_ctx,
                     };
                     for (agg_query.ret.items, 0..) |item, i| {
                         new_row[i] = eval.evalExpr(allocator, item.expr, row_env) catch Value{ .Null = {} };
@@ -375,6 +378,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                         .values = env_values,
                         .param_names = &.{},
                         .param_values = &.{},
+                        .exec_context = exec_ctx,
                     };
                     var new_names = try allocator.alloc([]const u8, with_clause.items.len);
                     var new_values = try allocator.alloc(Value, with_clause.items.len);
@@ -481,6 +485,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                                 .values = match_row,
                                 .param_names = &.{},
                                 .param_values = &.{},
+                                .exec_context = exec_ctx,
                             };
                             const where_result = eval.evalExpr(allocator, where_expr, filter_env) catch Value{ .Bool = false };
                             passes_filter = switch (where_result) {
@@ -503,6 +508,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                             .values = row_values,
                             .param_names = &.{},
                             .param_values = &.{},
+                            .exec_context = exec_ctx,
                         });
                     }
 
@@ -522,6 +528,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                         .values = env_values,
                         .param_names = &.{},
                         .param_values = &.{},
+                        .exec_context = exec_ctx,
                     };
                     const where_result = eval.evalExpr(allocator, where_expr, filter_env) catch Value{ .Bool = false };
                     passes_filter = switch (where_result) {
@@ -560,6 +567,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                         .values = env_values,
                         .param_names = &.{},
                         .param_values = &.{},
+                        .exec_context = exec_ctx,
                     });
                 }
             } else if (!passes_filter) {
@@ -757,6 +765,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
 
 // Helper function to execute a query with pre-existing bindings from a previous query
 fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext, binding_names: []const []const u8, binding_values: []const Value) anyerror!ExecutionResult {
+    const exec_ctx: *ExecutionContext = @constCast(&context);
     // Check if this query also has a next_query (multi-level chaining)
     if (q.next_query) |next_query_ptr| {
         // Execute current query with bindings, then chain to next
@@ -825,6 +834,7 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
                         .values = env_values,
                         .param_names = &.{},
                         .param_values = &.{},
+                        .exec_context = exec_ctx,
                     };
 
                     var new_names = try allocator.alloc([]const u8, with_clause.items.len);
@@ -855,6 +865,7 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
                         .values = current_values,
                         .param_names = &.{},
                         .param_values = &.{},
+                        .exec_context = exec_ctx,
                     };
                     const where_result = eval.evalExpr(allocator, where_expr, filter_env) catch Value{ .Bool = false };
                     passes_filter = switch (where_result) {
@@ -870,6 +881,7 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
                         .values = current_values,
                         .param_names = &.{},
                         .param_values = &.{},
+                        .exec_context = exec_ctx,
                     });
                 } else {
                     allocator.free(current_names);
@@ -1159,6 +1171,7 @@ fn combineBindingParams(
 
 // Execute a query with pre-existing bindings available as parameters
 pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext, binding_names: []const []const u8, binding_values: []const Value) anyerror!ExecutionResult {
+    const exec_ctx: *ExecutionContext = @constCast(&context);
     // For simple MATCH patterns with bound variables, we can shortcut the matching
     // and just use the bound values directly in the RETURN clause
 
@@ -1225,6 +1238,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
                 .values = binding_values,
                 .param_names = combined.names,
                 .param_values = combined.values,
+                .exec_context = exec_ctx,
             };
 
             // Evaluate WITH items to create new bindings
@@ -1255,6 +1269,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
             .values = current_values,
             .param_names = combined.names,
             .param_values = combined.values,
+            .exec_context = exec_ctx,
         };
 
         // Check WHERE clause - if it evaluates to false, return empty result
@@ -1312,6 +1327,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
             .values = bound_var_env_values.items,
             .param_names = combined.names,
             .param_values = combined.values,
+            .exec_context = exec_ctx,
         };
 
         // Check WHERE clause first - if it evaluates to false, return empty result
@@ -1361,11 +1377,10 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
     return executeMatchQueryImpl(allocator, q, combined.names, combined.values, &.{}, current_graph);
 }
 
-fn executeQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
-    return executeQueryWithContext(allocator, q, .{});
-}
-
 pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
+    const exec_ctx: *ExecutionContext = @constCast(&context);
+    const prev_ctx = execution.pushActiveContext(&context);
+    defer execution.popActiveContext(prev_ctx);
     // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Execution; STATUS=TESTED; TEST=graph_algorithms; OWNER=execution; UPDATED=2026-01-17
 
     // Check for query chaining: if next_query exists, execute chain
@@ -1394,6 +1409,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         .names = &.{},
         .values = &.{},
         .allocator = allocator,
+        .exec_context = exec_ctx,
     };
 
     for (q.let_bindings) |binding| {
@@ -1456,6 +1472,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
                         .param_names = param_names.items,
                         .param_values = param_values.items,
                         .allocator = allocator,
+                        .exec_context = exec_ctx,
                     };
 
                     const matches = try eval.evalExpr(allocator, where_expr, env);
@@ -1490,6 +1507,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
                     .param_names = param_names.items,
                     .param_values = param_values.items,
                     .allocator = allocator,
+                    .exec_context = exec_ctx,
                 };
 
                 for (q.ret.items, 0..) |item, i| {
@@ -1546,6 +1564,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
                         .param_names = param_names.items,
                         .param_values = param_values.items,
                         .allocator = allocator,
+                        .exec_context = exec_ctx,
                     };
 
                     const matches = try eval.evalExpr(allocator, where_expr, env);
@@ -1579,6 +1598,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
                     .param_names = param_names.items,
                     .param_values = param_values.items,
                     .allocator = allocator,
+                    .exec_context = exec_ctx,
                 };
 
                 for (q.ret.items, 0..) |item, i| {
@@ -1658,6 +1678,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
                 .param_names = param_names.items,
                 .param_values = param_values.items,
                 .allocator = allocator,
+                .exec_context = exec_ctx,
             };
 
             for (q.ret.items, 0..) |item, i| {
@@ -1717,6 +1738,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
             .param_names = param_names.items,
             .param_values = param_values.items,
             .allocator = allocator,
+            .exec_context = exec_ctx,
         };
 
         const list_value = try eval.evalExpr(allocator, unwind.list_expr, empty_env);
@@ -1741,6 +1763,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
                 .param_names = param_names.items,
                 .param_values = param_values.items,
                 .allocator = allocator,
+                .exec_context = exec_ctx,
             };
 
             // Evaluate RETURN items for this row

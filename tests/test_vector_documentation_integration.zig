@@ -73,7 +73,7 @@ test "TestCANARY_REQ_VECTOR_DOCS_INTEGRATION_003_IndexPopulation" {
     const allocator = testing.allocator;
 
     // Create mock graph storage with existing vector data
-    var mock_storage = MockGraphStorage.init(allocator);
+    var mock_storage = MockGraphStore.init(allocator);
     defer mock_storage.deinit();
 
     // Add existing nodes with vector properties as would exist before index creation
@@ -299,26 +299,26 @@ const MockIndexOptimizer = struct {
     }
 };
 
-const MockGraphStorage = struct {
+const MockGraphStore = struct {
     allocator: std.mem.Allocator,
     nodes: std.ArrayList(MockNode),
 
-    fn init(allocator: std.mem.Allocator) MockGraphStorage {
-        return MockGraphStorage{
+    fn init(allocator: std.mem.Allocator) MockGraphStore {
+        return MockGraphStore{
             .allocator = allocator,
             .nodes = std.ArrayList(MockNode).init(allocator),
         };
     }
 
-    fn deinit(self: *MockGraphStorage) void {
+    fn deinit(self: *MockGraphStore) void {
         self.nodes.deinit();
     }
 
-    fn addNode(self: *MockGraphStorage, node: MockNode) !void {
+    fn addNode(self: *MockGraphStore, node: MockNode) !void {
         try self.nodes.append(node);
     }
 
-    fn createVectorIndex(self: *MockGraphStorage, name: []const u8, label: []const u8, property: []const u8, index_type: MockIndexType) MockPopulationResult {
+    fn createVectorIndex(self: *MockGraphStore, name: []const u8, label: []const u8, property: []const u8, index_type: MockIndexType) MockPopulationResult {
         _ = name;
         _ = index_type;
 

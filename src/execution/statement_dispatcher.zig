@@ -112,13 +112,13 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // CANARY: REQ=REQ-AUTH-ENFORCE-006; FEATURE="AuthEnforcement"; ASPECT=IntersectReadPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
             // CRITICAL SECURITY: INTERSECT is a read operation
             try checkPermission(context, .Read);
-            return executeIntersect(allocator, i);
+            return executeIntersect(allocator, i, context);
         },
         .Except => |e| {
             // CANARY: REQ=REQ-AUTH-ENFORCE-007; FEATURE="AuthEnforcement"; ASPECT=ExceptReadPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
             // CRITICAL SECURITY: EXCEPT is a read operation
             try checkPermission(context, .Read);
-            return executeExcept(allocator, e);
+            return executeExcept(allocator, e, context);
         },
         .Create => |c| {
             // Check write permission
@@ -906,7 +906,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // This ensures SHOW GRAPHS no longer lists this graph
             graph_store.getGlobalStore(allocator).dropGraph(graph_name) catch |err| {
                 // Log but don't fail - graph might only exist in one place
-                log.warn("dropGraphStorage failed", &.{
+                log.warn("dropGraphStore failed", &.{
                     Attr.string("graph_name", graph_name),
                     Attr.err("error", err),
                 });

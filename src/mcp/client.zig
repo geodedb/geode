@@ -10,6 +10,10 @@ const spice_wrapper = @import("parallel/spice");
 // Import quic_transport through the parent module to ensure module resolution
 const quic_transport = @import("mod.zig").quic_transport;
 
+const ColumnInfo = struct {
+    name: []const u8,
+    type: []const u8,
+};
 
 pub const GeodeClientError = error{
     ConnectionFailed,
@@ -342,15 +346,39 @@ pub const GeodeClient = struct {
         };
     }
 
-    fn rowToJsonArray(allocator: std.mem.Allocator, row: schema.Row) !std.json.Value {
-        var arr = std.json.Array.init(allocator);
-        for (row.values.items) |val| {
-            try arr.append(try protoValueToJson(allocator, val));
+    fn ensureColumnInfoCount(allocator: std.mem.Allocator, columns: *std.ArrayList(ColumnInfo), value_count: usize) !void {
+        while (columns.items.len < value_count) {
+            const idx = columns.items.len + 1;
+            const name = try std.fmt.allocPrint(allocator, "col_{d}", .{idx});
+            const typ = try allocator.dupe(u8, "UNKNOWN");
+            try columns.append(allocator, .{ .name = name, .type = typ });
         }
-        return .{ .array = arr };
     }
 
-    fn buildRowsJsonArray(allocator: std.mem.Allocator, rows: []const schema.Row) !std.json.Array {
+    fn buildColumnsJsonArray(allocator: std.mem.Allocator, columns: []const ColumnInfo) !std.json.Array {
+        var arr = std.json.Array.init(allocator);
+        for (columns) |col| {
+            var obj = std.json.ObjectMap.init(allocator);
+            try obj.put("name", .{ .string = try allocator.dupe(u8, col.name) });
+            try obj.put("type", .{ .string = try allocator.dupe(u8, col.type) });
+            try arr.append(.{ .object = obj });
+        }
+        return arr;
+    }
+
+    fn rowToJsonObject(allocator: std.mem.Allocator, row: schema.Row, columns: []const ColumnInfo) !std.json.Value {
+        var obj = std.json.ObjectMap.init(allocator);
+        for (row.values.items, 0..) |val, idx| {
+            const name = if (idx < columns.len)
+                columns[idx].name
+            else
+                try std.fmt.allocPrint(allocator, "col_{d}", .{idx + 1});
+            try obj.put(try allocator.dupe(u8, name), try protoValueToJson(allocator, val));
+        }
+        return .{ .object = obj };
+    }
+
+    fn buildRowsJsonArray(allocator: std.mem.Allocator, rows: []const schema.Row, columns: []const ColumnInfo) !std.json.Array {
         var arr = std.json.Array.init(allocator);
         if (rows.len == 0) return arr;
 
@@ -362,16 +390,16 @@ pub const GeodeClient = struct {
             var ts_alloc = std.heap.ThreadSafeAllocator{ .child_allocator = allocator };
             const safe_alloc = ts_alloc.allocator();
 
-            const RowInput = struct { row: *const schema.Row, allocator: std.mem.Allocator };
+            const RowInput = struct { row: *const schema.Row, allocator: std.mem.Allocator, columns: []const ColumnInfo };
             const RowResult = struct { value: std.json.Value, err: ?anyerror };
 
             const inputs = try allocator.alloc(RowInput, rows.len);
             defer allocator.free(inputs);
-            for (rows, 0..) |*row, i| inputs[i] = .{ .row = row, .allocator = safe_alloc };
+            for (rows, 0..) |*row, i| inputs[i] = .{ .row = row, .allocator = safe_alloc, .columns = columns };
 
             const mapFn = struct {
                 fn map(_: *spice_wrapper.Task, input: RowInput) RowResult {
-                    const value = rowToJsonArray(input.allocator, input.row.*) catch |err| {
+                    const value = rowToJsonObject(input.allocator, input.row.*, input.columns) catch |err| {
                         return .{ .value = std.json.Value.null, .err = err };
                     };
                     return .{ .value = value, .err = null };
@@ -389,7 +417,7 @@ pub const GeodeClient = struct {
         }
 
         for (rows) |row| {
-            try arr.append(try rowToJsonArray(allocator, row));
+            try arr.append(try rowToJsonObject(allocator, row, columns));
         }
         return arr;
     }
@@ -418,14 +446,23 @@ pub const GeodeClient = struct {
         defer arena.deinit();
         const a = arena.allocator();
 
-        var columns = std.json.Array.init(a);
+        const ResultKind = enum { none, rows, explain, profile, metrics, heartbeat };
+
+        var columns_info = std.ArrayList(ColumnInfo).initCapacity(a, 0) catch return error.OutOfMemory;
         var rows = std.json.Array.init(a);
         var ordered = false;
         var order_keys = std.json.Array.init(a);
+        var additional_statuses = std.json.Array.init(a);
+        var flagger_findings = std.json.Array.init(a);
 
         var status_class: []const u8 = "00000";
+        var status_subclass: ?[]const u8 = null;
         var error_code: ?[]const u8 = null;
         var error_message: ?[]const u8 = null;
+        var result_kind: ResultKind = .none;
+        var explain_value: ?std.json.Value = null;
+        var profile_value: ?std.json.Value = null;
+        var metrics_value: ?std.json.Value = null;
 
         var schema_received = false;
         while (!schema_received and error_code == null) {
@@ -436,39 +473,89 @@ pub const GeodeClient = struct {
 
             const exec_resp = msg.execute;
             if (exec_resp.status) |status| {
-                status_class = try a.dupe(u8, status.status_class);
+                if (status.status_class.len > 0) {
+                    status_class = try a.dupe(u8, status.status_class);
+                }
+                if (status.status_subclass.len > 0) {
+                    status_subclass = try a.dupe(u8, status.status_subclass);
+                }
+                for (status.additional_statuses.items) |item| {
+                    try additional_statuses.append(.{ .string = try a.dupe(u8, item) });
+                }
+                for (status.flagger_findings.items) |item| {
+                    try flagger_findings.append(.{ .string = try a.dupe(u8, item) });
+                }
             }
 
             if (exec_resp.payload) |payload| switch (payload) {
                 .schema => |schema_def| {
                     for (schema_def.columns.items) |col| {
-                        var obj = std.json.ObjectMap.init(a);
-                        try obj.put("name", .{ .string = try a.dupe(u8, col.name) });
-                        try obj.put("type", .{ .string = try a.dupe(u8, col.type) });
-                        try columns.append(.{ .object = obj });
+                        try columns_info.append(a, .{
+                            .name = try a.dupe(u8, col.name),
+                            .type = try a.dupe(u8, col.type),
+                        });
                     }
+                    result_kind = .rows;
                     schema_received = true;
                 },
                 .page => |p| {
+                    if (columns_info.items.len == 0) return GeodeClientError.InvalidResponse;
                     ordered = ordered or p.ordered;
                     if (p.order_keys.items.len > 0 and order_keys.items.len == 0) {
                         for (p.order_keys.items) |k| try order_keys.append(.{ .string = try a.dupe(u8, k) });
                     }
-                    const page_rows = try buildRowsJsonArray(a, p.rows.items);
+                    var max_vals: usize = columns_info.items.len;
+                    for (p.rows.items) |row| {
+                        max_vals = @max(max_vals, row.values.items.len);
+                    }
+                    try ensureColumnInfoCount(a, &columns_info, max_vals);
+                    const page_rows = try buildRowsJsonArray(a, p.rows.items, columns_info.items);
                     for (page_rows.items) |row_val| {
                         try rows.append(row_val);
                     }
-                    if (!p.final) schema_received = true;
+                    result_kind = .rows;
+                    schema_received = true;
                 },
                 .@"error" => |e| {
                     error_code = try a.dupe(u8, e.code);
                     error_message = try a.dupe(u8, e.message);
                 },
-                else => {},
+                .explain => |expl| {
+                    if (std.json.parseFromSlice(std.json.Value, a, expl.json_payload, .{})) |parsed| {
+                        explain_value = parsed.value;
+                    } else |_| {
+                        explain_value = .{ .string = try a.dupe(u8, expl.json_payload) };
+                    }
+                    result_kind = .explain;
+                    schema_received = true;
+                },
+                .profile => |profile| {
+                    if (std.json.parseFromSlice(std.json.Value, a, profile.json_payload, .{})) |parsed| {
+                        profile_value = parsed.value;
+                    } else |_| {
+                        profile_value = .{ .string = try a.dupe(u8, profile.json_payload) };
+                    }
+                    result_kind = .profile;
+                    schema_received = true;
+                },
+                .metrics => |metrics| {
+                    var metrics_obj = std.json.ObjectMap.init(a);
+                    try metrics_obj.put("parse_ns", .{ .integer = metrics.parse_duration_ns });
+                    try metrics_obj.put("plan_ns", .{ .integer = metrics.plan_duration_ns });
+                    try metrics_obj.put("execute_ns", .{ .integer = metrics.execute_duration_ns });
+                    try metrics_obj.put("total_ns", .{ .integer = metrics.total_duration_ns });
+                    metrics_value = .{ .object = metrics_obj };
+                    result_kind = .metrics;
+                    schema_received = true;
+                },
+                .heartbeat => |_| {
+                    result_kind = .heartbeat;
+                    schema_received = true;
+                },
             };
         }
 
-        if (error_code == null) {
+        if (error_code == null and result_kind == .rows) {
             var done = false;
             var request_id: u64 = 1;
             while (!done) : (request_id += 1) {
@@ -485,13 +572,33 @@ pub const GeodeClient = struct {
                     else => return GeodeClientError.InvalidResponse,
                 };
 
+                if (exec_resp.status) |status| {
+                    if (status.status_class.len > 0) {
+                        status_class = try a.dupe(u8, status.status_class);
+                    }
+                    if (status.status_subclass.len > 0) {
+                        status_subclass = try a.dupe(u8, status.status_subclass);
+                    }
+                    for (status.additional_statuses.items) |item| {
+                        try additional_statuses.append(.{ .string = try a.dupe(u8, item) });
+                    }
+                    for (status.flagger_findings.items) |item| {
+                        try flagger_findings.append(.{ .string = try a.dupe(u8, item) });
+                    }
+                }
+
                 if (exec_resp.payload) |payload| switch (payload) {
                     .page => |p| {
                         ordered = ordered or p.ordered;
                         if (p.order_keys.items.len > 0 and order_keys.items.len == 0) {
                             for (p.order_keys.items) |k| try order_keys.append(.{ .string = try a.dupe(u8, k) });
                         }
-                        const page_rows = try buildRowsJsonArray(a, p.rows.items);
+                        var max_vals: usize = columns_info.items.len;
+                        for (p.rows.items) |row| {
+                            max_vals = @max(max_vals, row.values.items.len);
+                        }
+                        try ensureColumnInfoCount(a, &columns_info, max_vals);
+                        const page_rows = try buildRowsJsonArray(a, p.rows.items, columns_info.items);
                         for (page_rows.items) |row_val| {
                             try rows.append(row_val);
                         }
@@ -510,23 +617,39 @@ pub const GeodeClient = struct {
         if (error_code) |code| {
             const msg = error_message orelse "error";
             var err_obj = std.json.ObjectMap.init(a);
-            try err_obj.put("status_class", .{ .string = try a.dupe(u8, code) });
+            try err_obj.put("status_class", .{ .string = try a.dupe(u8, status_class) });
+            if (status_subclass) |sub| {
+                try err_obj.put("status_subclass", .{ .string = try a.dupe(u8, sub) });
+            }
             try err_obj.put("error", .{ .string = try a.dupe(u8, msg) });
+            try err_obj.put("error_code", .{ .string = try a.dupe(u8, code) });
+            try err_obj.put("additional_statuses", .{ .array = additional_statuses });
+            try err_obj.put("flagger_findings", .{ .array = flagger_findings });
             const err_val = std.json.Value{ .object = err_obj };
             return try std.json.Stringify.valueAlloc(self.allocator, err_val, .{});
         }
 
-        var result_obj = std.json.ObjectMap.init(a);
-        try result_obj.put("type", .{ .string = "BINDINGS" });
-        try result_obj.put("ordered", .{ .bool = ordered });
-        try result_obj.put("order_keys", .{ .array = order_keys });
-        try result_obj.put("final", .{ .bool = true });
-        try result_obj.put("columns", .{ .array = columns });
-        try result_obj.put("rows", .{ .array = rows });
-
         var root_obj = std.json.ObjectMap.init(a);
         try root_obj.put("status_class", .{ .string = status_class });
-        try root_obj.put("result", .{ .object = result_obj });
+        if (status_subclass) |sub| {
+            try root_obj.put("status_subclass", .{ .string = try a.dupe(u8, sub) });
+        }
+        try root_obj.put("additional_statuses", .{ .array = additional_statuses });
+        try root_obj.put("flagger_findings", .{ .array = flagger_findings });
+
+        switch (result_kind) {
+            .explain => if (explain_value) |val| try root_obj.put("explain", val),
+            .profile => if (profile_value) |val| try root_obj.put("profile", val),
+            .metrics => if (metrics_value) |val| try root_obj.put("metrics", val),
+            .heartbeat => try root_obj.put("heartbeat", .{ .bool = true }),
+            .rows, .none => {
+                const cols_array = try buildColumnsJsonArray(a, columns_info.items);
+                try root_obj.put("columns", .{ .array = cols_array });
+                try root_obj.put("rows", .{ .array = rows });
+                try root_obj.put("ordered", .{ .bool = ordered });
+                try root_obj.put("order_keys", .{ .array = order_keys });
+            },
+        }
 
         const root_val = std.json.Value{ .object = root_obj };
         return try std.json.Stringify.valueAlloc(self.allocator, root_val, .{});

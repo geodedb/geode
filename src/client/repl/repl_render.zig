@@ -32,27 +32,28 @@ fn renderCsv(writer: anytype, allocator: std.mem.Allocator, data: []const u8) !v
 
     const root = parsed.value.object;
     const columns = root.get("columns").?.array;
-    const rows = root.get("data").?.array;
+    const rows = root.get("rows").?.array;
+    const column_names = try extractColumnNames(allocator, columns);
+    defer allocator.free(column_names);
 
     // Header
-    for (columns.items, 0..) |col, i| {
+    for (column_names, 0..) |col, i| {
         if (i > 0) try writer.print(",", .{});
-        try writer.print("\"{s}\"", .{col.string});
+        try writer.print("\"{s}\"", .{col});
     }
     try writer.print("\n", .{});
 
     // Data rows
     for (rows.items) |row| {
-        const row_array = row.array;
-        for (row_array.items, 0..) |cell, i| {
+        for (column_names, 0..) |col_name, i| {
             if (i > 0) try writer.print(",", .{});
-            switch (cell) {
-                .string => |s| try writer.print("\"{s}\"", .{escapeString(s)}),
-                .integer => |n| try writer.print("{d}", .{n}),
-                .float => |f| try writer.print("{d}", .{f}),
-                .bool => |b| try writer.print("{}", .{b}),
-                .null => try writer.print("NULL", .{}),
-                else => try writer.print("", .{}),
+            const cell = getRowValue(row, col_name);
+            const rendered = try renderCell(allocator, cell);
+            defer allocator.free(rendered);
+            if (cell == .string) {
+                try writer.print("\"{s}\"", .{escapeString(rendered)});
+            } else {
+                try writer.print("{s}", .{rendered});
             }
         }
         try writer.print("\n", .{});
@@ -66,36 +67,24 @@ fn renderTable(writer: anytype, allocator: std.mem.Allocator, data: []const u8) 
 
     const root = parsed.value.object;
     const columns = root.get("columns").?.array;
-    const rows = root.get("data").?.array;
+    const rows = root.get("rows").?.array;
+    const column_names = try extractColumnNames(allocator, columns);
+    defer allocator.free(column_names);
 
     // Calculate column widths
-    var col_widths = try allocator.alloc(usize, columns.items.len);
+    var col_widths = try allocator.alloc(usize, column_names.len);
     defer allocator.free(col_widths);
 
-    for (columns.items, 0..) |col, i| {
-        col_widths[i] = col.string.len;
+    for (column_names, 0..) |col, i| {
+        col_widths[i] = col.len;
     }
 
     for (rows.items) |row| {
-        const row_array = row.array;
-        for (row_array.items, 0..) |cell, i| {
-            const width: usize = switch (cell) {
-                .string => |s| s.len,
-                .integer => blk: {
-                    var buf: [32]u8 = undefined;
-                    const len = (std.fmt.bufPrint(&buf, "{d}", .{cell.integer}) catch "0").len;
-                    break :blk len;
-                },
-                .float => blk: {
-                    var buf: [32]u8 = undefined;
-                    const len = (std.fmt.bufPrint(&buf, "{d}", .{cell.float}) catch "0").len;
-                    break :blk len;
-                },
-                .bool => if (cell.bool) 4 else 5,
-                .null => 4,
-                else => 0,
-            };
-            col_widths[i] = @max(col_widths[i], width);
+        for (column_names, 0..) |col_name, i| {
+            const cell = getRowValue(row, col_name);
+            const rendered = try renderCell(allocator, cell);
+            defer allocator.free(rendered);
+            col_widths[i] = @max(col_widths[i], rendered.len);
         }
     }
 
@@ -111,9 +100,9 @@ fn renderTable(writer: anytype, allocator: std.mem.Allocator, data: []const u8) 
 
     // Print header
     try writer.print("|", .{});
-    for (columns.items, 0..) |col, i| {
-        try writer.print(" {s}", .{col.string});
-        const padding = col_widths[i] -| col.string.len;
+    for (column_names, 0..) |col, i| {
+        try writer.print(" {s}", .{col});
+        const padding = col_widths[i] -| col.len;
         for (0..padding) |_| try writer.print(" ", .{});
         try writer.print(" |", .{});
     }
@@ -132,37 +121,13 @@ fn renderTable(writer: anytype, allocator: std.mem.Allocator, data: []const u8) 
     // Print rows
     for (rows.items) |row| {
         try writer.print("|", .{});
-        const row_array = row.array;
-        for (row_array.items, 0..) |cell, i| {
+        for (column_names, 0..) |col_name, i| {
             try writer.print(" ", .{});
-            const printed_len: usize = switch (cell) {
-                .string => |s| blk: {
-                    try writer.print("{s}", .{s});
-                    break :blk s.len;
-                },
-                .integer => |n| blk: {
-                    var buf: [32]u8 = undefined;
-                    const str = try std.fmt.bufPrint(&buf, "{d}", .{n});
-                    try writer.print("{s}", .{str});
-                    break :blk str.len;
-                },
-                .float => |f| blk: {
-                    var buf: [32]u8 = undefined;
-                    const str = try std.fmt.bufPrint(&buf, "{d}", .{f});
-                    try writer.print("{s}", .{str});
-                    break :blk str.len;
-                },
-                .bool => |b| blk: {
-                    const str = if (b) "true" else "false";
-                    try writer.print("{s}", .{str});
-                    break :blk str.len;
-                },
-                .null => blk: {
-                    try writer.print("NULL", .{});
-                    break :blk 4;
-                },
-                else => 0,
-            };
+            const cell = getRowValue(row, col_name);
+            const rendered = try renderCell(allocator, cell);
+            defer allocator.free(rendered);
+            try writer.print("{s}", .{rendered});
+            const printed_len: usize = rendered.len;
             const padding = col_widths[i] -| printed_len;
             for (0..padding) |_| try writer.print(" ", .{});
             try writer.print(" |", .{});
@@ -184,6 +149,40 @@ fn renderTable(writer: anytype, allocator: std.mem.Allocator, data: []const u8) 
 fn escapeString(s: []const u8) []const u8 {
     // Simple escape - in production would need proper escaping
     return s;
+}
+
+fn extractColumnNames(allocator: std.mem.Allocator, columns: std.json.Array) ![]const []const u8 {
+    var names = try allocator.alloc([]const u8, columns.items.len);
+    for (columns.items, 0..) |col, i| {
+        switch (col) {
+            .object => |obj| {
+                const name_val = obj.get("name") orelse return error.MissingColumnName;
+                if (name_val != .string) return error.InvalidColumnName;
+                names[i] = name_val.string;
+            },
+            .string => |s| names[i] = s,
+            else => return error.InvalidColumnName,
+        }
+    }
+    return names;
+}
+
+fn getRowValue(row: std.json.Value, column_name: []const u8) std.json.Value {
+    if (row == .object) {
+        if (row.object.get(column_name)) |val| return val;
+    }
+    return std.json.Value{ .null = {} };
+}
+
+fn renderCell(allocator: std.mem.Allocator, cell: std.json.Value) ![]u8 {
+    return switch (cell) {
+        .string => |s| allocator.dupe(u8, s),
+        .integer => |n| std.fmt.allocPrint(allocator, "{d}", .{n}),
+        .float => |f| std.fmt.allocPrint(allocator, "{d}", .{f}),
+        .bool => |b| allocator.dupe(u8, if (b) "true" else "false"),
+        .null => allocator.dupe(u8, "NULL"),
+        else => std.json.Stringify.valueAlloc(allocator, cell, .{}),
+    };
 }
 
 fn stripAnsi(text: []const u8, allocator: std.mem.Allocator) ![]u8 {

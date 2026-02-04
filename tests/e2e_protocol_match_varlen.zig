@@ -1,47 +1,59 @@
 const std = @import("std");
-const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
+const testing = std.testing;
+const util = @import("proto_test_util.zig");
+const schema = @import("schema");
 
-fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
-    const allocator = std.testing.allocator;
-    var argv = std.ArrayList([]const u8).init(allocator);
-    defer argv.deinit(allocator);
-    try argv.append(allocator, args[0]);
-    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
-        try argv.append(allocator, "query");
-    }
-    try argv.appendSlice(allocator, args[1..]);
-    var child = Child.init(argv.items, allocator);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-    const out = try child.stdout.?.readToEndAlloc(allocator, 1 << 20);
-    const err = try child.stderr.?.readToEndAlloc(allocator, 1 << 20);
-    const term = try child.wait();
-    const code: i32 = switch (term) {
-        .Exited => |st| st,
-        else => 2,
-    };
-    return .{ .code = code, .out = out, .err = err };
+fn execSimple(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query: []const u8) !util.ExecResult {
+    var params = std.ArrayList(schema.Param).init(allocator);
+    return client.executeAndCollect(allocator, query, params, 1024);
 }
 
-// Bounded variable-length path determinism over stdio
-// Graph: rely on server's sample graph (Alice->Bob KNOWS, Bob->Charlie KNOWS)
-// Expect deterministic rows and order metadata when ORDER applied.
-// CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Path Determinism UA005/UA006"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_VarLenDeterminism_STDIO; OWNER=engine; UPDATED=2025-09-24
-test "protocol: MATCH varlen 1..2 determinism (stdio)" {
-    const exe = "./zig-out/bin/geode";
-    const q = "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name AS a, b.name AS b ORDER BY a, b";
-    const res = try run(&.{ exe, q, "--format", "json" });
-    defer std.testing.allocator.free(res.out);
-    defer std.testing.allocator.free(res.err);
-    try std.testing.expectEqual(@as(i32, 0), res.code);
-    // Ordered true with keys ["a","b"]
-    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"ordered\":true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"order_keys\":[\"a\",\"b\"]") != null);
-    // Expect subset rows including Alice->Bob and Alice->Charlie, Bob->Charlie (names)
-    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"rows\":[") != null);
-    try std.testing.expect(std.mem.indexOf(u8, res.out, "{\"a\":\"Alice\",\"b\":\"Bob\"}") != null);
-    try std.testing.expect(std.mem.indexOf(u8, res.out, "{\"a\":\"Alice\",\"b\":\"Charlie\"}") != null);
-    try std.testing.expect(std.mem.indexOf(u8, res.out, "{\"a\":\"Bob\",\"b\":\"Charlie\"}") != null);
+// Bounded variable-length path determinism over QUIC
+// Graph: Alice->Bob KNOWS, Bob->Charlie KNOWS
+// CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Path Determinism UA005/UA006"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_VarLenDeterminism_QUIC; OWNER=engine; UPDATED=2025-09-24
+
+test "protocol QUIC: MATCH varlen 1..2 determinism" {
+    const allocator = testing.allocator;
+    const addr = "127.0.0.1:3186";
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, null);
+    defer server.deinit();
+
+    var client = try util.QuicProtoClient.connect(allocator, addr);
+    defer client.deinit();
+    var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
+    hello.deinit(allocator);
+
+    // Seed graph
+    var seed = try execSimple(
+        &client,
+        allocator,
+        "CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})-[:KNOWS]->(c:Person {name: 'Charlie'})",
+    );
+    seed.deinit(allocator);
+
+    var res = try execSimple(
+        &client,
+        allocator,
+        "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name AS a, b.name AS b ORDER BY a, b",
+    );
+    defer res.deinit(allocator);
+
+    try testing.expect(res.ordered);
+    try testing.expectEqual(@as(usize, 2), res.order_keys.len);
+    try testing.expectEqualStrings("a", res.order_keys[0]);
+    try testing.expectEqualStrings("b", res.order_keys[1]);
+
+    var found_ab = false;
+    var found_ac = false;
+    var found_bc = false;
+    for (res.rows) |row| {
+        if (row.len < 2) continue;
+        if (row[0] == .string and row[1] == .string) {
+            if (std.mem.eql(u8, row[0].string, "Alice") and std.mem.eql(u8, row[1].string, "Bob")) found_ab = true;
+            if (std.mem.eql(u8, row[0].string, "Alice") and std.mem.eql(u8, row[1].string, "Charlie")) found_ac = true;
+            if (std.mem.eql(u8, row[0].string, "Bob") and std.mem.eql(u8, row[1].string, "Charlie")) found_bc = true;
+        }
+    }
+
+    try testing.expect(found_ab and found_ac and found_bc);
 }

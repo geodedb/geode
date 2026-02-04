@@ -1,10 +1,8 @@
 const std = @import("std");
 
 pub fn findProfileLine(out: []const u8) ?[]const u8 {
-    var it = std.mem.splitScalar(u8, out, '\n');
-    while (it.next()) |line| {
-        if (std.mem.indexOf(u8, line, "\"type\":\"PROFILE\"") != null) return line;
-    }
+    // New JSON output embeds profile under "profile"
+    if (std.mem.indexOf(u8, out, "\"profile\"") != null) return out;
     return null;
 }
 
@@ -98,7 +96,7 @@ pub fn sliceMemory(profile_line: []const u8) ?[]const u8 {
     return profile_line[brace_idx..end];
 }
 
-// Unified CLI runner for tests (geodec). Accepts argv slice, returns stdout or error if exit!=0
+// Unified CLI runner for tests (geode). Accepts argv slice, returns stdout or error if exit!=0
 pub fn runCli(allocator: std.mem.Allocator, args: []const []const u8) ![]u8 {
     var argv = std.ArrayList([]const u8).init(allocator);
     defer argv.deinit(allocator);
@@ -123,11 +121,22 @@ pub fn parseOpNames(allocator: std.mem.Allocator, profile_line: []const u8) ![][
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, profile_line, .{});
     defer parsed.deinit();
     const root = parsed.value.object;
-    const result_val = root.get("result") orelse return error.MissingResult;
-    if (result_val.* != .object) return error.BadResult;
-    const json_val = result_val.object.get("json") orelse return error.MissingJson;
-    if (json_val.* != .object) return error.BadJson;
-    const prof_obj = json_val.object;
+    var prof_obj: std.json.ObjectMap = undefined;
+    var parsed_profile: ?std.json.Parsed(std.json.Value) = null;
+    defer if (parsed_profile) |*pp| pp.deinit();
+    if (root.get("profile")) |profile_val| {
+        switch (profile_val.*) {
+            .object => |obj| prof_obj = obj,
+            .string => |s| {
+                parsed_profile = try std.json.parseFromSlice(std.json.Value, allocator, s, .{});
+                if (parsed_profile.?.value != .object) return error.BadProfile;
+                prof_obj = parsed_profile.?.value.object;
+            },
+            else => return error.BadProfile,
+        }
+    } else {
+        return error.MissingProfile;
+    }
     const ops_val = prof_obj.get("ops") orelse return error.MissingOps;
     if (ops_val.* != .array) return error.BadOps;
     const ops_arr = ops_val.array.items;

@@ -47,7 +47,7 @@ pub fn freeParamBindings(allocator: std.mem.Allocator, bindings: ParamBindings) 
     allocator.free(bindings.values);
 }
 
-fn protoValueToValue(allocator: std.mem.Allocator, value: schema.Value, depth: usize) !value_types.Value {
+pub fn protoValueToValue(allocator: std.mem.Allocator, value: schema.Value, depth: usize) !value_types.Value {
     if (depth > 64) return error.ParamsTooDeep;
     const kind = value.kind orelse return .Null;
     return switch (kind) {
@@ -322,7 +322,7 @@ fn inferColumnType(rows: [][]value_types.Value, col_idx: usize) []const u8 {
     return "NULL";
 }
 
-fn valueToProto(allocator: std.mem.Allocator, value: value_types.Value) !schema.Value {
+pub fn valueToProto(allocator: std.mem.Allocator, value: value_types.Value) !schema.Value {
     return switch (value) {
         .Null => .{ .kind = .{ .null_val = .{} } },
         .Bool => |b| .{ .kind = .{ .bool_val = b } },

@@ -22,7 +22,7 @@ const graph_storage_mgr = struct {
         graph_store.setDataDirOverride(std.heap.page_allocator, dir);
     }
 
-    pub fn clearGraphStorage() void {
+    pub fn clearGraphStore() void {
         if (graph_store.getCurrentGlobalStore()) |store| {
             store.clearNodes();
             store.clearGraphRegistry();
@@ -30,8 +30,8 @@ const graph_storage_mgr = struct {
         }
     }
 
-    pub fn clearMultiGraphStorage() void {
-        clearGraphStorage();
+    pub fn clearMultiGraphStore() void {
+        clearGraphStore();
     }
 };
 
@@ -56,8 +56,8 @@ fn cleanupTestDir(allocator: std.mem.Allocator, dir: []const u8) void {
 /// Reset global state between tests
 fn resetGlobalState() void {
     // Clear graph storage first (while store still exists)
-    graph_storage_mgr.clearGraphStorage();
-    graph_storage_mgr.clearMultiGraphStorage();
+    graph_storage_mgr.clearGraphStore();
+    graph_storage_mgr.clearMultiGraphStore();
     // Deinit the global store
     graph_store.deinitGlobalStore();
     // Clear data dir (this also clears the override in graph_store)

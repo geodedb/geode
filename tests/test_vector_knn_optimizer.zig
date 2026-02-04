@@ -104,8 +104,8 @@ const MockIndexManager = struct {
 };
 
 // Create mock graph storage with vector data
-fn createMockGraphWithVectors(allocator: std.mem.Allocator) !graph_common.GraphStorage {
-    var graph = graph_common.GraphStorage.init(allocator);
+fn createMockGraphWithVectors(allocator: std.mem.Allocator) !graph_common.GraphStore {
+    var graph = graph_common.GraphStore.init(allocator);
 
     // Add nodes with vector properties
     const vectors = [_][]const f32{

@@ -110,7 +110,7 @@ export GEODE_KMS_PROVIDER="vault"
 export GEODE_VAULT_KEY_PATH="geode/encryption"
 
 # Start Geode with Vault-backed TDE
-./zig-out/bin/geoded --enable-tde --kms-provider vault
+./zig-out/bin/geode serve --enable-tde --kms-provider vault
 ```
 
 ## Security & Compliance Features
@@ -180,7 +180,7 @@ export GEODE_KMS_PROVIDER="vault"
 export GEODE_VAULT_KEY_PATH="geode"
 
 # Start Geode with enterprise encryption
-./zig-out/bin/geoded --data-dir /secure/data --listen-quic 0.0.0.0:3141
+./zig-out/bin/geode serve --data-dir /secure/data --listen-quic 0.0.0.0:3141
 ```
 
 ## Performance Characteristics

@@ -31,7 +31,6 @@ pub const EvalError = value_types.EvalError;
 /// Usage:
 /// ```zig
 /// const callbacks = ExecutionCallbacks{
-///     .getDefaultContextFn = execution.getDefaultContext,
 ///     .executeQueryWithContextFn = execution.executeQueryWithContext,
 ///     .findShortestPathFn = execution.findShortestPath,
 ///     .countPatternMatchesFn = execution.countPatternMatches,
@@ -39,9 +38,6 @@ pub const EvalError = value_types.EvalError;
 /// };
 /// ```
 pub const ExecutionCallbacks = struct {
-    /// Get default execution context (for legacy code paths)
-    getDefaultContextFn: *const fn (allocator: std.mem.Allocator) anyerror!ExecutionContext,
-
     /// Execute a GQL query with given context
     executeQueryWithContextFn: *const fn (allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) anyerror!ExecutionResult,
 
@@ -55,14 +51,22 @@ pub const ExecutionCallbacks = struct {
     executePatternComprehensionFn: *const fn (allocator: std.mem.Allocator, pattern: ast.GraphPattern, where_filter: ?*ast.Expr, map_expr: ast.Expr, env: Env) anyerror!Value,
 
     // CANARY: REQ=REQ-M5.3-CALLBACK-WRAPPER-001; FEATURE="Callback Wrappers"; ASPECT=ConvenienceMethods; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=adapter; UPDATED=2025-11-13
-    /// Convenience wrapper: Get default execution context
-    pub fn getDefaultContext(self: ExecutionCallbacks, allocator: std.mem.Allocator) !ExecutionContext {
-        return self.getDefaultContextFn(allocator);
-    }
-
     /// Convenience wrapper: Execute query with context
     pub fn executeQueryWithContext(self: ExecutionCallbacks, allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
         return self.executeQueryWithContextFn(allocator, q, context);
+    }
+
+    /// Convenience wrapper: Execute query with environment-scoped context
+    pub fn executeQueryWithEnv(self: ExecutionCallbacks, allocator: std.mem.Allocator, q: ast.Query, env: Env) !ExecutionResult {
+        // Try env.exec_context first, then fall back to getActiveContext()
+        const ctx_ptr: *anyopaque = if (env.exec_context) |ptr|
+            ptr
+        else if (parent_execution.getActiveContext()) |active_ctx|
+            @ptrCast(@constCast(active_ctx))
+        else
+            return error.Unsupported;
+        const ctx: *ExecutionContext = @ptrCast(@alignCast(ctx_ptr));
+        return self.executeQueryWithContext(allocator, q, ctx.*);
     }
 
     /// Convenience wrapper: Find shortest path
@@ -214,11 +218,6 @@ test "ExecutionCallbacks structure" {
     // This test just verifies the structure compiles
     // Actual functionality tested via integration tests
     const TestContext = struct {
-        fn mockGetDefaultContext(allocator: std.mem.Allocator) !ExecutionContext {
-            _ = allocator;
-            return error.Unsupported;
-        }
-
         fn mockExecuteQuery(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
             _ = allocator;
             _ = q;
@@ -234,9 +233,10 @@ test "ExecutionCallbacks structure" {
             return Value{ .Null = {} };
         }
 
-        fn mockCountPatterns(allocator: std.mem.Allocator, pattern: ast.GraphPattern, env: Env) !i64 {
+        fn mockCountPatterns(allocator: std.mem.Allocator, pattern: ast.GraphPattern, where_filter: ?*ast.Expr, env: Env) !i64 {
             _ = allocator;
             _ = pattern;
+            _ = where_filter;
             _ = env;
             return 0;
         }
@@ -252,7 +252,6 @@ test "ExecutionCallbacks structure" {
     };
 
     const callbacks = ExecutionCallbacks{
-        .getDefaultContextFn = TestContext.mockGetDefaultContext,
         .executeQueryWithContextFn = TestContext.mockExecuteQuery,
         .findShortestPathFn = TestContext.mockFindShortestPath,
         .countPatternMatchesFn = TestContext.mockCountPatterns,
@@ -275,11 +274,6 @@ test "EvaluatorInterface structure" {
     };
 
     const TestContext = struct {
-        fn mockGetDefaultContext(allocator: std.mem.Allocator) !ExecutionContext {
-            _ = allocator;
-            return error.Unsupported;
-        }
-
         fn mockExecuteQuery(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
             _ = allocator;
             _ = q;
@@ -295,9 +289,10 @@ test "EvaluatorInterface structure" {
             return Value{ .Null = {} };
         }
 
-        fn mockCountPatterns(allocator: std.mem.Allocator, pattern: ast.GraphPattern, env: Env) !i64 {
+        fn mockCountPatterns(allocator: std.mem.Allocator, pattern: ast.GraphPattern, where_filter: ?*ast.Expr, env: Env) !i64 {
             _ = allocator;
             _ = pattern;
+            _ = where_filter;
             _ = env;
             return 0;
         }
@@ -313,7 +308,6 @@ test "EvaluatorInterface structure" {
     };
 
     const callbacks = ExecutionCallbacks{
-        .getDefaultContextFn = TestContext.mockGetDefaultContext,
         .executeQueryWithContextFn = TestContext.mockExecuteQuery,
         .findShortestPathFn = TestContext.mockFindShortestPath,
         .countPatternMatchesFn = TestContext.mockCountPatterns,

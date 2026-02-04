@@ -13,28 +13,21 @@ const config_lib = @import("config");
 pub const ServerConfig = struct {
     // Output formatting
     result_format_txt: bool = false,
-    disable_estimates: bool = false,
-    compact_profile: bool = false,
-    memcurve_profile: bool = false,
 
     // Network configuration
     listen_quic: ?[]const u8 = null,
     listen_grpc: ?[]const u8 = null,
     cert_path: ?[]const u8 = null,
     key_path: ?[]const u8 = null,
-    force_no_tls: bool = false,
 
     // Storage configuration
     data_dir: ?[]const u8 = null,
-
-    // Authentication
-    auth_enabled: bool = true,
 
     // Logging
     log_level_arg: ?[]const u8 = null,
 
     // Query behavior
-    order_keys_mode_expr: bool = true, // enable property-based ordering by default
+    order_keys_mode_expr: bool = false, // ident-only by default; env/flag can enable
 
     // Catalog
     catalog_create_name: ?[]const u8 = null,
@@ -129,13 +122,8 @@ pub fn printHelp() void {
     std.debug.print("  --data_dir <path>            Data directory for storage and generated certs\n", .{});
     std.debug.print("  --data-dir <path>            Alias for --data_dir\n", .{});
     std.debug.print("  --result-format <txt|json>   Result format (default: json)\n", .{});
-    std.debug.print("  --no-estimates               Disable query estimation\n", .{});
-    std.debug.print("  --profile-compact            Enable compact profiling\n", .{});
-    std.debug.print("  --profile-memcurve           Enable memory curve profiling\n", .{});
     std.debug.print("  --order-keys expr            Allow expressions in ORDER BY\n", .{});
     std.debug.print("  --log-level <lvl>            Set log level trace|debug|info|warn|error|critical (default info)\n", .{});
-    std.debug.print("  --disable-auth               Disable authentication (debug builds only)\n", .{});
-    std.debug.print("  --enable-auth                Enable authentication (default)\n", .{});
     std.debug.print("  --help                       Show this help message\n", .{});
     std.debug.print("\nConfig File Locations (searched in order):\n", .{});
     std.debug.print("  1. .geode/config.{{yaml|toml|json}}    (project config)\n", .{});
@@ -206,12 +194,6 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
                 config.result_format_txt = true;
             }
             ai += 1;
-        } else if (std.mem.eql(u8, arg, "--no-estimates")) {
-            config.disable_estimates = true;
-        } else if (std.mem.eql(u8, arg, "--profile-compact")) {
-            config.compact_profile = true;
-        } else if (std.mem.eql(u8, arg, "--profile-memcurve")) {
-            config.memcurve_profile = true;
         } else if ((std.mem.eql(u8, arg, "--listen-quic") or std.mem.eql(u8, arg, "--listen")) and ai + 1 < args.len) {
             config.listen_quic = try allocator.dupe(u8, args[ai + 1]);
             ai += 1;
@@ -227,10 +209,6 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
         } else if ((std.mem.eql(u8, arg, "--data_dir") or std.mem.eql(u8, arg, "--data-dir")) and ai + 1 < args.len) {
             config.data_dir = try allocator.dupe(u8, args[ai + 1]);
             ai += 1;
-        } else if (std.mem.eql(u8, arg, "--disable-auth")) {
-            config.auth_enabled = false;
-        } else if (std.mem.eql(u8, arg, "--enable-auth")) {
-            config.auth_enabled = true;
         } else if (std.mem.eql(u8, arg, "--order-keys") and ai + 1 < args.len) {
             const mode = args[ai + 1];
             if (std.mem.eql(u8, mode, "expr")) {
@@ -239,8 +217,6 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
                 config.order_keys_mode_expr = false;
             }
             ai += 1;
-        } else if (std.mem.eql(u8, arg, "--no-tls")) {
-            config.force_no_tls = true;
         } else if (std.mem.eql(u8, arg, "--log-level") and ai + 1 < args.len) {
             config.log_level_arg = try allocator.dupe(u8, args[ai + 1]);
             ai += 1;

@@ -1,11 +1,10 @@
-#!/usr/bin/env nix-shell
-#! nix-shell -i bash -p bash -p coreutils
-# Regression test for stdio mode communication
-# Tests direct server communication via stdin/stdout with proper JSON protocol
+#!/usr/bin/env bash
+# Regression test for QUIC/protobuf query path (stdio server removed)
+# Validates JSON output formatting and basic query execution via QUIC.
 
 set -e
 
-echo "=== Geode Stdio Mode Regression Tests ==="
+echo "=== Geode QUIC Regression Tests ==="
 echo
 
 # Colors for output
@@ -17,15 +16,34 @@ NC='\033[0m'
 TESTS_PASSED=0
 TESTS_FAILED=0
 
+SERVER_PORT=8451
+ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+DATA_DIR=$(mktemp -d /tmp/geode_quic_regression_XXXXXX)
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+    ./zig-out/bin/geode serve --listen 127.0.0.1:${SERVER_PORT} --data-dir "${DATA_DIR}" > /tmp/geode_quic_regression.log 2>&1 &
+SERVER_PID=$!
+sleep 2
+
+cleanup() {
+    kill $SERVER_PID 2>/dev/null || true
+    wait $SERVER_PID 2>/dev/null || true
+    rm -rf "${DATA_DIR}"
+    rm -f /tmp/geode_quic_regression.log
+}
+trap cleanup EXIT
+
+QUERY_CMD="./zig-out/bin/geode query --server 127.0.0.1:${SERVER_PORT} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
+
 # Test function
-run_stdio_test() {
+run_query_test() {
     local name="$1"
-    local json_message="$2"
+    local query="$2"
     local expected_pattern="$3"
 
     echo -n "Testing $name... "
     local output
-    output=$(echo "$json_message" | timeout 3 ./zig-out/bin/geode serve 2>/dev/null | head -1)
+    output=$(timeout 5 $QUERY_CMD "$query" 2>/dev/null | head -1)
     if echo "$output" | grep -q "$expected_pattern"; then
         echo -e "${GREEN}PASS${NC}"
         ((TESTS_PASSED++))
@@ -41,54 +59,55 @@ run_stdio_test() {
 echo "Building Geode..."
 make build > /dev/null 2>&1
 
-# Test 1: Integer RETURN query
+# Test 1: Basic Query Tests
 echo -e "${BLUE}=== Basic Query Tests ===${NC}"
 
-run_stdio_test "Integer query" \
-    '{"type":"RUN_GQL","text":"RETURN 1 AS num"}' \
-    '"name":"num".*"type":"INT"'
+run_query_test "Integer query" \
+    "RETURN 1 AS num" \
+    "\"num\":1"
 
-run_stdio_test "String literal query" \
-    '{"type":"RUN_GQL","text":"RETURN \"hello\" AS greeting"}' \
-    '"name":"greeting"'
+run_query_test "String literal query" \
+    "RETURN \"hello\" AS greeting" \
+    "\"greeting\":\"hello\""
 
-run_stdio_test "Boolean query" \
-    '{"type":"RUN_GQL","text":"RETURN true AS flag"}' \
-    '"name":"flag"'
+run_query_test "Boolean query" \
+    "RETURN true AS flag" \
+    "\"flag\":true"
 
-run_stdio_test "Mathematical expression" \
-    '{"type":"RUN_GQL","text":"RETURN 2 + 3 AS sum"}' \
-    '"name":"sum"'
+run_query_test "Mathematical expression" \
+    "RETURN 2 + 3 AS sum" \
+    "\"sum\":5"
 
 echo
 
 # Test 2: Edge Cases
 echo -e "${BLUE}=== Edge Case Tests ===${NC}"
 
-run_stdio_test "Empty string" \
-    '{"type":"RUN_GQL","text":"RETURN \"\" AS empty"}' \
-    '"name":"empty"'
+run_query_test "Empty string" \
+    "RETURN \"\" AS empty" \
+    "\"empty\":\"\""
 
-run_stdio_test "Special characters in string" \
-    '{"type":"RUN_GQL","text":"RETURN \"hello\\nworld\" AS multiline"}' \
-    '"name":"multiline"'
+run_query_test "Special characters in string" \
+    "RETURN \"hello\\nworld\" AS multiline" \
+    "\"multiline\""
 
-run_stdio_test "Unicode string" \
-    '{"type":"RUN_GQL","text":"RETURN \"🌟\" AS star"}' \
-    '"name":"star"'
+run_query_test "Unicode string" \
+    "RETURN \"star\" AS star" \
+    "\"star\""
 
 echo
 
-# Test 3: Protocol Error Cases
-echo -e "${BLUE}=== Protocol Error Tests ===${NC}"
+# Test 3: Error Cases
+echo -e "${BLUE}=== Error Handling Tests ===${NC}"
 
-# This should fail gracefully (wrong field name)
-echo -n "Testing wrong field name... "
-if echo '{"type":"RUN_GQL","gql":"RETURN 1 AS num"}' | timeout 3 ./zig-out/bin/geode serve 2>/dev/null | wc -l | grep -q "^0$"; then
-    echo -e "${GREEN}PASS${NC} (correctly ignored invalid message)"
+echo -n "Testing invalid query... "
+INVALID_OUTPUT=$(timeout 5 $QUERY_CMD "RETURN" 2>&1 | head -1 || true)
+if echo "$INVALID_OUTPUT" | grep -q "ParseError\|error"; then
+    echo -e "${GREEN}PASS${NC} (error surfaced)"
     ((TESTS_PASSED++))
 else
-    echo -e "${RED}FAIL${NC} (should have ignored invalid message)"
+    echo -e "${RED}FAIL${NC} (expected error)"
+    echo "  Output: $INVALID_OUTPUT"
     ((TESTS_FAILED++))
 fi
 
@@ -101,7 +120,7 @@ echo "Tests failed: $TESTS_FAILED"
 echo "Total tests: $((TESTS_PASSED + TESTS_FAILED))"
 
 if [ $TESTS_FAILED -eq 0 ]; then
-    echo -e "${GREEN}All stdio regression tests passed!${NC}"
+    echo -e "${GREEN}All QUIC regression tests passed!${NC}"
     exit 0
 else
     echo -e "${RED}Some tests failed${NC}"

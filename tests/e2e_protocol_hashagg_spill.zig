@@ -8,14 +8,14 @@ test "protocol hashagg spill threshold does not break execution" {
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--disable-auth" },
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
         &.{ "GEODE_SPILL_THRESHOLD_BYTES=1" },
     );
     defer server.deinit();
 
     var client = try util.QuicProtoClient.connect(allocator, addr);
     defer client.deinit();
-    var hello = try client.hello(allocator, "", "");
+    var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
     hello.deinit(allocator);
 
     const res = try client.executeAndCollect(allocator, "RETURN 1 AS x GROUP BY x", util.emptyParams(), 100);

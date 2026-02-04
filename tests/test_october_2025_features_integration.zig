@@ -6,6 +6,11 @@ const graph_store = geode.graph_store;
 
 // CANARY: REQ=REQ-GQL-INTEGRATION-001; FEATURE="October2025Features"; ASPECT=Integration; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
 
+fn makeContext(allocator: std.mem.Allocator) !execution.ExecutionContext {
+    const catalog = try execution.ensureCatalogInstance(allocator);
+    return execution.ExecutionContext{ .catalog = catalog };
+}
+
 // Integration test: FILTER clause with complex graph patterns
 test "Integration: FILTER clause with relationship patterns" {
     const allocator = testing.allocator;
@@ -47,7 +52,8 @@ test "Integration: FILTER clause with relationship patterns" {
     var parse_result = try geode.parseGql(query, allocator);
     defer parse_result.arena.deinit();
 
-    var result = try execution.executeProgram(allocator, &parse_result.program);
+    var context = try makeContext(allocator);
+    var result = try execution.executeProgramWithContext(allocator, &parse_result.program, context);
     defer result.deinit(allocator);
 
     // Should only return Carol (Seattle), not Bob (Portland)
@@ -77,7 +83,8 @@ test "Integration: type() function returns relationship labels" {
     var parse_result = try geode.parseGql(query, allocator);
     defer parse_result.arena.deinit();
 
-    var result = try execution.executeProgram(allocator, &parse_result.program);
+    var context = try makeContext(allocator);
+    var result = try execution.executeProgramWithContext(allocator, &parse_result.program, context);
     defer result.deinit(allocator);
 
     // Should return 2 rows with relationship types
@@ -109,7 +116,8 @@ test "Integration: SET label operations with CREATE and MATCH" {
     var create_result = try geode.parseGql(create_query, allocator);
     defer create_result.arena.deinit();
 
-    var create_exec = try execution.executeProgram(allocator, &create_result.program);
+    var context = try makeContext(allocator);
+    var create_exec = try execution.executeProgramWithContext(allocator, &create_result.program, context);
     defer create_exec.deinit(allocator);
 
     // Add Employee label
@@ -118,7 +126,7 @@ test "Integration: SET label operations with CREATE and MATCH" {
     var set_result = try geode.parseGql(set_query, allocator);
     defer set_result.arena.deinit();
 
-    var set_exec = try execution.executeProgram(allocator, &set_result.program);
+    var set_exec = try execution.executeProgramWithContext(allocator, &set_result.program, context);
     defer set_exec.deinit(allocator);
 
     // Verify label was added by checking the store
@@ -171,7 +179,8 @@ test "Integration: Variable-length paths in social network" {
     var parse_result = try geode.parseGql(query, allocator);
     defer parse_result.arena.deinit();
 
-    var result = try execution.executeProgram(allocator, &parse_result.program);
+    var context = try makeContext(allocator);
+    var result = try execution.executeProgramWithContext(allocator, &parse_result.program, context);
     defer result.deinit(allocator);
 
     // Should find Bob (1 hop) and Carol (2 hops), but not Dave (3 hops)
@@ -203,7 +212,7 @@ test "Integration: Session management graph switching" {
     var set_result = try geode.parseGql(set_query, allocator);
     defer set_result.arena.deinit();
 
-    var context = try execution.getDefaultContext(allocator);
+    var context = try makeContext(allocator);
     context.session_state = &session_state;
     var exec_result = try execution.executeStatementWithContext(allocator, set_result.program.statements[0], context);
     defer exec_result.deinit(allocator);
@@ -233,7 +242,7 @@ test "Integration: Transaction lifecycle START/COMMIT/ROLLBACK" {
     var start_result = try geode.parseGql(start_query, allocator);
     defer start_result.arena.deinit();
 
-    var context = try execution.getDefaultContext(allocator);
+    var context = try makeContext(allocator);
     var start_exec = try execution.executeStatementWithContext(allocator, start_result.program.statements[0], context);
     defer start_exec.deinit(allocator);
 
@@ -268,7 +277,7 @@ test "Integration: Combined features - social network analysis" {
     var session_result = try geode.parseGql(session_query, allocator);
     defer session_result.arena.deinit();
 
-    var context = try execution.getDefaultContext(allocator);
+    var context = try makeContext(allocator);
     context.session_state = &session_state;
     var session_exec = try execution.executeStatementWithContext(allocator, session_result.program.statements[0], context);
     defer session_exec.deinit(allocator);
@@ -319,7 +328,7 @@ test "Integration: Combined features - social network analysis" {
     var parse_result = try geode.parseGql(query, allocator);
     defer parse_result.arena.deinit();
 
-    var result = try execution.executeProgram(allocator, &parse_result.program);
+    var result = try execution.executeProgramWithContext(allocator, &parse_result.program, context);
     defer result.deinit(allocator);
 
     // Should find Carol (1 hop, Seattle, age 35) and Dave (2 hops, Seattle, age 40)
@@ -350,7 +359,7 @@ test "Integration: Transaction error handling" {
     var commit_result = try geode.parseGql(commit_query, allocator);
     defer commit_result.arena.deinit();
 
-    const context = try execution.getDefaultContext(allocator);
+    const context = try makeContext(allocator);
     const result = execution.executeStatementWithContext(allocator, commit_result.program.statements[0], context);
 
     // Should return NoActiveTransaction error
@@ -361,7 +370,7 @@ test "Integration: Transaction error handling" {
     var start_result = try geode.parseGql(start_query, allocator);
     defer start_result.arena.deinit();
 
-    var active_context = try execution.getDefaultContext(allocator);
+    var active_context = try makeContext(allocator);
     active_context.transaction_state = .Active;
     const start_twice = execution.executeStatementWithContext(allocator, start_result.program.statements[0], active_context);
 
@@ -393,7 +402,8 @@ test "Integration: Memory management in complex scenarios" {
         var parse_result = try geode.parseGql(query, allocator);
         defer parse_result.arena.deinit();
 
-        var result = try execution.executeProgram(allocator, &parse_result.program);
+        var context = try makeContext(allocator);
+        var result = try execution.executeProgramWithContext(allocator, &parse_result.program, context);
         defer result.deinit(allocator);
     }
 

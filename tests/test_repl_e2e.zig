@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
+const repl_util = @import("repl_test_util.zig");
 
 // CANARY: REQ=REQ-REPL-QUIC-005; FEATURE="REPL E2E Tests"; ASPECT=EndToEndIntegration; STATUS=EXEMPT; TEST=test_repl_server_handshake; OWNER=repl; UPDATED=2025-10-05
 
@@ -9,13 +10,12 @@ const repl_loop = geode.repl.repl_loop;
 
 test "repl server handshake simulation" {
     const allocator = testing.allocator;
+    var server = try repl_util.startServer(allocator);
+    defer server.deinit();
 
     // Test HELLO handshake with expected client info
-    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_util.connectSession(allocator, server.addr);
     defer session.deinit();
-
-    try session.connect();
-    try session.hello();
 
     // Verify session is ready for queries after handshake
     try testing.expect(session.connected);
@@ -28,13 +28,12 @@ test "repl server handshake simulation" {
 
 test "repl transaction isolation" {
     const allocator = testing.allocator;
+    var server = try repl_util.startServer(allocator);
+    defer server.deinit();
 
     // Test transaction isolation in REPL context
-    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_util.connectSession(allocator, server.addr);
     defer session.deinit();
-
-    try session.connect();
-    try session.hello();
 
     // Create data outside transaction
     try session.runGql("CREATE (base:BaseNode {id: 1, value: 'persistent'})");
@@ -57,13 +56,12 @@ test "repl transaction isolation" {
 
 test "repl query result pagination" {
     const allocator = testing.allocator;
+    var server = try repl_util.startServer(allocator);
+    defer server.deinit();
 
     // Test PULL request handling for large result sets
-    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_util.connectSession(allocator, server.addr);
     defer session.deinit();
-
-    try session.connect();
-    try session.hello();
 
     // Create multiple nodes for pagination testing
     try session.runGql("CREATE (n1:TestNode {id: 1}), (n2:TestNode {id: 2}), (n3:TestNode {id: 3})");
@@ -78,21 +76,19 @@ test "repl query result pagination" {
 
 test "repl error recovery" {
     const allocator = testing.allocator;
+    var server = try repl_util.startServer(allocator);
+    defer server.deinit();
 
     // Test that REPL can recover from query errors
-    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_util.connectSession(allocator, server.addr);
     defer session.deinit();
-
-    try session.connect();
-    try session.hello();
 
     // Execute valid query
     try session.runGql("RETURN 'valid query' AS status");
     try testing.expect(session.last_response != null);
 
-    // Execute invalid query (with mock transport, this won't actually fail)
-    // But we can test the error handling infrastructure
-    try session.runGql("INVALID SYNTAX HERE");
+    // Execute invalid query and ensure session stays connected
+    _ = session.runGql("INVALID SYNTAX HERE") catch {};
 
     // Session should still be usable after error
     try testing.expect(session.connected);
@@ -104,13 +100,12 @@ test "repl error recovery" {
 
 test "repl concurrent operations simulation" {
     const allocator = testing.allocator;
+    var server = try repl_util.startServer(allocator);
+    defer server.deinit();
 
     // Test handling of multiple operations in sequence
-    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_util.connectSession(allocator, server.addr);
     defer session.deinit();
-
-    try session.connect();
-    try session.hello();
 
     // Simulate rapid sequence of operations
     const operations = [_][]const u8{
@@ -132,14 +127,12 @@ test "repl concurrent operations simulation" {
 
 test "repl security context" {
     const allocator = testing.allocator;
+    var server = try repl_util.startServer(allocator);
+    defer server.deinit();
 
     // Test security-related session behavior
-    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_util.connectSession(allocator, server.addr);
     defer session.deinit();
-
-    // Connection should work with TLS transport
-    try session.connect();
-    try session.hello();
 
     // Test that sensitive operations can be performed
     try session.runGql("RETURN current_user() AS user");
@@ -163,7 +156,7 @@ test "repl format handling" {
             .verbose = false,
             .show_timing = false,
             .allocator = allocator,
-            .transport = &repl_dispatch.mock_transport,
+            .transport = &geode.repl.quic_transport.transport,
         };
 
         // Verify format is set correctly
@@ -190,7 +183,7 @@ test "repl timing functionality" {
         .verbose = false,
         .show_timing = true, // Enable timing
         .allocator = allocator,
-        .transport = &repl_dispatch.mock_transport,
+        .transport = &geode.repl.quic_transport.transport,
     };
 
     try testing.expect(options.show_timing);

@@ -1,12 +1,24 @@
 const std = @import("std");
 const testing = std.testing;
+const util = @import("proto_test_util.zig");
 
 fn run_server(allocator: std.mem.Allocator) !std.ChildProcess {
-    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:7567" }, allocator);
+    var server = std.ChildProcess.init(&[_][]const u8{
+        "./zig-out/bin/geode",
+        "serve",
+        "--listen",
+        "127.0.0.1:7567",
+    }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Inherit;
     server.stderr_behavior = .Inherit;
+    var env_map = try std.process.getEnvMap(allocator);
+    errdefer env_map.deinit();
+    env_map.put("GEODE_ADMIN_USERNAME", util.defaultUsername()) catch {};
+    env_map.put("GEODE_DEFAULT_PASSWORD", util.defaultPassword()) catch {};
+    server.env_map = &env_map;
     try server.spawn();
+    env_map.deinit();
     // allow to boot
     std.Thread.sleep(200 * std.time.ns_per_ms);
     return server;
@@ -53,10 +65,23 @@ test "MVCC serialization failure yields 40001" {
     defer server.kill() catch {};
 
     // Trigger internal SerializationFailure via synthetic path in server (force path uses manager’s conflict matrix in commit)
-    const args = &[_][]const u8{ "./zig-out/bin/geode", "query", "RETURN 1", "--server", "127.0.0.1:7567" };
+    const args = &[_][]const u8{
+        "./zig-out/bin/geode",
+        "query",
+        "RETURN 1",
+        "--server",
+        "127.0.0.1:7567",
+        "--insecure",
+        "--user",
+        util.defaultUsername(),
+        "--password",
+        util.defaultPassword(),
+    };
     const out = try run_cmd(allocator, args);
     defer allocator.free(out);
 
     // This smoke check ensures server is responding; actual 40001 verification should be performed where conflicting updates are executed.
-    try testing.expect(std.mem.indexOf(u8, out, "SCHEMA") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "\"status_class\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "\"columns\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "\"rows\"") != null);
 }

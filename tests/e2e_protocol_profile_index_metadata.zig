@@ -12,7 +12,7 @@ test "profile includes NodeIndexScan metadata" {
     defer child.deinit();
     // Read all stdout
     const out = try child.readAllStdoutAlloc(testing.allocator, 1_000_000);
-    // We expect SCHEMA then PROFILE JSON lines. Metadata is in PROFILE JSON.
+    // We expect JSON output with a profile payload. Metadata is in the profile JSON.
     try testing.expect(std.mem.indexOf(u8, out, "NodeIndexScan") != null);
     try testing.expect(std.mem.indexOf(u8, out, "\"index_name\":\"") != null);
     // selectivity_est should appear with floating value; just assert key presence.

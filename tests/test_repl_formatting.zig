@@ -33,24 +33,42 @@ fn formatResultAsCsv(writer: anytype, allocator: std.mem.Allocator, response: []
 
     const root = parsed.value.object;
     if (root.get("columns")) |columns_value| {
-        if (root.get("data")) |data_value| {
+        if (root.get("rows")) |rows_value| {
             const columns = columns_value.array;
-            const rows = data_value.array;
+            const rows = rows_value.array;
+
+            var col_names = try allocator.alloc([]const u8, columns.items.len);
+            defer allocator.free(col_names);
+
+            for (columns.items, 0..) |col, i| {
+                if (col == .object) {
+                    if (col.object.get("name")) |name_val| {
+                        if (name_val == .string) {
+                            col_names[i] = name_val.string;
+                            continue;
+                        }
+                    }
+                }
+                col_names[i] = "";
+            }
 
             // Header
-            for (columns.items, 0..) |col, i| {
+            for (col_names, 0..) |col_name, i| {
                 if (i > 0) try writer.writeAll(",");
                 try writer.writeAll("\"");
-                try writer.writeAll(col.string);
+                try writer.writeAll(col_name);
                 try writer.writeAll("\"");
             }
             try writer.writeAll("\n");
 
             // Data rows
             for (rows.items) |row| {
-                const row_array = row.array;
-                for (row_array.items, 0..) |cell, i| {
+                const row_obj = if (row == .object) row.object else std.json.ObjectMap.init(allocator);
+                defer if (row != .object) row_obj.deinit();
+                for (col_names, 0..) |col_name, i| {
                     if (i > 0) try writer.writeAll(",");
+                    const cell_opt = row_obj.get(col_name);
+                    const cell = cell_opt orelse std.json.Value{ .null = {} };
                     switch (cell) {
                         .string => |s| {
                             try writer.writeAll("\"");
@@ -97,22 +115,40 @@ fn formatResultAsTable(writer: anytype, allocator: std.mem.Allocator, response: 
 
     const root = parsed.value.object;
     if (root.get("columns")) |columns_value| {
-        if (root.get("data")) |data_value| {
+        if (root.get("rows")) |rows_value| {
             const columns = columns_value.array;
-            const rows = data_value.array;
+            const rows = rows_value.array;
+
+            var col_names = try allocator.alloc([]const u8, columns.items.len);
+            defer allocator.free(col_names);
+
+            for (columns.items, 0..) |col, i| {
+                if (col == .object) {
+                    if (col.object.get("name")) |name_val| {
+                        if (name_val == .string) {
+                            col_names[i] = name_val.string;
+                            continue;
+                        }
+                    }
+                }
+                col_names[i] = "";
+            }
 
             // Calculate column widths
             var col_widths = try allocator.alloc(usize, columns.items.len);
             defer allocator.free(col_widths);
 
-            for (columns.items, 0..) |col, i| {
-                col_widths[i] = col.string.len;
+            for (col_names, 0..) |col_name, i| {
+                col_widths[i] = col_name.len;
             }
 
             for (rows.items) |row| {
-                const row_array = row.array;
-                for (row_array.items, 0..) |cell, i| {
+                const row_obj = if (row == .object) row.object else std.json.ObjectMap.init(allocator);
+                defer if (row != .object) row_obj.deinit();
+                for (col_names, 0..) |col_name, i| {
                     if (i >= col_widths.len) continue;
+                    const cell_opt = row_obj.get(col_name);
+                    const cell = cell_opt orelse std.json.Value{ .null = {} };
                     const width: usize = switch (cell) {
                         .string => |s| s.len,
                         .integer => 10, // rough estimate
@@ -127,9 +163,9 @@ fn formatResultAsTable(writer: anytype, allocator: std.mem.Allocator, response: 
 
             // Print header
             try writer.writeAll("| ");
-            for (columns.items, 0..) |col, i| {
-                try writer.writeAll(col.string);
-                const padding = col_widths[i] - col.string.len;
+            for (col_names, 0..) |col_name, i| {
+                try writer.writeAll(col_name);
+                const padding = col_widths[i] - col_name.len;
                 for (0..padding) |_| try writer.writeAll(" ");
                 try writer.writeAll(" | ");
             }
@@ -147,10 +183,13 @@ fn formatResultAsTable(writer: anytype, allocator: std.mem.Allocator, response: 
             // Print data rows
             for (rows.items) |row| {
                 try writer.writeAll("| ");
-                const row_array = row.array;
-                for (row_array.items, 0..) |cell, i| {
+                const row_obj = if (row == .object) row.object else std.json.ObjectMap.init(allocator);
+                defer if (row != .object) row_obj.deinit();
+                for (col_names, 0..) |col_name, i| {
                     if (i >= col_widths.len) continue;
                     var printed_len: usize = 0;
+                    const cell_opt = row_obj.get(col_name);
+                    const cell = cell_opt orelse std.json.Value{ .null = {} };
                     switch (cell) {
                         .string => |s| {
                             try writer.writeAll(s);
@@ -199,7 +238,7 @@ test "JSON format output - single column" {
     var output = std.ArrayList(u8).initCapacity(testing.allocator, 0) catch unreachable;
     defer output.deinit(testing.allocator);
 
-    const response = "{\"columns\":[\"name\"],\"data\":[[\"Alice\"]]}";
+    const response = "{\"columns\":[{\"name\":\"name\",\"type\":\"STRING\"}],\"rows\":[{\"name\":\"Alice\"}]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .json);
 
     try testing.expectEqualStrings(response, output.items);
@@ -209,7 +248,7 @@ test "CSV format output - single column" {
     var output = std.ArrayList(u8).initCapacity(testing.allocator, 0) catch unreachable;
     defer output.deinit(testing.allocator);
 
-    const response = "{\"columns\":[\"name\"],\"data\":[[\"Alice\"]]}";
+    const response = "{\"columns\":[{\"name\":\"name\",\"type\":\"STRING\"}],\"rows\":[{\"name\":\"Alice\"}]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .csv);
 
     const expected = "\"name\"\n\"Alice\"\n";
@@ -220,7 +259,7 @@ test "CSV format output - multiple columns and rows" {
     var output = std.ArrayList(u8).initCapacity(testing.allocator, 0) catch unreachable;
     defer output.deinit(testing.allocator);
 
-    const response = "{\"columns\":[\"name\",\"age\"],\"data\":[[\"Alice\",30],[\"Bob\",25]]}";
+    const response = "{\"columns\":[{\"name\":\"name\",\"type\":\"STRING\"},{\"name\":\"age\",\"type\":\"INTEGER\"}],\"rows\":[{\"name\":\"Alice\",\"age\":30},{\"name\":\"Bob\",\"age\":25}]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .csv);
 
     const expected = "\"name\",\"age\"\n\"Alice\",30\n\"Bob\",25\n";
@@ -231,7 +270,7 @@ test "CSV format output - mixed data types" {
     var output = std.ArrayList(u8).initCapacity(testing.allocator, 0) catch unreachable;
     defer output.deinit(testing.allocator);
 
-    const response = "{\"columns\":[\"name\",\"age\",\"active\",\"score\"],\"data\":[[\"Alice\",30,true,95.5],[\"Bob\",null,false,87.2]]}";
+    const response = "{\"columns\":[{\"name\":\"name\",\"type\":\"STRING\"},{\"name\":\"age\",\"type\":\"INTEGER\"},{\"name\":\"active\",\"type\":\"BOOLEAN\"},{\"name\":\"score\",\"type\":\"FLOAT\"}],\"rows\":[{\"name\":\"Alice\",\"age\":30,\"active\":true,\"score\":95.5},{\"name\":\"Bob\",\"age\":null,\"active\":false,\"score\":87.2}]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .csv);
 
     const expected = "\"name\",\"age\",\"active\",\"score\"\n\"Alice\",30,true,95.5\n\"Bob\",NULL,false,87.2\n";
@@ -242,7 +281,7 @@ test "Table format output - single column" {
     var output = std.ArrayList(u8).initCapacity(testing.allocator, 0) catch unreachable;
     defer output.deinit(testing.allocator);
 
-    const response = "{\"columns\":[\"name\"],\"data\":[[\"Alice\"]]}";
+    const response = "{\"columns\":[{\"name\":\"name\",\"type\":\"STRING\"}],\"rows\":[{\"name\":\"Alice\"}]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .table);
 
     // Check for key table components rather than exact formatting
@@ -255,7 +294,7 @@ test "Table format output - multiple columns" {
     var output = std.ArrayList(u8).initCapacity(testing.allocator, 0) catch unreachable;
     defer output.deinit(testing.allocator);
 
-    const response = "{\"columns\":[\"name\",\"age\"],\"data\":[[\"Alice\",30],[\"Bob\",25]]}";
+    const response = "{\"columns\":[{\"name\":\"name\",\"type\":\"STRING\"},{\"name\":\"age\",\"type\":\"INTEGER\"}],\"rows\":[{\"name\":\"Alice\",\"age\":30},{\"name\":\"Bob\",\"age\":25}]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .table);
 
     // Note: Table output has dynamic column sizing, so we check for key components
@@ -281,7 +320,7 @@ test "Missing columns field fallback" {
     var output = std.ArrayList(u8).initCapacity(testing.allocator, 0) catch unreachable;
     defer output.deinit(testing.allocator);
 
-    const response = "{\"data\":[[\"Alice\"]]}";
+    const response = "{\"rows\":[{\"name\":\"Alice\"}]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .csv);
 
     // Should fallback to raw output
@@ -292,7 +331,7 @@ test "Missing data field fallback" {
     var output = std.ArrayList(u8).initCapacity(testing.allocator, 0) catch unreachable;
     defer output.deinit(testing.allocator);
 
-    const response = "{\"columns\":[\"name\"]}";
+    const response = "{\"columns\":[{\"name\":\"name\",\"type\":\"STRING\"}]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .csv);
 
     // Should fallback to raw output
@@ -314,7 +353,7 @@ test "Empty data array" {
     var output = std.ArrayList(u8).initCapacity(testing.allocator, 0) catch unreachable;
     defer output.deinit(testing.allocator);
 
-    const response = "{\"columns\":[\"name\"],\"data\":[]}";
+    const response = "{\"columns\":[{\"name\":\"name\",\"type\":\"STRING\"}],\"rows\":[]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .csv);
 
     const expected = "\"name\"\n";
@@ -325,7 +364,7 @@ test "Multiple columns with varying widths" {
     var output = std.ArrayList(u8).initCapacity(testing.allocator, 0) catch unreachable;
     defer output.deinit(testing.allocator);
 
-    const response = "{\"columns\":[\"id\",\"name\",\"description\"],\"data\":[[1,\"Alice\",\"Short\"],[2,\"Bob\",\"A much longer description\"]]}";
+    const response = "{\"columns\":[{\"name\":\"id\",\"type\":\"INTEGER\"},{\"name\":\"name\",\"type\":\"STRING\"},{\"name\":\"description\",\"type\":\"STRING\"}],\"rows\":[{\"id\":1,\"name\":\"Alice\",\"description\":\"Short\"},{\"id\":2,\"name\":\"Bob\",\"description\":\"A much longer description\"}]}";
     try formatQueryResult(output.writer(testing.allocator), testing.allocator, response, .table);
 
     // Check that all content is present and properly formatted

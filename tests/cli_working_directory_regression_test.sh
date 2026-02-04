@@ -17,26 +17,26 @@ if [[ $result == *"FAIL"* ]]; then
 fi
 echo "PASS: CLI works from project root directory"
 
-# Test 2: CLI fails gracefully from zig-out directory (no geodec available)
+# Test 2: CLI fails gracefully from zig-out directory (no geode query available)
 echo "Test 2: CLI from zig-out directory (should fail gracefully)"
 cd zig-out
-result=$(../zig-out/bin/geode "RETURN 1" --insecure 2>&1 | grep "geodec client not found" || echo "DIFFERENT_ERROR")
+result=$(../zig-out/bin/geode "RETURN 1" --insecure 2>&1 | grep "geode query client not found" || echo "DIFFERENT_ERROR")
 cd ..
 if [[ $result == *"DIFFERENT_ERROR"* ]]; then
-    echo "FAIL: CLI should show 'geodec client not found' error from zig-out directory"
+    echo "FAIL: CLI should show 'geode query client not found' error from zig-out directory"
     exit 1
 fi
 echo "PASS: CLI fails gracefully from zig-out directory"
 
-# Test 3: CLI from subdirectory should fail gracefully (no geodec/geoded available)
+# Test 3: CLI from subdirectory should fail gracefully (no geode query/geode serve available)
 echo "Test 3: CLI from subdirectory with relative path (should fail gracefully)"
 mkdir -p temp_subdir
 cd temp_subdir
-result=$(../zig-out/bin/geode "RETURN 'subdir_test' AS location" --insecure 2>&1 | grep "geodec client not found" || echo "DIFFERENT_ERROR")
+result=$(../zig-out/bin/geode "RETURN 'subdir_test' AS location" --insecure 2>&1 | grep "geode query client not found" || echo "DIFFERENT_ERROR")
 cd ..
 rmdir temp_subdir
 if [[ $result == *"DIFFERENT_ERROR"* ]]; then
-    echo "FAIL: CLI should show 'geodec client not found' error from subdirectory"
+    echo "FAIL: CLI should show 'geode query client not found' error from subdirectory"
     exit 1
 fi
 echo "PASS: CLI fails gracefully from subdirectory"
@@ -53,9 +53,9 @@ echo "PASS: CLI works with absolute path"
 
 # Test 5: Embedded server path resolution
 echo "Test 5: Embedded server path resolution"
-# Check that geoded server binary exists and is accessible from working directory
+# Check that geode server binary exists and is accessible from working directory
 if [[ ! -f "./zig-out/bin/geode serve" ]]; then
-    echo "FAIL: geoded server binary not found at expected path"
+    echo "FAIL: geode server binary not found at expected path"
     exit 1
 fi
 echo "PASS: Embedded server path resolution"

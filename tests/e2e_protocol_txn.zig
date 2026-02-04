@@ -35,7 +35,9 @@ test "protocol: txn demarcation happy path (BEGIN/COMMIT)" {
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
-    try std.testing.expect(contains(res.out, "\"type\":\"BINDINGS\""));
+    try std.testing.expect(contains(res.out, "\"columns\""));
+    try std.testing.expect(contains(res.out, "\"rows\""));
+    try std.testing.expect(contains(res.out, "\"status_class\""));
 }
 
 test "protocol: txn demarcation error (COMMIT without BEGIN)" {

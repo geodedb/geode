@@ -12,9 +12,28 @@ echo
 echo "Building Geode..."
 make build > /dev/null 2>&1
 
+SERVER_PORT=8457
+ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+DATA_DIR=$(mktemp -d /tmp/geode_regression_basic_XXXXXX)
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+    ./zig-out/bin/geode serve --listen 127.0.0.1:${SERVER_PORT} --data-dir "${DATA_DIR}" > /tmp/geode_regression_basic.log 2>&1 &
+SERVER_PID=$!
+sleep 2
+
+cleanup() {
+    kill $SERVER_PID 2>/dev/null || true
+    wait $SERVER_PID 2>/dev/null || true
+    rm -rf "${DATA_DIR}"
+    rm -f /tmp/geode_regression_basic.log
+}
+trap cleanup EXIT
+
+QUERY_CMD="./zig-out/bin/geode query --server 127.0.0.1:${SERVER_PORT} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
+
 # Test 1: Basic CREATE statements (node ID collision fix)
 echo "1. Testing CREATE statement execution..."
-timeout 3 ./zig-out/bin/geode query 'CREATE (a), (b), (c)' --insecure > /dev/null
+timeout 3 $QUERY_CMD 'CREATE (a), (b), (c)' > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ CREATE nodes successful"
 else
@@ -24,7 +43,7 @@ fi
 
 # Test 2: CREATE with labels
 echo "2. Testing CREATE with labels..."
-timeout 3 ./zig-out/bin/geode query 'CREATE (p:Person), (c:Company)' --insecure > /dev/null
+timeout 3 $QUERY_CMD 'CREATE (p:Person), (c:Company)' > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ CREATE with labels successful"
 else
@@ -34,7 +53,7 @@ fi
 
 # Test 3: CREATE with properties
 echo "3. Testing CREATE with properties..."
-timeout 3 ./zig-out/bin/geode query "CREATE (p {name: 'Alice', age: 30})" --insecure > /dev/null
+timeout 3 $QUERY_CMD "CREATE (p {name: 'Alice', age: 30})" > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ CREATE with properties successful"
 else
@@ -44,7 +63,7 @@ fi
 
 # Test 4: CREATE with labels and properties
 echo "4. Testing CREATE with labels and properties..."
-timeout 3 ./zig-out/bin/geode query "CREATE (p:Person {name: 'Bob', age: 25})" --insecure > /dev/null
+timeout 3 $QUERY_CMD "CREATE (p:Person {name: 'Bob', age: 25})" > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ CREATE with labels and properties successful"
 else
@@ -54,7 +73,7 @@ fi
 
 # Test 5: CREATE relationship patterns
 echo "5. Testing CREATE relationship patterns..."
-timeout 3 ./zig-out/bin/geode query 'CREATE (a)-[:KNOWS]->(b)' --insecure > /dev/null
+timeout 3 $QUERY_CMD 'CREATE (a)-[:KNOWS]->(b)' > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ CREATE relationships successful"
 else
@@ -64,7 +83,7 @@ fi
 
 # Test 6: Complex CREATE patterns
 echo "6. Testing complex CREATE patterns..."
-timeout 3 ./zig-out/bin/geode query 'CREATE (alice:Person {name: "Alice"})-[:WORKS_AT {since: 2020}]->(tech:Company {name: "TechCorp"})' --insecure > /dev/null
+timeout 3 $QUERY_CMD 'CREATE (alice:Person {name: "Alice"})-[:WORKS_AT {since: 2020}]->(tech:Company {name: "TechCorp"})' > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ Complex CREATE patterns successful"
 else
@@ -74,7 +93,7 @@ fi
 
 # Test 7: Single quote string literals (should work)
 echo "7. Testing single quote string literals..."
-timeout 3 ./zig-out/bin/geode query "RETURN 'hello' AS greeting" --insecure > /dev/null
+timeout 3 $QUERY_CMD "RETURN 'hello' AS greeting" > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ Single quote strings successful"
 else
@@ -84,7 +103,7 @@ fi
 
 # Test 8: Basic RETURN queries
 echo "8. Testing basic RETURN queries..."
-timeout 3 ./zig-out/bin/geode query 'RETURN 42 AS answer' --insecure > /dev/null
+timeout 3 $QUERY_CMD 'RETURN 42 AS answer' > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ Basic RETURN successful"
 else
@@ -94,7 +113,7 @@ fi
 
 # Test 9: Basic MATCH queries (should execute without hanging)
 echo "9. Testing basic MATCH queries..."
-timeout 3 ./zig-out/bin/geode query 'MATCH (n) RETURN n' --insecure > /dev/null
+timeout 3 $QUERY_CMD 'MATCH (n) RETURN n' > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ Basic MATCH successful"
 else
@@ -105,7 +124,7 @@ fi
 # Test 10: Node ID collision fix verification
 echo "10. Testing node ID collision prevention..."
 # This test creates multiple nodes in succession to verify they get unique IDs
-timeout 3 ./zig-out/bin/geode query 'CREATE (n1), (n2), (n3), (n4), (n5)' --insecure > /dev/null
+timeout 3 $QUERY_CMD 'CREATE (n1), (n2), (n3), (n4), (n5)' > /dev/null
 if [ $? -eq 0 ]; then
     echo "   ✓ Node ID collision prevention successful"
 else
@@ -125,7 +144,6 @@ echo
 echo "=== Known Issues (tracked for future fixes) ==="
 echo "⚠ Double quote string literals cause server hang (parser-level issue)"
 echo "⚠ Count aggregation returns null instead of 0 (missing pipeline integration)"
-echo "⚠ Data persistence requires QUIC server (stdio mode process isolation)"
 echo "⚠ QUIC TLS handshake compatibility for insecure connections"
 echo
 

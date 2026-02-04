@@ -61,7 +61,7 @@ docker build -f Dockerfile.reliable -t geode:latest .
 
 # Run container
 docker run -d --name geode-test geode:latest
-docker exec geode-test geodec "RETURN 1 AS x" --server 127.0.0.1:7567
+docker exec geode-test geode query "RETURN 1 AS x" --server 127.0.0.1:7567
 ```
 
 ## Verification

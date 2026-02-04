@@ -100,6 +100,6 @@ else
 fi
 
 # Cleanup any leftover processes
-pkill -f geoded 2>/dev/null || true
+pkill -f geode serve 2>/dev/null || true
 
 echo -e "\n${GREEN}Regression testing complete!${NC}"

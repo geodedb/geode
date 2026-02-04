@@ -11,59 +11,26 @@ echo
 echo "Building Geode..."
 make build > /dev/null 2>&1
 
-echo "Testing property persistence within same session..."
-
-# Create a temporary script that tests properties in a QUIC server session
-cat > /tmp/property_test.gql << 'EOF'
-CREATE (p {name: 'Alice', age: 30, score: 95.5});
-MATCH (n) WHERE n.name = 'Alice' RETURN n;
-MATCH (n) RETURN n.name, n.age, n.score;
-MATCH (n) RETURN n ORDER BY n.id;
-EOF
+echo "Testing property persistence within same QUIC server session..."
 
 echo "Starting QUIC server for property persistence test..."
-./zig-out/bin/geode serve --listen 127.0.0.1:9443 --data_dir /tmp/geode_property_test &
+ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+SERVER_ADDR="127.0.0.1:9443"
+QUERY_CMD="./zig-out/bin/geode query --server ${SERVER_ADDR} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
+DATA_DIR=/tmp/geode_property_test
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+    ./zig-out/bin/geode serve --listen ${SERVER_ADDR} --data-dir "${DATA_DIR}" &
 SERVER_PID=$!
 
 # Give server time to start
 sleep 2
 
 echo "1. Testing CREATE with properties via QUIC client..."
-timeout 10 ./zig-out/bin/geode query "CREATE (p {name: 'Alice', age: 30})" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   QUIC failed, server may not be ready"
+timeout 10 $QUERY_CMD "CREATE (p {name: 'Alice', age: 30})" 2>/dev/null || echo "   QUIC failed, server may not be ready"
 
 echo "2. Testing property query via QUIC client..."
-timeout 10 ./zig-out/bin/geode query "MATCH (n) RETURN n.name, n.age" --server 127.0.0.1:9443 --insecure 2>/dev/null || echo "   QUIC failed, server may not be ready"
-
-# Stop the server
-kill $SERVER_PID 2>/dev/null || true
-sleep 1
-
-echo
-echo "Testing property persistence in stdio mode (single session)..."
-
-# Test CREATE and immediate query in stdio mode
-echo "3. Testing CREATE then immediate MATCH in stdio mode..."
-echo "   CREATE statement:"
-OUTPUT1=$(timeout 5 ./zig-out/bin/geode query "CREATE (p {name: 'Alice', age: 30})" --insecure 2>&1)
-if echo "$OUTPUT1" | grep -q "NoResult\|00000"; then
-    echo "   ✓ CREATE executed without error"
-else
-    echo "   ✗ CREATE failed: $OUTPUT1"
-fi
-
-echo "   MATCH properties:"
-OUTPUT2=$(timeout 5 ./zig-out/bin/geode query "MATCH (n) RETURN n" --insecure 2>&1)
-if echo "$OUTPUT2" | grep -q '"id"'; then
-    echo "   ✓ MATCH executed, checking for properties..."
-    if echo "$OUTPUT2" | grep -q '"name"'; then
-        echo "   ✓ Properties found in nodes!"
-    else
-        echo "   ⚠ No name property found in nodes"
-        echo "   Node structure: $(echo "$OUTPUT2" | grep '"col"' | head -1)"
-    fi
-else
-    echo "   ✗ MATCH failed: $OUTPUT2"
-fi
+timeout 10 $QUERY_CMD "MATCH (n) RETURN n.name, n.age" 2>/dev/null || echo "   QUIC failed, server may not be ready"
 
 echo
 echo "Testing property creation patterns..."
@@ -72,22 +39,22 @@ echo "Testing property creation patterns..."
 echo "4. Testing different property types..."
 
 echo "   String properties:"
-timeout 5 ./zig-out/bin/geode query "CREATE (p {name: 'Bob', city: 'NYC'})" --insecure > /dev/null 2>&1
+timeout 5 $QUERY_CMD "CREATE (p {name: 'Bob', city: 'NYC'})" > /dev/null 2>&1
 echo "   ✓ String properties created"
 
 echo "   Numeric properties:"
-timeout 5 ./zig-out/bin/geode query "CREATE (p {age: 25, salary: 50000})" --insecure > /dev/null 2>&1
+timeout 5 $QUERY_CMD "CREATE (p {age: 25, salary: 50000})" > /dev/null 2>&1
 echo "   ✓ Numeric properties created"
 
 echo "   Mixed properties:"
-timeout 5 ./zig-out/bin/geode query "CREATE (p {name: 'Charlie', age: 35, active: true})" --insecure > /dev/null 2>&1
+timeout 5 $QUERY_CMD "CREATE (p {name: 'Charlie', age: 35, active: true})" > /dev/null 2>&1
 echo "   ✓ Mixed properties created"
 
 echo
 echo "Testing property queries..."
 
 echo "5. Testing property access patterns..."
-OUTPUT3=$(timeout 5 ./zig-out/bin/geode query "MATCH (n) RETURN n.name AS name, n.age AS age LIMIT 1" --insecure 2>&1)
+OUTPUT3=$(timeout 5 $QUERY_CMD "MATCH (n) RETURN n.name AS name, n.age AS age LIMIT 1" 2>&1)
 if echo "$OUTPUT3" | grep -q '"name".*"age"'; then
     echo "   ✓ Property access query structure correct"
     if echo "$OUTPUT3" | grep -q 'null.*null'; then
@@ -103,10 +70,11 @@ echo
 echo "=== Property Persistence Test Results ==="
 echo "✅ CREATE statements with properties execute without error"
 echo "✅ Property access syntax is recognized"
-echo "⚠  Property persistence may be limited in stdio mode"
-echo "ℹ  Each stdio command starts a fresh server process"
-echo "ℹ  QUIC server needed for persistent property testing"
+echo "ℹ  QUIC server mode used for persistence verification"
 echo
 
 echo "Property persistence test completed!"
-echo "Recommendation: Use QUIC server mode for property persistence verification"
+
+# Stop the server
+kill $SERVER_PID 2>/dev/null || true
+sleep 1

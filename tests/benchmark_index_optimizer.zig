@@ -37,8 +37,8 @@ const BenchmarkIndexManager = struct {
 };
 
 // Create a test graph with many nodes
-fn createBenchmarkGraph(allocator: std.mem.Allocator, node_count: usize) !graph_common.GraphStorage {
-    var graph = graph_common.GraphStorage.init(allocator);
+fn createBenchmarkGraph(allocator: std.mem.Allocator, node_count: usize) !graph_common.GraphStore {
+    var graph = graph_common.GraphStore.init(allocator);
 
     // Add nodes with varying properties
     var labels = [_][]const u8{"Person"};

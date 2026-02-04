@@ -9,6 +9,9 @@ const diagnostics = geode.diagnostics;
 const execution = geode.execution;
 const graph_store = geode.graph_store;
 const server_state = geode.server_state;
+const query_traits = geode.query_traits;
+const explain_payload = geode.explain_payload;
+const profile_payload = geode.profile_payload;
 const txn_undo_log = geode.txn_undo_log;
 const user_mgmt = geode.user_management;
 const gql_ast = geode.gql.ast;
@@ -26,6 +29,10 @@ pub const GrpcConfig = struct {
     spill_union: usize = 0,
     spill_threshold: usize = 0,
     storage_checksum_error: bool = false,
+    wal_skip_ratio_override: ?f64 = null,
+    disable_estimates: bool = false,
+    compact_profile: bool = false,
+    memcurve_profile: bool = false,
     security_manager: ?*geode_auth.SecurityManager = null,
 };
 
@@ -553,7 +560,14 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
         .forbid_orderby_calls = !order_keys_expr,
     };
 
-    const outcome = try geode.parseGqlOutcome(req.query, allocator, parse_opts);
+    var normalized = try query_traits.normalizeExplainCalibrated(allocator, req.query);
+    defer normalized.deinit(allocator);
+
+    const query_text = normalized.text;
+    if (state.query_text) |qt| allocator.free(qt);
+    state.query_text = try allocator.dupe(u8, query_text);
+
+    const outcome = try geode.parseGqlOutcome(query_text, allocator, parse_opts);
     switch (outcome) {
         .Err => |err_info| {
             const msg = if (err_info.has_double_dash_comment)
@@ -574,8 +588,11 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 return encodeMessage(allocator, resp);
             }
 
-            const order_by_ptr = findOrderBy(&parse_result.program);
-            const ordered = order_by_ptr != null;
+            const analysis = query_traits.analyzeProgram(&parse_result.program);
+            const traits = analysis.traits;
+            const ordered = traits.ordered;
+            const distinct = traits.distinct;
+            const heur_index = traits.has_where_eq or traits.has_filter_eq;
 
             const role = if (state.authenticated_role) |role_u8|
                 @as(user_mgmt.Role, @enumFromInt(role_u8))
@@ -595,53 +612,142 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 .query_param_values = bindings.values,
             };
 
-            var exec_result = execution.executeProgramWithContext(allocator, &parse_result.program, exec_context) catch |err| {
-                const info = proto_util.mapError(err);
-                var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
-                defer resp.deinit(allocator);
-                return encodeMessage(allocator, resp);
-            };
-            var store_result = false;
-            defer if (!store_result) exec_result.deinit(allocator);
-
-            var order_keys: []const []const u8 = &.{};
-            defer if (!store_result) {
-                for (order_keys) |key| allocator.free(key);
-                if (order_keys.len > 0) allocator.free(order_keys);
-            };
-            if (order_by_ptr) |ob| {
-                order_keys = try buildOrderKeys(allocator, ob, &exec_result);
-            }
-
-            const base_flags = server_flags.computeBaseFlags(ordered, false);
+            var flags = std.ArrayList([]const u8).initCapacity(allocator, 8) catch return error.OutOfMemory;
+            defer flags.deinit(allocator);
+            const base_flags = server_flags.computeBaseFlags(ordered, distinct);
             for (base_flags) |flag| {
-                try appendFlagIfMissing(allocator, &exec_result.flags, flag);
+                try appendFlagIfMissing(allocator, &flags, flag);
+            }
+            if (traits.has_union) {
+                try appendFlagIfMissing(allocator, &flags, server_flags.F_UNION_PHASES);
+            }
+            if (heur_index) {
+                try appendFlagIfMissing(allocator, &flags, server_flags.F_HEUR_INDEX);
             }
             if (parse_result.has_double_solidus_comment) {
-                try appendFlagIfMissing(allocator, &exec_result.flags, "GB03:DoubleSolidusComment");
+                try appendFlagIfMissing(allocator, &flags, "GB03:DoubleSolidusComment");
             }
 
-            const status = try proto_util.buildStatus(allocator, "00000", exec_result.flags.items);
-            const schema_def = try proto_util.buildSchemaDefinition(allocator, &exec_result);
-            var schema_resp = schema.ExecutionResponse{
-                .status = status,
-                .payload = .{ .schema = schema_def },
-            };
-            defer schema_resp.deinit(allocator);
+            switch (analysis.kind) {
+                .explain => {
+                    const explain_json = try explain_payload.buildExplainJson(
+                        allocator,
+                        traits,
+                        analysis.union_part_count,
+                        normalized.explain_calibrated,
+                    );
+                    defer allocator.free(explain_json);
 
-            store_result = true;
-            state.active_result_values = exec_result;
-            state.active_result = true;
-            state.result_page_index = 0;
-            state.result_ordered = ordered;
-            state.result_order_keys = order_keys;
+                    const status = try proto_util.buildStatus(allocator, "00000", flags.items);
+                    var resp = schema.ExecutionResponse{
+                        .status = status,
+                        .payload = .{ .explain = .{ .json_payload = explain_json } },
+                    };
+                    defer resp.deinit(allocator);
+                    return encodeMessage(allocator, resp);
+                },
+                .profile => {
+                    const target_stmt = analysis.target orelse {
+                        var resp = try buildErrorResponse(allocator, "0A000", "PROFILE target missing", &.{}, &.{});
+                        defer resp.deinit(allocator);
+                        return encodeMessage(allocator, resp);
+                    };
+                    var exec_result = execution.executeStatementWithContext(allocator, target_stmt.*, exec_context) catch |err| {
+                        const info = proto_util.mapError(err);
+                        var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+                        defer resp.deinit(allocator);
+                        return encodeMessage(allocator, resp);
+                    };
+                    defer exec_result.deinit(allocator);
 
-            updateTxnStateFromProgram(state, &parse_result.program);
-            if (!state.in_txn) {
-                graph_store.getGlobalStore(allocator).saveIfDirty();
+                    for (flags.items) |flag| {
+                        try appendFlagIfMissing(allocator, &exec_result.flags, flag);
+                    }
+
+                    var wal_skip_ratio: f64 = 0.0;
+                    if (store.config.wal_skip_ratio_override) |override| {
+                        wal_skip_ratio = override;
+                    } else if (state.wal_ptr) |ptr| {
+                        const wal_mgr: *wal_manager.WalManager = @ptrCast(@alignCast(ptr));
+                        wal_skip_ratio = wal_mgr.wal.skipRatio();
+                    }
+
+                    const profile_json = try profile_payload.buildProfileJson(allocator, traits, exec_result.rows.len, .{
+                        .compact = store.config.compact_profile,
+                        .include_mem_curve = store.config.memcurve_profile,
+                        .disable_estimates = store.config.disable_estimates,
+                        .spill_sort = state.spill_sort,
+                        .spill_distinct = state.spill_distinct,
+                        .spill_union = state.spill_union,
+                        .spill_hashagg = state.spill_hashagg,
+                        .spill_threshold = state.query_mem_limit_bytes,
+                        .wal_skip_ratio = wal_skip_ratio,
+                        .committed_txns = state.global_commit_ts,
+                        .flagger_findings = exec_result.flags.items,
+                        .union_part_count = analysis.union_part_count,
+                    });
+                    defer allocator.free(profile_json);
+
+                    const status = try proto_util.buildStatus(allocator, "00000", exec_result.flags.items);
+                    var resp = schema.ExecutionResponse{
+                        .status = status,
+                        .payload = .{ .profile = .{ .json_payload = profile_json } },
+                    };
+                    defer resp.deinit(allocator);
+
+                    if (!state.in_txn) {
+                        graph_store.getGlobalStore(allocator).saveIfDirty();
+                    }
+                    return encodeMessage(allocator, resp);
+                },
+                .rows => {
+                    var exec_result = execution.executeProgramWithContext(allocator, &parse_result.program, exec_context) catch |err| {
+                        const info = proto_util.mapError(err);
+                        var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+                        defer resp.deinit(allocator);
+                        return encodeMessage(allocator, resp);
+                    };
+                    var store_result = false;
+                    defer if (!store_result) exec_result.deinit(allocator);
+
+                    for (flags.items) |flag| {
+                        try appendFlagIfMissing(allocator, &exec_result.flags, flag);
+                    }
+
+                    var order_keys: []const []const u8 = &.{};
+                    defer if (!store_result) {
+                        for (order_keys) |key| allocator.free(key);
+                        if (order_keys.len > 0) allocator.free(order_keys);
+                    };
+                    if (ordered) {
+                        if (findOrderBy(&parse_result.program)) |ob| {
+                            order_keys = try buildOrderKeys(allocator, ob, &exec_result);
+                        }
+                    }
+
+                    const status = try proto_util.buildStatus(allocator, "00000", exec_result.flags.items);
+                    const schema_def = try proto_util.buildSchemaDefinition(allocator, &exec_result);
+                    var schema_resp = schema.ExecutionResponse{
+                        .status = status,
+                        .payload = .{ .schema = schema_def },
+                    };
+                    defer schema_resp.deinit(allocator);
+
+                    store_result = true;
+                    state.active_result_values = exec_result;
+                    state.active_result = true;
+                    state.result_page_index = 0;
+                    state.result_ordered = ordered;
+                    state.result_order_keys = order_keys;
+
+                    updateTxnStateFromProgram(state, &parse_result.program);
+                    if (!state.in_txn) {
+                        graph_store.getGlobalStore(allocator).saveIfDirty();
+                    }
+
+                    return encodeMessage(allocator, schema_resp);
+                },
             }
-
-            return encodeMessage(allocator, schema_resp);
         },
     }
 }
@@ -745,6 +851,7 @@ fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
 
     state.in_txn = true;
     state.txn_id = @intCast(std.time.milliTimestamp());
+    state.session_snapshot_ts = state.global_commit_ts;
     txn_undo_log.getGlobalUndoLog(allocator).begin();
 
     const tx_id_str = try std.fmt.allocPrint(allocator, "{d}", .{state.txn_id});
@@ -783,6 +890,7 @@ fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
 
     if (state.in_txn) {
         txn_undo_log.getGlobalUndoLog(allocator).commit();
+        state.global_commit_ts += 1;
         state.in_txn = false;
         state.txn_id = 0;
         graph_store.getGlobalStore(allocator).saveIfDirty();

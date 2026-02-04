@@ -2,6 +2,9 @@ const std = @import("std");
 const geode = @import("geode");
 const quic_transport = @import("transport/quic");
 const query_plan_cache = geode.query_plan_cache;
+const query_traits = geode.query_traits;
+const explain_payload = geode.explain_payload;
+const profile_payload = geode.profile_payload;
 const ServerState = geode.server_state.ServerState;
 const CatalogSchema = geode.server_state.CatalogSchema;
 const CatalogGraph = geode.server_state.CatalogGraph;
@@ -146,7 +149,8 @@ const BufferedProtoReader = struct {
                     if (would_block_attempts >= max_would_block_attempts) {
                         return error.Timeout;
                     }
-                    try self.transport.poll(0);
+                    // Note: Do NOT call transport.poll() here - it's not thread-safe
+                    // The main accept loop handles polling; we just wait for data
                     std.Thread.sleep(1 * std.time.ns_per_ms);
                     continue;
                 }
@@ -336,6 +340,7 @@ pub fn handleQuicConnection(
     env_spill_threshold: usize,
     env_storage_checksum_error: bool,
     env_wal_compact_interval: usize,
+    env_wal_skip_ratio_override: ?f64,
     _force_serialization_failure_unused: bool,
     security_manager: ?*geode_auth.SecurityManager,
     shared_ast_cache: ?*anyopaque, // Type is query_ast_cache.SharedAstCache
@@ -351,15 +356,17 @@ pub fn handleQuicConnection(
     // Wait for incoming STREAM frames using a simple retry loop
     // Note: transport.poll() is NOT thread-safe and must only be called from the main accept loop
     // The main accept loop's poll() already processes incoming packets, so streams should be queued
-    // GAP-0200: Use simple sleep-based retry instead of transport.poll() for thread safety
+    // GAP-0200-FIX: Increased timeout from 50ms to 500ms to handle slower clients
+    // and network latency. The accept() function now waits longer for streams before
+    // returning, but we still need this as a fallback.
     var poll_attempts: usize = 0;
-    while (poll_attempts < 50) : (poll_attempts += 1) {
+    while (poll_attempts < 500) : (poll_attempts += 1) {
         if (conn.inner.hasIncomingStreams()) break;
         std.Thread.sleep(1 * std.time.ns_per_ms); // Sleep 1ms and check again
-        if (poll_attempts > 0 and poll_attempts % 10 == 0) {
+        if (poll_attempts > 0 and poll_attempts % 100 == 0) {
             log.debug("No streams yet, retrying", &.{
                 Attr.int("attempt", @intCast(poll_attempts + 1)),
-                Attr.int("max_attempts", 50),
+                Attr.int("max_attempts", 500),
             });
         }
     }
@@ -476,7 +483,9 @@ pub fn handleQuicConnection(
         const packet_opt = line_reader.nextMessage() catch |err| {
             if (err == error.EndOfStream) return;
             if (err == error.WouldBlock) {
-                try transport.poll(0);
+                // Note: Do NOT call transport.poll() here - it's not thread-safe
+                // The main accept loop handles polling; just sleep and retry
+                std.Thread.sleep(1 * std.time.ns_per_ms);
                 continue;
             }
             log.err("Protobuf read error", &.{Attr.err("error", err)});
@@ -494,7 +503,7 @@ pub fn handleQuicConnection(
         };
 
         // Process protobuf message and emit responses directly
-        handleClientMessage(gpa, &state, stream, msg, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |err| {
+        handleClientMessage(gpa, &state, stream, msg, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_wal_skip_ratio_override) catch |err| {
             log.err("Protobuf process error", &.{Attr.err("error", err)});
             try sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{});
             continue;
@@ -541,11 +550,9 @@ fn handleClientMessage(
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
+    wal_skip_ratio_override: ?f64,
 ) !void {
     _ = result_format_txt;
-    _ = disable_estimates;
-    _ = compact_profile;
-    _ = memcurve_profile;
 
     switch (msg) {
         .hello => |hello_req| {
@@ -628,7 +635,14 @@ fn handleClientMessage(
                 .forbid_orderby_calls = !order_keys_expr,
             };
 
-            const outcome = try geode.parseGqlOutcome(exec_req.query, gpa, parse_opts);
+            var normalized = try query_traits.normalizeExplainCalibrated(gpa, exec_req.query);
+            defer normalized.deinit(gpa);
+
+            const query_text = normalized.text;
+            if (state.query_text) |qt| gpa.free(qt);
+            state.query_text = try gpa.dupe(u8, query_text);
+
+            const outcome = try geode.parseGqlOutcome(query_text, gpa, parse_opts);
             switch (outcome) {
                 .Err => |err_info| {
                     const err_msg = if (err_info.has_double_dash_comment)
@@ -647,8 +661,11 @@ fn handleClientMessage(
                         return;
                     }
 
-                    const order_by_ptr = findOrderBy(&parse_result.program);
-                    const ordered = order_by_ptr != null;
+                    const analysis = query_traits.analyzeProgram(&parse_result.program);
+                    const traits = analysis.traits;
+                    const ordered = traits.ordered;
+                    const distinct = traits.distinct;
+                    const heur_index = traits.has_where_eq or traits.has_filter_eq;
 
                     const role = if (state.authenticated_role) |role_u8|
                         @as(user_mgmt.Role, @enumFromInt(role_u8))
@@ -668,68 +685,155 @@ fn handleClientMessage(
                         .query_param_values = bindings.values,
                     };
 
-                    var exec_result = execution.executeProgramWithContext(gpa, &parse_result.program, exec_context) catch |err| {
-                        const info = proto_util.mapError(err);
-                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-                        return;
-                    };
-                    var store_result = false;
-                    defer if (!store_result) exec_result.deinit(gpa);
-
-                    var order_keys: []const []const u8 = &.{};
-                    defer if (!store_result) {
-                        for (order_keys) |key| gpa.free(key);
-                        if (order_keys.len > 0) gpa.free(order_keys);
-                    };
-                    if (order_by_ptr) |ob| {
-                        order_keys = try buildOrderKeys(gpa, ob, &exec_result);
-                    }
-
-                    const base_flags = server_flags.computeBaseFlags(ordered, false);
+                    var flags = std.ArrayList([]const u8).initCapacity(gpa, 8) catch return error.OutOfMemory;
+                    defer flags.deinit(gpa);
+                    const base_flags = server_flags.computeBaseFlags(ordered, distinct);
                     for (base_flags) |flag| {
-                        try appendFlagIfMissing(gpa, &exec_result.flags, flag);
+                        try appendFlagIfMissing(gpa, &flags, flag);
+                    }
+                    if (traits.has_union) {
+                        try appendFlagIfMissing(gpa, &flags, server_flags.F_UNION_PHASES);
+                    }
+                    if (heur_index) {
+                        try appendFlagIfMissing(gpa, &flags, server_flags.F_HEUR_INDEX);
                     }
                     if (parse_result.has_double_solidus_comment) {
-                        try appendFlagIfMissing(gpa, &exec_result.flags, "GB03:DoubleSolidusComment");
+                        try appendFlagIfMissing(gpa, &flags, "GB03:DoubleSolidusComment");
                     }
 
-                    const status = try proto_util.buildStatus(gpa, "00000", exec_result.flags.items);
-                    const schema_def = try proto_util.buildSchemaDefinition(gpa, &exec_result);
-                    const schema_resp = schema.ExecutionResponse{
-                        .status = status,
-                        .payload = .{ .schema = schema_def },
-                    };
-                    try sendQuicMessage(gpa, stream, .{ .execute = schema_resp });
+                    switch (analysis.kind) {
+                        .explain => {
+                            const explain_json = try explain_payload.buildExplainJson(
+                                gpa,
+                                traits,
+                                analysis.union_part_count,
+                                normalized.explain_calibrated,
+                            );
+                            // Note: Do NOT defer free here - the protobuf message takes ownership
+                            // and will free json_payload when the message is deinit'd
 
-                    var sent_rows: usize = 0;
-                    var page_final = false;
-                    if (state.inline_results_enabled) {
-                        const inline_max = if (state.inline_results_max_rows == 0) exec_result.rows.len else state.inline_results_max_rows;
-                        const page = try proto_util.buildDataPage(gpa, &exec_result, 0, inline_max, ordered, order_keys);
-                        sent_rows = page.rows.items.len;
-                        page_final = page.final;
-                        const page_status = try proto_util.buildStatus(gpa, "00000", exec_result.flags.items);
-                        const page_resp = schema.ExecutionResponse{
-                            .status = page_status,
-                            .payload = .{ .page = page },
-                        };
-                        try sendQuicMessage(gpa, stream, .{ .execute = page_resp });
-                    }
+                            const status = try proto_util.buildStatus(gpa, "00000", flags.items);
+                            const resp = schema.ExecutionResponse{
+                                .status = status,
+                                .payload = .{ .explain = .{ .json_payload = explain_json } },
+                            };
+                            try sendQuicMessage(gpa, stream, .{ .execute = resp });
+                        },
+                        .profile => {
+                            const target_stmt = analysis.target orelse {
+                                try sendExecuteError(gpa, stream, "0A000", "PROFILE target missing", &.{}, &.{});
+                                return;
+                            };
+                            var exec_result = execution.executeStatementWithContext(gpa, target_stmt.*, exec_context) catch |err| {
+                                const info = proto_util.mapError(err);
+                                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                                return;
+                            };
+                            defer exec_result.deinit(gpa);
 
-                    if (!state.inline_results_enabled or !page_final) {
-                        store_result = true;
-                        state.active_result_values = exec_result;
-                        state.active_result = true;
-                        state.result_page_index = if (state.inline_results_enabled) sent_rows else 0;
-                        state.result_ordered = ordered;
-                        state.result_order_keys = order_keys;
-                    }
+                            for (flags.items) |flag| {
+                                try appendFlagIfMissing(gpa, &exec_result.flags, flag);
+                            }
 
-                    updateTxnStateFromProgram(state, &parse_result.program);
+                            var wal_skip_ratio: f64 = 0.0;
+                            if (wal_skip_ratio_override) |override| {
+                                wal_skip_ratio = override;
+                            } else if (state.wal_ptr) |ptr| {
+                                const wal_mgr: *wal_manager.WalManager = @ptrCast(@alignCast(ptr));
+                                wal_skip_ratio = wal_mgr.wal.skipRatio();
+                            }
 
-                    if (!state.in_txn) {
-                        const global_store = graph_store.getGlobalStore(gpa);
-                        global_store.saveIfDirty();
+                            const profile_json = try profile_payload.buildProfileJson(gpa, traits, exec_result.rows.len, .{
+                                .compact = compact_profile,
+                                .include_mem_curve = memcurve_profile,
+                                .disable_estimates = disable_estimates,
+                                .spill_sort = state.spill_sort,
+                                .spill_distinct = state.spill_distinct,
+                                .spill_union = state.spill_union,
+                                .spill_hashagg = state.spill_hashagg,
+                                .spill_threshold = state.query_mem_limit_bytes,
+                                .wal_skip_ratio = wal_skip_ratio,
+                                .committed_txns = state.global_commit_ts,
+                                .flagger_findings = exec_result.flags.items,
+                                .union_part_count = analysis.union_part_count,
+                            });
+                            defer gpa.free(profile_json);
+
+                            const status = try proto_util.buildStatus(gpa, "00000", exec_result.flags.items);
+                            const resp = schema.ExecutionResponse{
+                                .status = status,
+                                .payload = .{ .profile = .{ .json_payload = profile_json } },
+                            };
+                            try sendQuicMessage(gpa, stream, .{ .execute = resp });
+
+                            if (!state.in_txn) {
+                                const global_store = graph_store.getGlobalStore(gpa);
+                                global_store.saveIfDirty();
+                            }
+                        },
+                        .rows => {
+                            var exec_result = execution.executeProgramWithContext(gpa, &parse_result.program, exec_context) catch |err| {
+                                const info = proto_util.mapError(err);
+                                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                                return;
+                            };
+                            var store_result = false;
+                            defer if (!store_result) exec_result.deinit(gpa);
+
+                            for (flags.items) |flag| {
+                                try appendFlagIfMissing(gpa, &exec_result.flags, flag);
+                            }
+
+                            var order_keys: []const []const u8 = &.{};
+                            defer if (!store_result) {
+                                for (order_keys) |key| gpa.free(key);
+                                if (order_keys.len > 0) gpa.free(order_keys);
+                            };
+                            if (ordered) {
+                                if (findOrderBy(&parse_result.program)) |ob| {
+                                    order_keys = try buildOrderKeys(gpa, ob, &exec_result);
+                                }
+                            }
+
+                            const status = try proto_util.buildStatus(gpa, "00000", exec_result.flags.items);
+                            const schema_def = try proto_util.buildSchemaDefinition(gpa, &exec_result);
+                            const schema_resp = schema.ExecutionResponse{
+                                .status = status,
+                                .payload = .{ .schema = schema_def },
+                            };
+                            try sendQuicMessage(gpa, stream, .{ .execute = schema_resp });
+
+                            var sent_rows: usize = 0;
+                            var page_final = false;
+                            if (state.inline_results_enabled) {
+                                const inline_max = if (state.inline_results_max_rows == 0) exec_result.rows.len else state.inline_results_max_rows;
+                                const page = try proto_util.buildDataPage(gpa, &exec_result, 0, inline_max, ordered, order_keys);
+                                sent_rows = page.rows.items.len;
+                                page_final = page.final;
+                                const page_status = try proto_util.buildStatus(gpa, "00000", exec_result.flags.items);
+                                const page_resp = schema.ExecutionResponse{
+                                    .status = page_status,
+                                    .payload = .{ .page = page },
+                                };
+                                try sendQuicMessage(gpa, stream, .{ .execute = page_resp });
+                            }
+
+                            if (!state.inline_results_enabled or !page_final) {
+                                store_result = true;
+                                state.active_result_values = exec_result;
+                                state.active_result = true;
+                                state.result_page_index = if (state.inline_results_enabled) sent_rows else 0;
+                                state.result_ordered = ordered;
+                                state.result_order_keys = order_keys;
+                            }
+
+                            updateTxnStateFromProgram(state, &parse_result.program);
+
+                            if (!state.in_txn) {
+                                const global_store = graph_store.getGlobalStore(gpa);
+                                global_store.saveIfDirty();
+                            }
+                        },
                     }
                 },
             }
@@ -783,6 +887,7 @@ fn handleClientMessage(
 
             state.in_txn = true;
             state.txn_id = @intCast(std.time.milliTimestamp());
+            state.session_snapshot_ts = state.global_commit_ts;
             txn_undo_log.getGlobalUndoLog(gpa).begin();
 
             const tx_id_str = try std.fmt.allocPrint(gpa, "{d}", .{state.txn_id});
@@ -791,6 +896,7 @@ fn handleClientMessage(
         .commit => |_| {
             if (state.in_txn) {
                 txn_undo_log.getGlobalUndoLog(gpa).commit();
+                state.global_commit_ts += 1;
                 state.in_txn = false;
                 state.txn_id = 0;
                 const global_store = graph_store.getGlobalStore(gpa);

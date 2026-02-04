@@ -1837,21 +1837,27 @@ test "yaml: list with multi-field map elements" {
     try std.testing.expect(flag_val.bool_value == true);
 }
 
-test "yaml: parse basic.yaml from test-harness" {
+test "yaml: parse basic inline spec" {
     const allocator = std.testing.allocator;
+    const input =
+        \\version: "1.0"
+        \\name: "Inline Spec"
+        \\cli:
+        \\  binary: "./zig-out/bin/geode"
+        \\  server:
+        \\    enabled: true
+        \\tests:
+        \\  - name: "basic-query"
+        \\    args: ["query", "-"]
+        \\    stdin: "RETURN 1 AS x"
+        \\    expect:
+        \\      exit_code: 0
+        \\      stdout_contains: ["1"]
+    ;
 
-    // Read the actual basic.yaml file
-    const file = try std.fs.cwd().openFile("clients/test-harness/specs/basic.yaml", .{});
-    defer file.close();
-
-    const content = try file.readToEndAlloc(allocator, 1024 * 1024);
-    defer allocator.free(content);
-
-    // Try to parse it
-    var value = try parse(allocator, content);
+    var value = try parse(allocator, input);
     defer value.deinit(allocator);
 
-    // If we get here, parsing succeeded
     try std.testing.expect(value == .map);
 }
 

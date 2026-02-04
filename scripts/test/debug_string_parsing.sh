@@ -1,5 +1,4 @@
-#!/usr/bin/env nix-shell
-#! nix-shell -i bash -p bash -p coreutils -p strace
+#!/usr/bin/env bash
 # Debug script to isolate the string literal parsing issue
 
 set -e

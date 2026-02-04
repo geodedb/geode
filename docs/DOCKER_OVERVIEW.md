@@ -227,7 +227,6 @@ docker run geodedb/geode:latest \
 | `--cert <path>` | TLS certificate path |
 | `--key <path>` | TLS private key path |
 | `--log-level <level>` | Log level: `error`, `warn`, `info`, `debug` |
-| `--no-tls` | Disable TLS (development only) |
 | `--gpu-acceleration` | Enable GPU acceleration (GPU image only) |
 
 ## Encryption Configuration

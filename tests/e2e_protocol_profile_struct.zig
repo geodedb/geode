@@ -33,11 +33,10 @@ fn contains(hay: []const u8, needle: []const u8) bool {
 // Ensures deterministic shape independent of timing/bytes numeric variability.
 // Query chosen: PROFILE RETURN 1 AS x LIMIT 1
 // Expectations:
-//  - SCHEMA then PROFILE lines present
-//  - PROFILE.result.json.profile_version == 1
+//  - profile.profile_version == 1
 //  - ops array length >= 1 and contains a Limit stage
 //  - Each op has keys: op,id,op_index,input_rows,rows
-//  - flagger_findings includes IllegalOrderKeyPolicy and NullsFirstPolicy
+//  - root flagger_findings includes IllegalOrderKeyPolicy and NullsFirstPolicy
 //  - totals.time_ns present
 //  - memory.net_bytes & memory.peak_bytes present
 //  - No malformed JSON (parses successfully)
@@ -48,33 +47,15 @@ test "protocol: PROFILE structural JSON validation" {
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
-    try std.testing.expect(contains(res.out, "\"type\":\"PROFILE\""));
-
-    // Split stdout into lines; locate PROFILE line
-    var it = std.mem.splitScalar(u8, res.out, '\n');
-    var profile_line: ?[]const u8 = null;
-    while (it.next()) |line| {
-        if (std.mem.indexOf(u8, line, "\"type\":\"PROFILE\"") != null) {
-            profile_line = line;
-            break;
-        }
-    }
-    try std.testing.expect(profile_line != null);
-    const pl = profile_line.?;
 
     // Parse root JSON object
-    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, pl, .{});
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, res.out, .{});
     defer parsed.deinit();
     try std.testing.expect(parsed.value == .object);
     const root_obj = parsed.value.object;
-    const result_val = root_obj.get("result") orelse return error.MissingResult;
-    try std.testing.expect(result_val.* == .object);
-    const result_obj = result_val.object;
-    const type_val = result_obj.get("type") orelse return error.MissingType;
-    try std.testing.expect(type_val.* == .string and std.mem.eql(u8, type_val.string, "PROFILE"));
-    const json_val = result_obj.get("json") orelse return error.MissingJson;
-    try std.testing.expect(json_val.* == .object);
-    const prof_obj = json_val.object;
+    const profile_val = root_obj.get("profile") orelse return error.MissingProfile;
+    try std.testing.expect(profile_val.* == .object);
+    const prof_obj = profile_val.object;
     const pv = prof_obj.get("profile_version") orelse return error.MissingProfileVersion;
     try std.testing.expect(pv.* == .integer and pv.integer == 1);
     const ops_val = prof_obj.get("ops") orelse return error.MissingOps;
@@ -97,7 +78,7 @@ test "protocol: PROFILE structural JSON validation" {
         try std.testing.expect(o.get("rows") != null);
     }
     try std.testing.expect(saw_limit);
-    const flags_val = result_obj.get("flagger_findings") orelse return error.MissingFlags;
+    const flags_val = root_obj.get("flagger_findings") orelse return error.MissingFlags;
     try std.testing.expect(flags_val.* == .array);
     const flags_arr = flags_val.array.items;
     var found_illegal = false;

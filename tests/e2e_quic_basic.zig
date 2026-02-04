@@ -47,6 +47,6 @@ test "TestCANARY_REQ_GQL_074_QUICProtocol" {
     defer std.testing.allocator.free(r.out);
     defer std.testing.allocator.free(r.err);
     try std.testing.expectEqual(@as(i32, 0), r.code);
-    try std.testing.expect(std.mem.indexOf(u8, r.out, "\"type\":\"BINDINGS\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r.out, "\"rows\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, r.out, "{\"x\":1}") != null);
 }

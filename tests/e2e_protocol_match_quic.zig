@@ -57,8 +57,7 @@ test "protocol QUIC: MATCH ORDER/LIMIT ordered metadata" {
     defer allocator.free(res.out);
     defer allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
-    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"type\":\"SCHEMA\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"type\":\"BINDINGS\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"columns\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, res.out, "\"ordered\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, res.out, "\"order_keys\":[\"x\"]") != null);
     try std.testing.expect(std.mem.indexOf(u8, res.out, "\"rows\":[{\"x\":1}]") != null);

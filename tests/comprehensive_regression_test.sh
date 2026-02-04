@@ -127,7 +127,7 @@ run_test "Mixed aggregation columns" \
 
 run_test "Count returns single row" \
     "MATCH (n) RETURN count(n)" \
-    '"rows":\[\[.*\]\]'
+    '"rows":\[\{'
 
 echo
 echo "=== REGRESSION TEST 3: Node Creation Safety ==="
@@ -136,15 +136,15 @@ echo
 
 run_test "CREATE node with properties" \
     "CREATE (p:Person {name: 'TestUser', age: 25})" \
-    'SCHEMA'
+    '"status_class":"00000"'
 
 run_test "CREATE multiple nodes" \
     "CREATE (a:A), (b:B), (c:C)" \
-    'SCHEMA'
+    '"status_class":"00000"'
 
 run_test "CREATE with single quotes" \
     "CREATE (n {title: 'Test'})" \
-    'SCHEMA'
+    '"status_class":"00000"'
 
 echo
 echo "=== REGRESSION TEST 4: Query Features ==="
@@ -153,23 +153,23 @@ echo
 
 run_test "MATCH with properties" \
     "MATCH (n {id: 1}) RETURN n" \
-    'SCHEMA'
+    '"status_class":"00000"'
 
 run_test "Path patterns" \
     "MATCH (a)-[r]->(b) RETURN a, b" \
-    'SCHEMA'
+    '"status_class":"00000"'
 
 run_test "RETURN expressions" \
     "MATCH (n) RETURN n.id + 1" \
-    'SCHEMA'
+    '"status_class":"00000"'
 
 run_test "WHERE predicates" \
     "MATCH (n) WHERE n.id < 10 RETURN n" \
-    'SCHEMA'
+    '"status_class":"00000"'
 
 run_test "LIMIT clause without ORDER BY (allowed)" \
     "MATCH (n) RETURN n LIMIT 10" \
-    'SCHEMA'
+    '"status_class":"00000"'
 
 run_test "OFFSET requires ORDER BY" \
     "MATCH (n) RETURN n OFFSET 5" \
@@ -177,7 +177,7 @@ run_test "OFFSET requires ORDER BY" \
 
 run_test "DISTINCT" \
     "MATCH (n) RETURN DISTINCT n.name ORDER BY n.name" \
-    'SCHEMA'
+    '"status_class":"00000"'
 
 echo
 echo "=== REGRESSION TEST 5: Error Handling ==="
@@ -190,7 +190,7 @@ run_test "Invalid syntax error" \
 
 run_test "Unknown function" \
     "MATCH (n) RETURN unknown_func(n)" \
-    'SCHEMA\|ERROR\|ParseError'
+    'ParseError'
 
 echo
 echo "=== REGRESSION TEST 6: Data Types ==="
@@ -224,15 +224,15 @@ echo
 
 run_test "Multiple MATCH clauses" \
     "MATCH (a), (b) RETURN a, b LIMIT 1" \
-    'SCHEMA'
+    '"status_class":"00000"'
 
 run_test "Optional match" \
     "MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m" \
-    'SCHEMA\|ParseError'
+    '"status_class":"00000"\\|ParseError'
 
 run_test "Pattern comprehension" \
     "MATCH (n) RETURN [(n)-[r]->(m) | m.id]" \
-    'SCHEMA\|ParseError'
+    '"status_class":"00000"\\|ParseError'
 
 echo
 echo "=== KNOWN ISSUES (Expected to fail) ==="

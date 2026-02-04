@@ -291,23 +291,16 @@ pub const ClusterCoordinator = struct {
         const stream = try conn.acceptStream();
         // Stream/connection cleanup handled by transport on deinit (no explicit close)
         while (true) {
-            // Read a single newline-delimited frame (up to 256KB)
-            const line = stream.readLine(256 * 1024) catch |err| switch (err) {
+            const frame_res = raft_consensus.readRaftFrame(self.allocator, stream) catch |err| switch (err) {
                 error.EndOfStream => break,
+                error.WouldBlock => {
+                    std.Thread.sleep(5 * std.time.ns_per_ms);
+                    continue;
+                },
                 else => return err,
             };
-            defer self.allocator.free(line);
-            // Skip empty
-            if (line.len == 0) continue;
-            // Attempt Raft frame decode first
-            const frame_res = raft_consensus.decodeRaftFrame(self.allocator, line) catch |e| {
-                log.warn("Failed to decode raft frame", &.{
-                    Attr.string("error", @errorName(e)),
-                });
-                continue; // Ignore unknown line for now
-            };
             defer frame_res.deinit(self.allocator);
-            // Dispatch to Raft state machine
+
             self.raft.handleMessage(frame_res.from, frame_res.body) catch |e| {
                 log.err("Raft handleMessage error", &.{
                     Attr.string("error", @errorName(e)),

@@ -8,7 +8,7 @@ const exec = @import("server/graph/exec.zig");
 // predicate filtering does not introduce >5% mean overhead when selectivity is high
 // and maintains latency stability (CV<=0.24, p95/mean<=2.65).
 
-fn timeScan(filtered: bool, g: *const exec.GraphStorage, select_label: []const u8) u64 {
+fn timeScan(filtered: bool, g: *const exec.GraphStore, select_label: []const u8) u64 {
     const start = std.time.nanoTimestamp();
     var labels: [][]const u8 = &.{};
     var prop_key: ?[]const u8 = null;
@@ -35,7 +35,7 @@ fn cv(samples: []const u64, mean: f64) f64 {
 }
 
 test "BenchmarkCANARY_REQ_GQL_017_MatchLabelPropertyVarianceEnvelope" {
-    var g = exec.GraphStorage.init(std.testing.allocator);
+    var g = exec.GraphStore.init(std.testing.allocator);
     defer g.deinit();
 
     const total_nodes: usize = 5000;

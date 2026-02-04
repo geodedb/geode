@@ -1,11 +1,12 @@
 const std = @import("std");
 const protocol = @import("../protocol.zig");
 const planner = @import("../planner.zig");
-const exec = @import("../exec.zig");
 const federation = @import("federation.zig");
 const raft = @import("raft.zig");
 // GAP-0077: Import CBO for statistics integration
 const cbo = @import("../planner/cbo.zig");
+const spice_wrapper = @import("parallel/spice");
+const value_utilities = @import("../execution/value_utilities.zig");
 
 const logging = @import("logging");
 const log = logging.scoped("query_coordinator");
@@ -140,84 +141,63 @@ pub const QueryCoordinator = struct {
             return results;
         }
 
-        // GAP-0184: Concurrent execution using thread pool
-        var threads = try self.allocator.alloc(std.Thread, fragment_count);
-        defer self.allocator.free(threads);
-        var thread_errors = try self.allocator.alloc(?anyerror, fragment_count);
-        defer self.allocator.free(thread_errors);
+        var errors = try self.allocator.alloc(?anyerror, fragment_count);
+        defer self.allocator.free(errors);
+        for (errors) |*e| e.* = null;
 
-        // Initialize error tracking
-        for (thread_errors) |*e| {
-            e.* = null;
-        }
+        var pool = spice_wrapper.SpicePool.init(self.allocator, null);
+        defer pool.deinit();
 
-        // Context for thread workers
-        const WorkerContext = struct {
+        const Context = struct {
             coordinator: *Self,
-            fragment: QueryFragment,
+            fragments: []const QueryFragment,
             params: []const protocol.Value,
-            result_ptr: *federation.QueryResults,
-            error_ptr: *?anyerror,
-            index: usize,
-
-            fn execute(ctx: *@This()) void {
-                const node = ctx.coordinator.node_registry.getNode(ctx.fragment.shard_id) catch |err| {
-                    ctx.error_ptr.* = err;
-                    return;
-                };
-
-                if (node.is_local) {
-                    ctx.result_ptr.* = ctx.coordinator.executeLocalFragment(ctx.fragment.query_text, ctx.params) catch |err| {
-                        ctx.error_ptr.* = err;
-                        return;
-                    };
-                } else {
-                    ctx.result_ptr.* = ctx.coordinator.executeRemoteFragment(node, ctx.fragment.query_text, ctx.params) catch |err| {
-                        ctx.error_ptr.* = err;
-                        return;
-                    };
-                }
-            }
+            results: []federation.QueryResults,
+            errors: []?anyerror,
         };
 
-        // Allocate contexts for all workers
-        var contexts = try self.allocator.alloc(WorkerContext, fragment_count);
-        defer self.allocator.free(contexts);
+        const ctx = Context{
+            .coordinator = self,
+            .fragments = plan.fragments.items,
+            .params = params,
+            .results = results,
+            .errors = errors,
+        };
 
-        // Spawn threads for concurrent execution
-        for (plan.fragments.items, 0..) |fragment, i| {
-            contexts[i] = .{
-                .coordinator = self,
-                .fragment = fragment,
-                .params = params,
-                .result_ptr = &results[i],
-                .error_ptr = &thread_errors[i],
-                .index = i,
-            };
-            threads[i] = std.Thread.spawn(.{}, WorkerContext.execute, .{&contexts[i]}) catch |err| {
-                // If thread spawn fails, execute sequentially for remaining fragments
-                log.warn("Thread spawn failed for shard, falling back to sequential", &.{
-                    Attr.uint("shard_index", i),
-                    Attr.string("error", @errorName(err)),
-                });
-                const node = try self.node_registry.getNode(fragment.shard_id);
-                if (node.is_local) {
-                    results[i] = try self.executeLocalFragment(fragment.query_text, params);
-                } else {
-                    results[i] = try self.executeRemoteFragment(node, fragment.query_text, params);
+        spice_wrapper.parallelForEach(
+            &pool,
+            0,
+            fragment_count,
+            ctx,
+            struct {
+                fn work(_: *spice_wrapper.Task, idx: usize, c: Context) void {
+                    const fragment = c.fragments[idx];
+                    const node = c.coordinator.node_registry.getNode(fragment.shard_id) catch |err| {
+                        c.errors[idx] = err;
+                        return;
+                    };
+
+                    if (node.is_local) {
+                        c.results[idx] = c.coordinator.executeLocalFragment(fragment.query_text, c.params) catch |err| {
+                            c.errors[idx] = err;
+                            return;
+                        };
+                    } else {
+                        c.results[idx] = c.coordinator.executeRemoteFragment(node, fragment.query_text, c.params) catch |err| {
+                            c.errors[idx] = err;
+                            return;
+                        };
+                    }
                 }
-                continue;
-            };
-        }
+            }.work,
+            spice_wrapper.Thresholds.forEach,
+        );
 
-        // Join all threads
-        for (threads, 0..) |thread, i| {
-            thread.join();
-            // Check for errors from worker threads
-            if (thread_errors[i]) |err| {
+        for (errors, 0..) |err, i| {
+            if (err) |e| {
                 log.err("Shard execution failed", &.{
                     Attr.uint("shard_index", i),
-                    Attr.string("error", @errorName(err)),
+                    Attr.string("error", @errorName(e)),
                 });
                 // Continue with empty result rather than failing entire query
             }
@@ -250,7 +230,7 @@ pub const QueryCoordinator = struct {
         defer parse_result.deinit();
 
         // Get execution context
-        const context = execution.getDefaultContext(self.allocator) catch {
+        const catalog = execution.ensureCatalogInstance(self.allocator) catch {
             return federation.QueryResults{
                 .rows = &.{},
                 .schema = &.{},
@@ -258,6 +238,7 @@ pub const QueryCoordinator = struct {
                 .ordered = false,
             };
         };
+        const context = execution.ExecutionContext{ .catalog = catalog };
 
         // Execute the program
         var exec_result = execution.executeProgramWithContext(self.allocator, &parse_result.program, context) catch {
@@ -271,22 +252,42 @@ pub const QueryCoordinator = struct {
         defer exec_result.deinit(self.allocator);
 
         // Convert ExecutionResult to federation.QueryResults
-        // Convert column names to schema
-        var schema = try self.allocator.alloc(federation.ColumnDef, exec_result.columns.len);
+        var schema = try self.allocator.alloc(protocol.ColumnDef, exec_result.columns.len);
+        errdefer {
+            for (schema) |col| {
+                self.allocator.free(col.name);
+                self.allocator.free(col.data_type);
+            }
+            self.allocator.free(schema);
+        }
         for (exec_result.columns, 0..) |col_name, i| {
             schema[i] = .{
                 .name = try self.allocator.dupe(u8, col_name),
-                .data_type = .string, // Default to string type
+                .data_type = try self.allocator.dupe(u8, "ANY"),
             };
         }
 
-        // Convert Value rows to protocol.Value rows
-        var rows = try self.allocator.alloc([]protocol.Value, exec_result.rows.len);
-        for (exec_result.rows, 0..) |row, i| {
-            rows[i] = try self.allocator.alloc(protocol.Value, row.len);
-            for (row, 0..) |val, j| {
-                rows[i][j] = self.convertValueToProtocol(val, params);
+        var rows = try self.allocator.alloc(protocol.BindingRow, exec_result.rows.len);
+        var row_idx: usize = 0;
+        errdefer {
+            for (rows[0..row_idx]) |row| {
+                for (row.cols) |val| value_utilities.freeValue(self.allocator, val);
+                if (row.cols.len > 0) self.allocator.free(row.cols);
             }
+            self.allocator.free(rows);
+        }
+
+        for (exec_result.rows) |row| {
+            var cols = try self.allocator.alloc(protocol.Value, row.len);
+            errdefer {
+                for (cols) |val| value_utilities.freeValue(self.allocator, val);
+                self.allocator.free(cols);
+            }
+            for (row, 0..) |val, j| {
+                cols[j] = try value_utilities.duplicateValue(self.allocator, val);
+            }
+            rows[row_idx] = .{ .cols = cols };
+            row_idx += 1;
         }
 
         return federation.QueryResults{
@@ -297,27 +298,10 @@ pub const QueryCoordinator = struct {
         };
     }
 
-    /// Convert execution Value to protocol.Value
-    fn convertValueToProtocol(self: *Self, val: @import("../execution.zig").Value, params: []const protocol.Value) protocol.Value {
-        _ = self;
-        _ = params;
-        return switch (val) {
-            .Null => protocol.Value{ .Null = {} },
-            .Int => |i| protocol.Value{ .Int = i },
-            .Bool => |b| protocol.Value{ .Bool = b },
-            .Str => |s| protocol.Value{ .Str = s },
-            else => protocol.Value{ .Null = {} }, // Convert unsupported types to null
-        };
-    }
-
     /// Execute query fragment on remote shard via QUIC
     fn executeRemoteFragment(self: *Self, node: *Node, query: []const u8, params: []const protocol.Value) !federation.QueryResults {
         var conn = try node.connection_pool.acquire();
         defer node.connection_pool.release(conn);
-
-        if (conn.client == null) {
-            try conn.connect(node.endpoint);
-        }
 
         const fed_query = federation.FederatedQuery{
             .query_text = query,
@@ -325,9 +309,13 @@ pub const QueryCoordinator = struct {
             .target_nodes = &.{node.id},
             .consistency_level = .eventual,
         };
-
-        try conn.sendQuery(fed_query);
-        return try conn.receiveResults(self.allocator);
+        return try conn.executeQuery(
+            self.allocator,
+            node.endpoint,
+            self.config.query_timeout_ms,
+            self.config.topk_merge_batch_size,
+            fed_query,
+        );
     }
 
     /// Gather and merge results from shards
@@ -359,33 +347,57 @@ pub const QueryCoordinator = struct {
         for (shard_results) |result| {
             total_rows += result.rows.len;
         }
-
-        var all_rows = try self.allocator.alloc(protocol.BindingRow, total_rows);
-        var idx: usize = 0;
-
-        for (shard_results) |result| {
-            for (result.rows) |row| {
-                all_rows[idx] = row;
-                idx += 1;
-            }
-        }
-
-        // Apply offset and limit
         const start = offset orelse 0;
-        const end = if (limit) |l| @min(start + l, all_rows.len) else all_rows.len;
+        const end = if (limit) |l| @min(start + l, total_rows) else total_rows;
 
-        if (start >= all_rows.len) {
+        const schema_source = blk: {
+            for (shard_results) |result| {
+                if (result.schema.len > 0) break :blk result.schema;
+            }
+            break :blk &.{};
+        };
+        const schema_copy = if (schema_source.len > 0) try cloneSchema(self.allocator, schema_source) else &.{};
+        errdefer if (schema_copy.len > 0) {
+            for (schema_copy) |col| {
+                self.allocator.free(col.name);
+                self.allocator.free(col.data_type);
+            }
+            self.allocator.free(schema_copy);
+        };
+
+        if (start >= total_rows or end <= start) {
             return federation.QueryResults{
                 .rows = &.{},
-                .schema = if (shard_results.len > 0) shard_results[0].schema else &.{},
+                .schema = schema_copy,
                 .execution_time_ms = 0,
                 .ordered = false,
             };
         }
 
+        const out_len = end - start;
+        var out_rows = try self.allocator.alloc(protocol.BindingRow, out_len);
+        var out_idx: usize = 0;
+        errdefer {
+            for (out_rows[0..out_idx]) |row| freeBindingRow(self.allocator, row);
+            self.allocator.free(out_rows);
+        }
+
+        var global_idx: usize = 0;
+        for (shard_results) |result| {
+            for (result.rows) |row| {
+                if (global_idx >= start and global_idx < end) {
+                    out_rows[out_idx] = try cloneBindingRow(self.allocator, row);
+                    out_idx += 1;
+                }
+                global_idx += 1;
+                if (global_idx >= end) break;
+            }
+            if (global_idx >= end) break;
+        }
+
         return federation.QueryResults{
-            .rows = all_rows[start..end],
-            .schema = if (shard_results.len > 0) shard_results[0].schema else &.{},
+            .rows = out_rows,
+            .schema = schema_copy,
             .execution_time_ms = 0,
             .ordered = false,
         };
@@ -414,26 +426,64 @@ pub const QueryCoordinator = struct {
         }
 
         // Extract final sorted results
-        const sorted_rows = try heap.getSorted();
+        var sorted_rows = try heap.getSorted();
+        errdefer {
+            for (sorted_rows) |row| freeBindingRow(self.allocator, row);
+            self.allocator.free(sorted_rows);
+        }
 
-        // Apply offset
+        const schema_source = blk: {
+            for (shard_results) |result| {
+                if (result.schema.len > 0) break :blk result.schema;
+            }
+            break :blk &.{};
+        };
+        const schema_copy = if (schema_source.len > 0) try cloneSchema(self.allocator, schema_source) else &.{};
+        errdefer if (schema_copy.len > 0) {
+            for (schema_copy) |col| {
+                self.allocator.free(col.name);
+                self.allocator.free(col.data_type);
+            }
+            self.allocator.free(schema_copy);
+        };
+
+        const order_key_names = try self.extractOrderKeyNames(order_keys);
+        errdefer {
+            for (order_key_names) |k| self.allocator.free(k);
+            self.allocator.free(order_key_names);
+        }
+
         const start = offset orelse 0;
-        if (start >= sorted_rows.len) {
+        const end = if (limit) |l| @min(start + l, sorted_rows.len) else sorted_rows.len;
+
+        if (start >= sorted_rows.len or end <= start) {
+            for (sorted_rows) |row| freeBindingRow(self.allocator, row);
+            self.allocator.free(sorted_rows);
             return federation.QueryResults{
                 .rows = &.{},
-                .schema = if (shard_results.len > 0) shard_results[0].schema else &.{},
+                .schema = schema_copy,
                 .execution_time_ms = 0,
                 .ordered = true,
-                .order_keys = try self.extractOrderKeyNames(order_keys),
+                .order_keys = order_key_names,
             };
         }
 
+        if (start > 0 or end < sorted_rows.len) {
+            for (sorted_rows[0..start]) |row| freeBindingRow(self.allocator, row);
+            for (sorted_rows[end..]) |row| freeBindingRow(self.allocator, row);
+            const out_len = end - start;
+            if (start > 0) {
+                std.mem.copyForwards(protocol.BindingRow, sorted_rows[0..out_len], sorted_rows[start..end]);
+            }
+            sorted_rows = sorted_rows[0..out_len];
+        }
+
         return federation.QueryResults{
-            .rows = sorted_rows[start..],
-            .schema = if (shard_results.len > 0) shard_results[0].schema else &.{},
+            .rows = sorted_rows,
+            .schema = schema_copy,
             .execution_time_ms = 0,
             .ordered = true,
-            .order_keys = try self.extractOrderKeyNames(order_keys),
+            .order_keys = order_key_names,
         };
     }
 
@@ -501,6 +551,43 @@ pub const QueryCoordinator = struct {
         self.stats_registry = registry;
     }
 };
+
+fn cloneBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) !protocol.BindingRow {
+    var cols = try allocator.alloc(protocol.Value, row.cols.len);
+    errdefer {
+        for (cols) |val| value_utilities.freeValue(allocator, val);
+        allocator.free(cols);
+    }
+    for (row.cols, 0..) |val, i| {
+        cols[i] = try value_utilities.duplicateValue(allocator, val);
+    }
+    return .{ .cols = cols };
+}
+
+fn freeBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) void {
+    for (row.cols) |val| {
+        value_utilities.freeValue(allocator, val);
+    }
+    if (row.cols.len > 0) allocator.free(row.cols);
+}
+
+fn cloneSchema(allocator: std.mem.Allocator, schema_defs: []const protocol.ColumnDef) ![]const protocol.ColumnDef {
+    var cols = try allocator.alloc(protocol.ColumnDef, schema_defs.len);
+    errdefer {
+        for (cols) |col| {
+            allocator.free(col.name);
+            allocator.free(col.data_type);
+        }
+        allocator.free(cols);
+    }
+    for (schema_defs, 0..) |col, i| {
+        cols[i] = .{
+            .name = try allocator.dupe(u8, col.name),
+            .data_type = try allocator.dupe(u8, col.data_type),
+        };
+    }
+    return cols;
+}
 
 /// Distributed query plan
 const DistributedPlan = struct {
@@ -674,18 +761,25 @@ const TopKHeap = struct {
     }
 
     fn deinit(self: *TopKHeap) void {
+        for (self.items.items) |row| {
+            freeBindingRow(self.allocator, row);
+        }
         self.items.deinit();
     }
 
     fn push(self: *TopKHeap, row: protocol.BindingRow) !void {
-        try self.items.append(row);
+        const cloned = try cloneBindingRow(self.allocator, row);
+        try self.items.append(cloned);
 
         // If we exceed k items, remove the smallest
         if (self.items.items.len > self.k) {
             // Simple approach: sort and keep top k
             // TODO: Optimize with actual heap operations
             std.sort.heap(protocol.BindingRow, self.items.items, self.order_keys, compareRows);
-            self.items.shrinkRetainingCapacity(self.k);
+            for (self.items.items[self.k..]) |dropped| {
+                freeBindingRow(self.allocator, dropped);
+            }
+            self.items.items.len = self.k;
         }
     }
 

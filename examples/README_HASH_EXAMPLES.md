@@ -200,13 +200,13 @@ Run these examples against a Geode instance to verify functionality:
 
 ```bash
 # Basic hash operations
-geodec < gql_hash_examples.gql
+geode query < gql_hash_examples.gql
 
 # Authentication system
-geodec < hash_user_auth_example.gql
+geode query < hash_user_auth_example.gql
 
 # Data integrity patterns
-geodec < hash_data_integrity_example.gql
+geode query < hash_data_integrity_example.gql
 ```
 
 ## Security Considerations

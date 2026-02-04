@@ -6,7 +6,7 @@ const exec = @import("server/graph/exec.zig");
 // CANARY: REQ=REQ-GQL-017; FEATURE="Match Label+Property Predicate"; ASPECT=Execution; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_MatchLabelProperty; OWNER=engine; UPDATED=2025-09-21
 
 pub fn TestCANARY_REQ_GQL_017_MatchLabelProperty() !void {
-    var g = exec.GraphStorage.init(std.testing.allocator);
+    var g = exec.GraphStore.init(std.testing.allocator);
     defer g.deinit();
 
     try g.addNode(std.testing.allocator, 1, &.{"Person"});
@@ -66,7 +66,7 @@ fn hashBindings(bindings: []const exec.Binding) u64 {
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Match Label+Property Predicate"; ASPECT=EquivalenceDeterminism; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_MatchLabelPropertyEquivalenceDeterminism; OWNER=engine; UPDATED=2025-09-21
 pub fn TestCANARY_REQ_GQL_017_MatchLabelPropertyEquivalenceDeterminism() !void {
-    var g = exec.GraphStorage.init(std.testing.allocator);
+    var g = exec.GraphStore.init(std.testing.allocator);
     defer g.deinit();
 
     // Create sample nodes
@@ -130,7 +130,7 @@ pub fn TestCANARY_REQ_GQL_017_MatchLabelPropertyEquivalenceDeterminism() !void {
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Match Label+Property Predicate"; ASPECT=OptionalMatchNullPreserve; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_OptionalMatchNullPreserve; OWNER=engine; UPDATED=2025-09-21
 pub fn TestCANARY_REQ_GQL_017_OptionalMatchNullPreserve() !void {
-    var g = exec.GraphStorage.init(std.testing.allocator);
+    var g = exec.GraphStore.init(std.testing.allocator);
     defer g.deinit();
 
     // Base node without a matching optional pattern

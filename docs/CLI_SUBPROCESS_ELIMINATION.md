@@ -7,12 +7,12 @@
 
 ## Overview
 
-The CLI Subprocess Elimination implementation provides a unified binary architecture that eliminates the need for spawning separate `geoded` and `geodec` subprocess binaries. This architectural improvement simplifies deployment, improves performance, and provides a consistent user experience through direct function calls instead of subprocess management.
+The CLI Subprocess Elimination implementation provides a unified binary architecture that eliminates the need for spawning separate `geode serve` and `geode query` subprocess binaries. This architectural improvement simplifies deployment, improves performance, and provides a consistent user experience through direct function calls instead of subprocess management.
 
 ### Key Achievements
 
 - **✅ Unified Binary Design**: Single `geode` binary handles all CLI functionality
-- **✅ Subprocess Elimination**: No more spawning of `geoded` or `geodec` binaries
+- **✅ Subprocess Elimination**: No more spawning of `geode serve` or `geode query` binaries
 - **✅ Direct Function Calls**: Server and client functionality called directly
 - **✅ TLS Validation Override**: `--insecure` disables certificate validation for test/self-signed environments
 - **✅ Performance Improvement**: Eliminates subprocess overhead and complexity
@@ -40,8 +40,8 @@ Unified Binary Architecture (geode)
 fn runEmbeddedServer(ally: std.mem.Allocator, config: ServerConfig) !void {
     // Build argument array for subprocess
     var server_args = std.ArrayList([]const u8).init(ally);
-    // ... build args for geoded binary
-    // ... spawn geoded subprocess (eliminated)
+    // ... build args for geode serve binary
+    // ... spawn geode serve subprocess (eliminated)
 }
 ```
 
@@ -72,7 +72,6 @@ const ServerConfig = struct {
     disable_estimates: bool = false,
     compact_profile: bool = false,
     memcurve_profile: bool = false,
-    force_no_tls: bool = false,
 };
 ```
 
@@ -167,7 +166,7 @@ The `--insecure` flag disables TLS certificate verification for QUIC connections
 
 | Metric | Before (Subprocess) | After (Unified Binary) | Improvement |
 |--------|---------------------|------------------------|-------------|
-| Binary Count | 3 (geode, geoded, geodec) | 1 (geode) | 66% reduction |
+| Binary Count | 3 (geode, geode serve, geode query) | 1 (geode) | 66% reduction |
 | Startup Time | ~50-100ms | ~1-5ms | 10-50x faster |
 | Memory Usage | Multiple process overhead | Single process | 40-60% reduction |
 | Deployment Complexity | Multiple binaries | Single binary | Simplified |
@@ -220,7 +219,7 @@ The `--insecure` flag disables TLS certificate verification for QUIC connections
 ./zig-out/bin/geode shell --help              # ✅ Shows shell options
 
 # Verify no subprocess spawning
-# All commands execute within single process - no geoded/geodec spawning
+# All commands execute within single process - no geode serve/geode query spawning
 ```
 
 ## Integration Points
@@ -230,7 +229,7 @@ The `--insecure` flag disables TLS certificate verification for QUIC connections
 **Build Configuration:**
 
 - Single binary target: `geode`
-- No separate `geoded`/`geodec` targets required
+- No separate `geode serve`/`geode query` targets required
 - Simplified build dependencies
 - Unified binary distribution
 
@@ -253,8 +252,8 @@ const ClientMain = @import("../client/main.zig");
 ```
 deployment/
 ├── geode      (CLI binary)
-├── geoded     (Server binary)
-├── geodec     (Client binary)
+├── geode serve     (Server binary)
+├── geode query     (Client binary)
 └── config/
 ```
 
@@ -282,8 +281,8 @@ deployment/
 
 ```bash
 # OLD: Separate binaries
-./geoded --listen 0.0.0.0:3141
-./geodec "RETURN 1" --server 127.0.0.1:3141
+./geode serve --listen 0.0.0.0:3141
+./geode query "RETURN 1" --server 127.0.0.1:3141
 
 # NEW: Unified binary
 ./geode serve --listen 0.0.0.0:3141
@@ -295,8 +294,8 @@ deployment/
 ```bash
 # OLD: Script calling separate binaries
 #!/bin/bash
-./geoded --data-dir /data &
-./geodec "MATCH (n) RETURN count(n)"
+./geode serve --data-dir /data &
+./geode query "MATCH (n) RETURN count(n)"
 
 # NEW: Script using unified binary
 #!/bin/bash
@@ -310,7 +309,7 @@ deployment/
 
 ```bash
 # OLD: Test using separate binaries
-./geodec "RETURN 1" --server 127.0.0.1:3141 --insecure
+./geode query "RETURN 1" --server 127.0.0.1:3141 --insecure
 
 # NEW: Test using unified binary (same command works)
 ./geode query "RETURN 1" --server 127.0.0.1:3141 --insecure
@@ -341,7 +340,7 @@ deployment/
 
 ```bash
 # Issue: Scripts still calling old binaries
-./geoded --help
+./geode serve --help
 # Error: command not found
 
 # Solution: Update to unified binary
@@ -352,7 +351,7 @@ deployment/
 
 ```bash
 # Issue: Tests expecting old binary behavior
-./geodec "RETURN 1" --server 127.0.0.1:3141 --insecure
+./geode query "RETURN 1" --server 127.0.0.1:3141 --insecure
 
 # Solution: Use unified binary with same flags
 ./geode query "RETURN 1" --server 127.0.0.1:3141 --insecure
@@ -362,8 +361,8 @@ deployment/
 
 ```bash
 # Issue: Old configuration files referencing separate binaries
-server_binary=/usr/bin/geoded
-client_binary=/usr/bin/geodec
+server_binary=/usr/bin/geode serve
+client_binary=/usr/bin/geode query
 
 # Solution: Update to unified binary
 geode_binary=/usr/bin/geode
@@ -383,7 +382,7 @@ All CLI subprocess elimination implementations include proper CANARY governance 
 
 **Implementation Status**: ✅ Complete (October 2025)
 
-- ✅ **Subprocess Elimination**: No more geoded/geodec spawning
+- ✅ **Subprocess Elimination**: No more geode serve/geode query spawning
 - ✅ **Unified Binary**: Single geode binary for all functionality
 - ✅ **Direct Function Calls**: Server and client functions called directly
 - ✅ **TLS Validation Override**: --insecure disables certificate checks for self-signed/test servers

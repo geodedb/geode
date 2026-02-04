@@ -13,6 +13,8 @@ CLIENT_BIN="$BIN_DIR/geode"
 PAGE_SIZE="${1:-1}"
 LOG_FILE="$(mktemp -t geode_telemetry.XXXXXX.log)"
 PID_FILE="$(mktemp -t geode_telemetry.XXXXXX.pid)"
+ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
 
 cleanup() {
   if [[ -f "$PID_FILE" ]]; then
@@ -34,7 +36,8 @@ fi
 
 # Start server with telemetry enabled; capture stderr to log file
 GEODE_TELEMETRY_PAGING=1 \
-"$SERVER_BIN" serve --listen 127.0.0.1:3141 --data-dir "$ROOT_DIR/data" --disable-auth \
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+"$SERVER_BIN" serve --listen 127.0.0.1:3141 --data-dir "$ROOT_DIR/data" \
   1>/dev/null 2>"$LOG_FILE" &
 SERVER_PID=$!
 echo "$SERVER_PID" >"$PID_FILE"
@@ -43,7 +46,7 @@ echo "$SERVER_PID" >"$PID_FILE"
 sleep 0.5
 
 # Run a tiny ordered+limited query to ensure a single page flows
-"$CLIENT_BIN" query "RETURN 1 AS x ORDER BY x LIMIT $PAGE_SIZE" --format json --server 127.0.0.1:3141 --insecure || true
+"$CLIENT_BIN" query "RETURN 1 AS x ORDER BY x LIMIT $PAGE_SIZE" --format json --server 127.0.0.1:3141 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" || true
 
 # Print telemetry lines
 if grep -q '"event":"PULL_PAGE"' "$LOG_FILE"; then

@@ -357,10 +357,10 @@ pub const UndoLog = struct {
         self.active = false;
     }
 
-    // CANARY: REQ=REQ-TXN-UNDO-SERVER-015; FEATURE="TransactionUndoLog"; ASPECT=RollbackGraphStorage; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
-    /// Rollback all changes using GraphStorage (for server-side execution)
+    // CANARY: REQ=REQ-TXN-UNDO-SERVER-015; FEATURE="TransactionUndoLog"; ASPECT=RollbackGraphStore; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
+    /// Rollback all changes using GraphStore (for server-side execution)
     /// The storage parameter is kept for API compatibility but each entry looks up its own graph
-    pub fn rollbackGraphStorage(self: *UndoLog, storage: *graph_common.GraphStorage) void {
+    pub fn rollbackGraphStore(self: *UndoLog, storage: *graph_common.GraphStore) void {
         _ = storage; // Kept for API compatibility, but we look up per-entry graph
         if (!self.active) return;
 
@@ -369,14 +369,14 @@ pub const UndoLog = struct {
         while (i > 0) {
             i -= 1;
             const entry = self.entries.items[i];
-            self.undoEntryGraphStorage(entry);
+            self.undoEntryGraphStore(entry);
         }
 
         self.clear();
         self.active = false;
     }
 
-    fn undoEntryGraphStorage(self: *UndoLog, entry: UndoEntry) void {
+    fn undoEntryGraphStore(self: *UndoLog, entry: UndoEntry) void {
         switch (entry) {
             .CreateNode => |e| {
                 // CANARY: REQ=REQ-TXN-UNDO-020; FEATURE="TransactionUndoLog"; ASPECT=RollbackUseGraphStore; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23

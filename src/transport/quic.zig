@@ -179,13 +179,24 @@ pub const QuicTransport = struct {
             // Poll the endpoint to process incoming UDP packets and complete handshakes
             // This is required before connections can be accepted
             // Keep polling until a connection is ready with available streams
+            // GAP-0200-FIX: Increased poll count and wait for streams to be ready
+            // to prevent race condition where connection is returned before client
+            // sends its first STREAM frame (containing HELLO message)
             var poll_count: usize = 0;
-            while (poll_count < 100) : (poll_count += 1) {
+            var pending_conn: ?*Connection = null;
+
+            // First, try to get a connection (if we don't have one pending)
+            while (poll_count < 300) : (poll_count += 1) {
                 try ep.poll(10);
-                // Try to get an accepted connection
-                if (api.tryAccept(ep)) |conn| {
-                    // Check if streams are available; if not, keep polling
-                    if (conn.hasIncomingStreams() or poll_count > 50) {
+
+                // Get a connection if we don't have one yet
+                if (pending_conn == null) {
+                    pending_conn = api.tryAccept(ep);
+                }
+
+                // If we have a connection, check for streams
+                if (pending_conn) |conn| {
+                    if (conn.hasIncomingStreams()) {
                         const wrapper = try self.allocator.create(QuicConnection);
                         wrapper.* = QuicConnection{
                             .allocator = self.allocator,
@@ -198,10 +209,27 @@ pub const QuicTransport = struct {
                         try self.connections.append(self.allocator, wrapper);
                         return wrapper;
                     }
-                    // Connection accepted but no streams yet - need to keep polling
-                    // Put connection back (it's already tracked by the endpoint)
+                    // Connection exists but no streams yet - continue polling
+                    // This ensures we process incoming STREAM frames before returning
                 }
             }
+
+            // Timeout waiting for streams - return connection anyway but with warning
+            // The handler will wait for streams with its own timeout
+            if (pending_conn) |conn| {
+                std.debug.print("DEBUG_TRACE: accept() returning connection without streams after {} polls\n", .{poll_count});
+                const wrapper = try self.allocator.create(QuicConnection);
+                wrapper.* = QuicConnection{
+                    .allocator = self.allocator,
+                    .inner = conn,
+                    .streams = try std.ArrayList(*QuicStream).initCapacity(self.allocator, 0),
+                };
+                self.connections_mutex.lock();
+                defer self.connections_mutex.unlock();
+                try self.connections.append(self.allocator, wrapper);
+                return wrapper;
+            }
+
             // No connections ready after polling
             return QuicError.WouldBlock;
         }

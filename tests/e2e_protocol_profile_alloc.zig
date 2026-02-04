@@ -17,7 +17,7 @@ fn run(args: []const []const u8) !struct { stdout: []const u8, stderr: []const u
 // Query touches: Project, Distinct, Sort, Offset, Limit.
 // We pass multiple param rows to inflate allocation slightly.
 // Note: ORDER BY keys are simplified currently, so we only assert presence and non-negative values.
-// The PROFILE output is JSON lines: first SCHEMA then PROFILE frame; we parse the second line.
+// The PROFILE output is JSON with a top-level "profile" field; we parse that payload.
 
 pub fn parseNumberField(json: []const u8, field: []const u8) ?usize {
     if (std.mem.indexOf(u8, json, field)) |pos| {
@@ -36,10 +36,12 @@ test "protocol: PROFILE allocation deltas non-negative" {
     const exe = "zig-out/bin/geode";
     // All stages: DISTINCT + ORDER BY + OFFSET + LIMIT.
     const res = try run(&.{ exe, "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 2", "--param", "a", "[1,2,2,3]" });
-    // Split lines
-    var it = std.mem.splitScalar(u8, res.stdout, '\n');
-    _ = it.next(); // schema
-    const prof_line = it.next() orelse return error.MissingProfile;
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, res.stdout, .{});
+    defer parsed.deinit();
+    const root = parsed.value.object;
+    const profile_val = root.get("profile") orelse return error.MissingProfile;
+    const prof_line = try std.json.Stringify.valueAlloc(testing.allocator, profile_val, .{});
+    defer testing.allocator.free(prof_line);
     try testing.expect(std.mem.indexOf(u8, prof_line, "\"ops\"") != null);
     // Basic sanity: project bytes_alloc > 0, later stages present.
     try testing.expect(std.mem.indexOf(u8, prof_line, "\"Project\"") != null);

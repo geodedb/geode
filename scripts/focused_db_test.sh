@@ -1,5 +1,4 @@
-#!/usr/bin/env nix-shell
-#! nix-shell -i bash -p bash -p coreutils
+#!/usr/bin/env bash
 # Focused Database Integration Tests - Testing working functionality
 
 set -e

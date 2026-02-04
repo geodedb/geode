@@ -190,7 +190,7 @@ var catalog_instance_mutex = std.Thread.Mutex{};
 /// GAP-0203: Fast path uses atomic load to avoid mutex contention on every query.
 /// The mutex is only acquired during first-time initialization.
 ///
-/// M2 Note: This singleton is injected into ExecutionContext by entry points (test_harness, CLI)
+/// M2 Note: This singleton is injected into ExecutionContext by entry points (server, CLI)
 /// All execution code accesses catalog via context.catalog, not by calling this function
 pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog {
     // GAP-0203: Fast path - atomic load avoids mutex lock when already initialized (99.99% of calls)
@@ -234,10 +234,6 @@ pub fn getCatalog(_: std.mem.Allocator, context: ExecutionContext) *catalog_mod.
     return context.catalog;
 }
 
-/// M2: Create a default ExecutionContext with global catalog
-/// Used for legacy code paths that don't have context available
-/// TODO M2: Eliminate by passing context through all execution paths
-
 // CANARY: REQ=REQ-M5.3-EXECUTION-INIT-001; FEATURE="Circular Dependency Resolution"; ASPECT=CallbacksInitialization; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-11-13
 /// Initialize evaluator with execution callbacks
 /// This must be called once during module initialization to provide eval.zig
@@ -247,7 +243,6 @@ pub fn getCatalog(_: std.mem.Allocator, context: ExecutionContext) *catalog_mod.
 /// Instead of eval.zig importing execution.zig, it receives function pointers at runtime.
 pub fn initEvaluator() void {
     const callbacks = evaluator_adapter.ExecutionCallbacks{
-        .getDefaultContextFn = getDefaultContext,
         .executeQueryWithContextFn = query_execution.executeQueryWithContext,
         .findShortestPathFn = graph_algorithms.findShortestPath,
         .countPatternMatchesFn = graph_algorithms.countPatternMatches,
@@ -255,12 +250,6 @@ pub fn initEvaluator() void {
     };
 
     eval.setExecutionCallbacks(callbacks);
-}
-pub fn getDefaultContext(allocator: std.mem.Allocator) !ExecutionContext {
-    const cat = try ensureCatalogInstance(allocator);
-    return ExecutionContext{
-        .catalog = cat,
-    };
 }
 
 /// Cleanup the global catalog instance
@@ -383,6 +372,22 @@ pub const ExecutionContext = struct {
     query_param_names: []const []const u8 = &.{},
     query_param_values: []const value_types.Value = &.{},
 };
+
+threadlocal var g_active_context: ?*const ExecutionContext = null;
+
+pub fn getActiveContext() ?*const ExecutionContext {
+    return g_active_context;
+}
+
+pub fn pushActiveContext(ctx: *const ExecutionContext) ?*const ExecutionContext {
+    const prev = g_active_context;
+    g_active_context = ctx;
+    return prev;
+}
+
+pub fn popActiveContext(prev: ?*const ExecutionContext) void {
+    g_active_context = prev;
+}
 
 pub const ExecutionError = error{
     OutOfMemory,
@@ -537,12 +542,9 @@ pub fn checkPermission(context: ExecutionContext, permission: @import("security/
     }
 }
 
-pub fn executeProgram(allocator: std.mem.Allocator, program: *const ast.Program) !ExecutionResult {
-    const context = try getDefaultContext(allocator);
-    return executeProgramWithContext(allocator, program, context);
-}
-
 pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
+    const prev_ctx = pushActiveContext(&context);
+    defer popActiveContext(prev_ctx);
     if (program.statements.len == 0) {
         return ExecutionResult{
             .columns = try allocator.alloc([]const u8, 0),
@@ -1230,7 +1232,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // This ensures SHOW GRAPHS no longer lists this graph
             graph_store.getGlobalStore(allocator).dropGraph(graph_name) catch |err| {
                 // Log but don't fail - graph might only exist in one place
-                log.warn("dropGraphStorage failed", &.{
+                log.warn("dropGraphStore failed", &.{
                     Attr.string("graph_name", graph_name),
                     Attr.err("error", err),
                 });
@@ -2497,14 +2499,6 @@ pub fn valuesEqual(a: Value, b: Value) bool {
 
     // For other types, default to false (different types or unsupported comparison)
     return false;
-}
-
-pub fn executeQueryNoLimit(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
-    // Execute full query (including CREATE/MATCH patterns) without applying limit/offset
-    // This is used for UNION parts where we need to execute the full query to populate bindings
-    // M2: Use default context with global catalog for legacy code path
-    const context = try getDefaultContext(allocator);
-    return executeQueryWithContext(allocator, q, context);
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-UNION-001; FEATURE="MultiGraphIsolation"; ASPECT=UnionQueryContext; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-23

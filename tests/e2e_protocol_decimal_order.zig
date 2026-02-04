@@ -54,13 +54,7 @@ test "protocol: decimal ordering negatives and mixed scales" {
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
     // Rows should include -1.2 (deduped), 0, 1.2 in ascending order.
-    const line_it = blk: {
-        var it = std.mem.splitScalar(u8, res.out, '\n');
-        while (it.next()) |ln| {
-            if (contains(ln, "\"type\":\"BINDINGS\"")) break :blk ln;
-        }
-        break :blk res.out; // fallback
-    };
+    const line_it = res.out;
     const p_neg = std.mem.indexOf(u8, line_it, "{\"a\":-1.2}") orelse 0;
     const p_zero = std.mem.indexOf(u8, line_it, "{\"a\":0}") orelse 0;
     const p_pos = std.mem.indexOf(u8, line_it, "{\"a\":1.2}") orelse 0;
@@ -84,13 +78,7 @@ test "protocol: numeric ordering mixed ints and decimals" {
     try std.testing.expect(contains(res.out, "{\"x\":1.25}"));
     try std.testing.expect(contains(res.out, "{\"x\":2}"));
     // Order check in bindings line
-    const line_it = blk: {
-        var it = std.mem.splitScalar(u8, res.out, '\n');
-        while (it.next()) |ln| {
-            if (contains(ln, "\"type\":\"BINDINGS\"")) break :blk ln;
-        }
-        break :blk res.out; // fallback
-    };
+    const line_it = res.out;
     const p_m2 = std.mem.indexOf(u8, line_it, "{\"x\":-2}") orelse 0;
     const p_m15 = std.mem.indexOf(u8, line_it, "{\"x\":-1.5}") orelse 0;
     const p_m1 = std.mem.indexOf(u8, line_it, "{\"x\":-1}") orelse 0;

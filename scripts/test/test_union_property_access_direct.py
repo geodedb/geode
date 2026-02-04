@@ -2,13 +2,15 @@
 """Direct test runner for UNION property access functionality."""
 
 import json
+import os
 import subprocess
 import time
 
 
 class UnionPropertyAccessTester:
     def __init__(self):
-        self.binary = "/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode query"
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        self.binary = os.path.join(repo_root, "zig-out", "bin", "geode")
         self.passed = 0
         self.failed = 0
         self.results = []
@@ -17,7 +19,16 @@ class UnionPropertyAccessTester:
         """Execute a query and return the result."""
         try:
             result = subprocess.run(
-                [self.binary, query, "--server 127.0.0.1:3141 --insecure", "--format", "json"],
+                [
+                    self.binary,
+                    "query",
+                    query,
+                    "--server",
+                    "127.0.0.1:3141",
+                    "--insecure",
+                    "--format",
+                    "json",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -32,18 +43,17 @@ class UnionPropertyAccessTester:
         """Parse JSON response from stdout."""
         try:
             lines = stdout.strip().split("\n")
-            json_lines = []
             for line in lines:
                 line = line.strip()
                 if line.startswith("{") and line.endswith("}"):
-                    json_lines.append(json.loads(line))
-            return json_lines
+                    return json.loads(line)
+            return None
         except Exception:
             return None
 
     def test(self, name, query, expected_status="00000", assertions=None):
         """Run a test case."""
-        print(f"\n🧪 Running test: {name}")
+        print(f"\nRunning test: {name}")
         print(f"Query: {query}")
 
         start_time = time.time()
@@ -51,40 +61,25 @@ class UnionPropertyAccessTester:
         execution_time = time.time() - start_time
 
         if returncode != 0:
-            print(f"❌ Query failed with return code {returncode}")
+            print(f"Query failed with return code {returncode}")
             print(f"Stderr: {stderr}")
             self.failed += 1
             self.results.append({"name": name, "status": "FAILED", "reason": f"Return code {returncode}"})
             return False
 
         # Parse JSON response
-        json_responses = self.parse_json_response(stdout)
-        if not json_responses:
-            print("❌ Failed to parse JSON response")
+        response = self.parse_json_response(stdout)
+        if not response:
+            print("Failed to parse JSON response")
             print(f"Stdout: {stdout[:200]}...")
             self.failed += 1
             self.results.append({"name": name, "status": "FAILED", "reason": "Invalid JSON response"})
             return False
 
-        # Find BINDINGS response
-        bindings_response = None
-        schema_response = None
-        for response in json_responses:
-            if response.get("result", {}).get("type") == "BINDINGS":
-                bindings_response = response
-            elif response.get("result", {}).get("type") == "SCHEMA":
-                schema_response = response
-
-        if not bindings_response:
-            print("❌ No BINDINGS response found")
-            self.failed += 1
-            self.results.append({"name": name, "status": "FAILED", "reason": "No BINDINGS response"})
-            return False
-
         # Check status
-        status = bindings_response.get("status_class", "unknown")
+        status = response.get("status_class", "unknown")
         if status != expected_status:
-            print(f"❌ Unexpected status: {status} (expected {expected_status})")
+            print(f"Unexpected status: {status} (expected {expected_status})")
             self.failed += 1
             self.results.append({"name": name, "status": "FAILED", "reason": f"Status {status}"})
             return False
@@ -92,81 +87,75 @@ class UnionPropertyAccessTester:
         # Run custom assertions
         if assertions:
             for assertion in assertions:
-                if not assertion(bindings_response, schema_response):
-                    print("❌ Assertion failed")
+                if not assertion(response):
+                    print("Assertion failed")
                     self.failed += 1
                     self.results.append({"name": name, "status": "FAILED", "reason": "Assertion failed"})
                     return False
 
-        print(f"✅ Test passed (executed in {execution_time:.3f}s)")
-        print(f"Response: {json.dumps(bindings_response['result'], indent=2)[:200]}...")
+        print(f"Test passed (executed in {execution_time:.3f}s)")
+        print(f"Response: {json.dumps(response.get('rows', []), indent=2)[:200]}...")
         self.passed += 1
         self.results.append({"name": name, "status": "PASSED", "execution_time": execution_time})
         return True
 
-    def assert_has_property_values(self, bindings_response, schema_response):
+    def assert_has_property_values(self, response):
         """Assert that response contains actual property values, not null."""
-        rows = bindings_response.get("result", {}).get("rows", [])
+        rows = response.get("rows", [])
         if not rows:
             return False
 
         for row in rows:
-            if isinstance(row, list) and len(row) > 0:
-                for item in row:
-                    if isinstance(item, dict):
-                        for _key, value in item.items():
-                            if value is not None and value != "":
-                                return True
+            if isinstance(row, dict):
+                for _key, value in row.items():
+                    if value is not None and value != "":
+                        return True
         return False
 
-    def assert_contains_names(self, bindings_response, schema_response):
+    def assert_contains_names(self, response):
         """Assert that response contains actual names like Alice or Bob."""
-        rows = bindings_response.get("result", {}).get("rows", [])
+        rows = response.get("rows", [])
         found_names = set()
 
         for row in rows:
-            if isinstance(row, list) and len(row) > 0:
-                for item in row:
-                    if isinstance(item, dict):
-                        for _key, value in item.items():
-                            if isinstance(value, str) and value in ["Alice", "Bob"]:
-                                found_names.add(value)
+            if isinstance(row, dict):
+                for _key, value in row.items():
+                    if isinstance(value, str) and value in ["Alice", "Bob"]:
+                        found_names.add(value)
 
         return len(found_names) >= 1
 
-    def assert_node_has_properties_field(self, bindings_response, schema_response):
+    def assert_node_has_properties_field(self, response):
         """Assert that node serialization includes properties field."""
-        rows = bindings_response.get("result", {}).get("rows", [])
+        rows = response.get("rows", [])
 
         for row in rows:
-            if isinstance(row, list) and len(row) > 0:
-                for item in row:
-                    if isinstance(item, dict):
-                        for _key, value in item.items():
-                            if isinstance(value, dict) and "properties" in value:
-                                return True
+            if isinstance(row, dict):
+                for _key, value in row.items():
+                    if isinstance(value, dict) and "properties" in value:
+                        return True
         return False
 
     def assert_schema_has_correct_type(self, expected_type):
         """Return a function that asserts schema has correct type."""
 
-        def assertion(bindings_response, schema_response):
-            if not schema_response:
-                return False
-            columns = schema_response.get("result", {}).get("columns", [])
+        def assertion(response):
+            columns = response.get("columns", [])
             if not columns:
                 return False
-            return columns[0].get("type") == expected_type
+            if isinstance(columns[0], dict):
+                return columns[0].get("type") == expected_type
+            return False
 
         return assertion
 
     def run_all_tests(self):
         """Run all UNION property access tests."""
-        print("🚀 Starting UNION Property Access Test Suite")
+        print("Starting UNION Property Access Test Suite")
         print("=" * 60)
 
         # Setup data
-        print("\n📊 Setting up test data...")
+        print("\nSetting up test data...")
         self.run_query("CREATE (alice:Person {name: 'Alice', age: 30})")
         self.run_query("CREATE (bob:Person {name: 'Bob', age: 25})")
         time.sleep(0.1)  # Brief pause for data to settle

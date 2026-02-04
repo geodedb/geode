@@ -6,10 +6,10 @@
 
 ```bash
 # Basic server start
-geoded --listen-quic 0.0.0.0:3141
+geode serve --listen-quic 0.0.0.0:3141
 
 # With all options
-geoded --listen-quic 0.0.0.0:3141 \
+geode serve --listen-quic 0.0.0.0:3141 \
        --data-dir /var/geode/data \
        --tls-cert server.crt \
        --tls-key server.key \
@@ -21,10 +21,10 @@ geoded --listen-quic 0.0.0.0:3141 \
 
 ```bash
 # Run single query
-geodec "MATCH (n) RETURN n LIMIT 10"
+geode query "MATCH (n) RETURN n LIMIT 10"
 
 # Query with JSON output
-geodec "RETURN 1 AS x" --format json
+geode query "RETURN 1 AS x" --format json
 
 # Interactive REPL
 gql
@@ -232,7 +232,7 @@ export GEODE_CAPTURE_SERVER_STDERR=1 # Capture stderr
 ### Server Flags
 
 ```bash
-geoded --help
+geode serve --help
   --listen-quic      QUIC listen address
   --data-dir         Data directory path
   --tls-cert         TLS certificate path
@@ -264,20 +264,20 @@ ls -la /var/geode/data
 
 ```bash
 # Enable verbose logging
-geoded --log-level debug --log-json
+geode serve --log-level debug --log-json
 
 # Check query syntax
-geodec "EXPLAIN MATCH (n) RETURN n"
+geode query "EXPLAIN MATCH (n) RETURN n"
 ```
 
 #### Performance issues
 
 ```bash
 # Run profiling
-geodec "PROFILE MATCH (n) RETURN n"
+geode query "PROFILE MATCH (n) RETURN n"
 
 # Check indexes
-geodec "SHOW INDEXES"
+geode query "SHOW INDEXES"
 
 # Monitor metrics
 curl http://localhost:9090/metrics
@@ -375,8 +375,8 @@ Add to your shell profile:
 
 ```bash
 # Geode aliases
-alias gs='geoded --listen-quic 0.0.0.0:3141'
-alias gc='geodec'
+alias gs='geode serve --listen-quic 0.0.0.0:3141'
+alias gc='geode query'
 alias gql='gql'
 alias gbuild='make build'
 alias gtest='make test'
@@ -384,9 +384,9 @@ alias gfmt='make fmt'
 alias gverify='make verify-all'
 
 # Quick queries
-alias gnodes='geodec "MATCH (n) RETURN count(n)"'
-alias gedges='geodec "MATCH ()-[r]->() RETURN count(r)"'
-alias gstats='geodec "CALL db.stats()"'
+alias gnodes='geode query "MATCH (n) RETURN count(n)"'
+alias gedges='geode query "MATCH ()-[r]->() RETURN count(r)"'
+alias gstats='geode query "CALL db.stats()"'
 ```
 
 ## Links

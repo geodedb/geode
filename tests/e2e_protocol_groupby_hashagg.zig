@@ -14,12 +14,12 @@ test "e2e: GROUP BY execution with aggregation" {
     const allocator = testing.allocator;
     const addr = "127.0.0.1:17687";
 
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--disable-auth" }, null);
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, null);
     defer server.deinit();
 
     var client = try util.QuicProtoClient.connect(allocator, addr);
     defer client.deinit();
-    var hello = try client.hello(allocator, "", "");
+    var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
     hello.deinit(allocator);
 
     // a:[1,1,2], b:[10,1,5] -> (a=1,sum=11),(a=2,sum=5)
@@ -48,14 +48,14 @@ test "e2e: HashAgg with memory pressure" {
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--disable-auth" },
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
         &.{ "GEODE_QUERY_MEM_LIMIT_BYTES=1024" },
     );
     defer server.deinit();
 
     var client = try util.QuicProtoClient.connect(allocator, addr);
     defer client.deinit();
-    var hello = try client.hello(allocator, "", "");
+    var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
     hello.deinit(allocator);
 
     var params = util.emptyParams();

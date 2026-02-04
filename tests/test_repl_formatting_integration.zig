@@ -28,11 +28,11 @@ const MockClientSession = struct {
         // Simulate different types of responses based on query content
         // Check for more specific patterns first
         const mock_response = if (std.mem.indexOf(u8, gql, "COUNT")) |_|
-            try self.allocator.dupe(u8, "{\"columns\":[\"count\"],\"data\":[[42]]}")
+            try self.allocator.dupe(u8, "{\"columns\":[{\"name\":\"count\",\"type\":\"INTEGER\"}],\"rows\":[{\"count\":42}]}")
         else if (std.mem.indexOf(u8, gql, "CREATE")) |_|
             try self.allocator.dupe(u8, "{\"status\":\"success\",\"message\":\"Node created\"}")
         else if (std.mem.indexOf(u8, gql, "RETURN")) |_|
-            try self.allocator.dupe(u8, "{\"columns\":[\"result\"],\"data\":[[\"Mock query result\"]]}")
+            try self.allocator.dupe(u8, "{\"columns\":[{\"name\":\"result\",\"type\":\"STRING\"}],\"rows\":[{\"result\":\"Mock query result\"}]}")
         else
             try self.allocator.dupe(u8, "{\"status\":\"success\",\"message\":\"Query executed\"}");
 
@@ -71,7 +71,7 @@ fn executeGqlForTest(writer: anytype, state: *MockReplState, gql: []const u8) !v
         const response = state.session.mock_responses.items[state.session.mock_responses.items.len - 1];
 
         // Check if this is a query result that should be formatted
-        if (std.mem.indexOf(u8, response, "\"columns\":") != null and std.mem.indexOf(u8, response", "\"data\":") != null) {
+        if (std.mem.indexOf(u8, response, "\"columns\":") != null and std.mem.indexOf(u8, response, "\"rows\":") != null) {
             // Format and display query results based on current format setting
             try formatQueryResult(writer, state.allocator, response, state.format);
         } else {
@@ -99,24 +99,24 @@ fn formatResultAsCsv(writer: anytype, allocator: std.mem.Allocator, response: []
 
     const root = parsed.value.object;
     if (root.get("columns")) |columns_value| {
-        if (root.get("data")) |data_value| {
+        if (root.get("rows")) |rows_value| {
             const columns = columns_value.array;
-            const rows = data_value.array;
+            const rows = rows_value.array;
 
             // Header
             for (columns.items, 0..) |col, i| {
                 if (i > 0) try writer.writeAll(",");
                 try writer.writeAll("\"");
-                try writer.writeAll(col.string);
+                try writer.writeAll(columnName(col));
                 try writer.writeAll("\"");
             }
             try writer.writeAll("\n");
 
             // Data rows
             for (rows.items) |row| {
-                const row_array = row.array;
-                for (row_array.items, 0..) |cell, i| {
+                for (columns.items, 0..) |col, i| {
                     if (i > 0) try writer.writeAll(",");
+                    const cell = getRowValue(row, columnName(col));
                     switch (cell) {
                         .string => |s| {
                             try writer.writeAll("\"");
@@ -128,6 +128,8 @@ fn formatResultAsCsv(writer: anytype, allocator: std.mem.Allocator, response: []
                             const str = try std.fmt.bufPrint(&buf, "{d}", .{n});
                             try writer.writeAll(str);
                         },
+                        .bool => |b| try writer.writeAll(if (b) "true" else "false"),
+                        .null => try writer.writeAll("NULL"),
                         else => {},
                     }
                 }
@@ -148,22 +150,22 @@ fn formatResultAsTable(writer: anytype, allocator: std.mem.Allocator, response: 
 
     const root = parsed.value.object;
     if (root.get("columns")) |columns_value| {
-        if (root.get("data")) |data_value| {
+        if (root.get("rows")) |rows_value| {
             const columns = columns_value.array;
-            const rows = data_value.array;
+            const rows = rows_value.array;
 
             // Simplified table formatting for tests
             try writer.writeAll("| ");
             for (columns.items, 0..) |col, i| {
-                try writer.writeAll(col.string);
+                try writer.writeAll(columnName(col));
                 if (i < columns.items.len - 1) try writer.writeAll(" | ");
             }
             try writer.writeAll(" |\n");
 
             for (rows.items) |row| {
                 try writer.writeAll("| ");
-                const row_array = row.array;
-                for (row_array.items, 0..) |cell, i| {
+                for (columns.items, 0..) |col, i| {
+                    const cell = getRowValue(row, columnName(col));
                     switch (cell) {
                         .string => |s| try writer.writeAll(s),
                         .integer => |n| {
@@ -183,6 +185,21 @@ fn formatResultAsTable(writer: anytype, allocator: std.mem.Allocator, response: 
     try writer.writeAll(response);
 }
 
+fn columnName(col: std.json.Value) []const u8 {
+    return switch (col) {
+        .object => |obj| obj.get("name").?.string,
+        .string => |s| s,
+        else => "",
+    };
+}
+
+fn getRowValue(row: std.json.Value, name: []const u8) std.json.Value {
+    if (row == .object) {
+        if (row.object.get(name)) |val| return val;
+    }
+    return std.json.Value{ .null = {} };
+}
+
 // Integration Tests
 
 test "REPL integration - JSON format query execution" {
@@ -194,7 +211,7 @@ test "REPL integration - JSON format query execution" {
 
     try executeGqlForTest(output.writer(testing.allocator), &state, "RETURN 'hello' AS greeting");
 
-    const expected = "{\"columns\":[\"result\"],\"data\":[[\"Mock query result\"]]}";
+    const expected = "{\"columns\":[{\"name\":\"result\",\"type\":\"STRING\"}],\"rows\":[{\"result\":\"Mock query result\"}]}";
     try testing.expectEqualStrings(expected, output.items);
 }
 

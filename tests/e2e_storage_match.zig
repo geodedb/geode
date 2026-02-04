@@ -42,7 +42,9 @@ test "storage: MATCH_1HOP ordered" {
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
-    try std.testing.expect(contains(res.out, "\"type\":\"SCHEMA\""));
+    try std.testing.expect(contains(res.out, "\"columns\""));
+    try std.testing.expect(contains(res.out, "\"rows\""));
+    try std.testing.expect(contains(res.out, "\"status_class\""));
     try std.testing.expect(contains(res.out, "\"ordered\":true"));
     try std.testing.expect(contains(res.out, "\"order_keys\":[\"n\"]"));
     try std.testing.expect(contains(res.out, "{\"n\":1}"));

@@ -186,7 +186,9 @@ test "query responds to basic query" {
     if (child.stdout) |stdout_pipe| {
         const stdout = try stdout_pipe.readToEndAlloc(testing.allocator, 1024 * 1024);
         defer testing.allocator.free(stdout);
-        try testing.expect(std.mem.indexOf(u8, stdout, "\"type\":\"SCHEMA\"") != null);
+        try testing.expect(std.mem.indexOf(u8, stdout, "\"columns\"") != null);
+        try testing.expect(std.mem.indexOf(u8, stdout, "\"rows\"") != null);
+        try testing.expect(std.mem.indexOf(u8, stdout, "\"status_class\"") != null);
         try testing.expect(std.mem.indexOf(u8, stdout, "greeting") != null);
     }
 }

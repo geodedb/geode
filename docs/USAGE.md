@@ -6,32 +6,32 @@
 
 ```bash
 # Default configuration (QUIC/TLS on port 3141)
-./geoded
+./geode serve
 
 # With custom data directory
-./geoded --data_dir /path/to/data
+./geode serve --data_dir /path/to/data
 
 # With custom certificates
-./geoded --cert /path/to/cert.pem --key /path/to/key.pem
+./geode serve --cert /path/to/cert.pem --key /path/to/key.pem
 ```
 
 ### Connecting with Client
 
 ```bash
 # Interactive REPL
-./geodec
+./geode query
 
 # Execute single query
-./geodec "MATCH (n) RETURN n LIMIT 10"
+./geode query "MATCH (n) RETURN n LIMIT 10"
 
 # Execute from file
-./geodec -f queries.gql
+./geode query -f queries.gql
 
 # JSON output (default)
-./geodec --format json "RETURN 1 AS x"
+./geode query --format json "RETURN 1 AS x"
 
 # Plain text output
-./geodec --format txt "RETURN 1 AS x"
+./geode query --format txt "RETURN 1 AS x"
 ```
 
 ## Feature Overview (Current State)
@@ -42,10 +42,10 @@ Federated query execution across shards is always enabled:
 
 ```bash
 # Queries automatically consider federation
-./geodec "MATCH (n:Person) RETURN n ORDER BY n.name LIMIT 100"
+./geode query "MATCH (n:Person) RETURN n ORDER BY n.name LIMIT 100"
 
 # View distributed plan
-./geodec "EXPLAIN MATCH (n) RETURN n ORDER BY n.id"
+./geode query "EXPLAIN MATCH (n) RETURN n ORDER BY n.id"
 ```
 
 ### S3 Cloud Backups
@@ -105,7 +105,7 @@ The optimizer runs by default; enable tracing for diagnostics:
 # Optional: trace decisions
 export GEODE_TRACE_OPTIMIZER=1
 
-./geodec "EXPLAIN (VERBOSE) MATCH (n) RETURN n"
+./geode query "EXPLAIN (VERBOSE) MATCH (n) RETURN n"
 ```
 
 ## Query Language (GQL)
@@ -295,7 +295,7 @@ geode_backup_duration_ms
 
 ```bash
 # Verify shard connectivity
-geodec "CALL system.federation.status()"
+geode query "CALL system.federation.status()"
 
 # Check logs for errors
 grep "federation" /var/log/geode/geode.log
@@ -321,20 +321,20 @@ aws s3api put-object --bucket my-bucket --key test.txt --body test.txt
 curl -X POST https://api.example.com/webhook -H "Authorization: Bearer token"
 
 # View DLQ contents
-geodec "SELECT * FROM system.cdc.dlq"
+geode query "SELECT * FROM system.cdc.dlq"
 
 # Check retry metrics
-geodec "CALL system.cdc.metrics()"
+geode query "CALL system.cdc.metrics()"
 ```
 
 #### Performance Problems
 
 ```bash
 # View query plan for insight
-geodec "EXPLAIN (ANALYZE) <your-query>"
+geode query "EXPLAIN (ANALYZE) <your-query>"
 
 # Check system resources
-geodec "CALL system.resources()"
+geode query "CALL system.resources()"
 ```
 
 ### Log Locations
@@ -385,17 +385,17 @@ geodec "CALL system.resources()"
 geode backup --dest /backup/previous --mode full
 
 # 2. Stop old server
-systemctl stop geoded
+systemctl stop geode serve
 
 # 3. Install new binaries
 tar -xzf geode-v0.1.0.tar.gz
 cp geode/bin/* /usr/local/bin/
 
 # 4. Start new server
-systemctl start geoded
+systemctl start geode serve
 
 # 5. Verify functionality
-geodec "MATCH (n) RETURN COUNT(*)"
+geode query "MATCH (n) RETURN COUNT(*)"
 ```
 
 ### Breaking Changes

@@ -1,81 +1,48 @@
 const std = @import("std");
-const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
+const testing = std.testing;
+const util = @import("proto_test_util.zig");
+const schema = @import("schema");
 
-const RunResult = struct { code: i32, out: []u8, err: []u8 };
-
-fn run(args: []const []const u8) !RunResult {
-    const allocator = std.testing.allocator;
-    var argv = std.ArrayList([]const u8).init(allocator);
-    defer argv.deinit(allocator);
-    try argv.append(allocator, args[0]);
-    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
-        try argv.append(allocator, "query");
-    }
-    try argv.appendSlice(allocator, args[1..]);
-    var child = Child.init(argv.items, allocator);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-    const out = try child.stdout.?.readToEndAlloc(allocator, 1 << 20);
-    const err = try child.stderr.?.readToEndAlloc(allocator, 1 << 20);
-    const term = try child.wait();
-    const code: i32 = switch (term) {
-        .Exited => |st| st,
-        else => 2,
-    };
-    return .{ .code = code, .out = out, .err = err };
+fn execQuic(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query: []const u8) !util.ExecResult {
+    var params = std.ArrayList(schema.Param).init(allocator);
+    return client.executeAndCollect(allocator, query, params, 100);
 }
 
-fn run_server(args: []const []const u8) !struct { child: Child } {
-    const allocator = std.testing.allocator;
-    var env = try std.process.getEnvMap(allocator);
-    defer env.deinit();
-    try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
-    var argv = std.ArrayList([]const u8).init(allocator);
-    defer argv.deinit(allocator);
-    try argv.append(allocator, args[0]);
-    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
-        try argv.append(allocator, "query");
-    }
-    try argv.appendSlice(allocator, args[1..]);
-    var child = Child.init(argv.items, allocator);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    child.env_map = &env;
-    try child.spawn();
-    return .{ .child = child };
-}
-
-fn contains(hay: []const u8, needle: []const u8) bool {
-    return std.mem.indexOf(u8, hay, needle) != null;
+fn execGrpc(client: *util.GrpcProtoClient, allocator: std.mem.Allocator, query: []const u8) !util.ExecResult {
+    var params = std.ArrayList(schema.Param).init(allocator);
+    return client.executeAndCollect(allocator, query, params, 100);
 }
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Diagnostics IllegalOrderKey"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_IllegalOrderKey; OWNER=engine; UPDATED=2025-09-24
-test "protocol: transport parity diagnostics (IllegalOrderKey) stdio vs QUIC (gated)" {
+
+test "protocol: transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC (gated)" {
     if (std.posix.getenv("GEODE_CI_QUIC_SMOKE") == null) return error.SkipZigTest;
 
-    const exe = "./zig-out/bin/geode";
+    const allocator = testing.allocator;
+    const addr = "127.0.0.1:3191";
+    const grpc_addr = "127.0.0.1:3192";
+
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--listen-grpc", grpc_addr }, null);
+    defer server.deinit();
+
+    var quic = try util.QuicProtoClient.connect(allocator, addr);
+    defer quic.deinit();
+    var grpc = try util.GrpcProtoClient.connect(allocator, grpc_addr);
+    defer grpc.deinit();
+
+    var hello_q = try quic.hello(allocator, util.defaultUsername(), util.defaultPassword());
+    hello_q.deinit(allocator);
+    var hello_g = try grpc.hello(allocator, util.defaultUsername(), util.defaultPassword());
+    hello_g.deinit(allocator);
+
     const q = "RETURN a ORDER BY f(a)";
+    var qres = try execQuic(&quic, allocator, q);
+    defer qres.deinit(allocator);
+    var gres = try execGrpc(&grpc, allocator, q);
+    defer gres.deinit(allocator);
 
-    const sres = try run(&.{ exe, q, "--format", "json" });
-    defer std.testing.allocator.free(sres.out);
-    defer std.testing.allocator.free(sres.err);
-    try std.testing.expectEqual(@as(i32, 2), sres.code);
-    try std.testing.expect(contains(sres.err, "IllegalOrderKey"));
-    try std.testing.expect(contains(sres.err, "14.10"));
-
-    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17669", "--result-format", "json" });
-    defer {
-        _ = server.child.kill() catch {};
-    }
-    std.Thread.sleep(300 * std.time.ns_per_ms);
-
-    const qres = try run(&.{ exe, q, "--server", "127.0.0.1:17669", "--quic", "--format", "json" });
-    defer std.testing.allocator.free(qres.out);
-    defer std.testing.allocator.free(qres.err);
-    try std.testing.expectEqual(@as(i32, 2), qres.code);
-    try std.testing.expect(contains(qres.err, "IllegalOrderKey"));
-    try std.testing.expect(contains(qres.err, "14.10"));
+    try testing.expect(qres.error_code != null);
+    try testing.expect(gres.error_code != null);
+    try testing.expect(std.mem.indexOf(u8, qres.error_message orelse "", "IllegalOrderKey") != null);
+    try testing.expect(std.mem.indexOf(u8, gres.error_message orelse "", "IllegalOrderKey") != null);
 }

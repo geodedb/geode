@@ -1,5 +1,4 @@
-#!/usr/bin/env nix-shell
-#! nix-shell -i bash -p bash -p coreutils
+#!/usr/bin/env bash
 # Comprehensive Graph Database Integration Test
 # Systematically tests all graph database features and identifies issues to fix
 

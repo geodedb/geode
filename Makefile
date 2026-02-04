@@ -37,7 +37,7 @@ endif
 
 # Default target - build everything including cross-compilation checks (non-blocking)
 # Note: Integration tests (geodetestlab) moved to ../geode-test-harness
-all: sub build test cross-test no-feature-flags status-generate
+all: sub build test fuzz bench cross-compile cross-test no-feature-flags status-generate quic-smoke-strict transport-parity-smokes
 
 # Help target - show all available targets
 help:

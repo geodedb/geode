@@ -1,5 +1,4 @@
-#!/usr/bin/env nix-shell
-#! nix-shell -i bash -p bash -p coreutils
+#!/usr/bin/env bash
 # Simple Database Test to debug issues
 
 set -e

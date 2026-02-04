@@ -447,7 +447,7 @@ test "GAP-0193: MultiGraphSupport - USE GRAPH statement" {
     try testing.expect(result.program.statements.len > 0);
 }
 
-// CANARY: REQ=REQ-MULTI-GRAPH-002; FEATURE="MultiGraphSupport"; ASPECT=PerGraphStorage; STATUS=TESTED; OWNER=engine; UPDATED=2026-01-15
+// CANARY: REQ=REQ-MULTI-GRAPH-002; FEATURE="MultiGraphSupport"; ASPECT=PerGraphStore; STATUS=TESTED; OWNER=engine; UPDATED=2026-01-15
 test "GAP-0193: MultiGraphSupport - Per-graph storage verification" {
     var result = try geode.parse(testing.allocator, "CREATE GRAPH IF NOT EXISTS storage_test_graph", .{});
     defer result.deinit();

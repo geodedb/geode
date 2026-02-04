@@ -157,6 +157,8 @@ pub const Env = struct {
     owned: bool = false,
     /// Reference to TimeSeries store (GAP-004 wiring)
     timeseries_store: ?*const @import("timeseries/timeseries.zig").Store = null,
+    /// Optional opaque execution context pointer for subquery evaluation
+    exec_context: ?*anyopaque = null,
 
     /// Lookup a variable by name, checking regular bindings first, then parameters
     pub fn get(self: Env, name: []const u8) ?Value {
@@ -232,6 +234,7 @@ pub const Env = struct {
             .allocator = allocator,
             .owned = true, // New Env owns its newly allocated arrays
             .timeseries_store = self.timeseries_store,
+            .exec_context = self.exec_context,
         };
     }
 };

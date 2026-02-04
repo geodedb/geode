@@ -18,7 +18,7 @@ pub const EdgeId = graph_common.EdgeId;
 pub const PropertyValue = graph_common.PropertyValue;
 pub const Node = graph_common.Node;
 pub const Edge = graph_common.Edge;
-pub const GraphStorage = graph_common.GraphStorage;
+pub const GraphStore = graph_common.GraphStore;
 pub const Binding = graph_common.Binding;
 pub const BindingValue = graph_common.BindingValue;
 pub const MatchOptions = graph_common.MatchOptions;
@@ -41,7 +41,7 @@ pub const IndexOptimizer = struct {
     ) ScanPlan,
     executeOptimizedScanFn: *const fn (
         ctx: *anyopaque,
-        graph: *const GraphStorage,
+        graph: *const GraphStore,
         plan: ScanPlan,
         labels: []const []const u8,
         var_name: ?[]const u8,
@@ -62,7 +62,7 @@ pub const IndexOptimizer = struct {
 
     pub fn executeOptimizedScan(
         self: *IndexOptimizer,
-        graph: *const GraphStorage,
+        graph: *const GraphStore,
         plan: ScanPlan,
         labels: []const []const u8,
         var_name: ?[]const u8,
@@ -89,7 +89,7 @@ fn propertyValuesEqual(a: PropertyValue, b: PropertyValue) bool {
 // NodeScan operator - scan all nodes with optional label filter
 pub fn nodeScan(
     allocator: std.mem.Allocator,
-    graph: *const GraphStorage,
+    graph: *const GraphStore,
     labels: []const []const u8,
     var_name: ?[]const u8,
     // Optional single property predicate (key,value) for equality filtering.
@@ -144,7 +144,7 @@ pub fn nodeScan(
 // Index-aware node scan that delegates to IndexOptimizer
 pub fn indexAwareNodeScan(
     _: std.mem.Allocator,
-    graph: *const GraphStorage,
+    graph: *const GraphStore,
     index_optimizer: *IndexOptimizer,
     labels: []const []const u8,
     var_name: ?[]const u8,
@@ -158,7 +158,7 @@ pub fn indexAwareNodeScan(
 // Expand operator - traverse edges from a node
 pub fn expand(
     allocator: std.mem.Allocator,
-    graph: *const GraphStorage,
+    graph: *const GraphStore,
     bindings: []const Binding,
     _: []const u8, // source_var
     edge_types: []const []const u8,
@@ -224,7 +224,7 @@ pub fn expand(
 // Execute MATCH query with full pattern matching
 pub fn executeMatch(
     allocator: std.mem.Allocator,
-    graph: *const GraphStorage,
+    graph: *const GraphStore,
     query: *const ast.Query,
     where_clause: ?ast.Expr,
     opts_opt: ?MatchOptions,
@@ -287,7 +287,7 @@ pub fn executeWith(
     input_bindings: []const Binding,
     with_clause: ast.WithClause,
     where_clause: ?ast.Expr,
-    graph: *const GraphStorage,
+    graph: *const GraphStore,
 ) ![]Binding {
     _ = graph;
 
@@ -839,164 +839,4 @@ fn evaluateExpressionInBinding(
         // Other complex expressions (Binary, Unary, etc.) return null as they require full evaluation context.
         else => .Null,
     };
-}
-
-// Convert bindings to JSON format
-pub fn bindingsToJson(allocator: std.mem.Allocator, bindings: []const Binding, ret_items: []const ast.ReturnItem, graph: *const GraphStorage) ![]u8 {
-    _ = graph; // Graph parameter not needed for current implementation
-    var result = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
-    defer result.deinit(allocator);
-
-    try result.append(allocator, '[');
-
-    for (bindings, 0..) |binding, i| {
-        if (i > 0) try result.appendSlice(allocator, ", ");
-
-        try result.append(allocator, '{');
-
-        // Process each return item to get the correct property values
-        for (ret_items, 0..) |ret_item, j| {
-            if (j > 0) try result.appendSlice(allocator, ", ");
-
-            // Get the column name (alias or expression name)
-            const alias = ret_item.alias orelse getExpressionName(allocator, ret_item.expr);
-
-            try result.append(allocator, '"');
-            try result.appendSlice(allocator, alias);
-            try result.appendSlice(allocator, "\": ");
-
-            // Evaluate the return expression in the binding context
-            const value = try evaluateExpressionInBinding(allocator, ret_item.expr, &binding);
-
-            // Serialize the evaluated value
-            switch (value) {
-                .Property => |prop| {
-                    switch (prop) {
-                        .String => |s| {
-                            try result.append(allocator, '"');
-                            try result.appendSlice(allocator, s);
-                            try result.append(allocator, '"');
-                        },
-                        .Int => |n| try result.writer(allocator).print("{d}", .{n}),
-                        .Float => |f| try result.writer(allocator).print("{d}", .{f}),
-                        .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
-                        .Null => try result.appendSlice(allocator, "null"),
-                        .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
-                        .ExtValue => |ext| switch (ext) {
-                            .Str => |s| {
-                                try result.append(allocator, '"');
-                                try result.appendSlice(allocator, s);
-                                try result.append(allocator, '"');
-                            },
-                            .Int => |n| try result.writer(allocator).print("{d}", .{n}),
-                            .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
-                            .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
-                            .VectorF32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
-                            .VectorI32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
-                            else => try result.appendSlice(allocator, "\"<ext>\""),
-                        },
-                    }
-                },
-                .Value => |prop| {
-                    switch (prop) {
-                        .String => |s| {
-                            try result.append(allocator, '"');
-                            try result.appendSlice(allocator, s);
-                            try result.append(allocator, '"');
-                        },
-                        .Int => |n| try result.writer(allocator).print("{d}", .{n}),
-                        .Float => |f| try result.writer(allocator).print("{d}", .{f}),
-                        .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
-                        .Null => try result.appendSlice(allocator, "null"),
-                        .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
-                        .ExtValue => |ext| switch (ext) {
-                            .Str => |s| {
-                                try result.append(allocator, '"');
-                                try result.appendSlice(allocator, s);
-                                try result.append(allocator, '"');
-                            },
-                            .Int => |n| try result.writer(allocator).print("{d}", .{n}),
-                            .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
-                            .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
-                            .VectorF32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
-                            .VectorI32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
-                            else => try result.appendSlice(allocator, "\"<ext>\""),
-                        },
-                    }
-                },
-                .Node => |node| {
-                    // For nodes that weren't converted to properties, show basic info including properties
-                    try result.append(allocator, '{');
-                    try result.appendSlice(allocator, "\"id\": ");
-                    try result.writer(allocator).print("{d}", .{node.*.id});
-                    try result.appendSlice(allocator, ", \"labels\": [");
-                    for (node.*.labels, 0..) |label, k| {
-                        if (k > 0) try result.appendSlice(allocator, ", ");
-                        try result.append(allocator, '"');
-                        try result.appendSlice(allocator, label);
-                        try result.append(allocator, '"');
-                    }
-                    try result.appendSlice(allocator, "], \"properties\": {");
-
-                    // Add node properties
-                    var prop_iter = node.*.properties.iterator();
-                    var prop_count: usize = 0;
-                    while (prop_iter.next()) |prop_entry| {
-                        if (prop_count > 0) try result.appendSlice(allocator, ", ");
-                        try result.append(allocator, '"');
-                        try result.appendSlice(allocator, prop_entry.key_ptr.*);
-                        try result.appendSlice(allocator, "\": ");
-
-                        // Serialize property value
-                        switch (prop_entry.value_ptr.*) {
-                            .String => |s| {
-                                try result.append(allocator, '"');
-                                try result.appendSlice(allocator, s);
-                                try result.append(allocator, '"');
-                            },
-                            .Int => |n| try result.writer(allocator).print("{d}", .{n}),
-                            .Float => |f| try result.writer(allocator).print("{d}", .{f}),
-                            .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
-                            .Null => try result.appendSlice(allocator, "null"),
-                            .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
-                            .ExtValue => |ext| switch (ext) {
-                                .Str => |s| {
-                                    try result.append(allocator, '"');
-                                    try result.appendSlice(allocator, s);
-                                    try result.append(allocator, '"');
-                                },
-                                .Int => |n| try result.writer(allocator).print("{d}", .{n}),
-                                .Bool => |b| try result.appendSlice(allocator, if (b) "true" else "false"),
-                                .Decimal => |d| try result.writer(allocator).print("{d}", .{d.coeff}),
-                                .VectorF32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
-                                .VectorI32 => |v| try result.writer(allocator).print("[vector:{d}x{d}]", .{ v.dim, v.data.len }),
-                                else => try result.appendSlice(allocator, "\"<ext>\""),
-                            },
-                        }
-                        prop_count += 1;
-                    }
-
-                    try result.appendSlice(allocator, "}}");
-                },
-                .Edge => |edge| {
-                    // For edges that weren't converted to properties, show basic info
-                    try result.append(allocator, '{');
-                    try result.appendSlice(allocator, "\"id\": ");
-                    try result.writer(allocator).print("{d}", .{edge.id});
-                    try result.appendSlice(allocator, ", \"source\": ");
-                    try result.writer(allocator).print("{d}", .{edge.from_id});
-                    try result.appendSlice(allocator, ", \"target\": ");
-                    try result.writer(allocator).print("{d}", .{edge.to_id});
-                    try result.append(allocator, '}');
-                },
-                .Null => try result.appendSlice(allocator, "null"),
-                .Path => try result.appendSlice(allocator, "[]"),
-            }
-        }
-
-        try result.append(allocator, '}');
-    }
-
-    try result.append(allocator, ']');
-    return result.toOwnedSlice(allocator);
 }

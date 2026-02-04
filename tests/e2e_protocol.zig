@@ -31,10 +31,23 @@ test "protocol: Valid ORDER/LIMIT" {
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
-    // Updated expected: SCHEMA now includes flagger_findings, BINDINGS unchanged for deterministic baseline
-    const expected_prefix = "{\"status_class\":\"00000\",\"result\":{\"type\":\"SCHEMA\",\"columns\":[{\"name\":\"x\",\"type\":\"INT\"}],\"flagger_findings\":[\"I:IllegalOrderKeyPolicy=ident-only\"]}}\n";
-    const expected_suffix = "{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"ordered\":true,\"order_keys\":[\"x\"],\"rows\":[{\"x\":1}],\"flagger_findings\":[\"I:IllegalOrderKeyPolicy=ident-only\"]}}\n";
-    try std.testing.expect(std.mem.eql(u8, res.out, expected_prefix ++ expected_suffix));
+    const trimmed = std.mem.trim(u8, res.out, " \n\r\t");
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, trimmed, .{});
+    defer parsed.deinit();
+    const obj = parsed.value.object;
+    try std.testing.expectEqualStrings("00000", obj.get("status_class").?.string);
+    try std.testing.expect(obj.get("ordered").?.bool);
+    try std.testing.expect(obj.get("order_keys").?.array.items.len == 1);
+    try std.testing.expect(std.mem.eql(u8, obj.get("order_keys").?.array.items[0].string, "x"));
+    try std.testing.expect(obj.get("columns").?.array.items.len == 1);
+    try std.testing.expect(obj.get("rows").?.array.items.len == 1);
+    const row = obj.get("rows").?.array.items[0].object;
+    try std.testing.expect(row.get("x").?.integer == 1);
+    if (obj.get("flagger_findings")) |ff| {
+        if (ff.array.items.len > 0) {
+            try std.testing.expect(std.mem.indexOf(u8, ff.array.items[0].string, "IllegalOrderKeyPolicy") != null);
+        }
+    }
 }
 
 test "protocol: Invalid LIMIT+OFFSET without ORDER (US001)" {
@@ -74,13 +87,17 @@ test "protocol: Set operation ALL (UNION ALL) duplicate preserved" {
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
-    // Expect two occurrences of {"x":1}
+    const trimmed = std.mem.trim(u8, res.out, " \n\r\t");
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, trimmed, .{});
+    defer parsed.deinit();
+    const rows = parsed.value.object.get("rows").?.array.items;
     var count: usize = 0;
-    var it = std.mem.splitScalar(u8, res.out, '\n');
-    while (it.next()) |line| {
-        if (std.mem.indexOf(u8, line, "{\"x\":1}") != null) count += 1;
+    for (rows) |row_val| {
+        if (row_val.object.get("x")) |xval| {
+            if (xval == .integer and xval.integer == 1) count += 1;
+        }
     }
-    try std.testing.expect(count >= 2); // at least two rows
+    try std.testing.expect(count >= 2);
 }
 
 test "protocol: text format simple query" {

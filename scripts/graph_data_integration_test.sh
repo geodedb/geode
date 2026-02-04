@@ -1,5 +1,4 @@
-#!/usr/bin/env nix-shell
-#! nix-shell -i bash -p bash -p coreutils
+#!/usr/bin/env bash
 # Comprehensive Graph Data Integration Tests for Geode
 # Tests actual graph database functionality: vertex/edge creation, properties, traversal, etc.
 

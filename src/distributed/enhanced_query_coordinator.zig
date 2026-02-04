@@ -6,6 +6,7 @@ const protocol = @import("../protocol.zig");
 const federation = @import("federation.zig");
 const query_transport = @import("query_transport.zig");
 const network_transport = @import("network_transport.zig");
+const value_utilities = @import("../execution/value_utilities.zig");
 
 /// Enhanced distributed query coordinator with optimization and monitoring
 pub const EnhancedQueryCoordinator = struct {
@@ -58,6 +59,7 @@ pub const EnhancedQueryCoordinator = struct {
 
         // Check query cache first
         const query_hash = try self.cache.hashQuery(query, params);
+        defer self.allocator.free(query_hash);
         if (options.use_cache) {
             if (try self.cache.get(query_hash)) |cached_result| {
                 self.metrics.recordCacheHit();
@@ -210,28 +212,51 @@ pub const EnhancedQueryCoordinator = struct {
             total_rows += result.rows.len;
         }
 
-        // Apply limit early if specified
-        const effective_limit = if (options.limit) |limit| @min(limit, total_rows) else total_rows;
+        const start = options.offset orelse 0;
+        const end = if (options.limit) |limit| @min(start + limit, total_rows) else total_rows;
 
-        var all_rows = try self.allocator.alloc(protocol.BindingRow, effective_limit);
-        var idx: usize = 0;
-
-        for (shard_results) |result| {
-            for (result.rows) |row| {
-                if (idx >= effective_limit) break;
-                all_rows[idx] = row;
-                idx += 1;
+        const schema_source = blk: {
+            for (shard_results) |result| {
+                if (result.schema.len > 0) break :blk result.schema;
             }
-            if (idx >= effective_limit) break;
+            break :blk &.{};
+        };
+        const schema_copy = if (schema_source.len > 0) try cloneSchema(self.allocator, schema_source) else &.{};
+        errdefer if (schema_copy.len > 0) freeSchema(self.allocator, schema_copy);
+
+        if (start >= total_rows or end <= start) {
+            return federation.QueryResults{
+                .rows = &.{},
+                .schema = schema_copy,
+                .execution_time_ms = 0,
+                .ordered = false,
+            };
         }
 
-        // Apply offset
-        const start = options.offset orelse 0;
-        const end = @min(start + all_rows.len, all_rows.len);
+        const out_len = end - start;
+        var out_rows = try self.allocator.alloc(protocol.BindingRow, out_len);
+        var out_idx: usize = 0;
+        errdefer {
+            for (out_rows[0..out_idx]) |row| freeBindingRow(self.allocator, row);
+            self.allocator.free(out_rows);
+        }
+
+        var global_idx: usize = 0;
+        for (shard_results) |result| {
+            for (result.rows) |row| {
+                if (global_idx >= start and global_idx < end) {
+                    out_rows[out_idx] = try cloneBindingRow(self.allocator, row);
+                    out_idx += 1;
+                }
+                global_idx += 1;
+                if (global_idx >= end) break;
+            }
+            if (global_idx >= end) break;
+        }
 
         return federation.QueryResults{
-            .rows = if (start < all_rows.len) all_rows[start..end] else &.{},
-            .schema = if (shard_results.len > 0) shard_results[0].schema else &.{},
+            .rows = out_rows,
+            .schema = schema_copy,
             .execution_time_ms = 0,
             .ordered = false,
         };
@@ -244,10 +269,28 @@ pub const EnhancedQueryCoordinator = struct {
         options: QueryOptions,
     ) !federation.QueryResults {
         var seen_rows = std.StringHashMap(void).init(self.allocator);
-        defer seen_rows.deinit();
+        defer {
+            var it = seen_rows.iterator();
+            while (it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+            }
+            seen_rows.deinit();
+        }
 
         var unique_rows = std.ArrayList(protocol.BindingRow).init(self.allocator);
-        defer unique_rows.deinit();
+        errdefer {
+            for (unique_rows.items) |row| freeBindingRow(self.allocator, row);
+            unique_rows.deinit();
+        }
+
+        const schema_source = blk: {
+            for (shard_results) |result| {
+                if (result.schema.len > 0) break :blk result.schema;
+            }
+            break :blk &.{};
+        };
+        const schema_copy = if (schema_source.len > 0) try cloneSchema(self.allocator, schema_source) else &.{};
+        errdefer if (schema_copy.len > 0) freeSchema(self.allocator, schema_copy);
 
         for (shard_results) |result| {
             for (result.rows) |row| {
@@ -255,8 +298,10 @@ pub const EnhancedQueryCoordinator = struct {
                 const row_hash = try self.hashRow(row);
 
                 const gop = try seen_rows.getOrPut(row_hash);
-                if (!gop.found_existing) {
-                    try unique_rows.append(row);
+                if (gop.found_existing) {
+                    self.allocator.free(row_hash);
+                } else {
+                    try unique_rows.append(try cloneBindingRow(self.allocator, row));
 
                     // Apply limit
                     if (options.limit) |limit| {
@@ -265,21 +310,38 @@ pub const EnhancedQueryCoordinator = struct {
                         }
                     }
                 }
-
-                self.allocator.free(row_hash);
             }
         }
 
-        // Apply offset
         const start = options.offset orelse 0;
-        const rows_slice = if (start < unique_rows.items.len)
-            unique_rows.items[start..]
-        else
-            &.{};
+        const end = if (options.limit) |limit| @min(start + limit, unique_rows.items.len) else unique_rows.items.len;
+
+        if (start >= unique_rows.items.len or end <= start) {
+            for (unique_rows.items) |row| freeBindingRow(self.allocator, row);
+            unique_rows.items.len = 0;
+            return federation.QueryResults{
+                .rows = &.{},
+                .schema = schema_copy,
+                .execution_time_ms = 0,
+                .ordered = false,
+            };
+        }
+
+        if (start > 0 or end < unique_rows.items.len) {
+            for (unique_rows.items[0..start]) |row| freeBindingRow(self.allocator, row);
+            for (unique_rows.items[end..]) |row| freeBindingRow(self.allocator, row);
+            const out_len = end - start;
+            if (start > 0) {
+                std.mem.copyForwards(protocol.BindingRow, unique_rows.items[0..out_len], unique_rows.items[start..end]);
+            }
+            unique_rows.items.len = out_len;
+        }
+
+        const rows_slice = try unique_rows.toOwnedSlice();
 
         return federation.QueryResults{
-            .rows = try self.allocator.dupe(protocol.BindingRow, rows_slice),
-            .schema = if (shard_results.len > 0) shard_results[0].schema else &.{},
+            .rows = rows_slice,
+            .schema = schema_copy,
             .execution_time_ms = 0,
             .ordered = false,
         };
@@ -329,11 +391,14 @@ pub const EnhancedQueryCoordinator = struct {
         }
 
         var merged_rows = std.ArrayList(protocol.BindingRow).init(self.allocator);
-        defer merged_rows.deinit();
+        errdefer {
+            for (merged_rows.items) |row| freeBindingRow(self.allocator, row);
+            merged_rows.deinit();
+        }
 
         // Extract elements in sorted order
         while (merger.heap.removeOrNull()) |item| {
-            try merged_rows.append(item.row);
+            try merged_rows.append(try cloneBindingRow(self.allocator, item.row));
 
             // Add next element from same shard if available
             const next_index = item.row_index + 1;
@@ -353,16 +418,44 @@ pub const EnhancedQueryCoordinator = struct {
             }
         }
 
-        // Apply offset
+        const schema_source = blk: {
+            for (shard_results) |result| {
+                if (result.schema.len > 0) break :blk result.schema;
+            }
+            break :blk &.{};
+        };
+        const schema_copy = if (schema_source.len > 0) try cloneSchema(self.allocator, schema_source) else &.{};
+        errdefer if (schema_copy.len > 0) freeSchema(self.allocator, schema_copy);
+
         const start = options.offset orelse 0;
-        const rows_slice = if (start < merged_rows.items.len)
-            merged_rows.items[start..]
-        else
-            &.{};
+        const end = if (options.limit) |limit| @min(start + limit, merged_rows.items.len) else merged_rows.items.len;
+
+        if (start >= merged_rows.items.len or end <= start) {
+            for (merged_rows.items) |row| freeBindingRow(self.allocator, row);
+            merged_rows.items.len = 0;
+            return federation.QueryResults{
+                .rows = &.{},
+                .schema = schema_copy,
+                .execution_time_ms = 0,
+                .ordered = true,
+            };
+        }
+
+        if (start > 0 or end < merged_rows.items.len) {
+            for (merged_rows.items[0..start]) |row| freeBindingRow(self.allocator, row);
+            for (merged_rows.items[end..]) |row| freeBindingRow(self.allocator, row);
+            const out_len = end - start;
+            if (start > 0) {
+                std.mem.copyForwards(protocol.BindingRow, merged_rows.items[0..out_len], merged_rows.items[start..end]);
+            }
+            merged_rows.items.len = out_len;
+        }
+
+        const rows_slice = try merged_rows.toOwnedSlice();
 
         return federation.QueryResults{
-            .rows = try self.allocator.dupe(protocol.BindingRow, rows_slice),
-            .schema = if (shard_results.len > 0) shard_results[0].schema else &.{},
+            .rows = rows_slice,
+            .schema = schema_copy,
             .execution_time_ms = 0,
             .ordered = true,
         };
@@ -379,39 +472,51 @@ pub const EnhancedQueryCoordinator = struct {
         // Simple aggregation placeholder
         // In practice, would implement sophisticated aggregation merging
         var groups = std.StringHashMap(AggregateGroup).init(self.allocator);
-        defer groups.deinit();
+        defer {
+            var it = groups.iterator();
+            while (it.next()) |entry| {
+                freeBindingRow(self.allocator, entry.value_ptr.representative_row);
+                self.allocator.free(entry.key_ptr.*);
+            }
+            groups.deinit();
+        }
 
         for (shard_results) |result| {
             for (result.rows) |row| {
                 const group_key = try self.hashRow(row);
-                defer self.allocator.free(group_key);
-
                 const gop = try groups.getOrPut(group_key);
-                if (!gop.found_existing) {
+                if (gop.found_existing) {
+                    self.allocator.free(group_key);
+                    gop.value_ptr.count += 1;
+                    // Update aggregates
+                } else {
                     gop.value_ptr.* = AggregateGroup{
                         .count = 1,
                         .sum = 0, // Would extract from row
-                        .representative_row = row,
+                        .representative_row = try cloneBindingRow(self.allocator, row),
                     };
-                } else {
-                    gop.value_ptr.count += 1;
-                    // Update aggregates
                 }
             }
         }
 
         // Convert groups back to rows
         var aggregated_rows = std.ArrayList(protocol.BindingRow).init(self.allocator);
-        defer aggregated_rows.deinit();
+        errdefer {
+            for (aggregated_rows.items) |row| freeBindingRow(self.allocator, row);
+            aggregated_rows.deinit();
+        }
 
         var iter = groups.iterator();
         while (iter.next()) |entry| {
-            try aggregated_rows.append(entry.value_ptr.representative_row);
+            try aggregated_rows.append(try cloneBindingRow(self.allocator, entry.value_ptr.representative_row));
         }
 
         return federation.QueryResults{
             .rows = try aggregated_rows.toOwnedSlice(),
-            .schema = if (shard_results.len > 0) shard_results[0].schema else &.{},
+            .schema = if (shard_results.len > 0 and shard_results[0].schema.len > 0)
+                try cloneSchema(self.allocator, shard_results[0].schema)
+            else
+                &.{},
             .execution_time_ms = 0,
             .ordered = false,
         };
@@ -436,10 +541,15 @@ pub const EnhancedQueryCoordinator = struct {
         // If total rows <= k, no need for heap selection - just collect and sort
         if (total_rows <= k) {
             var all_rows = std.ArrayList(protocol.BindingRow).init(self.allocator);
-            defer all_rows.deinit();
+            errdefer {
+                for (all_rows.items) |row| freeBindingRow(self.allocator, row);
+                all_rows.deinit();
+            }
 
             for (shard_results) |result| {
-                try all_rows.appendSlice(result.rows);
+                for (result.rows) |row| {
+                    try all_rows.append(try cloneBindingRow(self.allocator, row));
+                }
             }
 
             // GAP-0130: Sort using ORDER BY keys if provided
@@ -453,12 +563,41 @@ pub const EnhancedQueryCoordinator = struct {
             const start = options.offset orelse 0;
             const end = @min(start + (options.limit orelse all_rows.items.len), all_rows.items.len);
 
+            const schema_source = blk: {
+                for (shard_results) |result| {
+                    if (result.schema.len > 0) break :blk result.schema;
+                }
+                break :blk &.{};
+            };
+            const schema_copy = if (schema_source.len > 0) try cloneSchema(self.allocator, schema_source) else &.{};
+            errdefer if (schema_copy.len > 0) freeSchema(self.allocator, schema_copy);
+
+            if (start >= all_rows.items.len or end <= start) {
+                for (all_rows.items) |row| freeBindingRow(self.allocator, row);
+                all_rows.items.len = 0;
+                return federation.QueryResults{
+                    .rows = &.{},
+                    .schema = schema_copy,
+                    .execution_time_ms = 0,
+                    .ordered = true,
+                };
+            }
+
+            if (start > 0 or end < all_rows.items.len) {
+                for (all_rows.items[0..start]) |row| freeBindingRow(self.allocator, row);
+                for (all_rows.items[end..]) |row| freeBindingRow(self.allocator, row);
+                const out_len = end - start;
+                if (start > 0) {
+                    std.mem.copyForwards(protocol.BindingRow, all_rows.items[0..out_len], all_rows.items[start..end]);
+                }
+                all_rows.items.len = out_len;
+            }
+
+            const rows_slice = try all_rows.toOwnedSlice();
+
             return federation.QueryResults{
-                .rows = if (start < all_rows.items.len)
-                    try self.allocator.dupe(protocol.BindingRow, all_rows.items[start..end])
-                else
-                    &.{},
-                .schema = if (shard_results.len > 0) shard_results[0].schema else &.{},
+                .rows = rows_slice,
+                .schema = schema_copy,
                 .execution_time_ms = 0,
                 .ordered = true,
             };
@@ -522,6 +661,11 @@ pub const EnhancedQueryCoordinator = struct {
             .ascending_heap = primary_ascending,
         });
         defer heap.deinit();
+        errdefer {
+            while (heap.removeOrNull()) |row| {
+                freeBindingRow(self.allocator, row);
+            }
+        }
 
         // Reserve capacity for k elements
         try heap.ensureTotalCapacity(k);
@@ -530,7 +674,7 @@ pub const EnhancedQueryCoordinator = struct {
         for (shard_results) |result| {
             for (result.rows) |row| {
                 if (heap.count() < k) {
-                    try heap.add(row);
+                    try heap.add(try cloneBindingRow(self.allocator, row));
                 } else {
                     // Compare with top of heap (the "worst" of current top-k)
                     const top = heap.peek().?;
@@ -541,8 +685,11 @@ pub const EnhancedQueryCoordinator = struct {
                     // If new row is better than top, replace top
                     const cmp = HeapContext.compare(ctx, row, top);
                     if (cmp == .gt) {
-                        _ = heap.removeOrNull();
-                        try heap.add(row);
+                        const cloned = try cloneBindingRow(self.allocator, row);
+                        if (heap.removeOrNull()) |removed| {
+                            freeBindingRow(self.allocator, removed);
+                        }
+                        try heap.add(cloned);
                     }
                 }
             }
@@ -550,7 +697,10 @@ pub const EnhancedQueryCoordinator = struct {
 
         // Extract results from heap and sort them (k elements, O(k log k))
         var result_rows = std.ArrayList(protocol.BindingRow).init(self.allocator);
-        defer result_rows.deinit();
+        errdefer {
+            for (result_rows.items) |row| freeBindingRow(self.allocator, row);
+            result_rows.deinit();
+        }
 
         while (heap.removeOrNull()) |row| {
             try result_rows.append(row);
@@ -565,15 +715,44 @@ pub const EnhancedQueryCoordinator = struct {
             std.sort.heap(protocol.BindingRow, result_rows.items, {}, simpleRowCompare);
         }
 
+        const schema_source = blk: {
+            for (shard_results) |result| {
+                if (result.schema.len > 0) break :blk result.schema;
+            }
+            break :blk &.{};
+        };
+        const schema_copy = if (schema_source.len > 0) try cloneSchema(self.allocator, schema_source) else &.{};
+        errdefer if (schema_copy.len > 0) freeSchema(self.allocator, schema_copy);
+
         const start = options.offset orelse 0;
         const end = @min(start + (options.limit orelse result_rows.items.len), result_rows.items.len);
 
+        if (start >= result_rows.items.len or end <= start) {
+            for (result_rows.items) |row| freeBindingRow(self.allocator, row);
+            result_rows.items.len = 0;
+            return federation.QueryResults{
+                .rows = &.{},
+                .schema = schema_copy,
+                .execution_time_ms = 0,
+                .ordered = true,
+            };
+        }
+
+        if (start > 0 or end < result_rows.items.len) {
+            for (result_rows.items[0..start]) |row| freeBindingRow(self.allocator, row);
+            for (result_rows.items[end..]) |row| freeBindingRow(self.allocator, row);
+            const out_len = end - start;
+            if (start > 0) {
+                std.mem.copyForwards(protocol.BindingRow, result_rows.items[0..out_len], result_rows.items[start..end]);
+            }
+            result_rows.items.len = out_len;
+        }
+
+        const rows_slice = try result_rows.toOwnedSlice();
+
         return federation.QueryResults{
-            .rows = if (start < result_rows.items.len)
-                try self.allocator.dupe(protocol.BindingRow, result_rows.items[start..end])
-            else
-                &.{},
-            .schema = if (shard_results.len > 0) shard_results[0].schema else &.{},
+            .rows = rows_slice,
+            .schema = schema_copy,
             .execution_time_ms = 0,
             .ordered = true,
         };
@@ -643,7 +822,7 @@ pub const EnhancedQueryCoordinator = struct {
     /// Hash a row for deduplication
     fn hashRow(self: *EnhancedQueryCoordinator, row: protocol.BindingRow) ![]u8 {
         var hasher = std.hash_map.DefaultHasher.init();
-        for (row) |binding| {
+        for (row.cols) |binding| {
             // Simple binding hashing - would be more sophisticated in practice
             hasher.update(std.mem.asBytes(&binding));
         }
@@ -858,6 +1037,12 @@ const QueryCache = struct {
     }
 
     fn deinit(self: *QueryCache) void {
+        var it = self.cache.iterator();
+        while (it.next()) |entry| {
+            var res = entry.value_ptr.result;
+            res.deinit(self.allocator);
+            self.allocator.free(entry.key_ptr.*);
+        }
         self.cache.deinit();
     }
 
@@ -875,9 +1060,13 @@ const QueryCache = struct {
         if (self.cache.get(query_hash)) |entry| {
             const now = std.time.milliTimestamp();
             if (now - entry.timestamp < entry.ttl_ms) {
-                return entry.result;
+                return try cloneQueryResults(self.allocator, entry.result);
             } else {
-                _ = self.cache.remove(query_hash);
+                if (self.cache.fetchRemove(query_hash)) |removed| {
+                    var res = removed.value.result;
+                    res.deinit(self.allocator);
+                    self.allocator.free(removed.key);
+                }
             }
         }
 
@@ -887,8 +1076,15 @@ const QueryCache = struct {
     fn put(self: *QueryCache, query_hash: []const u8, result: federation.QueryResults, ttl_ms: u64) !void {
         if (!self.enabled) return;
 
-        try self.cache.put(query_hash, CacheEntry{
-            .result = result,
+        if (self.cache.fetchRemove(query_hash)) |removed| {
+            var res = removed.value.result;
+            res.deinit(self.allocator);
+            self.allocator.free(removed.key);
+        }
+
+        const key_copy = try self.allocator.dupe(u8, query_hash);
+        try self.cache.put(key_copy, CacheEntry{
+            .result = try cloneQueryResults(self.allocator, result),
             .timestamp = std.time.milliTimestamp(),
             .ttl_ms = ttl_ms,
         });
@@ -940,3 +1136,101 @@ const NodeInfo = struct {
     region: []const u8,
     capabilities: []const u8,
 };
+
+fn cloneBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) !protocol.BindingRow {
+    var cols = try allocator.alloc(protocol.Value, row.cols.len);
+    errdefer {
+        for (cols) |val| value_utilities.freeValue(allocator, val);
+        allocator.free(cols);
+    }
+    for (row.cols, 0..) |val, i| {
+        cols[i] = try value_utilities.duplicateValue(allocator, val);
+    }
+    return .{ .cols = cols };
+}
+
+fn freeBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) void {
+    for (row.cols) |val| {
+        value_utilities.freeValue(allocator, val);
+    }
+    if (row.cols.len > 0) allocator.free(row.cols);
+}
+
+fn cloneSchema(allocator: std.mem.Allocator, schema_defs: []const protocol.ColumnDef) ![]const protocol.ColumnDef {
+    var cols = try allocator.alloc(protocol.ColumnDef, schema_defs.len);
+    errdefer {
+        for (cols) |col| {
+            allocator.free(col.name);
+            allocator.free(col.data_type);
+        }
+        allocator.free(cols);
+    }
+    for (schema_defs, 0..) |col, i| {
+        cols[i] = .{
+            .name = try allocator.dupe(u8, col.name),
+            .data_type = try allocator.dupe(u8, col.data_type),
+        };
+    }
+    return cols;
+}
+
+fn freeSchema(allocator: std.mem.Allocator, schema_defs: []const protocol.ColumnDef) void {
+    for (schema_defs) |col| {
+        allocator.free(col.name);
+        allocator.free(col.data_type);
+    }
+    allocator.free(schema_defs);
+}
+
+fn cloneOrderKeys(allocator: std.mem.Allocator, keys: []const []const u8) ![]const []const u8 {
+    var cloned = try allocator.alloc([]const u8, keys.len);
+    errdefer {
+        for (cloned) |k| allocator.free(k);
+        allocator.free(cloned);
+    }
+    for (keys, 0..) |k, i| {
+        cloned[i] = try allocator.dupe(u8, k);
+    }
+    return cloned;
+}
+
+fn cloneOrderDirs(allocator: std.mem.Allocator, dirs: []const bool) ![]const bool {
+    var cloned = try allocator.alloc(bool, dirs.len);
+    std.mem.copyForwards(bool, cloned, dirs);
+    return cloned;
+}
+
+fn cloneQueryResults(allocator: std.mem.Allocator, result: federation.QueryResults) !federation.QueryResults {
+    var rows = try allocator.alloc(protocol.BindingRow, result.rows.len);
+    var row_idx: usize = 0;
+    errdefer {
+        for (rows[0..row_idx]) |row| freeBindingRow(allocator, row);
+        allocator.free(rows);
+    }
+    for (result.rows) |row| {
+        rows[row_idx] = try cloneBindingRow(allocator, row);
+        row_idx += 1;
+    }
+
+    const schema = if (result.schema.len > 0) try cloneSchema(allocator, result.schema) else &.{};
+    errdefer if (schema.len > 0) freeSchema(allocator, schema);
+
+    const order_keys = if (result.order_keys.len > 0) try cloneOrderKeys(allocator, result.order_keys) else &.{};
+    errdefer if (order_keys.len > 0) {
+        for (order_keys) |k| allocator.free(k);
+        allocator.free(order_keys);
+    };
+
+    const order_dirs = if (result.order_dirs.len > 0) try cloneOrderDirs(allocator, result.order_dirs) else &.{};
+    errdefer if (order_dirs.len > 0) allocator.free(order_dirs);
+
+    return federation.QueryResults{
+        .rows = rows,
+        .schema = schema,
+        .execution_time_ms = result.execution_time_ms,
+        .ordered = result.ordered,
+        .order_keys = order_keys,
+        .order_dirs = order_dirs,
+        .nulls_first = result.nulls_first,
+    };
+}

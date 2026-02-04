@@ -33,7 +33,7 @@ pub const Path = struct {
 // Expand variable-length paths from a starting node
 pub fn expandVariablePaths(
     allocator: std.mem.Allocator,
-    graph: *exec.GraphStorage,
+    graph: *exec.GraphStore,
     start_node: exec.NodeId,
     pattern: ast.RelPattern,
     end_node: ?exec.NodeId, // If specified, only return paths to this node

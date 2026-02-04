@@ -114,7 +114,7 @@ The installation script tries these mirrors in order:
 ```bash
 # Test with minimal configuration
 docker-compose -f docker-compose.test.yml up -d
-docker exec geode-test geodec "RETURN 1 AS x" --server 127.0.0.1:7567
+docker exec geode-test geode query "RETURN 1 AS x" --server 127.0.0.1:7567
 docker-compose -f docker-compose.test.yml down
 ```
 

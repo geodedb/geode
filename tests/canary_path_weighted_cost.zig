@@ -3,7 +3,7 @@ const paths = @import("../src/graph/path_algorithms.zig");
 
 // CANARY: REQ=REQ-GQL-016; FEATURE="Weighted Path Cost"; ASPECT=Planner; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_016_PathWeightedCost; OWNER=planner; UPDATED=2025-09-20
 
-// Minimal fake GraphStorage subset for test
+// Minimal fake GraphStore subset for test
 const FakeGraph = struct {
     allocator: std.mem.Allocator,
     adj: std.AutoHashMap(u64, []u64),
@@ -53,7 +53,7 @@ const FakeGraph = struct {
 };
 
 // Adapt expected interface subset
-pub const GraphStorage = FakeGraph; // alias
+pub const GraphStore = FakeGraph; // alias
 
 // Weighted shortest path test
 

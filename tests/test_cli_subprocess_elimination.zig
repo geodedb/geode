@@ -9,7 +9,6 @@ const ServerConfig = struct {
     data_dir: ?[]const u8 = null,
     cert_path: ?[]const u8 = null,
     key_path: ?[]const u8 = null,
-    force_no_tls: bool = false,
     result_format_txt: bool = false,
     server_args: [][]const u8 = &.{},
     json_params: ?std.StringHashMap([]const u8) = null,
@@ -43,7 +42,6 @@ test "CLI unified binary architecture eliminates subprocess spawning" {
         .data_dir = "/tmp/test_data",
         .cert_path = null,
         .key_path = null,
-        .force_no_tls = false,
         .result_format_txt = false,
         .server_args = &.{},
         .json_params = null,
@@ -51,8 +49,6 @@ test "CLI unified binary architecture eliminates subprocess spawning" {
 
     try testing.expect(server_config.listen_quic != null);
     try testing.expect(server_config.data_dir != null);
-    try testing.expect(server_config.force_no_tls == false);
-
     // Test ClientConfig structure
     const client_config = ClientConfig{
         .query_text = "RETURN 1 AS test",
@@ -87,7 +83,6 @@ test "Server configuration supports unified binary operation" {
         .data_dir = "/var/lib/geode",
         .cert_path = "/etc/geode/cert.pem",
         .key_path = "/etc/geode/key.pem",
-        .force_no_tls = false,
         .result_format_txt = true,
         .server_args = &.{},
         .json_params = null,
@@ -104,7 +99,6 @@ test "Server configuration supports unified binary operation" {
     const default_config = ServerConfig{};
     try testing.expect(default_config.listen_quic == null);
     try testing.expect(default_config.data_dir == null);
-    try testing.expect(default_config.force_no_tls == false);
     try testing.expect(default_config.result_format_txt == false);
 
     _ = allocator; // Suppress unused variable warning
@@ -296,7 +290,6 @@ test "Configuration validation for unified binary operation" {
         .data_dir = "/valid/path",
         .cert_path = null,
         .key_path = null,
-        .force_no_tls = false,
         .result_format_txt = false,
         .server_args = &.{},
         .json_params = null,

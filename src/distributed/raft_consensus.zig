@@ -1,6 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const txn_coordinator = @import("txn_coordinator.zig");
+const protobuf = @import("protobuf");
+const raft_schema = @import("raft_schema");
 
 const logging = @import("logging");
 const log = logging.scoped("raft");
@@ -169,17 +171,14 @@ pub const RpcClient = struct {
         self.client = null;
     }
 
-    pub fn sendMessage(self: *RpcClient, msg: Message) !void {
+    pub fn sendMessage(self: *RpcClient, from: u64, term: u64, msg: Message) !void {
         if (self.client == null) {
             var qc = quic.QuicClient.init(self.allocator);
             try qc.connect(self.host, self.port);
             self.client = qc;
             self.stream = try self.client.?.getStream();
         }
-        const payload = try std.json.stringifyAlloc(self.allocator, msg, .{});
-        defer self.allocator.free(payload);
-        try self.stream.?.writeAll(payload);
-        try self.stream.?.writeAll("\n");
+        try writeRaftFrame(self.allocator, self.stream.?, from, term, msg);
     }
 };
 
@@ -203,14 +202,13 @@ pub const Transport = struct {
         try self.server.?.listen();
     }
 
-    pub fn send(self: *Transport, peer: Peer, data: []const u8) !void {
+    pub fn send(self: *Transport, peer: Peer, from: u64, term: u64, msg: Message) !void {
         var qc = quic.QuicClient.init(self.allocator);
         defer qc.deinit();
         try qc.connect(peer.endpoint, peer.port);
         const s = try qc.getStream();
         defer s.deinit();
-        try s.writeAll(data);
-        try s.writeAll("\n");
+        try writeRaftFrame(self.allocator, s, from, term, msg);
     }
 };
 
@@ -320,62 +318,50 @@ pub const PersistentStorage = struct {
     }
 
     pub fn getLogEntries(self: *PersistentStorage, allocator: Allocator) ![]LogEntry {
-        // Read JSONL log entries file; each line: {"term":..,"index":..,"cmd":"tag"}
         var dir = try std.fs.cwd().openDir(self.data_dir, .{ .iterate = true });
         defer dir.close();
         var exists = true;
-        dir.access("log.jsonl", .{}) catch {
+        dir.access("log.pb", .{}) catch {
             exists = false;
         };
         if (!exists) return &[_]LogEntry{};
-        const file = try dir.openFile("log.jsonl", .{ .mode = .read_only });
+
+        const file = try dir.openFile("log.pb", .{ .mode = .read_only });
         defer file.close();
+
         var list = std.ArrayList(LogEntry).initCapacity(allocator, 0) catch return error.OutOfMemory;
-        defer if (false) list.deinit();
-        var buf_reader = std.io.bufferedReader(file.reader());
-        var in_stream = buf_reader.reader();
-        while (true) {
-            var line_buf = std.ArrayList(u8).init(allocator);
-            defer line_buf.deinit();
-            const res = in_stream.readUntilDelimiterArrayList(&line_buf, '\n', 1024 * 8) catch |err| switch (err) {
-                error.EndOfStream => break,
-                else => return err,
-            };
-            _ = res;
-            const line = std.mem.trim(u8, line_buf.items, " \r\n\t");
-            if (line.len == 0) continue;
-            const parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch {
-                log.warn("Skipping invalid log line", &.{
-                    Attr.string("line", line),
-                });
-                continue;
-            };
-            defer parsed.deinit();
-            const root = parsed.value;
-            if (root != .object) continue;
-            const obj = root.object;
-            const term_v = obj.get("term") orelse continue;
-            const index_v = obj.get("index") orelse continue;
-            const cmd_v = obj.get("cmd") orelse continue;
-            if (term_v != .integer or index_v != .integer or cmd_v != .string) continue;
-            const cmd_tag = cmd_v.string;
-            var command: Command = .noop;
-            if (std.mem.eql(u8, cmd_tag, "noop")) {
-                // leave as noop
-            } else if (std.mem.eql(u8, cmd_tag, "write")) {
-                command = Command{ .write = "" }; // payload omitted
-            } else if (std.mem.eql(u8, cmd_tag, "graph_mutation")) {
-                command = Command{ .graph_mutation = .{ .graph = "", .mutation_type = .create, .data = "", .txn_id = null } };
-            } else if (std.mem.eql(u8, cmd_tag, "schema_change")) {
-                command = Command{ .schema_change = .{ .operation = .create_graph, .graph = "", .schema = "" } };
-            } else if (std.mem.eql(u8, cmd_tag, "config_change")) {
-                command = Command{ .config_change = .{ .change_type = .add_server, .server_id = 0, .server_endpoint = null, .server_port = null } };
-            } else if (std.mem.eql(u8, cmd_tag, "snapshot_pointer")) {
-                command = Command{ .snapshot_pointer = .{ .last_included_index = 0, .last_included_term = 0, .size_bytes = 0, .checksum = 0 } };
-            }
-            try list.append(.{ .term = @intCast(term_v.integer), .index = @intCast(index_v.integer), .command = command, .timestamp = 0, .client_id = null, .serial_number = null });
+        errdefer {
+            for (list.items) |*entry| freeLogEntryDeep(allocator, entry);
+            list.deinit(allocator);
         }
-        return list.toOwnedSlice();
+
+        var reader = file.reader();
+        while (true) {
+            var len_buf: [4]u8 = undefined;
+            var read_len: usize = 0;
+            while (read_len < len_buf.len) {
+                const n = try reader.read(len_buf[read_len..]);
+                if (n == 0) {
+                    if (read_len == 0) return list.toOwnedSlice();
+                    return error.UnexpectedEndOfStream;
+                }
+                read_len += n;
+            }
+
+            const msg_len = std.mem.readInt(u32, &len_buf, .big);
+            if (msg_len == 0) continue;
+
+            const payload = try allocator.alloc(u8, msg_len);
+            defer allocator.free(payload);
+            try reader.readNoEof(payload);
+
+            var pb_reader: std.Io.Reader = .fixed(payload);
+            var decoded = try protobuf.decode(raft_schema.RaftLogEntry, &pb_reader, allocator);
+            defer decoded.deinit(allocator);
+
+            const entry = try protoToLogEntry(allocator, decoded);
+            try list.append(allocator, entry);
+        }
     }
 
     pub fn appendLogEntry(self: *PersistentStorage, entry: LogEntry) !void {
@@ -384,28 +370,30 @@ pub const PersistentStorage = struct {
             var dir = try std.fs.cwd().openDir(self.data_dir, .{ .iterate = true });
             defer dir.close();
             var exists2 = true;
-            dir.access("log.jsonl", .{}) catch {
+            dir.access("log.pb", .{}) catch {
                 exists2 = false;
             };
             if (!exists2) {
-                self.log_file = try dir.createFile("log.jsonl", .{ .truncate = false });
+                self.log_file = try dir.createFile("log.pb", .{ .truncate = false });
             } else {
-                self.log_file = try dir.openFile("log.jsonl", .{ .mode = .read_write });
+                self.log_file = try dir.openFile("log.pb", .{ .mode = .read_write });
             }
         }
         const f = self.log_file.?;
         try f.seekFromEnd(0);
-        var buf: [128]u8 = undefined;
-        const cmd_tag = switch (entry.command) {
-            .noop => "noop",
-            .write => "write",
-            .graph_mutation => "graph_mutation",
-            .schema_change => "schema_change",
-            .config_change => "config_change",
-            .snapshot_pointer => "snapshot_pointer",
-        };
-        const line = std.fmt.bufPrint(&buf, "{\"term\":{d},\"index\":{d},\"cmd\":\"{s}\"}\n", .{ entry.term, entry.index, cmd_tag }) catch return error.UnexpectedWriteFailure;
-        try f.writeAll(line);
+        var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(self.allocator, 256) catch return error.OutOfMemory;
+        defer aw.deinit();
+
+        var proto_entry = try logEntryToProto(self.allocator, entry);
+        defer proto_entry.deinit(self.allocator);
+
+        try protobuf.encode(&aw.writer, self.allocator, proto_entry);
+        const payload = aw.writer.buffer[0..aw.writer.end];
+
+        var len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &len_buf, @intCast(payload.len), .big);
+        try f.writeAll(&len_buf);
+        try f.writeAll(payload);
         try f.sync();
     }
 };
@@ -420,146 +408,100 @@ pub const Message = union(enum) {
     install_snapshot_response: InstallSnapshotResponse,
 };
 
-// Lightweight envelope for Raft traffic over QUIC/newline framed transport.
-// JSON shape: {"term":<u64>,"from":<u64>,"kind":"req_vote|req_vote_resp|append|append_resp|install_snapshot|install_snapshot_resp","payload":{...}}
-pub const RaftFrameKind = enum { req_vote, req_vote_resp, append, append_resp, install_snapshot, install_snapshot_resp, snapshot_chunk };
-
+// Protobuf envelope for Raft traffic over QUIC streams (length-prefixed frames).
 pub fn encodeRaftFrame(allocator: Allocator, from: u64, term: u64, msg: Message) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
-    errdefer buf.deinit(allocator);
-    var w = buf.writer(allocator);
-    const kind = switch (msg) {
-        .request_vote => "req_vote",
-        .request_vote_response => "req_vote_resp",
-        .append_entries => "append",
-        .append_entries_response => "append_resp",
-        .install_snapshot => "install_snapshot",
-        .install_snapshot_response => "install_snapshot_resp",
-    };
-    try w.print("{\"term\":{d},\"from\":{d},\"kind\":\"{s}\",\"payload\":", .{ term, from, kind });
-    switch (msg) {
-        .request_vote => |rv| try w.print("{\"term\":{d},\"candidate_id\":{d},\"last_log_index\":{d},\"last_log_term\":{d},\"pre_vote\":{s}}", .{ rv.term, rv.candidate_id, rv.last_log_index, rv.last_log_term, if (rv.pre_vote) "true" else "false" }),
-        .request_vote_response => |rvr| try w.print("{\"term\":{d},\"vote_granted\":{s},\"voter_id\":{d}}", .{ rvr.term, if (rvr.vote_granted) "true" else "false", rvr.voter_id }),
-        .append_entries => |ae| {
-            try w.print("{\"term\":{d},\"leader_id\":{d},\"prev_log_index\":{d},\"prev_log_term\":{d},\"leader_commit\":{d},\"entries\":[", .{ ae.term, ae.leader_id, ae.prev_log_index, ae.prev_log_term, ae.leader_commit });
-            for (ae.entries, 0..) |e, i| {
-                if (i > 0) try w.writeAll(",");
-                const cmd_tag = switch (e.command) {
-                    .noop => "noop",
-                    .write => "write",
-                    .graph_mutation => "graph_mutation",
-                    .schema_change => "schema_change",
-                    .config_change => "config_change",
-                    .snapshot_pointer => "snapshot_pointer",
-                };
-                try w.print("{\"term\":{d},\"index\":{d},\"cmd\":\"{s}\"}", .{ e.term, e.index, cmd_tag });
-            }
-            try w.writeAll("]}");
-        },
-        .append_entries_response => |aer| try w.print("{\"term\":{d},\"success\":{s},\"match_index\":{d}}", .{ aer.term, if (aer.success) "true" else "false", aer.match_index }),
-        .install_snapshot => |is| try w.print("{\"term\":{d},\"leader_id\":{d},\"last_included_index\":{d},\"last_included_term\":{d},\"offset\":{d},\"done\":{s}}", .{ is.term, is.leader_id, is.last_included_index, is.last_included_term, is.offset, if (is.done) "true" else "false" }),
-        .install_snapshot_response => |isr| try w.print("{\"term\":{d}}", .{isr.term}),
-    }
-    try w.writeAll("}\n");
-    return buf.toOwnedSlice();
+    var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 256) catch return error.OutOfMemory;
+    errdefer aw.deinit();
+
+    const proto_msg = try messageToProto(allocator, msg);
+    var envelope = raft_schema.RaftEnvelope{ .term = term, .from = from, .message = proto_msg };
+    defer envelope.deinit(allocator);
+
+    try protobuf.encode(&aw.writer, allocator, envelope);
+    const out = try allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
+    aw.deinit();
+    return out;
 }
 
 pub const DecodedRaftFrame = struct {
     term: u64,
     from: u64,
     body: Message,
-    // deinit placeholder (currently no heap inside except maybe in message entries arrays which are borrowed)
-    pub fn deinit(self: DecodedRaftFrame, _: Allocator) void {
-        _ = self;
+
+    pub fn deinit(self: DecodedRaftFrame, allocator: Allocator) void {
+        var msg = self.body;
+        freeMessage(allocator, &msg);
     }
 };
 
-pub fn decodeRaftFrame(allocator: Allocator, line: []const u8) !DecodedRaftFrame {
-    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, line, .{});
-    defer parsed.deinit();
-    const root = parsed.value;
-    if (root != .object) return error.InvalidFrame;
-    const obj = root.object;
-    const term_v = obj.get("term") orelse return error.InvalidFrame;
-    const from_v = obj.get("from") orelse return error.InvalidFrame;
-    const kind_v = obj.get("kind") orelse return error.InvalidFrame;
-    const payload_v = obj.get("payload") orelse return error.InvalidFrame;
-    if (term_v != .integer or from_v != .integer or kind_v != .string or payload_v != .object) return error.InvalidFrame;
-    const term: u64 = @intCast(term_v.integer);
-    const from: u64 = @intCast(from_v.integer);
-    const kind_str = kind_v.string;
-    // We translate payload object back to Message union by matching kind string.
-    if (std.mem.eql(u8, kind_str, "req_vote")) {
-        const po = payload_v.object;
-        const rv = RequestVote{
-            .term = @intCast((po.get("term") orelse return error.InvalidFrame).integer),
-            .candidate_id = @intCast((po.get("candidate_id") orelse return error.InvalidFrame).integer),
-            .last_log_index = @intCast((po.get("last_log_index") orelse return error.InvalidFrame).integer),
-            .last_log_term = @intCast((po.get("last_log_term") orelse return error.InvalidFrame).integer),
-            .pre_vote = if (po.get("pre_vote")) |pv| pv == .bool and pv.bool else false,
-        };
-        return DecodedRaftFrame{ .term = term, .from = from, .body = .{ .request_vote = rv } };
-    } else if (std.mem.eql(u8, kind_str, "req_vote_resp")) {
-        const po = payload_v.object;
-        const rvr = RequestVoteResponse{
-            .term = @intCast((po.get("term") orelse return error.InvalidFrame).integer),
-            .vote_granted = if (po.get("vote_granted") orelse return error.InvalidFrame) |vg| vg == .bool and vg.bool else false,
-            .voter_id = @intCast((po.get("voter_id") orelse return error.InvalidFrame).integer),
-        };
-        return DecodedRaftFrame{ .term = term, .from = from, .body = .{ .request_vote_response = rvr } };
-    } else if (std.mem.eql(u8, kind_str, "append")) {
-        const po = payload_v.object;
-        var entries: []LogEntry = &[_]LogEntry{};
-        if (po.get("entries")) |ev| ev: {
-            if (ev != .array) break :ev;
-            const arr = ev.array.items;
-            var tmp = try allocator.alloc(LogEntry, arr.len);
-            errdefer allocator.free(tmp);
-            for (arr, 0..) |item, i| {
-                if (item != .object) return error.InvalidFrame;
-                const io = item.object;
-                const term_i = io.get("term") orelse return error.InvalidFrame;
-                const index_i = io.get("index") orelse return error.InvalidFrame;
-                if (term_i != .integer or index_i != .integer) return error.InvalidFrame;
-                tmp[i] = LogEntry{ .term = @intCast(term_i.integer), .index = @intCast(index_i.integer), .command = .noop, .timestamp = 0, .client_id = null, .serial_number = null };
+pub fn decodeRaftFrame(allocator: Allocator, payload: []const u8) !DecodedRaftFrame {
+    var reader: std.Io.Reader = .fixed(payload);
+    var decoded = try protobuf.decode(raft_schema.RaftEnvelope, &reader, allocator);
+    defer decoded.deinit(allocator);
+
+    const msg = decoded.message orelse return error.InvalidFrame;
+    const body = try protoToMessage(allocator, msg);
+    return DecodedRaftFrame{ .term = decoded.term, .from = decoded.from, .body = body };
+}
+
+pub fn writeRaftFrame(allocator: Allocator, stream: anytype, from: u64, term: u64, msg: Message) !void {
+    const payload = try encodeRaftFrame(allocator, from, term, msg);
+    defer allocator.free(payload);
+
+    var len_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &len_buf, @intCast(payload.len), .big);
+    try stream.writeAll(&len_buf);
+    try stream.writeAll(payload);
+}
+
+pub fn readRaftFrame(allocator: Allocator, stream: anytype) !DecodedRaftFrame {
+    var len_buf: [4]u8 = undefined;
+    var read_len: usize = 0;
+    var retry_count: usize = 0;
+    const max_retries: usize = 200;
+
+    while (read_len < len_buf.len) {
+        const n = stream.read(len_buf[read_len..]) catch |err| {
+            if (err == error.WouldBlock) {
+                retry_count += 1;
+                if (retry_count >= max_retries) return error.WouldBlock;
+                std.Thread.sleep(5 * std.time.ns_per_ms);
+                continue;
             }
-            entries = tmp;
+            return err;
+        };
+        if (n == 0) {
+            if (read_len == 0) return error.EndOfStream;
+            return error.UnexpectedEndOfStream;
         }
-        const ae = AppendEntries{
-            .term = @intCast((po.get("term") orelse return error.InvalidFrame).integer),
-            .leader_id = @intCast((po.get("leader_id") orelse return error.InvalidFrame).integer),
-            .prev_log_index = @intCast((po.get("prev_log_index") orelse return error.InvalidFrame).integer),
-            .prev_log_term = @intCast((po.get("prev_log_term") orelse return error.InvalidFrame).integer),
-            .entries = entries,
-            .leader_commit = @intCast((po.get("leader_commit") orelse return error.InvalidFrame).integer),
-        };
-        return DecodedRaftFrame{ .term = term, .from = from, .body = .{ .append_entries = ae } };
-    } else if (std.mem.eql(u8, kind_str, "append_resp")) {
-        const po = payload_v.object;
-        const aer = AppendEntriesResponse{
-            .term = @intCast((po.get("term") orelse return error.InvalidFrame).integer),
-            .success = if (po.get("success") orelse return error.InvalidFrame) |sv| sv == .bool and sv.bool else false,
-            .match_index = @intCast((po.get("match_index") orelse return error.InvalidFrame).integer),
-        };
-        return DecodedRaftFrame{ .term = term, .from = from, .body = .{ .append_entries_response = aer } };
-    } else if (std.mem.eql(u8, kind_str, "install_snapshot")) {
-        const po = payload_v.object;
-        const isnap = InstallSnapshot{
-            .term = @intCast((po.get("term") orelse return error.InvalidFrame).integer),
-            .leader_id = @intCast((po.get("leader_id") orelse return error.InvalidFrame).integer),
-            .last_included_index = @intCast((po.get("last_included_index") orelse return error.InvalidFrame).integer),
-            .last_included_term = @intCast((po.get("last_included_term") orelse return error.InvalidFrame).integer),
-            .offset = @intCast((po.get("offset") orelse return error.InvalidFrame).integer),
-            .data = &[_]u8{},
-            .done = if (po.get("done")) |dv| dv == .bool and dv.bool else false,
-        };
-        return DecodedRaftFrame{ .term = term, .from = from, .body = .{ .install_snapshot = isnap } };
-    } else if (std.mem.eql(u8, kind_str, "install_snapshot_resp")) {
-        const po = payload_v.object;
-        const resp = InstallSnapshotResponse{ .term = @intCast((po.get("term") orelse return error.InvalidFrame).integer) };
-        return DecodedRaftFrame{ .term = term, .from = from, .body = .{ .install_snapshot_response = resp } };
+        read_len += n;
+        retry_count = 0;
     }
-    return error.InvalidFrame;
+
+    const msg_len = std.mem.readInt(u32, &len_buf, .big);
+    if (msg_len == 0) return error.InvalidFrame;
+
+    const payload = try allocator.alloc(u8, msg_len);
+    defer allocator.free(payload);
+
+    var got: usize = 0;
+    retry_count = 0;
+    while (got < msg_len) {
+        const n = stream.read(payload[got..]) catch |err| {
+            if (err == error.WouldBlock) {
+                retry_count += 1;
+                if (retry_count >= max_retries) return error.WouldBlock;
+                std.Thread.sleep(5 * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+        if (n == 0) return error.UnexpectedEndOfStream;
+        got += n;
+        retry_count = 0;
+    }
+
+    return decodeRaftFrame(allocator, payload);
 }
 
 pub const RequestVote = struct {
@@ -604,6 +546,363 @@ pub const InstallSnapshot = struct {
 pub const InstallSnapshotResponse = struct {
     term: u64,
 };
+
+fn toProtoMutationType(mutation_type: GraphMutation.mutation_type) raft_schema.MutationType {
+    return switch (mutation_type) {
+        .create => .CREATE,
+        .update => .UPDATE,
+        .delete => .DELETE,
+        .merge => .MERGE,
+    };
+}
+
+fn fromProtoMutationType(mutation_type: raft_schema.MutationType) GraphMutation.mutation_type {
+    return switch (mutation_type) {
+        .CREATE => .create,
+        .UPDATE => .update,
+        .DELETE => .delete,
+        .MERGE => .merge,
+        else => .create,
+    };
+}
+
+fn toProtoSchemaOp(op: SchemaChange.operation) raft_schema.SchemaChangeOperation {
+    return switch (op) {
+        .create_graph => .CREATE_GRAPH,
+        .drop_graph => .DROP_GRAPH,
+        .alter_graph => .ALTER_GRAPH,
+    };
+}
+
+fn fromProtoSchemaOp(op: raft_schema.SchemaChangeOperation) SchemaChange.operation {
+    return switch (op) {
+        .CREATE_GRAPH => .create_graph,
+        .DROP_GRAPH => .drop_graph,
+        .ALTER_GRAPH => .alter_graph,
+        else => .create_graph,
+    };
+}
+
+fn toProtoConfigChange(change_type: ConfigChange.change_type) raft_schema.ConfigChangeType {
+    return switch (change_type) {
+        .add_server => .ADD_SERVER,
+        .remove_server => .REMOVE_SERVER,
+        .update_server => .UPDATE_SERVER,
+    };
+}
+
+fn fromProtoConfigChange(change_type: raft_schema.ConfigChangeType) ConfigChange.change_type {
+    return switch (change_type) {
+        .ADD_SERVER => .add_server,
+        .REMOVE_SERVER => .remove_server,
+        .UPDATE_SERVER => .update_server,
+        else => .add_server,
+    };
+}
+
+fn cloneCommand(allocator: Allocator, command: Command) !Command {
+    return switch (command) {
+        .noop => .noop,
+        .write => |data| .{ .write = try allocator.dupe(u8, data) },
+        .graph_mutation => |gm| .{ .graph_mutation = .{
+            .graph = try allocator.dupe(u8, gm.graph),
+            .mutation_type = gm.mutation_type,
+            .data = try allocator.dupe(u8, gm.data),
+            .txn_id = gm.txn_id,
+        } },
+        .schema_change => |sc| .{ .schema_change = .{
+            .operation = sc.operation,
+            .graph = try allocator.dupe(u8, sc.graph),
+            .schema = try allocator.dupe(u8, sc.schema),
+        } },
+        .config_change => |cc| .{ .config_change = .{
+            .change_type = cc.change_type,
+            .server_id = cc.server_id,
+            .server_endpoint = if (cc.server_endpoint) |ep| try allocator.dupe(u8, ep) else null,
+            .server_port = cc.server_port,
+        } },
+        .snapshot_pointer => |sp| .{ .snapshot_pointer = sp },
+        .txn_prepare => |tp| .{ .txn_prepare = .{
+            .xid = tp.xid,
+            .shard_id = tp.shard_id,
+            .write_set = try allocator.dupe(u8, tp.write_set),
+            .metadata = try allocator.dupe(u8, tp.metadata),
+        } },
+        .txn_decide => |td| .{ .txn_decide = .{
+            .xid = td.xid,
+            .commit = td.commit,
+        } },
+    };
+}
+
+fn freeCommand(allocator: Allocator, command: *Command) void {
+    switch (command.*) {
+        .noop => {},
+        .write => |data| allocator.free(data),
+        .graph_mutation => |*gm| {
+            allocator.free(gm.graph);
+            allocator.free(gm.data);
+        },
+        .schema_change => |*sc| {
+            allocator.free(sc.graph);
+            allocator.free(sc.schema);
+        },
+        .config_change => |*cc| {
+            if (cc.server_endpoint) |ep| allocator.free(ep);
+        },
+        .snapshot_pointer => {},
+        .txn_prepare => |*tp| {
+            allocator.free(tp.write_set);
+            allocator.free(tp.metadata);
+        },
+        .txn_decide => {},
+    }
+}
+
+fn cloneLogEntry(allocator: Allocator, entry: LogEntry) !LogEntry {
+    return .{
+        .term = entry.term,
+        .index = entry.index,
+        .command = try cloneCommand(allocator, entry.command),
+        .timestamp = entry.timestamp,
+        .client_id = entry.client_id,
+        .serial_number = entry.serial_number,
+    };
+}
+
+fn freeLogEntryDeep(allocator: Allocator, entry: *LogEntry) void {
+    freeCommand(allocator, &entry.command);
+}
+
+fn freeMessage(allocator: Allocator, msg: *Message) void {
+    switch (msg.*) {
+        .request_vote => {},
+        .request_vote_response => {},
+        .append_entries => |*ae| {
+            if (ae.entries.len > 0) {
+                var i: usize = 0;
+                while (i < ae.entries.len) : (i += 1) {
+                    freeLogEntryDeep(allocator, &ae.entries[i]);
+                }
+                allocator.free(@constCast(ae.entries));
+            }
+        },
+        .append_entries_response => {},
+        .install_snapshot => |*is| {
+            allocator.free(is.data);
+        },
+        .install_snapshot_response => {},
+    }
+}
+
+fn commandToProto(allocator: Allocator, command: Command) !raft_schema.RaftCommand {
+    return switch (command) {
+        .noop => .{ .noop = .{} },
+        .write => |data| .{ .write = .{ .data = try allocator.dupe(u8, data) } },
+        .graph_mutation => |gm| .{ .graph_mutation = .{
+            .graph = try allocator.dupe(u8, gm.graph),
+            .mutation_type = toProtoMutationType(gm.mutation_type),
+            .data = try allocator.dupe(u8, gm.data),
+            .txn_id = gm.txn_id,
+        } },
+        .schema_change => |sc| .{ .schema_change = .{
+            .operation = toProtoSchemaOp(sc.operation),
+            .graph = try allocator.dupe(u8, sc.graph),
+            .schema = try allocator.dupe(u8, sc.schema),
+        } },
+        .config_change => |cc| .{ .config_change = .{
+            .change_type = toProtoConfigChange(cc.change_type),
+            .server_id = cc.server_id,
+            .server_endpoint = if (cc.server_endpoint) |ep| try allocator.dupe(u8, ep) else null,
+            .server_port = cc.server_port,
+        } },
+        .snapshot_pointer => |sp| .{ .snapshot_pointer = .{
+            .last_included_index = sp.last_included_index,
+            .last_included_term = sp.last_included_term,
+            .size_bytes = sp.size_bytes,
+            .checksum = sp.checksum,
+        } },
+        .txn_prepare => |tp| .{ .txn_prepare = .{
+            .xid = tp.xid,
+            .shard_id = tp.shard_id,
+            .write_set = try allocator.dupe(u8, tp.write_set),
+            .metadata = try allocator.dupe(u8, tp.metadata),
+        } },
+        .txn_decide => |td| .{ .txn_decide = .{
+            .xid = td.xid,
+            .commit = td.commit,
+        } },
+    };
+}
+
+fn protoToCommand(allocator: Allocator, command: raft_schema.RaftCommand) !Command {
+    return switch (command) {
+        .noop => .noop,
+        .write => |w| .{ .write = try allocator.dupe(u8, w.data) },
+        .graph_mutation => |gm| .{ .graph_mutation = .{
+            .graph = try allocator.dupe(u8, gm.graph),
+            .mutation_type = fromProtoMutationType(gm.mutation_type),
+            .data = try allocator.dupe(u8, gm.data),
+            .txn_id = gm.txn_id,
+        } },
+        .schema_change => |sc| .{ .schema_change = .{
+            .operation = fromProtoSchemaOp(sc.operation),
+            .graph = try allocator.dupe(u8, sc.graph),
+            .schema = try allocator.dupe(u8, sc.schema),
+        } },
+        .config_change => |cc| .{ .config_change = .{
+            .change_type = fromProtoConfigChange(cc.change_type),
+            .server_id = cc.server_id,
+            .server_endpoint = if (cc.server_endpoint) |ep| try allocator.dupe(u8, ep) else null,
+            .server_port = cc.server_port,
+        } },
+        .snapshot_pointer => |sp| .{ .snapshot_pointer = .{
+            .last_included_index = sp.last_included_index,
+            .last_included_term = sp.last_included_term,
+            .size_bytes = sp.size_bytes,
+            .checksum = sp.checksum,
+        } },
+        .txn_prepare => |tp| .{ .txn_prepare = .{
+            .xid = tp.xid,
+            .shard_id = tp.shard_id,
+            .write_set = try allocator.dupe(u8, tp.write_set),
+            .metadata = try allocator.dupe(u8, tp.metadata),
+        } },
+        .txn_decide => |td| .{ .txn_decide = .{
+            .xid = td.xid,
+            .commit = td.commit,
+        } },
+    };
+}
+
+fn logEntryToProto(allocator: Allocator, entry: LogEntry) !raft_schema.RaftLogEntry {
+    const cmd = try commandToProto(allocator, entry.command);
+    return .{
+        .term = entry.term,
+        .index = entry.index,
+        .timestamp = entry.timestamp,
+        .client_id = entry.client_id,
+        .serial_number = entry.serial_number,
+        .command = cmd,
+    };
+}
+
+fn protoToLogEntry(allocator: Allocator, entry: raft_schema.RaftLogEntry) !LogEntry {
+    const cmd = if (entry.command) |c| try protoToCommand(allocator, c) else .noop;
+    return .{
+        .term = entry.term,
+        .index = entry.index,
+        .command = cmd,
+        .timestamp = entry.timestamp,
+        .client_id = entry.client_id,
+        .serial_number = entry.serial_number,
+    };
+}
+
+fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
+    return switch (msg) {
+        .request_vote => |rv| .{ .request_vote = .{
+            .term = rv.term,
+            .candidate_id = rv.candidate_id,
+            .last_log_index = rv.last_log_index,
+            .last_log_term = rv.last_log_term,
+            .pre_vote = rv.pre_vote,
+        } },
+        .request_vote_response => |rvr| .{ .request_vote_response = .{
+            .term = rvr.term,
+            .vote_granted = rvr.vote_granted,
+            .voter_id = rvr.voter_id,
+        } },
+        .append_entries => |ae| blk: {
+            var entries_list = try std.ArrayList(raft_schema.RaftLogEntry).initCapacity(allocator, ae.entries.len);
+            errdefer {
+                for (entries_list.items) |*entry| entry.deinit(allocator);
+                entries_list.deinit(allocator);
+            }
+            for (ae.entries) |entry| {
+                const proto_entry = try logEntryToProto(allocator, entry);
+                try entries_list.append(allocator, proto_entry);
+            }
+            break :blk .{ .append_entries = .{
+                .term = ae.term,
+                .leader_id = ae.leader_id,
+                .prev_log_index = ae.prev_log_index,
+                .prev_log_term = ae.prev_log_term,
+                .entries = entries_list,
+                .leader_commit = ae.leader_commit,
+            } };
+        },
+        .append_entries_response => |aer| .{ .append_entries_response = .{
+            .term = aer.term,
+            .success = aer.success,
+            .match_index = aer.match_index,
+        } },
+        .install_snapshot => |is| .{ .install_snapshot = .{
+            .term = is.term,
+            .leader_id = is.leader_id,
+            .last_included_index = is.last_included_index,
+            .last_included_term = is.last_included_term,
+            .offset = is.offset,
+            .data = try allocator.dupe(u8, is.data),
+            .done = is.done,
+        } },
+        .install_snapshot_response => |isr| .{ .install_snapshot_response = .{
+            .term = isr.term,
+        } },
+    };
+}
+
+fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
+    return switch (msg) {
+        .request_vote => |rv| .{ .request_vote = .{
+            .term = rv.term,
+            .candidate_id = rv.candidate_id,
+            .last_log_index = rv.last_log_index,
+            .last_log_term = rv.last_log_term,
+            .pre_vote = rv.pre_vote,
+        } },
+        .request_vote_response => |rvr| .{ .request_vote_response = .{
+            .term = rvr.term,
+            .vote_granted = rvr.vote_granted,
+            .voter_id = rvr.voter_id,
+        } },
+        .append_entries => |ae| blk: {
+            var entries: []LogEntry = &[_]LogEntry{};
+            if (ae.entries.items.len > 0) {
+                entries = try allocator.alloc(LogEntry, ae.entries.items.len);
+                errdefer allocator.free(entries);
+                for (ae.entries.items, 0..) |entry, i| {
+                    entries[i] = try protoToLogEntry(allocator, entry);
+                }
+            }
+            break :blk .{ .append_entries = .{
+                .term = ae.term,
+                .leader_id = ae.leader_id,
+                .prev_log_index = ae.prev_log_index,
+                .prev_log_term = ae.prev_log_term,
+                .entries = entries,
+                .leader_commit = ae.leader_commit,
+            } };
+        },
+        .append_entries_response => |aer| .{ .append_entries_response = .{
+            .term = aer.term,
+            .success = aer.success,
+            .match_index = aer.match_index,
+        } },
+        .install_snapshot => |is| .{ .install_snapshot = .{
+            .term = is.term,
+            .leader_id = is.leader_id,
+            .last_included_index = is.last_included_index,
+            .last_included_term = is.last_included_term,
+            .offset = is.offset,
+            .data = try allocator.dupe(u8, is.data),
+            .done = is.done,
+        } },
+        .install_snapshot_response => |isr| .{ .install_snapshot_response = .{
+            .term = isr.term,
+        } },
+    };
+}
 
 // Raft consensus implementation for leader election and log replication
 pub const RaftNode = struct {
@@ -724,6 +1023,9 @@ pub const RaftNode = struct {
 
     pub fn deinit(self: *RaftNode) void {
         self.state = .shutdown;
+        for (self.log.items) |*entry| {
+            freeLogEntryDeep(self.allocator, entry);
+        }
         self.log.deinit(self.allocator);
         self.votes_received.deinit();
         if (self.next_index) |*ni| ni.deinit();
@@ -753,6 +1055,9 @@ pub const RaftNode = struct {
         const entries = try storage.getLogEntries(self.allocator);
         defer self.allocator.free(entries);
 
+        for (self.log.items) |*entry| {
+            freeLogEntryDeep(self.allocator, entry);
+        }
         self.log.clearRetainingCapacity();
         for (entries) |entry| {
             try self.log.append(self.allocator, entry);
@@ -775,10 +1080,11 @@ pub const RaftNode = struct {
         if (self.state != .leader) return false;
 
         // Create log entry
+        const owned_command = try cloneCommand(self.allocator, command);
         const entry = LogEntry{
             .term = self.current_term,
             .index = self.log.items.len,
-            .command = command,
+            .command = owned_command,
             .timestamp = self.clock.nowMillis(),
             .client_id = null,
             .serial_number = null,
@@ -1124,13 +1430,18 @@ pub const RaftNode = struct {
                     if (entry.index <= self.log.items.len) {
                         // Check for conflicts
                         if (self.log.items[entry.index - 1].term != entry.term) {
+                            var prune_idx: usize = entry.index - 1;
+                            while (prune_idx < self.log.items.len) : (prune_idx += 1) {
+                                freeLogEntryDeep(self.allocator, &self.log.items[prune_idx]);
+                            }
                             // Delete conflicting entries
                             self.log.shrinkRetainingCapacity(entry.index - 1);
                         }
                     }
 
                     if (entry.index > self.log.items.len) {
-                        try self.log.append(self.allocator, entry);
+                        const owned_entry = try cloneLogEntry(self.allocator, entry);
+                        try self.log.append(self.allocator, owned_entry);
                     }
                 }
 
@@ -1260,16 +1571,13 @@ pub const RaftNode = struct {
     }
 
     fn sendInstallSnapshotResponse(self: *RaftNode, to: u64, term: u64) !void {
-        if (self.transport) |transport| {
-            const response = Message{
-                .install_snapshot_response = InstallSnapshotResponse{
-                    .term = term,
-                },
-            };
-            const frame = try encodeRaftFrame(self.allocator, self.id, term, response);
-            defer self.allocator.free(frame);
-            try transport.send(to, frame);
-        }
+        const peer = self.getPeer(to) orelse return;
+        const response = Message{
+            .install_snapshot_response = InstallSnapshotResponse{
+                .term = term,
+            },
+        };
+        try self.sendMessage(peer.*, response);
     }
 
     // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleSnapshotResponse; STATUS=EXEMPT; OWNER=raft; UPDATED=2026-01-10
@@ -1430,22 +1738,18 @@ pub const RaftNode = struct {
 
     fn sendMessage(self: *RaftNode, peer: Peer, msg: Message) !void {
         if (!peer.alive) return;
-        const line = try encodeRaftFrame(self.allocator, self.id, self.current_term, msg);
-        defer self.allocator.free(line);
         if (self.transport) |transport| {
-            transport.send(peer, line) catch {
+            transport.send(peer, self.id, self.current_term, msg) catch {
                 log.warn("Failed to send raft frame to peer", &.{
                     Attr.uint("peer_id", peer.id),
                 });
             };
         } else if (peer.rpc_client) |client| {
-            // Wrap client to send newline-delimited frame
-            if (client.client == null) {
-                try client.sendMessage(msg); // fallback legacy
+            // Wrap client to send length-prefixed frame
+            if (client.stream) |s| {
+                try writeRaftFrame(self.allocator, s, self.id, self.current_term, msg);
             } else {
-                if (client.stream) |s| {
-                    try s.writeAll(line);
-                } else try client.sendMessage(msg);
+                try client.sendMessage(self.id, self.current_term, msg);
             }
         }
     }
@@ -1486,10 +1790,11 @@ pub const RaftNode = struct {
             }
         }
 
+        const owned_command = try cloneCommand(self.allocator, command);
         const entry = LogEntry{
             .term = self.current_term,
             .index = self.getLastLogIndex() + 1,
-            .command = command,
+            .command = owned_command,
             .timestamp = self.clock.nowMillis(),
             .client_id = client_id,
             .serial_number = serial_number,

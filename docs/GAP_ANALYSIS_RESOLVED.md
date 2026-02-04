@@ -1328,11 +1328,11 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Fix:** Implemented full JSON serialization/deserialization in serializeFragment/deserializeFragment
 - **Evidence:** src/distributed/enhanced_query_transport.zig:459-514, 4 unit tests added
 
-### GAP-0163: geoded references remain after server binary removal ✅
+### GAP-0163: geode serve references remain after server binary removal ✅
 
 - **GitLab issue:** #254
 - **Fix:** Added symlink creation in build.zig for backward compatibility
-- **Evidence:** build.zig:229-248, symlinks created at zig-out/bin/geoded and zig-out/bin/geodec
+- **Evidence:** build.zig:229-248, symlinks created at zig-out/bin/geode serve and zig-out/bin/geode query
 
 ---
 

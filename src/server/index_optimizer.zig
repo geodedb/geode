@@ -8,7 +8,7 @@ const spice_wrapper = @import("parallel/spice");
 
 // Import types from common module
 const PropertyValue = graph_common.PropertyValue;
-const GraphStorage = graph_common.GraphStorage;
+const GraphStore = graph_common.GraphStore;
 const Binding = graph_common.Binding;
 const ScanPlan = graph_common.ScanPlan;
 const ScanType = graph_common.ScanType;
@@ -183,7 +183,7 @@ pub const IndexOptimizer = struct {
     // Execute optimized scan plan
     pub fn executeOptimizedScan(
         self: *IndexOptimizer,
-        graph: *const GraphStorage,
+        graph: *const GraphStore,
         plan: ScanPlan,
         labels: []const []const u8,
         var_name: ?[]const u8,
@@ -205,7 +205,7 @@ pub const IndexOptimizer = struct {
     // Execute sequential scan
     fn executeSequentialScan(
         self: *IndexOptimizer,
-        graph: *const GraphStorage,
+        graph: *const GraphStore,
         labels: []const []const u8,
         var_name: ?[]const u8,
         prop_key: ?[]const u8,
@@ -256,7 +256,7 @@ pub const IndexOptimizer = struct {
     // Execute index scan
     fn executeIndexScan(
         self: *IndexOptimizer,
-        graph: *const GraphStorage,
+        graph: *const GraphStore,
         index_info: IndexInfo,
         labels: []const []const u8,
         var_name: ?[]const u8,
@@ -1604,7 +1604,7 @@ pub const VectorKNNOptimizer = struct {
     // Execute vector K-NN scan using HNSW index
     pub fn executeVectorKNNScan(
         self: *IndexOptimizer,
-        graph: *const GraphStorage,
+        graph: *const GraphStore,
         knn_info: graph_common.VectorKNNInfo,
         labels: []const []const u8,
         var_name: ?[]const u8,
@@ -1672,7 +1672,7 @@ pub const VectorKNNOptimizer = struct {
     // Fallback sequential vector scan implementation
     fn executeSequentialVectorScan(
         self: *IndexOptimizer,
-        graph: *const GraphStorage,
+        graph: *const GraphStore,
         knn_info: graph_common.VectorKNNInfo,
         labels: []const []const u8,
         var_name: ?[]const u8,

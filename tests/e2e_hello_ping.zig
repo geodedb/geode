@@ -6,13 +6,13 @@ test "HELLO returns capabilities and PING returns ok" {
     const allocator = testing.allocator;
     const addr = "127.0.0.1:17685";
 
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--disable-auth" }, null);
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, null);
     defer server.deinit();
 
     var client = try util.QuicProtoClient.connect(allocator, addr);
     defer client.deinit();
 
-    var hello = try client.hello(allocator, "", "");
+    var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
     defer hello.deinit(allocator);
     try testing.expect(hello.success);
     try testing.expect(hello.capabilities.len > 0);

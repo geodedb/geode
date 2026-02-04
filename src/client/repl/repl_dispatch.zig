@@ -10,6 +10,19 @@ const proto_schema = @import("schema");
 
 const spice_wrapper = @import("parallel/spice");
 
+const ColumnInfo = struct {
+    name: []const u8,
+    type: []const u8,
+};
+
+const LastPayloadKind = enum {
+    none,
+    rows,
+    explain,
+    profile,
+    @"error",
+};
+
 // CANARY: REQ=REQ-SHELL-INTERRUPT-003; FEATURE="SourceInterrupt"; ASPECT=CheckFunction; STATUS=TESTED; TEST=tests/test_repl.zig; OWNER=cli; UPDATED=2026-01-30
 // Issue #390: Helper function to check for Ctrl+C (ASCII 3) in stdin without blocking
 // Made public so it can be used by other modules for interrupt handling
@@ -115,154 +128,6 @@ pub const TransportConnection = struct {
     }
 };
 
-const MockRequestKind = enum {
-    none,
-    hello,
-    execute,
-    begin,
-    commit,
-    rollback,
-    pull,
-    ping,
-    other,
-};
-
-/// Mock transport connection for testing/fallback
-const MockTransportConnection = struct {
-    allocator: std.mem.Allocator,
-    last_kind: MockRequestKind = .none,
-
-    pub fn writeAll(self: *TransportConnection, data: []const u8) !void {
-        const ctx = self.context orelse return;
-        const mock: *MockTransportConnection = @ptrCast(@alignCast(ctx));
-
-        if (data.len < 4) {
-            mock.last_kind = .other;
-            return;
-        }
-
-        const msg_len = std.mem.readInt(u32, data[0..4], .big);
-        if (data.len < 4 + msg_len) {
-            mock.last_kind = .other;
-            return;
-        }
-
-        var reader: std.Io.Reader = .fixed(data[4 .. 4 + msg_len]);
-        const packet = protobuf.decode(proto_schema.ClientPacket, &reader, mock.allocator) catch {
-            mock.last_kind = .other;
-            return;
-        };
-        defer packet.deinit(mock.allocator);
-
-        const msg = packet.quic orelse {
-            mock.last_kind = .other;
-            return;
-        };
-
-        mock.last_kind = switch (msg) {
-            .hello => .hello,
-            .execute => .execute,
-            .begin => .begin,
-            .commit => .commit,
-            .rollback => .rollback,
-            .pull => .pull,
-            .ping => .ping,
-            else => .other,
-        };
-    }
-
-    pub fn readLine(self: *TransportConnection, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
-        _ = max_size;
-        const ctx = self.context orelse return error.NotConnected;
-        const mock: *MockTransportConnection = @ptrCast(@alignCast(ctx));
-
-        var response: proto_schema.QuicServerMessage = switch (mock.last_kind) {
-            .hello => blk: {
-                var caps = std.ArrayList([]const u8).init(allocator);
-                try caps.append(allocator, try allocator.dupe(u8, "PROTOBUF"));
-                break :blk .{ .hello = .{
-                    .success = true,
-                    .session_id = "mock_session",
-                    .error_message = "",
-                    .capabilities = caps,
-                } };
-            },
-            .execute => blk: {
-                var cols = std.ArrayList(proto_schema.ColumnDefinition).init(allocator);
-                try cols.append(allocator, .{ .name = "mock", .type = "STRING" });
-                break :blk .{ .execute = .{
-                    .status = .{
-                        .status_class = "00000",
-                        .status_subclass = "",
-                        .additional_statuses = std.ArrayList([]const u8).init(allocator),
-                        .flagger_findings = std.ArrayList([]const u8).init(allocator),
-                    },
-                    .payload = .{ .schema = .{ .columns = cols } },
-                } };
-            },
-            .pull => blk: {
-                var values = std.ArrayList(proto_schema.Value).init(allocator);
-                try values.append(allocator, .{ .kind = .{ .string_val = .{ .value = "mock", .kind = .STRING } } });
-                var row_list = std.ArrayList(proto_schema.Row).init(allocator);
-                try row_list.append(allocator, .{ .values = values });
-                break :blk .{ .pull = .{ .response = .{
-                    .status = .{
-                        .status_class = "00000",
-                        .status_subclass = "",
-                        .additional_statuses = std.ArrayList([]const u8).init(allocator),
-                        .flagger_findings = std.ArrayList([]const u8).init(allocator),
-                    },
-                    .payload = .{ .page = .{
-                        .rows = row_list,
-                        .final = true,
-                        .ordered = false,
-                        .order_keys = std.ArrayList([]const u8).init(allocator),
-                    } },
-                } } };
-            },
-            .begin => .{ .begin = .{ .session_id = "mock_session", .tx_id = "1" } },
-            .commit => .{ .commit = .{ .success = true } },
-            .rollback => .{ .rollback = .{ .success = true } },
-            .ping => .{ .ping = .{ .ok = true } },
-            else => .{ .ping = .{ .ok = true } },
-        };
-
-        const body = try encodeServerPacketBody(allocator, response);
-        response.deinit(allocator);
-        return body;
-    }
-
-    pub fn deinit(self: *TransportConnection) void {
-        const alloc = self.allocator orelse return;
-        if (self.context) |ctx| {
-            const mock: *MockTransportConnection = @ptrCast(@alignCast(ctx));
-            alloc.destroy(mock);
-        }
-        alloc.destroy(self);
-    }
-};
-
-fn mockConnectFn(allocator: std.mem.Allocator, addr: []const u8) !*TransportConnection {
-    _ = addr;
-    const mock = try allocator.create(MockTransportConnection);
-    mock.* = MockTransportConnection{ .allocator = allocator };
-
-    // Return as TransportConnection interface
-    const transport_conn = try allocator.create(TransportConnection);
-    transport_conn.* = TransportConnection{
-        .writeAllFn = MockTransportConnection.writeAll,
-        .readLineFn = MockTransportConnection.readLine,
-        .deinitFn = MockTransportConnection.deinit,
-        .context = mock,
-        .allocator = allocator,
-    };
-    return transport_conn;
-}
-
-/// Default mock transport for testing
-pub const mock_transport = Transport{
-    .connectFn = mockConnectFn,
-};
 
 fn encodeClientPacket(allocator: std.mem.Allocator, msg: proto_schema.QuicClientMessage) ![]u8 {
     var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 1024);
@@ -414,23 +279,27 @@ fn protoValueToJson(allocator: std.mem.Allocator, value: proto_schema.Value) err
     };
 }
 
-fn buildColumnsJsonArray(allocator: std.mem.Allocator, columns: []const []const u8) !std.json.Array {
+fn buildColumnsJsonArray(allocator: std.mem.Allocator, columns: []const ColumnInfo) !std.json.Array {
     var arr = std.json.Array.init(allocator);
     for (columns) |col| {
-        try arr.append(.{ .string = try allocator.dupe(u8, col) });
+        var obj = std.json.ObjectMap.init(allocator);
+        try obj.put("name", .{ .string = try allocator.dupe(u8, col.name) });
+        try obj.put("type", .{ .string = try allocator.dupe(u8, col.type) });
+        try arr.append(.{ .object = obj });
     }
     return arr;
 }
 
-fn rowToJsonArray(allocator: std.mem.Allocator, row: proto_schema.Row) !std.json.Value {
-    var arr = std.json.Array.init(allocator);
-    for (row.values.items) |val| {
-        try arr.append(try protoValueToJson(allocator, val));
+fn rowToJsonArray(allocator: std.mem.Allocator, row: proto_schema.Row, columns: []const ColumnInfo) !std.json.Value {
+    var obj = std.json.ObjectMap.init(allocator);
+    for (row.values.items, 0..) |val, idx| {
+        const name = if (idx < columns.len) columns[idx].name else "?";
+        try obj.put(try allocator.dupe(u8, name), try protoValueToJson(allocator, val));
     }
-    return .{ .array = arr };
+    return .{ .object = obj };
 }
 
-fn buildRowsJsonArray(allocator: std.mem.Allocator, rows: []const proto_schema.Row) !std.json.Array {
+fn buildRowsJsonArray(allocator: std.mem.Allocator, rows: []const proto_schema.Row, columns: []const ColumnInfo) !std.json.Array {
     var arr = std.json.Array.init(allocator);
     if (rows.len == 0) return arr;
 
@@ -445,6 +314,7 @@ fn buildRowsJsonArray(allocator: std.mem.Allocator, rows: []const proto_schema.R
         const RowInput = struct {
             row: *const proto_schema.Row,
             allocator: std.mem.Allocator,
+            columns: []const ColumnInfo,
         };
 
         const RowResult = struct {
@@ -455,12 +325,12 @@ fn buildRowsJsonArray(allocator: std.mem.Allocator, rows: []const proto_schema.R
         const inputs = try allocator.alloc(RowInput, rows.len);
         defer allocator.free(inputs);
         for (rows, 0..) |*row, i| {
-            inputs[i] = .{ .row = row, .allocator = safe_alloc };
+            inputs[i] = .{ .row = row, .allocator = safe_alloc, .columns = columns };
         }
 
         const mapFn = struct {
             fn map(_: *spice_wrapper.Task, input: RowInput) RowResult {
-                const value = rowToJsonArray(input.allocator, input.row.*) catch |err| {
+                const value = rowToJsonArray(input.allocator, input.row.*, input.columns) catch |err| {
                     return .{ .value = std.json.Value.null, .err = err };
                 };
                 return .{ .value = value, .err = null };
@@ -476,7 +346,7 @@ fn buildRowsJsonArray(allocator: std.mem.Allocator, rows: []const proto_schema.R
         }
     } else {
         for (rows) |row| {
-            try arr.append(try rowToJsonArray(allocator, row));
+            try arr.append(try rowToJsonArray(allocator, row, columns));
         }
     }
 
@@ -486,7 +356,7 @@ fn buildRowsJsonArray(allocator: std.mem.Allocator, rows: []const proto_schema.R
 fn executionResponseToJson(
     allocator: std.mem.Allocator,
     exec_resp: proto_schema.ExecutionResponse,
-    columns: ?[]const []const u8,
+    columns: ?[]const ColumnInfo,
 ) ![]u8 {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -500,95 +370,84 @@ fn executionResponseToJson(
         "00000";
     try root.put("status_class", .{ .string = try a.dupe(u8, status_class) });
 
+    var additional_arr = std.json.Array.init(a);
+    var flagger_arr = std.json.Array.init(a);
     if (exec_resp.status) |st| {
         if (st.status_subclass.len > 0) {
             try root.put("status_subclass", .{ .string = try a.dupe(u8, st.status_subclass) });
         }
-        if (st.additional_statuses.items.len > 0) {
-            var arr = std.json.Array.init(a);
-            for (st.additional_statuses.items) |item| {
-                try arr.append(.{ .string = try a.dupe(u8, item) });
-            }
-            try root.put("additional_statuses", .{ .array = arr });
+        for (st.additional_statuses.items) |item| {
+            try additional_arr.append(.{ .string = try a.dupe(u8, item) });
         }
-        if (st.flagger_findings.items.len > 0) {
-            var arr = std.json.Array.init(a);
-            for (st.flagger_findings.items) |item| {
-                try arr.append(.{ .string = try a.dupe(u8, item) });
-            }
-            try root.put("flagger_findings", .{ .array = arr });
+        for (st.flagger_findings.items) |item| {
+            try flagger_arr.append(.{ .string = try a.dupe(u8, item) });
         }
     }
+    try root.put("additional_statuses", .{ .array = additional_arr });
+    try root.put("flagger_findings", .{ .array = flagger_arr });
 
     if (exec_resp.payload) |payload| {
         switch (payload) {
             .schema => |schema_def| {
-                var result_obj = std.json.ObjectMap.init(a);
-                try result_obj.put("type", .{ .string = try a.dupe(u8, "SCHEMA") });
-                try root.put("result", .{ .object = result_obj });
-
                 if (schema_def.columns.items.len > 0) {
                     var cols = std.json.Array.init(a);
                     for (schema_def.columns.items) |col| {
-                        try cols.append(.{ .string = try a.dupe(u8, col.name) });
+                        var col_obj = std.json.ObjectMap.init(a);
+                        try col_obj.put("name", .{ .string = try a.dupe(u8, col.name) });
+                        try col_obj.put("type", .{ .string = try a.dupe(u8, col.type) });
+                        try cols.append(.{ .object = col_obj });
                     }
                     try root.put("columns", .{ .array = cols });
                 }
             },
             .page => |page| {
-                const cols = columns orelse &.{};
+                const cols = columns orelse &[_]ColumnInfo{};
                 if (cols.len > 0) {
                     const cols_array = try buildColumnsJsonArray(a, cols);
                     try root.put("columns", .{ .array = cols_array });
                 }
-                const rows_array = try buildRowsJsonArray(a, page.rows.items);
+                const rows_array = try buildRowsJsonArray(a, page.rows.items, cols);
                 try root.put("rows", .{ .array = rows_array });
+                try root.put("ordered", .{ .bool = page.ordered });
+                var ok_arr = std.json.Array.init(a);
+                for (page.order_keys.items) |key| {
+                    try ok_arr.append(.{ .string = try a.dupe(u8, key) });
+                }
+                try root.put("order_keys", .{ .array = ok_arr });
             },
             .@"error" => |err| {
-                var result_obj = std.json.ObjectMap.init(a);
-                try result_obj.put("type", .{ .string = try a.dupe(u8, "RESULT") });
                 if (err.message.len > 0) {
-                    try result_obj.put("error", .{ .string = try a.dupe(u8, err.message) });
+                    try root.put("error", .{ .string = try a.dupe(u8, err.message) });
                     try root.put("message", .{ .string = try a.dupe(u8, err.message) });
                 }
                 if (err.code.len > 0) {
                     try root.put("error_code", .{ .string = try a.dupe(u8, err.code) });
                 }
-                try root.put("result", .{ .object = result_obj });
             },
             .metrics => |metrics| {
-                var result_obj = std.json.ObjectMap.init(a);
-                try result_obj.put("type", .{ .string = try a.dupe(u8, "METRICS") });
-                try result_obj.put("parse_ns", .{ .integer = metrics.parse_duration_ns });
-                try result_obj.put("plan_ns", .{ .integer = metrics.plan_duration_ns });
-                try result_obj.put("execute_ns", .{ .integer = metrics.execute_duration_ns });
-                try result_obj.put("total_ns", .{ .integer = metrics.total_duration_ns });
-                try root.put("result", .{ .object = result_obj });
+                var metrics_obj = std.json.ObjectMap.init(a);
+                try metrics_obj.put("parse_ns", .{ .integer = metrics.parse_duration_ns });
+                try metrics_obj.put("plan_ns", .{ .integer = metrics.plan_duration_ns });
+                try metrics_obj.put("execute_ns", .{ .integer = metrics.execute_duration_ns });
+                try metrics_obj.put("total_ns", .{ .integer = metrics.total_duration_ns });
+                try root.put("metrics", .{ .object = metrics_obj });
             },
             .explain => |explain| {
-                var result_obj = std.json.ObjectMap.init(a);
-                try result_obj.put("type", .{ .string = try a.dupe(u8, "EXPLAIN") });
                 if (std.json.parseFromSlice(std.json.Value, a, explain.json_payload, .{})) |parsed| {
-                    try result_obj.put("json", parsed.value);
+                    try root.put("explain", parsed.value);
                 } else |_| {
-                    try result_obj.put("json", .{ .string = try a.dupe(u8, explain.json_payload) });
+                    try root.put("explain", .{ .string = try a.dupe(u8, explain.json_payload) });
                 }
-                try root.put("result", .{ .object = result_obj });
             },
             .profile => |profile| {
-                var result_obj = std.json.ObjectMap.init(a);
-                try result_obj.put("type", .{ .string = try a.dupe(u8, "PROFILE") });
                 if (std.json.parseFromSlice(std.json.Value, a, profile.json_payload, .{})) |parsed| {
-                    try result_obj.put("json", parsed.value);
+                    try root.put("profile", parsed.value);
                 } else |_| {
-                    try result_obj.put("json", .{ .string = try a.dupe(u8, profile.json_payload) });
+                    try root.put("profile", .{ .string = try a.dupe(u8, profile.json_payload) });
                 }
-                try root.put("result", .{ .object = result_obj });
             },
             .heartbeat => |_| {
-                var result_obj = std.json.ObjectMap.init(a);
-                try result_obj.put("type", .{ .string = try a.dupe(u8, "HEARTBEAT") });
-                try root.put("result", .{ .object = result_obj });
+                try root.put("heartbeat", .{ .bool = true });
             },
         }
     }
@@ -647,7 +506,8 @@ pub const ClientSession = struct {
     connection: ?*TransportConnection = null,
     last_response: ?[]u8 = null,
     session_id: ?[]const u8 = null,
-    last_columns: ?[]const []const u8 = null,
+    last_columns: ?[]const ColumnInfo = null,
+    last_payload_kind: LastPayloadKind = .none,
     /// CANARY: REQ=REQ-SHELL-RECONNECT-003; FEATURE="ShellAutoReconnect"; ASPECT=SessionState; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
     reconnect_config: ReconnectionConfig = .{},
     pending_txn_state: PendingTransactionState = .{},
@@ -697,6 +557,7 @@ pub const ClientSession = struct {
             self.allocator.free(resp);
             self.last_response = null;
         }
+        self.last_payload_kind = .none;
     }
 
     pub fn deinit(self: *ClientSession) void {
@@ -737,7 +598,10 @@ pub const ClientSession = struct {
 
     fn clearLastColumns(self: *ClientSession) void {
         if (self.last_columns) |cols| {
-            for (cols) |col| self.allocator.free(col);
+            for (cols) |col| {
+                self.allocator.free(col.name);
+                self.allocator.free(col.type);
+            }
             self.allocator.free(cols);
             self.last_columns = null;
         }
@@ -1100,15 +964,35 @@ pub const ClientSession = struct {
 
                 switch (msg_union) {
                     .execute => |exec_resp| {
+                    session.last_payload_kind = .none;
                     if (exec_resp.payload) |payload| {
                         switch (payload) {
                             .schema => |schema_def| {
                                 session.clearLastColumns();
-                                const cols = try session.allocator.alloc([]const u8, schema_def.columns.items.len);
+                                const cols = try session.allocator.alloc(ColumnInfo, schema_def.columns.items.len);
                                 for (schema_def.columns.items, 0..) |col, i| {
-                                    cols[i] = try session.allocator.dupe(u8, col.name);
+                                    cols[i] = .{
+                                        .name = try session.allocator.dupe(u8, col.name),
+                                        .type = if (col.type.len > 0)
+                                            try session.allocator.dupe(u8, col.type)
+                                        else
+                                            try session.allocator.dupe(u8, "ANY"),
+                                    };
                                 }
                                 session.last_columns = cols;
+                                session.last_payload_kind = .rows;
+                            },
+                            .page => {
+                                session.last_payload_kind = .rows;
+                            },
+                            .explain => {
+                                session.last_payload_kind = .explain;
+                            },
+                            .profile => {
+                                session.last_payload_kind = .profile;
+                            },
+                            .@"error" => {
+                                session.last_payload_kind = .@"error";
                             },
                             else => {},
                         }
@@ -1437,6 +1321,11 @@ pub const ClientSession = struct {
         var all_rows = std.json.Array.init(a);
         var status_class: []const u8 = "00000";
         var status_subclass: []const u8 = "";
+        var status_captured = false;
+        var additional_arr = std.json.Array.init(a);
+        var flagger_arr = std.json.Array.init(a);
+        var ordered = false;
+        var order_keys = std.json.Array.init(a);
         var request_id: u64 = 1;
 
         const page_size: u32 = 0; // 0 -> server default page size
@@ -1480,16 +1369,32 @@ pub const ClientSession = struct {
                 .pull => |pull_resp| {
                     const exec_resp = pull_resp.response orelse return error.InvalidResponse;
                     if (exec_resp.status) |st| {
-                        if (st.status_class.len > 0) status_class = try a.dupe(u8, st.status_class);
-                        if (st.status_subclass.len > 0) status_subclass = try a.dupe(u8, st.status_subclass);
+                        if (!status_captured) {
+                            status_captured = true;
+                            if (st.status_class.len > 0) status_class = try a.dupe(u8, st.status_class);
+                            if (st.status_subclass.len > 0) status_subclass = try a.dupe(u8, st.status_subclass);
+                            for (st.additional_statuses.items) |item| {
+                                try additional_arr.append(.{ .string = try a.dupe(u8, item) });
+                            }
+                            for (st.flagger_findings.items) |item| {
+                                try flagger_arr.append(.{ .string = try a.dupe(u8, item) });
+                            }
+                        }
                     }
 
                     if (exec_resp.payload) |payload| {
                         switch (payload) {
                             .page => |page| {
-                                const page_rows = try buildRowsJsonArray(a, page.rows.items);
+                                const cols = self.last_columns orelse &[_]ColumnInfo{};
+                                const page_rows = try buildRowsJsonArray(a, page.rows.items, cols);
                                 for (page_rows.items) |row| {
                                     try all_rows.append(row);
+                                }
+                                if (page.ordered) ordered = true;
+                                if (order_keys.items.len == 0 and page.order_keys.items.len > 0) {
+                                    for (page.order_keys.items) |key| {
+                                        try order_keys.append(.{ .string = try a.dupe(u8, key) });
+                                    }
                                 }
                                 done = page.final;
                             },
@@ -1517,7 +1422,11 @@ pub const ClientSession = struct {
             const cols_array = try buildColumnsJsonArray(a, cols);
             try root.put("columns", .{ .array = cols_array });
         }
+        try root.put("ordered", .{ .bool = ordered });
+        try root.put("order_keys", .{ .array = order_keys });
         try root.put("rows", .{ .array = all_rows });
+        try root.put("additional_statuses", .{ .array = additional_arr });
+        try root.put("flagger_findings", .{ .array = flagger_arr });
 
         const root_value = std.json.Value{ .object = root };
         const json = try std.json.Stringify.valueAlloc(self.allocator, root_value, .{});
@@ -2305,7 +2214,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     var response_data = std.ArrayList(u8).empty;
     defer response_data.deinit(state.allocator);
 
-    if (!has_error) {
+    if (!has_error and state.session.last_payload_kind == .rows) {
         // CANARY: REQ=REQ-SHELL-RECONNECT-012; FEATURE="ShellAutoReconnect"; ASPECT=PullAllWithReconnect; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
         // Use pullAll to get the complete response with reconnection handling
         state.session.pullAll(&response_data) catch |err| {
@@ -2350,16 +2259,17 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     const duration_ns = timer.read();
     const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
 
-    // Check schema response for errors first
+    // Display schema response only when it carries errors or non-row payloads
     if (state.session.last_response) |schema_response| {
-        // Parse the response to extract the result
-        if (try extractAndDisplayResult(state.allocator, schema_response, stdout, stderr, state.format)) {
-            // Error was found and displayed, don't continue
-            return;
+        const should_display = has_error or state.session.last_payload_kind != .rows;
+        if (should_display) {
+            if (try extractAndDisplayResult(state.allocator, schema_response, stdout, stderr, state.format)) {
+                return;
+            }
         }
     }
 
-    // Format and output the response data (BINDINGS/result)
+    // Format and output the response data (rows payload)
     if (response_data.items.len > 0 and !suppress) {
         _ = try extractAndDisplayResult(state.allocator, response_data.items, stdout, stderr, state.format);
     }
@@ -2843,17 +2753,6 @@ pub fn extractServerErrorMessage(allocator: std.mem.Allocator, response: []const
 
     const obj = parsed.value.object;
 
-    // Try to extract error from result.error
-    if (obj.get("result")) |result_val| {
-        if (result_val == .object) {
-            if (result_val.object.get("error")) |err_val| {
-                if (err_val == .string) {
-                    return allocator.dupe(u8, err_val.string) catch null;
-                }
-            }
-        }
-    }
-
     // Try to extract from top-level error field
     if (obj.get("error")) |err_val| {
         if (err_val == .string) {
@@ -2980,90 +2879,69 @@ fn extractAndDisplayResult(allocator: std.mem.Allocator, response: []const u8, s
 
     const root = parsed.value.object;
 
-    // Check status_class for errors (non-00xxx codes indicate errors)
-    if (root.get("status_class")) |status_value| {
-        const status = status_value.string;
-        if (status.len >= 2 and !std.mem.startsWith(u8, status, "00")) {
-            // Error response - extract and display the error
-            if (root.get("result")) |result_value| {
-                if (result_value == .object) {
-                    if (result_value.object.get("error")) |error_value| {
-                        try stderr.writeAll("Error: ");
-                        try stderr.writeAll(error_value.string);
-                        try stderr.writeAll("\r\n");
-                        return true;
-                    }
+    if (format == .json) {
+        try stdout.writeAll(response);
+        try stdout.writeAll("\r\n");
+        if (root.get("status_class")) |status_value| {
+            if (status_value == .string) {
+                const status = status_value.string;
+                if (status.len >= 2 and !std.mem.startsWith(u8, status, "00")) {
+                    return true;
                 }
             }
-            // Generic error with status code
-            try stderr.writeAll("Error (");
-            try stderr.writeAll(status);
-            try stderr.writeAll(")\r\n");
+        }
+        if (root.get("error") != null or root.get("error_code") != null) {
             return true;
         }
+        return false;
     }
 
-    // CANARY: REQ=REQ-SHELL-PLAIN-010; FEATURE="ShellPlainMode"; ASPECT=TopLevelRowsFormat; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
-    // Handle top-level columns/rows format used by shell protocol:
-    // {"status_class":"00000","columns":["col1","col2"],"rows":[[val1,val2],...]}
-    // This is different from the nested format: {"result":{"type":"BINDINGS","rows":[{...}]}}
-    if (root.get("columns")) |columns_value| {
-        if (root.get("rows")) |rows_value| {
-            if (columns_value == .array and rows_value == .array) {
-                const columns = columns_value.array;
-                const rows = rows_value.array;
+    if (extractServerErrorMessage(allocator, response)) |err_msg| {
+        defer allocator.free(err_msg);
+        try stderr.writeAll("Error: ");
+        try stderr.writeAll(err_msg);
+        try stderr.writeAll("\r\n");
+        return true;
+    }
 
-                // Convert 2D array format to array of objects for display
-                // [[val1, val2], [val3, val4]] -> [{"col1":val1,"col2":val2}, {"col1":val3,"col2":val4}]
-                try displayRowsWithColumns(allocator, columns, rows, stdout, format);
-                return false;
+    if (root.get("status_class")) |status_value| {
+        if (status_value == .string) {
+            const status = status_value.string;
+            if (status.len >= 2 and !std.mem.startsWith(u8, status, "00")) {
+                try stderr.writeAll("Error (");
+                try stderr.writeAll(status);
+                try stderr.writeAll(")\r\n");
+                return true;
             }
         }
     }
 
-    // Extract and display the result
-    if (root.get("result")) |result_value| {
-        if (result_value == .object) {
-            const result_obj = result_value.object;
+    if (root.get("explain")) |explain_val| {
+        try prettyPrintJson(allocator, explain_val, stdout, 0);
+        try stdout.writeAll("\r\n");
+        return false;
+    }
+    if (root.get("profile")) |profile_val| {
+        try prettyPrintJson(allocator, profile_val, stdout, 0);
+        try stdout.writeAll("\r\n");
+        return false;
+    }
 
-            // Check result type
-            if (result_obj.get("type")) |type_value| {
-                const result_type = type_value.string;
-
-                // Skip SCHEMA responses silently (they're metadata)
-                if (std.mem.eql(u8, result_type, "SCHEMA")) {
-                    return false;
-                }
-
-                // Handle BINDINGS (query results with rows)
-                if (std.mem.eql(u8, result_type, "BINDINGS")) {
-                    if (result_obj.get("rows")) |rows_value| {
-                        try displayRows(allocator, rows_value, stdout, format);
-                    }
-                    return false;
-                }
-
-                // Handle RESULT type (may have rows or error)
-                if (std.mem.eql(u8, result_type, "RESULT")) {
-                    if (result_obj.get("error")) |error_value| {
-                        try stderr.writeAll("Error: ");
-                        try stderr.writeAll(error_value.string);
-                        try stderr.writeAll("\r\n");
-                        return true;
-                    }
-                    if (result_obj.get("rows")) |rows_value| {
-                        try displayRows(allocator, rows_value, stdout, format);
-                    }
+    if (root.get("rows")) |rows_value| {
+        if (rows_value == .array) {
+            if (root.get("columns")) |columns_value| {
+                if (columns_value == .array) {
+                    try displayRowsWithColumns(allocator, columns_value.array, rows_value.array, stdout, format);
                     return false;
                 }
             }
-
-            // Unknown result type - pretty print the result object
-            try prettyPrintJson(allocator, result_value, stdout, 0);
-            try stdout.writeAll("\r\n");
+            try displayRows(allocator, rows_value, stdout, format);
+            return false;
         }
     }
 
+    try prettyPrintJson(allocator, parsed.value, stdout, 0);
+    try stdout.writeAll("\r\n");
     return false;
 }
 
@@ -3094,8 +2972,8 @@ fn displayRows(allocator: std.mem.Allocator, rows_value: std.json.Value, stdout:
 }
 
 /// CANARY: REQ=REQ-SHELL-PLAIN-011; FEATURE="ShellPlainMode"; ASPECT=ColumnRowsDisplay; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
-/// Display rows from shell protocol format with separate columns and 2D rows array
-/// columns: ["col1", "col2"], rows: [[val1, val2], [val3, val4]]
+/// Display rows from shell protocol format with separate columns and row objects
+/// columns: [{name,type}], rows: [{col1: val1, col2: val2}, ...]
 fn displayRowsWithColumns(allocator: std.mem.Allocator, columns: std.json.Array, rows: std.json.Array, stdout: anytype, format: anytype) !void {
     if (rows.items.len == 0) {
         try stdout.writeAll("(0 rows)\r\n");
@@ -3106,31 +2984,23 @@ fn displayRowsWithColumns(allocator: std.mem.Allocator, columns: std.json.Array,
     var col_names = try allocator.alloc([]const u8, columns.items.len);
     defer allocator.free(col_names);
     for (columns.items, 0..) |col, i| {
-        col_names[i] = if (col == .string) col.string else "?";
+        if (col == .object) {
+            if (col.object.get("name")) |name_val| {
+                if (name_val == .string) {
+                    col_names[i] = name_val.string;
+                    continue;
+                }
+            }
+        }
+        col_names[i] = "?";
     }
 
     switch (format) {
         .table => try displayRowsWithColumnsAsTable(allocator, col_names, rows, stdout),
         .csv => try displayRowsWithColumnsAsCsv(col_names, rows, stdout),
         .json => {
-            // Convert to object format and pretty print
-            try stdout.writeAll("[\r\n");
-            for (rows.items, 0..) |row, row_idx| {
-                if (row == .array) {
-                    try stdout.writeAll("  {");
-                    for (row.array.items, 0..) |val, col_idx| {
-                        if (col_idx > 0) try stdout.writeAll(", ");
-                        try stdout.writeAll("\"");
-                        try stdout.writeAll(col_names[col_idx]);
-                        try stdout.writeAll("\": ");
-                        try writeJsonValue(stdout, val);
-                    }
-                    try stdout.writeAll("}");
-                    if (row_idx < rows.items.len - 1) try stdout.writeAll(",");
-                    try stdout.writeAll("\r\n");
-                }
-            }
-            try stdout.writeAll("]\r\n");
+            try prettyPrintJson(allocator, std.json.Value{ .array = rows }, stdout, 0);
+            try stdout.writeAll("\r\n");
         },
     }
 
@@ -3152,9 +3022,9 @@ fn displayRowsWithColumnsAsTable(allocator: std.mem.Allocator, col_names: []cons
 
     // Check each row for max widths
     for (rows.items) |row| {
-        if (row != .array) continue;
-        for (row.array.items, 0..) |val, i| {
-            if (i >= col_widths.len) break;
+        if (row != .object) continue;
+        for (col_names, 0..) |col_name, i| {
+            const val = row.object.get(col_name) orelse std.json.Value.null;
             const width = getValueDisplayWidth(val);
             col_widths[i] = @max(col_widths[i], @min(width, 50)); // Cap at 50 chars
         }
@@ -3181,18 +3051,16 @@ fn displayRowsWithColumnsAsTable(allocator: std.mem.Allocator, col_names: []cons
 
     // Print data rows
     for (rows.items) |row| {
-        if (row != .array) continue;
+        if (row != .object) continue;
         try stdout.writeAll("| ");
         for (col_names, 0..) |_, i| {
             var val_buf: [256]u8 = undefined;
             var printed_len: usize = 0;
-            if (i < row.array.items.len) {
-                const val = row.array.items[i];
-                const str = formatValueCompact(&val_buf, val);
-                const display_str = if (str.len > col_widths[i]) str[0..col_widths[i]] else str;
-                try stdout.writeAll(display_str);
-                printed_len = display_str.len;
-            }
+            const val = row.object.get(col_names[i]) orelse std.json.Value.null;
+            const str = formatValueCompact(&val_buf, val);
+            const display_str = if (str.len > col_widths[i]) str[0..col_widths[i]] else str;
+            try stdout.writeAll(display_str);
+            printed_len = display_str.len;
             const padding = col_widths[i] -| printed_len;
             for (0..padding) |_| try stdout.writeAll(" ");
             try stdout.writeAll(" | ");
@@ -3212,10 +3080,11 @@ fn displayRowsWithColumnsAsCsv(col_names: []const []const u8, rows: std.json.Arr
 
     // Print data rows
     for (rows.items) |row| {
-        if (row != .array) continue;
-        for (row.array.items, 0..) |val, i| {
+        if (row != .object) continue;
+        for (col_names, 0..) |col_name, i| {
             if (i > 0) try stdout.writeAll(",");
             var val_buf: [256]u8 = undefined;
+            const val = row.object.get(col_name) orelse std.json.Value.null;
             const str = formatValueCompact(&val_buf, val);
             try stdout.writeAll(str);
         }
@@ -3225,36 +3094,7 @@ fn displayRowsWithColumnsAsCsv(col_names: []const []const u8, rows: std.json.Arr
 
 /// Write a JSON value for output
 fn writeJsonValue(stdout: anytype, val: std.json.Value) !void {
-    var buf: [256]u8 = undefined;
-    switch (val) {
-        .null => try stdout.writeAll("null"),
-        .bool => |b| try stdout.writeAll(if (b) "true" else "false"),
-        .integer => |i| {
-            const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch "?";
-            try stdout.writeAll(str);
-        },
-        .float => |f| {
-            const str = std.fmt.bufPrint(&buf, "{d}", .{f}) catch "?";
-            try stdout.writeAll(str);
-        },
-        .string => |s| {
-            try stdout.writeAll("\"");
-            try stdout.writeAll(s);
-            try stdout.writeAll("\"");
-        },
-        .array => |arr| {
-            try stdout.writeAll("[");
-            for (arr.items, 0..) |item, i| {
-                if (i > 0) try stdout.writeAll(", ");
-                try writeJsonValue(stdout, item);
-            }
-            try stdout.writeAll("]");
-        },
-        .object => {
-            try stdout.writeAll("{...}");
-        },
-        .number_string => |s| try stdout.writeAll(s),
-    }
+    try std.json.stringify(val, .{}, stdout);
 }
 
 /// Display rows as a formatted table
@@ -3545,47 +3385,34 @@ fn formatResultAsCsv(stdout: anytype, allocator: std.mem.Allocator, response: []
 
     const root = parsed.value.object;
     if (root.get("columns")) |columns_value| {
-        if (root.get("data")) |data_value| {
+        if (root.get("rows")) |rows_value| {
             const columns = columns_value.array;
-            const rows = data_value.array;
+            const rows = rows_value.array;
+            const column_names = try extractColumnNames(allocator, columns);
+            defer allocator.free(column_names);
 
             // Header
-            for (columns.items, 0..) |col, i| {
+            for (column_names, 0..) |col, i| {
                 if (i > 0) try stdout.writeAll(",");
                 try stdout.writeAll("\"");
-                try stdout.writeAll(col.string);
+                try stdout.writeAll(col);
                 try stdout.writeAll("\"");
             }
             try stdout.writeAll("\r\n");
 
             // Data rows
             for (rows.items) |row| {
-                const row_array = row.array;
-                for (row_array.items, 0..) |cell, i| {
+                for (column_names, 0..) |col_name, i| {
                     if (i > 0) try stdout.writeAll(",");
-                    switch (cell) {
-                        .string => |s| {
-                            try stdout.writeAll("\"");
-                            try stdout.writeAll(s);
-                            try stdout.writeAll("\"");
-                        },
-                        .integer => |n| {
-                            var buf: [32]u8 = undefined;
-                            const str = try std.fmt.bufPrint(&buf, "{d}", .{n});
-                            try stdout.writeAll(str);
-                        },
-                        .float => |f| {
-                            var buf: [32]u8 = undefined;
-                            const str = try std.fmt.bufPrint(&buf, "{d}", .{f});
-                            try stdout.writeAll(str);
-                        },
-                        .bool => |b| {
-                            try stdout.writeAll(if (b) "true" else "false");
-                        },
-                        .null => {
-                            try stdout.writeAll("NULL");
-                        },
-                        else => {},
+                    const cell = getRowValue(row, col_name);
+                    const rendered = try renderCell(allocator, cell);
+                    defer allocator.free(rendered);
+                    if (cell == .string) {
+                        try stdout.writeAll("\"");
+                        try stdout.writeAll(rendered);
+                        try stdout.writeAll("\"");
+                    } else {
+                        try stdout.writeAll(rendered);
                     }
                 }
                 try stdout.writeAll("\r\n");
@@ -3609,39 +3436,35 @@ fn formatResultAsTable(stdout: anytype, allocator: std.mem.Allocator, response: 
 
     const root = parsed.value.object;
     if (root.get("columns")) |columns_value| {
-        if (root.get("data")) |data_value| {
+        if (root.get("rows")) |rows_value| {
             const columns = columns_value.array;
-            const rows = data_value.array;
+            const rows = rows_value.array;
+            const column_names = try extractColumnNames(allocator, columns);
+            defer allocator.free(column_names);
 
             // Calculate column widths
-            var col_widths = try allocator.alloc(usize, columns.items.len);
+            var col_widths = try allocator.alloc(usize, column_names.len);
             defer allocator.free(col_widths);
 
-            for (columns.items, 0..) |col, i| {
-                col_widths[i] = col.string.len;
+            for (column_names, 0..) |col, i| {
+                col_widths[i] = col.len;
             }
 
             for (rows.items) |row| {
-                const row_array = row.array;
-                for (row_array.items, 0..) |cell, i| {
+                for (column_names, 0..) |col_name, i| {
                     if (i >= col_widths.len) continue;
-                    const width: usize = switch (cell) {
-                        .string => |s| s.len,
-                        .integer => 10, // rough estimate
-                        .float => 10, // rough estimate
-                        .bool => 5,
-                        .null => 4,
-                        else => 0,
-                    };
-                    col_widths[i] = @max(col_widths[i], width);
+                    const cell = getRowValue(row, col_name);
+                    const rendered = try renderCell(allocator, cell);
+                    defer allocator.free(rendered);
+                    col_widths[i] = @max(col_widths[i], rendered.len);
                 }
             }
 
             // Print header
             try stdout.writeAll("| ");
-            for (columns.items, 0..) |col, i| {
-                try stdout.writeAll(col.string);
-                const padding = col_widths[i] - col.string.len;
+            for (column_names, 0..) |col, i| {
+                try stdout.writeAll(col);
+                const padding = col_widths[i] - col.len;
                 for (0..padding) |_| try stdout.writeAll(" ");
                 try stdout.writeAll(" | ");
             }
@@ -3659,38 +3482,13 @@ fn formatResultAsTable(stdout: anytype, allocator: std.mem.Allocator, response: 
             // Print data rows
             for (rows.items) |row| {
                 try stdout.writeAll("| ");
-                const row_array = row.array;
-                for (row_array.items, 0..) |cell, i| {
+                for (column_names, 0..) |col_name, i| {
                     if (i >= col_widths.len) continue;
-                    var printed_len: usize = 0;
-                    switch (cell) {
-                        .string => |s| {
-                            try stdout.writeAll(s);
-                            printed_len = s.len;
-                        },
-                        .integer => |n| {
-                            var buf: [32]u8 = undefined;
-                            const str = try std.fmt.bufPrint(&buf, "{d}", .{n});
-                            try stdout.writeAll(str);
-                            printed_len = str.len;
-                        },
-                        .float => |f| {
-                            var buf: [32]u8 = undefined;
-                            const str = try std.fmt.bufPrint(&buf, "{d}", .{f});
-                            try stdout.writeAll(str);
-                            printed_len = str.len;
-                        },
-                        .bool => |b| {
-                            const str = if (b) "true" else "false";
-                            try stdout.writeAll(str);
-                            printed_len = str.len;
-                        },
-                        .null => {
-                            try stdout.writeAll("NULL");
-                            printed_len = 4;
-                        },
-                        else => {},
-                    }
+                    const cell = getRowValue(row, col_name);
+                    const rendered = try renderCell(allocator, cell);
+                    defer allocator.free(rendered);
+                    try stdout.writeAll(rendered);
+                    const printed_len: usize = rendered.len;
                     const padding = col_widths[i] - printed_len;
                     for (0..padding) |_| try stdout.writeAll(" ");
                     try stdout.writeAll(" | ");
@@ -3703,6 +3501,40 @@ fn formatResultAsTable(stdout: anytype, allocator: std.mem.Allocator, response: 
 
     // Fallback: output as-is
     try stdout.writeAll(response);
+}
+
+fn extractColumnNames(allocator: std.mem.Allocator, columns: std.json.Array) ![]const []const u8 {
+    var names = try allocator.alloc([]const u8, columns.items.len);
+    for (columns.items, 0..) |col, i| {
+        switch (col) {
+            .object => |obj| {
+                const name_val = obj.get("name") orelse return error.MissingColumnName;
+                if (name_val.* != .string) return error.InvalidColumnName;
+                names[i] = name_val.string;
+            },
+            .string => |s| names[i] = s,
+            else => return error.InvalidColumnName,
+        }
+    }
+    return names;
+}
+
+fn getRowValue(row: std.json.Value, column_name: []const u8) std.json.Value {
+    if (row == .object) {
+        if (row.object.get(column_name)) |val| return val;
+    }
+    return std.json.Value{ .null = {} };
+}
+
+fn renderCell(allocator: std.mem.Allocator, cell: std.json.Value) ![]u8 {
+    return switch (cell) {
+        .string => |s| allocator.dupe(u8, s),
+        .integer => |n| std.fmt.allocPrint(allocator, "{d}", .{n}),
+        .float => |f| std.fmt.allocPrint(allocator, "{d}", .{f}),
+        .bool => |b| allocator.dupe(u8, if (b) "true" else "false"),
+        .null => allocator.dupe(u8, "NULL"),
+        else => std.json.Stringify.valueAlloc(allocator, cell, .{}),
+    };
 }
 
 fn splitOnce(allocator: std.mem.Allocator, text: []const u8, delimiter: u8) ![2][]u8 {
@@ -4408,7 +4240,12 @@ test "TestClientSession_IsConnectionError_NonConnectionError" {
 test "TestClientSession_InitialReconnectCount" {
     // Test that reconnect count starts at 0
     const allocator = testing.allocator;
-    const transport = Transport{ .connectFn = mockConnectFn };
+    const Dummy = struct {
+        fn connect(_: std.mem.Allocator, _: []const u8) anyerror!*TransportConnection {
+            return error.NotConnected;
+        }
+    };
+    const transport = Transport{ .connectFn = Dummy.connect };
     var session = try ClientSession.init(allocator, "localhost:3141", &transport);
     defer session.deinit();
     try testing.expectEqual(@as(u32, 0), session.reconnect_count);
@@ -4417,7 +4254,12 @@ test "TestClientSession_InitialReconnectCount" {
 test "TestClientSession_InitialPendingTxnState" {
     // Test that pending transaction state is initialized properly
     const allocator = testing.allocator;
-    const transport = Transport{ .connectFn = mockConnectFn };
+    const Dummy = struct {
+        fn connect(_: std.mem.Allocator, _: []const u8) anyerror!*TransportConnection {
+            return error.NotConnected;
+        }
+    };
+    const transport = Transport{ .connectFn = Dummy.connect };
     var session = try ClientSession.init(allocator, "localhost:3141", &transport);
     defer session.deinit();
     try testing.expect(!session.pending_txn_state.had_active_transaction);
@@ -4428,7 +4270,12 @@ test "TestClientSession_InitialPendingTxnState" {
 test "TestClientSession_SaveTransactionState" {
     // Test saving transaction state
     const allocator = testing.allocator;
-    const transport = Transport{ .connectFn = mockConnectFn };
+    const Dummy = struct {
+        fn connect(_: std.mem.Allocator, _: []const u8) anyerror!*TransportConnection {
+            return error.NotConnected;
+        }
+    };
+    const transport = Transport{ .connectFn = Dummy.connect };
     var session = try ClientSession.init(allocator, "localhost:3141", &transport);
     defer session.deinit();
 
@@ -4442,7 +4289,12 @@ test "TestClientSession_SaveTransactionState" {
 test "TestClientSession_SaveTransactionState_NoGraph" {
     // Test saving transaction state without graph
     const allocator = testing.allocator;
-    const transport = Transport{ .connectFn = mockConnectFn };
+    const Dummy = struct {
+        fn connect(_: std.mem.Allocator, _: []const u8) anyerror!*TransportConnection {
+            return error.NotConnected;
+        }
+    };
+    const transport = Transport{ .connectFn = Dummy.connect };
     var session = try ClientSession.init(allocator, "localhost:3141", &transport);
     defer session.deinit();
 
@@ -4456,7 +4308,12 @@ test "TestClientSession_SaveTransactionState_NoGraph" {
 test "TestClientSession_CacheCredentials" {
     // Test credential caching
     const allocator = testing.allocator;
-    const transport = Transport{ .connectFn = mockConnectFn };
+    const Dummy = struct {
+        fn connect(_: std.mem.Allocator, _: []const u8) anyerror!*TransportConnection {
+            return error.NotConnected;
+        }
+    };
+    const transport = Transport{ .connectFn = Dummy.connect };
     var session = try ClientSession.init(allocator, "localhost:3141", &transport);
     defer session.deinit();
 
@@ -4471,7 +4328,12 @@ test "TestClientSession_CacheCredentials" {
 test "TestClientSession_CacheCredentials_Overwrite" {
     // Test overwriting cached credentials
     const allocator = testing.allocator;
-    const transport = Transport{ .connectFn = mockConnectFn };
+    const Dummy = struct {
+        fn connect(_: std.mem.Allocator, _: []const u8) anyerror!*TransportConnection {
+            return error.NotConnected;
+        }
+    };
+    const transport = Transport{ .connectFn = Dummy.connect };
     var session = try ClientSession.init(allocator, "localhost:3141", &transport);
     defer session.deinit();
 
@@ -4485,7 +4347,12 @@ test "TestClientSession_CacheCredentials_Overwrite" {
 test "TestClientSession_DefaultReconnectConfig" {
     // Test default reconnect configuration in session
     const allocator = testing.allocator;
-    const transport = Transport{ .connectFn = mockConnectFn };
+    const Dummy = struct {
+        fn connect(_: std.mem.Allocator, _: []const u8) anyerror!*TransportConnection {
+            return error.NotConnected;
+        }
+    };
+    const transport = Transport{ .connectFn = Dummy.connect };
     var session = try ClientSession.init(allocator, "localhost:3141", &transport);
     defer session.deinit();
 

@@ -504,7 +504,7 @@ class ParallelTestRunner:
                     processed_arg = arg
                     processed_arg = processed_arg.replace("${secret:api_token}", "test-token-123")
                     processed_arg = processed_arg.replace("${secret:user_password}", "password123")
-                    processed_arg = processed_arg.replace("${secret:admin_password}", "admin123")
+                    processed_arg = processed_arg.replace("${secret:admin_password}", "geode-test-password")
                     processed_args.append(processed_arg)
                 else:
                     processed_args.append(arg)
@@ -1110,24 +1110,19 @@ class ParallelTestRunner:
         scenario_server_flags = scenario.server_default_flags or []
         # Combine both, with spec args taking precedence (added last to override)
         server_args_override = scenario_server_flags + spec_server_args
-        # GAP-0106: Auth is enabled by default, add --disable-auth for tests unless explicitly requiring auth
-        # Don't add --disable-auth if spec already has --enable-auth or --disable-auth in args
-        has_auth_flag = "--disable-auth" in server_args_override or "--enable-auth" in server_args_override
-        if server_enabled and not has_auth_flag and not server_config.get("auth", False):
-            server_args_override = ["--disable-auth"] + server_args_override
+        # Remove legacy auth flags from spec/scenario args
+        server_args_override = [arg for arg in server_args_override if arg not in ("--disable-auth", "--enable-auth")]
         # Merge environment overrides: top-level env first, then cli.server.env overrides
         # This ensures top-level env vars (like GEODE_TDE_KEY) are passed to the server
         top_level_env = spec.get("env", {}) or {}
         server_specific_env = server_config.get("env", {}) or {}
         server_env_overrides = {**top_level_env, **server_specific_env}  # server-specific takes precedence
 
-        # If auth is enabled, set test credentials so tests can authenticate
-        # These must match the ${secret:*} substitutions in build_command (admin123, password123)
-        if "--enable-auth" in server_args_override:
-            if "GEODE_ADMIN_PASSWORD" not in server_env_overrides and "GEODE_ADMIN_PASSWORD" not in os.environ:
-                server_env_overrides["GEODE_ADMIN_PASSWORD"] = "admin123"  # Must match ${secret:admin_password}
-            if "GEODE_ADMIN_USERNAME" not in server_env_overrides and "GEODE_ADMIN_USERNAME" not in os.environ:
-                server_env_overrides["GEODE_ADMIN_USERNAME"] = "admin"
+        # Ensure default credentials are available for test clients
+        if "GEODE_ADMIN_USERNAME" not in server_env_overrides and "GEODE_ADMIN_USERNAME" not in os.environ:
+            server_env_overrides["GEODE_ADMIN_USERNAME"] = "geode"
+        if "GEODE_DEFAULT_PASSWORD" not in server_env_overrides and "GEODE_DEFAULT_PASSWORD" not in os.environ:
+            server_env_overrides["GEODE_DEFAULT_PASSWORD"] = "geode-test-password"
 
         # Allocate unique port for this spec from the port pool
         port = None
@@ -1163,7 +1158,6 @@ class ParallelTestRunner:
                     str(spec_data_dir),
                     "--log-level",
                     "error",
-                    "--disable-auth",  # Disable auth for tests (auth-specific tests can override)
                 ]
                 server_extra_args = server_args_override or []
                 if server_extra_args:
@@ -1174,8 +1168,6 @@ class ParallelTestRunner:
 
                 server_env = os.environ.copy()
                 server_env.update({k: str(v) for k, v in server_env_overrides.items()})
-                # Allow --disable-auth even in release builds (required for test mode)
-                server_env["GEODE_ALLOW_NO_AUTH"] = "1"
                 # CRITICAL FIX: Use DEVNULL for server stdout/stderr to prevent blocking
                 # When using PIPE, the server can block if it writes more output than the
                 # pipe buffer can hold (typically 64KB on Linux). With many connections,

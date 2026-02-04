@@ -85,14 +85,14 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const response = "{\"columns\":[\"name\",\"age\"],\"data\":[[\"Alice\",30],[\"Bob\",25]]}";
+    const response = "{\"columns\":[{\"name\":\"name\",\"type\":\"STRING\"},{\"name\":\"age\",\"type\":\"INTEGER\"}],\"rows\":[{\"name\":\"Alice\",\"age\":30},{\"name\":\"Bob\",\"age\":25}]}";
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
     defer parsed.deinit();
 
     // Verify structure
     const root = parsed.value.object;
     const columns = root.get("columns").?.array;
-    const rows = root.get("data").?.array;
+    const rows = root.get("rows").?.array;
 
     if (columns.items.len != 2) return error.InvalidColumns;
     if (rows.items.len != 2) return error.InvalidRows;
@@ -116,14 +116,14 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const response = "{\"columns\":[\"id\",\"name\"],\"data\":[[1,\"Alice\"],[2,\"Bob\"]]}";
+    const response = "{\"columns\":[{\"name\":\"id\",\"type\":\"INTEGER\"},{\"name\":\"name\",\"type\":\"STRING\"}],\"rows\":[{\"id\":1,\"name\":\"Alice\"},{\"id\":2,\"name\":\"Bob\"}]}";
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
     defer parsed.deinit();
 
     // Verify structure
     const root = parsed.value.object;
     const columns = root.get("columns").?.array;
-    const rows = root.get("data").?.array;
+    const rows = root.get("rows").?.array;
 
     if (columns.items.len != 2) return error.InvalidColumns;
     if (rows.items.len != 2) return error.InvalidRows;
@@ -133,7 +133,7 @@ pub fn main() !void {
     defer allocator.free(col_widths);
 
     for (columns.items, 0..) |col, i| {
-        col_widths[i] = col.string.len;
+        col_widths[i] = col.object.get("name").?.string.len;
     }
 
     std.debug.print("✅ Table format structure validated\n", .{});
@@ -199,7 +199,7 @@ pub fn main() !void {
 
     // Simulate executeGql behavior - should start with newline
     try output.append(allocator, '\n');
-    try output.appendSlice(allocator, "{\"columns\":[\"name\"],\"data\":[[\"Alice\"]]}");
+    try output.appendSlice(allocator, "{\"columns\":[{\"name\":\"name\",\"type\":\"STRING\"}],\"rows\":[{\"name\":\"Alice\"}]}");
     try output.append(allocator, '\n');
 
     // Verify output structure

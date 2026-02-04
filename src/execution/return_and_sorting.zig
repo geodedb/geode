@@ -279,7 +279,7 @@ fn compareValues(a: Value, b: Value) i8 {
     return compareValuesWithNullsPolicy(a, b, .default);
 }
 
-fn compareValuesWithNullsPolicy(a: Value, b: Value, nulls: ast.OrderBy.NullsPolicy) i8 {
+pub fn compareValuesWithNullsPolicy(a: Value, b: Value, nulls: ast.OrderBy.NullsPolicy) i8 {
     // Compare values for sorting
     // Returns: -1 if a < b, 0 if a == b, 1 if a > b
 

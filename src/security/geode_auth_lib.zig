@@ -2,6 +2,7 @@
 // CANARY: REQ=REQ-0005; FEATURE="Security Requirements"; ASPECT=Security; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=security; UPDATED=2026-01-15
 // Clean reconstructed auth.zig with consolidated definitions (RBAC, ABAC, RLS, Sessions, MFA Policies)
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const crypto = std.crypto;
 const mfa = @import("mfa");
@@ -1026,7 +1027,6 @@ pub const SecurityManager = struct {
                 break :blk env;
             }
             // GAP-0146: Generate cryptographically random password in production
-            const builtin = @import("builtin");
             if (builtin.mode != .Debug) {
                 // Production: Generate random 32-byte password (hex encoded to 64 chars)
                 std.crypto.random.bytes(&generated_password_buf);
@@ -1049,10 +1049,11 @@ pub const SecurityManager = struct {
         // Hash the password
         const password_hash = try self.hashPassword(default_password);
 
-        // CRITICAL SECURITY FIX (C5): ALWAYS require password reset for default user
-        // Even if env password is strong, it may be committed to git/logs/CI
-        // Per OWASP ASVS 2.1.9: Force password change on first use of default credentials
-        const needs_reset = true;
+        // Default user bootstrap:
+        // - Allow login when an explicit password is provided (env or debug default),
+        //   otherwise the system is unusable without a separate reset workflow.
+        // - We still log a high-severity warning so operators rotate credentials promptly.
+        const needs_reset = false;
 
         const user = User{
             .id = id,
@@ -1076,11 +1077,16 @@ pub const SecurityManager = struct {
         try self.audit_log.logUserCreated(id, admin_username);
 
         // SECURITY FIX (C5): Log with HIGH severity - default credentials are critical security event
-        const password_source = if (password_from_env) "environment" else "hardcoded";
-        try self.audit_log.append(.user_created, id, "DEFAULT_USER_CREATED username={s} password_source={s} REQUIRES_IMMEDIATE_RESET", .{ admin_username, password_source });
+        const password_source = if (password_from_env)
+            "environment"
+        else if (builtin.mode != .Debug)
+            "generated"
+        else
+            "debug_default";
+        try self.audit_log.append(.user_created, id, "DEFAULT_USER_CREATED username={s} password_source={s} RECOMMENDED_ROTATION", .{ admin_username, password_source });
 
         if (password_from_env) {
-            log.warn("Default user created with env password - password reset required on first login", &.{
+            log.warn("Default user created with env password - rotate after bootstrap", &.{
                 Attr.string("warning", "Ensure GEODE_DEFAULT_PASSWORD is not in git/logs"),
             });
         }

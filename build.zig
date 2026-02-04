@@ -455,8 +455,6 @@ pub fn build(b: *std.Build) void {
     // Note: transport_quic_mod is defined later after vendor_quic_mod is available
 
     const protocol_mod = b.createModule(.{ .root_source_file = b.path("src/protocol.zig"), .target = target, .optimize = optimize });
-    // Add external JSON library for RFC 8259 compliant parsing in protocol module
-    protocol_mod.addImport("json", json_mod);
     geode_exe.root_module.addImport("protocol", protocol_mod);
 
     // Proto Schema Module
@@ -464,6 +462,10 @@ pub fn build(b: *std.Build) void {
     schema_mod.addImport("protobuf", protobuf_mod);
     geode_exe.root_module.addImport("schema", schema_mod);
     root_mod.addImport("schema", schema_mod);
+    const raft_schema_mod = b.createModule(.{ .root_source_file = b.path("src/proto/raft_schema.zig"), .target = target, .optimize = optimize });
+    raft_schema_mod.addImport("protobuf", protobuf_mod);
+    geode_exe.root_module.addImport("raft_schema", raft_schema_mod);
+    root_mod.addImport("raft_schema", raft_schema_mod);
 
     // M11: Add storage/backup module for CLI to eliminate BackupConfig duplication
     const storage_backup_mod = b.createModule(.{ .root_source_file = b.path("src/storage/backup.zig"), .target = target, .optimize = optimize });
@@ -694,9 +696,12 @@ pub fn build(b: *std.Build) void {
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
     // GAP-0203: Query pipeline optimization tests and benchmarks
-    const gap0203_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/performance/test_perf_optimizations.zig"), .target = target, .optimize = optimize }) });
+    const gap0203_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_perf_optimizations.zig"), .target = target, .optimize = optimize }) });
     gap0203_tests.root_module.addImport("geode", root_mod);
-    // test_harness import added later after test_harness_mod is defined
+    gap0203_tests.root_module.addImport("protobuf", protobuf_mod);
+    gap0203_tests.root_module.addImport("schema", schema_mod);
+    gap0203_tests.root_module.addImport("transport/quic", transport_quic_mod);
+    gap0203_tests.root_module.addImport("grpc_client", grpc_client_mod);
     const run_gap0203_tests = b.addRunArtifact(gap0203_tests);
 
     // GAP-384: Graph persistence tests
@@ -750,15 +755,13 @@ pub fn build(b: *std.Build) void {
     const gql_conformance_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gql_conformance.zig"), .target = target, .optimize = optimize }) });
     gql_conformance_tests.root_module.addImport("protobuf", protobuf_mod);
     gql_conformance_tests.root_module.addImport("schema", schema_mod);
+    gql_conformance_tests.root_module.addImport("transport/quic", transport_quic_mod);
+    gql_conformance_tests.root_module.addImport("grpc_client", grpc_client_mod);
 
     // Add new ISO conformance patch tests
     const conformance_patch_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/conformance_tests.zig"), .target = target, .optimize = optimize }) });
     conformance_patch_tests.root_module.addImport("geode", root_mod);
     const run_conformance_patch_tests = b.addRunArtifact(conformance_patch_tests);
-    // Create test_harness module (imports will be added later after auth/rls modules are defined)
-    // NOTE: test_harness.zig stays in src/ due to internal @import dependencies
-    const test_harness_mod = b.createModule(.{ .root_source_file = b.path("src/test_harness.zig"), .target = target, .optimize = optimize });
-    gql_conformance_tests.root_module.addImport("test_harness", test_harness_mod);
     // Server graph exec module available through geode module
     // Migration engine stub module
     const migration_mod = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });
@@ -1351,29 +1354,6 @@ pub fn build(b: *std.Build) void {
     audit_security_mod.addImport("logging", logging_mod);
     audit_security_mod.addImport("json", json_mod);
 
-    // Add security module imports to test_harness_mod (defined earlier)
-    test_harness_mod.addImport("geode_auth", auth_mod);
-    test_harness_mod.addImport("rls", rls_mod);
-    // FLE modules
-    test_harness_mod.addImport("fle_key_manager", fle_key_manager_mod);
-    test_harness_mod.addImport("fle_key_types", fle_key_types_mod);
-    test_harness_mod.addImport("fle_aead", fle_aead_mod);
-    test_harness_mod.addImport("fle_blind_index", fle_blind_index_mod);
-    test_harness_mod.addImport("fle_catalog", fle_catalog_mod);
-    test_harness_mod.addImport("fle_annotations", fle_annotations_mod);
-    // Transport/QUIC for kms_remote dependency chain (test_harness -> execution -> procedure_registry -> kms -> kms_remote)
-    test_harness_mod.addImport("transport/quic", transport_quic_mod);
-    test_harness_mod.addImport("vendor_quic", quic_ext_mod);
-    test_harness_mod.addImport("transport/thread_pool", thread_pool_mod); // GAP-0201: Thread pool
-    test_harness_mod.addImport("transport/stream_scheduler", stream_scheduler_mod); // GAP-0201: DRR scheduling
-    test_harness_mod.addImport("logging", logging_mod);
-    test_harness_mod.addImport("protobuf", protobuf_mod);
-    test_harness_mod.addImport("schema", schema_mod);
-    test_harness_mod.addImport("geode", root_mod);
-
-    // GAP-0203: Add test_harness to gap0203_tests now that it's defined
-    gap0203_tests.root_module.addImport("test_harness", test_harness_mod);
-
     // Create user storage module
     const user_storage_mod = b.createModule(.{ .root_source_file = b.path("src/storage/user_storage.zig"), .target = target, .optimize = optimize });
     user_storage_mod.addImport("storage_page_manager", storage_page_manager_shared);
@@ -1385,14 +1365,6 @@ pub fn build(b: *std.Build) void {
     user_manager_mod.addImport("user_storage", user_storage_mod);
     user_manager_mod.addImport("logging", logging_mod);
 
-    // Add user_manager and user_storage to test_harness_mod
-    test_harness_mod.addImport("user_manager", user_manager_mod);
-    test_harness_mod.addImport("user_storage", user_storage_mod);
-
-    // Create txn_session module for test_harness
-    const txn_session_mod = b.createModule(.{ .root_source_file = b.path("src/txn_session.zig"), .target = target, .optimize = optimize });
-    txn_session_mod.addImport("geode", root_mod);
-    test_harness_mod.addImport("txn_session", txn_session_mod);
 
     user_auth_exe.root_module.addImport("geode_auth", auth_mod);
     user_auth_exe.root_module.addImport("rls", rls_mod);

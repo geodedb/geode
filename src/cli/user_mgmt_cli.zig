@@ -14,16 +14,13 @@ const cli_dispatcher = @import("cli_dispatcher.zig");
 const is_production_build = builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSmall;
 
 fn printOut(comptime fmt: []const u8, args: anytype) void {
-    // Write directly to STDOUT so help text lands in the expected stream for tests.
-    var buf: [2048]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-    stdout.writeAll(msg) catch {};
+    // Write to STDERR for help/info text to keep stdout clean for data output (pipe-friendly).
+    std.debug.print(fmt, args);
 }
 
 fn printOutRaw(data: []const u8) void {
-    const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-    stdout.writeAll(data) catch {};
+    const stderr = std.io.getStdErr().writer();
+    stderr.writeAll(data) catch {};
 }
 
 // CANARY: REQ=REQ-M4.1-USER-MGMT-CLI-001; FEATURE="CLI Modularization"; ASPECT=UserManagement; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-11-12
@@ -71,8 +68,7 @@ fn findSubcommandStart(argv: [][:0]u8, start_idx: usize) usize {
     var idx = start_idx + 1;
     while (idx < argv.len) : (idx += 1) {
         const arg = argv[idx];
-        if (std.mem.eql(u8, arg, "--enable-auth") or
-            std.mem.eql(u8, arg, "--audit"))
+        if (std.mem.eql(u8, arg, "--audit"))
         {
             continue;
         }
@@ -129,9 +125,6 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
     }
 
     if (std.mem.eql(u8, subcommand, "create")) {
-        // Clear test state files at the start of each test spec (user create is always first)
-        cli_dispatcher.clearAllTestState();
-
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
             printUserUsage();
             std.process.exit(@intFromEnum(ExitCode.success));

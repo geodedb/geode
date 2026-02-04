@@ -9,6 +9,16 @@ const tde = @import("storage/tde_file_encryption.zig");
 const logging = @import("logging");
 const log = logging.scoped("storage");
 const Attr = logging.Attr;
+const crc = std.hash.crc;
+
+const PERSIST_VERSION: u32 = 3;
+const HEADER_LEN: usize = 60; // magic(8) + version(4) + reserved(4) + ids/counts(40) + checksum(4)
+
+var last_checksum_error: bool = false;
+
+pub fn lastLoadHadChecksumError() bool {
+    return last_checksum_error;
+}
 
 /// Generate a time-based unique 64-bit ID (UUIDv7-compatible lower 64 bits)
 /// Structure: 48-bit timestamp (ms) | 16-bit counter/random
@@ -590,7 +600,7 @@ pub const GraphStore = struct {
         var i: usize = 0;
         var it = self.graphs.iterator();
         while (it.next()) |entry| {
-            names[i] = entry.key_ptr.*;
+            names[i] = try allocator.dupe(u8, entry.key_ptr.*);
             i += 1;
         }
         return names;
@@ -2278,10 +2288,10 @@ pub const GraphStore = struct {
         var buffer = try std.ArrayList(u8).initCapacity(self.allocator, 4096);
         defer buffer.deinit(self.allocator);
 
-        // Write header: magic, version, next_node_id, next_edge_id, graph_count, node_count, edge_count
-        var header: [56]u8 = undefined;
+        // Write header placeholder: magic, version, ids/counts, checksum (filled after data write)
+        var header: [HEADER_LEN]u8 = [_]u8{0} ** HEADER_LEN;
         @memcpy(header[0..8], "GEODGST1");
-        std.mem.writeInt(u32, header[8..12], 2, .little);
+        std.mem.writeInt(u32, header[8..12], PERSIST_VERSION, .little);
         std.mem.writeInt(u32, header[12..16], 0, .little);
         std.mem.writeInt(u64, header[16..24], self.next_node_id, .little);
         std.mem.writeInt(u64, header[24..32], self.next_edge_id, .little);
@@ -2484,6 +2494,12 @@ pub const GraphStore = struct {
             try buffer.appendSlice(self.allocator, edge.graph_name);
         }
 
+        // Compute checksum over payload (after header) and fill header slot
+        if (buffer.items.len >= HEADER_LEN) {
+            const checksum = crc.Crc32.hash(buffer.items[HEADER_LEN..]);
+            std.mem.writeInt(u32, buffer.items[56..60], checksum, .little);
+        }
+
         // Encrypt and write to file using TDE
         try tde.writeEncryptedFile(self.allocator, file_path, buffer.items);
 
@@ -2537,62 +2553,61 @@ pub const GraphStore = struct {
 
         // Reset current state before loading
         self.clearNodes();
+        last_checksum_error = false;
 
-        // Read header (supports legacy v1 and v2 with graph registry)
-        var magic: [8]u8 = undefined;
-        const magic_read = reader.readAll(&magic) catch 0;
-        if (magic_read < 8) return;
+        if (data.len < HEADER_LEN) return error.InvalidHeader;
+        if (!std.mem.eql(u8, data[0..8], "GEODGST1")) {
+            last_checksum_error = true;
+            return error.InvalidMagic;
+        }
+
+        const version = std.mem.readInt(u32, data[8..12], .little);
+        if (version != PERSIST_VERSION) {
+            return error.UnsupportedVersion;
+        }
+        const checksum_stored = std.mem.readInt(u32, data[56..60], .little);
+        const checksum_actual = crc.Crc32.hash(data[HEADER_LEN..]);
+        if (checksum_actual != checksum_stored) {
+            last_checksum_error = true;
+            return error.ChecksumMismatch;
+        }
 
         var node_count: u64 = 0;
         var edge_count: u64 = 0;
+        self.next_node_id = std.mem.readInt(u64, data[16..24], .little);
+        self.next_edge_id = std.mem.readInt(u64, data[24..32], .little);
+        const graph_count = std.mem.readInt(u64, data[32..40], .little);
+        node_count = std.mem.readInt(u64, data[40..48], .little);
+        edge_count = std.mem.readInt(u64, data[48..56], .little);
 
-        if (std.mem.eql(u8, &magic, "GEODGST1")) {
-            var header: [48]u8 = undefined;
-            if ((try reader.readAll(&header)) < header.len) return;
+        // Reset graph registry and load from file
+        var graph_iter = self.graphs.iterator();
+        while (graph_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.graphs.deinit();
+        self.graphs = std.StringHashMap(void).init(self.allocator);
 
-            const version = std.mem.readInt(u32, header[0..4], .little);
-            _ = version;
+        // Advance reader past header
+        stream.pos = HEADER_LEN;
 
-            self.next_node_id = std.mem.readInt(u64, header[8..16], .little);
-            self.next_edge_id = std.mem.readInt(u64, header[16..24], .little);
-            const graph_count = std.mem.readInt(u64, header[24..32], .little);
-            node_count = std.mem.readInt(u64, header[32..40], .little);
-            edge_count = std.mem.readInt(u64, header[40..48], .little);
+        var graphs_read: u64 = 0;
+        while (graphs_read < graph_count) : (graphs_read += 1) {
+            var name_len_buf: [4]u8 = undefined;
+            if ((try reader.readAll(&name_len_buf)) < 4) break;
+            const name_len = std.mem.readInt(u32, &name_len_buf, .little);
 
-            // Reset graph registry and load from file
-            var graph_iter = self.graphs.iterator();
-            while (graph_iter.next()) |entry| {
-                self.allocator.free(entry.key_ptr.*);
+            const name_data = try self.allocator.alloc(u8, name_len);
+            if ((try reader.readAll(name_data)) < name_len) {
+                self.allocator.free(name_data);
+                break;
             }
-            self.graphs.deinit();
-            self.graphs = std.StringHashMap(void).init(self.allocator);
+            try self.graphs.put(name_data, {});
+        }
 
-            var graphs_read: u64 = 0;
-            while (graphs_read < graph_count) : (graphs_read += 1) {
-                var name_len_buf: [4]u8 = undefined;
-                if ((try reader.readAll(&name_len_buf)) < 4) break;
-                const name_len = std.mem.readInt(u32, &name_len_buf, .little);
-
-                const name_data = try self.allocator.alloc(u8, name_len);
-                if ((try reader.readAll(name_data)) < name_len) {
-                    self.allocator.free(name_data);
-                    break;
-                }
-                try self.graphs.put(name_data, {});
-            }
-
-            if (self.graphs.count() == 0) {
-                const default_name = self.allocator.dupe(u8, "default") catch unreachable;
-                self.graphs.put(default_name, {}) catch unreachable;
-            }
-        } else {
-            // Legacy v1 header (magic bytes are next_node_id)
-            self.next_node_id = std.mem.readInt(u64, &magic, .little);
-            var header: [24]u8 = undefined;
-            if ((try reader.readAll(&header)) < header.len) return;
-            self.next_edge_id = std.mem.readInt(u64, header[0..8], .little);
-            node_count = std.mem.readInt(u64, header[8..16], .little);
-            edge_count = std.mem.readInt(u64, header[16..24], .little);
+        if (self.graphs.count() == 0) {
+            const default_name = self.allocator.dupe(u8, "default") catch unreachable;
+            self.graphs.put(default_name, {}) catch unreachable;
         }
 
         // Read nodes

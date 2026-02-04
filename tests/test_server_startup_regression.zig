@@ -115,7 +115,6 @@ test "server_configuration_validation" {
         cert_path: ?[]const u8 = null,
         key_path: ?[]const u8 = null,
         log_level: []const u8 = "info",
-        force_no_tls: bool = false,
         result_format_txt: bool = false,
     };
 
@@ -124,19 +123,16 @@ test "server_configuration_validation" {
     try expect(default_config.data_dir == null);
     try expect(default_config.listen_quic == null);
     try expectEqualStrings("info", default_config.log_level);
-    try expectEqual(false, default_config.force_no_tls);
 
     // Test custom configuration
     const custom_config = ServerConfig{
         .data_dir = "./custom_data",
         .listen_quic = "0.0.0.0:3141",
         .log_level = "debug",
-        .force_no_tls = true,
     };
     try expectEqualStrings("./custom_data", custom_config.data_dir.?);
     try expectEqualStrings("0.0.0.0:3141", custom_config.listen_quic.?);
     try expectEqualStrings("debug", custom_config.log_level);
-    try expectEqual(true, custom_config.force_no_tls);
 
     std.debug.print("✅ Server configuration validation test passed\n", .{});
 }

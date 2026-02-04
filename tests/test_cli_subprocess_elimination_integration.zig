@@ -69,8 +69,8 @@ test "integration query executes with configured server" {
     try expect(result.exit_code == 0);
 
     // Verify JSON response format
-    try expect(std.mem.indexOf(u8, result.stdout, "\"type\":\"SCHEMA\"") != null);
-    try expect(std.mem.indexOf(u8, result.stdout, "\"type\":\"BINDINGS\"") != null);
+    try expect(std.mem.indexOf(u8, result.stdout, "\"columns\"") != null);
+    try expect(std.mem.indexOf(u8, result.stdout, "\"rows\"") != null);
     try expect(std.mem.indexOf(u8, result.stdout, "\"test\":1") != null);
 
     // Verify it's valid JSON
@@ -129,9 +129,9 @@ test "integration complex query with --insecure" {
     // Should succeed
     try expect(result.exit_code == 0);
 
-    // Should contain schema and bindings output
-    try expect(std.mem.indexOf(u8, result.stdout, "\"type\":\"SCHEMA\"") != null);
-    try expect(std.mem.indexOf(u8, result.stdout, "\"type\":\"BINDINGS\"") != null);
+    // Should contain columns and rows output
+    try expect(std.mem.indexOf(u8, result.stdout, "\"columns\"") != null);
+    try expect(std.mem.indexOf(u8, result.stdout, "\"rows\"") != null);
 }
 
 // Test server address parameter in error message
@@ -157,14 +157,14 @@ test "integration server address in error message" {
     try expect(std.mem.indexOf(u8, result.stderr, "127.0.0.1:1") != null);
 }
 
-// Test that no subprocess binaries are spawned (no geodec/geoded calls)
+// Test that no external subprocess binaries are spawned
 test "integration no subprocess spawning verification" {
     const allocator = testing.allocator;
 
     const server = try getTestServer(allocator);
     defer allocator.free(server);
 
-    // Test with --insecure to ensure it doesn't try to spawn geodec
+    // Test with --insecure to ensure it doesn't try to spawn external helpers
     const args = [_][]const u8{
         "./zig-out/bin/geode",
         "query",
@@ -182,8 +182,8 @@ test "integration no subprocess spawning verification" {
     try expect(result.exit_code == 0);
 
     // Should not mention subprocess-related errors
-    try expect(std.mem.indexOf(u8, result.stderr, "geodec") == null);
-    try expect(std.mem.indexOf(u8, result.stderr, "geoded") == null);
+    try expect(std.mem.indexOf(u8, result.stderr, "subprocess") == null);
+    try expect(std.mem.indexOf(u8, result.stderr, "spawn") == null);
     try expect(std.mem.indexOf(u8, result.stderr, "No such file or directory") == null);
     try expect(std.mem.indexOf(u8, result.stderr, "command not found") == null);
 }
@@ -273,8 +273,9 @@ test "integration output format consistency" {
         try expect(std.mem.indexOf(u8, result.stdout, test_case.expected_pattern) != null);
 
         // All should have consistent JSON format
-        try expect(std.mem.indexOf(u8, result.stdout, "\"type\":\"SCHEMA\"") != null);
-        try expect(std.mem.indexOf(u8, result.stdout, "\"type\":\"BINDINGS\"") != null);
+        try expect(std.mem.indexOf(u8, result.stdout, "\"columns\"") != null);
+        try expect(std.mem.indexOf(u8, result.stdout, "\"rows\"") != null);
+        try expect(std.mem.indexOf(u8, result.stdout, "\"status_class\"") != null);
     }
 }
 
@@ -341,8 +342,8 @@ test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_001" {
     try expect(std.mem.indexOf(u8, result.stdout, "CANARY INTEGRATION TEST") != null);
 
     // Verify no subprocess-related errors occurred
-    try expect(std.mem.indexOf(u8, result.stderr, "geodec") == null);
-    try expect(std.mem.indexOf(u8, result.stderr, "geoded") == null);
+    try expect(std.mem.indexOf(u8, result.stderr, "subprocess") == null);
+    try expect(std.mem.indexOf(u8, result.stderr, "spawn") == null);
 
     // Log successful CANARY test completion
     std.log.info("CANARY integration test passed: CLI subprocess elimination working end-to-end", .{});

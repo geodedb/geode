@@ -109,6 +109,8 @@ pub const planner_structural_key = @import("planner/structural_key.zig");
 // Expose planner pipeline orchestration (synthetic phases + selection integration)
 pub const planner_pipeline = @import("planner/pipeline.zig");
 pub const temporal = @import("temporal.zig");
+// Query analysis helpers (EXPLAIN/PROFILE traits)
+pub const query_traits = @import("query/query_traits.zig");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");
@@ -184,6 +186,9 @@ pub const impl_flagger = @import("server/flagger_impl_defined.zig");
 pub const wal_manager = @import("server/wal_manager.zig");
 // Re-export proto_util for unified binary
 pub const proto_util = @import("server/proto_util.zig");
+// Re-export explain/profile payload builders for server handlers and tests
+pub const explain_payload = @import("server/explain_payload.zig");
+pub const profile_payload = @import("server/profile_payload.zig");
 
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {
@@ -249,6 +254,7 @@ pub const repl = struct {
     pub const repl_errors = @import("client/repl/repl_errors.zig");
     pub const repl_render = @import("client/repl/repl_render.zig");
     pub const repl_dispatch = @import("client/repl/repl_dispatch.zig");
+    pub const quic_transport = @import("client/repl/quic_transport.zig");
     pub const keymap_emacs = @import("client/repl/keymap_emacs.zig");
     pub const keymap_vi = @import("client/repl/keymap_vi.zig");
     pub const repl_complete = @import("client/repl/repl_complete.zig");
@@ -390,7 +396,7 @@ pub fn makeEnv(id_names: []const []const u8, id_values: []const eval.Value, para
 /// defer result.deinit();
 ///
 /// // Execute against local storage
-/// var storage = try geode.GraphStorage.init(allocator, "/path/to/data");
+/// var storage = geode.graph_store.GraphStore.init(allocator);
 /// defer storage.deinit();
 ///
 /// const exec_result = try geode.execute(allocator, result.program, &storage);

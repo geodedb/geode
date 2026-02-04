@@ -6,8 +6,6 @@ const diagnostics = @import("geode").diagnostics;
 const eval = geode.eval;
 const eval_extended = geode.eval_ext;
 const exec = geode.exec;
-const storage_pm = @import("storage_page_manager");
-const storage_catalog = @import("storage_catalog");
 const txn_mgr = @import("txn");
 const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
 const TextFormatter = @import("text_formatter").TextFormatter;
@@ -43,8 +41,6 @@ const server_flags = geode.server_flags;
 const cli_args = @import("cli_args.zig");
 // Import server initialization (M3.2 Phase 3 initialization extraction)
 const server_init = @import("server_init.zig");
-// Import transaction handlers (M3.2 Phase 3 transaction handlers extraction)
-const transaction_handlers = @import("transaction_handlers.zig");
 // Import QUIC connection handlers (M3.3 Phase 3 QUIC handlers extraction)
 const quic_connection_handler = @import("quic_connection_handler.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-017; FEATURE="ABAC Enforcement"; ASPECT=AsyncConnection; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
@@ -68,6 +64,7 @@ const ConnectionContext = struct {
     env_spill_threshold: usize,
     env_storage_checksum_error: bool,
     env_wal_compact_interval: usize,
+    env_wal_skip_ratio_override: ?f64,
     security_manager: ?*geode_auth.SecurityManager,
     shared_ast_cache: ?*query_ast_cache.SharedAstCache,
 };
@@ -89,6 +86,7 @@ fn handleConnectionAsync(context: *anyopaque) void {
         ctx.env_spill_threshold,
         ctx.env_storage_checksum_error,
         ctx.env_wal_compact_interval,
+        ctx.env_wal_skip_ratio_override,
         false,
         ctx.security_manager,
         ctx.shared_ast_cache,
@@ -138,7 +136,6 @@ const nullsFlag = server_flags.nullsFlag;
 const paginationStreamScaffold = server_flags.paginationStreamScaffold;
 const initImplDefinedFlags = server_flags.initImplDefinedFlags;
 const computeBaseFlags = server_flags.computeBaseFlags;
-const computeFlagsExtended = server_flags.computeFlagsExtended;
 // Import graph storage management (M3.1 Phase 3 graph persistence extraction)
 // CANARY: REQ=REQ-BINARY-PERSIST-003; FEATURE="BinaryPersistence"; ASPECT=MainImports; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
 // Note: JSON Lines persistence (tryLoadGraphFromDir, saveGraphToDir) removed - using binary persistence via graph_store
@@ -182,7 +179,7 @@ const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 // Removed: server_utilities.getOrCreateMVCCManager() function (~10 lines) now in server_utilities module (M3.3 Phase 3 server utilities extraction)
 
 // Removed: Graph storage management functions now in graph_store module (M3.1 Phase 3 graph persistence extraction)
-// Original: getOrCreateGraphStorage() function (~28 lines)
+// Original: getOrCreateGraphStore() function (~28 lines)
 // Original: getNextNodeId() function (~10 lines)
 // Original: tryLoadGraphFromDir() function (~98 lines)
 // Original: saveGraphToDir() function (~86 lines)
@@ -252,17 +249,13 @@ pub fn main() !void {
 
     // Extract config values into local variables for compatibility with existing code
     const result_format_txt = config.result_format_txt;
-    const disable_estimates = config.disable_estimates;
-    const compact_profile = config.compact_profile;
-    var memcurve_profile = config.memcurve_profile;
+    var memcurve_profile = false;
     const listen_quic = config.listen_quic;
     const listen_grpc = config.listen_grpc;
     const order_keys_mode_expr = config.order_keys_mode_expr;
     const data_dir = config.data_dir;
-    _ = config.force_no_tls; // Reserved for future TLS configuration
     const catalog_create_name = config.catalog_create_name;
     const log_level_arg = config.log_level_arg;
-    var auth_enabled = config.auth_enabled;
 
     // Apply log level and MATCH overrides
     if (log_level_arg) |lla| {
@@ -270,42 +263,17 @@ pub fn main() !void {
     }
     log.info("server.start", &.{Attr.string("level", log_level_arg orelse "info")});
 
-    // Initialize user management and enforce auth guard (migrated from CLI wrapper)
+    // Initialize user management (auth is always enabled in the server process)
     const user_mgmt = geode.user_management;
-    if (!auth_enabled) {
-        if (builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall) {
-            log.err("SECURITY ERROR: --disable-auth is blocked in production builds", &.{});
-            log.err("If this is intentional for testing, use a Debug build or set GEODE_ALLOW_NO_AUTH=1", &.{});
-            const allow_no_auth = std.process.getEnvVarOwned(gpa, "GEODE_ALLOW_NO_AUTH") catch null;
-            if (allow_no_auth) |v| {
-                defer gpa.free(v);
-                if (std.mem.eql(u8, v, "1") or std.mem.eql(u8, v, "true")) {
-                    log.warn("SECURITY WARNING: Authentication disabled via GEODE_ALLOW_NO_AUTH override!", &.{});
-                    auth_enabled = false;
-                } else {
-                    return error.AuthenticationBypassBlockedInProduction;
-                }
-            } else {
-                return error.AuthenticationBypassBlockedInProduction;
-            }
-        } else {
-            log.warn("SECURITY WARNING: Authentication disabled. Do not use in production!", &.{});
-        }
-    }
-
-    if (auth_enabled) {
-        user_mgmt.initUserStore(gpa) catch |err| {
-            log.err("Failed to initialize user store", &.{Attr.string("error", @errorName(err))});
-            return err;
-        };
-        user_mgmt.setAuthEnabled(true);
-        user_mgmt.ensureDefaultUser(gpa) catch |err| {
-            log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
-            return err;
-        };
-    } else {
-        user_mgmt.setAuthEnabled(false);
-    }
+    user_mgmt.initUserStore(gpa) catch |err| {
+        log.err("Failed to initialize user store", &.{Attr.string("error", @errorName(err))});
+        return err;
+    };
+    user_mgmt.setAuthEnabled(true);
+    user_mgmt.ensureDefaultUser(gpa) catch |err| {
+        log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
+        return err;
+    };
 
     // Resolve certificate paths and ensure they exist
     const cert_paths = try cli_args.resolveCertPaths(gpa, &config);
@@ -371,6 +339,10 @@ pub fn main() !void {
     const env_spill_threshold = init_ctx.env_config.spill_threshold;
     const env_storage_checksum_error = init_ctx.env_config.storage_checksum_error;
     const env_wal_compact_interval = init_ctx.env_config.wal_compact_interval;
+    const env_wal_skip_ratio_override = init_ctx.env_config.wal_skip_ratio_override;
+    const disable_estimates = init_ctx.env_config.disable_estimates;
+    const compact_profile = init_ctx.env_config.compact_profile;
+    memcurve_profile = init_ctx.env_config.memcurve_profile;
 
     // CANARY: REQ=REQ-PROMETHEUS-WIRE-004; FEATURE="Prometheus Metrics Endpoint"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
     // GAP-0166: Initialize Prometheus metrics server if enabled via environment
@@ -412,6 +384,10 @@ pub fn main() !void {
             .spill_union = env_spill_union,
             .spill_threshold = env_spill_threshold,
             .storage_checksum_error = env_storage_checksum_error,
+            .wal_skip_ratio_override = env_wal_skip_ratio_override,
+            .disable_estimates = disable_estimates,
+            .compact_profile = compact_profile,
+            .memcurve_profile = memcurve_profile,
             .security_manager = init_ctx.security_manager,
         };
 
@@ -499,7 +475,7 @@ pub fn main() !void {
                     });
                     continue;
                 };
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err2| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, env_wal_skip_ratio_override, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err2| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err2)),
                     });
@@ -524,6 +500,9 @@ pub fn main() !void {
                         Attr.string("error", @errorName(err)),
                     });
                 }
+                // GAP-0200-FIX: Add small sleep when no connections to prevent tight spin loop
+                // This also gives other threads a chance to process and reduces CPU usage
+                std.Thread.sleep(1 * std.time.ns_per_ms);
                 continue;
             };
             std.debug.print("DEBUG_TRACE: Accepted connection\n", .{});
@@ -532,7 +511,7 @@ pub fn main() !void {
             // GAP-0202: Create context for async connection handling
             const ctx = gpa.create(ConnectionContext) catch {
                 log.err("Failed to allocate connection context, handling sync", &.{});
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, env_wal_skip_ratio_override, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err)),
                     });
@@ -554,6 +533,7 @@ pub fn main() !void {
                 .env_spill_threshold = env_spill_threshold,
                 .env_storage_checksum_error = env_storage_checksum_error,
                 .env_wal_compact_interval = env_wal_compact_interval,
+                .env_wal_skip_ratio_override = env_wal_skip_ratio_override,
                 .security_manager = init_ctx.security_manager,
                 .shared_ast_cache = init_ctx.shared_ast_cache,
             };

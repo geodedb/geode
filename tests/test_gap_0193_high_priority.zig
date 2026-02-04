@@ -266,13 +266,13 @@ test "GAP-0193: REQ-TXN-UNDO-SERVER-011 CreateUndoLogServer - Server creates und
     try testing.expect(@hasDecl(geode, "server") or @hasDecl(geode, "protocol"));
 }
 
-// CANARY: REQ=REQ-TXN-UNDO-SERVER-012; FEATURE="TransactionUndoLog"; ASPECT=GraphStorageRemoveNode; STATUS=TESTED; TEST=test_gap_0193_high_priority.zig; OWNER=engine; UPDATED=2026-01-15
-test "GAP-0193: REQ-TXN-UNDO-SERVER-012 GraphStorageRemoveNode - Remove node from storage" {
+// CANARY: REQ=REQ-TXN-UNDO-SERVER-012; FEATURE="TransactionUndoLog"; ASPECT=GraphStoreRemoveNode; STATUS=TESTED; TEST=test_gap_0193_high_priority.zig; OWNER=engine; UPDATED=2026-01-15
+test "GAP-0193: REQ-TXN-UNDO-SERVER-012 GraphStoreRemoveNode - Remove node from storage" {
     try testing.expect(@hasDecl(geode, "graph_store"));
 }
 
-// CANARY: REQ=REQ-TXN-UNDO-SERVER-013; FEATURE="TransactionUndoLog"; ASPECT=GraphStorageRemoveEdge; STATUS=TESTED; TEST=test_gap_0193_high_priority.zig; OWNER=engine; UPDATED=2026-01-15
-test "GAP-0193: REQ-TXN-UNDO-SERVER-013 GraphStorageRemoveEdge - Remove edge from storage" {
+// CANARY: REQ=REQ-TXN-UNDO-SERVER-013; FEATURE="TransactionUndoLog"; ASPECT=GraphStoreRemoveEdge; STATUS=TESTED; TEST=test_gap_0193_high_priority.zig; OWNER=engine; UPDATED=2026-01-15
+test "GAP-0193: REQ-TXN-UNDO-SERVER-013 GraphStoreRemoveEdge - Remove edge from storage" {
     try testing.expect(@hasDecl(geode, "graph_store"));
 }
 
@@ -281,13 +281,13 @@ test "GAP-0193: REQ-TXN-UNDO-SERVER-014 GraphCommonImport - Graph common imports
     try testing.expect(@hasDecl(geode, "graph_store") or @hasDecl(geode, "types"));
 }
 
-// CANARY: REQ=REQ-TXN-UNDO-SERVER-015; FEATURE="TransactionUndoLog"; ASPECT=RollbackGraphStorage; STATUS=TESTED; TEST=test_gap_0193_high_priority.zig; OWNER=engine; UPDATED=2026-01-15
-test "GAP-0193: REQ-TXN-UNDO-SERVER-015 RollbackGraphStorage - Rollback in graph storage" {
+// CANARY: REQ=REQ-TXN-UNDO-SERVER-015; FEATURE="TransactionUndoLog"; ASPECT=RollbackGraphStore; STATUS=TESTED; TEST=test_gap_0193_high_priority.zig; OWNER=engine; UPDATED=2026-01-15
+test "GAP-0193: REQ-TXN-UNDO-SERVER-015 RollbackGraphStore - Rollback in graph storage" {
     try testing.expect(@hasDecl(geode, "graph_store"));
 }
 
-// CANARY: REQ=REQ-TXN-UNDO-SERVER-016; FEATURE="TransactionUndoLog"; ASPECT=GraphStorageImport; STATUS=TESTED; TEST=test_gap_0193_high_priority.zig; OWNER=engine; UPDATED=2026-01-15
-test "GAP-0193: REQ-TXN-UNDO-SERVER-016 GraphStorageImport - Transaction handlers import storage" {
+// CANARY: REQ=REQ-TXN-UNDO-SERVER-016; FEATURE="TransactionUndoLog"; ASPECT=GraphStoreImport; STATUS=TESTED; TEST=test_gap_0193_high_priority.zig; OWNER=engine; UPDATED=2026-01-15
+test "GAP-0193: REQ-TXN-UNDO-SERVER-016 GraphStoreImport - Transaction handlers import storage" {
     try testing.expect(@hasDecl(geode, "graph_store"));
 }
 

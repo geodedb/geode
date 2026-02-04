@@ -36,8 +36,8 @@ run_test() {
     OUTPUT=$(timeout 3 ./zig-out/bin/geode query "$query" --insecure 2>&1 || true)
 
     if [ "$should_succeed" = "true" ]; then
-        # Should succeed - check for SCHEMA or valid result
-        if echo "$OUTPUT" | grep -q '"type":"SCHEMA"\|"type":"BINDINGS"'; then
+        # Should succeed - check for JSON rows
+        if echo "$OUTPUT" | grep -q '"rows"'; then
             echo "✅ PASSED (query succeeded as expected)"
             PASSED_TESTS=$((PASSED_TESTS + 1))
         else

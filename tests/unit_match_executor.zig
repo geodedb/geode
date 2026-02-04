@@ -7,7 +7,7 @@ const graph_exec = @import("server/graph/exec.zig");
 test "TestCANARY_REQ_GQL_017_MatchSingleHop" {
     const allocator = std.testing.allocator;
     // Build tiny graph: 1-[:KNOWS]->2, 2-[:KNOWS]->3
-    var g = graph_exec.GraphStorage.init(allocator);
+    var g = graph_exec.GraphStore.init(allocator);
     defer g.deinit();
     var person_labels = [_][]const u8{"Person"};
     const n1 = try g.createNode(&person_labels);
@@ -37,7 +37,7 @@ test "TestCANARY_REQ_GQL_017_MatchSingleHop" {
 
 test "TestCANARY_REQ_GQL_017_InvalidHopBounds" {
     const allocator = std.testing.allocator;
-    var g = graph_exec.GraphStorage.init(allocator);
+    var g = graph_exec.GraphStore.init(allocator);
     defer g.deinit();
     var labels = [_][]const u8{"X"};
     _ = try g.createNode(&labels);
@@ -55,7 +55,7 @@ test "TestCANARY_REQ_GQL_017_InvalidHopBounds" {
 
 test "TestCANARY_REQ_GQL_017_EmptyGraph" {
     const allocator = std.testing.allocator;
-    var g = graph_exec.GraphStorage.init(allocator);
+    var g = graph_exec.GraphStore.init(allocator);
     defer g.deinit();
     const qtxt = "MATCH (a)-[:KNOWS]->(b) RETURN a, b";
     var parsed = try geode.parseGql(qtxt, allocator);
@@ -74,7 +74,7 @@ test "TestCANARY_REQ_GQL_017_EmptyGraph" {
 
 test "TestCANARY_REQ_GQL_017_BoundedVarLen" {
     const allocator = std.testing.allocator;
-    var g = graph_exec.GraphStorage.init(allocator);
+    var g = graph_exec.GraphStore.init(allocator);
     defer g.deinit();
     var person_labels = [_][]const u8{"Person"};
     const a = try g.createNode(&person_labels);

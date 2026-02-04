@@ -45,8 +45,8 @@ test "integration --insecure flag basic functionality" {
     }
 
     // Should produce JSON output
-    try expect(std.mem.indexOf(u8, stdout, "\"type\":\"SCHEMA\"") != null);
-    try expect(std.mem.indexOf(u8, stdout, "\"type\":\"BINDINGS\"") != null);
+    try expect(std.mem.indexOf(u8, stdout, "\"columns\"") != null);
+    try expect(std.mem.indexOf(u8, stdout, "\"rows\"") != null);
 }
 
 // Test query without text returns usage error
@@ -115,7 +115,7 @@ test "integration help command functionality" {
     try expect(has_help);
 }
 
-// Test subprocess elimination - verify no geodec/geoded spawning
+// Test subprocess elimination - verify no external helper spawning
 test "integration no subprocess spawning" {
     const allocator = testing.allocator;
 
@@ -151,8 +151,8 @@ test "integration no subprocess spawning" {
     }
 
     // Should not contain subprocess-related errors
-    try expect(std.mem.indexOf(u8, stderr, "geodec") == null);
-    try expect(std.mem.indexOf(u8, stderr, "geoded") == null);
+    try expect(std.mem.indexOf(u8, stderr, "subprocess") == null);
+    try expect(std.mem.indexOf(u8, stderr, "spawn") == null);
     try expect(std.mem.indexOf(u8, stderr, "No such file") == null);
 }
 
@@ -287,8 +287,8 @@ test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_002" {
     try expect(stdout.len > 0);
 
     // Should not have subprocess errors
-    try expect(std.mem.indexOf(u8, stderr, "geodec") == null);
-    try expect(std.mem.indexOf(u8, stderr, "geoded") == null);
+    try expect(std.mem.indexOf(u8, stderr, "subprocess") == null);
+    try expect(std.mem.indexOf(u8, stderr, "spawn") == null);
 
     // Log successful CANARY test completion
     std.log.info("CANARY integration test passed: CLI subprocess elimination working end-to-end", .{});

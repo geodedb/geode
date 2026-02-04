@@ -98,40 +98,17 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             }
         },
         .graphs => {
-            // Prefer catalog graph names, but merge with graph storage names for legacy compatibility.
-            var seen = std.StringHashMap(void).init(allocator);
-            defer seen.deinit();
-
-            var iter = cat.graphs.iterator();
-            while (iter.next()) |entry| {
-                const name = entry.key_ptr.*;
-                if (seen.contains(name)) continue;
-                const name_copy = try allocator.dupe(u8, name);
-                try seen.put(name_copy, {});
-                var row = try allocator.alloc(Value, 1);
-                row[0] = Value{ .Str = name_copy };
-                try rows_list.append(allocator, row);
-            }
-
-            // Get storage graphs - only free if we got allocated memory
-            if (graph_store.getGlobalStore(allocator).listGraphNames(allocator)) |storage_graphs| {
+            const storage_graphs = graph_store.getGlobalStore(allocator).listGraphNames(allocator) catch null;
+            if (storage_graphs) |names| {
                 defer {
-                    for (storage_graphs) |name| {
-                        allocator.free(name);
-                    }
-                    allocator.free(storage_graphs);
+                    for (names) |name| allocator.free(name);
+                    allocator.free(names);
                 }
-
-                for (storage_graphs) |name| {
-                    if (seen.contains(name)) continue;
-                    const name_copy = try allocator.dupe(u8, name);
-                    try seen.put(name_copy, {});
+                for (names) |name| {
                     var row = try allocator.alloc(Value, 1);
-                    row[0] = Value{ .Str = name_copy };
+                    row[0] = Value{ .Str = try allocator.dupe(u8, name) };
                     try rows_list.append(allocator, row);
                 }
-            } else |_| {
-                // listGraphNames failed, just use catalog graphs only
             }
         },
         .constraints => {

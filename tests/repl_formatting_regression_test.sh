@@ -137,8 +137,8 @@ pub fn main() !void {
 
     // Test JSON parsing like the REPL does
     const test_responses = [_][]const u8{
-        "{\"columns\":[\"name\"],\"data\":[[\"Alice\"]]}",
-        "{\"columns\":[\"id\",\"name\"],\"data\":[[1,\"Alice\"],[2,\"Bob\"]]}",
+        "{\"columns\":[{\"name\":\"name\",\"type\":\"STRING\"}],\"rows\":[{\"name\":\"Alice\"}]}",
+        "{\"columns\":[{\"name\":\"id\",\"type\":\"INTEGER\"},{\"name\":\"name\",\"type\":\"STRING\"}],\"rows\":[{\"id\":1,\"name\":\"Alice\"},{\"id\":2,\"name\":\"Bob\"}]}",
         "{\"status\":\"success\",\"message\":\"Query executed\"}",
     };
 
@@ -151,10 +151,10 @@ pub fn main() !void {
 
         const root = parsed.value.object;
         if (root.get("columns")) |_| {
-            if (root.get("data")) |_| {
+            if (root.get("rows")) |_| {
                 std.debug.print("✅ Valid query response format\n", .{});
             } else {
-                std.debug.print("❌ Missing data field\n", .{});
+                std.debug.print("❌ Missing rows field\n", .{});
             }
         } else if (root.get("status")) |_| {
             std.debug.print("✅ Valid status response format\n", .{});
@@ -191,8 +191,8 @@ pub fn main() !void {
     // Test error cases
     const error_cases = [_][]const u8{
         "{invalid json",
-        "{\"columns\":[]}",  // missing data
-        "{\"data\":[]}",     // missing columns
+        "{\"columns\":[]}",  // missing rows
+        "{\"rows\":[]}",     // missing columns
         "",                  // empty
         "null",              // null response
     };
@@ -235,7 +235,7 @@ pub fn main() !void {
     const start_time = std.time.milliTimestamp();
 
     // Simulate multiple formatting operations
-    const large_response = "{\"columns\":[\"id\",\"name\",\"value\"],\"data\":[[1,\"test1\",100],[2,\"test2\",200],[3,\"test3\",300],[4,\"test4\",400],[5,\"test5\",500]]}";
+    const large_response = "{\"columns\":[{\"name\":\"id\",\"type\":\"INTEGER\"},{\"name\":\"name\",\"type\":\"STRING\"},{\"name\":\"value\",\"type\":\"INTEGER\"}],\"rows\":[{\"id\":1,\"name\":\"test1\",\"value\":100},{\"id\":2,\"name\":\"test2\",\"value\":200},{\"id\":3,\"name\":\"test3\",\"value\":300},{\"id\":4,\"name\":\"test4\",\"value\":400},{\"id\":5,\"name\":\"test5\",\"value\":500}]}";
 
     for (0..100) |_| {
         const parsed = std.json.parseFromSlice(std.json.Value, allocator, large_response, .{}) catch continue;
@@ -244,15 +244,13 @@ pub fn main() !void {
         // Simulate processing
         const root = parsed.value.object;
         if (root.get("columns")) |columns_value| {
-            if (root.get("data")) |data_value| {
-                _ = columns_value.array;
-                const rows = data_value.array;
+            if (root.get("rows")) |rows_value| {
+                const cols = columns_value.array;
+                const rows = rows_value.array;
 
                 // Process columns and rows (lightweight simulation)
                 var total_cells: usize = 0;
-                for (rows.items) |row| {
-                    total_cells += row.array.items.len;
-                }
+                total_cells = rows.items.len * cols.items.len;
                 // Use total_cells to prevent optimization away
                 if (total_cells > 0) continue;
             }

@@ -134,7 +134,7 @@ pub const RandomWalk = struct {
     }
 
     /// Calculate transition probability for Node2Vec biased walk
-    pub fn transitionProbability(self: *const RandomWalk, target_node: u64, graph: *const geode.graph_common.GraphStorage) f64 {
+    pub fn transitionProbability(self: *const RandomWalk, target_node: u64, graph: *const geode.graph_common.GraphStore) f64 {
         if (self.previous_node == null) return 1.0;
 
         const prev = self.previous_node.?;
@@ -182,14 +182,14 @@ pub const GraphEmbeddingsManager = struct {
     statistics: EmbeddingStatistics,
     training_context: ?TrainingContext,
     // GAP-0081: Store graph reference for inductive learning
-    // CANARY: REQ=REQ-GRAPHSAGE-INDUCTIVE-001; FEATURE="GraphSAGE Inductive Learning"; ASPECT=GraphStorage; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=ml; UPDATED=2026-01-10
-    trained_graph: ?*const geode.graph_common.GraphStorage = null,
+    // CANARY: REQ=REQ-GRAPHSAGE-INDUCTIVE-001; FEATURE="GraphSAGE Inductive Learning"; ASPECT=GraphStore; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=ml; UPDATED=2026-01-10
+    trained_graph: ?*const geode.graph_common.GraphStore = null,
     // Learned aggregation weights for GraphSAGE (per layer)
     aggregation_weights: ?[][]f32 = null,
     num_layers: u32 = 2,
 
     pub const AlgorithmImplementation = struct {
-        train_fn: *const fn (*GraphEmbeddingsManager, *const geode.graph_common.GraphStorage, EmbeddingConfig) anyerror!void,
+        train_fn: *const fn (*GraphEmbeddingsManager, *const geode.graph_common.GraphStore, EmbeddingConfig) anyerror!void,
         predict_fn: *const fn (*GraphEmbeddingsManager, u64) anyerror![]f32,
         update_fn: *const fn (*GraphEmbeddingsManager, u64, []const f32) anyerror!void,
         similarity_fn: *const fn (*GraphEmbeddingsManager, u64, u64) anyerror!f64,
@@ -271,7 +271,7 @@ pub const GraphEmbeddingsManager = struct {
     }
 
     /// Train embeddings using specified algorithm
-    pub fn trainEmbeddings(self: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStorage, algorithm: MLAlgorithm, custom_config: ?EmbeddingConfig) !void {
+    pub fn trainEmbeddings(self: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStore, algorithm: MLAlgorithm, custom_config: ?EmbeddingConfig) !void {
         const config = custom_config orelse self.config;
         const start_time = std.time.milliTimestamp();
 
@@ -401,7 +401,7 @@ pub const GraphEmbeddingsManager = struct {
 // Algorithm Implementation Functions
 
 /// Node2Vec training implementation
-fn trainNode2Vec(manager: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStorage, config: EmbeddingConfig) !void {
+fn trainNode2Vec(manager: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStore, config: EmbeddingConfig) !void {
     log.info("Training Node2Vec algorithm with p={d:.2}, q={d:.2}", .{ config.p, config.q });
 
     // Initialize embeddings for all nodes
@@ -452,7 +452,7 @@ fn trainNode2Vec(manager: *GraphEmbeddingsManager, graph: *const geode.graph_com
 }
 
 /// GraphSAGE training implementation
-fn trainGraphSAGE(manager: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStorage, config: EmbeddingConfig) !void {
+fn trainGraphSAGE(manager: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStore, config: EmbeddingConfig) !void {
     log.info("Training GraphSAGE algorithm with {} neighbor samples", .{config.neighbor_samples});
 
     // GAP-0081: Store graph reference for inductive learning on unseen nodes
@@ -512,7 +512,7 @@ fn trainGraphSAGE(manager: *GraphEmbeddingsManager, graph: *const geode.graph_co
 }
 
 /// DeepWalk training implementation (simplified Node2Vec with p=1, q=1)
-fn trainDeepWalk(manager: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStorage, config: EmbeddingConfig) !void {
+fn trainDeepWalk(manager: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStore, config: EmbeddingConfig) !void {
     log.info("Training DeepWalk algorithm");
 
     // DeepWalk is Node2Vec with p=1, q=1 (uniform random walks)
@@ -526,7 +526,7 @@ fn trainDeepWalk(manager: *GraphEmbeddingsManager, graph: *const geode.graph_com
 // Helper functions for algorithm implementations
 
 /// Generate a biased random walk for Node2Vec
-fn generateRandomWalk(walk: *RandomWalk, graph: *const geode.graph_common.GraphStorage, walk_length: u32) !void {
+fn generateRandomWalk(walk: *RandomWalk, graph: *const geode.graph_common.GraphStore, walk_length: u32) !void {
     var current = walk.current_node;
 
     for (1..walk_length) |_| {
@@ -599,7 +599,7 @@ fn updateEmbeddingsPair(manager: *GraphEmbeddingsManager, node1: u64, node2: u64
 }
 
 /// Aggregate neighbor features for GraphSAGE
-fn aggregateNeighborFeatures(manager: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStorage, node_id: u64, config: EmbeddingConfig) !void {
+fn aggregateNeighborFeatures(manager: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStore, node_id: u64, config: EmbeddingConfig) !void {
     const neighbors = try graph.getNeighbors(manager.allocator, node_id);
     defer manager.allocator.free(neighbors);
 
@@ -869,7 +869,7 @@ test "Random walk generation" {
     const allocator = std.testing.allocator;
 
     // Create a simple test graph
-    var graph = geode.graph_common.GraphStorage.init(allocator);
+    var graph = geode.graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add nodes and edges for testing

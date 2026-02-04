@@ -77,24 +77,24 @@ fn formatResultAsCsv(writer: anytype, allocator: std.mem.Allocator, response: []
 
     const root = parsed.value.object;
     if (root.get("columns")) |columns_value| {
-        if (root.get("data")) |data_value| {
+        if (root.get("rows")) |rows_value| {
             const columns = columns_value.array;
-            const rows = data_value.array;
+            const rows = rows_value.array;
 
             // Header
             for (columns.items, 0..) |col, i| {
                 if (i > 0) try writer.writeAll(",");
                 try writer.writeAll("\"");
-                try writer.writeAll(col.string);
+                try writer.writeAll(columnName(col));
                 try writer.writeAll("\"");
             }
             try writer.writeAll("\n");
 
             // Data rows
             for (rows.items) |row| {
-                const row_array = row.array;
-                for (row_array.items, 0..) |cell, i| {
+                for (columns.items, 0..) |col, i| {
                     if (i > 0) try writer.writeAll(",");
+                    const cell = getRowValue(row, columnName(col));
                     switch (cell) {
                         .string => |s| {
                             try writer.writeAll("\"");
@@ -141,26 +141,26 @@ fn formatResultAsTable(writer: anytype, allocator: std.mem.Allocator, response: 
 
     const root = parsed.value.object;
     if (root.get("columns")) |columns_value| {
-        if (root.get("data")) |data_value| {
+        if (root.get("rows")) |rows_value| {
             const columns = columns_value.array;
-            const rows = data_value.array;
+            const rows = rows_value.array;
 
             // Calculate column widths
             var col_widths = try allocator.alloc(usize, columns.items.len);
             defer allocator.free(col_widths);
 
             for (columns.items, 0..) |col, i| {
-                col_widths[i] = col.string.len;
+                col_widths[i] = columnName(col).len;
             }
 
             for (rows.items) |row| {
-                const row_array = row.array;
-                for (row_array.items, 0..) |cell, i| {
+                for (columns.items, 0..) |col, i| {
                     if (i >= col_widths.len) continue;
+                    const cell = getRowValue(row, columnName(col));
                     const width: usize = switch (cell) {
                         .string => |s| s.len,
-                        .integer => 10, // rough estimate
-                        .float => 10, // rough estimate
+                        .integer => 10,
+                        .float => 10,
                         .bool => 5,
                         .null => 4,
                         else => 0,
@@ -172,8 +172,9 @@ fn formatResultAsTable(writer: anytype, allocator: std.mem.Allocator, response: 
             // Print header
             try writer.writeAll("| ");
             for (columns.items, 0..) |col, i| {
-                try writer.writeAll(col.string);
-                const padding = col_widths[i] - col.string.len;
+                const name = columnName(col);
+                try writer.writeAll(name);
+                const padding = col_widths[i] - name.len;
                 for (0..padding) |_| try writer.writeAll(" ");
                 try writer.writeAll(" | ");
             }
@@ -191,9 +192,9 @@ fn formatResultAsTable(writer: anytype, allocator: std.mem.Allocator, response: 
             // Print data rows
             for (rows.items) |row| {
                 try writer.writeAll("| ");
-                const row_array = row.array;
-                for (row_array.items, 0..) |cell, i| {
+                for (columns.items, 0..) |col, i| {
                     if (i >= col_widths.len) continue;
+                    const cell = getRowValue(row, columnName(col));
                     var printed_len: usize = 0;
                     switch (cell) {
                         .string => |s| {
@@ -237,6 +238,21 @@ fn formatResultAsTable(writer: anytype, allocator: std.mem.Allocator, response: 
     try writer.writeAll(response);
 }
 
+fn columnName(col: std.json.Value) []const u8 {
+    return switch (col) {
+        .object => |obj| obj.get("name").?.string,
+        .string => |s| s,
+        else => "",
+    };
+}
+
+fn getRowValue(row: std.json.Value, name: []const u8) std.json.Value {
+    if (row == .object) {
+        if (row.object.get(name)) |val| return val;
+    }
+    return std.json.Value{ .null = {} };
+}
+
 // Unit Tests for Formatting Fixes
 
 test "Output contains leading newline for query results" {
@@ -244,7 +260,7 @@ test "Output contains leading newline for query results" {
     var capture = OutputCapture.init(testing.allocator);
     defer capture.deinit();
 
-    const response = "{\"columns\":[\"name\"],\"data\":[[\"Alice\"]]}";
+    const response = "{\"columns\":[{\"name\":\"name\",\"type\":\"STRING\"}],\"rows\":[{\"name\":\"Alice\"}]}";
 
     // Simulate executeGql behavior - should start with newline
     try capture.writer().writeAll("\n");
@@ -260,7 +276,7 @@ test "CSV format includes proper newlines" {
     var capture = OutputCapture.init(testing.allocator);
     defer capture.deinit();
 
-    const response = "{\"columns\":[\"name\",\"age\"],\"data\":[[\"Alice\",30],[\"Bob\",25]]}";
+    const response = "{\"columns\":[{\"name\":\"name\",\"type\":\"STRING\"},{\"name\":\"age\",\"type\":\"INTEGER\"}],\"rows\":[{\"name\":\"Alice\",\"age\":30},{\"name\":\"Bob\",\"age\":25}]}";
     try formatQueryResult(capture.writer(), testing.allocator, response, .csv);
 
     const output = capture.getOutput();
@@ -278,7 +294,7 @@ test "Table format has consistent line endings" {
     var capture = OutputCapture.init(testing.allocator);
     defer capture.deinit();
 
-    const response = "{\"columns\":[\"id\",\"name\"],\"data\":[[1,\"Alice\"],[2,\"Bob\"]]}";
+    const response = "{\"columns\":[{\"name\":\"id\",\"type\":\"INTEGER\"},{\"name\":\"name\",\"type\":\"STRING\"}],\"rows\":[{\"id\":1,\"name\":\"Alice\"},{\"id\":2,\"name\":\"Bob\"}]}";
     try formatQueryResult(capture.writer(), testing.allocator, response, .table);
 
     const output = capture.getOutput();
@@ -380,7 +396,7 @@ test "Multi-line output with proper newlines" {
 
     // Simulate multi-line output
     try capture.writer().writeAll("\n"); // Leading newline
-    try capture.writer().writeAll("{\"columns\":[\"id\"],\"data\":[[1]]}\n");
+    try capture.writer().writeAll("{\"columns\":[{\"name\":\"id\",\"type\":\"INTEGER\"}],\"rows\":[{\"id\":1}]}\n");
     try capture.writer().writeAll("Query executed in 1.23 ms\n");
 
     const output = capture.getOutput();
@@ -437,7 +453,7 @@ test "Empty data array formatting" {
     var capture = OutputCapture.init(testing.allocator);
     defer capture.deinit();
 
-    const response = "{\"columns\":[\"name\"],\"data\":[]}";
+    const response = "{\"columns\":[{\"name\":\"name\",\"type\":\"STRING\"}],\"rows\":[]}";
     try formatQueryResult(capture.writer(), testing.allocator, response, .csv);
 
     const output = capture.getOutput();
@@ -450,7 +466,7 @@ test "Large table output consistency" {
     defer capture.deinit();
 
     // Create a response with many rows
-    const response = "{\"columns\":[\"id\",\"name\"],\"data\":[[1,\"Alice\"],[2,\"Bob\"],[3,\"Charlie\"],[4,\"David\"],[5,\"Eve\"]]}";
+    const response = "{\"columns\":[{\"name\":\"id\",\"type\":\"INTEGER\"},{\"name\":\"name\",\"type\":\"STRING\"}],\"rows\":[{\"id\":1,\"name\":\"Alice\"},{\"id\":2,\"name\":\"Bob\"},{\"id\":3,\"name\":\"Charlie\"},{\"id\":4,\"name\":\"David\"},{\"id\":5,\"name\":\"Eve\"}]}";
     try formatQueryResult(capture.writer(), testing.allocator, response, .table);
 
     const output = capture.getOutput();

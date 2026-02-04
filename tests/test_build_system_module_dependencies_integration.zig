@@ -4,14 +4,14 @@ const geode = @import("geode");
 
 // CANARY: REQ=REQ-BUILD-SYSTEM-MODULE-DEPS-INTEGRATION-001; FEATURE="Build System Module Dependencies Integration"; ASPECT=EndToEndWorkflow; STATUS=TESTED; TEST=TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_001_EndToEndWorkflow; OWNER=build; UPDATED=2025-10-05
 // CANARY: REQ=REQ-BUILD-SYSTEM-MODULE-DEPS-INTEGRATION-002; FEATURE="Build System Module Dependencies Integration"; ASPECT=MaterializedViewsIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_002_MaterializedViewsIntegration; OWNER=build; UPDATED=2025-10-05
-// CANARY: REQ=REQ-BUILD-SYSTEM-MODULE-DEPS-INTEGRATION-003; FEATURE="Build System Module Dependencies Integration"; ASPECT=GraphStorageIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_003_GraphStorageIntegration; OWNER=build; UPDATED=2025-10-05
+// CANARY: REQ=REQ-BUILD-SYSTEM-MODULE-DEPS-INTEGRATION-003; FEATURE="Build System Module Dependencies Integration"; ASPECT=GraphStoreIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_003_GraphStoreIntegration; OWNER=build; UPDATED=2025-10-05
 
 test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_001_EndToEndWorkflow" {
     // Test complete end-to-end workflow using resolved module dependencies
     const allocator = testing.allocator;
 
     // Create graph storage
-    var graph = geode.graph_common.GraphStorage.init(allocator);
+    var graph = geode.graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add nodes with properties
@@ -160,12 +160,12 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_002_MaterializedViewsI
     }
 }
 
-test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_003_GraphStorageIntegration" {
+test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_003_GraphStoreIntegration" {
     // Test comprehensive graph storage operations with resolved dependencies
     const allocator = testing.allocator;
 
     // Create graph storage instance
-    var graph = geode.graph_common.GraphStorage.init(allocator);
+    var graph = geode.graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Test complex graph creation
@@ -308,7 +308,7 @@ test "Cross-module dependency resolution validation" {
     var mv_manager = geode.materialized_views.MaterializedViewManager.init(allocator);
     defer mv_manager.deinit();
 
-    var graph = geode.graph_common.GraphStorage.init(allocator);
+    var graph = geode.graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Test 2: Column type is accessible from multiple modules
@@ -411,7 +411,7 @@ test "Build system stability under load" {
     const num_instances = 10;
 
     // Create multiple graph storage instances
-    var graphs = std.ArrayList(geode.graph_common.GraphStorage).init(allocator);
+    var graphs = std.ArrayList(geode.graph_common.GraphStore).init(allocator);
     defer {
         for (graphs.items) |*graph| {
             graph.deinit();
@@ -420,7 +420,7 @@ test "Build system stability under load" {
     }
 
     for (0..num_instances) |i| {
-        var graph = geode.graph_common.GraphStorage.init(allocator);
+        var graph = geode.graph_common.GraphStore.init(allocator);
 
         // Add nodes to each graph
         var labels = [_][]const u8{"TestNode"};

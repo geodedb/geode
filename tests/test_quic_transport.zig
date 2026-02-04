@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
+const repl_util = @import("repl_test_util.zig");
 
 // We need to include the CLI code to test the QUIC transport
 // Since it's in the CLI module, we'll test the interface behavior
@@ -8,58 +9,39 @@ const repl_dispatch = geode.repl.repl_dispatch;
 
 // CANARY: REQ=REQ-REPL-QUIC-003; FEATURE="REPL QUIC Transport Tests"; ASPECT=UnitTests; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; TEST=test_transport_interface; OWNER=repl; UPDATED=2025-10-05
 
-test "transport interface - mock transport connectivity" {
+test "transport interface - quic connectivity" {
     const allocator = testing.allocator;
+    var server = try repl_util.startServer(allocator);
+    defer server.deinit();
 
-    // Test the mock transport implementation
-    const transport = &repl_dispatch.mock_transport;
-
-    // Test connection creation
-    var connection = transport.connect(allocator, "127.0.0.1:3141") catch |err| {
-        std.debug.print("Failed to create mock connection: {s}\n", .{@errorName(err)});
-        return err;
-    };
-    defer connection.deinit();
-
-    // Test basic operations
-    try connection.writeAll("test message");
-
-    const response = try connection.readLine(allocator, 1024);
-    defer allocator.free(response);
-
-    // Mock should return a JSON response
-    try testing.expect(std.mem.indexOf(u8, response, "MOCK_RESPONSE") != null);
-}
-
-test "transport interface - client session with mock transport" {
-    const allocator = testing.allocator;
-
-    // Test ClientSession with mock transport
-    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_util.connectSession(allocator, server.addr);
     defer session.deinit();
 
-    // Test connection
-    try session.connect();
-    try testing.expect(session.connected);
-
-    // Test protocol operations (these should work with mock)
-    try session.hello();
     try session.runGql("RETURN 1 AS test");
+    try testing.expect(session.last_response != null);
+}
 
-    // The mock should have stored a response
+test "transport interface - client session with quic transport" {
+    const allocator = testing.allocator;
+    var server = try repl_util.startServer(allocator);
+    defer server.deinit();
+
+    var session = try repl_util.connectSession(allocator, server.addr);
+    defer session.deinit();
+
+    try testing.expect(session.connected);
+    try session.runGql("RETURN 1 AS test");
     try testing.expect(session.last_response != null);
 }
 
 test "transport interface - error handling" {
     const allocator = testing.allocator;
 
-    // Test error handling with uninitialized session
-    var session = try repl_dispatch.ClientSession.init(allocator, "invalid:address", &repl_dispatch.mock_transport);
+    // Test error handling with invalid address
+    var session = try repl_dispatch.ClientSession.init(allocator, "invalid", &geode.repl.quic_transport.transport);
     defer session.deinit();
 
-    // Test operations before connection should fail
-    const result = session.hello();
-    try testing.expectError(error.NotConnected, result);
+    try testing.expectError(error.InvalidAddress, session.connect());
 }
 
 test "address parsing - valid addresses" {
@@ -141,22 +123,15 @@ test "json escaping - repl dispatch" {
 
 test "transport interface - connection lifecycle" {
     const allocator = testing.allocator;
+    var server = try repl_util.startServer(allocator);
+    defer server.deinit();
 
     // Test complete connection lifecycle
-    var session = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_util.connectSession(allocator, server.addr);
     defer session.deinit();
 
-    // Test initial state
-    try testing.expect(!session.connected);
-    try testing.expect(session.connection == null);
-
-    // Test connect
-    try session.connect();
     try testing.expect(session.connected);
     try testing.expect(session.connection != null);
-
-    // Test protocol handshake
-    try session.hello();
 
     // Test query execution
     try session.runGql("RETURN 1 AS test");
@@ -177,7 +152,7 @@ test "transport interface - comprehensive error scenarios" {
     const allocator = testing.allocator;
 
     // Test operations on unconnected session
-    var session = try repl_dispatch.ClientSession.init(allocator, "invalid:1234", &repl_dispatch.mock_transport);
+    var session = try repl_dispatch.ClientSession.init(allocator, "invalid:1234", &geode.repl.quic_transport.transport);
     defer session.deinit();
 
     // These should fail before connection
@@ -215,29 +190,41 @@ test "address parsing - comprehensive edge cases" {
 
 test "protocol messages - comprehensive validation" {
     const allocator = testing.allocator;
+    const protobuf = @import("protobuf");
+    const schema = @import("schema");
 
-    // Test all protocol messages used by REPL
-    const test_messages = [_]struct {
-        msg: []const u8,
-        expected_type: []const u8,
-    }{
-        .{ .msg = "{\"type\":\"HELLO\",\"client_name\":\"geode-repl\",\"client_ver\":\"0.1.0\",\"wanted_conformance\":\"min\"}", .expected_type = "HELLO" },
-        .{ .msg = "{\"type\":\"RUN_GQL\",\"text\":\"RETURN 1 AS test\"}", .expected_type = "RUN_GQL" },
-        .{ .msg = "{\"type\":\"BEGIN\"}", .expected_type = "BEGIN" },
-        .{ .msg = "{\"type\":\"COMMIT\"}", .expected_type = "COMMIT" },
-        .{ .msg = "{\"type\":\"ROLLBACK\"}", .expected_type = "ROLLBACK" },
-        .{ .msg = "{\"type\":\"PULL\",\"request_id\":1,\"page_size\":1000}", .expected_type = "PULL" },
+    const messages = [_]schema.QuicClientMessage{
+        .{ .hello = .{
+            .username = "geode",
+            .password = "test-pass",
+            .tenant_id = null,
+            .client_name = "geode-repl",
+            .client_version = "0.1.0",
+            .wanted_conformance = "min",
+        } },
+        .{ .execute = .{
+            .session_id = "sess",
+            .query = "RETURN 1 AS test",
+            .params = std.ArrayList(schema.Param).init(allocator),
+        } },
+        .{ .begin = .{ .read_only = false, .session_id = "" } },
+        .{ .commit = .{ .session_id = "" } },
+        .{ .rollback = .{ .session_id = "" } },
+        .{ .pull = .{ .request_id = 1, .page_size = 1000, .session_id = "" } },
     };
 
-    for (test_messages) |test_case| {
-        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, test_case.msg, .{});
-        defer parsed.deinit();
+    for (messages) |msg| {
+        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 256);
+        defer aw.deinit();
 
-        const root = parsed.value.object;
-        try testing.expect(root.get("type") != null);
+        const packet = schema.ClientPacket{ .quic = msg };
+        try protobuf.encode(&aw.writer, allocator, packet);
 
-        const msg_type = root.get("type").?.string;
-        try testing.expectEqualStrings(test_case.expected_type, msg_type);
+        var reader: std.Io.Reader = .fixed(aw.writer.buffer[0..aw.writer.end]);
+        var decoded = try protobuf.decode(schema.ClientPacket, &reader, allocator);
+        defer decoded.deinit(allocator);
+
+        try testing.expect(decoded.quic != null);
     }
 }
 
@@ -246,15 +233,15 @@ test "protocol messages - comprehensive validation" {
 
 test "session cleanup - deinitSourcedFileCache called on deinit" {
     const allocator = testing.allocator;
+    var server = try repl_util.startServer(allocator);
+    defer server.deinit();
 
     // Create multiple sessions and verify cleanup happens properly
     {
-        var session1 = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
-        try session1.connect();
+        var session1 = try repl_util.connectSession(allocator, server.addr);
         session1.deinit(); // Should call deinitSourcedFileCache
 
-        var session2 = try repl_dispatch.ClientSession.init(allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
-        try session2.connect();
+        var session2 = try repl_util.connectSession(allocator, server.addr);
         session2.deinit(); // Should call deinitSourcedFileCache again (no crash)
     }
 
@@ -272,13 +259,12 @@ test "session lifecycle - memory safety with transaction operations" {
         };
     }
     const test_allocator = gpa.allocator();
+    var server = try repl_util.startServer(test_allocator);
+    defer server.deinit();
 
     // Create session and run full lifecycle
-    var session = try repl_dispatch.ClientSession.init(test_allocator, "127.0.0.1:3141", &repl_dispatch.mock_transport);
+    var session = try repl_util.connectSession(test_allocator, server.addr);
     defer session.deinit();
-
-    try session.connect();
-    try session.hello();
 
     // Test transaction lifecycle
     try session.begin();

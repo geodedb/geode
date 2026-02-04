@@ -7,12 +7,12 @@ test "transactions e2e basic lifecycle" {
     const allocator = testing.allocator;
     const addr = "127.0.0.1:17684";
 
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--disable-auth" }, null);
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, null);
     defer server.deinit();
 
     var client = try util.QuicProtoClient.connect(allocator, addr);
     defer client.deinit();
-    var hello = try client.hello(allocator, "", "");
+    var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
     hello.deinit(allocator);
 
     const begin_ok = try client.begin(allocator);

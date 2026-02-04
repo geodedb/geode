@@ -24,7 +24,7 @@ var flags_buf_ext: [7][]const u8 = undefined; // room for adaptive + union phase
 
 /// Global flag state variables
 var g_nulls_last: bool = false; // default NullsFirstPolicy unless overridden by env
-var g_order_keys_expr: bool = true; // enable property-based ordering by default
+var g_order_keys_expr: bool = false; // default ident-only unless env overrides
 var g_adapt_estimates: bool = false; // env or future CLI toggled
 var g_estimate_adjust_factor: f64 = 1.0; // groundwork; stays 1.0 until adaptive algorithm enabled
 
@@ -64,14 +64,27 @@ pub fn initImplDefinedFlags(allocator: std.mem.Allocator) void {
 /// Compute base flags for query execution
 /// Returns appropriate ordering and property flags based on query characteristics
 pub fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
-    _ = ordered;
-    _ = distinct;
-    // Use appropriate flag based on property ordering setting
-    flags_buf_base[0] = if (g_order_keys_expr) F_PROPERTY_ORDER else F_ILLEGAL;
-    return flags_buf_base[0..1];
+    var idx: usize = 0;
+    flags_buf_base[idx] = if (g_order_keys_expr) F_PROPERTY_ORDER else F_ILLEGAL;
+    idx += 1;
+    flags_buf_base[idx] = nullsFlag();
+    idx += 1;
+    if (ordered) {
+        flags_buf_base[idx] = F_TIEBREAK;
+        idx += 1;
+    }
+    if (distinct and !ordered) {
+        flags_buf_base[idx] = F_DISTINCT_UNORDERED;
+        idx += 1;
+    }
+    if (g_adapt_estimates) {
+        flags_buf_base[idx] = F_ADAPT_EST;
+        idx += 1;
+    }
+    return flags_buf_base[0..idx];
 }
 
-/// Compute extended flags including union phases and deprecation warnings
+/// Compute extended flags including union phases
 /// Builds on base flags with additional metadata flags
 pub fn computeFlagsExtended(ordered: bool, distinct: bool, union_phases: bool) []const []const u8 {
     const base = computeBaseFlags(ordered, distinct);
@@ -82,9 +95,6 @@ pub fn computeFlagsExtended(ordered: bool, distinct: bool, union_phases: bool) [
         flags_buf_ext[end] = F_UNION_PHASES;
         end += 1;
     }
-    // Deprecation flag for wal_skip_ratio legacy key always appended (profile context check later could refine)
-    flags_buf_ext[end] = "U:WalSkipRatioDeprecated";
-    end += 1;
     return flags_buf_ext[0..end];
 }
 

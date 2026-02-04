@@ -1,5 +1,4 @@
-#!/usr/bin/env nix-shell
-#! nix-shell -i bash -p bash -p coreutils
+#!/usr/bin/env bash
 # Comprehensive Database Integration Tests for Geode
 # Tests all major database functionality including CRUD, transactions, constraints, etc.
 

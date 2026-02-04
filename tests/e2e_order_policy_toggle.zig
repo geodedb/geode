@@ -1,74 +1,54 @@
 const std = @import("std");
-const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
+const testing = std.testing;
+const proto = @import("proto_test_util");
+const schema = @import("schema");
 
-fn run(args: []const []const u8, gql: []const u8) !struct { code: i32, out: []u8, err: []u8 } {
-    const allocator = std.testing.allocator;
-    var argv = std.ArrayList([]const u8).init(allocator);
-    defer argv.deinit(allocator);
-    try argv.append(allocator, args[0]);
-    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
-        try argv.append(allocator, "query");
-    }
-    try argv.appendSlice(allocator, args[1..]);
-    var child = Child.init(argv.items, allocator);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
+fn runQuery(allocator: std.mem.Allocator, addr: []const u8, query: []const u8) !proto.ExecResult {
+    var client = try proto.QuicProtoClient.connect(allocator, addr);
+    defer client.deinit();
+    const hello = try client.hello(allocator, proto.defaultUsername(), proto.defaultPassword());
+    defer hello.deinit(allocator);
 
-    // HELLO
-    try child.stdin.?.writeAll("{\"type\":\"HELLO\",\"client_name\":\"test\",\"client_ver\":\"0.1\",\"wanted_conformance\":\"min\"}\n");
-    _ = try child.stdout.?.readToEndAlloc(allocator, 1 << 20);
-
-    // RUN_GQL
-    try child.stdin.?.writeAll("{\"type\":\"RUN_GQL\",\"text\":\"");
-    try child.stdin.?.writeAll(gql);
-    try child.stdin.?.writeAll("\"}\n");
-
-    // Read first response (SCHEMA or ERROR)
-    const resp = try child.stdout.?.readToEndAlloc(allocator, 1 << 20);
-    defer allocator.free(resp);
-
-    child.stdin.?.close();
-    child.stdout.?.close();
-    const term = try child.wait();
-    const code: i32 = switch (term) {
-        .Exited => |st| st,
-        else => 2,
-    };
-    return .{ .code = code, .out = resp, .err = try allocator.dupe(u8, "") };
+    const params = std.ArrayList(schema.Param).init(allocator);
+    return client.executeAndCollect(allocator, query, params, 0);
 }
 
 test "ORDER policy: expr forbidden by default" {
-    const exe = "./zig-out/bin/geode";
-    const r = try run(&.{exe}, "RETURN a ORDER BY f(a)");
-    defer std.testing.allocator.free(r.out);
-    defer std.testing.allocator.free(r.err);
-    // Parse JSON and assert ERROR with code IllegalOrderKey
-    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, r.out, .{});
-    defer parsed.deinit();
-    try std.testing.expect(parsed.value == .object);
-    const obj = parsed.value.object;
-    const result_v = obj.get("result") orelse return error.Unexpected;
-    try std.testing.expect(result_v == .object);
-    const typ = result_v.object.get("type") orelse return error.Unexpected;
-    try std.testing.expect(typ == .string and std.mem.eql(u8, typ.string, "ERROR"));
-    const codev = result_v.object.get("code") orelse return error.Unexpected;
-    try std.testing.expect(codev == .string and std.mem.eql(u8, codev.string, "IllegalOrderKey"));
+    const allocator = testing.allocator;
+    const addr = "127.0.0.1:15620";
+
+    var server = try proto.spawnServer(
+        allocator,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
+        null,
+    );
+    defer server.deinit();
+    std.time.sleep(200 * std.time.ns_per_ms);
+
+    var res = try runQuery(allocator, addr, "RETURN a ORDER BY f(a)");
+    defer res.deinit(allocator);
+
+    try testing.expect(res.error_code != null);
+    if (res.error_message) |msg| {
+        try testing.expect(std.mem.indexOf(u8, msg, "ORDER BY") != null or std.mem.indexOf(u8, msg, "IllegalOrderKey") != null);
+    }
 }
 
 test "ORDER policy: expr allowed with --order-keys expr" {
-    const exe = "./zig-out/bin/geode";
-    const r = try run(&.{ exe, "--order-keys", "expr" }, "RETURN a ORDER BY f(a)");
-    defer std.testing.allocator.free(r.out);
-    defer std.testing.allocator.free(r.err);
-    // Parse JSON and assert SCHEMA
-    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, r.out, .{});
-    defer parsed.deinit();
-    try std.testing.expect(parsed.value == .object);
-    const obj = parsed.value.object;
-    const result_v = obj.get("result") orelse return error.Unexpected;
-    try std.testing.expect(result_v == .object);
-    const typ = result_v.object.get("type") orelse return error.Unexpected;
-    try std.testing.expect(typ == .string and std.mem.eql(u8, typ.string, "SCHEMA"));
+    const allocator = testing.allocator;
+    const addr = "127.0.0.1:15621";
+
+    var server = try proto.spawnServer(
+        allocator,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--order-keys", "expr" },
+        null,
+    );
+    defer server.deinit();
+    std.time.sleep(200 * std.time.ns_per_ms);
+
+    var res = try runQuery(allocator, addr, "RETURN a ORDER BY f(a)");
+    defer res.deinit(allocator);
+
+    try testing.expect(res.error_code == null);
+    try testing.expect(res.columns.len > 0);
 }

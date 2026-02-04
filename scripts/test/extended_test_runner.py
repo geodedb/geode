@@ -139,7 +139,7 @@ def run_test(
         if "${secret" in processed_arg:
             processed_arg = processed_arg.replace("${secret:api_token}", "test-token-123")
             processed_arg = processed_arg.replace("${secret:user_password}", "password123")
-            processed_arg = processed_arg.replace("${secret:admin_password}", "admin123")
+            processed_arg = processed_arg.replace("${secret:admin_password}", "geode-test-password")
 
         # Replace instance_id for parallel tests
         if instance_id is not None and "${instance_id}" in processed_arg:
@@ -791,7 +791,7 @@ def run_test(
                     data = json.loads(line)
                     # Extract values from JSON structure
                     if "rows" in data:
-                        # Geode JSON format: {"status_class":"00000","columns":[...],"rows":[[...]]}
+                        # Geode JSON format: {"status_class":"00000","columns":[...],"rows":[{...}]}
                         for row in data["rows"]:
                             if isinstance(row, list):
                                 # Row is a list of values
@@ -800,16 +800,6 @@ def run_test(
                             elif isinstance(row, dict):
                                 # Row is a dict of key-value pairs
                                 for val in row.values():
-                                    json_values.append(str(val))
-
-                    # Also extract from legacy 'result' structure
-                    if "result" in data and "rows" in data["result"]:
-                        for row in data["result"]["rows"]:
-                            if isinstance(row, dict):
-                                for val in row.values():
-                                    json_values.append(str(val))
-                            elif isinstance(row, list):
-                                for val in row:
                                     json_values.append(str(val))
                 except Exception:
                     pass  # Not valid JSON, will fall back to string matching
@@ -865,7 +855,7 @@ def run_test(
         import json
 
         try:
-            # Try to parse JSON from output - look for BINDINGS response with row data
+            # Try to parse JSON from output (protobuf/QUIC CLI emits a single JSON object)
             json_lines = [line for line in result.stdout.split("\n") if line.startswith("{")]
             if not json_lines:
                 return False, "no JSON output for assertion"
@@ -875,53 +865,35 @@ def run_test(
                 expected_val = assertion.get("equals")
                 not_equals_val = assertion.get("not_equals")
 
-                # Find the BINDINGS response (contains the actual query results)
-                # or fall back to raw JSON output for CLI commands
-                bindings_data = None
-                raw_json_data = None
+                json_data = None
                 for line in json_lines:
                     try:
                         parsed = json.loads(line)
                         if isinstance(parsed, dict):
-                            result_obj = parsed.get("result", {})
-                            if result_obj.get("type") == "BINDINGS" and "rows" in result_obj:
-                                bindings_data = parsed
-                                break
-                            # Save first valid JSON as fallback for CLI commands
-                            if raw_json_data is None:
-                                raw_json_data = parsed
+                            json_data = parsed
+                            break
                     except json.JSONDecodeError:
                         continue
 
-                # Use bindings data if found, otherwise use raw JSON
-                json_data = bindings_data if bindings_data else raw_json_data
                 if not json_data:
                     return False, f"no valid JSON found for assertion: {expr}"
 
-                # Evaluate the JSON path expression
-                # Convert test spec expression format to actual path only for query results
-                actual_expr = expr
-                if bindings_data:
-                    actual_expr = expr.replace("results[", "result.rows[")
-                    # Also handle direct rows[] access
-                    if actual_expr.startswith("rows["):
-                        actual_expr = "result." + actual_expr
-
-                # Navigate the JSON path
-                # Extract headers for column name resolution
+                # Extract column headers (new format uses columns: [{name,type}, ...])
                 headers = None
-                if isinstance(json_data, dict) and "result" in json_data:
-                    result_obj = json_data.get("result", {})
-                    if isinstance(result_obj, dict):
-                        headers = result_obj.get("headers", [])
+                if isinstance(json_data, dict):
+                    columns = json_data.get("columns")
+                    if isinstance(columns, list):
+                        if columns and isinstance(columns[0], dict) and "name" in columns[0]:
+                            headers = [col.get("name") for col in columns if isinstance(col, dict)]
+                        else:
+                            headers = columns
 
                 try:
                     extracted = json_data
                     in_rows_array = False  # Track if we're navigating within a rows array element
-                    for part in actual_expr.split("."):
+                    for part in expr.split("."):
                         if "[" in part and "]" in part:
                             # Handle array index(es) like rows[0] or rows[0][0]
-                            # First extract the key before any brackets
                             key = part[: part.index("[")]
                             if key:
                                 if not isinstance(extracted, dict) or key not in extracted:
@@ -929,7 +901,6 @@ def run_test(
                                 extracted = extracted[key]
                                 in_rows_array = key == "rows"
 
-                            # Now extract ALL indices from this part (handles [0][0] etc.)
                             import re
 
                             indices = re.findall(r"\[(\d+)\]", part)
@@ -940,19 +911,23 @@ def run_test(
                                 else:
                                     return False, f"index {idx} out of range for {key or 'array'}"
                         else:
-                            # Check if this is a column name lookup on a row element
-                            if in_rows_array and isinstance(extracted, list) and headers:
-                                # Look up column name in headers to get index
-                                try:
-                                    col_idx = headers.index(part)
-                                    if col_idx < len(extracted):
-                                        extracted = extracted[col_idx]
+                            # Column name lookup on row element (supports list-of-values or dict rows)
+                            if in_rows_array:
+                                if isinstance(extracted, dict):
+                                    if part in extracted:
+                                        extracted = extracted[part]
                                         in_rows_array = False
                                         continue
-                                except ValueError:
-                                    pass  # Column not found in headers, fall through to normal key lookup
+                                if isinstance(extracted, list) and headers:
+                                    try:
+                                        col_idx = headers.index(part)
+                                        if col_idx < len(extracted):
+                                            extracted = extracted[col_idx]
+                                            in_rows_array = False
+                                            continue
+                                    except ValueError:
+                                        pass
 
-                            # Check if key exists (distinguishes null value from missing key)
                             if not isinstance(extracted, dict) or part not in extracted:
                                 return False, f"path '{part}' not found in JSON"
                             extracted = extracted[part]
@@ -1092,11 +1067,8 @@ def main():
                 spec_server_enabled = server_config.get("enabled", False)
                 spec_server_args = server_config.get("args", [])
                 startup_timeout = server_config.get("startup_timeout_ms", 30000)
-                # GAP-0106: Auth is enabled by default, add --disable-auth for tests unless explicitly requiring auth
-                # Don't add --disable-auth if spec already has --enable-auth or --disable-auth in args
-                has_auth_flag = "--disable-auth" in spec_server_args or "--enable-auth" in spec_server_args
-                if spec_server_enabled and not has_auth_flag and not server_config.get("auth", False):
-                    spec_server_args = ["--disable-auth"] + spec_server_args
+                # Remove legacy auth flags from specs (auth is always enabled)
+                spec_server_args = [arg for arg in spec_server_args if arg not in ("--disable-auth", "--enable-auth")]
 
         # Build server env overrides
         server_env_overrides = {}
@@ -1108,13 +1080,11 @@ def main():
                 # Convert all values to strings (env vars must be strings)
                 server_env_overrides[key] = str(value)
 
-        # If auth is enabled, set test credentials so tests can authenticate
-        # These must match the ${secret:*} substitutions (admin123, password123)
-        if "--enable-auth" in spec_server_args:
-            if "GEODE_ADMIN_PASSWORD" not in os.environ:
-                server_env_overrides["GEODE_ADMIN_PASSWORD"] = "admin123"
-            if "GEODE_ADMIN_USERNAME" not in os.environ:
-                server_env_overrides["GEODE_ADMIN_USERNAME"] = "admin"
+        # Ensure default credentials are available for test clients
+        if "GEODE_ADMIN_USERNAME" not in server_env_overrides and "GEODE_ADMIN_USERNAME" not in os.environ:
+            server_env_overrides["GEODE_ADMIN_USERNAME"] = "geode"
+        if "GEODE_DEFAULT_PASSWORD" not in server_env_overrides and "GEODE_DEFAULT_PASSWORD" not in os.environ:
+            server_env_overrides["GEODE_DEFAULT_PASSWORD"] = "geode-test-password"
 
         # Start server if required
         if spec_server_enabled:

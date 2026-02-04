@@ -58,8 +58,8 @@ test "TestCANARY_REQ_GQL_016_SetRemoveClauseImplementation" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    // Test GraphStorage property manipulation methods
-    var graph = graph_common.GraphStorage.init(allocator);
+    // Test GraphStore property manipulation methods
+    var graph = graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add a test node
@@ -113,7 +113,7 @@ test "TestCANARY_REQ_GQL_016_WithClauseImplementation" {
     const input_bindings = [_]graph_common.Binding{input_binding};
 
     // Create test graph
-    var graph = graph_common.GraphStorage.init(allocator);
+    var graph = graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // This should compile and execute without errors

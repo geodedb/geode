@@ -14,7 +14,6 @@ test "ServerConfig initialization with defaults" {
         disable_estimates: bool = false,
         compact_profile: bool = false,
         memcurve_profile: bool = false,
-        force_no_tls: bool = false,
     };
 
     const config = ServerConfig{};

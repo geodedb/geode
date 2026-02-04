@@ -3,8 +3,8 @@ const geode = @import("geode");
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=FrontierAndResultGuardTrips; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-24
 
-fn buildSmallGraph(allocator: std.mem.Allocator, fanout: usize) geode.graph_common.GraphStorage {
-    var g = geode.graph_common.GraphStorage.init(allocator);
+fn buildSmallGraph(allocator: std.mem.Allocator, fanout: usize) geode.graph_common.GraphStore {
+    var g = geode.graph_common.GraphStore.init(allocator);
     // Create star graph: 1 connected to 2..fanout+1
     var empty_labels = [_][]const u8{};
     const center = try g.createNode(&empty_labels);

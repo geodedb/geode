@@ -71,25 +71,24 @@ test "advanced FTS: language analyzers" {
 }
 
 test "graph algorithms: comprehensive suite" {
-    // The graph algorithms are tested through their integration
-    // This is a placeholder for the actual graph storage integration
     const allocator = std.testing.allocator;
-    _ = allocator;
 
-    // Tests would go here once GraphStorage is properly integrated
-    // For now, we verify the structures compile correctly
-    const result = builtin_algos.BuiltinAlgorithms.CentralityResult{
-        .node_id = 1,
-        .score = 0.5,
-    };
-    try std.testing.expect(result.score == 0.5);
+    var graph = @import(\"geode\").graph_store.GraphStore.init(allocator);
+    defer graph.deinit();
 
-    const community = builtin_algos.BuiltinAlgorithms.Community{
-        .id = 1,
-        .nodes = &[_]u64{ 1, 2, 3 },
-        .modularity = 0.7,
-    };
-    try std.testing.expect(community.modularity == 0.7);
+    const n1 = try graph.createNode(&.{\"Person\"});
+    const n2 = try graph.createNode(&.{\"Person\"});
+    const n3 = try graph.createNode(&.{\"Person\"});
+
+    _ = try graph.createEdge(n1, n2, \"KNOWS\");
+    _ = try graph.createEdge(n2, n3, \"KNOWS\");
+
+    var algos = builtin_algos.BuiltinAlgorithms.init(allocator, &graph);
+    defer algos.deinit();
+
+    var ranks = try algos.pageRank(0.85, 5, 1e-6);
+    defer ranks.deinit();
+    try std.testing.expectEqual(@as(usize, 3), ranks.count());
 }
 
 test "CBO: advanced features" {

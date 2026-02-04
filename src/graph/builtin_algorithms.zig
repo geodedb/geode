@@ -8,12 +8,12 @@ const graph_exec = @import("../server/graph/exec.zig");
 // Built-in graph algorithm functions for GQL with optimizations for large graphs
 pub const BuiltinAlgorithms = struct {
     allocator: Allocator,
-    graph: *graph_exec.GraphStorage,
+    graph: *graph_exec.GraphStore,
     use_gpu: bool = false,
     parallel_threshold: usize = 10000,
     cache: AlgorithmCache,
 
-    pub fn init(allocator: Allocator, graph: *graph_exec.GraphStorage) BuiltinAlgorithms {
+    pub fn init(allocator: Allocator, graph: *graph_exec.GraphStore) BuiltinAlgorithms {
         return .{
             .allocator = allocator,
             .graph = graph,

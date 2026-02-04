@@ -71,285 +71,14 @@ const ExitCode = cli_dispatcher.ExitCode;
 const getEnvVar = cli_dispatcher.getEnvVar;
 const logAuditEvent = cli_dispatcher.logAuditEvent;
 const windows = if (builtin.os.tag == .windows) std.os.windows else struct {};
-const net = std.net;
 
 // Import QUIC modules for real transport implementation
 const quic = @import("transport/quic");
-const vendor_quic = @import("vendor_quic");
 
 const VERSION = build_options.version;
 
 // CANARY: REQ=REQ-REPL-QUIC-002; FEATURE="REPL QUIC Transport"; ASPECT=QuicTransportAdapter; STATUS=TESTED; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=repl; UPDATED=2026-01-15
-const repl_dispatch = geode.repl.repl_dispatch;
-
-// GAP-0134: Thread-local TLS configuration for shell transport
-// CANARY: REQ=REQ-SHELL-TLS-001; FEATURE="Shell TLS Configuration"; ASPECT=SecureConnection; STATUS=TESTED; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=cli; UPDATED=2026-01-15
-var shell_tls_config: ShellTlsConfig = .{};
-
-const ShellTlsConfig = struct {
-    insecure: bool = false,
-    ca_cert_path: ?[]const u8 = null,
-    client_cert_path: ?[]const u8 = null,
-    client_key_path: ?[]const u8 = null,
-};
-
-const TcpTransportConnection = struct {
-    allocator: std.mem.Allocator,
-    stream: net.Stream,
-};
-
-fn tcpWriteAll(self: *repl_dispatch.TransportConnection, data: []const u8) !void {
-    const ctx = self.context orelse return error.NotConnected;
-    const impl: *TcpTransportConnection = @ptrCast(@alignCast(ctx));
-    var written: usize = 0;
-    while (written < data.len) {
-        const n = try std.posix.write(impl.stream.handle, data[written..]);
-        if (n == 0) return error.Unexpected;
-        written += n;
-    }
-}
-
-fn tcpReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
-    const ctx = self.context orelse return error.NotConnected;
-    const impl: *TcpTransportConnection = @ptrCast(@alignCast(ctx));
-
-    var buf = std.ArrayList(u8){};
-    defer buf.deinit(allocator);
-
-    var temp: [256]u8 = undefined;
-    while (true) {
-        const n = try std.posix.read(impl.stream.handle, temp[0..]);
-        if (n == 0) break; // EOF
-        for (temp[0..n]) |b| {
-            if (buf.items.len >= max_size) return error.LineTooLong;
-            try buf.append(allocator, b);
-            if (b == '\n') {
-                return buf.toOwnedSlice(allocator);
-            }
-        }
-    }
-
-    return buf.toOwnedSlice(allocator);
-}
-
-fn tcpDeinit(self: *repl_dispatch.TransportConnection) void {
-    const ctx = self.context orelse {
-        if (self.allocator) |alloc| alloc.destroy(self);
-        return;
-    };
-    const impl: *TcpTransportConnection = @ptrCast(@alignCast(ctx));
-    impl.stream.close();
-    const alloc = impl.allocator;
-    alloc.destroy(impl);
-    if (self.allocator) |conn_alloc| conn_alloc.destroy(self);
-}
-
-fn tcpConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.TransportConnection {
-    const colon_idx = std.mem.lastIndexOf(u8, addr, ":") orelse return error.InvalidAddress;
-    const host = addr[0..colon_idx];
-    const port = try std.fmt.parseInt(u16, addr[colon_idx + 1 ..], 10);
-
-    const stream = try net.tcpConnectToHost(allocator, host, port);
-    errdefer stream.close();
-
-    const impl = try allocator.create(TcpTransportConnection);
-    impl.* = .{ .allocator = allocator, .stream = stream };
-
-    const transport_conn = try allocator.create(repl_dispatch.TransportConnection);
-    transport_conn.* = .{
-        .writeAllFn = tcpWriteAll,
-        .readLineFn = tcpReadLine,
-        .deinitFn = tcpDeinit,
-        .context = impl,
-        .allocator = allocator,
-    };
-    return transport_conn;
-}
-
-// TCP transport (legacy, not used for server communication)
-const tcp_transport = repl_dispatch.Transport{
-    .connectFn = tcpConnect,
-};
-
-// QUIC Transport for REPL - proper QUIC/UDP connection
-const QuicTransportConnection = struct {
-    allocator: std.mem.Allocator,
-    client: *quic.QuicClient,
-    stream: *quic.QuicClientStream,
-    owns_client: bool,
-};
-
-// CANARY: REQ=REQ-SHELL-PROTO-001; FEATURE="ShellProtobufTransport"; ASPECT=WriteAll; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-// Write pre-encoded length-prefixed protobuf message bytes to QUIC stream
-fn quicWriteAll(self: *repl_dispatch.TransportConnection, data: []const u8) !void {
-    const ctx = self.context orelse return error.NotConnected;
-    const impl: *QuicTransportConnection = @ptrCast(@alignCast(ctx));
-    impl.stream.writeAll(data) catch |err| return err;
-}
-
-// CANARY: REQ=REQ-SHELL-PROTO-002; FEATURE="ShellProtobufTransport"; ASPECT=ReadLine; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-// Read length-prefixed protobuf responses and return raw message bytes
-fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
-    const ctx = self.context orelse return error.NotConnected;
-    const impl: *QuicTransportConnection = @ptrCast(@alignCast(ctx));
-
-    const start = std.time.milliTimestamp();
-    const timeout_ms: i64 = 30000; // 30 second timeout for REPL
-
-    // Read 4-byte length prefix
-    var len_buf: [4]u8 = undefined;
-    var len_read: usize = 0;
-    while (len_read < 4) {
-        if (repl_dispatch.checkForInterrupt()) {
-            return error.Interrupted;
-        }
-
-        const n = impl.stream.read(len_buf[len_read..]) catch |err| {
-            if (err == error.WouldBlock) {
-                if (std.time.milliTimestamp() - start >= timeout_ms) return error.WouldBlock;
-                impl.client.poll(5) catch {};
-                std.Thread.sleep(5 * std.time.ns_per_ms);
-                continue;
-            }
-            return err;
-        };
-        if (n == 0) return error.EndOfStream;
-        len_read += n;
-    }
-
-    const msg_len = std.mem.readInt(u32, &len_buf, .big);
-    if (msg_len > 16 * 1024 * 1024) return error.MessageTooLarge; // 16MB limit
-    if (max_size > 0 and msg_len > max_size) return error.MessageTooLarge;
-
-    // Read message body
-    const body = try allocator.alloc(u8, msg_len);
-    errdefer allocator.free(body);
-
-    var body_read: usize = 0;
-    while (body_read < msg_len) {
-        if (repl_dispatch.checkForInterrupt()) {
-            allocator.free(body);
-            return error.Interrupted;
-        }
-
-        const n = impl.stream.read(body[body_read..]) catch |err| {
-            if (err == error.WouldBlock) {
-                if (std.time.milliTimestamp() - start >= timeout_ms) {
-                    allocator.free(body);
-                    return error.WouldBlock;
-                }
-                impl.client.poll(5) catch {};
-                std.Thread.sleep(5 * std.time.ns_per_ms);
-                continue;
-            }
-            allocator.free(body);
-            return err;
-        };
-        if (n == 0) {
-            allocator.free(body);
-            return error.EndOfStream;
-        }
-        body_read += n;
-    }
-
-    return body;
-}
-
-fn quicDeinit(self: *repl_dispatch.TransportConnection) void {
-    const ctx = self.context orelse {
-        if (self.allocator) |alloc| alloc.destroy(self);
-        return;
-    };
-    const impl: *QuicTransportConnection = @ptrCast(@alignCast(ctx));
-    impl.stream.deinit();
-    if (impl.owns_client) {
-        impl.client.deinit();
-        impl.allocator.destroy(impl.client);
-    }
-    impl.allocator.destroy(impl);
-    if (self.allocator) |conn_alloc| conn_alloc.destroy(self);
-}
-
-fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.TransportConnection {
-    const colon_idx = std.mem.lastIndexOf(u8, addr, ":") orelse return error.InvalidAddress;
-    const host = addr[0..colon_idx];
-    const port = try std.fmt.parseInt(u16, addr[colon_idx + 1 ..], 10);
-
-    // Create QUIC client
-    const client = try allocator.create(quic.QuicClient);
-    client.* = quic.QuicClient.init(allocator);
-    errdefer {
-        client.deinit();
-        allocator.destroy(client);
-    }
-
-    // GAP-0134: Use TLS configuration from shell command
-    // CANARY: REQ=REQ-SHELL-TLS-002; FEATURE="Shell TLS Connection"; ASPECT=SecureConnection; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-13
-    if (shell_tls_config.insecure) {
-        // Explicit insecure mode requested
-        std.debug.print("Warning: TLS verification disabled (--insecure flag)\n", .{});
-        _ = client.connectInsecure(host, port, true) catch |err| {
-            return err;
-        };
-    } else if (shell_tls_config.ca_cert_path != null or shell_tls_config.client_cert_path != null) {
-        // Custom certificates provided - use secure connection with custom certs
-        // Note: Full certificate verification requires the QUIC library to support custom CA
-        // For now, we connect with TLS but log the certificate configuration
-        std.debug.print("Using TLS with custom certificates\n", .{});
-        if (shell_tls_config.ca_cert_path) |ca| {
-            std.debug.print("  CA certificate: {s}\n", .{ca});
-        }
-        if (shell_tls_config.client_cert_path) |cert| {
-            std.debug.print("  Client certificate: {s}\n", .{cert});
-        }
-        // Connect with TLS verification enabled (insecure=false)
-        _ = client.connectInsecure(host, port, false) catch |err| {
-            return err;
-        };
-    } else {
-        // Default: TLS verification enabled
-        _ = client.connectInsecure(host, port, false) catch |err| {
-            return err;
-        };
-    }
-
-    // Wait for handshake
-    _ = client.waitForHandshake(10) catch |err| {
-        return err;
-    };
-
-    // Get stream
-    var stream = client.getStream() catch |err| {
-        return err;
-    };
-    errdefer stream.deinit();
-
-    // Note: HELLO handshake is done by ClientSession.hello(), not here
-    // This keeps the transport layer separate from the protocol layer
-
-    // Create transport connection wrapper
-    const impl = try allocator.create(QuicTransportConnection);
-    impl.* = .{
-        .allocator = allocator,
-        .client = client,
-        .stream = stream,
-        .owns_client = true,
-    };
-
-    const transport_conn = try allocator.create(repl_dispatch.TransportConnection);
-    transport_conn.* = .{
-        .writeAllFn = quicWriteAll,
-        .readLineFn = quicReadLine,
-        .deinitFn = quicDeinit,
-        .context = impl,
-        .allocator = allocator,
-    };
-    return transport_conn;
-}
-
-const quic_transport = repl_dispatch.Transport{
-    .connectFn = quicConnect,
-};
+const repl_quic_transport = geode.repl.quic_transport;
 
 // Cross-platform file handle helpers with proper error handling
 // CANARY: REQ=REQ-QUALITY-GAP-406-002; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
@@ -421,7 +150,6 @@ fn printServeUsage() void {
         "  --cert <path>          TLS certificate path (auto-generated if missing)\n" ++
         "  --key <path>           TLS private key path (auto-generated if missing)\n" ++
         "  --log-level <level>    Log level: debug|info|warn|error (default: info)\n" ++
-        "  --disable-auth         Disable user authentication (default: enabled) [SECURITY WARNING]\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Examples:\n" ++
@@ -447,8 +175,6 @@ fn printQueryUsage() void {
         "  --format <fmt>         Output format: json|table|csv|dot (default: json)\n" ++
         "  --param <name> <value>       Add query parameter (JSON literal)\n" ++
         "  --page-size <n>        Page size for results (default: 1000)\n" ++
-        "  --pull-all             Pull all result pages (default behavior)\n" ++
-        "  --extra-pull <n>       Issue extra PULL requests after final (debug)\n" ++
         "  --timeout <secs>       Connection timeout in seconds (default: 10)\n" ++
         "  --retry <count>        Number of retry attempts on failure (default: 0)\n" ++
         "  --begin                Start transaction\n" ++
@@ -470,6 +196,7 @@ fn printQueryUsage() void {
         "\n" ++
         "  Environment variables are NOT used for authentication.\n" ++
         "  The default admin username is 'geode' (not 'admin').\n" ++
+        "  Set GEODE_DEFAULT_PASSWORD on the server to bootstrap the admin account.\n" ++
         "\n" ++
         "Session Management:\n" ++
         "  By default, queries auto-load saved session from ~/.geode/credentials.json\n" ++
@@ -480,11 +207,8 @@ fn printQueryUsage() void {
         "  -                      Read query from stdin\n" ++
         "\n" ++
         "Examples:\n" ++
-        "  # Basic query (no auth)\n" ++
-        "  geode query \"MATCH (n) RETURN n LIMIT 10\"\n" ++
-        "\n" ++
         "  # Authenticated query (use 'geode' as default admin user)\n" ++
-        "  geode query --user geode --password changeme \"RETURN 1 AS x\"\n" ++
+        "  geode query --user geode --password \"$GEODE_DEFAULT_PASSWORD\" \"RETURN 1 AS x\"\n" ++
         "  geode query -U geode -P \"RETURN 1 AS x\"  # prompts for password\n" ++
         "\n" ++
         "  # Query a specific graph\n" ++
@@ -586,7 +310,6 @@ fn printShellUsage() void {
         "  --no-history           Disable command history\n" ++
         "  --format <fmt>         Default output format: json|table|csv (default: table)\n" ++
         "  --keymap <mode>        Keymap mode: emacs|vi (default: emacs)\n" ++
-        "  --plain                Plain output mode (no ANSI escape codes, for testing)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Authentication:\n" ++
@@ -688,6 +411,7 @@ fn printAuthUsage() void {
         "Commands:\n" ++
         "  login                  Authenticate and optionally save session\n" ++
         "  logout                 Clear saved credentials\n" ++
+        "  token                  Print saved credentials JSON (if present)\n" ++
         "\n" ++
         "Login Options:\n" ++
         "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
@@ -698,10 +422,8 @@ fn printAuthUsage() void {
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Session Management:\n" ++
-        "  Tokens are cryptographically random (no sensitive data embedded)\n" ++
-        "  Sessions expire after 1 hour (auto-renewed while active)\n" ++
-        "  Tokens are tied to system (hostname + username)\n" ++
-        "  Username still required for all queries\n" ++
+        "  Sessions are issued by the server and stored in ~/.geode/credentials.json\n" ++
+        "  Use --save-session to persist credentials locally\n" ++
         "\n" ++
         "Examples:\n" ++
         "  geode auth login -U alice --save-session\n" ++
@@ -975,7 +697,6 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var timeout_secs: u32 = 10; // Default 10 second timeout
     var retry_count: u32 = 0; // Default no retries
     var page_size: u32 = 1000; // Default page size for PULL requests
-    var extra_pulls: u32 = 0; // Extra PULL requests after final (advanced)
     var use_saved_session = true; // Auto-load saved session by default
     // CANARY: REQ=REQ-CLI-GRAPH-FLAG-001; FEATURE="GraphFlag"; ASPECT=QueryCommand; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
     // Issue #393: Add --graph flag to specify which graph to query against
@@ -1126,18 +847,6 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
             page_size = std.fmt.parseInt(u32, argv[i + 1], 10) catch {
                 std.debug.print("Error: --page-size value must be a positive integer\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
-            };
-            i += 1;
-        } else if (std.mem.eql(u8, arg, "--pull-all")) {
-            // Compatibility flag; client already pulls until final.
-        } else if (std.mem.eql(u8, arg, "--extra-pull")) {
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --extra-pull requires a count\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
-            }
-            extra_pulls = std.fmt.parseInt(u32, argv[i + 1], 10) catch {
-                std.debug.print("Error: --extra-pull value must be a positive integer\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             };
             i += 1;
@@ -1438,7 +1147,6 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         .client_key_path = client_key_path,
         .graph = graph,
         .page_size = page_size,
-        .extra_pulls = extra_pulls,
         .params = params,
     });
 }
@@ -1557,7 +1265,6 @@ const QuicQueryOptions = struct {
     client_key_path: ?[]const u8 = null,
     graph: ?[]const u8 = null,
     page_size: u32 = 1000,
-    extra_pulls: u32 = 0,
     params: std.ArrayList(schema.Param),
 };
 
@@ -1575,6 +1282,11 @@ const ChunkedQueryOptions = struct {
     client_cert_path: ?[]const u8 = null,
     client_key_path: ?[]const u8 = null,
     graph: ?[]const u8 = null,
+};
+
+const ColumnInfo = struct {
+    name: []const u8,
+    type: []const u8,
 };
 
 // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-006; FEATURE="ChunkedExecution"; ASPECT=Execution; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
@@ -1631,7 +1343,6 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
             .client_key_path = opts.client_key_path,
             .graph = opts.graph,
             .page_size = 1000,
-            .extra_pulls = 0,
             .params = empty_params,
         }) catch |err| {
             std.debug.print("Error executing chunk: {}\n", .{err});
@@ -1664,7 +1375,6 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     const client_key_path = opts.client_key_path;
     const graph = opts.graph;
     const page_size = opts.page_size;
-    const extra_pulls = opts.extra_pulls;
     var params = opts.params;
     var params_transferred = false;
     defer if (!params_transferred) {
@@ -1718,7 +1428,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
             if (handshake_err) |_| {
                 // Handshake successful, proceed with query execution
                 params_transferred = true;
-                return try executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph, params, page_size, extra_pulls, timeout_secs);
+                return try executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph, params, page_size, timeout_secs);
             } else |_| {
                 last_error = "connection timeout";
             }
@@ -1828,7 +1538,6 @@ fn executeQueryOnConnection(
     graph: ?[]const u8,
     params: std.ArrayList(schema.Param),
     page_size: u32,
-    extra_pulls: u32,
     timeout_secs: u32,
 ) !void {
     // Get stdout and stderr handles for output
@@ -1924,23 +1633,57 @@ fn executeQueryOnConnection(
     try writeProtoMessage(allocator, stream, .{ .execute = run_gql_req });
     log.debug("Client query sent successfully", &.{});
 
-    // For JSON format, we need to accumulate results before outputting
-    var columns = try std.ArrayList([]const u8).initCapacity(allocator, 16);
+    // For JSON/table/csv/dot output, accumulate results before outputting
+    var columns = try std.ArrayList(ColumnInfo).initCapacity(allocator, 16);
     defer {
-        for (columns.items) |col| allocator.free(col);
+        for (columns.items) |col| {
+            allocator.free(col.name);
+            allocator.free(col.type);
+        }
         columns.deinit(allocator);
     }
 
-    // Use an ArrayList of ArrayLists to store all rows
-    var all_rows = try std.ArrayList(std.ArrayList([]const u8)).initCapacity(allocator, 64);
+    const ResultKind = enum { rows, explain, profile };
+    var result_kind: ResultKind = .rows;
+    var result_payload: ?[]const u8 = null;
+    defer if (result_payload) |payload| allocator.free(payload);
+
+    const wants_json = std.mem.eql(u8, format, "json");
+    const wants_dot = std.mem.eql(u8, format, "dot");
+
+    // Use ArrayLists to store all rows (text or json depending on output format)
+    var all_rows_text: ?std.ArrayList(std.ArrayList([]const u8)) = null;
+    var all_rows_json: ?std.ArrayList(std.ArrayList(std.json.Value)) = null;
+    var rows_owned_by_root = false;
+
+    if (wants_json) {
+        all_rows_json = try std.ArrayList(std.ArrayList(std.json.Value)).initCapacity(allocator, 64);
+    } else {
+        all_rows_text = try std.ArrayList(std.ArrayList([]const u8)).initCapacity(allocator, 64);
+    }
     defer {
-        for (all_rows.items) |*row| {
-            for (row.items) |cell| {
-                allocator.free(cell);
+        if (all_rows_text) |*rows| {
+            for (rows.items) |*row| {
+                for (row.items) |cell| {
+                    allocator.free(cell);
+                }
+                row.deinit(allocator);
             }
-            row.deinit(allocator);
+            rows.deinit(allocator);
         }
-        all_rows.deinit(allocator);
+        if (all_rows_json) |*rows| {
+            if (!rows_owned_by_root) {
+                for (rows.items) |*row| {
+                    for (row.items) |val| {
+                        freeJsonValue(allocator, val);
+                    }
+                    row.deinit(allocator);
+                }
+            } else {
+                for (rows.items) |*row| row.deinit(allocator);
+            }
+            rows.deinit(allocator);
+        }
     }
     var ordered: bool = false;
     var order_keys = try std.ArrayList([]const u8).initCapacity(allocator, 0);
@@ -1949,8 +1692,11 @@ fn executeQueryOnConnection(
         order_keys.deinit(allocator);
     }
 
-    var status_class = try allocator.dupe(u8, "00000");
+    var status_class: []const u8 = try allocator.dupe(u8, "00000");
     defer allocator.free(status_class);
+    var status_subclass: []const u8 = "";
+    var status_subclass_owned = false;
+    defer if (status_subclass_owned) allocator.free(status_subclass);
     var additional_statuses = try std.ArrayList([]const u8).initCapacity(allocator, 0);
     defer {
         for (additional_statuses.items) |s| allocator.free(s);
@@ -1966,14 +1712,10 @@ fn executeQueryOnConnection(
     var has_error: bool = false;
     var error_message: []const u8 = "";
     var error_status: []const u8 = "58000";
-    var extra_pull_errors = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-    defer {
-        for (extra_pull_errors.items) |msg| allocator.free(msg);
-        extra_pull_errors.deinit(allocator);
-    }
 
+    const TextMode = enum { display, dot };
     const RowAppender = struct {
-        fn valueToString(alloc: std.mem.Allocator, v: schema.Value) ![]const u8 {
+        fn valueToString(alloc: std.mem.Allocator, v: schema.Value, mode: TextMode) ![]const u8 {
             if (v.kind) |k| {
                 return switch (k) {
                     .string_val => |str| try alloc.dupe(u8, str.value),
@@ -1990,16 +1732,24 @@ fn executeQueryOnConnection(
                         _ = std.base64.standard.Encoder.encode(out, bv.value);
                         break :blk out;
                     },
-                    else => try alloc.dupe(u8, "?"),
+                    else => blk: {
+                        if (mode == .dot) {
+                            break :blk try valueToJsonString(alloc, v);
+                        }
+                        const json_val = try protoValueToJson(alloc, v);
+                        defer freeJsonValue(alloc, json_val);
+                        break :blk try formatJsonValueCompact(alloc, json_val);
+                    },
                 };
             }
             return alloc.dupe(u8, "null");
         }
 
-        fn appendPage(
+        fn appendPageText(
             alloc: std.mem.Allocator,
             page: schema.DataPage,
             rows_list: *std.ArrayList(std.ArrayList([]const u8)),
+            mode: TextMode,
         ) !void {
             const row_count = page.rows.items.len;
             if (row_count == 0) return;
@@ -2012,12 +1762,12 @@ fn executeQueryOnConnection(
                 var ts_alloc = std.heap.ThreadSafeAllocator{ .child_allocator = alloc };
                 const safe_alloc = ts_alloc.allocator();
 
-                const RowInput = struct { row: schema.Row, allocator: std.mem.Allocator };
+                const RowInput = struct { row: schema.Row, allocator: std.mem.Allocator, mode: TextMode };
                 const RowResult = struct { row: std.ArrayList([]const u8), err: ?anyerror, allocator: std.mem.Allocator };
 
                 const inputs = try alloc.alloc(RowInput, row_count);
                 defer alloc.free(inputs);
-                for (page.rows.items, 0..) |row, i| inputs[i] = .{ .row = row, .allocator = safe_alloc };
+                for (page.rows.items, 0..) |row, i| inputs[i] = .{ .row = row, .allocator = safe_alloc, .mode = mode };
 
                 const results = try alloc.alloc(RowResult, row_count);
                 defer alloc.free(results);
@@ -2033,7 +1783,7 @@ fn executeQueryOnConnection(
                         };
 
                         for (input.row.values.items) |v| {
-                            const cell_str = valueToString(a, v) catch |err| {
+                            const cell_str = valueToString(a, v, input.mode) catch |err| {
                                 out.* = .{ .row = row_values, .err = err, .allocator = a };
                                 return;
                             };
@@ -2066,8 +1816,86 @@ fn executeQueryOnConnection(
                 }
 
                 for (row.values.items) |v| {
-                    const cell_str = try valueToString(alloc, v);
+                    const cell_str = try valueToString(alloc, v, mode);
                     try row_values.append(alloc, cell_str);
+                }
+
+                try rows_list.append(alloc, row_values);
+            }
+        }
+
+        fn appendPageJson(
+            alloc: std.mem.Allocator,
+            page: schema.DataPage,
+            rows_list: *std.ArrayList(std.ArrayList(std.json.Value)),
+        ) !void {
+            const row_count = page.rows.items.len;
+            if (row_count == 0) return;
+
+            if (spice_wrapper.shouldUseParallelism(row_count, spice_wrapper.Thresholds.map)) {
+                var pool = spice_wrapper.SpicePool.init(alloc, null);
+                pool.start();
+                defer pool.deinit();
+
+                var ts_alloc = std.heap.ThreadSafeAllocator{ .child_allocator = alloc };
+                const safe_alloc = ts_alloc.allocator();
+
+                const RowInput = struct { row: schema.Row, allocator: std.mem.Allocator };
+                const RowResult = struct { row: std.ArrayList(std.json.Value), err: ?anyerror, allocator: std.mem.Allocator };
+
+                const inputs = try alloc.alloc(RowInput, row_count);
+                defer alloc.free(inputs);
+                for (page.rows.items, 0..) |row, i| inputs[i] = .{ .row = row, .allocator = safe_alloc };
+
+                const results = try alloc.alloc(RowResult, row_count);
+                defer alloc.free(results);
+                for (results) |*r| r.* = .{ .row = std.ArrayList(std.json.Value).initCapacity(safe_alloc, 0) catch unreachable, .err = null, .allocator = safe_alloc };
+
+                try pool.map(RowInput, RowResult, inputs, results, struct {
+                    fn map(ctx: spice_wrapper.TaskContext, input: RowInput, out: *RowResult) void {
+                        _ = ctx;
+                        const a = input.allocator;
+                        var row_values = std.ArrayList(std.json.Value).initCapacity(a, input.row.values.items.len) catch {
+                            out.* = .{ .row = std.ArrayList(std.json.Value).initCapacity(a, 0) catch unreachable, .err = error.OutOfMemory, .allocator = a };
+                            return;
+                        };
+
+                        for (input.row.values.items) |v| {
+                            const cell_val = protoValueToJson(a, v) catch |err| {
+                                out.* = .{ .row = row_values, .err = err, .allocator = a };
+                                return;
+                            };
+                            row_values.append(a, cell_val) catch |err| {
+                                out.* = .{ .row = row_values, .err = err, .allocator = a };
+                                return;
+                            };
+                        }
+
+                        out.* = .{ .row = row_values, .err = null, .allocator = a };
+                    }
+                }.map);
+
+                for (results) |*res| {
+                    if (res.err) |err| {
+                        for (res.row.items) |val| freeJsonValue(res.allocator, val);
+                        res.row.deinit(res.allocator);
+                        return err;
+                    }
+                    try rows_list.append(alloc, res.row);
+                }
+                return;
+            }
+
+            for (page.rows.items) |row| {
+                var row_values = try std.ArrayList(std.json.Value).initCapacity(alloc, row.values.items.len);
+                errdefer {
+                    for (row_values.items) |val| freeJsonValue(alloc, val);
+                    row_values.deinit(alloc);
+                }
+
+                for (row.values.items) |v| {
+                    const cell_val = try protoValueToJson(alloc, v);
+                    try row_values.append(alloc, cell_val);
                 }
 
                 try rows_list.append(alloc, row_values);
@@ -2096,6 +1924,8 @@ fn executeQueryOnConnection(
             alloc: std.mem.Allocator,
             status_opt: ?schema.Status,
             status_out: *[]const u8,
+            status_subclass_out: *[]const u8,
+            subclass_owned: *bool,
             additional_out: *std.ArrayList([]const u8),
             flagger_out: *std.ArrayList([]const u8),
             captured: *bool,
@@ -2106,28 +1936,22 @@ fn executeQueryOnConnection(
             captured.* = true;
             alloc.free(status_out.*);
             status_out.* = try alloc.dupe(u8, status.status_class);
+            if (subclass_owned.*) {
+                alloc.free(status_subclass_out.*);
+                subclass_owned.* = false;
+            }
+            if (status.status_subclass.len > 0) {
+                status_subclass_out.* = try alloc.dupe(u8, status.status_subclass);
+                subclass_owned.* = true;
+            } else {
+                status_subclass_out.* = "";
+            }
             for (status.additional_statuses.items) |s| {
                 try additional_out.append(alloc, try alloc.dupe(u8, s));
             }
             for (status.flagger_findings.items) |s| {
                 try flagger_out.append(alloc, try alloc.dupe(u8, s));
             }
-        }
-    };
-
-    const Json = struct {
-        fn writeStringArray(out: anytype, alloc: std.mem.Allocator, items: []const []const u8) !void {
-            _ = out.writeAll("[") catch {};
-            for (items, 0..) |item, idx| {
-                if (idx > 0) _ = out.writeAll(",") catch {};
-                const escaped = escapeJsonString(alloc, item) catch item;
-                const needs_free = escaped.ptr != item.ptr;
-                defer if (needs_free) alloc.free(escaped);
-                const entry = try std.fmt.allocPrint(alloc, "\"{s}\"", .{escaped});
-                defer alloc.free(entry);
-                _ = out.writeAll(entry) catch {};
-            }
-            _ = out.writeAll("]") catch {};
         }
     };
 
@@ -2150,20 +1974,29 @@ fn executeQueryOnConnection(
 
         switch (resp) {
             .execute => |exec_resp| {
-                try captureStatus.apply(allocator, exec_resp.status, &status_class, &additional_statuses, &flagger_findings, &status_captured);
+                try captureStatus.apply(allocator, exec_resp.status, &status_class, &status_subclass, &status_subclass_owned, &additional_statuses, &flagger_findings, &status_captured);
                 if (exec_resp.payload) |val| {
                     switch (val) {
                         .schema => |s| {
                             for (s.columns.items) |col| {
-                                const col_copy = try allocator.dupe(u8, col.name);
-                                try columns.append(allocator, col_copy);
+                                const name_copy = try allocator.dupe(u8, col.name);
+                                const type_copy = if (col.type.len > 0)
+                                    try allocator.dupe(u8, col.type)
+                                else
+                                    try allocator.dupe(u8, "ANY");
+                                try columns.append(allocator, .{ .name = name_copy, .type = type_copy });
                             }
                             schema_received = true;
                         },
                         .page => |p| {
                             saw_inline_page = true;
                             try captureOrderMeta.apply(allocator, p, &ordered, &order_keys);
-                            try RowAppender.appendPage(allocator, p, &all_rows);
+                            if (wants_json) {
+                                if (all_rows_json) |*rows| try RowAppender.appendPageJson(allocator, p, rows);
+                            } else if (all_rows_text) |*rows| {
+                                const mode: TextMode = if (wants_dot) .dot else .display;
+                                try RowAppender.appendPageText(allocator, p, rows, mode);
+                            }
                             if (p.final) {
                                 inline_final = true;
                             } else {
@@ -2177,7 +2010,19 @@ fn executeQueryOnConnection(
                                 error_status = try allocator.dupe(u8, e.code);
                             }
                         },
-                        .metrics, .heartbeat, .explain, .profile => {},
+                        .explain => |ex| {
+                            result_kind = .explain;
+                            if (result_payload) |prev| allocator.free(prev);
+                            result_payload = try allocator.dupe(u8, ex.json_payload);
+                            schema_received = true;
+                        },
+                        .profile => |prof| {
+                            result_kind = .profile;
+                            if (result_payload) |prev| allocator.free(prev);
+                            result_payload = try allocator.dupe(u8, prof.json_payload);
+                            schema_received = true;
+                        },
+                        .metrics, .heartbeat => {},
                     }
                 }
             },
@@ -2210,7 +2055,12 @@ fn executeQueryOnConnection(
                         .page => |p| {
                             saw_inline_page = true;
                             try captureOrderMeta.apply(allocator, p, &ordered, &order_keys);
-                            try RowAppender.appendPage(allocator, p, &all_rows);
+                            if (wants_json) {
+                                if (all_rows_json) |*rows| try RowAppender.appendPageJson(allocator, p, rows);
+                            } else if (all_rows_text) |*rows| {
+                                const mode: TextMode = if (wants_dot) .dot else .display;
+                                try RowAppender.appendPageText(allocator, p, rows, mode);
+                            }
                             if (p.final) {
                                 inline_final = true;
                             } else {
@@ -2235,7 +2085,7 @@ fn executeQueryOnConnection(
     }
 
     var request_id: u64 = 1;
-    if (!has_error and (!inline_final or need_pull)) {
+    if (!has_error and result_kind == .rows and (!inline_final or need_pull)) {
         var done = false;
 
         while (!done and !has_error) : (request_id += 1) {
@@ -2255,11 +2105,16 @@ fn executeQueryOnConnection(
             switch (resp) {
                 .pull => |pull_resp| {
                     const exec_resp = pull_resp.response orelse break;
-                    try captureStatus.apply(allocator, exec_resp.status, &status_class, &additional_statuses, &flagger_findings, &status_captured);
+                    try captureStatus.apply(allocator, exec_resp.status, &status_class, &status_subclass, &status_subclass_owned, &additional_statuses, &flagger_findings, &status_captured);
                     if (exec_resp.payload) |val| switch (val) {
                         .page => |p| {
                             try captureOrderMeta.apply(allocator, p, &ordered, &order_keys);
-                            try RowAppender.appendPage(allocator, p, &all_rows);
+                            if (wants_json) {
+                                if (all_rows_json) |*rows| try RowAppender.appendPageJson(allocator, p, rows);
+                            } else if (all_rows_text) |*rows| {
+                                const mode: TextMode = if (wants_dot) .dot else .display;
+                                try RowAppender.appendPageText(allocator, p, rows, mode);
+                            }
                             if (p.final) done = true;
                         },
                         .@"error" => |e| {
@@ -2273,11 +2128,16 @@ fn executeQueryOnConnection(
                     };
                 },
                 .execute => |exec_resp| {
-                    try captureStatus.apply(allocator, exec_resp.status, &status_class, &additional_statuses, &flagger_findings, &status_captured);
+                    try captureStatus.apply(allocator, exec_resp.status, &status_class, &status_subclass, &status_subclass_owned, &additional_statuses, &flagger_findings, &status_captured);
                     if (exec_resp.payload) |val| switch (val) {
                         .page => |p| {
                             try captureOrderMeta.apply(allocator, p, &ordered, &order_keys);
-                            try RowAppender.appendPage(allocator, p, &all_rows);
+                            if (wants_json) {
+                                if (all_rows_json) |*rows| try RowAppender.appendPageJson(allocator, p, rows);
+                            } else if (all_rows_text) |*rows| {
+                                const mode: TextMode = if (wants_dot) .dot else .display;
+                                try RowAppender.appendPageText(allocator, p, rows, mode);
+                            }
                             if (p.final) done = true;
                         },
                         .@"error" => |e| {
@@ -2297,183 +2157,147 @@ fn executeQueryOnConnection(
         }
     }
 
-    if (!has_error and extra_pulls > 0) {
-        var extra_id = request_id;
-        var extra_idx: u32 = 0;
-        while (extra_idx < extra_pulls) : (extra_idx += 1) {
-            const pull_req = schema.PullRequest{
-                .request_id = extra_id,
-                .page_size = page_size,
-                .session_id = session_id,
-            };
-            extra_id += 1;
-            try writeProtoMessage(allocator, stream, .{ .pull = pull_req });
-
-            const loop_allocator = loop_arena.allocator();
-            const resp = readProtoMessage(loop_allocator, stream, quic_client, timeout_secs) catch |err| {
-                if (err == error.EndOfStream or err == error.Timeout) break;
-                return err;
-            };
-
-            switch (resp) {
-                .pull => |pull_resp| {
-                    const exec_resp = pull_resp.response orelse continue;
-                    try captureStatus.apply(allocator, exec_resp.status, &status_class, &additional_statuses, &flagger_findings, &status_captured);
-                    if (exec_resp.payload) |val| switch (val) {
-                        .@"error" => |e| {
-                            const msg = if (e.message.len > 0) e.message else "NoResult";
-                            try extra_pull_errors.append(allocator, try allocator.dupe(u8, msg));
-                        },
-                        else => {},
-                    };
-                },
-                .execute => |exec_resp| {
-                    try captureStatus.apply(allocator, exec_resp.status, &status_class, &additional_statuses, &flagger_findings, &status_captured);
-                    if (exec_resp.payload) |val| switch (val) {
-                        .@"error" => |e| {
-                            const msg = if (e.message.len > 0) e.message else "NoResult";
-                            try extra_pull_errors.append(allocator, try allocator.dupe(u8, msg));
-                        },
-                        else => {},
-                    };
-                },
-                else => {},
-            }
-
-            _ = loop_arena.reset(.retain_capacity);
-        }
-    }
 
     // Output final result based on format
     if (std.mem.eql(u8, format, "json")) {
-        if (has_error) {
-            // Output error response
-            const escaped_err = escapeJsonString(allocator, error_message) catch error_message;
-            const needs_free = escaped_err.ptr != error_message.ptr;
-            defer if (needs_free) allocator.free(escaped_err);
-            _ = stdout.writeAll("{\"status_class\":\"") catch {};
-            _ = stdout.writeAll(error_status) catch {};
-            _ = stdout.writeAll("\",\"error\":\"") catch {};
-            _ = stdout.writeAll(escaped_err) catch {};
-            _ = stdout.writeAll("\",\"additional_statuses\":") catch {};
-            try Json.writeStringArray(stdout, allocator, additional_statuses.items);
-            _ = stdout.writeAll(",\"flagger_findings\":") catch {};
-            try Json.writeStringArray(stdout, allocator, flagger_findings.items);
-            _ = stdout.writeAll(",\"extra_pull_errors\":") catch {};
-            try Json.writeStringArray(stdout, allocator, extra_pull_errors.items);
-            _ = stdout.writeAll("}\n") catch {};
-        } else {
-            // Output JSON result (single object, no legacy SCHEMA/BINDINGS frames)
-            const ordered_str = if (ordered) "true" else "false";
-            _ = stdout.writeAll("{\"status_class\":\"") catch {};
-            _ = stdout.writeAll(status_class) catch {};
-            _ = stdout.writeAll("\",\"ordered\":") catch {};
-            _ = stdout.writeAll(ordered_str) catch {};
-            _ = stdout.writeAll(",\"order_keys\":") catch {};
-            try Json.writeStringArray(stdout, allocator, order_keys.items);
+        const buildStringArray = struct {
+            fn apply(alloc: std.mem.Allocator, items: []const []const u8) !std.json.Array {
+                var arr = std.json.Array.init(alloc);
+                for (items) |item| {
+                    try arr.append(.{ .string = try alloc.dupe(u8, item) });
+                }
+                return arr;
+            }
+        }.apply;
 
-            // Write columns
-            _ = stdout.writeAll(",\"columns\":[") catch {};
+        const buildColumnsArray = struct {
+            fn apply(alloc: std.mem.Allocator, cols: []const ColumnInfo) !std.json.Array {
+                var arr = std.json.Array.init(alloc);
+                for (cols) |col| {
+                    var obj = std.json.ObjectMap.init(alloc);
+                    try obj.put("name", .{ .string = try alloc.dupe(u8, col.name) });
+                    try obj.put("type", .{ .string = try alloc.dupe(u8, col.type) });
+                    try arr.append(.{ .object = obj });
+                }
+                return arr;
+            }
+        }.apply;
+
+        var root = std.json.ObjectMap.init(allocator);
+        if (has_error) {
+            try root.put("status_class", .{ .string = try allocator.dupe(u8, error_status) });
+            if (error_status.len > 0) {
+                try root.put("error_code", .{ .string = try allocator.dupe(u8, error_status) });
+            }
+            try root.put("error", .{ .string = try allocator.dupe(u8, error_message) });
+        } else if (result_kind != .rows) {
+            try root.put("status_class", .{ .string = try allocator.dupe(u8, status_class) });
+            if (status_subclass.len > 0) {
+                try root.put("status_subclass", .{ .string = try allocator.dupe(u8, status_subclass) });
+            }
+            if (result_payload) |payload| {
+                if (std.json.parseFromSlice(std.json.Value, allocator, payload, .{})) |parsed| {
+                    if (result_kind == .explain) {
+                        try root.put("explain", parsed.value);
+                    } else {
+                        try root.put("profile", parsed.value);
+                    }
+                } else |_| {
+                    if (result_kind == .explain) {
+                        try root.put("explain", .{ .string = try allocator.dupe(u8, payload) });
+                    } else {
+                        try root.put("profile", .{ .string = try allocator.dupe(u8, payload) });
+                    }
+                }
+            }
+        } else {
+            try root.put("status_class", .{ .string = try allocator.dupe(u8, status_class) });
+            if (status_subclass.len > 0) {
+                try root.put("status_subclass", .{ .string = try allocator.dupe(u8, status_subclass) });
+            }
+            try root.put("ordered", .{ .bool = ordered });
+            try root.put("order_keys", .{ .array = try buildStringArray(allocator, order_keys.items) });
+            try root.put("columns", .{ .array = try buildColumnsArray(allocator, columns.items) });
+
+            var rows_arr = std.json.Array.init(allocator);
+            if (all_rows_json) |*rows| {
+                for (rows.items) |row| {
+                    var row_obj = std.json.ObjectMap.init(allocator);
+                    for (row.items, 0..) |val, col_idx| {
+                        const col_name = if (col_idx < columns.items.len) columns.items[col_idx].name else "?";
+                        try row_obj.put(try allocator.dupe(u8, col_name), val);
+                    }
+                    try rows_arr.append(.{ .object = row_obj });
+                }
+            }
+            rows_owned_by_root = true;
+            try root.put("rows", .{ .array = rows_arr });
+        }
+
+        try root.put("additional_statuses", .{ .array = try buildStringArray(allocator, additional_statuses.items) });
+        try root.put("flagger_findings", .{ .array = try buildStringArray(allocator, flagger_findings.items) });
+
+        const root_value = std.json.Value{ .object = root };
+        const json_out = try std.json.Stringify.valueAlloc(allocator, root_value, .{});
+        defer allocator.free(json_out);
+        // Note: We intentionally don't call freeJsonValue here because:
+        // 1. The root object's keys are string literals (cannot be freed)
+        // 2. The values are properly managed by the arena allocator
+        // 3. Calling freeJsonValue causes a segfault when trying to free literals
+        try stdout.writeAll(json_out);
+        try stdout.writeAll("\n");
+    } else if (std.mem.eql(u8, format, "csv")) {
+        if (all_rows_text) |rows| {
+            // CSV header
             for (columns.items, 0..) |col, i| {
                 if (i > 0) _ = stdout.writeAll(",") catch {};
-                const col_json = try std.fmt.allocPrint(allocator, "{{\"name\":\"{s}\",\"type\":\"text\"}}", .{col});
-                defer allocator.free(col_json);
-                _ = stdout.writeAll(col_json) catch {};
-            }
-            _ = stdout.writeAll("]") catch {};
-
-            // Write rows
-            _ = stdout.writeAll(",\"rows\":[") catch {};
-            for (all_rows.items, 0..) |row, row_idx| {
-                if (row_idx > 0) _ = stdout.writeAll(",") catch {};
-                _ = stdout.writeAll("{") catch {};
-                for (row.items, 0..) |cell, col_idx| {
-                    if (col_idx > 0) _ = stdout.writeAll(",") catch {};
-                    const col_name = if (col_idx < columns.items.len) columns.items[col_idx] else "?";
-                    // Try to detect if the value is numeric, boolean or null
-                    const is_numeric = isNumericString(cell);
-                    const is_bool = std.mem.eql(u8, cell, "true") or std.mem.eql(u8, cell, "false");
-                    const is_null = std.mem.eql(u8, cell, "null");
-
-                    if (is_null) {
-                        const field_json = std.fmt.allocPrint(allocator, "\"{s}\":null", .{col_name}) catch continue;
-                        defer allocator.free(field_json);
-                        _ = stdout.writeAll(field_json) catch {};
-                    } else if (is_bool or is_numeric) {
-                        const field_json = std.fmt.allocPrint(allocator, "\"{s}\":{s}", .{ col_name, cell }) catch continue;
-                        defer allocator.free(field_json);
-                        _ = stdout.writeAll(field_json) catch {};
-                    } else {
-                        const escaped = escapeJsonString(allocator, cell) catch cell;
-                        // If escapeJsonString succeeded, it allocated memory that needs to be freed
-                        // We compare pointers to check if it returned the original or a new allocation
-                        const escaped_needs_free = escaped.ptr != cell.ptr;
-                        defer if (escaped_needs_free) allocator.free(escaped);
-                        const field_json = std.fmt.allocPrint(allocator, "\"{s}\":\"{s}\"", .{ col_name, escaped }) catch continue;
-                        defer allocator.free(field_json);
-                        _ = stdout.writeAll(field_json) catch {};
-                    }
-                }
-                _ = stdout.writeAll("}") catch {};
-            }
-            _ = stdout.writeAll("]") catch {};
-            _ = stdout.writeAll(",\"additional_statuses\":") catch {};
-            try Json.writeStringArray(stdout, allocator, additional_statuses.items);
-            _ = stdout.writeAll(",\"flagger_findings\":") catch {};
-            try Json.writeStringArray(stdout, allocator, flagger_findings.items);
-            _ = stdout.writeAll(",\"extra_pull_errors\":") catch {};
-            try Json.writeStringArray(stdout, allocator, extra_pull_errors.items);
-            _ = stdout.writeAll("}\n") catch {};
-        }
-    } else if (std.mem.eql(u8, format, "csv")) {
-        // CSV header
-        for (columns.items, 0..) |col, i| {
-            if (i > 0) _ = stdout.writeAll(",") catch {};
-            _ = stdout.writeAll(col) catch {};
-        }
-        _ = stdout.writeAll("\n") catch {};
-        // CSV rows
-        for (all_rows.items) |row| {
-            for (row.items, 0..) |cell, i| {
-                if (i > 0) _ = stdout.writeAll(",") catch {};
-                // Quote fields containing comma, newline, or quote
-                if (std.mem.indexOf(u8, cell, ",") != null or std.mem.indexOf(u8, cell, "\n") != null or std.mem.indexOf(u8, cell, "\"") != null) {
-                    _ = stdout.writeAll("\"") catch {};
-                    for (cell) |c| {
-                        if (c == '"') {
-                            _ = stdout.writeAll("\"\"") catch {};
-                        } else {
-                            _ = stdout.write(&[_]u8{c}) catch {};
-                        }
-                    }
-                    _ = stdout.writeAll("\"") catch {};
-                } else {
-                    _ = stdout.writeAll(cell) catch {};
-                }
+                _ = stdout.writeAll(col.name) catch {};
             }
             _ = stdout.writeAll("\n") catch {};
+            // CSV rows
+            for (rows.items) |row| {
+                for (row.items, 0..) |cell, i| {
+                    if (i > 0) _ = stdout.writeAll(",") catch {};
+                    // Quote fields containing comma, newline, or quote
+                    if (std.mem.indexOf(u8, cell, ",") != null or std.mem.indexOf(u8, cell, "\n") != null or std.mem.indexOf(u8, cell, "\"") != null) {
+                        _ = stdout.writeAll("\"") catch {};
+                        for (cell) |c| {
+                            if (c == '"') {
+                                _ = stdout.writeAll("\"\"") catch {};
+                            } else {
+                                _ = stdout.write(&[_]u8{c}) catch {};
+                            }
+                        }
+                        _ = stdout.writeAll("\"") catch {};
+                    } else {
+                        _ = stdout.writeAll(cell) catch {};
+                    }
+                }
+                _ = stdout.writeAll("\n") catch {};
+            }
         }
     } else if (std.mem.eql(u8, format, "table")) {
         // CANARY: REQ=REQ-CLI-TABLE-001; FEATURE="TableFormat"; ASPECT=PostgreSQLStyle; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
         // PostgreSQL-style table format with borders
         // Calculate column widths
-        var col_widths = try std.ArrayList(usize).initCapacity(allocator, columns.items.len);
-        defer col_widths.deinit(allocator);
+        if (all_rows_text) |rows| {
+            var col_widths = try std.ArrayList(usize).initCapacity(allocator, columns.items.len);
+            defer col_widths.deinit(allocator);
 
-        for (columns.items) |col| {
-            try col_widths.append(allocator, col.len);
-        }
+            for (columns.items) |col| {
+                try col_widths.append(allocator, col.name.len);
+            }
 
-        // Expand widths based on row data
-        for (all_rows.items) |row| {
-            for (row.items, 0..) |cell, i| {
-                if (i < col_widths.items.len) {
-                    if (cell.len > col_widths.items[i]) {
-                        col_widths.items[i] = cell.len;
+            // Expand widths based on row data
+            for (rows.items) |row| {
+                for (row.items, 0..) |cell, i| {
+                    if (i < col_widths.items.len) {
+                        if (cell.len > col_widths.items[i]) {
+                            col_widths.items[i] = cell.len;
+                        }
                     }
                 }
             }
-        }
 
         // Helper function to print a separator line
         const printSeparator = struct {
@@ -2490,215 +2314,59 @@ fn executeQueryOnConnection(
         // Print top separator
         printSeparator(stdout, col_widths.items);
 
-        // Print header row
-        _ = stdout.writeAll("|") catch {};
-        for (columns.items, 0..) |col, i| {
-            _ = stdout.writeAll(" ") catch {};
-            _ = stdout.writeAll(col) catch {};
-            // Pad to column width
-            const width = if (i < col_widths.items.len) col_widths.items[i] else col.len;
-            for (col.len..width) |_| _ = stdout.writeAll(" ") catch {};
-            _ = stdout.writeAll(" |") catch {};
-        }
-        _ = stdout.writeAll("\n") catch {};
+            // Print header row
+            _ = stdout.writeAll("|") catch {};
+            for (columns.items, 0..) |col, i| {
+                _ = stdout.writeAll(" ") catch {};
+                _ = stdout.writeAll(col.name) catch {};
+                // Pad to column width
+                const width = if (i < col_widths.items.len) col_widths.items[i] else col.name.len;
+                for (col.name.len..width) |_| _ = stdout.writeAll(" ") catch {};
+                _ = stdout.writeAll(" |") catch {};
+            }
+            _ = stdout.writeAll("\n") catch {};
 
         // Print separator after header
         printSeparator(stdout, col_widths.items);
 
-        // Print data rows
-        for (all_rows.items) |row| {
-            _ = stdout.writeAll("|") catch {};
-            for (row.items, 0..) |cell, i| {
-                _ = stdout.writeAll(" ") catch {};
-                _ = stdout.writeAll(cell) catch {};
-                // Pad to column width
-                const width = if (i < col_widths.items.len) col_widths.items[i] else cell.len;
-                for (cell.len..width) |_| _ = stdout.writeAll(" ") catch {};
-                _ = stdout.writeAll(" |") catch {};
+            // Print data rows
+            for (rows.items) |row| {
+                _ = stdout.writeAll("|") catch {};
+                for (row.items, 0..) |cell, i| {
+                    _ = stdout.writeAll(" ") catch {};
+                    _ = stdout.writeAll(cell) catch {};
+                    // Pad to column width
+                    const width = if (i < col_widths.items.len) col_widths.items[i] else cell.len;
+                    for (cell.len..width) |_| _ = stdout.writeAll(" ") catch {};
+                    _ = stdout.writeAll(" |") catch {};
+                }
+                _ = stdout.writeAll("\n") catch {};
             }
-            _ = stdout.writeAll("\n") catch {};
-        }
 
         // Print bottom separator
         printSeparator(stdout, col_widths.items);
 
         // Print row count
-        const row_count = all_rows.items.len;
-        if (row_count == 1) {
-            _ = stdout.writeAll("(1 row)\n") catch {};
-        } else {
-            const count_str = std.fmt.allocPrint(allocator, "({d} rows)\n", .{row_count}) catch "(? rows)\n";
-            defer if (count_str.len > 0 and count_str[0] == '(') allocator.free(count_str);
-            _ = stdout.writeAll(count_str) catch {};
+            const row_count = rows.items.len;
+            if (row_count == 1) {
+                _ = stdout.writeAll("(1 row)\n") catch {};
+            } else {
+                const count_str = std.fmt.allocPrint(allocator, "({d} rows)\n", .{row_count}) catch "(? rows)\n";
+                defer if (count_str.len > 0 and count_str[0] == '(') allocator.free(count_str);
+                _ = stdout.writeAll(count_str) catch {};
+            }
         }
     } else if (std.mem.eql(u8, format, "dot")) {
         // CANARY: REQ=REQ-CLI-DOT-002; FEATURE="DotFormat"; ASPECT=GraphvizOutput; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
         // DOT format for Graphviz visualization
-        try outputDotFormatFromRows(allocator, columns.items, all_rows.items, stdout);
+        if (all_rows_text) |rows| {
+            try outputDotFormatFromRows(allocator, rows.items, stdout);
+        }
     }
 
     // Free error strings if allocated
     if (has_error and error_message.len > 0) {
         allocator.free(error_message);
-    }
-}
-
-// Helper to check if a string represents a numeric value
-fn isNumericString(s: []const u8) bool {
-    if (s.len == 0) return false;
-    var has_dot = false;
-    var has_digit = false;
-    for (s, 0..) |c, i| {
-        if (c == '-' or c == '+') {
-            if (i != 0) return false;
-        } else if (c == '.') {
-            if (has_dot) return false;
-            has_dot = true;
-        } else if (c >= '0' and c <= '9') {
-            has_digit = true;
-        } else if (c == 'e' or c == 'E') {
-            // Scientific notation
-            if (!has_digit) return false;
-        } else {
-            return false;
-        }
-    }
-    return has_digit;
-}
-
-// CANARY: REQ=REQ-CLI-DOT-001; FEATURE="DotGraphOutput"; ASPECT=FormatConversion; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-/// Output query results in Graphviz DOT format
-fn outputDotFormat(allocator: std.mem.Allocator, result_line: []const u8, stdout: *std.fs.File) !void {
-    // Parse the BINDINGS response to extract rows
-    var parsed = std.json.parseFromSlice(std.json.Value, allocator, result_line, .{}) catch {
-        // If parsing fails, output empty graph
-        _ = stdout.writeAll("digraph G {\n  rankdir=LR;\n  node [shape=ellipse];\n}\n") catch {};
-        return;
-    };
-    defer parsed.deinit();
-
-    const root = parsed.value.object;
-    // Try result.rows first (standard response), then rows directly (alternative format)
-    const rows = blk: {
-        if (root.get("result")) |inner| {
-            if (inner == .object) {
-                if (inner.object.get("rows")) |r| {
-                    if (r == .array) break :blk r.array;
-                }
-            }
-        }
-        if (root.get("rows")) |r| {
-            if (r == .array) break :blk r.array;
-        }
-        break :blk std.json.Array.init(allocator);
-    };
-
-    // Start DOT graph
-    _ = stdout.writeAll("digraph G {\n") catch {};
-    _ = stdout.writeAll("  rankdir=LR;\n") catch {};
-    _ = stdout.writeAll("  node [shape=ellipse, style=filled, fillcolor=lightblue];\n") catch {};
-    _ = stdout.writeAll("  edge [fontsize=10];\n") catch {};
-    _ = stdout.writeAll("\n") catch {};
-
-    // Track nodes and relationships we've seen to avoid duplicates
-    var seen_nodes = std.StringHashMap(void).init(allocator);
-    defer {
-        // Free all keys before deinit
-        var key_iter = seen_nodes.keyIterator();
-        while (key_iter.next()) |key| {
-            allocator.free(key.*);
-        }
-        seen_nodes.deinit();
-    }
-    var seen_edges = std.StringHashMap(void).init(allocator);
-    defer {
-        // Free all keys before deinit
-        var key_iter = seen_edges.keyIterator();
-        while (key_iter.next()) |key| {
-            allocator.free(key.*);
-        }
-        seen_edges.deinit();
-    }
-
-    // Process each row
-    // Rows can be arrays or objects with column names as keys
-    for (rows.items) |row| {
-        // Process values based on row type
-        if (row == .array) {
-            for (row.array.items) |col| {
-                try processDotValue(allocator, col, &seen_nodes, &seen_edges, stdout);
-            }
-        } else if (row == .object) {
-            // Iterate over all values in the object
-            var iter = row.object.iterator();
-            while (iter.next()) |entry| {
-                try processDotValue(allocator, entry.value_ptr.*, &seen_nodes, &seen_edges, stdout);
-            }
-        }
-    }
-
-    // End DOT graph
-    _ = stdout.writeAll("}\n") catch {};
-}
-
-/// Process a single value for DOT output (node or relationship)
-fn processDotValue(allocator: std.mem.Allocator, col: std.json.Value, seen_nodes: *std.StringHashMap(void), seen_edges: *std.StringHashMap(void), stdout: *std.fs.File) !void {
-    if (col != .object) return;
-
-    const obj = col.object;
-
-    // Check if this is a node (has labels array)
-    // Server returns: {id: int, labels: [...], properties: {...}}
-    if (obj.get("labels")) |labels_val| {
-        const node_id = getDotNodeId(allocator, obj) orelse return;
-        defer allocator.free(node_id);
-
-        // Only output if we haven't seen this node
-        if (!seen_nodes.contains(node_id)) {
-            try seen_nodes.put(try allocator.dupe(u8, node_id), {});
-
-            // Get label for display
-            const label = getDotNodeLabel(allocator, obj, labels_val) catch node_id;
-            defer if (!std.mem.eql(u8, label, node_id)) allocator.free(label);
-
-            // Output node definition
-            _ = stdout.writeAll("  \"") catch {};
-            _ = stdout.writeAll(node_id) catch {};
-            _ = stdout.writeAll("\" [label=\"") catch {};
-            _ = stdout.writeAll(label) catch {};
-            _ = stdout.writeAll("\"];\n") catch {};
-        }
-    }
-    // Check if this is a relationship (has type and from/to)
-    // Server returns: {id: int, type: string, from: int, to: int, properties: {...}}
-    else if (obj.get("type")) |type_val| {
-        if (type_val != .string) return;
-        const rel_type = type_val.string;
-
-        // Try "from"/"to" first (server format), then "start_node"/"end_node" (alternative)
-        const start_id = getDotIdString(allocator, obj.get("from")) orelse
-            getDotIdString(allocator, obj.get("start_node")) orelse return;
-        defer allocator.free(start_id);
-        const end_id = getDotIdString(allocator, obj.get("to")) orelse
-            getDotIdString(allocator, obj.get("end_node")) orelse return;
-        defer allocator.free(end_id);
-
-        // Create edge key for deduplication
-        const edge_key = std.fmt.allocPrint(allocator, "{s}-{s}->{s}", .{ start_id, rel_type, end_id }) catch return;
-        defer allocator.free(edge_key);
-
-        if (!seen_edges.contains(edge_key)) {
-            try seen_edges.put(try allocator.dupe(u8, edge_key), {});
-
-            // Output edge
-            _ = stdout.writeAll("  \"") catch {};
-            _ = stdout.writeAll(start_id) catch {};
-            _ = stdout.writeAll("\" -> \"") catch {};
-            _ = stdout.writeAll(end_id) catch {};
-            _ = stdout.writeAll("\" [label=\"") catch {};
-            _ = stdout.writeAll(rel_type) catch {};
-            _ = stdout.writeAll("\"];\n") catch {};
-        }
     }
 }
 
@@ -2756,17 +2424,6 @@ fn getDotNodeLabel(allocator: std.mem.Allocator, obj: std.json.ObjectMap, labels
                 }
             }
         }
-    } else {
-        // Fall back to top-level properties (legacy format)
-        for (display_props) |prop| {
-            if (obj.get(prop)) |val| {
-                if (val == .string and val.string.len > 0) {
-                    try label_parts.appendSlice(allocator, "\\n");
-                    try label_parts.appendSlice(allocator, val.string);
-                    break;
-                }
-            }
-        }
     }
 
     if (label_parts.items.len == 0) {
@@ -2780,7 +2437,7 @@ fn getDotNodeLabel(allocator: std.mem.Allocator, obj: std.json.ObjectMap, labels
 
 /// Output DOT format from pre-collected row data
 /// CANARY: REQ=REQ-CLI-DOT-003; FEATURE="DotFormat"; ASPECT=RowBasedOutput; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-fn outputDotFormatFromRows(allocator: std.mem.Allocator, columns: []const []const u8, rows: []const std.ArrayList([]const u8), stdout: std.fs.File) !void {
+fn outputDotFormatFromRows(allocator: std.mem.Allocator, rows: []const std.ArrayList([]const u8), stdout: std.fs.File) !void {
     // Start DOT graph
     _ = stdout.writeAll("digraph G {\n") catch {};
     _ = stdout.writeAll("  rankdir=LR;\n") catch {};
@@ -2796,10 +2453,6 @@ fn outputDotFormatFromRows(allocator: std.mem.Allocator, columns: []const []cons
         seen_nodes.deinit();
     }
 
-    // For simple queries (like RETURN 1 AS x), there may be no graph data
-    // In that case, just output the empty graph structure with data as comments
-    var has_graph_data = false;
-
     // Process each row looking for node/edge data
     for (rows) |row| {
         for (row.items, 0..) |cell, col_idx| {
@@ -2812,7 +2465,6 @@ fn outputDotFormatFromRows(allocator: std.mem.Allocator, columns: []const []cons
 
             // Check if this is a node (has labels)
             if (obj.get("labels")) |labels_val| {
-                has_graph_data = true;
                 const node_id = getDotNodeId(allocator, obj) orelse continue;
                 defer allocator.free(node_id);
 
@@ -2830,9 +2482,8 @@ fn outputDotFormatFromRows(allocator: std.mem.Allocator, columns: []const []cons
                 }
             }
             // Check if this is a relationship
-            else if (obj.get("type")) |type_val| {
+            else if (obj.get("label") orelse obj.get("type")) |type_val| {
                 if (type_val != .string) continue;
-                has_graph_data = true;
                 const rel_type = type_val.string;
 
                 const start_id = getDotIdString(allocator, obj.get("from")) orelse
@@ -2855,201 +2506,8 @@ fn outputDotFormatFromRows(allocator: std.mem.Allocator, columns: []const []cons
         }
     }
 
-    // If no graph data was found, add columns as comment for debugging
-    if (!has_graph_data and columns.len > 0) {
-        _ = stdout.writeAll("  // Query returned tabular data, not graph data\n") catch {};
-        _ = stdout.writeAll("  // Columns: ") catch {};
-        for (columns, 0..) |col, i| {
-            if (i > 0) _ = stdout.writeAll(", ") catch {};
-            _ = stdout.writeAll(col) catch {};
-        }
-        _ = stdout.writeAll("\n") catch {};
-    }
-
     // End DOT graph
     _ = stdout.writeAll("}\n") catch {};
-}
-
-/// Extract column name from either string or object format
-/// Server may return columns as strings or as objects with {name, type}
-fn getColumnName(col: std.json.Value) []const u8 {
-    // String format: columns are just names
-    if (col == .string) return col.string;
-    // Object format: {name: "col_name", type: "text"}
-    if (col == .object) {
-        if (col.object.get("name")) |name_val| {
-            if (name_val == .string) return name_val.string;
-        }
-    }
-    return "?";
-}
-
-/// Output query results in ASCII table format
-fn outputTableFormat(allocator: std.mem.Allocator, schema_response: []const u8, result_line: []const u8, stdout: *std.fs.File) !void {
-    // Parse schema to get column names
-    var schema_parsed = std.json.parseFromSlice(std.json.Value, allocator, schema_response, .{}) catch {
-        // Fall back to JSON if we can't parse
-        _ = stdout.writeAll(result_line) catch {};
-        return;
-    };
-    defer schema_parsed.deinit();
-
-    const schema_obj = schema_parsed.value.object;
-    // Try result.columns first (standard response), then columns directly (alternative format)
-    const columns = blk: {
-        if (schema_obj.get("result")) |inner| {
-            if (inner == .object) {
-                if (inner.object.get("columns")) |c| {
-                    if (c == .array) break :blk c.array;
-                }
-            }
-        }
-        if (schema_obj.get("columns")) |c| {
-            if (c == .array) break :blk c.array;
-        }
-        break :blk std.json.Array.init(allocator);
-    };
-
-    // Parse result rows - handle nested result.rows structure
-    var result_parsed = std.json.parseFromSlice(std.json.Value, allocator, result_line, .{}) catch {
-        _ = stdout.writeAll(result_line) catch {};
-        return;
-    };
-    defer result_parsed.deinit();
-
-    const result_obj = result_parsed.value.object;
-    // Try result.rows first (standard response), then rows directly (alternative format)
-    const rows = blk: {
-        if (result_obj.get("result")) |inner| {
-            if (inner == .object) {
-                if (inner.object.get("rows")) |r| {
-                    if (r == .array) break :blk r.array;
-                }
-            }
-        }
-        if (result_obj.get("rows")) |r| {
-            if (r == .array) break :blk r.array;
-        }
-        break :blk std.json.Array.init(allocator);
-    };
-
-    // Calculate column widths
-    var col_widths = try allocator.alloc(usize, columns.items.len);
-    defer allocator.free(col_widths);
-
-    // Initialize with header widths
-    for (columns.items, 0..) |col, i| {
-        const name = getColumnName(col);
-        col_widths[i] = if (name.len > 0) name.len else 5;
-    }
-
-    // Check each row for max widths
-    // Rows can be either arrays or objects with column names as keys
-    for (rows.items) |row| {
-        if (row == .array) {
-            for (row.array.items, 0..) |cell, i| {
-                if (i >= col_widths.len) break;
-                const cell_width = getJsonValueDisplayWidth(cell);
-                if (cell_width > col_widths[i]) {
-                    col_widths[i] = @min(cell_width, 50); // Cap at 50 chars
-                }
-            }
-        } else if (row == .object) {
-            for (columns.items, 0..) |col, i| {
-                const col_name = getColumnName(col);
-                if (row.object.get(col_name)) |cell| {
-                    const cell_width = getJsonValueDisplayWidth(cell);
-                    if (cell_width > col_widths[i]) {
-                        col_widths[i] = @min(cell_width, 50); // Cap at 50 chars
-                    }
-                }
-            }
-        }
-    }
-
-    // Print header separator
-    try printTableSeparator(stdout, col_widths);
-
-    // Print header row
-    _ = stdout.writeAll("| ") catch {};
-    for (columns.items, 0..) |col, i| {
-        const name = getColumnName(col);
-        _ = stdout.writeAll(name) catch {};
-        const padding = col_widths[i] -| name.len;
-        for (0..padding) |_| _ = stdout.writeAll(" ") catch {};
-        _ = stdout.writeAll(" | ") catch {};
-    }
-    _ = stdout.writeAll("\n") catch {};
-
-    // Print separator
-    try printTableSeparator(stdout, col_widths);
-
-    // Print data rows
-    // Rows can be either arrays or objects with column names as keys
-    for (rows.items) |row| {
-        _ = stdout.writeAll("| ") catch {};
-        for (columns.items, 0..) |col, i| {
-            const col_name = getColumnName(col);
-            const cell = blk: {
-                if (row == .array) {
-                    break :blk if (i < row.array.items.len) row.array.items[i] else std.json.Value.null;
-                } else if (row == .object) {
-                    break :blk row.object.get(col_name) orelse std.json.Value.null;
-                } else {
-                    break :blk std.json.Value.null;
-                }
-            };
-            const cell_str = try formatJsonValueCompact(allocator, cell);
-            defer allocator.free(cell_str);
-
-            // Truncate if too long
-            const display_len = @min(cell_str.len, col_widths[i]);
-            _ = stdout.writeAll(cell_str[0..display_len]) catch {};
-
-            const padding = col_widths[i] -| display_len;
-            for (0..padding) |_| _ = stdout.writeAll(" ") catch {};
-            _ = stdout.writeAll(" | ") catch {};
-        }
-        _ = stdout.writeAll("\n") catch {};
-    }
-
-    // Print footer separator
-    try printTableSeparator(stdout, col_widths);
-
-    // Print row count
-    const row_count_str = try std.fmt.allocPrint(allocator, "({d} row{s})\n", .{ rows.items.len, if (rows.items.len == 1) "" else "s" });
-    defer allocator.free(row_count_str);
-    _ = stdout.writeAll(row_count_str) catch {};
-}
-
-fn printTableSeparator(stdout: *std.fs.File, col_widths: []const usize) !void {
-    _ = stdout.writeAll("+") catch {};
-    for (col_widths) |width| {
-        for (0..width + 2) |_| _ = stdout.writeAll("-") catch {};
-        _ = stdout.writeAll("+") catch {};
-    }
-    _ = stdout.writeAll("\n") catch {};
-}
-
-fn getJsonValueDisplayWidth(val: std.json.Value) usize {
-    return switch (val) {
-        .null => 4,
-        .bool => |b| if (b) 4 else 5,
-        .integer => |i| blk: {
-            var buf: [32]u8 = undefined;
-            const s = std.fmt.bufPrint(&buf, "{d}", .{i}) catch break :blk 10;
-            break :blk s.len;
-        },
-        .float => |f| blk: {
-            var buf: [32]u8 = undefined;
-            const s = std.fmt.bufPrint(&buf, "{d:.6}", .{f}) catch break :blk 10;
-            break :blk s.len;
-        },
-        .string => |s| s.len,
-        .array => 10,
-        .object => 10,
-        .number_string => |s| s.len,
-    };
 }
 
 fn formatJsonValueCompact(allocator: std.mem.Allocator, val: std.json.Value) ![]u8 {
@@ -3063,15 +2521,17 @@ fn formatJsonValueCompact(allocator: std.mem.Allocator, val: std.json.Value) ![]
         .object => blk: {
             // For objects, try to show a useful summary
             const obj = val.object;
-            if (obj.get("_labels")) |_| {
-                // It's a node
-                if (obj.get("name")) |n| {
-                    if (n == .string) break :blk try allocator.dupe(u8, n.string);
+            if (obj.get("labels")) |labels_val| {
+                if (labels_val == .array and labels_val.array.items.len > 0 and labels_val.array.items[0] == .string) {
+                    break :blk try std.fmt.allocPrint(allocator, "({s})", .{labels_val.array.items[0].string});
                 }
                 break :blk try allocator.dupe(u8, "(node)");
             }
-            if (obj.get("_type")) |t| {
-                // It's a relationship
+            if (obj.get("label")) |t| {
+                if (t == .string) break :blk try std.fmt.allocPrint(allocator, "[:{s}]", .{t.string});
+                break :blk try allocator.dupe(u8, "[rel]");
+            }
+            if (obj.get("type")) |t| {
                 if (t == .string) break :blk try std.fmt.allocPrint(allocator, "[:{s}]", .{t.string});
                 break :blk try allocator.dupe(u8, "[rel]");
             }
@@ -3081,177 +2541,153 @@ fn formatJsonValueCompact(allocator: std.mem.Allocator, val: std.json.Value) ![]
     };
 }
 
-/// Output query results in CSV format
-fn outputCsvFormat(allocator: std.mem.Allocator, schema_response: []const u8, result_line: []const u8, stdout: *std.fs.File) !void {
-    // Parse schema to get column names
-    var schema_parsed = std.json.parseFromSlice(std.json.Value, allocator, schema_response, .{}) catch {
-        _ = stdout.writeAll(result_line) catch {};
-        return;
-    };
-    defer schema_parsed.deinit();
-
-    const schema_obj = schema_parsed.value.object;
-    // Try result.columns first (standard response), then columns directly (alternative format)
-    const columns = blk: {
-        if (schema_obj.get("result")) |inner| {
-            if (inner == .object) {
-                if (inner.object.get("columns")) |c| {
-                    if (c == .array) break :blk c.array;
-                }
-            }
-        }
-        if (schema_obj.get("columns")) |c| {
-            if (c == .array) break :blk c.array;
-        }
-        break :blk std.json.Array.init(allocator);
-    };
-
-    // Parse result rows
-    var result_parsed = std.json.parseFromSlice(std.json.Value, allocator, result_line, .{}) catch {
-        _ = stdout.writeAll(result_line) catch {};
-        return;
-    };
-    defer result_parsed.deinit();
-
-    const result_obj = result_parsed.value.object;
-    // Try result.rows first (standard response), then rows directly (alternative format)
-    const rows = blk: {
-        if (result_obj.get("result")) |inner| {
-            if (inner == .object) {
-                if (inner.object.get("rows")) |r| {
-                    if (r == .array) break :blk r.array;
-                }
-            }
-        }
-        if (result_obj.get("rows")) |r| {
-            if (r == .array) break :blk r.array;
-        }
-        break :blk std.json.Array.init(allocator);
-    };
-
-    // Print header row
-    for (columns.items, 0..) |col, i| {
-        if (i > 0) _ = stdout.writeAll(",") catch {};
-        const name = getColumnName(col);
-        try writeCsvValue(stdout, name);
+fn jsonNumberFromU64(allocator: std.mem.Allocator, value: u64) !std.json.Value {
+    if (value <= @as(u64, std.math.maxInt(i64))) {
+        return .{ .integer = @intCast(value) };
     }
-    _ = stdout.writeAll("\n") catch {};
-
-    // Print data rows
-    // Rows can be either arrays or objects with column names as keys
-    for (rows.items) |row| {
-        for (columns.items, 0..) |col, i| {
-            if (i > 0) _ = stdout.writeAll(",") catch {};
-            const col_name = getColumnName(col);
-            const cell = blk: {
-                if (row == .array) {
-                    break :blk if (i < row.array.items.len) row.array.items[i] else std.json.Value.null;
-                } else if (row == .object) {
-                    break :blk row.object.get(col_name) orelse std.json.Value.null;
-                } else {
-                    break :blk std.json.Value.null;
-                }
-            };
-            const cell_str = try formatJsonValueCompact(allocator, cell);
-            defer allocator.free(cell_str);
-            try writeCsvValue(stdout, cell_str);
-        }
-        _ = stdout.writeAll("\n") catch {};
-    }
+    const num_str = try std.fmt.allocPrint(allocator, "{d}", .{value});
+    return .{ .number_string = num_str };
 }
 
-fn writeCsvValue(stdout: *std.fs.File, value: []const u8) !void {
-    // Check if quoting is needed
-    var needs_quotes = false;
-    for (value) |c| {
-        if (c == ',' or c == '"' or c == '\n' or c == '\r') {
-            needs_quotes = true;
-            break;
-        }
-    }
-
-    if (needs_quotes) {
-        _ = stdout.writeAll("\"") catch {};
-        for (value) |c| {
-            if (c == '"') {
-                _ = stdout.writeAll("\"\"") catch {}; // Escape quotes by doubling
-            } else {
-                _ = stdout.write(&[_]u8{c}) catch {};
-            }
-        }
-        _ = stdout.writeAll("\"") catch {};
-    } else {
-        _ = stdout.writeAll(value) catch {};
-    }
+fn base64Encode(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
+    const out = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(bytes.len));
+    _ = std.base64.standard.Encoder.encode(out, bytes);
+    return out;
 }
 
-fn readBufferedLineWithPoll(allocator: std.mem.Allocator, quic_client: *quic.QuicClient, stream: *quic.QuicClientStream, buffer: *std.ArrayList(u8), max_size: usize, timeout_ms: u64) ![]u8 {
-    const start = std.time.milliTimestamp();
-    while (true) {
-        if (std.mem.indexOfScalar(u8, buffer.items, '\n')) |idx| {
-            return try takeBufferedLine(allocator, buffer, idx);
-        }
-        if (buffer.items.len >= max_size) return error.LineTooLong;
+fn protoMapEntriesToJson(allocator: std.mem.Allocator, entries: []const schema.MapEntry) !std.json.ObjectMap {
+    var obj = std.json.ObjectMap.init(allocator);
+    for (entries) |entry| {
+        const key = try allocator.dupe(u8, entry.key);
+        const val = if (entry.value) |v|
+            try protoValueToJson(allocator, v)
+        else
+            std.json.Value.null;
+        try obj.put(key, val);
+    }
+    return obj;
+}
 
-        var temp_buf: [4096]u8 = undefined;
-        const n = stream.read(&temp_buf) catch |err| {
-            if (err == error.WouldBlock) {
-                if (std.time.milliTimestamp() - start >= timeout_ms) return error.WouldBlock;
-                quic_client.poll(5) catch {};
-                std.Thread.sleep(5 * std.time.ns_per_ms);
-                continue;
-            }
-            return err;
+fn protoNodeToJson(allocator: std.mem.Allocator, node: schema.NodeValue) !std.json.Value {
+    var obj = std.json.ObjectMap.init(allocator);
+    try obj.put("id", try jsonNumberFromU64(allocator, node.id));
+
+    var labels = std.json.Array.init(allocator);
+    for (node.labels.items) |label| {
+        try labels.append(.{ .string = try allocator.dupe(u8, label) });
+    }
+    try obj.put("labels", .{ .array = labels });
+
+    const props_obj = try protoMapEntriesToJson(allocator, node.properties.items);
+    try obj.put("properties", .{ .object = props_obj });
+    return .{ .object = obj };
+}
+
+fn protoEdgeToJson(allocator: std.mem.Allocator, edge: schema.EdgeValue) !std.json.Value {
+    var obj = std.json.ObjectMap.init(allocator);
+    try obj.put("id", try jsonNumberFromU64(allocator, edge.id));
+    try obj.put("from", try jsonNumberFromU64(allocator, edge.from_id));
+    try obj.put("to", try jsonNumberFromU64(allocator, edge.to_id));
+    try obj.put("label", .{ .string = try allocator.dupe(u8, edge.label) });
+
+    const props_obj = try protoMapEntriesToJson(allocator, edge.properties.items);
+    try obj.put("properties", .{ .object = props_obj });
+    return .{ .object = obj };
+}
+
+fn protoPathToJson(allocator: std.mem.Allocator, path: schema.PathValue) !std.json.Value {
+    var obj = std.json.ObjectMap.init(allocator);
+
+    var nodes = std.json.Array.init(allocator);
+    for (path.nodes.items) |node| {
+        try nodes.append(try protoNodeToJson(allocator, node));
+    }
+    try obj.put("nodes", .{ .array = nodes });
+
+    var edges = std.json.Array.init(allocator);
+    for (path.edges.items) |edge| {
+        try edges.append(try protoEdgeToJson(allocator, edge));
+    }
+    try obj.put("edges", .{ .array = edges });
+    return .{ .object = obj };
+}
+
+fn protoExtendedToJson(allocator: std.mem.Allocator, ext: schema.ExtendedValue) !std.json.Value {
+    var obj = std.json.ObjectMap.init(allocator);
+    if (ext.type_name.len > 0) {
+        try obj.put("type", .{ .string = try allocator.dupe(u8, ext.type_name) });
+    }
+    if (ext.data) |data| {
+        const val: std.json.Value = switch (data) {
+            .text => |t| .{ .string = try allocator.dupe(u8, t) },
+            .bytes => |b| .{ .string = try base64Encode(allocator, b) },
+            .int_val => |n| .{ .integer = n },
+            .double_val => |f| .{ .float = f },
+            .bool_val => |b| .{ .bool = b },
         };
-        if (n == 0) {
-            if (std.time.milliTimestamp() - start >= timeout_ms) return error.WouldBlock;
-            quic_client.poll(5) catch {};
-            std.Thread.sleep(5 * std.time.ns_per_ms);
-            continue;
-        }
-        if (buffer.items.len + n > max_size) return error.LineTooLong;
-        try buffer.appendSlice(allocator, temp_buf[0..n]);
+        try obj.put("value", val);
     }
+    return .{ .object = obj };
 }
 
-fn tryReadBufferedLine(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8)) !?[]u8 {
-    if (std.mem.indexOfScalar(u8, buffer.items, '\n')) |idx| {
-        return try takeBufferedLine(allocator, buffer, idx);
-    }
-    return null;
-}
-
-fn takeBufferedLine(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), idx: usize) ![]u8 {
-    const line_len = idx + 1;
-    const line = try allocator.alloc(u8, line_len);
-    @memcpy(line, buffer.items[0..line_len]);
-
-    const remaining = buffer.items.len - line_len;
-    if (remaining > 0) {
-        std.mem.copyForwards(u8, buffer.items[0..remaining], buffer.items[line_len..]);
-        buffer.items.len = remaining;
-    } else {
-        buffer.items.len = 0;
-    }
-    return line;
-}
-
-fn readLineWithPoll(quic_client: *quic.QuicClient, stream: *quic.QuicClientStream, max_size: usize, timeout_ms: u64) ![]u8 {
-    const start = std.time.milliTimestamp();
-    while (true) {
-        const line = stream.readLine(max_size) catch |err| {
-            if (err == error.WouldBlock or err == error.EndOfStream) {
-                // If we've waited long enough, propagate the timeout/EOF
-                if (std.time.milliTimestamp() - start >= timeout_ms) return err;
-                // Poll transport and retry
-                // GAP-0200: Reduced poll/sleep from 50ms to 5ms for higher throughput
-                quic_client.poll(5) catch {};
-                std.Thread.sleep(5 * std.time.ns_per_ms);
-                continue;
+fn protoValueToJson(allocator: std.mem.Allocator, value: schema.Value) error{OutOfMemory}!std.json.Value {
+    const kind = value.kind orelse return std.json.Value.null;
+    return switch (kind) {
+        .null_val => std.json.Value.null,
+        .int_val => |v| .{ .integer = v.value },
+        .double_val => |v| .{ .float = v.value },
+        .bool_val => |b| .{ .bool = b },
+        .string_val => |v| .{ .string = try allocator.dupe(u8, v.value) },
+        .decimal_val => |v| blk: {
+            const repr = if (v.orig_repr.len > 0) v.orig_repr else v.coeff;
+            break :blk .{ .string = try allocator.dupe(u8, repr) };
+        },
+        .bytes_val => |v| .{ .string = try base64Encode(allocator, v.value) },
+        .list_val => |v| blk: {
+            var arr = std.json.Array.init(allocator);
+            for (v.values.items) |item| {
+                try arr.append(try protoValueToJson(allocator, item));
             }
-            return err;
-        };
-        return line;
+            break :blk .{ .array = arr };
+        },
+        .map_val => |v| blk: {
+            const obj = try protoMapEntriesToJson(allocator, v.entries.items);
+            break :blk .{ .object = obj };
+        },
+        .node_val => |v| try protoNodeToJson(allocator, v),
+        .edge_val => |v| try protoEdgeToJson(allocator, v),
+        .path_val => |v| try protoPathToJson(allocator, v),
+        .ext_val => |v| try protoExtendedToJson(allocator, v),
+    };
+}
+
+fn valueToJsonString(allocator: std.mem.Allocator, value: schema.Value) ![]const u8 {
+    const json_val = try protoValueToJson(allocator, value);
+    defer freeJsonValue(allocator, json_val);
+    return std.json.Stringify.valueAlloc(allocator, json_val, .{});
+}
+
+fn freeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) void {
+    switch (value) {
+        .number_string => |ns| allocator.free(ns),
+        .string => |s| allocator.free(s),
+        .array => |arr| {
+            for (arr.items) |item| {
+                freeJsonValue(allocator, item);
+            }
+            var mutable_arr = arr;
+            mutable_arr.deinit();
+        },
+        .object => |obj| {
+            var iter = obj.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            var mutable_obj = obj;
+            mutable_obj.deinit();
+        },
+        else => {},
     }
 }
 
@@ -3275,9 +2711,6 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // Issue #387: Authentication credentials for shell command
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
-    // CANARY: REQ=REQ-SHELL-PLAIN-004; FEATURE="ShellPlainMode"; ASPECT=CLIParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
-    // Plain mode for automated testing - disables terminal control sequences
-    var plain_mode = false;
 
     const stdin_handle = getStdinHandle() catch |err| {
         std.debug.print("Error: Cannot get stdin handle: {}\n", .{err});
@@ -3341,9 +2774,6 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             i += 1;
         } else if (std.mem.eql(u8, argv[i], "--no-history")) {
             history_enabled = false;
-        } else if (std.mem.eql(u8, argv[i], "--plain")) {
-            // CANARY: REQ=REQ-SHELL-PLAIN-005; FEATURE="ShellPlainMode"; ASPECT=FlagParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
-            plain_mode = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             insecure = true;
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
@@ -3411,9 +2841,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    // CANARY: REQ=REQ-SHELL-PLAIN-008; FEATURE="ShellPlainMode"; ASPECT=NonInteractiveBypass; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
-    // Plain mode allows non-interactive usage for automated testing
-    if (non_interactive and !plain_mode) {
+    if (non_interactive) {
         const stderr_file = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
         _ = stderr_file.writeAll("Non-interactive shell mode is not supported. Use 'geode query' for scripted execution.\n") catch {};
         std.process.exit(@intFromEnum(ExitCode.usage_error));
@@ -3425,7 +2853,6 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    // For testing - simulate a simple shell without full REPL
     std.debug.print("Geode Shell v0.1.0\n", .{});
     // GAP-0113: Display TLS certificate status
     // Note: Print "Connecting to..." here since actual connection happens in REPL loop
@@ -3441,32 +2868,14 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
     std.debug.print("Type 'help' for help, 'exit' to quit.\n", .{});
 
-    // Check for CI environment variable to detect non-interactive mode
-    if (std.process.getEnvVarOwned(allocator, "CI")) |ci_val| {
-        defer allocator.free(ci_val);
-        if (std.mem.eql(u8, ci_val, "true") or std.mem.eql(u8, ci_val, "1")) {
-            std.debug.print("geode> exit\n", .{});
-            std.debug.print("Goodbye!\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
-        }
-    } else |_| {
-        // Also check if NON_INTERACTIVE is set
-        if (std.process.getEnvVarOwned(allocator, "NON_INTERACTIVE")) |val| {
-            defer allocator.free(val);
-            std.debug.print("geode> exit\n", .{});
-            std.debug.print("Goodbye!\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
-        } else |_| {}
-    }
-
     // GAP-0134: Set TLS configuration for shell transport before REPL
     // CANARY: REQ=REQ-SHELL-TLS-003; FEATURE="Shell TLS Config Setup"; ASPECT=SecureConnection; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-13
-    shell_tls_config = .{
+    repl_quic_transport.setTlsConfig(.{
         .insecure = insecure,
         .ca_cert_path = ca_cert_path,
         .client_cert_path = client_cert_path,
         .client_key_path = client_key_path,
-    };
+    });
 
     // CANARY: REQ=REQ-SHELL-INTERRUPT-012; FEATURE="SourceInterrupt"; ASPECT=SignalInstall; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
     // Install signal handlers for Ctrl+C detection before starting REPL
@@ -3481,12 +2890,10 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         .verbose = verbose,
         .show_timing = false, // Default to off, can be toggled in REPL with \timing on
         .allocator = allocator,
-        .transport = &quic_transport, // Use real QUIC transport
+        .transport = &repl_quic_transport.transport, // Use real QUIC transport
         // Issue #387: Pass authentication credentials to REPL
         .username = username,
         .password = password,
-        // CANARY: REQ=REQ-SHELL-PLAIN-006; FEATURE="ShellPlainMode"; ASPECT=PassToOptions; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
-        .plain_mode = plain_mode,
     };
 
     repl_loop.ReplLoop.run(options) catch |err| {
@@ -3514,39 +2921,6 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
     } else if (std.mem.eql(u8, subcmd, "logout")) {
         // CANARY: REQ=REQ-AUTH-002; FEATURE="AuthenticationLogout"; ASPECT=RealImplementation; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_002_RealLogout; OWNER=cli; UPDATED=2025-09-30
         try cmdAuthLogout(allocator, argv, subcmd_idx + 1);
-    } else if (std.mem.eql(u8, subcmd, "validate")) {
-        // Validate a session token
-        var token: ?[]const u8 = null;
-        var i = subcmd_idx + 1;
-        while (i < argv.len) : (i += 1) {
-            if (std.mem.eql(u8, argv[i], "--token") and i + 1 < argv.len) {
-                token = argv[i + 1];
-                i += 1;
-            }
-        }
-        if (token) |t| {
-            if (std.mem.eql(u8, t, "session_token_placeholder") or std.mem.eql(u8, t, "test_session_token_12345")) {
-                std.debug.print("Session token is valid\n", .{});
-                std.debug.print("User: testuser\n", .{});
-                std.debug.print("Expires: 2025-12-31\n", .{});
-            } else {
-                std.debug.print("Session token is invalid or expired\n", .{});
-                std.process.exit(3);
-            }
-        } else {
-            std.debug.print("Error: --token required\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.usage_error));
-        }
-        std.process.exit(@intFromEnum(ExitCode.success));
-    } else if (std.mem.eql(u8, subcmd, "sessions")) {
-        // List active sessions as JSON to stdout
-        const sessions_json =
-            \\{"sessions":[{"user":"testuser","expires":"2025-12-31"},{"user":"admin","expires":"2025-12-31"}]}
-        ;
-        const stdout_fd = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable };
-        _ = try stdout_fd.writeAll(sessions_json);
-        _ = try stdout_fd.writeAll("\n");
-        std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcmd, "token")) {
         // CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
         try cmdAuthToken(allocator);
@@ -3718,41 +3092,6 @@ const AuthResult = struct {
     requires_password_reset: bool = false,
 };
 
-// CANARY: REQ=REQ-AUTH-POLICY-010; FEATURE="CLI Password Policy Validation"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
-fn validatePasswordAgainstPolicy(password: []const u8) !void {
-    // Get current policy configuration from environment
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-    const min_length_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_LENGTH");
-    defer if (min_length_env) |env| allocator.free(env);
-    const min_length = if (min_length_env) |len_str| blk: {
-        const parsed = std.fmt.parseInt(usize, len_str, 10) catch 20;
-        break :blk if (parsed < 20) 20 else parsed;
-    } else 20;
-
-    const min_words_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_WORDS");
-    defer if (min_words_env) |env| allocator.free(env);
-    const min_words = if (min_words_env) |words_str| blk: {
-        const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
-        break :blk if (parsed < 2) 2 else parsed;
-    } else 3;
-
-    // Validate length
-    if (password.len < min_length) return error.PasswordTooShort;
-    if (password.len > 256) return error.PasswordTooLong;
-
-    // Validate case requirements
-    if (!hasUpperAndLower(password)) return error.PasswordMissingCase;
-
-    // Validate passphrase format
-    if (!isPassphrase(password)) return error.PasswordNotPassphrase;
-
-    // Validate word count
-    const word_count = countWords(password);
-    if (word_count < min_words) return error.PasswordInsufficientWords;
-}
-
 /// GAP-0150: Real QUIC authentication to server
 /// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=ServerConnection; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
 fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: []const u8, password: []const u8) !AuthResult {
@@ -3778,8 +3117,8 @@ fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: [
         allocator.destroy(client);
     }
 
-    // Connect to server (TLS verification based on shell_tls_config)
-    const insecure = shell_tls_config.insecure;
+    // Connect to server (TLS verification based on shell transport config)
+    const insecure = repl_quic_transport.getTlsConfig().insecure;
     _ = client.connectInsecure(host, port, insecure) catch |err| {
         std.debug.print("Error: Could not connect to server {s}:{d}: {s}\n", .{ host, port, @errorName(err) });
         client.deinit();
@@ -3831,186 +3170,6 @@ fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: [
     }
 }
 
-/// Escape a string for JSON embedding (auth-specific version to avoid conflicts)
-fn escapeJsonStringForAuth(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
-    var result = try std.ArrayList(u8).initCapacity(allocator, s.len * 2);
-    errdefer result.deinit(allocator);
-
-    for (s) |c| {
-        switch (c) {
-            '"' => try result.appendSlice(allocator, "\\\""),
-            '\\' => try result.appendSlice(allocator, "\\\\"),
-            '\n' => try result.appendSlice(allocator, "\\n"),
-            '\r' => try result.appendSlice(allocator, "\\r"),
-            '\t' => try result.appendSlice(allocator, "\\t"),
-            else => try result.append(allocator, c),
-        }
-    }
-
-    return result.toOwnedSlice(allocator);
-}
-
-/// GAP-0150: Update password on server via QUIC SET_PASSWORD message
-/// CANARY: REQ=REQ-AUTH-CLI-004; FEATURE="CLI QUIC Password Update"; ASPECT=PasswordChange; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
-fn updatePasswordOnServer(allocator: std.mem.Allocator, server: []const u8, username: []const u8, new_password: []const u8) !void {
-    // Parse server address
-    const colon_idx = std.mem.lastIndexOf(u8, server, ":") orelse return error.InvalidAddress;
-    const host = server[0..colon_idx];
-    const port = std.fmt.parseInt(u16, server[colon_idx + 1 ..], 10) catch return error.InvalidAddress;
-
-    // Create QUIC client connection
-    const client = try allocator.create(quic.QuicClient);
-    client.* = quic.QuicClient.init(allocator);
-    errdefer {
-        client.deinit();
-        allocator.destroy(client);
-    }
-
-    // Connect to server
-    const insecure = shell_tls_config.insecure;
-    _ = client.connectInsecure(host, port, insecure) catch |err| {
-        std.debug.print("Error: Could not connect to server for password update: {s}\n", .{@errorName(err)});
-        client.deinit();
-        allocator.destroy(client);
-        return error.ConnectionFailed;
-    };
-
-    // Wait for TLS handshake
-    _ = client.waitForHandshake(10) catch |err| {
-        client.deinit();
-        allocator.destroy(client);
-        return err;
-    };
-
-    // Get QUIC stream
-    var stream = client.getStream() catch |err| {
-        client.deinit();
-        allocator.destroy(client);
-        return err;
-    };
-    defer stream.deinit();
-    defer {
-        client.deinit();
-        allocator.destroy(client);
-    }
-
-    // Escape fields for JSON
-    const escaped_username = try escapeJsonStringForAuth(allocator, username);
-    defer allocator.free(escaped_username);
-
-    const escaped_password = try escapeJsonStringForAuth(allocator, new_password);
-    defer allocator.free(escaped_password);
-
-    // Send SET_PASSWORD message
-    const set_pwd_msg = try std.fmt.allocPrint(
-        allocator,
-        "{{\"type\":\"SET_PASSWORD\",\"username\":\"{s}\",\"new_password\":\"{s}\"}}\n",
-        .{ escaped_username, escaped_password },
-    );
-    defer allocator.free(set_pwd_msg);
-
-    _ = stream.write(set_pwd_msg) catch |err| {
-        std.debug.print("Error: Could not send password update request: {s}\n", .{@errorName(err)});
-        return error.WriteError;
-    };
-
-    // Read response
-    var response_buf: [4096]u8 = undefined;
-    const response_len = stream.read(&response_buf) catch |err| {
-        std.debug.print("Error: Could not read password update response: {s}\n", .{@errorName(err)});
-        return error.ReadError;
-    };
-
-    if (response_len == 0) {
-        return error.InvalidResponse;
-    }
-
-    // Find end of first line
-    var end_of_line: usize = response_len;
-    for (response_buf[0..response_len], 0..) |b, i| {
-        if (b == '\n') {
-            end_of_line = i;
-            break;
-        }
-    }
-
-    const response = response_buf[0..end_of_line];
-
-    // Parse response
-    var parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{ .duplicate_field_behavior = .use_last }) catch {
-        return error.InvalidResponse;
-    };
-    defer parsed.deinit();
-
-    const obj = parsed.value.object;
-    const type_val = obj.get("type") orelse return error.InvalidResponse;
-
-    if (type_val != .string) return error.InvalidResponse;
-
-    const type_str = type_val.string;
-
-    if (std.mem.eql(u8, type_str, "ERROR")) {
-        const msg = if (obj.get("message")) |m|
-            if (m == .string) m.string else "Password update failed"
-        else
-            "Password update failed";
-        std.debug.print("Server error: {s}\n", .{msg});
-        return error.PasswordUpdateFailed;
-    }
-
-    if (std.mem.eql(u8, type_str, "SET_PASSWORD_OK")) {
-        return; // Success
-    }
-
-    return error.InvalidResponse;
-}
-
-fn hasUpperAndLower(password: []const u8) bool {
-    var has_upper = false;
-    var has_lower = false;
-
-    for (password) |c| {
-        if (std.ascii.isUpper(c)) has_upper = true;
-        if (std.ascii.isLower(c)) has_lower = true;
-        if (has_upper and has_lower) return true;
-    }
-
-    return has_upper and has_lower;
-}
-
-fn countWords(text: []const u8) usize {
-    var word_count: usize = 0;
-    var in_word = false;
-
-    for (text) |c| {
-        if (std.ascii.isAlphanumeric(c)) {
-            if (!in_word) {
-                word_count += 1;
-                in_word = true;
-            }
-        } else {
-            in_word = false;
-        }
-    }
-
-    return word_count;
-}
-
-fn isPassphrase(password: []const u8) bool {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-    // Use configurable minimum words for passphrase validation
-    const min_words_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_WORDS");
-    defer if (min_words_env) |env| allocator.free(env);
-    const min_words = if (min_words_env) |words_str| blk: {
-        const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
-        break :blk if (parsed < 2) 2 else parsed;
-    } else 3;
-
-    return countWords(password) >= min_words;
-}
-
 fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var server: []const u8 = "127.0.0.1:3141";
     var username: ?[]const u8 = null;
@@ -4046,51 +3205,6 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     }
 
     // CANARY: REQ=REQ-AUTH-SESSION-008; FEATURE="TokenBasedLogin"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
-
-    // For simplified testing mode - generate token without server connection
-    if (username) |u| {
-        // Import session storage
-        const session_storage = @import("security/session_storage.zig");
-
-        // Generate a cryptographically random session token
-        const session_token = try session_storage.SessionToken.generate(allocator, u);
-        defer allocator.free(session_token.username);
-        defer allocator.free(session_token.system_fingerprint);
-
-        const token_hex = try session_token.toHexString(allocator);
-        defer allocator.free(token_hex);
-
-        // Check for known test users
-        if (std.mem.eql(u8, u, "nonexistent")) {
-            std.debug.print("Error: Invalid user - user not found\n", .{});
-            std.process.exit(3); // Exit code 3 for auth failure
-        }
-
-        // Save session if requested
-        if (save_session) {
-            var cred_store = try session_storage.CredentialStore.init(allocator);
-            defer cred_store.deinit();
-
-            const creds = session_storage.Credentials{
-                .token = token_hex,
-                .username = u,
-                .server = server,
-                .created_at = session_token.created_at,
-                .system_fingerprint = session_token.system_fingerprint,
-            };
-
-            try cred_store.saveCredentials(creds);
-            std.debug.print("Login successful for user '{s}'\n", .{u});
-            std.debug.print("Session token saved to ~/.geode/credentials.json\n", .{});
-            std.debug.print("Token expires in 1 hour (auto-renewed while active)\n", .{});
-        } else {
-            std.debug.print("Login successful for user '{s}'\n", .{u});
-            std.debug.print("Session token: {s}\n", .{token_hex});
-            std.debug.print("Use --save-session to save credentials locally\n", .{});
-        }
-
-        std.process.exit(@intFromEnum(ExitCode.success));
-    }
 
     // Prompt for username if not provided
     const final_username = username orelse blk: {
@@ -4166,55 +3280,10 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     // Log successful authentication
     logAuditEvent("auth", "login", "success");
 
-    // Handle password reset requirement
     if (auth_result.requires_password_reset) {
-        // Get current policy configuration
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-        defer _ = gpa.deinit();
-        const local_allocator = gpa.allocator();
-
-        const min_length_env = getEnvVar(local_allocator, "GEODE_PASSWORD_MIN_LENGTH");
-        defer if (min_length_env) |env| local_allocator.free(env);
-        const min_length = if (min_length_env) |len_str| blk: {
-            const parsed = std.fmt.parseInt(usize, len_str, 10) catch 20;
-            break :blk if (parsed < 20) 20 else parsed;
-        } else 20;
-
-        const min_words_env = getEnvVar(local_allocator, "GEODE_PASSWORD_MIN_WORDS");
-        defer if (min_words_env) |env| local_allocator.free(env);
-        const min_words = if (min_words_env) |words_str| blk: {
-            const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
-            break :blk if (parsed < 2) 2 else parsed;
-        } else 3;
-
-        std.debug.print("Authentication successful, but a password reset is required.\n", .{});
-        std.debug.print("Your current password does not meet the security policy:\n", .{});
-        std.debug.print("  - Minimum {} characters\n", .{min_length});
-        std.debug.print("  - Must be a passphrase ({} or more words)\n", .{min_words});
-        std.debug.print("  - Must contain uppercase and lowercase letters\n", .{});
-        std.debug.print("  - Spaces, numbers, and symbols are allowed\n", .{});
-        std.debug.print("\nYou must set a new password before accessing the database.\n\n", .{});
-
-        // Prompt for new password
-        const new_password = try promptNewPassword(allocator);
-        defer allocator.free(new_password);
-
-        // Validate new password
-        if (!validateNewPassword(new_password)) {
-            std.debug.print("Error: New password does not meet security requirements\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.auth_error));
-        }
-
-        // GAP-0150: Send password update to server via QUIC
-        // CANARY: REQ=REQ-AUTH-CLI-003; FEATURE="CLI QUIC Password Update"; ASPECT=PasswordChange; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
-        updatePasswordOnServer(allocator, server, final_username, new_password) catch |err| {
-            std.debug.print("Error: Failed to update password on server: {s}\n", .{@errorName(err)});
-            std.process.exit(@intFromEnum(ExitCode.auth_error));
-        };
-
-        std.debug.print("Password updated successfully.\n", .{});
-        std.debug.print("You can now log in with your new password.\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.success));
+        std.debug.print("Authentication succeeded, but the server requires a password reset.\n", .{});
+        std.debug.print("Use an administrative password reset workflow on the server and retry login.\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.auth_error));
     }
 
     // Save credentials
@@ -4226,104 +3295,31 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         .expires_at = expires_at,
     };
 
-    saveCredentials(allocator, creds) catch |err| {
-        std.debug.print("Warning: Could not save credentials: {s}\n", .{@errorName(err)});
-    };
-
     std.debug.print("Successfully authenticated as '{s}' on server '{s}'\n", .{ final_username, server });
-    std.debug.print("Session token saved to ~/.geode/credentials.json\n", .{});
-}
-
-fn promptNewPassword(allocator: std.mem.Allocator) ![]const u8 {
-    var attempts: u8 = 0;
-    const max_attempts = 3;
-
-    while (attempts < max_attempts) {
-        const new_password = try promptPassword(allocator, "New password: ");
-        const confirm_password = try promptPassword(allocator, "Confirm password: ");
-
-        defer allocator.free(confirm_password);
-
-        if (std.mem.eql(u8, new_password, confirm_password)) {
-            return new_password;
-        } else {
-            allocator.free(new_password);
-            attempts += 1;
-            std.debug.print("Passwords do not match. Please try again.\n", .{});
-        }
+    if (save_session) {
+        saveCredentials(allocator, creds) catch |err| {
+            std.debug.print("Warning: Could not save credentials: {s}\n", .{@errorName(err)});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        std.debug.print("Session token saved to ~/.geode/credentials.json\n", .{});
+    } else {
+        std.debug.print("Session token: {s}\n", .{auth_result.session_token});
+        std.debug.print("Use --save-session to persist credentials locally\n", .{});
     }
-
-    std.debug.print("Too many failed attempts.\n", .{});
-    std.process.exit(@intFromEnum(ExitCode.auth_error));
 }
-
-fn validateNewPassword(password: []const u8) bool {
-    // Use the same validation as the policy check for consistency
-    validatePasswordAgainstPolicy(password) catch |err| {
-        switch (err) {
-            error.PasswordTooShort => {
-                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-                defer _ = gpa.deinit();
-                const allocator = gpa.allocator();
-
-                const min_length_env = getEnvVar(allocator, "GEODE_PASSWORD_MIN_LENGTH");
-                defer if (min_length_env) |env| allocator.free(env);
-                const min_length = if (min_length_env) |len_str| blk: {
-                    const parsed = std.fmt.parseInt(usize, len_str, 10) catch 20;
-                    break :blk if (parsed < 20) 20 else parsed;
-                } else 20;
-                std.debug.print("Password must be at least {} characters long.\n", .{min_length});
-            },
-            error.PasswordTooLong => {
-                std.debug.print("Password must be no more than 256 characters long.\n", .{});
-            },
-            error.PasswordMissingCase => {
-                std.debug.print("Password must contain both uppercase and lowercase letters.\n", .{});
-            },
-            error.PasswordNotPassphrase, error.PasswordInsufficientWords => {
-                var gpa2 = std.heap.GeneralPurposeAllocator(.{}){};
-                defer _ = gpa2.deinit();
-                const allocator2 = gpa2.allocator();
-                const min_words_env = getEnvVar(allocator2, "GEODE_PASSWORD_MIN_WORDS");
-                defer if (min_words_env) |env| allocator2.free(env);
-                const min_words = if (min_words_env) |words_str| blk: {
-                    const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
-                    break :blk if (parsed < 2) 2 else parsed;
-                } else 3;
-                std.debug.print("Password must be a passphrase with at least {} words.\n", .{min_words});
-            },
-        }
-        return false;
-    };
-    return true;
-}
-
-// Removed - replaced by countWords function above
 
 fn cmdAuthLogout(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Check for token option
-    var token: ?[]const u8 = null;
     var i = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--help") or std.mem.eql(u8, argv[i], "-h")) {
             std.debug.print("geode auth logout - Clear saved credentials\n" ++
                 "\n" ++
-                "Usage: geode auth logout [--token <token>]\n" ++
+                "Usage: geode auth logout\n" ++
                 "\n" ++
                 "This command clears saved authentication credentials from ~/.geode/credentials.json\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
-        } else if (std.mem.eql(u8, argv[i], "--token") and i + 1 < argv.len) {
-            token = argv[i + 1];
-            i += 1;
         }
-    }
-
-    // If token provided, we're logging out a specific session
-    if (token != null) {
-        std.debug.print("Session logged out successfully\n", .{});
-        std.debug.print("Token invalidated\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.success));
     }
 
     // Clear saved credentials

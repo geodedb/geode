@@ -6,6 +6,8 @@ set -e
 
 echo "=== QUIC Multi-Client Test Suite ==="
 echo ""
+ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
 
 # Function to run a query and check result
 run_query() {
@@ -15,7 +17,7 @@ run_query() {
     local server_port=${4:-8443}
 
     echo "Client $client_id: Executing query..."
-    OUTPUT=$(./zig-out/bin/geode query --server 127.0.0.1:$server_port "$query" 2>&1 | grep -E "(SCHEMA|RESULT|STATUS|Error)" || true)
+    OUTPUT=$(./zig-out/bin/geode query --server 127.0.0.1:$server_port --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" "$query" 2>&1 || true)
 
     if echo "$OUTPUT" | grep -q "$expected"; then
         echo "Client $client_id: ✓ Query successful"
@@ -31,7 +33,8 @@ run_query() {
 # Test 1: Sequential clients
 echo "Test 1: Sequential clients to single server"
 echo "Starting server..."
-./zig-out/bin/geode serve --listen 127.0.0.1:8443 > test_server.log 2>&1 &
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+    ./zig-out/bin/geode serve --listen 127.0.0.1:8443 > test_server.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -47,21 +50,22 @@ echo ""
 # Test 2: Concurrent clients
 echo "Test 2: Concurrent clients to single server"
 echo "Starting server..."
-./zig-out/bin/geode serve --listen 127.0.0.1:8444 > test_server2.log 2>&1 &
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+    ./zig-out/bin/geode serve --listen 127.0.0.1:8444 > test_server2.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
 echo "Launching 5 concurrent clients..."
 # Launch clients in background
-(./zig-out/bin/geode query --server 127.0.0.1:8444 "RETURN 'A' AS data" > client_a.out 2>&1) &
+(./zig-out/bin/geode query --server 127.0.0.1:8444 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" "RETURN 'A' AS data" > client_a.out 2>&1) &
 PID_A=$!
-(./zig-out/bin/geode query --server 127.0.0.1:8444 "RETURN 'B' AS data" > client_b.out 2>&1) &
+(./zig-out/bin/geode query --server 127.0.0.1:8444 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" "RETURN 'B' AS data" > client_b.out 2>&1) &
 PID_B=$!
-(./zig-out/bin/geode query --server 127.0.0.1:8444 "RETURN 'C' AS data" > client_c.out 2>&1) &
+(./zig-out/bin/geode query --server 127.0.0.1:8444 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" "RETURN 'C' AS data" > client_c.out 2>&1) &
 PID_C=$!
-(./zig-out/bin/geode query --server 127.0.0.1:8444 "RETURN 'D' AS data" > client_d.out 2>&1) &
+(./zig-out/bin/geode query --server 127.0.0.1:8444 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" "RETURN 'D' AS data" > client_d.out 2>&1) &
 PID_D=$!
-(./zig-out/bin/geode query --server 127.0.0.1:8444 "RETURN 'E' AS data" > client_e.out 2>&1) &
+(./zig-out/bin/geode query --server 127.0.0.1:8444 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" "RETURN 'E' AS data" > client_e.out 2>&1) &
 PID_E=$!
 
 # Wait for all clients to complete
@@ -128,13 +132,14 @@ echo ""
 # Test 3: Rapid fire from single client
 echo "Test 3: Rapid sequential queries from single client"
 echo "Starting server..."
-./zig-out/bin/geode serve --listen 127.0.0.1:8445 > test_server3.log 2>&1 &
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+    ./zig-out/bin/geode serve --listen 127.0.0.1:8445 > test_server3.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
 echo "Sending rapid queries..."
 for i in 1 2 3 4 5 6 7 8 9 10; do
-    OUTPUT=$(./zig-out/bin/geode query --server 127.0.0.1:8445 "RETURN $i AS num" 2>&1 || true)
+    OUTPUT=$(./zig-out/bin/geode query --server 127.0.0.1:8445 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" "RETURN $i AS num" 2>&1 || true)
     if echo "$OUTPUT" | grep -q "\"num\":$i"; then
         echo "Query $i: ✓"
     else
@@ -152,14 +157,15 @@ echo ""
 # Test 4: Stress test with 10 concurrent clients
 echo "Test 4: Stress test with 10 concurrent clients"
 echo "Starting server..."
-./zig-out/bin/geode serve --listen 127.0.0.1:8446 > test_server4.log 2>&1 &
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+    ./zig-out/bin/geode serve --listen 127.0.0.1:8446 > test_server4.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
 echo "Launching 10 concurrent clients..."
 PIDS=""
 for i in 1 2 3 4 5 6 7 8 9 10; do
-    (./zig-out/bin/geode query --server 127.0.0.1:8446 "RETURN $i AS id" > stress_$i.out 2>&1) &
+    (./zig-out/bin/geode query --server 127.0.0.1:8446 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" "RETURN $i AS id" > stress_$i.out 2>&1) &
     PIDS="$PIDS $!"
 done
 
@@ -195,14 +201,15 @@ echo ""
 # Test 5: Connection reuse (multiple queries per client)
 echo "Test 5: Connection reuse test"
 echo "Starting server..."
-./zig-out/bin/geode serve --listen 127.0.0.1:8447 > test_server5.log 2>&1 &
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+    ./zig-out/bin/geode serve --listen 127.0.0.1:8447 > test_server5.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
 echo "Client performing multiple queries..."
 SUCCESS=0
 for i in 1 2 3; do
-    OUTPUT=$(./zig-out/bin/geode query --server 127.0.0.1:8447 "RETURN $i AS iteration" 2>&1 || true)
+    OUTPUT=$(./zig-out/bin/geode query --server 127.0.0.1:8447 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" "RETURN $i AS iteration" 2>&1 || true)
     if echo "$OUTPUT" | grep -q "\"iteration\":$i"; then
         echo "Iteration $i: ✓"
         SUCCESS=$((SUCCESS + 1))

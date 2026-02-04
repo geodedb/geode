@@ -65,7 +65,7 @@ test "renderer JSON mode" {
         .allocator = allocator,
     };
 
-    const data = "{\"columns\":[\"a\"],\"data\":[[1]]}";
+    const data = "{\"status_class\":\"00000\",\"ordered\":false,\"order_keys\":[],\"columns\":[{\"name\":\"a\",\"type\":\"ANY\"}],\"rows\":[{\"a\":1}],\"additional_statuses\":[],\"flagger_findings\":[]}";
     try sink.write(data);
 
     try testing.expectEqualStrings(data, output.items);
@@ -160,11 +160,11 @@ test "Ctrl+C semantics" {
 
 // CANARY: REQ=REQ-SHELL-SOURCE-ERROR-004; FEATURE="SourceFileErrorDetails"; ASPECT=UnitTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
 // Tests for extractServerErrorMessage helper function
-test "extractServerErrorMessage extracts error from result.error" {
+test "extractServerErrorMessage extracts top-level error" {
     const allocator = testing.allocator;
 
     const response =
-        \\{"status_class":"42000","result":{"type":"ERROR","error":"Syntax error at line 15: unexpected token"}}
+        \\{"status_class":"42000","error":"Syntax error at line 15: unexpected token"}
     ;
 
     const msg = repl_dispatch.extractServerErrorMessage(allocator, response);
@@ -243,7 +243,7 @@ test "extractServerErrorMessage returns null for success response" {
     const allocator = testing.allocator;
 
     const response =
-        \\{"status_class":"00000","result":{"type":"BINDINGS","rows":[]}}
+        \\{"status_class":"00000","ordered":false,"order_keys":[],"columns":[],"rows":[],"additional_statuses":[],"flagger_findings":[]}
     ;
 
     // This function is only called when status indicates error, but test edge case
@@ -316,11 +316,11 @@ test "containsTransactionCommands handles whitespace variations" {
 
 // CANARY: REQ=REQ-SHELL-INTERRUPT-020; FEATURE="SourceInterrupt"; ASPECT=ErrorMessageTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
 // Tests for error message extraction from various server response formats
-test "extractServerErrorMessage handles nested result.error" {
+test "extractServerErrorMessage handles error field" {
     const allocator = testing.allocator;
 
     const response =
-        \\{"status_class":"42000","result":{"type":"ERROR","error":"Duplicate key violation in index 'idx_name'"}}
+        \\{"status_class":"42000","error":"Duplicate key violation in index 'idx_name'"}
     ;
 
     const msg = repl_dispatch.extractServerErrorMessage(allocator, response);

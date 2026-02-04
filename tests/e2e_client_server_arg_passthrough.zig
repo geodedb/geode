@@ -20,7 +20,9 @@ test "client: server arg passthrough allows data_dir injection" {
     defer std.testing.allocator.free(err);
     const term = try child.wait();
     try std.testing.expect(term == .Exited and term.Exited == 0);
-    // Expect at least one BINDINGS frame line (rows) referencing the projected column name.
-    try std.testing.expect(std.mem.indexOf(u8, out, "\"type\":\"BINDINGS\"") != null);
+    // Expect rows/columns payload with ordering metadata.
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"columns\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"rows\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"status_class\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "\"order_keys\":[\"name\"]") != null);
 }

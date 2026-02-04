@@ -15,7 +15,7 @@ zig build -Doptimize=ReleaseSafe
 - Start the server (QUIC):
 
 ```bash
-./zig-out/bin/geoded --listen-quic 127.0.0.1:7567 --log_json --result-format json
+./zig-out/bin/geode serve --listen-quic 127.0.0.1:7567 --log_json --result-format json
 ```
 
 ## Basic Pattern: Single Hop
@@ -29,7 +29,7 @@ MATCH (a:Person {age: 30})-[:KNOWS]->(b:Person) RETURN a.id AS a, b.id AS b ORDE
 Example with CLI:
 
 ```bash
-./zig-out/bin/geodec "MATCH (a:Person {age: 30})-[:KNOWS]->(b:Person) RETURN a.id AS a, b.id AS b ORDER BY a, b" --format json
+./zig-out/bin/geode query "MATCH (a:Person {age: 30})-[:KNOWS]->(b:Person) RETURN a.id AS a, b.id AS b ORDER BY a, b" --format json
 ```
 
 Output (rows are deterministically ordered):
@@ -53,7 +53,7 @@ LIMIT 3
 CLI:
 
 ```bash
-./zig-out/bin/geodec "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name AS a, b.name AS b ORDER BY a, b LIMIT 3" --format json
+./zig-out/bin/geode query "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name AS a, b.name AS b ORDER BY a, b LIMIT 3" --format json
 ```
 
 ## OPTIONAL MATCH (subset)

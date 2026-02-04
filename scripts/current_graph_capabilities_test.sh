@@ -1,5 +1,4 @@
-#!/usr/bin/env nix-shell
-#! nix-shell -i bash -p bash -p coreutils
+#!/usr/bin/env bash
 # Graph Capabilities Assessment for Geode
 # Tests what graph functionality is currently working vs. what needs implementation
 

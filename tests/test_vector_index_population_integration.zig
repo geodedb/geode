@@ -10,7 +10,7 @@ const expectEqual = testing.expectEqual;
 const geode = @import("geode");
 const vector_types = geode.vector_types;
 const heap = geode.heap;
-const graph_storage = geode.graph_storage;
+const graph_store = geode.graph_store;
 const index_manager = geode.index_manager;
 
 fn toHeapVectorF32(vec: vector_types.VectorF32) heap.VectorF32 {
@@ -30,7 +30,7 @@ const MockServerState = struct {
     allocator: std.mem.Allocator,
     index_manager_ptr: ?*anyopaque = null,
     index_stats_manager: ?*anyopaque = null,
-    graph_storage: ?*graph_storage.GraphStorage = null,
+    graph_storage: ?*graph_store.GraphStore = null,
 
     pub fn init(allocator: std.mem.Allocator) MockServerState {
         return MockServerState{
@@ -72,8 +72,8 @@ test "integration vector index population on CREATE INDEX" {
     const allocator = testing.allocator;
 
     // Create mock graph storage with vector data
-    const graph = try allocator.create(graph_storage.GraphStorage);
-    graph.* = graph_storage.GraphStorage.init(allocator);
+    const graph = try allocator.create(graph_store.GraphStore);
+    graph.* = graph_store.GraphStore.init(allocator);
     defer {
         graph.deinit();
         allocator.destroy(graph);
@@ -180,8 +180,8 @@ test "integration vector index population VectorI32 conversion" {
     const allocator = testing.allocator;
 
     // Create mock graph storage with integer vector data
-    const graph = try allocator.create(graph_storage.GraphStorage);
-    graph.* = graph_storage.GraphStorage.init(allocator);
+    const graph = try allocator.create(graph_store.GraphStore);
+    graph.* = graph_store.GraphStore.init(allocator);
     defer {
         graph.deinit();
         allocator.destroy(graph);
@@ -298,8 +298,8 @@ test "integration vector index population dimension mismatch handling" {
     const allocator = testing.allocator;
 
     // Create mock graph storage
-    const graph = try allocator.create(graph_storage.GraphStorage);
-    graph.* = graph_storage.GraphStorage.init(allocator);
+    const graph = try allocator.create(graph_store.GraphStore);
+    graph.* = graph_store.GraphStore.init(allocator);
     defer {
         graph.deinit();
         allocator.destroy(graph);
@@ -387,8 +387,8 @@ test "integration vector index population performance" {
     const allocator = testing.allocator;
 
     // Create mock graph storage
-    const graph = try allocator.create(graph_storage.GraphStorage);
-    graph.* = graph_storage.GraphStorage.init(allocator);
+    const graph = try allocator.create(graph_store.GraphStore);
+    graph.* = graph_store.GraphStore.init(allocator);
     defer {
         graph.deinit();
         allocator.destroy(graph);
@@ -501,8 +501,8 @@ test "integration vector index population mixed data types" {
     const allocator = testing.allocator;
 
     // Create mock graph storage with mixed property types
-    const graph = try allocator.create(graph_storage.GraphStorage);
-    graph.* = graph_storage.GraphStorage.init(allocator);
+    const graph = try allocator.create(graph_store.GraphStore);
+    graph.* = graph_store.GraphStore.init(allocator);
     defer {
         graph.deinit();
         allocator.destroy(graph);
@@ -598,8 +598,8 @@ test "TestCANARY_REQ_VECTOR_INDEX_POPULATION_INTEGRATION_001" {
     // as specified in REQ-VECTOR-INDEX-POPULATION-INTEGRATION-001
 
     // Test complete end-to-end vector index population with CREATE INDEX simulation
-    const graph = try allocator.create(graph_storage.GraphStorage);
-    graph.* = graph_storage.GraphStorage.init(allocator);
+    const graph = try allocator.create(graph_store.GraphStore);
+    graph.* = graph_store.GraphStore.init(allocator);
     defer {
         graph.deinit();
         allocator.destroy(graph);

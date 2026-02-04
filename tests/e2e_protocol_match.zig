@@ -1,70 +1,47 @@
 const std = @import("std");
-const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
+const util = @import("proto_test_util.zig");
 
-fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
-    const allocator = std.testing.allocator;
-    var argv = std.ArrayList([]const u8).init(allocator);
-    defer argv.deinit(allocator);
-    try argv.append(allocator, args[0]);
-    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
-        try argv.append(allocator, "query");
-    }
-    try argv.appendSlice(allocator, args[1..]);
-    var child = Child.init(argv.items, allocator);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-    const out = try child.stdout.?.readToEndAlloc(allocator, 1 << 20);
-    const err = try child.stderr.?.readToEndAlloc(allocator, 1 << 20);
-    const term = try child.wait();
-    const code: i32 = switch (term) {
-        .Exited => |st| st,
-        else => 2,
-    };
-    return .{ .code = code, .out = out, .err = err };
+fn runQuery(allocator: std.mem.Allocator, port: u16, query: []const u8) !util.ExecResult {
+    const addr = try std.fmt.allocPrint(allocator, "127.0.0.1:{d}", .{port});
+    defer allocator.free(addr);
+
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, null);
+    defer server.deinit();
+
+    var client = try util.QuicProtoClient.connect(allocator, addr);
+    defer client.deinit();
+
+    return try client.executeAndCollect(allocator, query, util.emptyParams(), 100);
 }
 
-// Basic E2E over stdio for MATCH ORDER/LIMIT and US001 policy
+// Basic E2E over QUIC for MATCH ORDER/LIMIT and US001 policy
 // CANARY: REQ=REQ-GQL-017; FEATURE="MATCH ORDER/LIMIT determinism"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_MatchOrderLimit; OWNER=engine; UPDATED=2025-09-24
 test "protocol: MATCH ORDER/LIMIT ordered metadata" {
-    const exe = "./zig-out/bin/geode";
-    const res = try run(&.{ exe, "MATCH (n) RETURN 1 AS x ORDER BY x LIMIT 1" });
-    defer std.testing.allocator.free(res.out);
-    defer std.testing.allocator.free(res.err);
-    try std.testing.expectEqual(@as(i32, 0), res.code);
-    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"type\":\"SCHEMA\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"type\":\"BINDINGS\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"ordered\":true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"order_keys\":[\"x\"]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"rows\":[{\"x\":1}]") != null);
+    const res = try runQuery(std.testing.allocator, 17700, "MATCH (n) RETURN 1 AS x ORDER BY x LIMIT 1");
+    defer res.deinit(std.testing.allocator);
+    try std.testing.expect(res.error_code == null);
+    try std.testing.expect(res.ordered);
+    try std.testing.expect(res.order_keys.len == 1 and std.mem.eql(u8, res.order_keys[0], "x"));
+    try std.testing.expect(res.rows.len == 1);
+    try std.testing.expect(res.rows[0].len == 1);
+    try std.testing.expect(res.rows[0][0] == .int and res.rows[0][0].int == 1);
 }
 
 // CANARY: REQ=REQ-GQL-010; FEATURE="Pagination Legality (US001)"; ASPECT=Execution; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_MatchUnorderedPaginationReject; OWNER=planner; UPDATED=2025-09-24
 test "protocol: MATCH LIMIT+OFFSET without ORDER (US001)" {
-    const exe = "./zig-out/bin/geode";
-    const res = try run(&.{ exe, "MATCH (n) RETURN 1 LIMIT 10 OFFSET 5" });
-    defer std.testing.allocator.free(res.out);
-    defer std.testing.allocator.free(res.err);
-    try std.testing.expectEqual(@as(i32, 2), res.code);
-    try std.testing.expect(std.mem.indexOf(u8, res.err, "US001") != null);
-    try std.testing.expect(std.mem.indexOf(u8, res.err, "16.18–16.19") != null);
+    const res = try runQuery(std.testing.allocator, 17701, "MATCH (n) RETURN 1 LIMIT 10 OFFSET 5");
+    defer res.deinit(std.testing.allocator);
+    try std.testing.expect(res.error_code != null);
+    try std.testing.expect(res.error_message != null);
+    try std.testing.expect(std.mem.indexOf(u8, res.error_message.?, "US001") != null);
 }
 
 test "protocol: MATCH DISTINCT dedup rows" {
-    const exe = "./zig-out/bin/geode";
-    // Two identical rows under MATCH projection should dedup to a single row when DISTINCT present.
-    const res = try run(&.{ exe, "MATCH (n) RETURN DISTINCT 1 AS x" });
-    defer std.testing.allocator.free(res.out);
-    defer std.testing.allocator.free(res.err);
-    try std.testing.expectEqual(@as(i32, 0), res.code);
-    // Expect ordered=false default and single row {"x":1}
-    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"ordered\":false") != null);
-    // Count number of rows
-    var cnt: usize = 0;
-    var it = std.mem.splitScalar(u8, res.out, '\n');
-    while (it.next()) |line| {
-        if (std.mem.indexOf(u8, line, "{\"x\":1}") != null) cnt += 1;
-    }
-    try std.testing.expect(cnt == 1);
+    const res = try runQuery(std.testing.allocator, 17702, "MATCH (n) RETURN DISTINCT 1 AS x");
+    defer res.deinit(std.testing.allocator);
+    try std.testing.expect(res.error_code == null);
+    try std.testing.expect(!res.ordered);
+    try std.testing.expect(res.rows.len == 1);
+    try std.testing.expect(res.rows[0].len == 1);
+    try std.testing.expect(res.rows[0][0] == .int and res.rows[0][0].int == 1);
 }

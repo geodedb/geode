@@ -36,7 +36,11 @@ fn mockQueryHandler(config: ClientConfig, output_buffer: *std.ArrayList(u8)) !i3
         return 2; // usage_error exit code
     }
 
-    const response = try std.fmt.allocPrint(output_buffer.allocator, "{{\"type\":\"SCHEMA\",\"query\":\"{s}\"}}\n", .{config.query_text});
+    const response = try std.fmt.allocPrint(
+        output_buffer.allocator,
+        "{{\"status_class\":\"00000\",\"columns\":[{{\"name\":\"query\",\"type\":\"STRING\"}}],\"rows\":[{{\"query\":\"{s}\"}}],\"additional_statuses\":[],\"flagger_findings\":[]}}\n",
+        .{config.query_text},
+    );
     try output_buffer.appendSlice(response);
     output_buffer.allocator.free(response);
     return 0; // success exit code
@@ -61,15 +65,18 @@ test "insecure flag returns success with JSON response" {
 
     // Verify JSON response format
     const response = output.items;
-    try expect(std.mem.indexOf(u8, response, "\"type\":\"SCHEMA\"") != null);
+    try expect(std.mem.indexOf(u8, response, "\"status_class\"") != null);
+    try expect(std.mem.indexOf(u8, response, "\"columns\"") != null);
+    try expect(std.mem.indexOf(u8, response, "\"rows\"") != null);
     try expect(std.mem.indexOf(u8, response, "\"query\":\"RETURN 1 AS test\"") != null);
 
     // Verify it's valid JSON by parsing
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, response[0 .. response.len - 1], .{}) catch unreachable;
     defer parsed.deinit();
 
-    try expect(parsed.value.object.get("type") != null);
-    try expect(parsed.value.object.get("query") != null);
+    try expect(parsed.value.object.get("status_class") != null);
+    try expect(parsed.value.object.get("columns") != null);
+    try expect(parsed.value.object.get("rows") != null);
 }
 
 // Test invalid server returns error with guidance
@@ -222,14 +229,15 @@ test "JSON output format validation" {
 
     // Verify structure
     try expect(parsed.value == .object);
-    try expect(parsed.value.object.contains("message"));
-    try expect(parsed.value.object.contains("query"));
+    try expect(parsed.value.object.contains("status_class"));
+    try expect(parsed.value.object.contains("columns"));
+    try expect(parsed.value.object.contains("rows"));
 
     // Verify content
-    const message = parsed.value.object.get("type").?.string;
-    const query = parsed.value.object.get("query").?.string;
-
-    try expect(std.mem.eql(u8, message, "SCHEMA"));
+    const rows = parsed.value.object.get("rows").?.array;
+    try expect(rows.items.len == 1);
+    const row_obj = rows.items[0].object;
+    const query = row_obj.get("query").?.string;
     try expect(std.mem.eql(u8, query, "COMPLEX 'query' WITH \"quotes\" AND symbols!@#$%"));
 }
 

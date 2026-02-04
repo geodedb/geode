@@ -6,6 +6,11 @@ const protocol = @import("../protocol.zig");
 const quic = @import("../transport/quic.zig");
 const federation = @import("federation.zig");
 const network_transport = @import("network_transport.zig");
+const schema = @import("schema");
+const protobuf = @import("protobuf");
+const proto_util = @import("../server/proto_util.zig");
+const value_utilities = @import("../execution/value_utilities.zig");
+const spice_wrapper = @import("parallel/spice");
 
 const logging = @import("logging");
 const log = logging.scoped("query_transport");
@@ -18,6 +23,7 @@ pub const QueryTransport = struct {
     connection_pool: ConnectionPool,
     timeout_ms: u32 = 30000, // 30 second default timeout
     retry_attempts: u32 = 3,
+    page_size: u32 = 1000,
 
     pub fn init(allocator: std.mem.Allocator, network_transport: *network_transport.NetworkTransport) !QueryTransport {
         return QueryTransport{
@@ -43,29 +49,10 @@ pub const QueryTransport = struct {
         var connection = try self.connection_pool.getConnection(node_id);
         defer self.connection_pool.releaseConnection(connection);
 
-        // Send query request
-        const request = QueryRequest{
-            .query_id = generateQueryId(),
-            .query_text = query.query_text,
-            .parameters = query.parameters,
-            .timeout_ms = self.timeout_ms,
-            .consistency_level = query.consistency_level,
-        };
-
-        try self.sendQueryRequest(connection, request);
-
-        // Wait for response with timeout
-        const response = try self.receiveQueryResponse(connection);
-
-        const execution_time = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
-
-        return federation.QueryResults{
-            .rows = response.rows,
-            .schema = response.schema,
-            .execution_time_ms = execution_time,
-            .ordered = response.ordered,
-            .node_id = node_id,
-        };
+        try connection.ensureSession(self.timeout_ms);
+        var result = try connection.executeQuery(self.allocator, query, self.timeout_ms, self.page_size);
+        result.execution_time_ms = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
+        return result;
     }
 
     /// Send batch of queries to multiple nodes in parallel
@@ -76,34 +63,66 @@ pub const QueryTransport = struct {
         var results = try self.allocator.alloc(federation.QueryResults, queries.len);
         errdefer self.allocator.free(results);
 
-        // Use thread pool for parallel execution
-        var threads = try self.allocator.alloc(std.Thread, queries.len);
-        defer self.allocator.free(threads);
-
-        var contexts = try self.allocator.alloc(QueryContext, queries.len);
-        defer self.allocator.free(contexts);
-
-        // Start all queries in parallel
-        for (queries, 0..) |query, i| {
-            contexts[i] = QueryContext{
-                .transport = self,
-                .query = query,
-                .result = &results[i],
-                .error_state = null,
-            };
-
-            threads[i] = try std.Thread.spawn(.{}, executeQueryThread, .{&contexts[i]});
+        if (queries.len == 0) {
+            return results;
         }
 
-        // Wait for all queries to complete
-        for (threads) |thread| {
-            thread.join();
+        if (!spice_wrapper.shouldUseParallelism(queries.len, spice_wrapper.Thresholds.forEach)) {
+            for (queries, 0..) |query, i| {
+                results[i] = self.executeRemoteQuery(query.node_id, query.query) catch |err| {
+                    for (results[0..i]) |*res| res.deinit(self.allocator);
+                    return err;
+                };
+            }
+            return results;
         }
 
-        // Check for errors
-        for (contexts) |context| {
-            if (context.error_state) |err| {
-                return err;
+        var errors = try self.allocator.alloc(?anyerror, queries.len);
+        defer self.allocator.free(errors);
+        for (errors) |*e| e.* = null;
+
+        var pool = spice_wrapper.SpicePool.init(self.allocator, null);
+        defer pool.deinit();
+
+        const Context = struct {
+            transport: *QueryTransport,
+            queries: []const NodeQuery,
+            results: []federation.QueryResults,
+            errors: []?anyerror,
+        };
+
+        const ctx = Context{
+            .transport = self,
+            .queries = queries,
+            .results = results,
+            .errors = errors,
+        };
+
+        spice_wrapper.parallelForEach(
+            &pool,
+            0,
+            queries.len,
+            ctx,
+            struct {
+                fn work(_: *spice_wrapper.Task, idx: usize, c: Context) void {
+                    c.results[idx] = c.transport.executeRemoteQuery(
+                        c.queries[idx].node_id,
+                        c.queries[idx].query,
+                    ) catch |err| {
+                        c.errors[idx] = err;
+                        return;
+                    };
+                }
+            }.work,
+            spice_wrapper.Thresholds.forEach,
+        );
+
+        for (errors, 0..) |err, idx| {
+            if (err) |e| {
+                for (results, 0..) |*res, j| {
+                    if (errors[j] == null) res.deinit(self.allocator);
+                }
+                return e;
             }
         }
 
@@ -120,74 +139,8 @@ pub const QueryTransport = struct {
         var connection = try self.connection_pool.getConnection(node_id);
         defer self.connection_pool.releaseConnection(connection);
 
-        const request = QueryRequest{
-            .query_id = generateQueryId(),
-            .query_text = query.query_text,
-            .parameters = query.parameters,
-            .timeout_ms = self.timeout_ms,
-            .consistency_level = query.consistency_level,
-            .streaming = true,
-        };
-
-        try self.sendQueryRequest(connection, request);
-
-        // Stream results as they arrive
-        while (true) {
-            const chunk = self.receiveResultChunk(connection) catch |err| switch (err) {
-                error.EndOfStream => break,
-                else => return err,
-            };
-
-            try result_handler(chunk);
-
-            if (chunk.is_final) break;
-        }
-    }
-
-    // Private implementation methods
-
-    fn sendQueryRequest(self: *QueryTransport, connection: *Connection, request: QueryRequest) !void {
-        // Serialize request to JSON
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
-
-        try serializeQueryRequest(buffer.writer(), request);
-
-        // Send with retry logic
-        var attempts: u32 = 0;
-        while (attempts < self.retry_attempts) : (attempts += 1) {
-            connection.send(buffer.items) catch |err| {
-                if (attempts == self.retry_attempts - 1) return err;
-
-                // Exponential backoff
-                const delay_ms = @as(u64, 100) << @intCast(attempts);
-                std.time.sleep(delay_ms * std.time.ns_per_ms);
-                continue;
-            };
-
-            break;
-        }
-    }
-
-    fn receiveQueryResponse(self: *QueryTransport, connection: *Connection) !QueryResponse {
-        // Receive with timeout
-        const timeout_ns = @as(u64, self.timeout_ms) * std.time.ns_per_ms;
-        const data = try connection.receiveWithTimeout(self.allocator, timeout_ns);
-        defer self.allocator.free(data);
-
-        return try deserializeQueryResponse(self.allocator, data);
-    }
-
-    fn receiveResultChunk(self: *QueryTransport, connection: *Connection) !ResultChunk {
-        const data = try connection.receive(self.allocator);
-        defer self.allocator.free(data);
-
-        return try deserializeResultChunk(self.allocator, data);
-    }
-
-    fn generateQueryId() u64 {
-        // Simple timestamp-based query ID
-        return @bitCast(std.time.nanoTimestamp());
+        try connection.ensureSession(self.timeout_ms);
+        try connection.streamQuery(self.allocator, query, self.timeout_ms, self.page_size, result_handler);
     }
 };
 
@@ -251,6 +204,8 @@ const Connection = struct {
     allocator: std.mem.Allocator,
     node_id: u32,
     quic_client: ?quic.QuicClient = null,
+    stream: ?*quic.QuicClientStream = null,
+    session_id: ?[]u8 = null,
     last_activity: i64,
     is_connected: bool = false,
     node_registry: ?*NodeRegistry = null,
@@ -273,6 +228,14 @@ const Connection = struct {
     }
 
     pub fn deinit(self: *Connection) void {
+        if (self.stream) |s| {
+            s.deinit();
+            self.stream = null;
+        }
+        if (self.session_id) |sid| {
+            self.allocator.free(sid);
+            self.session_id = null;
+        }
         if (self.quic_client) |*client| {
             client.deinit();
         }
@@ -288,42 +251,320 @@ const Connection = struct {
         return age < max_age_ms;
     }
 
-    pub fn send(self: *Connection, data: []const u8) !void {
+    pub fn ensureSession(self: *Connection, timeout_ms: u32) !void {
         if (!self.is_connected) {
-            try self.connect();
+            try self.connect(timeout_ms);
         }
-
-        if (self.quic_client) |*client| {
-            try client.send(data);
-            self.last_activity = std.time.milliTimestamp();
-        } else {
+        if (self.session_id == null) {
             return error.NotConnected;
         }
     }
 
-    pub fn receive(self: *Connection, allocator: std.mem.Allocator) ![]u8 {
-        if (self.quic_client) |*client| {
-            const data = try client.receive(allocator);
-            self.last_activity = std.time.milliTimestamp();
-            return data;
-        } else {
+    pub fn executeQuery(
+        self: *Connection,
+        allocator: std.mem.Allocator,
+        query: federation.FederatedQuery,
+        timeout_ms: u32,
+        page_size: u32,
+    ) !federation.QueryResults {
+        if (self.stream == null or self.quic_client == null or self.session_id == null) {
             return error.NotConnected;
         }
+
+        var params = try buildParams(allocator, query.parameters);
+        defer freeParams(allocator, &params);
+
+        const exec_req = schema.ExecuteRequest{
+            .session_id = self.session_id.?,
+            .query = query.query_text,
+            .params = params,
+        };
+        try writeProtoMessage(allocator, self.stream.?, .{ .execute = exec_req });
+
+        var columns = std.ArrayList(protocol.ColumnDef).init(allocator);
+        errdefer {
+            for (columns.items) |col| {
+                allocator.free(col.name);
+                allocator.free(col.data_type);
+            }
+            columns.deinit(allocator);
+        }
+        var rows = std.ArrayList(protocol.BindingRow).init(allocator);
+        errdefer {
+            for (rows.items) |row| freeBindingRow(allocator, row);
+            rows.deinit(allocator);
+        }
+        var order_keys = std.ArrayList([]const u8).init(allocator);
+        errdefer {
+            for (order_keys.items) |k| allocator.free(k);
+            order_keys.deinit(allocator);
+        }
+
+        var ordered = false;
+        var schema_received = false;
+        var saw_inline_page = false;
+        var inline_final = false;
+        var need_pull = false;
+
+        var loop_arena = std.heap.ArenaAllocator.init(allocator);
+        defer loop_arena.deinit();
+
+        while (!schema_received) {
+            const resp = readProtoMessage(loop_arena.allocator(), self.stream.?, &self.quic_client.?, timeout_ms) catch |err| {
+                if (err == error.EndOfStream or err == error.Timeout) break;
+                return err;
+            };
+
+            switch (resp) {
+                .execute => |exec_resp| if (exec_resp.payload) |val| switch (val) {
+                    .schema => |s| {
+                        schema_received = true;
+                        for (s.columns.items) |col| {
+                            const name = try allocator.dupe(u8, col.name);
+                            const dtype = if (col.type.len > 0)
+                                try allocator.dupe(u8, col.type)
+                            else
+                                try allocator.dupe(u8, "ANY");
+                            try columns.append(allocator, .{ .name = name, .data_type = dtype });
+                        }
+                    },
+                    .page => |p| {
+                        saw_inline_page = true;
+                        try captureOrderMeta(allocator, p, &ordered, &order_keys);
+                        try appendPageRows(allocator, p, &rows);
+                        if (p.final) {
+                            inline_final = true;
+                        } else {
+                            need_pull = true;
+                        }
+                    },
+                    .@"error" => |e| return error.RemoteExecutionFailed,
+                    .explain, .profile => return error.Unsupported,
+                    .metrics, .heartbeat => {},
+                },
+                .hello => |h| if (!h.success) return error.AuthFailed,
+                else => {},
+            }
+
+            _ = loop_arena.reset(.retain_capacity);
+        }
+
+        if (!saw_inline_page and !inline_final) {
+            const maybe_resp: ?schema.QuicServerMessage = readProtoMessage(loop_arena.allocator(), self.stream.?, &self.quic_client.?, 1) catch |err| switch (err) {
+                error.Timeout, error.EndOfStream => null,
+                else => return err,
+            };
+            if (maybe_resp) |resp| switch (resp) {
+                .execute => |exec_resp| if (exec_resp.payload) |val| switch (val) {
+                    .page => |p| {
+                        saw_inline_page = true;
+                        try captureOrderMeta(allocator, p, &ordered, &order_keys);
+                        try appendPageRows(allocator, p, &rows);
+                        if (p.final) {
+                            inline_final = true;
+                        } else {
+                            need_pull = true;
+                        }
+                    },
+                    .@"error" => return error.RemoteExecutionFailed,
+                    else => {},
+                },
+                else => {},
+            };
+
+            _ = loop_arena.reset(.retain_capacity);
+        }
+
+        if (!inline_final or need_pull) {
+            var request_id: u64 = 1;
+            var done = false;
+            while (!done) : (request_id += 1) {
+                const pull_req = schema.PullRequest{
+                    .request_id = request_id,
+                    .page_size = page_size,
+                    .session_id = self.session_id.?,
+                };
+                try writeProtoMessage(allocator, self.stream.?, .{ .pull = pull_req });
+
+                const resp = readProtoMessage(loop_arena.allocator(), self.stream.?, &self.quic_client.?, timeout_ms) catch |err| {
+                    if (err == error.EndOfStream) break;
+                    return err;
+                };
+
+                switch (resp) {
+                    .pull => |pull_resp| {
+                        const exec_resp = pull_resp.response orelse break;
+                        if (exec_resp.payload) |val| switch (val) {
+                            .page => |p| {
+                                try captureOrderMeta(allocator, p, &ordered, &order_keys);
+                                try appendPageRows(allocator, p, &rows);
+                                if (p.final) done = true;
+                            },
+                            .@"error" => return error.RemoteExecutionFailed,
+                            else => {},
+                        };
+                    },
+                    .execute => |exec_resp| if (exec_resp.payload) |val| switch (val) {
+                        .page => |p| {
+                            try captureOrderMeta(allocator, p, &ordered, &order_keys);
+                            try appendPageRows(allocator, p, &rows);
+                            if (p.final) done = true;
+                        },
+                        .@"error" => return error.RemoteExecutionFailed,
+                        else => {},
+                    },
+                    else => {},
+                }
+
+                _ = loop_arena.reset(.retain_capacity);
+            }
+        }
+
+        const rows_slice = try rows.toOwnedSlice(allocator);
+        const schema_slice = try columns.toOwnedSlice(allocator);
+        const order_keys_slice = try order_keys.toOwnedSlice(allocator);
+
+        return federation.QueryResults{
+            .rows = rows_slice,
+            .schema = schema_slice,
+            .execution_time_ms = 0,
+            .ordered = ordered,
+            .order_keys = order_keys_slice,
+            .order_dirs = &.{},
+            .nulls_first = true,
+        };
     }
 
-    pub fn receiveWithTimeout(self: *Connection, allocator: std.mem.Allocator, timeout_ns: u64) ![]u8 {
-        if (self.quic_client) |*client| {
-            const data = try client.receiveWithTimeout(allocator, timeout_ns);
-            self.last_activity = std.time.milliTimestamp();
-            return data;
-        } else {
+    pub fn streamQuery(
+        self: *Connection,
+        allocator: std.mem.Allocator,
+        query: federation.FederatedQuery,
+        timeout_ms: u32,
+        page_size: u32,
+        handler: ResultHandler,
+    ) !void {
+        if (self.stream == null or self.quic_client == null or self.session_id == null) {
             return error.NotConnected;
+        }
+
+        var params = try buildParams(allocator, query.parameters);
+        defer freeParams(allocator, &params);
+
+        const exec_req = schema.ExecuteRequest{
+            .session_id = self.session_id.?,
+            .query = query.query_text,
+            .params = params,
+        };
+        try writeProtoMessage(allocator, self.stream.?, .{ .execute = exec_req });
+
+        var loop_arena = std.heap.ArenaAllocator.init(allocator);
+        defer loop_arena.deinit();
+
+        var saw_inline_page = false;
+        var inline_final = false;
+        var need_pull = false;
+
+        while (true) {
+            const resp = readProtoMessage(loop_arena.allocator(), self.stream.?, &self.quic_client.?, timeout_ms) catch |err| {
+                if (err == error.EndOfStream or err == error.Timeout) break;
+                return err;
+            };
+
+            switch (resp) {
+                .execute => |exec_resp| if (exec_resp.payload) |val| switch (val) {
+                    .page => |p| {
+                        saw_inline_page = true;
+                        try emitChunkFromPage(allocator, p, handler, 0);
+                        if (p.final) {
+                            inline_final = true;
+                        } else {
+                            need_pull = true;
+                        }
+                        break;
+                    },
+                    .@"error" => return error.RemoteExecutionFailed,
+                    .explain, .profile => return error.Unsupported,
+                    else => {},
+                },
+                .hello => |h| if (!h.success) return error.AuthFailed,
+                else => {},
+            }
+
+            _ = loop_arena.reset(.retain_capacity);
+        }
+
+        if (!saw_inline_page and !inline_final) {
+            const maybe_resp: ?schema.QuicServerMessage = readProtoMessage(loop_arena.allocator(), self.stream.?, &self.quic_client.?, 1) catch |err| switch (err) {
+                error.Timeout, error.EndOfStream => null,
+                else => return err,
+            };
+            if (maybe_resp) |resp| switch (resp) {
+                .execute => |exec_resp| if (exec_resp.payload) |val| switch (val) {
+                    .page => |p| {
+                        saw_inline_page = true;
+                        try emitChunkFromPage(allocator, p, handler, 0);
+                        if (p.final) {
+                            inline_final = true;
+                        } else {
+                            need_pull = true;
+                        }
+                    },
+                    .@"error" => return error.RemoteExecutionFailed,
+                    else => {},
+                },
+                else => {},
+            };
+
+            _ = loop_arena.reset(.retain_capacity);
+        }
+
+        if (inline_final and !need_pull) return;
+
+        var request_id: u64 = 1;
+        var done = false;
+        while (!done) : (request_id += 1) {
+            const pull_req = schema.PullRequest{
+                .request_id = request_id,
+                .page_size = page_size,
+                .session_id = self.session_id.?,
+            };
+            try writeProtoMessage(allocator, self.stream.?, .{ .pull = pull_req });
+
+            const resp = readProtoMessage(loop_arena.allocator(), self.stream.?, &self.quic_client.?, timeout_ms) catch |err| {
+                if (err == error.EndOfStream) break;
+                return err;
+            };
+
+            switch (resp) {
+                .pull => |pull_resp| {
+                    const exec_resp = pull_resp.response orelse break;
+                    if (exec_resp.payload) |val| switch (val) {
+                        .page => |p| {
+                            try emitChunkFromPage(allocator, p, handler, request_id);
+                            if (p.final) done = true;
+                        },
+                        .@"error" => return error.RemoteExecutionFailed,
+                        else => {},
+                    };
+                },
+                .execute => |exec_resp| if (exec_resp.payload) |val| switch (val) {
+                    .page => |p| {
+                        try emitChunkFromPage(allocator, p, handler, request_id);
+                        if (p.final) done = true;
+                    },
+                    .@"error" => return error.RemoteExecutionFailed,
+                    else => {},
+                },
+                else => {},
+            }
+
+            _ = loop_arena.reset(.retain_capacity);
         }
     }
 
     // GAP-0144: Secure TLS connections for distributed queries
     // CANARY: REQ=REQ-DIST-TLS-001; FEATURE="Distributed TLS"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=distributed; UPDATED=2026-01-13
-    fn connect(self: *Connection) !void {
+    fn connect(self: *Connection, timeout_ms: u32) !void {
         // Get node address from registry if available, otherwise use default pattern
         const node_info = self.getNodeAddress();
 
@@ -361,6 +602,33 @@ const Connection = struct {
             });
             return error.ConnectionFailed;
         };
+
+        try self.quic_client.?.waitForHandshake(5);
+        self.stream = try self.quic_client.?.getStream();
+
+        // HELLO handshake
+        const hello_req = schema.HelloRequest{
+            .username = "",
+            .password = "",
+            .tenant_id = null,
+            .client_name = "geode-distributed",
+            .client_version = "",
+            .wanted_conformance = "",
+        };
+        try writeProtoMessage(self.allocator, self.stream.?, .{ .hello = hello_req });
+
+        var hello_arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer hello_arena.deinit();
+        const resp = try readProtoMessage(hello_arena.allocator(), self.stream.?, &self.quic_client.?, timeout_ms);
+        switch (resp) {
+            .hello => |h| {
+                if (!h.success) return error.AuthFailed;
+                if (h.session_id.len > 0) {
+                    self.session_id = try self.allocator.dupe(u8, h.session_id);
+                }
+            },
+            else => return error.ProtocolError,
+        }
 
         self.is_connected = true;
         self.last_activity = std.time.milliTimestamp();
@@ -439,25 +707,6 @@ pub const NodeRegistry = struct {
     }
 };
 
-/// Query request message
-const QueryRequest = struct {
-    query_id: u64,
-    query_text: []const u8,
-    parameters: []const protocol.Value,
-    timeout_ms: u32,
-    consistency_level: federation.ConsistencyLevel,
-    streaming: bool = false,
-};
-
-/// Query response message
-const QueryResponse = struct {
-    query_id: u64,
-    rows: []protocol.BindingRow,
-    schema: []protocol.Column,
-    ordered: bool,
-    error_message: ?[]const u8 = null,
-};
-
 /// Result chunk for streaming
 const ResultChunk = struct {
     query_id: u64,
@@ -472,41 +721,144 @@ pub const NodeQuery = struct {
     query: federation.FederatedQuery,
 };
 
-/// Query execution context for parallel processing
-const QueryContext = struct {
-    transport: *QueryTransport,
-    query: NodeQuery,
-    result: *federation.QueryResults,
-    error_state: ?anyerror,
-};
-
 /// Result handler for streaming queries
 pub const ResultHandler = fn (ResultChunk) anyerror!void;
 
-// Thread function for parallel query execution
-fn executeQueryThread(context: *QueryContext) void {
-    context.result.* = context.transport.executeRemoteQuery(
-        context.query.node_id,
-        context.query.query,
-    ) catch |err| {
-        context.error_state = err;
-        return;
+fn buildParams(allocator: std.mem.Allocator, values: []const protocol.Value) !std.ArrayList(schema.Param) {
+    var params = std.ArrayList(schema.Param).init(allocator);
+    try params.ensureTotalCapacity(allocator, values.len);
+    for (values, 0..) |val, idx| {
+        const name = try std.fmt.allocPrint(allocator, "p{d}", .{idx + 1});
+        const proto_val = try proto_util.valueToProto(allocator, val);
+        try params.append(allocator, schema.Param{ .name = name, .value = proto_val });
+    }
+    return params;
+}
+
+fn freeParams(allocator: std.mem.Allocator, params: *std.ArrayList(schema.Param)) void {
+    for (params.items) |*p| {
+        p.deinit(allocator);
+    }
+    params.deinit(allocator);
+}
+
+fn appendPageRows(
+    allocator: std.mem.Allocator,
+    page: schema.DataPage,
+    rows: *std.ArrayList(protocol.BindingRow),
+) !void {
+    for (page.rows.items) |row| {
+        var cols = try allocator.alloc(protocol.Value, row.values.items.len);
+        errdefer {
+            for (cols) |v| value_utilities.freeValue(allocator, v);
+            allocator.free(cols);
+        }
+        for (row.values.items, 0..) |val, idx| {
+            cols[idx] = try proto_util.protoValueToValue(allocator, val, 0);
+        }
+        try rows.append(allocator, .{ .cols = cols });
+    }
+}
+
+fn emitChunkFromPage(
+    allocator: std.mem.Allocator,
+    page: schema.DataPage,
+    handler: ResultHandler,
+    query_id: u64,
+) !void {
+    var rows = std.ArrayList(protocol.BindingRow).init(allocator);
+    defer {
+        for (rows.items) |row| freeBindingRow(allocator, row);
+        rows.deinit(allocator);
+    }
+    try appendPageRows(allocator, page, &rows);
+    const chunk = ResultChunk{
+        .query_id = query_id,
+        .rows = rows.items,
+        .is_final = page.final,
     };
+    try handler(chunk);
 }
 
-// Serialization functions
-fn serializeQueryRequest(writer: anytype, request: QueryRequest) !void {
-    try std.json.stringify(request, .{}, writer);
+fn freeBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) void {
+    for (row.cols) |val| {
+        value_utilities.freeValue(allocator, val);
+    }
+    allocator.free(row.cols);
 }
 
-fn deserializeQueryResponse(allocator: std.mem.Allocator, data: []const u8) !QueryResponse {
-    const parsed = try std.json.parseFromSlice(QueryResponse, allocator, data, .{});
-    defer parsed.deinit();
-    return parsed.value;
+fn captureOrderMeta(
+    allocator: std.mem.Allocator,
+    page: schema.DataPage,
+    ordered: *bool,
+    order_keys: *std.ArrayList([]const u8),
+) !void {
+    if (page.ordered) ordered.* = true;
+    if (order_keys.items.len == 0 and page.order_keys.items.len > 0) {
+        for (page.order_keys.items) |key| {
+            try order_keys.append(allocator, try allocator.dupe(u8, key));
+        }
+    }
 }
 
-fn deserializeResultChunk(allocator: std.mem.Allocator, data: []const u8) !ResultChunk {
-    const parsed = try std.json.parseFromSlice(ResultChunk, allocator, data, .{});
-    defer parsed.deinit();
-    return parsed.value;
+fn writeProtoMessage(allocator: std.mem.Allocator, stream: *quic.QuicClientStream, msg: schema.QuicClientMessage) !void {
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
+    defer aw.deinit();
+
+    const packet = schema.ClientPacket{ .quic = msg };
+    try protobuf.encode(&aw.writer, allocator, packet);
+
+    const written = aw.writer.buffer[0..aw.writer.end];
+    var len_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &len_buf, @intCast(written.len), .big);
+    try stream.writeAll(&len_buf);
+    try stream.writeAll(written);
+}
+
+fn readProtoMessage(
+    allocator: std.mem.Allocator,
+    stream: *quic.QuicClientStream,
+    client: *quic.QuicClient,
+    timeout_ms: u32,
+) !schema.QuicServerMessage {
+    var len_buf: [4]u8 = undefined;
+    var total_read: usize = 0;
+    const start = std.time.milliTimestamp();
+    while (total_read < len_buf.len) {
+        const n = stream.read(len_buf[total_read..]) catch |err| switch (err) {
+            error.WouldBlock => {
+                if (std.time.milliTimestamp() - start > timeout_ms) return error.Timeout;
+                try client.poll(5);
+                std.Thread.sleep(5 * std.time.ns_per_ms);
+                continue;
+            },
+            else => return err,
+        };
+        if (n == 0) return error.EndOfStream;
+        total_read += n;
+    }
+
+    const msg_len = std.mem.readInt(u32, &len_buf, .big);
+    if (msg_len == 0) return error.InvalidMessage;
+    const msg_bytes = try allocator.alloc(u8, msg_len);
+    defer allocator.free(msg_bytes);
+
+    total_read = 0;
+    while (total_read < msg_len) {
+        const n = stream.read(msg_bytes[total_read..]) catch |err| switch (err) {
+            error.WouldBlock => {
+                if (std.time.milliTimestamp() - start > timeout_ms) return error.Timeout;
+                try client.poll(5);
+                std.Thread.sleep(5 * std.time.ns_per_ms);
+                continue;
+            },
+            else => return err,
+        };
+        if (n == 0) return error.EndOfStream;
+        total_read += n;
+    }
+
+    var reader: std.Io.Reader = .fixed(msg_bytes);
+    const packet = try protobuf.decode(schema.ServerPacket, &reader, allocator);
+    return packet.quic orelse error.InvalidMessage;
 }

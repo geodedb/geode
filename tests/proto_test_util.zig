@@ -10,13 +10,26 @@ pub const ServerHandle = struct {
     env_map: ?std.process.EnvMap = null,
 
     pub fn deinit(self: *ServerHandle) void {
-        self.child.kill() catch {};
+        _ = self.child.kill() catch {};
         _ = self.child.wait() catch {};
         if (self.env_map) |*env| {
             env.deinit();
         }
     }
 };
+
+pub const DefaultAuth = struct {
+    pub const username: []const u8 = "geode";
+    pub const password: []const u8 = "geode-test-password";
+};
+
+pub fn defaultUsername() []const u8 {
+    return DefaultAuth.username;
+}
+
+pub fn defaultPassword() []const u8 {
+    return DefaultAuth.password;
+}
 
 pub fn spawnServer(
     allocator: std.mem.Allocator,
@@ -32,16 +45,22 @@ pub fn spawnServer(
     handle.child.stdout_behavior = .Ignore;
     handle.child.stderr_behavior = .Ignore;
 
-    if (env) |pairs| {
-        handle.env_map = try std.process.getEnvMap(allocator);
-        if (handle.env_map) |*map| {
+    handle.env_map = try std.process.getEnvMap(allocator);
+    if (handle.env_map) |*map| {
+        if (map.get("GEODE_ADMIN_USERNAME") == null) {
+            map.put("GEODE_ADMIN_USERNAME", DefaultAuth.username) catch {};
+        }
+        if (map.get("GEODE_DEFAULT_PASSWORD") == null) {
+            map.put("GEODE_DEFAULT_PASSWORD", DefaultAuth.password) catch {};
+        }
+        if (env) |pairs| {
             for (pairs) |kv| {
                 if (std.mem.indexOfScalar(u8, kv, '=')) |eq| {
                     map.put(kv[0..eq], kv[eq + 1 ..]) catch {};
                 }
             }
-            handle.child.env_map = map;
         }
+        handle.child.env_map = map;
     }
 
     try handle.child.spawn();
@@ -197,6 +216,13 @@ pub const QuicProtoClient = struct {
         }
     }
 
+    fn ensureHello(self: *QuicProtoClient, allocator: std.mem.Allocator) !void {
+        if (self.session_id.len > 0) return;
+        var hello = try self.hello(allocator, defaultUsername(), defaultPassword());
+        defer hello.deinit(allocator);
+        if (!hello.success) return error.AuthenticationFailed;
+    }
+
     fn writeMessage(self: *QuicProtoClient, msg: schema.QuicClientMessage) !void {
         var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 4096);
         defer aw.deinit();
@@ -302,6 +328,16 @@ pub const QuicProtoClient = struct {
         return msg.ping.ok;
     }
 
+    pub fn cdcDiagnostics(self: *QuicProtoClient, allocator: std.mem.Allocator) ![]u8 {
+        try self.ensureHello(allocator);
+        try self.writeMessage(.{ .cdc_diag = .{} });
+        var packet = try self.readPacket(allocator, 5000);
+        defer packet.deinit(allocator);
+        const msg = packet.quic orelse return error.InvalidMessage;
+        if (msg != .cdc_diag) return error.InvalidMessage;
+        return try allocator.dupe(u8, msg.cdc_diag.json_payload);
+    }
+
     pub fn begin(self: *QuicProtoClient, allocator: std.mem.Allocator) !BeginResult {
         const req = schema.BeginRequest{ .read_only = false, .session_id = "" };
         try self.writeMessage(.{ .begin = req });
@@ -369,7 +405,7 @@ pub const QuicProtoClient = struct {
 
     fn appendRows(
         allocator: std.mem.Allocator,
-        rows_list: *std.ArrayList([]TestValue),
+        rows_list: *std.array_list.Managed([]TestValue),
         page: schema.DataPage,
     ) !void {
         for (page.rows.items) |row| {
@@ -377,7 +413,7 @@ pub const QuicProtoClient = struct {
             for (row.values.items, 0..) |v, i| {
                 out_row[i] = try valueToTest(allocator, v);
             }
-            try rows_list.append(allocator, out_row);
+            try rows_list.append( out_row);
         }
     }
 
@@ -388,6 +424,7 @@ pub const QuicProtoClient = struct {
         params: std.ArrayList(schema.Param),
         page_size: u32,
     ) !ExecResult {
+        try self.ensureHello(allocator);
         var params_list = params;
         defer {
             for (params_list.items) |*param| {
@@ -403,13 +440,13 @@ pub const QuicProtoClient = struct {
         };
         try self.writeMessage(.{ .execute = req });
 
-        var columns = std.ArrayList([]const u8).init(allocator);
+        var columns = std.array_list.Managed([]const u8).init(allocator);
         errdefer {
             for (columns.items) |c| allocator.free(c);
             columns.deinit();
         }
 
-        var rows = std.ArrayList([]TestValue).init(allocator);
+        var rows = std.array_list.Managed([]TestValue).init(allocator);
         errdefer {
             for (rows.items) |row| {
                 for (row) |cell| {
@@ -425,7 +462,7 @@ pub const QuicProtoClient = struct {
         }
 
         var ordered = false;
-        var order_keys = std.ArrayList([]const u8).init(allocator);
+        var order_keys = std.array_list.Managed([]const u8).init(allocator);
         errdefer {
             for (order_keys.items) |k| allocator.free(k);
             order_keys.deinit();
@@ -445,7 +482,7 @@ pub const QuicProtoClient = struct {
             const msg = packet.quic orelse return error.InvalidMessage;
             if (msg != .execute) return error.InvalidMessage;
             const exec_resp = msg.execute;
-            const status = try copyStatus(allocator, exec_resp.status);
+            const status = try copyStatus(allocator, exec_resp.status.?);
             allocator.free(status_class);
             allocator.free(additional_statuses);
             allocator.free(flagger_findings);
@@ -456,14 +493,14 @@ pub const QuicProtoClient = struct {
             if (exec_resp.payload) |payload| switch (payload) {
                 .schema => |schema_def| {
                     for (schema_def.columns.items) |col| {
-                        try columns.append(allocator, try allocator.dupe(u8, col.name));
+                        try columns.append( try allocator.dupe(u8, col.name));
                     }
                     schema_received = true;
                 },
                 .page => |p| {
                     ordered = ordered or p.ordered;
                     if (order_keys.items.len == 0 and p.order_keys.items.len > 0) {
-                        for (p.order_keys.items) |k| try order_keys.append(allocator, try allocator.dupe(u8, k));
+                        for (p.order_keys.items) |k| try order_keys.append( try allocator.dupe(u8, k));
                     }
                     try appendRows(allocator, &rows, p);
                     if (!p.final) {
@@ -499,7 +536,7 @@ pub const QuicProtoClient = struct {
                     .page => |p| {
                         ordered = ordered or p.ordered;
                         if (order_keys.items.len == 0 and p.order_keys.items.len > 0) {
-                            for (p.order_keys.items) |k| try order_keys.append(allocator, try allocator.dupe(u8, k));
+                            for (p.order_keys.items) |k| try order_keys.append( try allocator.dupe(u8, k));
                         }
                         try appendRows(allocator, &rows, p);
                         if (p.final) done = true;
@@ -544,6 +581,13 @@ pub const GrpcProtoClient = struct {
         if (self.session_id.len > 0) {
             self.allocator.free(self.session_id);
         }
+    }
+
+    fn ensureHello(self: *GrpcProtoClient, allocator: std.mem.Allocator) !void {
+        if (self.session_id.len > 0) return;
+        var hello = try self.hello(allocator, defaultUsername(), defaultPassword());
+        defer hello.deinit(allocator);
+        if (!hello.success) return error.AuthenticationFailed;
     }
 
     fn encodePacket(allocator: std.mem.Allocator, msg: schema.QuicClientMessage) ![]u8 {
@@ -600,6 +644,35 @@ pub const GrpcProtoClient = struct {
         };
     }
 
+    fn valueToTest(allocator: std.mem.Allocator, val: schema.Value) !TestValue {
+        if (val.kind) |k| switch (k) {
+            .null_val => return .null,
+            .int_val => |i| return .{ .int = i.value },
+            .double_val => |d| return .{ .double = d.value },
+            .bool_val => |b| return .{ .bool = b },
+            .string_val => |s| return .{ .string = try allocator.dupe(u8, s.value) },
+            .node_val => |n| return .{ .node = .{ .id = n.id, .label_count = n.labels.items.len, .property_count = n.properties.items.len } },
+            .edge_val => |e| return .{ .edge = .{ .id = e.id, .from_id = e.from_id, .to_id = e.to_id, .label = try allocator.dupe(u8, e.label) } },
+            .path_val => |p| return .{ .path = .{ .node_count = p.nodes.items.len, .edge_count = p.edges.items.len } },
+            else => return .other,
+        };
+        return .null;
+    }
+
+    fn appendRows(
+        allocator: std.mem.Allocator,
+        rows_list: *std.array_list.Managed([]TestValue),
+        page: schema.DataPage,
+    ) !void {
+        for (page.rows.items) |row| {
+            var out_row = try allocator.alloc(TestValue, row.values.items.len);
+            for (row.values.items, 0..) |v, i| {
+                out_row[i] = try valueToTest(allocator, v);
+            }
+            try rows_list.append( out_row);
+        }
+    }
+
     pub fn executeAndCollect(
         self: *GrpcProtoClient,
         allocator: std.mem.Allocator,
@@ -607,6 +680,7 @@ pub const GrpcProtoClient = struct {
         params: std.ArrayList(schema.Param),
         page_size: u32,
     ) !ExecResult {
+        try self.ensureHello(allocator);
         var params_list = params;
         defer {
             for (params_list.items) |*param| {
@@ -626,13 +700,13 @@ pub const GrpcProtoClient = struct {
         if (msg != .execute) return error.InvalidResponse;
         const exec_resp = msg.execute;
 
-        var columns = std.ArrayList([]const u8).init(allocator);
+        var columns = std.array_list.Managed([]const u8).init(allocator);
         errdefer {
             for (columns.items) |c| allocator.free(c);
             columns.deinit();
         }
 
-        var rows = std.ArrayList([]TestValue).init(allocator);
+        var rows = std.array_list.Managed([]TestValue).init(allocator);
         errdefer {
             for (rows.items) |row| {
                 for (row) |cell| {
@@ -648,19 +722,19 @@ pub const GrpcProtoClient = struct {
         }
 
         var ordered = false;
-        var order_keys = std.ArrayList([]const u8).init(allocator);
+        var order_keys = std.array_list.Managed([]const u8).init(allocator);
         errdefer {
             for (order_keys.items) |k| allocator.free(k);
             order_keys.deinit();
         }
 
         var status_class: []const u8 = "00000";
-        var additional_statuses = std.ArrayList([]const u8).init(allocator);
+        var additional_statuses = std.array_list.Managed([]const u8).init(allocator);
         errdefer {
             for (additional_statuses.items) |s| allocator.free(s);
             additional_statuses.deinit();
         }
-        var flagger_findings = std.ArrayList([]const u8).init(allocator);
+        var flagger_findings = std.array_list.Managed([]const u8).init(allocator);
         errdefer {
             for (flagger_findings.items) |s| allocator.free(s);
             flagger_findings.deinit();
@@ -672,10 +746,10 @@ pub const GrpcProtoClient = struct {
         if (exec_resp.status) |status| {
             status_class = try allocator.dupe(u8, status.status_class);
             for (status.additional_statuses.items) |s| {
-                try additional_statuses.append(allocator, try allocator.dupe(u8, s));
+                try additional_statuses.append( try allocator.dupe(u8, s));
             }
             for (status.flagger_findings.items) |s| {
-                try flagger_findings.append(allocator, try allocator.dupe(u8, s));
+                try flagger_findings.append( try allocator.dupe(u8, s));
             }
         } else {
             status_class = try allocator.dupe(u8, "00000");
@@ -684,7 +758,7 @@ pub const GrpcProtoClient = struct {
         if (exec_resp.payload) |payload| switch (payload) {
             .schema => |schema_def| {
                 for (schema_def.columns.items) |col| {
-                    try columns.append(allocator, try allocator.dupe(u8, col.name));
+                    try columns.append( try allocator.dupe(u8, col.name));
                 }
             },
             .@"error" => |err| {
@@ -715,7 +789,7 @@ pub const GrpcProtoClient = struct {
                     ordered = ordered or page.ordered;
                     if (page.order_keys.items.len > 0 and order_keys.items.len == 0) {
                         for (page.order_keys.items) |k| {
-                            try order_keys.append(allocator, try allocator.dupe(u8, k));
+                            try order_keys.append( try allocator.dupe(u8, k));
                         }
                     }
                     try appendRows(allocator, &rows, page);
@@ -771,7 +845,7 @@ pub fn makeStringParam(allocator: std.mem.Allocator, name: []const u8, value: []
 pub fn makeIntListParam(allocator: std.mem.Allocator, name: []const u8, values: []const i64) !schema.Param {
     var list_values = std.ArrayList(schema.Value).initCapacity(allocator, values.len) catch return error.OutOfMemory;
     for (values) |v| {
-        try list_values.append(allocator, .{ .kind = .{ .int_val = .{ .value = v, .kind = .INT } } });
+        try list_values.append( .{ .kind = .{ .int_val = .{ .value = v, .kind = .INT } } });
     }
     return .{
         .name = try allocator.dupe(u8, name),

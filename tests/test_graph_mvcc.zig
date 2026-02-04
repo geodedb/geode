@@ -7,7 +7,7 @@ test "MATCH pattern execution - basic node scan" {
     const allocator = std.testing.allocator;
 
     // Create graph storage
-    var graph = graph_exec.GraphStorage.init(allocator);
+    var graph = graph_exec.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add test nodes
@@ -59,7 +59,7 @@ test "MATCH pattern with edge traversal" {
     const allocator = std.testing.allocator;
 
     // Create graph storage
-    var graph = graph_exec.GraphStorage.init(allocator);
+    var graph = graph_exec.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add nodes

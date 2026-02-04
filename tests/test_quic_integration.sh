@@ -6,37 +6,22 @@ set -e
 
 echo "=== QUIC Integration Test Suite ==="
 echo ""
+ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
 
 # Test 1: Basic QUIC query execution
 echo "Test 1: Basic QUIC query execution"
 echo "Starting server..."
-./zig-out/bin/geode serve --listen 127.0.0.1:8443 --test-exit-after-first > test_server.log 2>&1 &
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+    ./zig-out/bin/geode serve --listen 127.0.0.1:8443 > test_server.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
 echo "Executing query..."
-OUTPUT=$(./zig-out/bin/geode query --server 127.0.0.1:8443 "RETURN 1 AS test" 2>&1 || true)
+OUTPUT=$(./zig-out/bin/geode query --server 127.0.0.1:8443 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" "RETURN 1 AS test" 2>&1 || true)
 
 # Check for expected output
-if echo "$OUTPUT" | grep -q "SCHEMA:"; then
-    echo "✓ Schema received"
-else
-    echo "✗ Schema missing"
-    echo "$OUTPUT"
-    kill $SERVER_PID 2>/dev/null || true
-    exit 1
-fi
-
-if echo "$OUTPUT" | grep -q "RESULT:"; then
-    echo "✓ Result received"
-else
-    echo "✗ Result missing"
-    echo "$OUTPUT"
-    kill $SERVER_PID 2>/dev/null || true
-    exit 1
-fi
-
-if echo "$OUTPUT" | grep -q "STATUS:"; then
+if echo "$OUTPUT" | grep -q "\"status_class\":\"00000\""; then
     echo "✓ Status received"
 else
     echo "✗ Status missing"
@@ -51,7 +36,7 @@ echo ""
 
 # Test 2: Handshake timeout with unreachable server
 echo "Test 2: Handshake timeout handling"
-OUTPUT=$(timeout 3 ./zig-out/bin/geode query --server 127.0.0.1:19999 "RETURN 1" 2>&1 || true)
+OUTPUT=$(timeout 3 ./zig-out/bin/geode query --server 127.0.0.1:19999 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" "RETURN 1" 2>&1 || true)
 
 if echo "$OUTPUT" | grep -q "QUIC handshake failed"; then
     echo "✓ Handshake timeout detected"
@@ -75,11 +60,12 @@ echo ""
 # Test 3: Multiple queries to same server (tests readStream fix)
 echo "Test 3: Multiple sequential queries"
 echo "Starting server..."
-./zig-out/bin/geode serve --listen 127.0.0.1:8444 > test_server2.log 2>&1 &
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+    ./zig-out/bin/geode serve --listen 127.0.0.1:8444 > test_server2.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
-QUERY1=$(./zig-out/bin/geode query --server 127.0.0.1:8444 "RETURN 1 AS x" 2>&1 || true)
+QUERY1=$(./zig-out/bin/geode query --server 127.0.0.1:8444 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" "RETURN 1 AS x" 2>&1 || true)
 if echo "$QUERY1" | grep -q '"x":1'; then
     echo "✓ Query 1 successful"
 else
@@ -88,7 +74,7 @@ else
     exit 1
 fi
 
-QUERY2=$(./zig-out/bin/geode query --server 127.0.0.1:8444 "RETURN 2 AS y" 2>&1 || true)
+QUERY2=$(./zig-out/bin/geode query --server 127.0.0.1:8444 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" "RETURN 2 AS y" 2>&1 || true)
 if echo "$QUERY2" | grep -q '"y":2'; then
     echo "✓ Query 2 successful"
 else
@@ -97,7 +83,7 @@ else
     exit 1
 fi
 
-QUERY3=$(./zig-out/bin/geode query --server 127.0.0.1:8444 "RETURN 'test' AS z" 2>&1 || true)
+QUERY3=$(./zig-out/bin/geode query --server 127.0.0.1:8444 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" "RETURN 'test' AS z" 2>&1 || true)
 if echo "$QUERY3" | grep -q '"z":"test"'; then
     echo "✓ Query 3 successful"
 else
@@ -112,7 +98,13 @@ echo ""
 
 # Test 4: Verify no excessive debug output
 echo "Test 4: Debug output suppression"
-OUTPUT=$(./zig-out/bin/geode query --server 127.0.0.1:8445 "RETURN 1" 2>&1 || true)
+echo "Starting server..."
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+    ./zig-out/bin/geode serve --listen 127.0.0.1:8445 > test_server3.log 2>&1 &
+SERVER_PID=$!
+sleep 2
+
+OUTPUT=$(./zig-out/bin/geode query --server 127.0.0.1:8445 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" "RETURN 1" 2>&1 || true)
 
 if echo "$OUTPUT" | grep -q "DEBUG: poll called"; then
     echo "✗ Verbose polling debug still present"
@@ -128,6 +120,7 @@ else
     echo "✓ ReadStream debug suppressed"
 fi
 
+kill $SERVER_PID 2>/dev/null || true
 echo "✓ Test 4 passed"
 echo ""
 

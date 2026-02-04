@@ -12,7 +12,7 @@ pub const EdgeId = u64;
 pub const PropertyValue = graph_store.PropertyValue;
 pub const Node = graph_store.Node;
 pub const Edge = graph_store.Edge;
-pub const GraphStorage = graph_store.GraphStore;
+pub const GraphStore = graph_store.GraphStore;
 
 // Variable binding in query execution
 pub const Binding = struct {
