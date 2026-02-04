@@ -1,16 +1,11 @@
 const std = @import("std");
+const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
 
 fn run(args: []const []const u8) !struct { stdout: []const u8, stderr: []const u8 } {
-    var child = std.process.Child.init(args, testing.allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-    const stdout_bytes = try child.stdout.?.readToEndAlloc(testing.allocator, 1 << 16);
-    const stderr_bytes = try child.stderr.?.readToEndAlloc(testing.allocator, 1 << 16);
-    const term = try child.wait();
-    try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, term);
-    return .{ .stdout = stdout_bytes, .stderr = stderr_bytes };
+    const res = try cli_test_util.run(args);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    return .{ .stdout = res.out, .stderr = res.err };
 }
 
 // Ensures per-stage allocation deltas are non-negative and project alloc > 0 for a query exercising all stages.

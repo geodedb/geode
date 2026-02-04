@@ -1,19 +1,10 @@
 const std = @import("std");
+const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
-    var child = std.process.Child.init(args, testing.allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-    const out = try child.stdout.?.readToEndAlloc(testing.allocator, 4096);
-    const err = try child.stderr.?.readToEndAlloc(testing.allocator, 4096);
-    const term = try child.wait();
-    const code: i32 = switch (term) {
-        .Exited => |st| st,
-        else => 2,
-    };
-    return .{ .code = code, .out = out, .err = err };
+    const res = try cli_test_util.run(args);
+    return .{ .code = res.code, .out = res.out, .err = res.err };
 }
 
 inline fn contains(h: []const u8, n: []const u8) bool {

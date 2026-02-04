@@ -1,19 +1,10 @@
 const std = @import("std");
-const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
+const cli_test_util = @import("cli_test_util.zig");
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8 } {
-    var child = Child.init(args, std.testing.allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-    const out = try child.stdout.?.readToEndAlloc(std.testing.allocator, 1 << 16);
-    _ = try child.stderr.?.readToEndAlloc(std.testing.allocator, 1 << 16);
-    const term = try child.wait();
-    const code: i32 = switch (term) {
-        .Exited => |st| st,
-        else => 2,
-    };
-    return .{ .code = code, .out = out };
+    const res = try cli_test_util.run(args);
+    std.testing.allocator.free(res.err);
+    return .{ .code = res.code, .out = res.out };
 }
 
 fn contains(h: []const u8, n: []const u8) bool {

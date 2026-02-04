@@ -1,16 +1,12 @@
 const std = @import("std");
+const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
 
 fn run(args: []const []const u8) !struct { out: []u8 } {
-    var child = std.process.Child.init(args, testing.allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-    const out = try child.stdout.?.readToEndAlloc(testing.allocator, 1 << 16);
-    _ = try child.stderr.?.readToEndAlloc(testing.allocator, 1 << 16);
-    const term = try child.wait();
-    try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, term);
-    return .{ .out = out };
+    const res = try cli_test_util.run(args);
+    std.testing.allocator.free(res.err);
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    return .{ .out = res.out };
 }
 
 // Validates presence of estimate_bytes / estimate_vs_actual / cumulative_time_ns and monotonic cumulative.
