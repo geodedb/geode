@@ -1,6 +1,6 @@
 const std = @import("std");
 const crypto = std.crypto;
-const flags_mod = @import("../util/feature_flags.zig");
+const flags_mod = @import("feature_flags");
 
 // Multi-Factor Authentication (MFA) - RFC 6238 TOTP implementation (HMAC-SHA1 default)
 // Runtime gated by shared feature flag (GEODE_ENABLE_MFA) via util/feature_flags.zig.

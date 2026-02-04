@@ -13,7 +13,7 @@ pub const Analyzer = enum {
     standard, // Unicode word boundaries
 };
 
-const flags_mod = @import("../util/feature_flags.zig");
+const flags_mod = @import("feature_flags");
 fn flag() *flags_mod.Flag {
     return &flags_mod.global().adv_fts;
 }

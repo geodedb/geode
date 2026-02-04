@@ -1223,12 +1223,15 @@ pub fn build(b: *std.Build) void {
     });
 
     // Create separate modules for security components
+    const feature_flags_mod = b.createModule(.{ .root_source_file = b.path("src/util/feature_flags.zig"), .target = target, .optimize = optimize });
     const mfa_mod = b.createModule(.{ .root_source_file = b.path("src/security/mfa.zig"), .target = target, .optimize = optimize });
+    mfa_mod.addImport("feature_flags", feature_flags_mod);
     const auth_mod = b.createModule(.{ .root_source_file = b.path("src/security/geode_auth_lib.zig"), .target = target, .optimize = optimize });
     auth_mod.addImport("mfa", mfa_mod);
     auth_mod.addImport("logging", logging_mod);
     root_mod.addImport("geode_auth", auth_mod);
     root_mod.addImport("mfa", mfa_mod);
+    root_mod.addImport("feature_flags", feature_flags_mod);
     // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-003; FEATURE="CLI Subprocess Elimination"; ASPECT=AuthModule; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
     // Add auth module to unified binary for server authentication
     geode_exe.root_module.addImport("geode_auth", auth_mod);
@@ -1246,6 +1249,7 @@ pub fn build(b: *std.Build) void {
     // Create user storage module (GraphStore-backed)
     const user_storage_mod = b.createModule(.{ .root_source_file = b.path("src/storage/user_storage.zig"), .target = target, .optimize = optimize });
     user_storage_mod.addImport("logging", logging_mod);
+    user_storage_mod.addImport("geode", root_mod);
 
     const user_manager_mod = b.createModule(.{ .root_source_file = b.path("src/security/user_manager.zig"), .target = target, .optimize = optimize });
     user_manager_mod.addImport("geode_auth", auth_mod);
@@ -1258,6 +1262,7 @@ pub fn build(b: *std.Build) void {
     user_auth_exe.root_module.addImport("rls", rls_mod);
     user_auth_exe.root_module.addImport("user_manager", user_manager_mod);
     user_auth_exe.root_module.addImport("user_storage", user_storage_mod);
+    user_auth_exe.root_module.addImport("geode", root_mod);
 
     b.installArtifact(user_auth_exe);
     const user_auth_run = b.addRunArtifact(user_auth_exe);

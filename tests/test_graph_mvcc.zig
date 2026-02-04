@@ -1,129 +1,96 @@
 const std = @import("std");
 const geode = @import("../src/lib.zig");
-const graph_exec = @import("../src/graph/exec.zig");
+const execution = geode.execution;
+const graph_store = geode.graph_store;
 const mvcc = @import("../src/server/txn/mvcc.zig");
+
+const Harness = struct {
+    allocator: std.mem.Allocator,
+    tmp: std.testing.TmpDir,
+    data_dir: []u8,
+    ctx: execution.ExecutionContext,
+
+    pub fn init(allocator: std.mem.Allocator) !Harness {
+        execution.cleanupCatalogInstance();
+        graph_store.deinitGlobalStore();
+
+        var tmp = std.testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+
+        const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+        errdefer allocator.free(data_dir);
+
+        graph_store.setDataDirOverride(allocator, data_dir);
+        _ = graph_store.getGlobalStore(allocator);
+
+        const catalog = try execution.ensureCatalogInstance(allocator);
+        return .{
+            .allocator = allocator,
+            .tmp = tmp,
+            .data_dir = data_dir,
+            .ctx = execution.ExecutionContext{ .catalog = catalog },
+        };
+    }
+
+    pub fn deinit(self: *Harness) void {
+        execution.cleanupCatalogInstance();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(self.allocator, null);
+        self.allocator.free(self.data_dir);
+        self.tmp.cleanup();
+    }
+
+    pub fn exec(self: *Harness, query: []const u8) !execution.ExecutionResult {
+        var parsed = try geode.parseGql(query, self.allocator);
+        defer parsed.deinit();
+        return execution.executeStatementWithContext(self.allocator, parsed.program.statements[0], self.ctx);
+    }
+};
 
 test "MATCH pattern execution - basic node scan" {
     const allocator = std.testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
 
-    // Create graph storage
-    var graph = graph_exec.GraphStore.init(allocator);
-    defer graph.deinit();
+    const store = graph_store.getGlobalStore(allocator);
+    const alice_id = try store.createNode(&.{ "Person" });
+    try store.setNodeProperty(alice_id, "name", .{ .String = "Alice" });
+    const bob_id = try store.createNode(&.{ "Person" });
+    try store.setNodeProperty(bob_id, "name", .{ .String = "Bob" });
 
-    // Add test nodes
-    var person_labels = [_][]const u8{"Person"};
-    const alice_id = try graph.createNode(&person_labels);
-    try graph.setNodeProperty(alice_id, "name", .{ .String = "Alice" });
+    var res = try h.exec("MATCH (n:Person) RETURN n");
+    defer res.deinit(allocator);
 
-    const bob_id = try graph.createNode(&person_labels);
-    try graph.setNodeProperty(bob_id, "name", .{ .String = "Bob" });
-
-    // Create a simple MATCH pattern: MATCH (n:Person)
-    const pattern = geode.ast.GraphPattern{
-        .chains = &.{
-            geode.ast.Chain{
-                .name = null,
-                .hops = &.{
-                    geode.ast.Hop{
-                        .left = geode.ast.NodePattern{
-                            .name = "n",
-                            .labels = &.{"Person"},
-                            .props = null,
-                        },
-                        .rel = geode.ast.RelPattern{
-                            .name = null,
-                            .types = &.{},
-                            .props = null,
-                            .dir = .right,
-                        },
-                        .right = geode.ast.NodePattern{
-                            .name = null,
-                            .labels = &.{},
-                            .props = null,
-                        },
-                    },
-                },
-            },
-        },
-    };
-
-    // Execute the pattern
-    const bindings = try graph_exec.executeMatch(allocator, &graph, pattern, null);
-    defer allocator.free(bindings);
-
-    // Should find 2 nodes
-    try std.testing.expectEqual(@as(usize, 2), bindings.len);
+    try std.testing.expectEqual(@as(usize, 2), res.rows.len);
 }
 
 test "MATCH pattern with edge traversal" {
     const allocator = std.testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
 
-    // Create graph storage
-    var graph = graph_exec.GraphStore.init(allocator);
-    defer graph.deinit();
+    const store = graph_store.getGlobalStore(allocator);
+    const alice_id = try store.createNode(&.{ "Person" });
+    try store.setNodeProperty(alice_id, "name", .{ .String = "Alice" });
+    const bob_id = try store.createNode(&.{ "Person" });
+    try store.setNodeProperty(bob_id, "name", .{ .String = "Bob" });
 
-    // Add nodes
-    var person_labels = [_][]const u8{"Person"};
-    const alice_id = try graph.createNode(&person_labels);
-    try graph.setNodeProperty(alice_id, "name", .{ .String = "Alice" });
+    const edge_id = try store.createEdge(alice_id, bob_id, "KNOWS");
+    try store.setEdgeProperty(edge_id, "since", .{ .Int = 2020 });
 
-    const bob_id = try graph.createNode(&person_labels);
-    try graph.setNodeProperty(bob_id, "name", .{ .String = "Bob" });
+    var res = try h.exec("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, r, b");
+    defer res.deinit(allocator);
 
-    // Add edge
-    const edge_id = try graph.createEdge(alice_id, bob_id, "KNOWS");
-    try graph.setEdgeProperty(edge_id, "since", .{ .Int = 2020 });
-
-    // Create pattern: MATCH (a:Person)-[r:KNOWS]->(b:Person)
-    const pattern = geode.ast.GraphPattern{
-        .chains = &.{
-            geode.ast.Chain{
-                .name = null,
-                .hops = &.{
-                    geode.ast.Hop{
-                        .left = geode.ast.NodePattern{
-                            .name = "a",
-                            .labels = &.{"Person"},
-                            .props = null,
-                        },
-                        .rel = geode.ast.RelPattern{
-                            .name = "r",
-                            .types = &.{"KNOWS"},
-                            .props = null,
-                            .dir = .right,
-                        },
-                        .right = geode.ast.NodePattern{
-                            .name = "b",
-                            .labels = &.{"Person"},
-                            .props = null,
-                        },
-                    },
-                },
-            },
-        },
-    };
-
-    // Execute the pattern
-    const bindings = try graph_exec.executeMatch(allocator, &graph, pattern, null);
-    defer allocator.free(bindings);
-
-    // Should find 1 relationship (Alice -> Bob)
-    try std.testing.expectEqual(@as(usize, 1), bindings.len);
-
-    // Check the binding contains correct nodes
-    if (bindings.len > 0) {
-        const binding = bindings[0];
-        const a_val = binding.vars.get("a").?;
-        const b_val = binding.vars.get("b").?;
-        const r_val = binding.vars.get("r").?;
-
-        try std.testing.expectEqual(graph_exec.BindingValue.Node, std.meta.activeTag(a_val));
-        try std.testing.expectEqual(graph_exec.BindingValue.Node, std.meta.activeTag(b_val));
-        try std.testing.expectEqual(graph_exec.BindingValue.Edge, std.meta.activeTag(r_val));
-
-        try std.testing.expectEqual(@as(graph_exec.NodeId, alice_id), a_val.Node);
-        try std.testing.expectEqual(@as(graph_exec.NodeId, bob_id), b_val.Node);
-        try std.testing.expectEqual(@as(graph_exec.EdgeId, edge_id), r_val.Edge);
+    try std.testing.expectEqual(@as(usize, 1), res.rows.len);
+    if (res.rows.len > 0) {
+        const row = res.rows[0];
+        try std.testing.expect(row.len == 3);
+        try std.testing.expect(std.meta.activeTag(row[0]) == .Node);
+        try std.testing.expect(std.meta.activeTag(row[1]) == .Edge);
+        try std.testing.expect(std.meta.activeTag(row[2]) == .Node);
+        try std.testing.expectEqual(alice_id, row[0].Node.id);
+        try std.testing.expectEqual(bob_id, row[2].Node.id);
+        try std.testing.expectEqual(edge_id, row[1].Edge.id);
     }
 }
 

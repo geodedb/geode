@@ -399,6 +399,7 @@ pub const ExecutionError = error{
     UnionColumnCountMismatch,
     InvalidKeyProvider,
     InvalidGuardrailConfiguration,
+    InvalidHopBounds,
     UnknownProcedure,
     Unauthenticated,
     Unauthorized,
@@ -632,6 +633,18 @@ fn applyMatchGuard(allocator: std.mem.Allocator, result: *ExecutionResult, conte
     }
 }
 
+fn validateHopBounds(pattern: ast.GraphPattern) !void {
+    for (pattern.chains) |chain| {
+        for (chain.hops) |hop| {
+            if (hop.rel.min_len != null and hop.rel.max_len != null) {
+                if (hop.rel.min_len.? > hop.rel.max_len.?) {
+                    return ExecutionError.InvalidHopBounds;
+                }
+            }
+        }
+    }
+}
+
 /// Check if user has required permission for operation
 pub fn checkPermission(context: ExecutionContext, permission: @import("security/user_management.zig").Permission) !void {
     const user_mgmt = @import("security/user_management.zig");
@@ -764,6 +777,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             }
 
             // Check if query has SKIP or LIMIT
+            try validateHopBounds(q.match);
             var result = try executeQueryWithContext(allocator, q, context);
 
             try applyMatchGuard(allocator, &result, context, q.match.chains.len > 0);

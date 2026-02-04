@@ -293,7 +293,7 @@ pub fn buildProfilePayload(
         }
         setop_opt = setop;
     }
-    if (setop_opt != null) errdefer setop_opt.?.deinit(allocator);
+    // Note: setop_opt ownership transfers to the returned ProfilePayload
 
     var hashagg_spills: u64 = 0;
     var hashagg_reason: []const u8 = "";
@@ -305,7 +305,7 @@ pub fn buildProfilePayload(
             hashagg_spills = 0;
         }
     }
-    if (hashagg_reason.len > 0) errdefer allocator.free(hashagg_reason);
+    // Note: hashagg_reason ownership transfers to the returned ProfilePayload
 
     var findings = std.ArrayList([]const u8).initCapacity(allocator, opts.flagger_findings.len) catch return error.OutOfMemory;
     errdefer {

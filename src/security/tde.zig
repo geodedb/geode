@@ -1,6 +1,6 @@
 const std = @import("std");
 const crypto = std.crypto;
-const flags_mod = @import("../util/feature_flags.zig");
+const flags_mod = @import("feature_flags");
 const key_manager = @import("tde_key_manager.zig");
 const nonce_gen = @import("tde_nonce_gen.zig");
 const logging = @import("logging");

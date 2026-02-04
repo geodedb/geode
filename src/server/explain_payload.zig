@@ -50,7 +50,7 @@ pub fn buildExplainPayload(
 
     var calibration_opt: ?schema.ExplainCalibration = null;
     if (calibrated) {
-        var entries = std.ArrayList(schema.ExplainCalibrationEntry).initCapacity(allocator, 0) catch return error.OutOfMemory;
+        const entries = std.ArrayList(schema.ExplainCalibrationEntry).initCapacity(allocator, 0) catch return error.OutOfMemory;
         calibration_opt = schema.ExplainCalibration{
             .mape = 0,
             .entries = entries,

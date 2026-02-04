@@ -2,7 +2,7 @@ const std = @import("std");
 const crypto = std.crypto;
 const kms = @import("kms.zig");
 const tde_hierarchy = @import("tde_hierarchy.zig");
-const flags_mod = @import("../util/feature_flags.zig");
+const flags_mod = @import("feature_flags");
 
 // TDE-KMS Integration: Enhanced Transparent Data Encryption with KMS Provider support
 // CANARY: REQ=REQ-GQL-TDE-KMS-001; FEATURE="TDEKMSIntegration"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2025-10-05

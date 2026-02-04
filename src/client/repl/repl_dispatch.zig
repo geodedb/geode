@@ -7,8 +7,8 @@ const spinner_mod = @import("spinner.zig");
 
 const protobuf = @import("protobuf");
 const proto_schema = @import("schema");
-const explain_payload = @import("server/explain_payload.zig");
-const profile_payload = @import("server/profile_payload.zig");
+const explain_payload = @import("../../server/explain_payload.zig");
+const profile_payload = @import("../../server/profile_payload.zig");
 
 const spice_wrapper = @import("parallel/spice");
 

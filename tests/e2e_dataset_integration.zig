@@ -1,5 +1,5 @@
 // End-to-end integration tests for the social network dataset
-// Tests migration loading and queries using geodec
+// Tests migration loading and queries using unified geode CLI
 
 const std = @import("std");
 const testing = std.testing;
@@ -7,9 +7,22 @@ const builtin = @import("builtin");
 
 const test_timeout = 30 * std.time.ns_per_s;
 
-// Helper to run geodec commands
-fn runGeodec(allocator: std.mem.Allocator, query: []const u8) !std.ChildProcess.ExecResult {
-    const argv = [_][]const u8{ "./zig-out/bin/geode", "query", "--host", "127.0.0.1", "--port", "3141", query };
+// Helper to run geode query commands against a QUIC server
+fn runGeodeQuery(allocator: std.mem.Allocator, server: []const u8, query: []const u8) !std.ChildProcess.ExecResult {
+    const argv = [_][]const u8{
+        "./zig-out/bin/geode",
+        "query",
+        "--server",
+        server,
+        "--insecure",
+        "--user",
+        "geode",
+        "--password",
+        "geode-test-password",
+        "--format",
+        "json",
+        query,
+    };
     return try std.ChildProcess.exec(.{
         .allocator = allocator,
         .argv = &argv,
@@ -18,15 +31,15 @@ fn runGeodec(allocator: std.mem.Allocator, query: []const u8) !std.ChildProcess.
 }
 
 // Helper to load a migration file
-fn loadMigrationFile(allocator: std.mem.Allocator, path: []const u8) !void {
+fn loadMigrationFile(allocator: std.mem.Allocator, server: []const u8, path: []const u8) !void {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
     const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
     defer allocator.free(content);
 
-    // Use geodec to execute the migration
-    const result = try runGeodec(allocator, content);
+    // Use geode query to execute the migration
+    const result = try runGeodeQuery(allocator, server, content);
     defer {
         allocator.free(result.stdout);
         allocator.free(result.stderr);
@@ -48,10 +61,24 @@ test "dataset migration and basic queries" {
 
     const allocator = testing.allocator;
 
+    const server_addr = "127.0.0.1:3141";
+
     // Start server
-    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geode", "query", "--data_dir", "./test_data", "--port", "3141" }, allocator);
+    var env_map = try std.process.getEnvMap(allocator);
+    defer env_map.deinit();
+    env_map.put("GEODE_ADMIN_USERNAME", "geode") catch {};
+    env_map.put("GEODE_DEFAULT_PASSWORD", "geode-test-password") catch {};
+
+    var server = std.process.Child.init(
+        &[_][]const u8{ "./zig-out/bin/geode", "serve", "--listen", server_addr, "--data_dir", "./test_data" },
+        allocator,
+    );
+    server.env_map = &env_map;
     try server.spawn();
-    defer _ = server.kill() catch {};
+    defer {
+        _ = server.kill() catch {};
+        _ = server.wait() catch {};
+    }
 
     // Wait for server to start
     std.time.sleep(3 * std.time.ns_per_s);
@@ -66,7 +93,7 @@ test "dataset migration and basic queries" {
 
     for (migrations) |migration| {
         std.debug.print("Loading migration: {s}\n", .{migration});
-        try loadMigrationFile(allocator, migration);
+        try loadMigrationFile(allocator, server_addr, migration);
     }
 
     // Test queries
@@ -105,7 +132,7 @@ test "dataset migration and basic queries" {
     for (test_queries) |test_case| {
         std.debug.print("Testing: {s}\n", .{test_case.name});
 
-        const result = try runGeodec(allocator, test_case.query);
+        const result = try runGeodeQuery(allocator, server_addr, test_case.query);
         defer {
             allocator.free(result.stdout);
             allocator.free(result.stderr);

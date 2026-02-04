@@ -3,7 +3,7 @@ const auth = @import("geode_auth");
 const rls = @import("rls");
 const user_manager = @import("user_manager");
 const user_storage = @import("user_storage");
-const graph_store = @import("../graph_store.zig");
+const graph_store = @import("geode").graph_store;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
