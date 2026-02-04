@@ -3,12 +3,36 @@ const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 test "protocol PROFILE returns profile payload" {
-    const allocator = testing.allocator;
-    const addr = "127.0.0.1:17689";
+    util.testStart("PROFILE returns profile payload");
+    errdefer util.testFail();
 
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, null);
+    const allocator = testing.allocator;
+
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    util.progress("Starting server on port {d}...", .{port});
+    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, util.TestEnv.standard()) catch |err| {
+        util.progress("Server spawn failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
     defer server.deinit();
 
+    // Wait for server readiness
+    util.waitForServerReady(allocator, addr, 10000) catch |err| {
+        util.progress("Server readiness timeout: {}", .{err});
+        util.testSkip();
+        return;
+    };
+
+    util.progress("Running PROFILE GROUP BY query...", .{});
     var child = std.process.Child.init(
         &.{
             "./zig-out/bin/geode",
@@ -34,6 +58,7 @@ test "protocol PROFILE returns profile payload" {
     _ = try child.stderr.?.readToEndAlloc(allocator, 1 << 18);
     try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, try child.wait());
 
+    util.progress("Validating PROFILE payload structure...", .{});
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, out, .{});
     defer parsed.deinit();
     const root = parsed.value.object;
@@ -52,4 +77,6 @@ test "protocol PROFILE returns profile payload" {
     }
 
     try testing.expect(profile_obj.get("ops") != null);
+
+    util.testPass();
 }

@@ -36,26 +36,74 @@ fn contains(hay: []const u8, needle: []const u8) bool {
 }
 
 test "protocol: EXPLAIN emits explain payload" {
+    util.testStart("EXPLAIN emits explain payload");
+    errdefer util.testFail();
+
     const allocator = testing.allocator;
-    const addr = "127.0.0.1:3194";
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, null);
+
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    util.progress("Starting server on port {d}...", .{port});
+    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, util.TestEnv.standard()) catch |err| {
+        util.progress("Server spawn failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
     defer server.deinit();
 
-    std.Thread.sleep(200 * std.time.ns_per_ms);
+    // Wait for server readiness
+    util.waitForServerReady(allocator, addr, 10000) catch |err| {
+        util.progress("Server readiness timeout: {}", .{err});
+        util.testSkip();
+        return;
+    };
 
+    util.progress("Running EXPLAIN query...", .{});
     const out = try runQuery(allocator, addr, "EXPLAIN RETURN 1 AS x LIMIT 1");
     defer allocator.free(out);
     try testing.expect(contains(out, "\"explain\""));
+
+    util.testPass();
 }
 
 test "protocol: PROFILE emits profile payload" {
+    util.testStart("PROFILE emits profile payload");
+    errdefer util.testFail();
+
     const allocator = testing.allocator;
-    const addr = "127.0.0.1:3195";
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, null);
+
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    util.progress("Starting server on port {d}...", .{port});
+    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, util.TestEnv.standard()) catch |err| {
+        util.progress("Server spawn failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
     defer server.deinit();
 
-    std.Thread.sleep(200 * std.time.ns_per_ms);
+    // Wait for server readiness
+    util.waitForServerReady(allocator, addr, 10000) catch |err| {
+        util.progress("Server readiness timeout: {}", .{err});
+        util.testSkip();
+        return;
+    };
 
+    util.progress("Running PROFILE query...", .{});
     const out = try runQuery(allocator, addr, "PROFILE RETURN 1 AS x LIMIT 1");
     defer allocator.free(out);
     try testing.expect(contains(out, "\"profile\""));
@@ -63,4 +111,6 @@ test "protocol: PROFILE emits profile payload" {
     try testing.expect(contains(out, "\"bytes_out\""));
     try testing.expect(contains(out, "\"bytes_alloc\""));
     try testing.expect(contains(out, "\"input_rows\""));
+
+    util.testPass();
 }

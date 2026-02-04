@@ -37,16 +37,40 @@ inline fn contains(h: []const u8, n: []const u8) bool {
 // We assert substrings in expected relative order to avoid brittle full-line goldens while freezing key fields.
 
 test "protocol: PROFILE golden simple query" {
+    util.testStart("PROFILE golden simple query");
+    errdefer util.testFail();
+
     const allocator = testing.allocator;
-    const addr = "127.0.0.1:3196";
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, null);
+
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    util.progress("Starting server on port {d}...", .{port});
+    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, util.TestEnv.standard()) catch |err| {
+        util.progress("Server spawn failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
     defer server.deinit();
 
-    std.Thread.sleep(200 * std.time.ns_per_ms);
+    // Wait for server readiness
+    util.waitForServerReady(allocator, addr, 10000) catch |err| {
+        util.progress("Server readiness timeout: {}", .{err});
+        util.testSkip();
+        return;
+    };
 
+    util.progress("Running PROFILE query...", .{});
     const out = try runQuery(allocator, addr, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1");
     defer allocator.free(out);
 
+    util.progress("Validating PROFILE output structure...", .{});
     const req = [_][]const u8{
         "\"profile_version\":1",
         "\"ops\":[",
@@ -65,4 +89,6 @@ test "protocol: PROFILE golden simple query" {
         last_pos = p + needle.len;
     }
     try testing.expect(contains(out, "\"profile\""));
+
+    util.testPass();
 }

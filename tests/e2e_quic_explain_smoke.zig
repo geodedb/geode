@@ -1,8 +1,8 @@
 const std = @import("std");
+const util = @import("proto_test_util.zig");
 const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
 
-fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
-    const allocator = std.testing.allocator;
+fn run(allocator: std.mem.Allocator, args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     var argv = std.ArrayList([]const u8).init(allocator);
     defer argv.deinit(allocator);
     try argv.append(allocator, args[0]);
@@ -26,12 +26,25 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
 }
 
 test "quic: EXPLAIN schema then explain (smoke)" {
+    util.testStart("EXPLAIN schema then explain (smoke)");
+    errdefer util.testFail();
 
     const allocator = std.testing.allocator;
     const geode = "./zig-out/bin/geode";
 
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    util.progress("Starting server on port {d}...", .{port});
+
     // Start server in background with QUIC, exit after first request
-    var srv = Child.init(&.{ geode, "serve", "--listen", "127.0.0.1:7567", "--log-level", "info" }, allocator);
+    var srv = Child.init(&.{ geode, "serve", "--listen", addr, "--log-level", "info" }, allocator);
     srv.stdin_behavior = .Ignore;
     srv.stdout_behavior = .Inherit;
     srv.stderr_behavior = .Inherit;
@@ -41,19 +54,22 @@ test "quic: EXPLAIN schema then explain (smoke)" {
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
     srv.env_map = &env;
     try srv.spawn();
+    defer {
+        _ = srv.kill() catch {};
+        _ = srv.wait() catch {};
+    }
 
     // Small sleep to let server bind
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    std.time.sleep(500 * std.time.ns_per_ms);
 
+    util.progress("Running EXPLAIN query...", .{});
     // Client over QUIC targeting the server (QUIC is default, no --quic flag needed)
-    const res = try run(&.{ geode, "query", "EXPLAIN RETURN 1 AS x", "--format", "json", "--server", "127.0.0.1:7567", "--insecure" });
+    const res = try run(allocator, &.{ geode, "query", "EXPLAIN RETURN 1 AS x", "--format", "json", "--server", addr, "--insecure" });
     defer allocator.free(res.out);
     defer allocator.free(res.err);
 
-    // Terminate server gracefully
-    _ = srv.kill() catch {};
-    _ = srv.wait() catch {};
-
     try std.testing.expectEqual(@as(i32, 0), res.code);
     try std.testing.expect(std.mem.indexOf(u8, res.out, "\"explain\"") != null);
+
+    util.testPass();
 }

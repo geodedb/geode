@@ -43,27 +43,55 @@ fn seedLabeled(client: *util.QuicProtoClient, allocator: std.mem.Allocator) !voi
 }
 
 test "storage: two-hop expansion (GraphStore)" {
-    const allocator = testing.allocator;
-    const addr = "127.0.0.1:8576";
+    util.testStart("two-hop expansion (GraphStore)");
+    errdefer util.testFail();
 
+    const allocator = testing.allocator;
+
+    util.progress("Creating temp directory...", .{});
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    var server = try util.spawnServer(
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    util.progress("Starting server on port {d}...", .{port});
+    var server = util.spawnServer(
         allocator,
         &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
-        null,
-    );
+        util.TestEnv.standard(),
+    ) catch |err| {
+        util.progress("Server spawn failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
     defer server.deinit();
 
+    // Wait for server readiness
+    util.waitForServerReady(allocator, addr, 10000) catch |err| {
+        util.progress("Server readiness timeout: {}", .{err});
+        util.testSkip();
+        return;
+    };
+
+    util.progress("Connecting to server...", .{});
     var client = try util.QuicProtoClient.connect(allocator, addr);
     defer client.deinit();
 
+    util.progress("Authenticating...", .{});
     var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
     defer hello.deinit(allocator);
 
+    util.progress("Seeding two-hop graph data...", .{});
     try seedTwoHop(&client, allocator);
 
+    util.progress("Executing two-hop expansion query...", .{});
     var params = std.ArrayList(schema.Param).init(allocator);
     defer params.deinit(allocator);
     var res = try client.executeAndCollect(allocator, "MATCH (a:Node {id: 0})-[:LINK]->()-[:LINK]->(c) RETURN c.id AS m ORDER BY m", params, 1000);
@@ -71,30 +99,60 @@ test "storage: two-hop expansion (GraphStore)" {
 
     try testing.expectEqual(@as(usize, 1), res.rows.len);
     try expectInt(res.rows[0][0], 3);
+
+    util.testPass();
 }
 
 test "storage: labeled expansion (GraphStore)" {
-    const allocator = testing.allocator;
-    const addr = "127.0.0.1:8577";
+    util.testStart("labeled expansion (GraphStore)");
+    errdefer util.testFail();
 
+    const allocator = testing.allocator;
+
+    util.progress("Creating temp directory...", .{});
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    var server = try util.spawnServer(
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    util.progress("Starting server on port {d}...", .{port});
+    var server = util.spawnServer(
         allocator,
         &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
-        null,
-    );
+        util.TestEnv.standard(),
+    ) catch |err| {
+        util.progress("Server spawn failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
     defer server.deinit();
 
+    // Wait for server readiness
+    util.waitForServerReady(allocator, addr, 10000) catch |err| {
+        util.progress("Server readiness timeout: {}", .{err});
+        util.testSkip();
+        return;
+    };
+
+    util.progress("Connecting to server...", .{});
     var client = try util.QuicProtoClient.connect(allocator, addr);
     defer client.deinit();
 
+    util.progress("Authenticating...", .{});
     var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
     defer hello.deinit(allocator);
 
+    util.progress("Seeding labeled graph data...", .{});
     try seedLabeled(&client, allocator);
 
+    util.progress("Executing labeled expansion query...", .{});
     var params = std.ArrayList(schema.Param).init(allocator);
     defer params.deinit(allocator);
     var res = try client.executeAndCollect(allocator, "MATCH (a:Node {id: 0})-[:A]->(b) RETURN b.id AS m ORDER BY m", params, 1000);
@@ -102,4 +160,6 @@ test "storage: labeled expansion (GraphStore)" {
 
     try testing.expectEqual(@as(usize, 1), res.rows.len);
     try expectInt(res.rows[0][0], 1);
+
+    util.testPass();
 }

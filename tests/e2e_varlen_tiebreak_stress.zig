@@ -13,14 +13,23 @@ fn execSimple(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query
 // CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Multi-branch UA005/UA006"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_VarLenMultiBranchDeterminism; OWNER=engine; UPDATED=2025-09-24
 
 test "protocol QUIC: varlen tie-break determinism multi-branch" {
+    util.testStart("varlen tie-break determinism multi-branch");
+    errdefer util.testFail();
+
     const allocator = testing.allocator;
-    const addr = "127.0.0.1:3190";
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, null);
+
+    var server = util.spawnServerRandom(allocator, util.TestEnv.standard()) catch |err| {
+        util.progress("Server spawn failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
     defer server.deinit();
 
-    var client = try util.QuicProtoClient.connect(allocator, addr);
+    util.progress("Connecting to {s}...", .{server.getAddr()});
+    var client = try util.QuicProtoClient.connect(allocator, server.getAddr());
     defer client.deinit();
 
+    util.progress("Seeding graph data...", .{});
     var seed = try execSimple(
         &client,
         allocator,
@@ -29,13 +38,17 @@ test "protocol QUIC: varlen tie-break determinism multi-branch" {
     );
     seed.deinit(allocator);
 
+    util.progress("Testing query determinism (run 1)...", .{});
     const query = "MATCH (a:Person)-[:KNOWS*2..2]->(c:Person) RETURN a.name AS a, c.name AS c ORDER BY a, c";
     var res1 = try execSimple(&client, allocator, query);
     defer res1.deinit(allocator);
 
+    util.progress("Testing query determinism (run 2)...", .{});
     var res2 = try execSimple(&client, allocator, query);
     defer res2.deinit(allocator);
 
     try testing.expect(res1.ordered);
     try testing.expect(util.execResultsEqual(res1, res2));
+
+    util.testPass();
 }

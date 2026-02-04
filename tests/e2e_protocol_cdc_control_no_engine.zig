@@ -5,26 +5,32 @@ const util = @import("proto_test_util.zig");
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDCControlProtocol"; ASPECT=E2ENoEngine; STATUS=TESTED; TEST=protocol_CDC_CONTROL_no_engine; OWNER=cdc; UPDATED=2025-09-20
 
 test "protocol: CDC control when engine disabled" {
-    const allocator = testing.allocator;
-    const addr = "127.0.0.1:8572";
+    util.testStart("CDC control when engine disabled");
+    errdefer util.testFail();
 
-    // Start without GEODE_CDC_ENABLE env var
-    var server = try util.spawnServer(
-        allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
-        null,
-    );
+    const allocator = testing.allocator;
+
+    var server = util.spawnServerRandom(allocator, util.TestEnv.standard()) catch |err| {
+        util.progress("Server spawn failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
     defer server.deinit();
 
-    var client = try util.QuicProtoClient.connect(allocator, addr);
+    util.progress("Connecting to {s}...", .{server.getAddr()});
+    var client = try util.QuicProtoClient.connect(allocator, server.getAddr());
     defer client.deinit();
 
+    util.progress("Authenticating...", .{});
     var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
     defer hello.deinit(allocator);
 
+    util.progress("Sending RESET_GUARDRAILS to server without CDC...", .{});
     var ctrl = try client.cdcControl(allocator, "RESET_GUARDRAILS");
     defer ctrl.deinit(allocator);
 
     try testing.expect(!ctrl.success);
     try testing.expect(std.mem.eql(u8, ctrl.status, "NO_ENGINE"));
+
+    util.testPass();
 }

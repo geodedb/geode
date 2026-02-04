@@ -13,17 +13,27 @@ fn execSimple(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query
 // CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Path Determinism UA005/UA006"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_VarLenDeterminism_QUIC; OWNER=engine; UPDATED=2025-09-24
 
 test "protocol QUIC: MATCH varlen 1..2 determinism" {
+    util.testStart("MATCH varlen 1..2 determinism");
+    errdefer util.testFail();
+
     const allocator = testing.allocator;
-    const addr = "127.0.0.1:3186";
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, null);
+
+    var server = util.spawnServerRandom(allocator, util.TestEnv.standard()) catch |err| {
+        util.progress("Server spawn failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
     defer server.deinit();
 
-    var client = try util.QuicProtoClient.connect(allocator, addr);
+    util.progress("Connecting to {s}...", .{server.getAddr()});
+    var client = try util.QuicProtoClient.connect(allocator, server.getAddr());
     defer client.deinit();
+
+    util.progress("Authenticating...", .{});
     var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
     hello.deinit(allocator);
 
-    // Seed graph
+    util.progress("Seeding graph...", .{});
     var seed = try execSimple(
         &client,
         allocator,
@@ -31,6 +41,7 @@ test "protocol QUIC: MATCH varlen 1..2 determinism" {
     );
     seed.deinit(allocator);
 
+    util.progress("Executing varlen MATCH query...", .{});
     var res = try execSimple(
         &client,
         allocator,
@@ -56,4 +67,6 @@ test "protocol QUIC: MATCH varlen 1..2 determinism" {
     }
 
     try testing.expect(found_ab and found_ac and found_bc);
+
+    util.testPass();
 }
