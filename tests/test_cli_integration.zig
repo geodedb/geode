@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const builtin = @import("builtin");
+const cli_test_util = @import("cli_test_util.zig");
 const proto_util = @import("proto_test_util.zig");
 
 // Integration tests for unified CLI - testing actual process spawning and communication
@@ -79,22 +80,13 @@ test "geode query executes with configured server" {
     defer server.deinit();
     const addr = server.getAddr();
 
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 1 AS x", "--server", addr, "--insecure" }, testing.allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
+    const res = try cli_test_util.runAgainstServer(testing.allocator, addr, &.{ "./zig-out/bin/geode", "query", "RETURN 1 AS x" });
+    defer testing.allocator.free(res.out);
+    defer testing.allocator.free(res.err);
 
-    try child.spawn();
-    const result = try child.wait();
-
-    try testing.expect(result == .Exited);
-    try testing.expect(result.Exited == 0);
-
+    try testing.expectEqual(@as(i32, 0), res.code);
     // Check for expected JSON response structure in stdout if available
-    if (child.stdout) |stdout_pipe| {
-        const stdout = try stdout_pipe.readToEndAlloc(testing.allocator, 1024 * 1024);
-        defer testing.allocator.free(stdout);
-        try testing.expect(std.mem.indexOf(u8, stdout, "\"x\":1") != null);
-    }
+    try testing.expect(std.mem.indexOf(u8, res.out, "\"x\":1") != null);
 }
 
 test "geode shell command exists" {
@@ -175,25 +167,17 @@ test "query responds to basic query" {
     const addr = server.getAddr();
 
     // Test basic query execution against configured server
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 'hello' AS greeting", "--server", addr, "--insecure", "--format", "json" }, testing.allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
+    const res = try cli_test_util.runAgainstServer(testing.allocator, addr, &.{ "./zig-out/bin/geode", "query", "RETURN 'hello' AS greeting", "--format", "json" });
+    defer testing.allocator.free(res.out);
+    defer testing.allocator.free(res.err);
 
-    try child.spawn();
-    const result = try child.wait();
-
-    try testing.expect(result == .Exited);
-    try testing.expect(result.Exited == 0);
+    try testing.expectEqual(@as(i32, 0), res.code);
 
     // Check for expected response in stdout if available
-    if (child.stdout) |stdout_pipe| {
-        const stdout = try stdout_pipe.readToEndAlloc(testing.allocator, 1024 * 1024);
-        defer testing.allocator.free(stdout);
-        try testing.expect(std.mem.indexOf(u8, stdout, "\"columns\"") != null);
-        try testing.expect(std.mem.indexOf(u8, stdout, "\"rows\"") != null);
-        try testing.expect(std.mem.indexOf(u8, stdout, "\"status_class\"") != null);
-        try testing.expect(std.mem.indexOf(u8, stdout, "greeting") != null);
-    }
+    try testing.expect(std.mem.indexOf(u8, res.out, "\"columns\"") != null);
+    try testing.expect(std.mem.indexOf(u8, res.out, "\"rows\"") != null);
+    try testing.expect(std.mem.indexOf(u8, res.out, "\"status_class\"") != null);
+    try testing.expect(std.mem.indexOf(u8, res.out, "greeting") != null);
 }
 
 test "query error handling for invalid syntax" {
@@ -204,21 +188,12 @@ test "query error handling for invalid syntax" {
     const addr = server.getAddr();
 
     // Test error handling with invalid syntax
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "SELECT * FROM nonexistent_table", "--server", addr, "--insecure" }, testing.allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
+    const res = try cli_test_util.runAgainstServer(testing.allocator, addr, &.{ "./zig-out/bin/geode", "query", "SELECT * FROM nonexistent_table" });
+    defer testing.allocator.free(res.out);
+    defer testing.allocator.free(res.err);
 
-    try child.spawn();
-    const result = try child.wait();
-
-    try testing.expect(result == .Exited);
-    try testing.expect(result.Exited != 0);
-
-    if (child.stderr) |stderr_pipe| {
-        const stderr = try stderr_pipe.readToEndAlloc(testing.allocator, 1024 * 1024);
-        defer testing.allocator.free(stderr);
-        try testing.expect(std.mem.indexOf(u8, stderr, "Error") != null);
-    }
+    try testing.expect(res.code != 0);
+    try testing.expect(std.mem.indexOf(u8, res.err, "Error") != null);
 }
 
 test "process argument forwarding" {
@@ -229,22 +204,13 @@ test "process argument forwarding" {
     const addr = server.getAddr();
 
     // Test that arguments are properly forwarded to configured server
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 42 AS answer", "--server", addr, "--insecure", "--format", "json" }, testing.allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
+    const res = try cli_test_util.runAgainstServer(testing.allocator, addr, &.{ "./zig-out/bin/geode", "query", "RETURN 42 AS answer", "--format", "json" });
+    defer testing.allocator.free(res.out);
+    defer testing.allocator.free(res.err);
 
-    try child.spawn();
-    const result = try child.wait();
-
-    try testing.expect(result == .Exited);
-    try testing.expect(result.Exited == 0);
-
-    // For JSON format, expect the number 42 in stdout if available
-    if (child.stdout) |stdout_pipe| {
-        const stdout = try stdout_pipe.readToEndAlloc(testing.allocator, 1024 * 1024);
-        defer testing.allocator.free(stdout);
-        try testing.expect(std.mem.indexOf(u8, stdout, "42") != null);
-    }
+    try testing.expectEqual(@as(i32, 0), res.code);
+    // For JSON format, expect the number 42 in stdout
+    try testing.expect(std.mem.indexOf(u8, res.out, "42") != null);
 }
 
 test "concurrent query execution" {
@@ -263,7 +229,18 @@ test "concurrent query execution" {
         const query = try std.fmt.allocPrint(testing.allocator, "RETURN {d} AS id", .{i});
         defer testing.allocator.free(query);
 
-        child.* = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", query, "--server", addr, "--insecure" }, testing.allocator);
+        child.* = std.process.Child.init(&.{
+            "./zig-out/bin/geode",
+            "query",
+            query,
+            "--server",
+            addr,
+            "--insecure",
+            "--user",
+            proto_util.defaultUsername(),
+            "--password",
+            proto_util.defaultPassword(),
+        }, testing.allocator);
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
 

@@ -1,19 +1,13 @@
 const std = @import("std");
+const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
-const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
 const util = @import("proto_test_util.zig");
 
 fn runOne(allocator: std.mem.Allocator, server: []const u8, query: []const u8) ![]u8 {
-    var child = Child.init(&.{ "./zig-out/bin/geode", "query", query, "--server", server, "--format", "json" }, allocator);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-    const stdout = try child.stdout.?.readToEndAlloc(allocator, 1 << 20);
-    _ = try child.stderr.?.readToEndAlloc(allocator, 1 << 16);
-    const term = try child.wait();
-    try testing.expect(term == .Exited and term.Exited == 0);
-    return stdout;
+    const res = try cli_test_util.runAgainstServer(allocator, server, &.{ "./zig-out/bin/geode", "query", query, "--format", "json" });
+    defer allocator.free(res.err);
+    try testing.expectEqual(@as(i32, 0), res.code);
+    return res.out;
 }
 
 // Simple aggregation query: RETURN a, COUNT(*) GROUP BY a ORDER BY a
@@ -25,33 +19,9 @@ test "group by basic non-profile" {
 
     const allocator = testing.allocator;
 
-    // Get random port
-    const port = util.getRandomPort() catch |err| {
-        util.progress("Port allocation failed: {}", .{err});
-        util.testSkip();
-        return;
-    };
-    const addr = try util.formatAddr(allocator, port);
-    defer allocator.free(addr);
-
-    util.progress("Starting server on port {d}...", .{port});
-
-    var env = try std.process.getEnvMap(allocator);
-    defer env.deinit();
-    try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
-
-    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", addr }, allocator);
-    server.stdin_behavior = .Ignore;
-    server.stdout_behavior = .Pipe;
-    server.stderr_behavior = .Pipe;
-    server.env_map = &env;
-    try server.spawn();
-    defer {
-        _ = server.kill() catch {};
-        _ = server.wait() catch {};
-    }
-
-    std.time.sleep(200 * std.time.ns_per_ms);
+    var server = try util.spawnServerRandom(allocator, &.{ "GEODE_QUIC_PASSIVE_TEARDOWN=1" });
+    defer server.deinit();
+    const addr = server.getAddr();
 
     util.progress("Running GROUP BY query...", .{});
     const out = try runOne(allocator, addr, "RETURN 1 AS a, COUNT(*) AS c GROUP BY a ORDER BY a LIMIT 10");

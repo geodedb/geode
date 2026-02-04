@@ -1,30 +1,12 @@
 const std = @import("std");
-const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
+const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
 
 const RunResult = struct { code: i32, out: []u8, err: []u8 };
 
-fn run(allocator: std.mem.Allocator, args: []const []const u8) !RunResult {
-    var argv = std.ArrayList([]const u8).init(allocator);
-    defer argv.deinit();
-    try argv.append(args[0]);
-    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
-        try argv.append("query");
-    }
-    try argv.appendSlice(args[1..]);
-    var child = Child.init(argv.items, allocator);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-    const out = try child.stdout.?.readToEndAlloc(allocator, 4 << 20);
-    const err = try child.stderr.?.readToEndAlloc(allocator, 1 << 20);
-    const term = try child.wait();
-    const code: i32 = switch (term) {
-        .Exited => |st| st,
-        else => 2,
-    };
-    return .{ .code = code, .out = out, .err = err };
+fn run(allocator: std.mem.Allocator, addr: []const u8, args: []const []const u8) !RunResult {
+    const res = try cli_test_util.runAgainstServer(allocator, addr, args);
+    return .{ .code = res.code, .out = res.out, .err = res.err };
 }
 
 fn extract_rows(allocator: std.mem.Allocator, out: []const u8) ![]u8 {
@@ -49,36 +31,12 @@ test "protocol: transport parity MATCH varlen rows QUIC (gated)" {
     // The query orders by projected names to ensure stable order metadata and rows.
     const q = "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name AS a, b.name AS b ORDER BY a, b LIMIT 3 OFFSET 0";
 
-    // Get random port
-    const port = util.getRandomPort() catch |err| {
-        util.progress("Port allocation failed: {}", .{err});
-        util.testSkip();
-        return;
-    };
-    const addr = try util.formatAddr(allocator, port);
-    defer allocator.free(addr);
-
-    util.progress("Starting server on port {d}...", .{port});
-
-    var env = try std.process.getEnvMap(allocator);
-    defer env.deinit();
-    try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
-
-    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", addr }, allocator);
-    server.stdin_behavior = .Ignore;
-    server.stdout_behavior = .Pipe;
-    server.stderr_behavior = .Pipe;
-    server.env_map = &env;
-    try server.spawn();
-    defer {
-        _ = server.kill() catch {};
-        _ = server.wait() catch {};
-    }
-
-    std.time.sleep(400 * std.time.ns_per_ms);
+    var server = try util.spawnServerRandom(allocator, &.{ "GEODE_QUIC_PASSIVE_TEARDOWN=1" });
+    defer server.deinit();
+    const addr = server.getAddr();
 
     util.progress("Running first query...", .{});
-    const qres = try run(allocator, &.{ exe, q, "--server", addr, "--format", "json" });
+    const qres = try run(allocator, addr, &.{ exe, q, "--format", "json" });
     defer allocator.free(qres.out);
     defer allocator.free(qres.err);
     try std.testing.expectEqual(@as(i32, 0), qres.code);
@@ -86,7 +44,7 @@ test "protocol: transport parity MATCH varlen rows QUIC (gated)" {
     defer allocator.free(qrows);
 
     util.progress("Running second query...", .{});
-    const qres2 = try run(allocator, &.{ exe, q, "--server", addr, "--format", "json" });
+    const qres2 = try run(allocator, addr, &.{ exe, q, "--format", "json" });
     defer allocator.free(qres2.out);
     defer allocator.free(qres2.err);
     try std.testing.expectEqual(@as(i32, 0), qres2.code);

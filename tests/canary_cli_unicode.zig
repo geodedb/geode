@@ -1,23 +1,13 @@
 const std = @import("std");
-
-const Child = std.process.Child;
+const cli_test_util = @import("cli_test_util.zig");
+const proto_test_util = @import("proto_test_util.zig");
 
 fn run(argv: []const []const u8, allocator: std.mem.Allocator) !struct { code: u8, out: []u8, err: []u8 } {
-    var child = Child.init(argv, allocator);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-    var stdout_stream = child.stdout.?.reader();
-    var stderr_stream = child.stderr.?.reader();
-    var out_buf = std.ArrayList(u8).init(allocator);
-    defer out_buf.deinit();
-    var err_buf = std.ArrayList(u8).init(allocator);
-    defer err_buf.deinit();
-    try stdout_stream.stream.readAllArrayList(&out_buf, 1 << 16);
-    try stderr_stream.stream.readAllArrayList(&err_buf, 1 << 16);
-    const term = try child.wait();
-    return .{ .code = @intCast(term.Exited), .out = try out_buf.toOwnedSlice(), .err = try err_buf.toOwnedSlice() };
+    var server = try proto_test_util.spawnServerRandom(allocator, proto_test_util.TestEnv.standard());
+    defer server.deinit();
+
+    const res = try cli_test_util.runAgainstServer(allocator, server.getAddr(), argv);
+    return .{ .code = @intCast(res.code), .out = res.out, .err = res.err };
 }
 
 // Test normalization flag: Provide decomposed form of "é" and ensure query executes (RETURN statement) with no error frames.
@@ -28,7 +18,7 @@ test "TestCANARY_ClientCli_NormalizeNfc" {
     defer _ = gpa.deinit();
     // Decomposed e + combining acute U+0065 U+0301
     const decomposed = "RETURN 'e\xCC\x81' AS v LIMIT 1"; // LIMIT to force schema+bindings
-    const res = try run(&.{ "./zig-out/bin/geode", decomposed", "--normalize-nfc" }, gpa.allocator());
+    const res = try run(&.{ "./zig-out/bin/geode", decomposed, "--normalize-nfc" }, gpa.allocator());
     defer gpa.allocator().free(res.out);
     defer gpa.allocator().free(res.err);
     try std.testing.expectEqual(@as(u8, 0), res.code);
@@ -42,7 +32,7 @@ test "TestCANARY_ClientCli_FoldCase" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const q = "RETURN 'Stra\xC3\x9Fe' AS v LIMIT 1"; // Straße
-    const res = try run(&.{ "./zig-out/bin/geode", q", "--fold-case" }, gpa.allocator());
+    const res = try run(&.{ "./zig-out/bin/geode", q, "--fold-case" }, gpa.allocator());
     defer gpa.allocator().free(res.out);
     defer gpa.allocator().free(res.err);
     try std.testing.expectEqual(@as(u8, 0), res.code);
@@ -59,7 +49,7 @@ test "TestCANARY_ClientCli_Utf16Input" {
     // RETURN 1 AS x  encoded as hexadecimal 16-bit units. This exercises the decode path; successful execution implies
     // the units were converted to a valid UTF-8 query prior to send.
     const utf16_return = "0052 0045 0054 0055 0052 004E 0020 0031 0020 0041 0053 0020 0078"; // "RETURN 1 AS x"
-    const res = try run(&.{ "./zig-out/bin/geode", utf16_return", "--utf16-input" }, gpa.allocator());
+    const res = try run(&.{ "./zig-out/bin/geode", utf16_return, "--utf16-input" }, gpa.allocator());
     defer gpa.allocator().free(res.out);
     defer gpa.allocator().free(res.err);
     try std.testing.expectEqual(@as(u8, 0), res.code);
