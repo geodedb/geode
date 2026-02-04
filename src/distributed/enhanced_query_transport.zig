@@ -7,6 +7,8 @@ const Allocator = std.mem.Allocator;
 const network_transport = @import("network_transport.zig");
 const NetworkTransport = network_transport.NetworkTransport;
 const ClusterMessage = network_transport.ClusterMessage;
+const protobuf = @import("protobuf");
+const dist_schema = @import("distributed_schema");
 const query_coordinator = @import("query_coordinator.zig");
 const raft_consensus = @import("raft_consensus.zig");
 const txn_coordinator = @import("txn_coordinator.zig");
@@ -15,39 +17,11 @@ const logging = @import("logging");
 const log = logging.scoped("enhanced_query_transport");
 const Attr = logging.Attr;
 
-/// Enhanced query message types for distributed execution
-pub const QueryMessageType = enum(u8) {
-    execute_fragment = 20, // Start after existing cluster message types
-    fragment_result = 21,
-    query_cancel = 22,
-    shard_heartbeat = 23,
-    shard_registration = 24,
-    query_plan_request = 25,
-    query_plan_response = 26,
-    cross_shard_join = 27,
-    aggregate_partial = 28,
-    coordinator_merge = 29,
-};
-
-/// Query execution message for cross-shard operations
-pub const QueryMessage = struct {
-    msg_type: QueryMessageType,
-    query_id: u64,
-    fragment_id: u64,
-    shard_id: u64,
-    timestamp: i64,
-    payload: []const u8, // JSON-encoded query data
-    metadata: QueryMetadata,
-
-    pub const QueryMetadata = struct {
-        estimated_rows: u64,
-        memory_limit_mb: u64,
-        timeout_ms: u64,
-        priority: enum { low, normal, high, critical },
-        requires_transaction: bool,
-        isolation_level: enum { read_uncommitted, read_committed, repeatable_read, serializable },
-    };
-};
+const QueryMessageType = dist_schema.QueryMessageType;
+const QueryMessage = dist_schema.QueryMessage;
+const QueryMetadata = dist_schema.QueryMetadata;
+const ProtoQueryFragment = dist_schema.QueryFragment;
+const ProtoQueryResult = dist_schema.QueryResult;
 
 /// Enhanced query transport with network integration
 pub const EnhancedQueryTransport = struct {
@@ -230,21 +204,34 @@ pub const EnhancedQueryTransport = struct {
     fn sendFragmentToShard(self: *EnhancedQueryTransport, query_id: u64, fragment: QueryFragment) !void {
         const shard = try self.shard_registry.getShard(fragment.shard_id);
 
+        var deps = std.ArrayList(u64).init(self.allocator);
+        defer deps.deinit();
+        try deps.appendSlice(fragment.dependencies);
+
+        const proto_fragment = ProtoQueryFragment{
+            .fragment_id = fragment.fragment_id,
+            .shard_id = fragment.shard_id,
+            .query_text = fragment.query_text,
+            .dependencies = deps,
+            .result_schema = fragment.result_schema,
+            .estimated_rows = fragment.estimated_rows,
+        };
+
         // Create query message
         const query_msg = QueryMessage{
-            .msg_type = .execute_fragment,
+            .msg_type = .EXECUTE_FRAGMENT,
             .query_id = query_id,
             .fragment_id = fragment.fragment_id,
             .shard_id = fragment.shard_id,
             .timestamp = std.time.milliTimestamp(),
-            .payload = try self.serializeFragment(fragment),
-            .metadata = QueryMessage.QueryMetadata{
+            .fragment = proto_fragment,
+            .metadata = QueryMetadata{
                 .estimated_rows = fragment.estimated_rows,
                 .memory_limit_mb = 256,
                 .timeout_ms = self.config.message_timeout_ms,
-                .priority = .normal,
+                .priority = .NORMAL,
                 .requires_transaction = false,
-                .isolation_level = .read_committed,
+                .isolation_level = .READ_COMMITTED,
             },
         };
 
@@ -485,68 +472,61 @@ pub const EnhancedQueryTransport = struct {
     }
 
     // Helper functions for message handling and type conversion
-    /// Serialize a QueryFragment to JSON for distributed transport
+    /// Serialize a QueryFragment to protobuf for distributed transport
     // CANARY: REQ=REQ-DIST-FRAG-001; FEATURE="Fragment Serialization"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
-    /// GAP-0162: Implements actual fragment serialization using JSON encoding
-    fn serializeFragment(self: *EnhancedQueryTransport, fragment: QueryFragment) ![]u8 {
-        // Build a serializable representation that handles slices properly
-        const SerializableFragment = struct {
-            fragment_id: u64,
-            shard_id: u64,
-            query_text: []const u8,
-            dependencies: []const u64,
-            result_schema: []const u8,
-            estimated_rows: u64,
-        };
+    /// GAP-0162: Implements fragment serialization using protobuf encoding
+    fn serializeFragment(allocator: Allocator, fragment: QueryFragment) ![]u8 {
+        var deps = std.ArrayList(u64).init(allocator);
+        defer deps.deinit();
+        try deps.appendSlice(fragment.dependencies);
 
-        const serializable = SerializableFragment{
+        const proto_fragment = ProtoQueryFragment{
             .fragment_id = fragment.fragment_id,
             .shard_id = fragment.shard_id,
             .query_text = fragment.query_text,
-            .dependencies = fragment.dependencies,
+            .dependencies = deps,
             .result_schema = fragment.result_schema,
             .estimated_rows = fragment.estimated_rows,
         };
 
-        return try std.json.stringifyAlloc(self.allocator, serializable, .{});
+        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 256);
+        defer aw.deinit();
+        try protobuf.encode(&aw.writer, allocator, proto_fragment);
+        const body = aw.writer.buffer[0..aw.writer.end];
+        return allocator.dupe(u8, body);
     }
 
-    /// Deserialize a QueryFragment from JSON for distributed transport
+    /// Deserialize a QueryFragment from protobuf for distributed transport
     // CANARY: REQ=REQ-DIST-FRAG-002; FEATURE="Fragment Deserialization"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
-    /// GAP-0162: Implements actual fragment deserialization from JSON
-    fn deserializeFragment(self: *EnhancedQueryTransport, data: []const u8) !QueryFragment {
-        const ParsedFragment = struct {
-            fragment_id: u64,
-            shard_id: u64,
-            query_text: []const u8,
-            dependencies: []const u64,
-            result_schema: []const u8,
-            estimated_rows: u64,
-        };
+    /// GAP-0162: Implements fragment deserialization from protobuf
+    fn deserializeFragment(allocator: Allocator, data: []const u8) !QueryFragment {
+        var reader: std.Io.Reader = .fixed(data);
+        var parsed = try protobuf.decode(ProtoQueryFragment, &reader, allocator);
+        defer parsed.deinit(allocator);
 
-        const parsed = try std.json.parseFromSlice(ParsedFragment, self.allocator, data, .{});
-        defer parsed.deinit();
-
-        // Copy the data into allocator-owned memory
-        const query_text = try self.allocator.dupe(u8, parsed.value.query_text);
-        const dependencies = try self.allocator.dupe(u64, parsed.value.dependencies);
-        const result_schema = try self.allocator.dupe(u8, parsed.value.result_schema);
+        const query_text = try allocator.dupe(u8, parsed.query_text);
+        const dependencies = try allocator.dupe(u64, parsed.dependencies.items);
+        const result_schema = try allocator.dupe(u8, parsed.result_schema);
 
         return QueryFragment{
-            .fragment_id = parsed.value.fragment_id,
-            .shard_id = parsed.value.shard_id,
+            .fragment_id = parsed.fragment_id,
+            .shard_id = parsed.shard_id,
             .query_text = query_text,
             .dependencies = dependencies,
             .result_schema = result_schema,
-            .estimated_rows = parsed.value.estimated_rows,
+            .estimated_rows = parsed.estimated_rows,
         };
     }
 
     fn convertToClusterMessage(self: *EnhancedQueryTransport, query_msg: QueryMessage, dest_node: u32) !ClusterMessage {
-        const payload = try std.json.stringifyAlloc(self.allocator, query_msg, .{});
+        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 512);
+        defer aw.deinit();
+        try protobuf.encode(&aw.writer, self.allocator, query_msg);
+        const body = aw.writer.buffer[0..aw.writer.end];
+        const payload = try self.allocator.dupe(u8, body);
 
         return ClusterMessage{
-            .msg_type = .client_request, // Reuse existing cluster message type
+            .msg_type = .CLIENT_REQUEST, // Reuse existing cluster message type
             .source_node = self.network_transport.node_id,
             .dest_node = dest_node,
             .term = 0,
@@ -970,24 +950,9 @@ fn handleCoordinatorMerge(transport: *EnhancedQueryTransport, message: *const Qu
 // CANARY: REQ=REQ-DIST-FRAG-003; FEATURE="Fragment Serialization Tests"; ASPECT=Testing; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
 // GAP-0162: Tests for fragment serialization/deserialization
 
-test "serializeFragment produces valid JSON" {
+test "serializeFragment produces protobuf payload" {
     const allocator = std.testing.allocator;
 
-    // Create minimal test infrastructure
-    var net_transport = try NetworkTransport.init(allocator, .{
-        .node_id = 1,
-        .bind_address = "127.0.0.1",
-        .bind_port = 9000,
-    });
-    defer net_transport.deinit();
-
-    var coordinator = try query_coordinator.QueryCoordinator.init(allocator, &net_transport);
-    defer coordinator.deinit();
-
-    var transport = try EnhancedQueryTransport.init(allocator, &net_transport, &coordinator);
-    defer transport.deinit();
-
-    // Create a test fragment
     const deps = [_]u64{ 1, 2, 3 };
     const fragment = QueryFragment{
         .fragment_id = 42,
@@ -998,74 +963,60 @@ test "serializeFragment produces valid JSON" {
         .estimated_rows = 1000,
     };
 
-    // Serialize the fragment
-    const json = try transport.serializeFragment(fragment);
-    defer allocator.free(json);
+    const payload = try EnhancedQueryTransport.serializeFragment(allocator, fragment);
+    defer allocator.free(payload);
+    try std.testing.expect(payload.len > 0);
 
-    // Verify JSON contains expected fields
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"fragment_id\":42") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"shard_id\":7") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"query_text\":\"MATCH (n) RETURN n\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"estimated_rows\":1000") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"result_schema\":\"n:Node\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"dependencies\":[1,2,3]") != null);
+    const recovered = try EnhancedQueryTransport.deserializeFragment(allocator, payload);
+    defer {
+        allocator.free(recovered.query_text);
+        allocator.free(recovered.dependencies);
+        allocator.free(recovered.result_schema);
+    }
+
+    try std.testing.expectEqual(fragment.fragment_id, recovered.fragment_id);
+    try std.testing.expectEqual(fragment.shard_id, recovered.shard_id);
+    try std.testing.expectEqualStrings(fragment.query_text, recovered.query_text);
+    try std.testing.expectEqual(fragment.dependencies.len, recovered.dependencies.len);
+    try std.testing.expectEqualStrings(fragment.result_schema, recovered.result_schema);
+    try std.testing.expectEqual(fragment.estimated_rows, recovered.estimated_rows);
 }
 
 test "deserializeFragment recovers fragment data" {
     const allocator = std.testing.allocator;
 
-    var net_transport = try NetworkTransport.init(allocator, .{
-        .node_id = 1,
-        .bind_address = "127.0.0.1",
-        .bind_port = 9001,
-    });
-    defer net_transport.deinit();
+    const deps = [_]u64{ 10, 20 };
+    const fragment = QueryFragment{
+        .fragment_id = 99,
+        .shard_id = 5,
+        .query_text = "RETURN 1",
+        .dependencies = &deps,
+        .result_schema = "x:Int",
+        .estimated_rows = 50,
+    };
 
-    var coordinator = try query_coordinator.QueryCoordinator.init(allocator, &net_transport);
-    defer coordinator.deinit();
+    const payload = try EnhancedQueryTransport.serializeFragment(allocator, fragment);
+    defer allocator.free(payload);
 
-    var transport = try EnhancedQueryTransport.init(allocator, &net_transport, &coordinator);
-    defer transport.deinit();
-
-    // JSON data to deserialize
-    const json =
-        \\{"fragment_id":99,"shard_id":5,"query_text":"RETURN 1","dependencies":[10,20],"result_schema":"x:Int","estimated_rows":50}
-    ;
-
-    // Deserialize the fragment
-    const fragment = try transport.deserializeFragment(json);
+    const recovered = try EnhancedQueryTransport.deserializeFragment(allocator, payload);
     defer {
-        allocator.free(fragment.query_text);
-        allocator.free(fragment.dependencies);
-        allocator.free(fragment.result_schema);
+        allocator.free(recovered.query_text);
+        allocator.free(recovered.dependencies);
+        allocator.free(recovered.result_schema);
     }
 
-    // Verify fields match
-    try std.testing.expectEqual(@as(u64, 99), fragment.fragment_id);
-    try std.testing.expectEqual(@as(u64, 5), fragment.shard_id);
-    try std.testing.expectEqualStrings("RETURN 1", fragment.query_text);
-    try std.testing.expectEqual(@as(usize, 2), fragment.dependencies.len);
-    try std.testing.expectEqual(@as(u64, 10), fragment.dependencies[0]);
-    try std.testing.expectEqual(@as(u64, 20), fragment.dependencies[1]);
-    try std.testing.expectEqualStrings("x:Int", fragment.result_schema);
-    try std.testing.expectEqual(@as(u64, 50), fragment.estimated_rows);
+    try std.testing.expectEqual(@as(u64, 99), recovered.fragment_id);
+    try std.testing.expectEqual(@as(u64, 5), recovered.shard_id);
+    try std.testing.expectEqualStrings("RETURN 1", recovered.query_text);
+    try std.testing.expectEqual(@as(usize, 2), recovered.dependencies.len);
+    try std.testing.expectEqual(@as(u64, 10), recovered.dependencies[0]);
+    try std.testing.expectEqual(@as(u64, 20), recovered.dependencies[1]);
+    try std.testing.expectEqualStrings("x:Int", recovered.result_schema);
+    try std.testing.expectEqual(@as(u64, 50), recovered.estimated_rows);
 }
 
 test "serializeFragment round-trip preserves data" {
     const allocator = std.testing.allocator;
-
-    var net_transport = try NetworkTransport.init(allocator, .{
-        .node_id = 1,
-        .bind_address = "127.0.0.1",
-        .bind_port = 9002,
-    });
-    defer net_transport.deinit();
-
-    var coordinator = try query_coordinator.QueryCoordinator.init(allocator, &net_transport);
-    defer coordinator.deinit();
-
-    var transport = try EnhancedQueryTransport.init(allocator, &net_transport, &coordinator);
-    defer transport.deinit();
 
     // Create original fragment
     const deps = [_]u64{ 100, 200, 300 };
@@ -1079,10 +1030,10 @@ test "serializeFragment round-trip preserves data" {
     };
 
     // Serialize then deserialize
-    const json = try transport.serializeFragment(original);
-    defer allocator.free(json);
+    const payload = try EnhancedQueryTransport.serializeFragment(allocator, original);
+    defer allocator.free(payload);
 
-    const recovered = try transport.deserializeFragment(json);
+    const recovered = try EnhancedQueryTransport.deserializeFragment(allocator, payload);
     defer {
         allocator.free(recovered.query_text);
         allocator.free(recovered.dependencies);
@@ -1104,19 +1055,6 @@ test "serializeFragment round-trip preserves data" {
 test "serializeFragment handles empty dependencies" {
     const allocator = std.testing.allocator;
 
-    var net_transport = try NetworkTransport.init(allocator, .{
-        .node_id = 1,
-        .bind_address = "127.0.0.1",
-        .bind_port = 9003,
-    });
-    defer net_transport.deinit();
-
-    var coordinator = try query_coordinator.QueryCoordinator.init(allocator, &net_transport);
-    defer coordinator.deinit();
-
-    var transport = try EnhancedQueryTransport.init(allocator, &net_transport, &coordinator);
-    defer transport.deinit();
-
     // Create fragment with no dependencies
     const fragment = QueryFragment{
         .fragment_id = 1,
@@ -1127,14 +1065,10 @@ test "serializeFragment handles empty dependencies" {
         .estimated_rows = 1,
     };
 
-    const json = try transport.serializeFragment(fragment);
-    defer allocator.free(json);
+    const payload = try EnhancedQueryTransport.serializeFragment(allocator, fragment);
+    defer allocator.free(payload);
 
-    // Verify empty dependencies array
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"dependencies\":[]") != null);
-
-    // Round-trip test
-    const recovered = try transport.deserializeFragment(json);
+    const recovered = try EnhancedQueryTransport.deserializeFragment(allocator, payload);
     defer {
         allocator.free(recovered.query_text);
         allocator.free(recovered.dependencies);

@@ -1,90 +1,23 @@
 const std = @import("std");
-const Random = std.Random;
 
 // CANARY: REQ=REQ-PERF-SPICE-009; FEATURE="SpiceIntegration"; ASPECT=ExecutionPool; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
 const spice_wrapper = @import("parallel/spice");
 const SpicePool = spice_wrapper.SpicePool;
 
-// Parallel execution thread pool with work-stealing scheduler
-// CANARY: REQ=REQ-GQL-PARALLEL-001; FEATURE="Parallel Exec"; ASPECT=ENGINE; STATUS=TESTED; TEST=tests/e2e_parallel_execution.zig:1; BENCH=tests/benchmark_parallel_expand_mem_perf.zig:1; OWNER=engine; UPDATED=2025-09-26
-
-// Work-stealing scheduler with adaptive chunk sizing and pipelined parallel joins
+// Parallel execution pool backed by spice fork/join
+// CANARY: REQ=REQ-GQL-PARALLEL-001; FEATURE="Parallel Exec"; ASPECT=ENGINE; STATUS=TESTED; TEST=tests/e2e_parallel_execution.zig:1; BENCH=tests/benchmark_parallel_expand_mem_perf.zig:1; OWNER=engine; UPDATED=2026-02-04
 
 pub const JobFn = *const fn (ctx: ?*anyopaque) void;
 pub const Job = struct {
     func: JobFn,
     ctx: ?*anyopaque,
-    priority: u8 = 0, // 0=normal, 1=high
-    chunk_size: ?usize = null, // adaptive chunk size hint
-};
-
-// Work-stealing deque for each worker
-pub const WorkStealingDeque = struct {
-    jobs: std.ArrayListUnmanaged(Job),
-    mutex: std.Thread.Mutex = .{},
-    top: std.atomic.Value(i32) = std.atomic.Value(i32).init(0),
-    bottom: std.atomic.Value(i32) = std.atomic.Value(i32).init(0),
-
-    pub fn push(self: *WorkStealingDeque, allocator: std.mem.Allocator, job: Job) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        try self.jobs.append(allocator, job);
-        _ = self.bottom.fetchAdd(1, .release);
-    }
-
-    pub fn pop(self: *WorkStealingDeque) ?Job {
-        const b = self.bottom.fetchSub(1, .acquire) - 1;
-        const t = self.top.load(.acquire);
-
-        if (t <= b) {
-            // Non-empty
-            if (t == b) {
-                // Last element - need CAS
-                if (self.top.cmpxchgWeak(t, t + 1, .acq_rel, .acquire) != null) {
-                    // Failed race
-                    _ = self.bottom.fetchAdd(1, .release);
-                    return null;
-                }
-            }
-            self.mutex.lock();
-            defer self.mutex.unlock();
-            if (b >= 0 and b < self.jobs.items.len) {
-                return self.jobs.items[@intCast(b)];
-            }
-        } else {
-            // Empty
-            _ = self.bottom.fetchAdd(1, .release);
-        }
-        return null;
-    }
-
-    pub fn steal(self: *WorkStealingDeque) ?Job {
-        const t = self.top.load(.acquire);
-        const b = self.bottom.load(.acquire);
-
-        if (t < b) {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            // Try to steal from top
-            if (self.top.cmpxchgWeak(t, t + 1, .acq_rel, .acquire) == null) {
-                if (t >= 0 and t < self.jobs.items.len) {
-                    return self.jobs.items[@intCast(t)];
-                }
-            }
-        }
-        return null;
-    }
-
-    pub fn deinit(self: *WorkStealingDeque, allocator: std.mem.Allocator) void {
-        self.jobs.deinit(allocator);
-    }
+    priority: u8 = 0, // retained for API compatibility
+    chunk_size: ?usize = null,
 };
 
 // Deterministic parallel map: splits input slice into chunks, schedules jobs that
 // apply workerFn(element_index, element_ptr, user_ctx) and stores results in order.
-// Falls back to serial if pool disabled. Caller owns result allocation lifecycle.
-pub const MapResult = struct { items: []u8 }; // placeholder generic-less container
+pub const MapResult = struct { items: []u8 };
 
 pub fn parallelMap(
     allocator: std.mem.Allocator,
@@ -97,112 +30,85 @@ pub fn parallelMap(
     if (src_count == 0) return MapResult{ .items = try allocator.alloc(u8, 0) };
     const total_bytes = elem_size * src_count;
     var out = try allocator.alloc(u8, total_bytes);
-    if (!pool.enabled) {
+
+    if (!pool.enabled or !spice_wrapper.shouldUseParallelism(src_count, spice_wrapper.Thresholds.map)) {
         var i: usize = 0;
         while (i < src_count) : (i += 1) {
             worker_fn(i, out[i * elem_size .. i * elem_size + elem_size], user_ctx);
         }
         return MapResult{ .items = out };
     }
-    // Parallel path
-    const JobCtx = struct {
-        worker_fn: *const fn (usize, []u8, ?*anyopaque) void,
+
+    const Context = struct {
         out: []u8,
         elem_size: usize,
+        worker_fn: *const fn (usize, []u8, ?*anyopaque) void,
         user_ctx: ?*anyopaque,
-        index: usize,
     };
-    var job_buf = try allocator.alloc(JobCtx, src_count);
-    defer allocator.free(job_buf);
-    var i: usize = 0;
-    while (i < src_count) : (i += 1) {
-        job_buf[i] = JobCtx{ .worker_fn = worker_fn, .out = out, .elem_size = elem_size, .user_ctx = user_ctx, .index = i };
-        const run = struct {
-            fn go(ctx: ?*anyopaque) void {
-                const jc: *JobCtx = @ptrCast(@alignCast(ctx.?));
-                const start = jc.index * jc.elem_size;
-                jc.worker_fn(jc.index, jc.out[start .. start + jc.elem_size], jc.user_ctx);
+
+    const ctx = Context{
+        .out = out,
+        .elem_size = elem_size,
+        .worker_fn = worker_fn,
+        .user_ctx = user_ctx,
+    };
+
+    spice_wrapper.parallelForEach(
+        &pool.spice_pool,
+        0,
+        src_count,
+        ctx,
+        struct {
+            fn work(_: *spice_wrapper.Task, idx: usize, c: Context) void {
+                const start = idx * c.elem_size;
+                c.worker_fn(idx, c.out[start .. start + c.elem_size], c.user_ctx);
             }
-        }.go;
-        try pool.submit(.{ .func = run, .ctx = &job_buf[i] });
-    }
-    pool.waitIdle();
+        }.work,
+        spice_wrapper.Thresholds.map,
+    );
+
     return MapResult{ .items = out };
 }
 
 pub const Pool = struct {
     allocator: std.mem.Allocator,
-    threads: []std.Thread = &[_]std.Thread{},
-    worker_queues: []WorkStealingDeque,
-    global_queue: std.ArrayListUnmanaged(Job),
-    mutex: std.Thread.Mutex = .{},
-    cond: std.Thread.Condition = .{},
-    shutdown: bool = false,
-    active_jobs: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    spice_pool: SpicePool,
     enabled: bool = true,
     worker_count: usize,
+    queued_jobs: std.ArrayList(Job),
+    mutex: std.Thread.Mutex = .{},
     chunk_size_estimator: AdaptiveChunkEstimator,
-    // CANARY: REQ=REQ-PERF-SPICE-010; FEATURE="SpicePoolIntegration"; ASPECT=PoolField; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
-    spice_pool: ?*SpicePool = null,
 
     pub fn init(allocator: std.mem.Allocator, worker_count: usize) !Pool {
         const count = if (worker_count == 0) std.Thread.getCpuCount() catch 4 else worker_count;
-
-        var pool: Pool = .{
+        var pool = Pool{
             .allocator = allocator,
-            .global_queue = .{},
+            .spice_pool = SpicePool.init(allocator, count),
             .enabled = true,
             .worker_count = count,
-            .worker_queues = try allocator.alloc(WorkStealingDeque, count),
-            .threads = try allocator.alloc(std.Thread, count),
+            .queued_jobs = std.ArrayList(Job).init(allocator),
             .chunk_size_estimator = AdaptiveChunkEstimator.init(),
-            .spice_pool = null,
         };
-
-        // Initialize work-stealing deques
-        for (pool.worker_queues) |*queue| {
-            queue.* = .{ .jobs = .{} };
-        }
-
-        // Start worker threads
-        var i: usize = 0;
-        while (i < count) : (i += 1) {
-            pool.threads[i] = try std.Thread.spawn(.{}, workerMainSteal, .{ &pool, i });
-        }
+        pool.spice_pool.start();
         return pool;
     }
 
-    /// Initialize and attach a SpicePool for fork/join parallelism
-    /// CANARY: REQ=REQ-PERF-SPICE-011; FEATURE="SpicePoolInit"; ASPECT=PoolMethod; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
+    /// Initialize spice pool if not already started (idempotent)
     pub fn initSpicePool(self: *Pool) !void {
-        if (self.spice_pool != null) return;
-
-        const sp = try self.allocator.create(SpicePool);
-        sp.* = SpicePool.init(self.allocator, self.worker_count);
-        sp.start();
-        self.spice_pool = sp;
+        self.spice_pool.start();
     }
 
     /// Execute a fork/join computation using spice
-    /// Falls back to sequential execution if spice pool is not initialized
-    /// CANARY: REQ=REQ-PERF-SPICE-012; FEATURE="ForkJoin"; ASPECT=PoolMethod; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
     pub fn forkJoin(
         self: *Pool,
         comptime T: type,
         func: anytype,
         arg: anytype,
     ) T {
-        if (self.spice_pool) |sp| {
-            return sp.call(T, func, arg);
-        }
-        // Sequential fallback - execute directly
-        var dummy_task: spice_wrapper.Task = undefined;
-        return @call(.auto, func, .{ &dummy_task, arg });
+        return self.spice_pool.call(T, func, arg);
     }
 
     /// Parallel map using spice fork/join (for recursive divide-and-conquer workloads)
-    /// Falls back to sequential if spice pool is not initialized or workload is small
-    /// CANARY: REQ=REQ-PERF-SPICE-013; FEATURE="SpiceMap"; ASPECT=PoolMethod; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
     pub fn spiceMap(
         self: *Pool,
         comptime T: type,
@@ -211,156 +117,69 @@ pub const Pool = struct {
         comptime mapFn: fn (*spice_wrapper.Task, T) R,
         threshold: usize,
     ) ![]R {
-        if (self.spice_pool) |sp| {
-            return spice_wrapper.parallelMap(T, R, sp, items, mapFn, threshold);
-        }
-        // Sequential fallback
-        var results = try self.allocator.alloc(R, items.len);
-        var dummy_task: spice_wrapper.Task = undefined;
-        for (items, 0..) |item, i| {
-            results[i] = mapFn(&dummy_task, item);
-        }
-        return results;
+        return spice_wrapper.parallelMap(T, R, &self.spice_pool, items, mapFn, threshold);
     }
 
     pub fn submit(self: *Pool, job: Job) !void {
         if (!self.enabled) return;
-
-        // Try to submit to least loaded worker queue
-        var min_size: usize = std.math.maxInt(usize);
-        var target_worker: usize = 0;
-
-        for (self.worker_queues, 0..) |*queue, i| {
-            const size = queue.jobs.items.len;
-            if (size < min_size) {
-                min_size = size;
-                target_worker = i;
-            }
-        }
-
-        // Submit to target worker's queue
-        try self.worker_queues[target_worker].push(self.allocator, job);
-        self.cond.signal();
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        try self.queued_jobs.append(self.allocator, job);
     }
 
     pub fn submitBatch(self: *Pool, jobs: []const Job) !void {
         if (!self.enabled or jobs.len == 0) return;
-
-        // Distribute jobs across workers for load balancing
-        const jobs_per_worker = (jobs.len + self.worker_count - 1) / self.worker_count;
-
-        for (self.worker_queues, 0..) |*queue, i| {
-            const start = i * jobs_per_worker;
-            if (start >= jobs.len) break;
-
-            const end = @min(start + jobs_per_worker, jobs.len);
-            for (jobs[start..end]) |job| {
-                try queue.push(self.allocator, job);
-            }
-        }
-
-        self.cond.broadcast();
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        try self.queued_jobs.appendSlice(self.allocator, jobs);
     }
 
     pub fn waitIdle(self: *Pool) void {
         if (!self.enabled) return;
 
         while (true) {
-            var has_work = false;
-
-            // Check all worker queues
-            for (self.worker_queues) |*queue| {
-                if (queue.jobs.items.len > 0) {
-                    has_work = true;
-                    break;
-                }
-            }
-
-            // Check active jobs
-            if (self.active_jobs.load(.acquire) > 0) {
-                has_work = true;
-            }
-
-            if (!has_work) break;
-
             self.mutex.lock();
-            self.cond.wait(&self.mutex);
+            if (self.queued_jobs.items.len == 0) {
+                self.mutex.unlock();
+                break;
+            }
+
+            const count = self.queued_jobs.items.len;
+            const jobs = self.allocator.alloc(Job, count) catch {
+                self.mutex.unlock();
+                break;
+            };
+            std.mem.copy(Job, jobs, self.queued_jobs.items);
+            self.queued_jobs.items.len = 0;
             self.mutex.unlock();
+
+            const Context = struct {
+                jobs: []Job,
+            };
+
+            spice_wrapper.parallelForEach(
+                &self.spice_pool,
+                0,
+                jobs.len,
+                Context{ .jobs = jobs },
+                struct {
+                    fn work(_: *spice_wrapper.Task, idx: usize, c: Context) void {
+                        const j = c.jobs[idx];
+                        j.func(j.ctx);
+                    }
+                }.work,
+                spice_wrapper.Thresholds.forEach,
+            );
+
+            self.allocator.free(jobs);
         }
     }
 
     pub fn deinit(self: *Pool) void {
-        // Clean up spice pool if initialized
-        if (self.spice_pool) |sp| {
-            sp.deinit();
-            self.allocator.destroy(sp);
-            self.spice_pool = null;
-        }
-
-        if (self.enabled) {
-            self.mutex.lock();
-            self.shutdown = true;
-            self.cond.broadcast();
-            self.mutex.unlock();
-
-            for (self.threads) |t| t.join();
-
-            for (self.worker_queues) |*queue| {
-                queue.deinit(self.allocator);
-            }
-
-            self.allocator.free(self.worker_queues);
-            self.allocator.free(self.threads);
-        }
-        self.global_queue.deinit(self.allocator);
+        self.spice_pool.deinit();
+        self.queued_jobs.deinit(self.allocator);
     }
 };
-
-fn workerMainSteal(pool: *Pool, worker_id: usize) void {
-    var rng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp() + @as(i64, @intCast(worker_id))));
-    const random = rng.random();
-
-    while (!pool.shutdown) {
-        var job: ?Job = null;
-
-        // Try to get job from own queue first
-        job = pool.worker_queues[worker_id].pop();
-
-        // If no job, try work stealing
-        if (job == null) {
-            // Random victim selection for work stealing
-            const victim = random.intRangeAtMost(usize, 0, pool.worker_count - 1);
-            if (victim != worker_id) {
-                job = pool.worker_queues[victim].steal();
-            }
-        }
-
-        // If still no job, check global queue
-        if (job == null) {
-            pool.mutex.lock();
-            if (pool.global_queue.items.len > 0) {
-                job = pool.global_queue.items[0];
-                for (pool.global_queue.items[1..], 0..) |it, idx| {
-                    pool.global_queue.items[idx] = it;
-                }
-                pool.global_queue.items.len -= 1;
-            }
-            pool.mutex.unlock();
-        }
-
-        if (job) |j| {
-            _ = pool.active_jobs.fetchAdd(1, .release);
-            j.func(j.ctx);
-            _ = pool.active_jobs.fetchSub(1, .release);
-            pool.cond.signal();
-        } else {
-            // No work available, wait briefly
-            pool.mutex.lock();
-            _ = pool.cond.timedWait(&pool.mutex, 1_000_000) catch {}; // 1ms timeout
-            pool.mutex.unlock();
-        }
-    }
-}
 
 // Adaptive chunk size estimator for dynamic workload balancing
 pub const AdaptiveChunkEstimator = struct {
@@ -421,36 +240,30 @@ pub const ParallelPipeline = struct {
 
         for (self.stages) |stage| {
             const chunk_size = self.pool.chunk_size_estimator.estimateChunkSize(current_batch.len, stage.parallelism);
-            var jobs = try self.allocator.alloc(Job, (current_batch.len + chunk_size - 1) / chunk_size);
-            defer self.allocator.free(jobs);
+            const chunk_count = (current_batch.len + chunk_size - 1) / chunk_size;
 
-            var job_idx: usize = 0;
-            var i: usize = 0;
-            while (i < current_batch.len) : (i += chunk_size) {
-                const end = @min(i + chunk_size, current_batch.len);
-                const ctx = struct {
-                    items: []const *anyopaque,
-                    stage: PipelineStage,
+            const Context = struct {
+                items: []const *anyopaque,
+                stage: PipelineStage,
+                chunk_size: usize,
+            };
 
-                    pub fn run(c: ?*anyopaque) void {
-                        const self_ctx = @as(*@This(), @ptrCast(@alignCast(c.?)));
-                        for (self_ctx.items) |item| {
-                            self_ctx.stage.process(@constCast(item), self_ctx.stage.ctx) catch {};
+            spice_wrapper.parallelForEach(
+                &self.pool.spice_pool,
+                0,
+                chunk_count,
+                Context{ .items = current_batch, .stage = stage, .chunk_size = chunk_size },
+                struct {
+                    fn work(_: *spice_wrapper.Task, idx: usize, c: Context) void {
+                        const start = idx * c.chunk_size;
+                        const end = @min(start + c.chunk_size, c.items.len);
+                        for (c.items[start..end]) |item| {
+                            c.stage.process(@constCast(item), c.stage.ctx) catch {};
                         }
                     }
-                }{ .items = current_batch[i..end], .stage = stage };
-
-                jobs[job_idx] = .{
-                    .func = ctx.run,
-                    .ctx = @ptrCast(@constCast(&ctx)),
-                    .priority = 0,
-                    .chunk_size = chunk_size,
-                };
-                job_idx += 1;
-            }
-
-            try self.pool.submitBatch(jobs[0..job_idx]);
-            self.pool.waitIdle();
+                }.work,
+                spice_wrapper.Thresholds.forEach,
+            );
         }
     }
 };

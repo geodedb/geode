@@ -1,27 +1,12 @@
 const std = @import("std");
 const quic = @import("../transport/quic_msquic.zig");
+const protobuf = @import("protobuf");
+const dist_schema = @import("distributed_schema");
 
 // CANARY: REQ=REQ-GQL-041; FEATURE="Cluster Networking"; ASPECT=InterNodeMessaging; STATUS=TESTED; TEST=e2e_distributed_cluster; OWNER=distributed; UPDATED=2025-09-25
 
-pub const ClusterMessageType = enum(u8) {
-    append_entries,
-    append_entries_response,
-    request_vote,
-    request_vote_response,
-    install_snapshot,
-    install_snapshot_response,
-    heartbeat,
-    client_request,
-    client_response,
-};
-
-pub const ClusterMessage = struct {
-    msg_type: ClusterMessageType,
-    source_node: u32,
-    dest_node: u32,
-    term: u64,
-    payload: []const u8,
-};
+pub const ClusterMessageType = dist_schema.ClusterMessageType;
+pub const ClusterMessage = dist_schema.ClusterMessage;
 
 pub const NetworkTransport = struct {
     allocator: std.mem.Allocator,
@@ -82,18 +67,16 @@ pub const NetworkTransport = struct {
 
         const peer = self.peers.get(node_id) orelse return error.PeerNotFound;
 
-        // Serialize message with length-prefix framing
+        // Serialize message with length-prefixed protobuf framing
+        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 512);
+        defer aw.deinit();
+        try protobuf.encode(&aw.writer, self.allocator, msg.*);
+        const body = aw.writer.buffer[0..aw.writer.end];
+
         var buffer = std.ArrayList(u8).init(self.allocator);
         defer buffer.deinit();
-
-        // Frame: u32 length | u8 msg_type | payload
-        const payload_len = @sizeOf(ClusterMessage) - @sizeOf([]const u8) + msg.payload.len;
-        try buffer.writer().writeInt(u32, @intCast(payload_len), .little);
-        try buffer.writer().writeByte(@intFromEnum(msg.msg_type));
-        try buffer.writer().writeInt(u32, msg.source_node, .little);
-        try buffer.writer().writeInt(u32, msg.dest_node, .little);
-        try buffer.writer().writeInt(u64, msg.term, .little);
-        try buffer.writer().writeAll(msg.payload);
+        try buffer.writer().writeInt(u32, @intCast(body.len), .big);
+        try buffer.writer().writeAll(body);
 
         // Retry logic: 3 attempts with exponential backoff
         const retry_delays = [_]u64{ 50, 100, 200 }; // milliseconds
@@ -145,25 +128,14 @@ pub const NetworkTransport = struct {
     }
 
     pub fn processIncomingMessage(self: *NetworkTransport, data: []const u8) !void {
-        if (data.len < 13) return error.InvalidMessage; // Min size check
+        if (data.len < 4) return error.InvalidMessage;
 
-        var reader = std.io.fixedBufferStream(data);
-        const len = try reader.reader().readInt(u32, .little);
-        const msg_type_byte = try reader.reader().readByte();
-        const source = try reader.reader().readInt(u32, .little);
-        const dest = try reader.reader().readInt(u32, .little);
-        const term = try reader.reader().readInt(u64, .little);
+        const len = std.mem.readInt(u32, data[0..4], .big);
+        if (data.len < 4 + len) return error.TruncatedMessage;
 
-        const payload_start = 13;
-        if (data.len < payload_start + len - 13) return error.TruncatedMessage;
-
-        const msg = ClusterMessage{
-            .msg_type = @enumFromInt(msg_type_byte),
-            .source_node = source,
-            .dest_node = dest,
-            .term = term,
-            .payload = data[payload_start .. payload_start + len - 13],
-        };
+        var reader: std.Io.Reader = .fixed(data[4 .. 4 + len]);
+        var msg = protobuf.decode(ClusterMessage, &reader, self.allocator) catch return error.InvalidMessage;
+        defer msg.deinit(self.allocator);
 
         if (self.message_handler) |handler| {
             handler(self, &msg);

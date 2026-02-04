@@ -1511,12 +1511,21 @@ fn executeRemoteBackup(
 }
 
 // GAP-0137: Updated to support TLS certificate verification
-fn executeBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, server: []const u8, compress: bool, tls_config: TlsConfig) !void {
+fn executeBackup(
+    allocator: std.mem.Allocator,
+    dest: []const u8,
+    mode: []const u8,
+    server: []const u8,
+    compress: bool,
+    tls_config: TlsConfig,
+    username: ?[]const u8,
+    password: ?[]const u8,
+) !void {
     std.debug.print("Creating {s} backup to: {s}\n", .{ mode, dest });
 
     // CANARY: REQ=REQ-BACKUP-CLI-001; FEATURE="CLI Backup"; ASPECT=ServerConnection; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-10
     // Always try to connect to server via QUIC first - this ensures we get real data
-    executeRemoteBackup(allocator, dest, mode, server, compress, tls_config) catch |err| {
+    executeRemoteBackup(allocator, dest, mode, server, compress, tls_config, username, password) catch |err| {
         std.debug.print("Warning: Could not connect to server {s}: {}\n", .{ server, err });
         std.debug.print("Attempting local data directory backup...\n", .{});
 
@@ -1629,7 +1638,15 @@ fn computeChecksum(data: []const u8) u64 {
 // CANARY: REQ=REQ-BACKUP-RESTORE-001; FEATURE="Backup Restore"; ASPECT=RemoteRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-09
 // GAP-0137: Updated to support TLS certificate verification
 // Remote server restore execution function - sends restore request via QUIC
-fn executeRemoteRestore(allocator: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8, tls_config: TlsConfig) !void {
+fn executeRemoteRestore(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    target_time: ?[]const u8,
+    server: []const u8,
+    tls_config: TlsConfig,
+    username: ?[]const u8,
+    password: ?[]const u8,
+) !void {
     std.debug.print("RESTORE: Connecting to server {s} for remote restore...\n", .{server});
 
     // Parse server address
@@ -1679,8 +1696,11 @@ fn executeRemoteRestore(allocator: std.mem.Allocator, source: []const u8, target
 
     // Send HELLO (Protobuf)
     const hello_req = schema.HelloRequest{
+        .username = username orelse "",
+        .password = password orelse "",
         .client_name = "geode-restore",
         .client_version = "0.18.0",
+        .wanted_conformance = "GQL/1.0",
     };
     writeProtoMessage(allocator, stream, .{ .hello = hello_req }) catch |err| {
         std.debug.print("RESTORE: Failed to send HELLO: {}\n", .{err});
@@ -1749,7 +1769,15 @@ fn executeRemoteRestore(allocator: std.mem.Allocator, source: []const u8, target
 // CANARY: REQ=REQ-BACKUP-RESTORE-002; FEATURE="Backup Restore"; ASPECT=LocalRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-09
 // GAP-0137: Updated to support TLS certificate verification
 // Local restore execution - handles local file restoration
-fn executeRestore(allocator: std.mem.Allocator, source: []const u8, target_time: ?[]const u8, server: []const u8, tls_config: TlsConfig) !void {
+fn executeRestore(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    target_time: ?[]const u8,
+    server: []const u8,
+    tls_config: TlsConfig,
+    username: ?[]const u8,
+    password: ?[]const u8,
+) !void {
     std.debug.print("RESTORE: Initiating restore from '{s}'\n", .{source});
 
     // Check if source is a remote URI (s3://, https://, etc.)
@@ -1758,7 +1786,7 @@ fn executeRestore(allocator: std.mem.Allocator, source: []const u8, target_time:
         std.mem.startsWith(u8, source, "http://"))
     {
         // Remote restore via server (GAP-0137: pass TLS config)
-        return executeRemoteRestore(allocator, source, target_time, server, tls_config);
+        return executeRemoteRestore(allocator, source, target_time, server, tls_config, username, password);
     }
 
     // Local restore

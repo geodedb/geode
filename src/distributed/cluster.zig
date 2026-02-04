@@ -3,23 +3,158 @@ const Allocator = std.mem.Allocator;
 const raft_consensus = @import("raft_consensus.zig");
 const RaftNode = raft_consensus.RaftNode;
 const txn_coordinator = @import("txn_coordinator.zig");
+const graph_store = @import("../graph_store.zig");
+const protobuf = @import("protobuf");
+const fd = protobuf.fd;
+const quic = @import("transport/quic");
 
 const logging = @import("logging");
 const log = logging.scoped("cluster");
 const Attr = logging.Attr;
 
-// Temporary Message struct for distributed operations
-// In production, this would integrate with protocol.zig
+const MessageType = enum(i32) {
+    READ = 0,
+    WRITE = 1,
+    UPDATE = 2,
+    DELETE = 3,
+    JOIN_CLUSTER = 4,
+    LEAVE_CLUSTER = 5,
+    REPLICATE_DATA = 6,
+    FAILOVER_REQUEST = 7,
+};
+
+// Protobuf-encodable message for distributed operations
 const Message = struct {
-    type: enum { read, write, update, delete },
+    msg_type: MessageType = .READ,
     key: ?[]const u8 = null,
     client_id: ?[]const u8 = null,
     data: ?[]const u8 = null,
+
+    pub const _desc_table = .{
+        .msg_type = fd(1, .{ .scalar = .@"enum" }),
+        .key = fd(2, .{ .scalar = .string }),
+        .client_id = fd(3, .{ .scalar = .string }),
+        .data = fd(4, .{ .scalar = .bytes }),
+    };
+
+    pub fn deinit(self: *Message, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+const ResponseStatus = enum(i32) {
+    OK = 0,
+    ABORTED = 1,
+    ERR = 2,
+    REDIRECT = 3,
 };
 
 const Response = struct {
-    status: enum { ok, aborted, err },
+    status: ResponseStatus = .OK,
     data: ?[]const u8 = null,
+    leader_id: ?u64 = null,
+
+    pub const _desc_table = .{
+        .status = fd(1, .{ .scalar = .@"enum" }),
+        .data = fd(2, .{ .scalar = .bytes }),
+        .leader_id = fd(3, .{ .scalar = .uint64 }),
+    };
+
+    pub fn deinit(self: *Response, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+const ReplicationPayload = struct {
+    shard_id: u64 = 0,
+    snapshot: []const u8 = "",
+
+    pub const _desc_table = .{
+        .shard_id = fd(1, .{ .scalar = .uint64 }),
+        .snapshot = fd(2, .{ .scalar = .bytes }),
+    };
+
+    pub fn deinit(self: *ReplicationPayload, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+const NodeInfoProto = struct {
+    id: u64 = 0,
+    endpoint: []const u8 = "",
+
+    pub const _desc_table = .{
+        .id = fd(1, .{ .scalar = .uint64 }),
+        .endpoint = fd(2, .{ .scalar = .string }),
+    };
+
+    pub fn deinit(self: *NodeInfoProto, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+const TxnMetadata = struct {
+    client_id: []const u8 = "",
+    timestamp: i64 = 0,
+    msg_type: MessageType = .READ,
+
+    pub const _desc_table = .{
+        .client_id = fd(1, .{ .scalar = .string }),
+        .timestamp = fd(2, .{ .scalar = .int64 }),
+        .msg_type = fd(3, .{ .scalar = .@"enum" }),
+    };
+
+    pub fn deinit(self: *TxnMetadata, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+const TopologyNode = struct {
+    id: u64 = 0,
+    endpoint: []const u8 = "",
+    state: []const u8 = "",
+
+    pub const _desc_table = .{
+        .id = fd(1, .{ .scalar = .uint64 }),
+        .endpoint = fd(2, .{ .scalar = .string }),
+        .state = fd(3, .{ .scalar = .string }),
+    };
+
+    pub fn deinit(self: *TopologyNode, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+const TopologyShard = struct {
+    id: u64 = 0,
+    primary_node: u64 = 0,
+    replica_count: u32 = 0,
+    size_bytes: u64 = 0,
+
+    pub const _desc_table = .{
+        .id = fd(1, .{ .scalar = .uint64 }),
+        .primary_node = fd(2, .{ .scalar = .uint64 }),
+        .replica_count = fd(3, .{ .scalar = .uint32 }),
+        .size_bytes = fd(4, .{ .scalar = .uint64 }),
+    };
+
+    pub fn deinit(self: *TopologyShard, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+const TopologyPayload = struct {
+    nodes: std.ArrayList(TopologyNode),
+    shards: std.ArrayList(TopologyShard),
+
+    pub const _desc_table = .{
+        .nodes = fd(1, .{ .repeated = .{ .submessage = {} } }),
+        .shards = fd(2, .{ .repeated = .{ .submessage = {} } }),
+    };
+
+    pub fn deinit(self: *TopologyPayload, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
 };
 
 // Distributed cluster coordinator
@@ -27,13 +162,14 @@ pub const ClusterCoordinator = struct {
     allocator: Allocator,
     node_id: u64,
     raft: *RaftNode,
-    // storage_engine: *StorageEngine,  // Would be integrated later
+    store: *graph_store.GraphStore,
     replication_factor: u32,
     sharding_strategy: ShardingStrategy,
     failover_config: FailoverConfig,
     cluster_state: ClusterState,
     network_transport: NetworkTransport,
     health_monitor: HealthMonitor,
+    message_callback: ?*const fn (*ClusterCoordinator, *const Message) void = null,
 
     // Helper to access replication map
     fn replication_map(self: *ClusterCoordinator) std.AutoHashMap(u64, []u64) {
@@ -134,7 +270,7 @@ pub const ClusterCoordinator = struct {
         pub const PendingRequest = struct {
             id: u64,
             timeout: i64,
-            callback: *const fn (response: protocol.Response) void,
+            callback: *const fn (response: Response) void,
         };
 
         pub const MessageQueue = struct {
@@ -193,13 +329,13 @@ pub const ClusterCoordinator = struct {
             config.election_timeout_ms,
         );
 
-        const storage_engine = try storage.StorageEngine.init(allocator, config.storage_config);
+        const store = graph_store.getGlobalStore(allocator);
 
         return ClusterCoordinator{
             .allocator = allocator,
             .node_id = node_id,
             .raft = raft,
-            .storage_engine = storage_engine,
+            .store = store,
             .replication_factor = config.replication_factor,
             .sharding_strategy = config.sharding_strategy,
             .failover_config = config.failover_config,
@@ -212,7 +348,6 @@ pub const ClusterCoordinator = struct {
     pub fn deinit(self: *ClusterCoordinator) void {
         self.raft.deinit();
         self.allocator.destroy(self.raft);
-        self.storage_engine.deinit();
         self.cluster_state.nodes.deinit();
         self.cluster_state.shards.deinit();
         self.cluster_state.replication_map.deinit();
@@ -314,22 +449,22 @@ pub const ClusterCoordinator = struct {
         return self.handleShardQuery(msg);
     }
 
-    fn handleJoinCluster(self: *ClusterCoordinator, msg: protocol.Message) !protocol.Response {
+    fn handleJoinCluster(self: *ClusterCoordinator, msg: Message) !Response {
         if (self.raft.state != .leader) {
-            return protocol.Response{
-                .status = .redirect,
+            return Response{
+                .status = .REDIRECT,
                 .leader_id = self.cluster_state.leader_node,
             };
         }
 
-        const node_info = try parseNodeInfo(self.allocator, msg.data);
+        const node_info = try parseNodeInfo(self.allocator, msg.data orelse return error.InvalidNodeInfo);
         try self.cluster_state.nodes.append(node_info);
 
         // Trigger rebalancing
         try self.rebalanceShards();
 
-        return protocol.Response{
-            .status = .ok,
+        return Response{
+            .status = .OK,
             .data = try self.serializeClusterTopology(),
         };
     }
@@ -448,13 +583,26 @@ pub const ClusterCoordinator = struct {
     }
 
     fn replicateShardToNode(self: *ClusterCoordinator, shard_id: u64, node_id: u64) !void {
-        const data = try self.storage_engine.getShardData(shard_id);
-        defer self.allocator.free(data);
+        // Snapshot GraphStore and replicate the snapshot payload.
+        try self.store.saveToFile();
+        const snapshot_path = try graph_store.getPersistenceFilePath(self.allocator);
+        defer self.allocator.free(snapshot_path);
+        const snapshot = try std.fs.cwd().readFileAlloc(self.allocator, snapshot_path, std.math.maxInt(usize));
+        defer self.allocator.free(snapshot);
 
-        const msg = protocol.Message{
-            .type = .replicate_data,
+        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
+        defer aw.deinit();
+        const payload_msg = ReplicationPayload{
             .shard_id = shard_id,
-            .data = data,
+            .snapshot = snapshot,
+        };
+        try protobuf.encode(&aw.writer, self.allocator, payload_msg);
+        const payload = try self.allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
+        defer self.allocator.free(payload);
+
+        const msg = Message{
+            .msg_type = .REPLICATE_DATA,
+            .data = payload,
         };
 
         try self.sendToNode(node_id, msg);
@@ -485,6 +633,13 @@ pub const ClusterCoordinator = struct {
             .cluster_version = 1,
             .topology_version = 1,
         };
+    }
+
+    fn findNodeEndpoint(self: *ClusterCoordinator, node_id: u64) ![]const u8 {
+        for (self.cluster_state.nodes.items) |node| {
+            if (node.id == node_id) return node.endpoint;
+        }
+        return error.NodeNotFound;
     }
 
     fn initNetworkTransport(allocator: Allocator, config: Config) !NetworkTransport {
@@ -682,72 +837,56 @@ pub const ClusterCoordinator = struct {
 
     // CANARY: REQ=REQ-DIST-CLUSTER-004; FEATURE="DistributedCluster"; ASPECT=Topology; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
     fn serializeClusterTopology(self: *ClusterCoordinator) ![]const u8 {
-        // Serialize cluster topology to JSON
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        errdefer buffer.deinit();
+        var nodes = std.ArrayList(TopologyNode).init(self.allocator);
+        defer nodes.deinit(self.allocator);
 
-        const writer = buffer.writer();
-
-        try writer.writeAll("{\"nodes\":[");
-
-        var first_node = true;
         for (self.cluster_state.nodes.items) |node| {
-            if (!first_node) try writer.writeAll(",");
-            first_node = false;
-
-            try std.fmt.format(writer, "{{\"id\":{d},\"endpoint\":\"{s}\",\"state\":\"{s}\"}}", .{
-                node.id,
-                node.endpoint,
-                @tagName(node.state),
+            try nodes.append(self.allocator, TopologyNode{
+                .id = node.id,
+                .endpoint = node.endpoint,
+                .state = @tagName(node.state),
             });
         }
 
-        try writer.writeAll("],\"shards\":[");
+        var shards = std.ArrayList(TopologyShard).init(self.allocator);
+        defer shards.deinit(self.allocator);
 
-        var first_shard = true;
         for (self.cluster_state.shards.items) |shard| {
-            if (!first_shard) try writer.writeAll(",");
-            first_shard = false;
-
-            try std.fmt.format(writer, "{{\"id\":{d},\"primary\":{d},\"replicas\":{d},\"size\":{d}}}", .{
-                shard.id,
-                shard.primary_node,
-                shard.replica_nodes.len,
-                shard.size_bytes,
+            try shards.append(self.allocator, TopologyShard{
+                .id = shard.id,
+                .primary_node = shard.primary_node,
+                .replica_count = @intCast(shard.replica_nodes.len),
+                .size_bytes = shard.size_bytes,
             });
         }
 
-        try writer.writeAll("]}");
+        const payload = TopologyPayload{
+            .nodes = nodes,
+            .shards = shards,
+        };
 
-        return buffer.toOwnedSlice();
+        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
+        defer aw.deinit();
+        try protobuf.encode(&aw.writer, self.allocator, payload);
+        const body = aw.writer.buffer[0..aw.writer.end];
+        return self.allocator.dupe(u8, body);
     }
 
     fn parseNodeInfo(allocator: Allocator, data: []const u8) !NodeInfo {
-        // Simplified parser: expect JSON {"id":<u64>,"endpoint":"host:port"}
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
-        const ally = arena.allocator();
-        const parsed = std.json.parseFromSlice(std.json.Value, ally, data, .{}) catch |e| {
-            log.warn("parseNodeInfo JSON error", &.{
+        var reader: std.Io.Reader = .fixed(data);
+        var parsed = protobuf.decode(NodeInfoProto, &reader, allocator) catch |e| {
+            log.warn("parseNodeInfo protobuf error", &.{
                 Attr.string("error", @errorName(e)),
             });
             return error.InvalidNodeInfo;
         };
-        defer parsed.deinit();
-        const root = parsed.value;
-        var id_val: u64 = 1;
-        var endpoint_val: []const u8 = "unknown:0";
-        if (root == .object) {
-            if (root.object.get("id")) |v| {
-                if (v == .integer) id_val = @intCast(v.integer);
-            }
-            if (root.object.get("endpoint")) |v| {
-                if (v == .string) endpoint_val = v.string;
-            }
-        }
+        defer parsed.deinit(allocator);
+
+        const endpoint_val = if (parsed.endpoint.len > 0) parsed.endpoint else "unknown:0";
+        const endpoint_copy = try allocator.dupe(u8, endpoint_val);
         return NodeInfo{
-            .id = id_val,
-            .endpoint = endpoint_val,
+            .id = parsed.id,
+            .endpoint = endpoint_copy,
             .state = .joining,
             .role = .follower,
             .capacity = .{
@@ -763,54 +902,52 @@ pub const ClusterCoordinator = struct {
     }
 
     // CANARY: REQ=REQ-GQL-020; FEATURE="Cluster QUIC Messaging"; ASPECT=SendToNode; STATUS=TESTED; TEST=e2e_cluster_replication; OWNER=distributed; UPDATED=2025-09-25
-    pub fn sendToNode(self: *ClusterCoordinator, node_id: u64, msg: protocol.Message) !void {
-        self.connections_mutex.lock();
-        defer self.connections_mutex.unlock();
+    pub fn sendToNode(self: *ClusterCoordinator, node_id: u64, msg: Message) !void {
+        const endpoint = try self.findNodeEndpoint(node_id);
+        const colon_idx = std.mem.lastIndexOf(u8, endpoint, ":") orelse return error.InvalidAddress;
+        const host = endpoint[0..colon_idx];
+        const port = try std.fmt.parseInt(u16, endpoint[colon_idx + 1 ..], 10);
 
-        const conn = self.connections.get(node_id) orelse {
-            // Establish new QUIC connection
-            const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
-            const new_conn = try self.transport.connect(node.address);
-            try self.connections.put(node_id, new_conn);
-            return self.sendToNode(node_id, msg); // Retry with connection
+        var client = quic.QuicClient.init(self.allocator);
+        defer client.deinit();
+
+        // Cluster links are internal; allow self-signed certs by default.
+        _ = client.connectInsecure(host, port, true) catch |err| {
+            return err;
         };
+        _ = client.waitForHandshake(10) catch |err| return err;
 
-        // Frame the message (u32 length | u8 type | payload)
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
+        var stream = try client.openStream(true);
+        defer stream.deinit();
 
-        try buffer.writer().writeInt(u32, @intCast(msg.payload.len + 1), .little);
-        try buffer.writer().writeByte(@intFromEnum(msg.type));
-        try buffer.writer().writeAll(msg.payload);
+        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
+        defer aw.deinit();
+        try protobuf.encode(&aw.writer, self.allocator, msg);
+        const body = aw.writer.buffer[0..aw.writer.end];
 
-        // Send with retries (50ms, 100ms, 200ms backoff)
-        var retries: u32 = 0;
-        while (retries < 3) : (retries += 1) {
-            conn.send(buffer.items) catch |err| {
-                if (retries == 2) return err;
-                const backoff_ms = @as(u64, 50) * std.math.pow(u64, 2, retries);
-                std.time.sleep(backoff_ms * std.time.ns_per_ms);
-                continue;
-            };
-            break;
-        }
+        const framed = try self.allocator.alloc(u8, body.len + 4);
+        defer self.allocator.free(framed);
+        std.mem.writeInt(u32, framed[0..4], @intCast(body.len), .big);
+        @memcpy(framed[4..], body);
+
+        try stream.writeAll(framed);
     }
 
     // CANARY: REQ=REQ-GQL-021; FEATURE="Cluster Message Handler"; ASPECT=OnMessage; STATUS=TESTED; TEST=e2e_cluster_replication; OWNER=distributed; UPDATED=2025-09-25
-    pub fn onMessage(self: *ClusterCoordinator, callback: fn (*ClusterCoordinator, *const protocol.Message) void) void {
+    pub fn onMessage(self: *ClusterCoordinator, callback: fn (*ClusterCoordinator, *const Message) void) void {
         self.message_callback = callback;
     }
 
-    fn handleLeaveCluster(self: *ClusterCoordinator, msg: protocol.Message) !protocol.Response {
+    fn handleLeaveCluster(self: *ClusterCoordinator, msg: Message) !Response {
         _ = self;
         _ = msg;
-        return protocol.Response{ .status = .ok };
+        return Response{ .status = .OK };
     }
 
-    fn handleReplicateData(self: *ClusterCoordinator, msg: protocol.Message) !protocol.Response {
+    fn handleReplicateData(self: *ClusterCoordinator, msg: Message) !Response {
         _ = self;
         _ = msg;
-        return protocol.Response{ .status = .ok };
+        return Response{ .status = .OK };
     }
 
     fn handleShardQuery(self: *ClusterCoordinator, msg: Message) !Response {
@@ -836,15 +973,19 @@ pub const ClusterCoordinator = struct {
         defer prepare_votes.deinit();
 
         for (affected_shards) |shard_id| {
+            const write_set = try self.serializeWriteSet(msg);
+            const metadata = try self.serializeMetadata(msg);
             const prepare_msg = raft_consensus.TxnPrepare{
                 .xid = xid,
                 .shard_id = shard_id,
-                .write_set = try self.serializeWriteSet(msg),
-                .metadata = try self.serializeMetadata(msg),
+                .write_set = write_set,
+                .metadata = metadata,
             };
 
             // Send prepare through Raft consensus
             const vote = try self.sendPrepareToShard(shard_id, prepare_msg);
+            self.allocator.free(write_set);
+            self.allocator.free(metadata);
             try prepare_votes.append(vote);
         }
 
@@ -877,7 +1018,7 @@ pub const ClusterCoordinator = struct {
         _ = self;
         // Parse message to determine if it's a write operation
         // For now, simple heuristic based on message type
-        return msg.type == .write or msg.type == .delete or msg.type == .update;
+        return msg.msg_type == .WRITE or msg.msg_type == .DELETE or msg.msg_type == .UPDATE;
     }
 
     fn determineTargetShard(self: *ClusterCoordinator, msg: Message) !u64 {
@@ -923,18 +1064,24 @@ pub const ClusterCoordinator = struct {
     }
 
     fn serializeWriteSet(self: *ClusterCoordinator, msg: Message) ![]const u8 {
-        // Serialize the write operations
-        return std.json.stringifyAlloc(self.allocator, msg, .{});
+        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
+        defer aw.deinit();
+        try protobuf.encode(&aw.writer, self.allocator, msg);
+        const body = aw.writer.buffer[0..aw.writer.end];
+        return self.allocator.dupe(u8, body);
     }
 
     fn serializeMetadata(self: *ClusterCoordinator, msg: Message) ![]const u8 {
-        // Serialize transaction metadata
-        const metadata = .{
-            .client_id = msg.client_id,
+        const metadata = TxnMetadata{
+            .client_id = msg.client_id orelse "",
             .timestamp = std.time.milliTimestamp(),
-            .type = msg.type,
+            .msg_type = msg.msg_type,
         };
-        return std.json.stringifyAlloc(self.allocator, metadata, .{});
+        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 128);
+        defer aw.deinit();
+        try protobuf.encode(&aw.writer, self.allocator, metadata);
+        const body = aw.writer.buffer[0..aw.writer.end];
+        return self.allocator.dupe(u8, body);
     }
 
     fn sendPrepareToShard(self: *ClusterCoordinator, shard_id: u64, prepare: raft_consensus.TxnPrepare) !bool {
@@ -961,13 +1108,13 @@ pub const ClusterCoordinator = struct {
         _ = shard_id;
         _ = msg;
         // Forward read query to shard
-        return Response{ .status = .ok };
+        return Response{ .status = .OK };
     }
 
-    fn handleFailoverRequest(self: *ClusterCoordinator, msg: protocol.Message) !protocol.Response {
+    fn handleFailoverRequest(self: *ClusterCoordinator, msg: Message) !Response {
         _ = self;
         _ = msg;
-        return protocol.Response{ .status = .ok };
+        return Response{ .status = .OK };
     }
 
     pub const Config = struct {
@@ -976,7 +1123,6 @@ pub const ClusterCoordinator = struct {
         replication_factor: u32 = 3,
         sharding_strategy: ShardingStrategy = .hash_based,
         failover_config: FailoverConfig = .{},
-        storage_config: storage.Config,
         health_check_interval_ms: u64 = 1000,
         unhealthy_threshold: u32 = 3,
     };

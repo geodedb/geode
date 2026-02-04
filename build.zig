@@ -423,6 +423,11 @@ pub fn build(b: *std.Build) void {
     raft_schema_mod.addImport("protobuf", protobuf_mod);
     geode_exe.root_module.addImport("raft_schema", raft_schema_mod);
     root_mod.addImport("raft_schema", raft_schema_mod);
+    const distributed_schema_mod = b.createModule(.{ .root_source_file = b.path("src/proto/distributed_schema.zig"), .target = target, .optimize = optimize });
+    distributed_schema_mod.addImport("protobuf", protobuf_mod);
+    distributed_schema_mod.addImport("schema", schema_mod);
+    geode_exe.root_module.addImport("distributed_schema", distributed_schema_mod);
+    root_mod.addImport("distributed_schema", distributed_schema_mod);
 
     // M11: Add storage/backup module for CLI to eliminate BackupConfig duplication
     const storage_backup_mod = b.createModule(.{ .root_source_file = b.path("src/storage/backup.zig"), .target = target, .optimize = optimize });

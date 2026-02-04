@@ -1,12 +1,38 @@
 // CANARY: REQ=REQ-GQL-040; FEATURE="Raft Consensus"; ASPECT=Distributed; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_040_RaftLeaderElection; BENCH=BenchmarkCANARY_REQ_GQL_040_RaftElectionLatency; OWNER=distributed; UPDATED=2025-09-21
 
 const std = @import("std");
+const protobuf = @import("protobuf");
+const fd = protobuf.fd;
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-066; FEATURE="JSON Library Migration"; ASPECT=RaftConsensus; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-25
-const json_lib = @import("json");
+const SnapshotRequest = struct {
+    term: u64,
+    last_included_index: u64,
+    last_included_term: u64,
+    done: bool,
 
-// JSON response types for Raft protocol
-const SnapshotResponse = struct { term: u64 };
+    pub const _desc_table = .{
+        .term = fd(1, .{ .scalar = .uint64 }),
+        .last_included_index = fd(2, .{ .scalar = .uint64 }),
+        .last_included_term = fd(3, .{ .scalar = .uint64 }),
+        .done = fd(4, .{ .scalar = .bool }),
+    };
+
+    pub fn deinit(self: *SnapshotRequest, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+const SnapshotResponse = struct {
+    term: u64,
+
+    pub const _desc_table = .{
+        .term = fd(1, .{ .scalar = .uint64 }),
+    };
+
+    pub fn deinit(self: *SnapshotResponse, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
 
 /// Raft node states
 pub const NodeState = enum {
@@ -21,6 +47,17 @@ pub const LogEntry = struct {
     index: u64,
     command: []const u8,
     timestamp: i64,
+
+    pub const _desc_table = .{
+        .term = fd(1, .{ .scalar = .uint64 }),
+        .index = fd(2, .{ .scalar = .uint64 }),
+        .command = fd(3, .{ .scalar = .bytes }),
+        .timestamp = fd(4, .{ .scalar = .int64 }),
+    };
+
+    pub fn deinit(self: *LogEntry, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
 };
 
 /// Raft RPC message types
@@ -39,11 +76,31 @@ pub const RequestVoteRequest = struct {
     candidate_id: []const u8,
     last_log_index: u64,
     last_log_term: u64,
+
+    pub const _desc_table = .{
+        .term = fd(1, .{ .scalar = .uint64 }),
+        .candidate_id = fd(2, .{ .scalar = .string }),
+        .last_log_index = fd(3, .{ .scalar = .uint64 }),
+        .last_log_term = fd(4, .{ .scalar = .uint64 }),
+    };
+
+    pub fn deinit(self: *RequestVoteRequest, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
 };
 
 pub const RequestVoteResponse = struct {
     term: u64,
     vote_granted: bool,
+
+    pub const _desc_table = .{
+        .term = fd(1, .{ .scalar = .uint64 }),
+        .vote_granted = fd(2, .{ .scalar = .bool }),
+    };
+
+    pub fn deinit(self: *RequestVoteResponse, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
 };
 
 /// Append Entries RPC
@@ -52,14 +109,37 @@ pub const AppendEntriesRequest = struct {
     leader_id: []const u8,
     prev_log_index: u64,
     prev_log_term: u64,
-    entries: []const LogEntry,
+    entries: std.ArrayList(LogEntry),
     leader_commit: u64,
+
+    pub const _desc_table = .{
+        .term = fd(1, .{ .scalar = .uint64 }),
+        .leader_id = fd(2, .{ .scalar = .string }),
+        .prev_log_index = fd(3, .{ .scalar = .uint64 }),
+        .prev_log_term = fd(4, .{ .scalar = .uint64 }),
+        .entries = fd(5, .{ .repeated = .{ .submessage = {} } }),
+        .leader_commit = fd(6, .{ .scalar = .uint64 }),
+    };
+
+    pub fn deinit(self: *AppendEntriesRequest, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
 };
 
 pub const AppendEntriesResponse = struct {
     term: u64,
     success: bool,
     match_index: u64,
+
+    pub const _desc_table = .{
+        .term = fd(1, .{ .scalar = .uint64 }),
+        .success = fd(2, .{ .scalar = .bool }),
+        .match_index = fd(3, .{ .scalar = .uint64 }),
+    };
+
+    pub fn deinit(self: *AppendEntriesResponse, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
 };
 
 /// Raft node configuration
@@ -111,7 +191,7 @@ pub const RaftNode = struct {
             .config = config,
             .current_term = 0,
             .voted_for = null,
-            .log = std.ArrayList(LogEntry){},
+            .log = std.ArrayList(LogEntry).init(allocator),
             .state = .follower,
             .commit_index = 0,
             .last_applied = 0,
@@ -134,7 +214,7 @@ pub const RaftNode = struct {
     }
 
     pub fn deinit(self: *RaftNode) void {
-        self.log.deinit();
+        self.log.deinit(self.allocator);
         self.next_index.deinit();
         self.match_index.deinit();
         if (self.voted_for) |voted| {
@@ -226,7 +306,7 @@ pub const RaftNode = struct {
             .timestamp = std.time.timestamp(),
         };
 
-        try self.log.append(entry);
+        try self.log.append(self.allocator, entry);
 
         if (self.enable_log_replication) {
             // Send to followers
@@ -304,8 +384,10 @@ pub const RaftNode = struct {
                 .last_log_term = self.getLastLogTerm(),
             };
 
-            // Serialize request (simplified)
-            const payload = try std.json.stringifyAlloc(self.allocator, request, .{});
+            var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
+            defer aw.deinit();
+            try protobuf.encode(&aw.writer, self.allocator, request);
+            const payload = try self.allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
             defer self.allocator.free(payload);
 
             for (self.config.peers) |peer| {
@@ -331,12 +413,12 @@ pub const RaftNode = struct {
                     0;
 
                 // Get entries to send
-                var entries = std.ArrayList(LogEntry){};
-                defer entries.deinit();
+                var entries = std.ArrayList(LogEntry).init(self.allocator);
+                defer entries.deinit(self.allocator);
 
                 if (next_idx <= self.log.items.len) {
                     for (self.log.items[next_idx - 1 ..]) |entry| {
-                        try entries.append(entry);
+                        try entries.append(self.allocator, entry);
                     }
                 }
 
@@ -345,11 +427,14 @@ pub const RaftNode = struct {
                     .leader_id = self.config.node_id,
                     .prev_log_index = prev_log_index,
                     .prev_log_term = prev_log_term,
-                    .entries = entries.items,
+                    .entries = entries,
                     .leader_commit = self.commit_index,
                 };
 
-                const payload = try std.json.stringifyAlloc(self.allocator, request, .{});
+                var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 512);
+                defer aw.deinit();
+                try protobuf.encode(&aw.writer, self.allocator, request);
+                const payload = try self.allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
                 defer self.allocator.free(payload);
 
                 callback(peer, .append_entries, payload);
@@ -372,13 +457,14 @@ pub const RaftNode = struct {
     }
 
     fn handleRequestVote(self: *RaftNode, from: []const u8, payload: []const u8) !void {
-        const request = std.json.parseFromSlice(RequestVoteRequest, self.allocator, payload, .{}) catch return;
-        defer request.deinit();
+        var reader: std.Io.Reader = .fixed(payload);
+        var request = protobuf.decode(RequestVoteRequest, &reader, self.allocator) catch return;
+        defer request.deinit(self.allocator);
 
         var vote_granted = false;
 
-        if (request.value.term > self.current_term) {
-            self.current_term = request.value.term;
+        if (request.term > self.current_term) {
+            self.current_term = request.term;
             self.state = .follower;
             if (self.voted_for) |voted| {
                 self.allocator.free(voted);
@@ -386,20 +472,20 @@ pub const RaftNode = struct {
             }
         }
 
-        if (request.value.term == self.current_term) {
+        if (request.term == self.current_term) {
             const can_vote = self.voted_for == null or
-                std.mem.eql(u8, self.voted_for.?, request.value.candidate_id);
+                std.mem.eql(u8, self.voted_for.?, request.candidate_id);
 
-            const log_ok = request.value.last_log_term > self.getLastLogTerm() or
-                (request.value.last_log_term == self.getLastLogTerm() and
-                    request.value.last_log_index >= self.getLastLogIndex());
+            const log_ok = request.last_log_term > self.getLastLogTerm() or
+                (request.last_log_term == self.getLastLogTerm() and
+                    request.last_log_index >= self.getLastLogIndex());
 
             if (can_vote and log_ok) {
                 vote_granted = true;
                 if (self.voted_for) |voted| {
                     self.allocator.free(voted);
                 }
-                self.voted_for = try self.allocator.dupe(u8, request.value.candidate_id);
+                self.voted_for = try self.allocator.dupe(u8, request.candidate_id);
                 try self.resetElectionTimer();
             }
         }
@@ -410,7 +496,10 @@ pub const RaftNode = struct {
         };
 
         if (self.send_message_callback) |callback| {
-            const response_payload = try std.json.stringifyAlloc(self.allocator, response, .{});
+            var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 128);
+            defer aw.deinit();
+            try protobuf.encode(&aw.writer, self.allocator, response);
+            const response_payload = try self.allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
             defer self.allocator.free(response_payload);
             callback(from, .request_vote_response, response_payload);
         }
@@ -421,11 +510,12 @@ pub const RaftNode = struct {
 
         if (self.state != .candidate) return;
 
-        const response = std.json.parseFromSlice(RequestVoteResponse, self.allocator, payload, .{}) catch return;
-        defer response.deinit();
+        var reader: std.Io.Reader = .fixed(payload);
+        var response = protobuf.decode(RequestVoteResponse, &reader, self.allocator) catch return;
+        defer response.deinit(self.allocator);
 
-        if (response.value.term > self.current_term) {
-            self.current_term = response.value.term;
+        if (response.term > self.current_term) {
+            self.current_term = response.term;
             self.state = .follower;
             if (self.voted_for) |voted| {
                 self.allocator.free(voted);
@@ -434,7 +524,7 @@ pub const RaftNode = struct {
             return;
         }
 
-        if (response.value.term == self.current_term and response.value.vote_granted) {
+        if (response.term == self.current_term and response.vote_granted) {
             self.votes_received += 1;
 
             const majority = (self.config.peers.len + 1) / 2 + 1;
@@ -458,49 +548,50 @@ pub const RaftNode = struct {
     }
 
     fn handleAppendEntries(self: *RaftNode, from: []const u8, payload: []const u8) !void {
-        const request = std.json.parseFromSlice(AppendEntriesRequest, self.allocator, payload, .{}) catch return;
-        defer request.deinit();
+        var reader: std.Io.Reader = .fixed(payload);
+        var request = protobuf.decode(AppendEntriesRequest, &reader, self.allocator) catch return;
+        defer request.deinit(self.allocator);
 
         var success = false;
 
-        if (request.value.term >= self.current_term) {
-            self.current_term = request.value.term;
+        if (request.term >= self.current_term) {
+            self.current_term = request.term;
             self.state = .follower;
             try self.resetElectionTimer();
 
             // Log consistency check
-            if (request.value.prev_log_index == 0 or
-                (request.value.prev_log_index <= self.log.items.len and
-                    self.log.items[request.value.prev_log_index - 1].term == request.value.prev_log_term))
+            if (request.prev_log_index == 0 or
+                (request.prev_log_index <= self.log.items.len and
+                    self.log.items[request.prev_log_index - 1].term == request.prev_log_term))
             {
                 success = true;
 
                 // Append new entries
-                if (request.value.entries.len > 0) {
+                if (request.entries.items.len > 0) {
                     // Remove conflicting entries
-                    if (request.value.prev_log_index < self.log.items.len) {
+                    if (request.prev_log_index < self.log.items.len) {
                         // Truncate log
-                        while (self.log.items.len > request.value.prev_log_index) {
+                        while (self.log.items.len > request.prev_log_index) {
                             const removed = self.log.pop();
                             self.allocator.free(removed.command);
                         }
                     }
 
                     // Append new entries
-                    for (request.value.entries) |entry| {
+                    for (request.entries.items) |entry| {
                         const new_entry = LogEntry{
                             .term = entry.term,
                             .index = entry.index,
                             .command = try self.allocator.dupe(u8, entry.command),
                             .timestamp = entry.timestamp,
                         };
-                        try self.log.append(new_entry);
+                        try self.log.append(self.allocator, new_entry);
                     }
                 }
 
                 // Update commit index
-                if (request.value.leader_commit > self.commit_index) {
-                    self.commit_index = @min(request.value.leader_commit, self.getLastLogIndex());
+                if (request.leader_commit > self.commit_index) {
+                    self.commit_index = @min(request.leader_commit, self.getLastLogIndex());
                 }
             }
         }
@@ -512,7 +603,10 @@ pub const RaftNode = struct {
         };
 
         if (self.send_message_callback) |callback| {
-            const response_payload = try std.json.stringifyAlloc(self.allocator, response, .{});
+            var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 128);
+            defer aw.deinit();
+            try protobuf.encode(&aw.writer, self.allocator, response);
+            const response_payload = try self.allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
             defer self.allocator.free(response_payload);
             callback(from, .append_entries_response, response_payload);
         }
@@ -521,11 +615,12 @@ pub const RaftNode = struct {
     fn handleAppendEntriesResponse(self: *RaftNode, from: []const u8, payload: []const u8) !void {
         if (self.state != .leader) return;
 
-        const response = std.json.parseFromSlice(AppendEntriesResponse, self.allocator, payload, .{}) catch return;
-        defer response.deinit();
+        var reader: std.Io.Reader = .fixed(payload);
+        var response = protobuf.decode(AppendEntriesResponse, &reader, self.allocator) catch return;
+        defer response.deinit(self.allocator);
 
-        if (response.value.term > self.current_term) {
-            self.current_term = response.value.term;
+        if (response.term > self.current_term) {
+            self.current_term = response.term;
             self.state = .follower;
             if (self.voted_for) |voted| {
                 self.allocator.free(voted);
@@ -534,10 +629,10 @@ pub const RaftNode = struct {
             return;
         }
 
-        if (response.value.term == self.current_term) {
-            if (response.value.success) {
-                try self.next_index.put(from, response.value.match_index + 1);
-                try self.match_index.put(from, response.value.match_index);
+        if (response.term == self.current_term) {
+            if (response.success) {
+                try self.next_index.put(from, response.match_index + 1);
+                try self.match_index.put(from, response.match_index);
 
                 // Update commit index
                 try self.updateCommitIndex();
@@ -553,16 +648,9 @@ pub const RaftNode = struct {
 
     // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleInstallSnapshot; STATUS=EXEMPT; OWNER=raft; UPDATED=2026-01-10
     fn handleInstallSnapshot(self: *RaftNode, from: []const u8, payload: []const u8) !void {
-        // Parse snapshot metadata from payload (JSON format expected)
-        const parsed = std.json.parseFromSlice(
-            struct { term: u64, last_included_index: u64, last_included_term: u64, done: bool },
-            self.allocator,
-            payload,
-            .{},
-        ) catch return;
-        defer parsed.deinit();
-
-        const msg = parsed.value;
+        var reader: std.Io.Reader = .fixed(payload);
+        var msg = protobuf.decode(SnapshotRequest, &reader, self.allocator) catch return;
+        defer msg.deinit(self.allocator);
 
         // If term < current term, ignore
         if (msg.term < self.current_term) {
@@ -590,9 +678,12 @@ pub const RaftNode = struct {
         // Send response
         if (self.send_message_callback) |send_fn| {
             const response_obj = SnapshotResponse{ .term = self.current_term };
-            const response_json = json_lib.encode(self.allocator, response_obj, .{}) catch return;
-            defer self.allocator.free(response_json);
-            send_fn(from, .install_snapshot_response, response_json);
+            var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 128);
+            defer aw.deinit();
+            try protobuf.encode(&aw.writer, self.allocator, response_obj);
+            const response_payload = try self.allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
+            defer self.allocator.free(response_payload);
+            send_fn(from, .install_snapshot_response, response_payload);
         }
     }
 
@@ -603,16 +694,9 @@ pub const RaftNode = struct {
             return;
         }
 
-        // Parse response
-        const parsed = std.json.parseFromSlice(
-            struct { term: u64 },
-            self.allocator,
-            payload,
-            .{},
-        ) catch return;
-        defer parsed.deinit();
-
-        const msg = parsed.value;
+        var reader: std.Io.Reader = .fixed(payload);
+        var msg = protobuf.decode(SnapshotResponse, &reader, self.allocator) catch return;
+        defer msg.deinit(self.allocator);
 
         // If term is higher, step down
         if (msg.term > self.current_term) {
@@ -631,16 +715,16 @@ pub const RaftNode = struct {
 
     fn updateCommitIndex(self: *RaftNode) !void {
         // Find the highest index that is replicated on a majority of servers
-        var indices = std.ArrayList(u64){};
-        defer indices.deinit();
+        var indices = std.ArrayList(u64).init(self.allocator);
+        defer indices.deinit(self.allocator);
 
         // Add leader's match index
-        try indices.append(self.getLastLogIndex());
+        try indices.append(self.allocator, self.getLastLogIndex());
 
         // Add followers' match indices
         var iter = self.match_index.iterator();
         while (iter.next()) |entry| {
-            try indices.append(entry.value_ptr.*);
+            try indices.append(self.allocator, entry.value_ptr.*);
         }
 
         // Sort indices in descending order

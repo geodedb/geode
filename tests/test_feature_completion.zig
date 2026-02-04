@@ -5,16 +5,14 @@ const bm25 = @import("../src/fts/bm25.zig");
 const cbo = @import("../src/planner/cbo.zig");
 const builtin_algos = @import("../src/graph/builtin_algorithms.zig");
 
-test "multi-threading: work-stealing scheduler" {
+test "multi-threading: spice-backed pool" {
     const allocator = std.testing.allocator;
 
-    // Test work-stealing thread pool
     var pool = try parallel.Pool.init(allocator, 4);
     defer pool.deinit();
 
-    // Verify work-stealing deques
-    try std.testing.expect(pool.worker_queues.len == 4);
     try std.testing.expect(pool.worker_count == 4);
+    try std.testing.expect(pool.enabled);
 
     // Test adaptive chunk estimator
     var estimator = parallel.AdaptiveChunkEstimator.init();
@@ -73,15 +71,15 @@ test "advanced FTS: language analyzers" {
 test "graph algorithms: comprehensive suite" {
     const allocator = std.testing.allocator;
 
-    var graph = @import(\"geode\").graph_store.GraphStore.init(allocator);
+    var graph = @import("geode").graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
-    const n1 = try graph.createNode(&.{\"Person\"});
-    const n2 = try graph.createNode(&.{\"Person\"});
-    const n3 = try graph.createNode(&.{\"Person\"});
+    const n1 = try graph.createNode(&.{ "Person" });
+    const n2 = try graph.createNode(&.{ "Person" });
+    const n3 = try graph.createNode(&.{ "Person" });
 
-    _ = try graph.createEdge(n1, n2, \"KNOWS\");
-    _ = try graph.createEdge(n2, n3, \"KNOWS\");
+    _ = try graph.createEdge(n1, n2, "KNOWS");
+    _ = try graph.createEdge(n2, n3, "KNOWS");
 
     var algos = builtin_algos.BuiltinAlgorithms.init(allocator, &graph);
     defer algos.deinit();
@@ -157,7 +155,7 @@ test "integration: all features compile and link" {
     // This test verifies that all enhanced features compile together
     // without conflicts or missing dependencies
 
-    try std.testing.expect(@sizeOf(parallel.WorkStealingDeque) > 0);
+    try std.testing.expect(@sizeOf(parallel.Pool) > 0);
     try std.testing.expect(@sizeOf(fts.AdvancedSearch) > 0);
     try std.testing.expect(@sizeOf(bm25.BM25F) > 0);
     try std.testing.expect(@sizeOf(cbo.CardinalityEstimator) > 0);
