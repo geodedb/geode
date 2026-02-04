@@ -1,17 +1,17 @@
 const std = @import("std");
 const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
+const util = @import("proto_test_util.zig");
 
 const RunResult = struct { code: i32, out: []u8, err: []u8 };
 
-fn run(args: []const []const u8) !RunResult {
-    const allocator = std.testing.allocator;
+fn run(allocator: std.mem.Allocator, args: []const []const u8) !RunResult {
     var argv = std.ArrayList([]const u8).init(allocator);
-    defer argv.deinit(allocator);
-    try argv.append(allocator, args[0]);
+    defer argv.deinit();
+    try argv.append(args[0]);
     if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
-        try argv.append(allocator, "query");
+        try argv.append("query");
     }
-    try argv.appendSlice(allocator, args[1..]);
+    try argv.appendSlice(args[1..]);
     var child = Child.init(argv.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
@@ -39,35 +39,59 @@ fn extract_rows(allocator: std.mem.Allocator, out: []const u8) ![]u8 {
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Full Rows"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_FullRows; OWNER=engine; UPDATED=2025-09-24
 test "protocol: transport parity full-rows QUIC (gated)" {
+    util.testStart("transport parity full-rows QUIC");
+    errdefer util.testFail();
 
+    const allocator = std.testing.allocator;
     const exe = "./zig-out/bin/geode";
     const q = "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name AS a, b.name AS b ORDER BY a, b LIMIT 10";
 
-    var env = try std.process.getEnvMap(std.testing.allocator);
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    util.progress("Starting server on port {d}...", .{port});
+
+    var env = try std.process.getEnvMap(allocator);
     defer env.deinit();
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
 
-    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17663", "--result-format", "json" }, std.testing.allocator);
+    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--result-format", "json" }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Pipe;
     server.stderr_behavior = .Pipe;
     server.env_map = &env;
     try server.spawn();
-    std.Thread.sleep(400 * std.time.ns_per_ms);
+    defer {
+        _ = server.kill() catch {};
+        _ = server.wait() catch {};
+    }
 
-    const qres = try run(&.{ exe, q, "--server", "127.0.0.1:17663", "--format", "json" });
-    defer std.testing.allocator.free(qres.out);
-    defer std.testing.allocator.free(qres.err);
+    std.time.sleep(400 * std.time.ns_per_ms);
+
+    util.progress("Running first query...", .{});
+    const qres = try run(allocator, &.{ exe, q, "--server", addr, "--format", "json" });
+    defer allocator.free(qres.out);
+    defer allocator.free(qres.err);
     try std.testing.expectEqual(@as(i32, 0), qres.code);
-    const qrows = try extract_rows(std.testing.allocator, qres.out);
-    defer std.testing.allocator.free(qrows);
+    const qrows = try extract_rows(allocator, qres.out);
+    defer allocator.free(qrows);
 
-    const qres2 = try run(&.{ exe, q, "--server", "127.0.0.1:17663", "--format", "json" });
-    defer std.testing.allocator.free(qres2.out);
-    defer std.testing.allocator.free(qres2.err);
+    util.progress("Running second query...", .{});
+    const qres2 = try run(allocator, &.{ exe, q, "--server", addr, "--format", "json" });
+    defer allocator.free(qres2.out);
+    defer allocator.free(qres2.err);
     try std.testing.expectEqual(@as(i32, 0), qres2.code);
-    const qrows2 = try extract_rows(std.testing.allocator, qres2.out);
-    defer std.testing.allocator.free(qrows2);
+    const qrows2 = try extract_rows(allocator, qres2.out);
+    defer allocator.free(qrows2);
 
+    util.progress("Comparing results...", .{});
     try std.testing.expect(std.mem.eql(u8, qrows, qrows2));
+
+    util.testPass();
 }

@@ -57,9 +57,6 @@ const ConnectionContext = struct {
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
-    env_spill_sort: usize,
-    env_spill_distinct: usize,
-    env_spill_union: usize,
     env_spill_threshold: usize,
     env_storage_checksum_error: bool,
     security_manager: ?*geode_auth.SecurityManager,
@@ -77,9 +74,6 @@ fn handleConnectionAsync(context: *anyopaque) void {
         ctx.disable_estimates,
         ctx.compact_profile,
         ctx.memcurve_profile,
-        ctx.env_spill_sort,
-        ctx.env_spill_distinct,
-        ctx.env_spill_union,
         ctx.env_spill_threshold,
         ctx.env_storage_checksum_error,
         false,
@@ -338,9 +332,6 @@ pub fn main() !void {
     defer init_ctx.deinit();
 
     // Extract initialization values for compatibility with existing code
-    const env_spill_sort = init_ctx.env_config.spill_sort;
-    const env_spill_distinct = init_ctx.env_config.spill_distinct;
-    const env_spill_union = init_ctx.env_config.spill_union;
     const env_spill_threshold = init_ctx.env_config.spill_threshold;
     const env_storage_checksum_error = init_ctx.env_config.storage_checksum_error;
     const disable_estimates = init_ctx.env_config.disable_estimates;
@@ -382,9 +373,6 @@ pub fn main() !void {
         }
 
         const grpc_config = grpc_transport.GrpcConfig{
-            .spill_sort = env_spill_sort,
-            .spill_distinct = env_spill_distinct,
-            .spill_union = env_spill_union,
             .spill_threshold = env_spill_threshold,
             .storage_checksum_error = env_storage_checksum_error,
             .disable_estimates = disable_estimates,
@@ -477,7 +465,7 @@ pub fn main() !void {
                     });
                     continue;
                 };
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err2| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err2| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err2)),
                     });
@@ -513,7 +501,7 @@ pub fn main() !void {
             // GAP-0202: Create context for async connection handling
             const ctx = gpa.create(ConnectionContext) catch {
                 log.err("Failed to allocate connection context, handling sync", &.{});
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err)),
                     });
@@ -529,9 +517,6 @@ pub fn main() !void {
                 .disable_estimates = disable_estimates,
                 .compact_profile = compact_profile,
                 .memcurve_profile = memcurve_profile,
-                .env_spill_sort = env_spill_sort,
-                .env_spill_distinct = env_spill_distinct,
-                .env_spill_union = env_spill_union,
                 .env_spill_threshold = env_spill_threshold,
                 .env_storage_checksum_error = env_storage_checksum_error,
                 .security_manager = init_ctx.security_manager,

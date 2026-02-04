@@ -282,9 +282,6 @@ pub fn handleQuicConnection(
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
-    env_spill_sort: usize,
-    env_spill_distinct: usize,
-    env_spill_union: usize,
     env_spill_threshold: usize,
     env_storage_checksum_error: bool,
     _force_serialization_failure_unused: bool,
@@ -336,9 +333,6 @@ pub fn handleQuicConnection(
     state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.graph_types = std.HashMap([]const u8, geode.server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
-    state.spill_sort = env_spill_sort;
-    state.spill_distinct = env_spill_distinct;
-    state.spill_union = env_spill_union;
     state.query_mem_limit_bytes = env_spill_threshold;
     state.storage_checksum_error = env_storage_checksum_error;
     // CANARY: REQ=REQ-ABAC-WIRE-014; FEATURE="ABAC Enforcement"; ASPECT=QUICState; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
@@ -677,10 +671,6 @@ fn handleClientMessage(
                                 .compact = compact_profile,
                                 .include_mem_curve = memcurve_profile,
                                 .disable_estimates = disable_estimates,
-                                .spill_sort = state.spill_sort,
-                                .spill_distinct = state.spill_distinct,
-                                .spill_union = state.spill_union,
-                                .spill_hashagg = state.spill_hashagg,
                                 .spill_threshold = state.query_mem_limit_bytes,
                                 .committed_txns = state.global_commit_ts,
                                 .graph_store_nodes = @intCast(store.getNodeCount()),

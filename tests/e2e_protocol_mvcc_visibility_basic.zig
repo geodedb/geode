@@ -66,32 +66,78 @@ fn runMvccScenario(allocator: std.mem.Allocator, addr: []const u8) !struct { bef
 // 3. T1 SELECT count() again (still expect 0 under snapshot isolation)
 // 4. T1 COMMIT
 test "mvcc visibility snapshot isolation (QUIC)" {
+    proto_util.testStart("mvcc visibility snapshot isolation (QUIC)");
+    errdefer proto_util.testFail();
+
     const allocator = testing.allocator;
+
+    // Get random port
+    const port = proto_util.getRandomPort() catch |err| {
+        proto_util.progress("Port allocation failed: {}", .{err});
+        proto_util.testSkip();
+        return;
+    };
+    const addr = try proto_util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    proto_util.progress("Starting server on port {d}...", .{port});
+
     var server = try proto_util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17672", "--result-format", "json" },
-        null,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--result-format", "json" },
+        proto_util.TestEnv.standard(),
     );
     defer server.deinit();
-    std.Thread.sleep(300 * std.time.ns_per_ms);
 
-    const counts = try runMvccScenario(allocator, "127.0.0.1:17672");
+    proto_util.waitForServerReady(allocator, addr, 10000) catch |err| {
+        proto_util.progress("Server readiness timeout: {}", .{err});
+        proto_util.testSkip();
+        return;
+    };
+
+    proto_util.progress("Running MVCC scenario...", .{});
+    const counts = try runMvccScenario(allocator, addr);
     try testing.expectEqual(@as(usize, 0), counts.before);
     try testing.expectEqual(@as(usize, 0), counts.after);
+
+    proto_util.testPass();
 }
 
 // CANARY wrapper providing named test for scanner linkage
 test "TestCANARY_REQ_GQL_013_SSIPhantomPrevention" {
+    proto_util.testStart("SSI Phantom Prevention");
+    errdefer proto_util.testFail();
+
     const allocator = testing.allocator;
+
+    // Get random port
+    const port = proto_util.getRandomPort() catch |err| {
+        proto_util.progress("Port allocation failed: {}", .{err});
+        proto_util.testSkip();
+        return;
+    };
+    const addr = try proto_util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    proto_util.progress("Starting server on port {d}...", .{port});
+
     var server = try proto_util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17673", "--result-format", "json" },
-        null,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--result-format", "json" },
+        proto_util.TestEnv.standard(),
     );
     defer server.deinit();
-    std.Thread.sleep(300 * std.time.ns_per_ms);
 
-    const counts = try runMvccScenario(allocator, "127.0.0.1:17673");
+    proto_util.waitForServerReady(allocator, addr, 10000) catch |err| {
+        proto_util.progress("Server readiness timeout: {}", .{err});
+        proto_util.testSkip();
+        return;
+    };
+
+    proto_util.progress("Running MVCC scenario...", .{});
+    const counts = try runMvccScenario(allocator, addr);
     try testing.expectEqual(@as(usize, 0), counts.before);
     try testing.expectEqual(@as(usize, 0), counts.after);
+
+    proto_util.testPass();
 }

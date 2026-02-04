@@ -4,11 +4,12 @@
 const std = @import("std");
 const testing = std.testing;
 const builtin = @import("builtin");
+const util = @import("proto_test_util.zig");
 
 const test_timeout = 30 * std.time.ns_per_s;
 
 // Helper to run geode query commands against a QUIC server
-fn runGeodeQuery(allocator: std.mem.Allocator, server: []const u8, query: []const u8) !std.ChildProcess.ExecResult {
+fn runGeodeQuery(allocator: std.mem.Allocator, server: []const u8, query: []const u8) !std.process.Child.RunResult {
     const argv = [_][]const u8{
         "./zig-out/bin/geode",
         "query",
@@ -23,7 +24,7 @@ fn runGeodeQuery(allocator: std.mem.Allocator, server: []const u8, query: []cons
         "json",
         query,
     };
-    return try std.ChildProcess.exec(.{
+    return try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &argv,
         .max_output_bytes = 1024 * 1024,
@@ -52,25 +53,38 @@ fn loadMigrationFile(allocator: std.mem.Allocator, server: []const u8, path: []c
 }
 
 test "dataset migration and basic queries" {
+    util.testStart("dataset migration and basic queries");
+    errdefer util.testFail();
+
     // Skip if not in CI or explicit test mode
-    if (std.os.getenv("GEODE_RUN_DATASET_TESTS") == null and
-        std.os.getenv("CI") == null)
+    if (std.posix.getenv("GEODE_RUN_DATASET_TESTS") == null and
+        std.posix.getenv("CI") == null)
     {
+        util.testSkip();
         return error.SkipZigTest;
     }
 
     const allocator = testing.allocator;
 
-    const server_addr = "127.0.0.1:3141";
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
 
-    // Start server
+    util.progress("Starting server on port {d}...", .{port});
+
     var env_map = try std.process.getEnvMap(allocator);
     defer env_map.deinit();
-    env_map.put("GEODE_ADMIN_USERNAME", "geode") catch {};
-    env_map.put("GEODE_DEFAULT_PASSWORD", "geode-test-password") catch {};
+    try env_map.put("GEODE_ADMIN_USERNAME", "geode");
+    try env_map.put("GEODE_DEFAULT_PASSWORD", "geode-test-password");
+    try env_map.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
 
     var server = std.process.Child.init(
-        &[_][]const u8{ "./zig-out/bin/geode", "serve", "--listen", server_addr, "--data_dir", "./test_data" },
+        &[_][]const u8{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", "./test_data" },
         allocator,
     );
     server.env_map = &env_map;
@@ -91,9 +105,10 @@ test "dataset migration and basic queries" {
         "migrations/004_social_network_events_products.gql",
     };
 
+    util.progress("Loading migrations...", .{});
     for (migrations) |migration| {
-        std.debug.print("Loading migration: {s}\n", .{migration});
-        try loadMigrationFile(allocator, server_addr, migration);
+        util.progress("Loading migration: {s}", .{migration});
+        try loadMigrationFile(allocator, addr, migration);
     }
 
     // Test queries
@@ -129,10 +144,11 @@ test "dataset migration and basic queries" {
         },
     };
 
+    util.progress("Running test queries...", .{});
     for (test_queries) |test_case| {
-        std.debug.print("Testing: {s}\n", .{test_case.name});
+        util.progress("Testing: {s}", .{test_case.name});
 
-        const result = try runGeodeQuery(allocator, server_addr, test_case.query);
+        const result = try runGeodeQuery(allocator, addr, test_case.query);
         defer {
             allocator.free(result.stdout);
             allocator.free(result.stderr);
@@ -148,6 +164,8 @@ test "dataset migration and basic queries" {
             return error.UnexpectedOutput;
         }
     }
+
+    util.testPass();
 }
 
 // CANARY: REQ=REQ-GQL-DATASET-E2E; FEATURE="DatasetIntegrationE2E"; ASPECT=Testing; STATUS=TESTED; TEST=e2e_dataset_integration.zig; BENCH=benchmark_dataset_e2e.zig; OWNER=test-team; UPDATED=2025-09-29

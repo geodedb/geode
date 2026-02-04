@@ -1444,27 +1444,19 @@ pub const HashAggregator = struct {
                 break :blk AggregateState.AggValue{ .Avg = .{ .sum = sum, .count = cnt } };
             },
             5 => blk_cd: {
-                // Legacy CountDistinct tag previously encoded like Count (only count). For backwards compat: read count then treat values as empty set.
                 const cnt = try file.reader().readInt(i64, .little);
-                // Detect presence of set length (optional). Peek by reading next 4 bytes; if EOF treat zero.
                 var values = std.ArrayList([]const u8).init(allocator);
                 errdefer {
                     for (values.items) |v| allocator.free(v);
                     values.deinit();
                 }
-                // Attempt to read optional length; if fails just use empty.
-                const len_or_err = file.reader().readInt(u32, .little) catch |e| switch (e) {
-                    error.EndOfStream => 0,
-                    else => 0,
-                };
-                if (len_or_err > 0) {
-                    var i: u32 = 0;
-                    while (i < len_or_err) : (i += 1) {
-                        const l = try file.reader().readInt(u32, .little);
-                        const buf = try allocator.alloc(u8, l);
-                        try file.readAll(buf);
-                        try values.append(buf);
-                    }
+                const len = try file.reader().readInt(u32, .little);
+                var i: u32 = 0;
+                while (i < len) : (i += 1) {
+                    const l = try file.reader().readInt(u32, .little);
+                    const buf = try allocator.alloc(u8, l);
+                    try file.readAll(buf);
+                    try values.append(buf);
                 }
                 break :blk_cd AggregateState.AggValue{ .CountDistinctState = .{ .count = cnt, .values = values.toOwnedSlice() } };
             },

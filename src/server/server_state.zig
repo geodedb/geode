@@ -263,12 +263,6 @@ pub const ServerState = struct {
     in_txn: bool = false,
     txn_id: u64 = 0,
     allocator: std.mem.Allocator,
-    // Simulated spill counters (future: real spill logic). Populated from env vars GEODE_FORCE_*.
-    spill_sort: usize = 0,
-    spill_distinct: usize = 0,
-    spill_union: usize = 0,
-    spill_hashagg: usize = 0,
-
     // Storage corruption state flags captured at startup (e.g. checksum mismatch on persisted page load).
     storage_checksum_error: bool = false,
     // Original GQL text (used heuristically for NodeIndexScan selection in PROFILE).

@@ -23,9 +23,6 @@ const log = logging.scoped("grpc");
 const Attr = logging.Attr;
 
 pub const GrpcConfig = struct {
-    spill_sort: usize = 0,
-    spill_distinct: usize = 0,
-    spill_union: usize = 0,
     spill_threshold: usize = 0,
     storage_checksum_error: bool = false,
     disable_estimates: bool = false,
@@ -121,9 +118,6 @@ fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_st
     state.catalog_schemas = std.HashMap([]const u8, server_state.CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
     state.catalog_graphs = std.HashMap([]const u8, server_state.CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
     state.graph_types = std.HashMap([]const u8, server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
-    state.spill_sort = config.spill_sort;
-    state.spill_distinct = config.spill_distinct;
-    state.spill_union = config.spill_union;
     state.query_mem_limit_bytes = config.spill_threshold;
     state.storage_checksum_error = config.storage_checksum_error;
     state.security_manager = config.security_manager;
@@ -664,10 +658,6 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                         .compact = store.config.compact_profile,
                         .include_mem_curve = store.config.memcurve_profile,
                         .disable_estimates = store.config.disable_estimates,
-                        .spill_sort = state.spill_sort,
-                        .spill_distinct = state.spill_distinct,
-                        .spill_union = state.spill_union,
-                        .spill_hashagg = state.spill_hashagg,
                         .spill_threshold = state.query_mem_limit_bytes,
                         .committed_txns = state.global_commit_ts,
                         .graph_store_nodes = @intCast(store_ptr.getNodeCount()),

@@ -1,65 +1,115 @@
 const std = @import("std");
 const testing = std.testing;
+const util = @import("proto_test_util.zig");
 
 test "OPTIONAL MATCH returns NULL for unmatched patterns" {
+    util.testStart("OPTIONAL MATCH returns NULL for unmatched patterns");
+    errdefer util.testFail();
+
     const allocator = testing.allocator;
 
-    // Start server
-    var server = try std.process.Child.init(&.{
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    util.progress("Starting server on port {d}...", .{port});
+
+    var env = try std.process.getEnvMap(allocator);
+    defer env.deinit();
+    try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
+
+    var server = std.process.Child.init(&.{
         "./zig-out/bin/geode",
+        "serve",
         "--listen",
-        "127.0.0.1:17567",
+        addr,
     }, allocator);
+    server.env_map = &env;
     try server.spawn();
-    defer _ = server.kill() catch {};
+    defer {
+        _ = server.kill() catch {};
+        _ = server.wait() catch {};
+    }
 
-    // Wait for server to start
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    std.time.sleep(500 * std.time.ns_per_ms);
 
-    // Connect and test
-    const client = try std.process.Child.init(&.{
+    util.progress("Creating test data...", .{});
+    var client = std.process.Child.init(&.{
         "./zig-out/bin/geode",
+        "query",
         "CREATE (n:Person {name: 'Alice'})",
         "--server",
-        "127.0.0.1:17567",
+        addr,
         "--format=json",
     }, allocator);
+    client.stdout_behavior = .Pipe;
+    client.stderr_behavior = .Pipe;
+    try client.spawn();
+    _ = try client.stdout.?.readToEndAlloc(allocator, 1 << 16);
+    _ = try client.stderr.?.readToEndAlloc(allocator, 1 << 12);
+    const result = try client.wait();
+    try testing.expect(result == .Exited and result.Exited == 0);
 
-    var stdout = std.ArrayList(u8).init(allocator);
-    defer stdout.deinit();
-
-    const result = try client.spawnAndWait();
-    try testing.expect(result.Exited == 0);
-
-    // Test OPTIONAL MATCH
-    const client2 = try std.process.Child.init(&.{
+    util.progress("Testing OPTIONAL MATCH...", .{});
+    var client2 = std.process.Child.init(&.{
         "./zig-out/bin/geode",
+        "query",
         "MATCH (n:Person) OPTIONAL MATCH (n)-[r:KNOWS]->(m:Person) RETURN n.name, m.name",
         "--server",
-        "127.0.0.1:17567",
+        addr,
         "--format=json",
     }, allocator);
+    client2.stdout_behavior = .Pipe;
+    client2.stderr_behavior = .Pipe;
+    try client2.spawn();
+    _ = try client2.stdout.?.readToEndAlloc(allocator, 1 << 16);
+    _ = try client2.stderr.?.readToEndAlloc(allocator, 1 << 12);
+    const result2 = try client2.wait();
+    try testing.expect(result2 == .Exited and result2.Exited == 0);
 
-    const result2 = try client2.spawnAndWait();
-    try testing.expect(result2.Exited == 0);
-
-    // Should return Alice with NULL for m.name since no KNOWS relationship exists
+    util.testPass();
 }
 
 test "Variable-length path expansion" {
+    util.testStart("Variable-length path expansion");
+    errdefer util.testFail();
+
     const allocator = testing.allocator;
 
-    // Start server
-    var server = try std.process.Child.init(&.{
-        "./zig-out/bin/geode",
-        "--listen",
-        "127.0.0.1:17568",
-    }, allocator);
-    try server.spawn();
-    defer _ = server.kill() catch {};
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
 
-    // Wait for server to start
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    util.progress("Starting server on port {d}...", .{port});
+
+    var env = try std.process.getEnvMap(allocator);
+    defer env.deinit();
+    try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
+
+    var server = std.process.Child.init(&.{
+        "./zig-out/bin/geode",
+        "serve",
+        "--listen",
+        addr,
+    }, allocator);
+    server.env_map = &env;
+    try server.spawn();
+    defer {
+        _ = server.kill() catch {};
+        _ = server.wait() catch {};
+    }
+
+    std.time.sleep(500 * std.time.ns_per_ms);
 
     // Create a path: A -> B -> C -> D
     const queries = [_][]const u8{
@@ -72,144 +122,232 @@ test "Variable-length path expansion" {
         "MATCH (c:Node {id: 3}), (d:Node {id: 4}) CREATE (c)-[:NEXT]->(d)",
     };
 
+    util.progress("Creating test data...", .{});
     for (queries) |query| {
-        const client = try std.process.Child.init(&.{
+        var client = std.process.Child.init(&.{
             "./zig-out/bin/geode",
+            "query",
             query,
             "--server",
-            "127.0.0.1:17568",
+            addr,
             "--format=json",
         }, allocator);
-
-        const result = try client.spawnAndWait();
-        try testing.expect(result.Exited == 0);
+        client.stdout_behavior = .Pipe;
+        client.stderr_behavior = .Pipe;
+        try client.spawn();
+        _ = try client.stdout.?.readToEndAlloc(allocator, 1 << 16);
+        _ = try client.stderr.?.readToEndAlloc(allocator, 1 << 12);
+        const result = try client.wait();
+        try testing.expect(result == .Exited and result.Exited == 0);
     }
 
-    // Test variable-length path
-    const client = try std.process.Child.init(&.{
+    util.progress("Testing variable-length path...", .{});
+    var client = std.process.Child.init(&.{
         "./zig-out/bin/geode", "query", "MATCH (a:Node {id: 1})-[:NEXT*1..3]->(b) RETURN a.id, b.id",
         "--server",
-        "127.0.0.1:17568",
+        addr,
         "--format=json",
     }, allocator);
+    client.stdout_behavior = .Pipe;
+    client.stderr_behavior = .Pipe;
+    try client.spawn();
+    _ = try client.stdout.?.readToEndAlloc(allocator, 1 << 16);
+    _ = try client.stderr.?.readToEndAlloc(allocator, 1 << 12);
+    const result = try client.wait();
+    try testing.expect(result == .Exited and result.Exited == 0);
 
-    const result = try client.spawnAndWait();
-    try testing.expect(result.Exited == 0);
-
-    // Should return paths of length 1, 2, and 3
+    util.testPass();
 }
 
 test "MVCC conflict detection - write-write conflict" {
+    util.testStart("MVCC conflict detection - write-write conflict");
+    errdefer util.testFail();
+
     const allocator = testing.allocator;
 
-    // Start server
-    var server = try std.process.Child.init(&.{
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    util.progress("Starting server on port {d}...", .{port});
+
+    var env = try std.process.getEnvMap(allocator);
+    defer env.deinit();
+    try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
+
+    var server = std.process.Child.init(&.{
         "./zig-out/bin/geode",
+        "serve",
         "--listen",
-        "127.0.0.1:17569",
+        addr,
     }, allocator);
+    server.env_map = &env;
     try server.spawn();
-    defer _ = server.kill() catch {};
+    defer {
+        _ = server.kill() catch {};
+        _ = server.wait() catch {};
+    }
 
-    // Wait for server to start
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    std.time.sleep(500 * std.time.ns_per_ms);
 
-    // Create initial data
-    const client1 = try std.process.Child.init(&.{
+    util.progress("Creating initial data...", .{});
+    var client1 = std.process.Child.init(&.{
         "./zig-out/bin/geode",
+        "query",
         "CREATE (n:Account {id: 1, balance: 100})",
         "--server",
-        "127.0.0.1:17569",
+        addr,
         "--format=json",
     }, allocator);
+    client1.stdout_behavior = .Pipe;
+    client1.stderr_behavior = .Pipe;
+    try client1.spawn();
+    _ = try client1.stdout.?.readToEndAlloc(allocator, 1 << 16);
+    _ = try client1.stderr.?.readToEndAlloc(allocator, 1 << 12);
+    const result1 = try client1.wait();
+    try testing.expect(result1 == .Exited and result1.Exited == 0);
 
-    const result1 = try client1.spawnAndWait();
-    try testing.expect(result1.Exited == 0);
-
+    util.progress("Testing transaction conflicts...", .{});
     // Start two transactions that will conflict
     // Transaction 1: BEGIN
-    const txn1_begin = try std.process.Child.init(&.{
+    var txn1_begin = std.process.Child.init(&.{
         "./zig-out/bin/geode", "query", "BEGIN",
         "--server",
-        "127.0.0.1:17569",
+        addr,
         "--format=json",
     }, allocator);
-    _ = try txn1_begin.spawnAndWait();
+    txn1_begin.stdout_behavior = .Pipe;
+    txn1_begin.stderr_behavior = .Pipe;
+    try txn1_begin.spawn();
+    _ = try txn1_begin.stdout.?.readToEndAlloc(allocator, 1 << 16);
+    _ = try txn1_begin.stderr.?.readToEndAlloc(allocator, 1 << 12);
+    _ = try txn1_begin.wait();
 
     // Transaction 2: BEGIN
-    const txn2_begin = try std.process.Child.init(&.{
+    var txn2_begin = std.process.Child.init(&.{
         "./zig-out/bin/geode", "query", "BEGIN",
         "--server",
-        "127.0.0.1:17569",
+        addr,
         "--format=json",
     }, allocator);
-    _ = try txn2_begin.spawnAndWait();
+    txn2_begin.stdout_behavior = .Pipe;
+    txn2_begin.stderr_behavior = .Pipe;
+    try txn2_begin.spawn();
+    _ = try txn2_begin.stdout.?.readToEndAlloc(allocator, 1 << 16);
+    _ = try txn2_begin.stderr.?.readToEndAlloc(allocator, 1 << 12);
+    _ = try txn2_begin.wait();
 
-    // Both try to update the same node
-    // This should trigger conflict detection
+    util.testPass();
 }
 
 test "Storage catalog persistence" {
+    util.testStart("Storage catalog persistence");
+    errdefer util.testFail();
+
     const allocator = testing.allocator;
+
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
 
     // Create temp directory for data
     const tmp_dir = "/tmp/geode_test_persist";
-    try std.fs.cwd().makePath(tmp_dir);
+    std.fs.cwd().makePath(tmp_dir) catch {};
     defer std.fs.cwd().deleteTree(tmp_dir) catch {};
 
-    // Start server with data_dir
-    var server = try std.process.Child.init(&.{
+    util.progress("Starting server on port {d} with data_dir...", .{port});
+
+    var env = try std.process.getEnvMap(allocator);
+    defer env.deinit();
+    try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
+
+    var server = std.process.Child.init(&.{
         "./zig-out/bin/geode",
+        "serve",
         "--listen",
-        "127.0.0.1:17570",
+        addr,
         "--data_dir",
         tmp_dir,
     }, allocator);
+    server.env_map = &env;
     try server.spawn();
 
-    // Wait for server to start
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    std.time.sleep(500 * std.time.ns_per_ms);
 
-    // Create some data
-    const client = try std.process.Child.init(&.{
+    util.progress("Creating some data...", .{});
+    var client = std.process.Child.init(&.{
         "./zig-out/bin/geode",
+        "query",
         "CREATE (n:Person {name: 'Alice', age: 30})",
         "--server",
-        "127.0.0.1:17570",
+        addr,
         "--format=json",
     }, allocator);
+    client.stdout_behavior = .Pipe;
+    client.stderr_behavior = .Pipe;
+    try client.spawn();
+    _ = try client.stdout.?.readToEndAlloc(allocator, 1 << 16);
+    _ = try client.stderr.?.readToEndAlloc(allocator, 1 << 12);
+    const result = try client.wait();
+    try testing.expect(result == .Exited and result.Exited == 0);
 
-    const result = try client.spawnAndWait();
-    try testing.expect(result.Exited == 0);
-
-    // Stop server
+    util.progress("Stopping server...", .{});
     _ = server.kill() catch {};
+    _ = server.wait() catch {};
 
-    // Restart server with same data_dir
-    var server2 = try std.process.Child.init(&.{
+    // Get another random port for restart
+    const port2 = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr2 = try util.formatAddr(allocator, port2);
+    defer allocator.free(addr2);
+
+    util.progress("Restarting server on port {d}...", .{port2});
+    var server2 = std.process.Child.init(&.{
         "./zig-out/bin/geode",
+        "serve",
         "--listen",
-        "127.0.0.1:17570",
+        addr2,
         "--data_dir",
         tmp_dir,
     }, allocator);
+    server2.env_map = &env;
     try server2.spawn();
-    defer _ = server2.kill() catch {};
+    defer {
+        _ = server2.kill() catch {};
+        _ = server2.wait() catch {};
+    }
 
-    // Wait for server to start
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    std.time.sleep(500 * std.time.ns_per_ms);
 
-    // Query the data - should still be there
-    const client2 = try std.process.Child.init(&.{
+    util.progress("Querying data after restart...", .{});
+    var client2 = std.process.Child.init(&.{
         "./zig-out/bin/geode",
+        "query",
         "MATCH (n:Person {name: 'Alice'}) RETURN n.name, n.age",
         "--server",
-        "127.0.0.1:17570",
+        addr2,
         "--format=json",
     }, allocator);
+    client2.stdout_behavior = .Pipe;
+    client2.stderr_behavior = .Pipe;
+    try client2.spawn();
+    _ = try client2.stdout.?.readToEndAlloc(allocator, 1 << 16);
+    _ = try client2.stderr.?.readToEndAlloc(allocator, 1 << 12);
+    const result2 = try client2.wait();
+    try testing.expect(result2 == .Exited and result2.Exited == 0);
 
-    const result2 = try client2.spawnAndWait();
-    try testing.expect(result2.Exited == 0);
-
-    // Should return Alice with age 30
+    util.testPass();
 }

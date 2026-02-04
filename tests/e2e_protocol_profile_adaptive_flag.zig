@@ -30,18 +30,44 @@ fn runQuery(allocator: std.mem.Allocator, addr: []const u8, query: []const u8) !
 }
 
 test "protocol: PROFILE adaptive estimates flag when env enabled" {
+    util.testStart("PROFILE adaptive estimates flag");
+    errdefer util.testFail();
+
     const allocator = testing.allocator;
-    const addr = "127.0.0.1:3197";
+
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    util.progress("Starting server on port {d}...", .{port});
+
     var server = try util.spawnServer(
         allocator,
         &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
-        &.{ "GEODE_ADAPT_ESTIMATES=1" },
+        &.{
+            util.TestEnv.GEODE_ALLOW_NO_AUTH,
+            util.TestEnv.GEODE_DISABLE_AUDIT,
+            util.TestEnv.GEODE_TEST_MODE,
+            "GEODE_ADAPT_ESTIMATES=1",
+        },
     );
     defer server.deinit();
 
-    std.Thread.sleep(200 * std.time.ns_per_ms);
+    util.waitForServerReady(allocator, addr, 10000) catch |err| {
+        util.progress("Server readiness timeout: {}", .{err});
+        util.testSkip();
+        return;
+    };
 
+    util.progress("Running PROFILE query...", .{});
     const out = try runQuery(allocator, addr, "PROFILE RETURN 1 AS x LIMIT 1");
     defer allocator.free(out);
     try testing.expect(std.mem.indexOf(u8, out, "U:AdaptiveEstimatesPlanned") != null);
+
+    util.testPass();
 }

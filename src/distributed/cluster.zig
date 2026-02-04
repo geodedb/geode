@@ -541,7 +541,7 @@ pub const ClusterCoordinator = struct {
     // CANARY: REQ=REQ-DIST-CLUSTER-001; FEATURE="DistributedCluster"; ASPECT=ReplicationLag; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
     fn getReplicationLag(self: *ClusterCoordinator, node_id: u64, shard_id: u64) !u64 {
         // Calculate replication lag based on node health check latency
-        // In a real implementation, this would compare WAL positions between primary and replica
+        // In a real implementation, this would compare snapshot generations between primary and replica
         for (self.cluster_state.shards.items) |*shard| {
             if (shard.id == shard_id) {
                 // Check if node is a replica for this shard

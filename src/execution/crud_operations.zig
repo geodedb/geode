@@ -139,14 +139,6 @@ fn formatDecimalForJson(allocator: std.mem.Allocator, coeff: i128, scale: u8) ![
     }
 }
 
-/// Legacy function for backwards compatibility - appends Value as JSON to ArrayList
-/// CANARY: REQ=REQ-LIB-MIGRATION-JSON-018; FEATURE="JSON Library Migration"; ASPECT=LegacyCompat; STATUS=TESTED; OWNER=crud_operations; UPDATED=2026-01-24
-fn valueToJsonAppend(allocator: std.mem.Allocator, value: Value, output: *std.ArrayList(u8)) !void {
-    // Use streaming encoder to properly encode to the output buffer
-    var encoder = json_lib.streamingEncoder(allocator, output.writer(allocator), .{});
-    try encodeValueToStream(allocator, value, &encoder);
-}
-
 // CANARY: REQ=REQ-CONSTRAINT-ENFORCE-002; FEATURE="ConstraintEnforcement"; ASPECT=Validation; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=engine; UPDATED=2026-01-09
 /// Constraint violation error
 pub const ConstraintViolationError = error{

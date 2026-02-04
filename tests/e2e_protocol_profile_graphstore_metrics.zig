@@ -4,17 +4,36 @@ const util = @import("proto_test_util.zig");
 // E2E: PROFILE should include GraphStore metrics.
 
 test "protocol PROFILE graph_store metrics present" {
+    util.testStart("PROFILE graph_store metrics present");
+    errdefer util.testFail();
+
     const allocator = std.testing.allocator;
-    const addr = "127.0.0.1:3193";
+
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    util.progress("Starting server on port {d}...", .{port});
+
     var server = try util.spawnServer(
         allocator,
         &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
-        &.{},
+        util.TestEnv.standard(),
     );
     defer server.deinit();
 
-    std.Thread.sleep(200 * std.time.ns_per_ms);
+    util.waitForServerReady(allocator, addr, 10000) catch |err| {
+        util.progress("Server readiness timeout: {}", .{err});
+        util.testSkip();
+        return;
+    };
 
+    util.progress("Running PROFILE query...", .{});
     var child = std.process.Child.init(
         &.{
             "./zig-out/bin/geode",
@@ -47,6 +66,9 @@ test "protocol PROFILE graph_store metrics present" {
         std.mem.indexOf(u8, out, "\"graph_store_dirty\":") == null)
     {
         std.debug.print("STDOUT=\n{s}\nSTDERR=\n{s}\n", .{ out, err });
+        util.testFail();
         return error.MissingGraphStoreMetrics;
     }
+
+    util.testPass();
 }

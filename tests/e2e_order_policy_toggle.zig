@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const proto = @import("proto_test_util");
+const proto = @import("proto_test_util.zig");
 const schema = @import("schema");
 
 fn runQuery(allocator: std.mem.Allocator, addr: []const u8, query: []const u8) !proto.ExecResult {
@@ -14,17 +14,36 @@ fn runQuery(allocator: std.mem.Allocator, addr: []const u8, query: []const u8) !
 }
 
 test "ORDER policy: expr forbidden by default" {
+    proto.testStart("ORDER policy: expr forbidden by default");
+    errdefer proto.testFail();
+
     const allocator = testing.allocator;
-    const addr = "127.0.0.1:15620";
+
+    // Get random port
+    const port = proto.getRandomPort() catch |err| {
+        proto.progress("Port allocation failed: {}", .{err});
+        proto.testSkip();
+        return;
+    };
+    const addr = try proto.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    proto.progress("Starting server on port {d}...", .{port});
 
     var server = try proto.spawnServer(
         allocator,
         &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
-        null,
+        proto.TestEnv.standard(),
     );
     defer server.deinit();
-    std.time.sleep(200 * std.time.ns_per_ms);
 
+    proto.waitForServerReady(allocator, addr, 10000) catch |err| {
+        proto.progress("Server readiness timeout: {}", .{err});
+        proto.testSkip();
+        return;
+    };
+
+    proto.progress("Running query...", .{});
     var res = try runQuery(allocator, addr, "RETURN a ORDER BY f(a)");
     defer res.deinit(allocator);
 
@@ -32,23 +51,46 @@ test "ORDER policy: expr forbidden by default" {
     if (res.error_message) |msg| {
         try testing.expect(std.mem.indexOf(u8, msg, "ORDER BY") != null or std.mem.indexOf(u8, msg, "IllegalOrderKey") != null);
     }
+
+    proto.testPass();
 }
 
 test "ORDER policy: expr allowed with --order-keys expr" {
+    proto.testStart("ORDER policy: expr allowed with --order-keys expr");
+    errdefer proto.testFail();
+
     const allocator = testing.allocator;
-    const addr = "127.0.0.1:15621";
+
+    // Get random port
+    const port = proto.getRandomPort() catch |err| {
+        proto.progress("Port allocation failed: {}", .{err});
+        proto.testSkip();
+        return;
+    };
+    const addr = try proto.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    proto.progress("Starting server on port {d} with --order-keys expr...", .{port});
 
     var server = try proto.spawnServer(
         allocator,
         &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--order-keys", "expr" },
-        null,
+        proto.TestEnv.standard(),
     );
     defer server.deinit();
-    std.time.sleep(200 * std.time.ns_per_ms);
 
+    proto.waitForServerReady(allocator, addr, 10000) catch |err| {
+        proto.progress("Server readiness timeout: {}", .{err});
+        proto.testSkip();
+        return;
+    };
+
+    proto.progress("Running query...", .{});
     var res = try runQuery(allocator, addr, "RETURN a ORDER BY f(a)");
     defer res.deinit(allocator);
 
     try testing.expect(res.error_code == null);
     try testing.expect(res.columns.len > 0);
+
+    proto.testPass();
 }

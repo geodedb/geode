@@ -1269,7 +1269,7 @@ pub const VectorKNNOptimizer = struct {
         metric: []const u8,
         labels: []const []const u8,
     ) ScanPlan {
-        // Convert legacy parameters to new VectorQueryOptions format
+        // Convert parameters to VectorQueryOptions format
         const options = VectorQueryOptions{
             .query_type = .knn,
             .distance_metric = VectorDistanceMetric.fromString(metric) orelse .l2,
@@ -1278,48 +1278,6 @@ pub const VectorKNNOptimizer = struct {
         };
 
         return self.optimizeAdvancedVectorQuery(property, query_vector, options, labels);
-    }
-
-    // Legacy method - calls new advanced optimization
-    fn optimizeVectorKNNScanLegacy(
-        self: *IndexOptimizer,
-        property: []const u8,
-        query_vector: []const f32,
-        k: u32,
-        metric: []const u8,
-        labels: []const []const u8,
-    ) ScanPlan {
-        // Look for available vector indexes on this property
-        const best_vector_index = self.findBestVectorIndex(property, query_vector.len, metric);
-
-        if (best_vector_index) |index_info| {
-            const knn_cost = self.estimateVectorKNNCost(index_info, k, query_vector.len);
-            const knn_rows = @min(k, 1000); // K-NN returns at most k results
-
-            return ScanPlan{
-                .type = .{ .vector_knn = graph_common.VectorKNNInfo{
-                    .index_name = index_info.name,
-                    .query_vector = query_vector,
-                    .k = k,
-                    .metric = metric,
-                    .property = property,
-                } },
-                .estimated_cost = knn_cost,
-                .estimated_rows = knn_rows,
-                .explain_info = self.createVectorKNNExplain(index_info, knn_cost, knn_rows, k, metric),
-            };
-        }
-
-        // Fallback to sequential scan with vector distance computation
-        const sequential_cost = self.estimateSequentialVectorScanCost(labels, query_vector.len);
-        const sequential_rows = self.estimateSequentialScanRows(labels);
-
-        return ScanPlan{
-            .type = .sequential,
-            .estimated_cost = sequential_cost,
-            .estimated_rows = sequential_rows,
-            .explain_info = self.createSequentialVectorScanExplain(labels, sequential_cost, sequential_rows, k),
-        };
     }
 
     // Find the best vector index for advanced queries with comprehensive options

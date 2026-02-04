@@ -20,9 +20,6 @@ const Attr = logging.Attr;
 
 /// Environment-derived configuration flags
 pub const EnvironmentConfig = struct {
-    spill_sort: usize = 0,
-    spill_distinct: usize = 0,
-    spill_union: usize = 0,
     spill_threshold: usize = 0,
     storage_checksum_error: bool = false,
     memcurve_profile: bool = false,
@@ -66,10 +63,6 @@ pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profil
     if (std.process.getEnvMap(allocator)) |*env_ptr| {
         var env = env_ptr.*;
         defer env.deinit();
-
-        if (env.get("GEODE_FORCE_SORT_SPILL")) |_| config.spill_sort = 1;
-        if (env.get("GEODE_FORCE_DISTINCT_SPILL")) |_| config.spill_distinct = 1;
-        if (env.get("GEODE_FORCE_UNION_SPILL")) |_| config.spill_union = 1;
 
         if (env.get("GEODE_QUERY_MEM_LIMIT_BYTES")) |th| {
             config.spill_threshold = std.fmt.parseInt(usize, th, 10) catch config.spill_threshold;
