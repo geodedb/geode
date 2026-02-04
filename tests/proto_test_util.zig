@@ -218,9 +218,9 @@ pub const QuicProtoClient = struct {
 
     fn ensureHello(self: *QuicProtoClient, allocator: std.mem.Allocator) !void {
         if (self.session_id.len > 0) return;
-        var hello = try self.hello(allocator, defaultUsername(), defaultPassword());
-        defer hello.deinit(allocator);
-        if (!hello.success) return error.AuthenticationFailed;
+        var hello_result = try self.hello(allocator, defaultUsername(), defaultPassword());
+        defer hello_result.deinit(allocator);
+        if (!hello_result.success) return error.AuthenticationFailed;
     }
 
     fn writeMessage(self: *QuicProtoClient, msg: schema.QuicClientMessage) !void {
@@ -585,9 +585,9 @@ pub const GrpcProtoClient = struct {
 
     fn ensureHello(self: *GrpcProtoClient, allocator: std.mem.Allocator) !void {
         if (self.session_id.len > 0) return;
-        var hello = try self.hello(allocator, defaultUsername(), defaultPassword());
-        defer hello.deinit(allocator);
-        if (!hello.success) return error.AuthenticationFailed;
+        var hello_result = try self.hello(allocator, defaultUsername(), defaultPassword());
+        defer hello_result.deinit(allocator);
+        if (!hello_result.success) return error.AuthenticationFailed;
     }
 
     fn encodePacket(allocator: std.mem.Allocator, msg: schema.QuicClientMessage) ![]u8 {

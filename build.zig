@@ -469,10 +469,7 @@ pub fn build(b: *std.Build) void {
 
     // M11: Add storage/backup module for CLI to eliminate BackupConfig duplication
     const storage_backup_mod = b.createModule(.{ .root_source_file = b.path("src/storage/backup.zig"), .target = target, .optimize = optimize });
-    storage_backup_mod.addImport("wal", wal_mod);
     storage_backup_mod.addImport("logging", logging_mod);
-    storage_backup_mod.addImport("storage_page_manager", storage_page_manager_shared);
-    storage_backup_mod.addImport("storage_catalog", storage_catalog_mod);
     geode_exe.root_module.addImport("storage/backup", storage_backup_mod);
     root_mod.addImport("storage/backup", storage_backup_mod);
 

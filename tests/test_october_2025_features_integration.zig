@@ -52,7 +52,7 @@ test "Integration: FILTER clause with relationship patterns" {
     var parse_result = try geode.parseGql(query, allocator);
     defer parse_result.arena.deinit();
 
-    var context = try makeContext(allocator);
+    const context = try makeContext(allocator);
     var result = try execution.executeProgramWithContext(allocator, &parse_result.program, context);
     defer result.deinit(allocator);
 
@@ -83,7 +83,7 @@ test "Integration: type() function returns relationship labels" {
     var parse_result = try geode.parseGql(query, allocator);
     defer parse_result.arena.deinit();
 
-    var context = try makeContext(allocator);
+    const context = try makeContext(allocator);
     var result = try execution.executeProgramWithContext(allocator, &parse_result.program, context);
     defer result.deinit(allocator);
 
@@ -116,7 +116,7 @@ test "Integration: SET label operations with CREATE and MATCH" {
     var create_result = try geode.parseGql(create_query, allocator);
     defer create_result.arena.deinit();
 
-    var context = try makeContext(allocator);
+    const context = try makeContext(allocator);
     var create_exec = try execution.executeProgramWithContext(allocator, &create_result.program, context);
     defer create_exec.deinit(allocator);
 
@@ -179,7 +179,7 @@ test "Integration: Variable-length paths in social network" {
     var parse_result = try geode.parseGql(query, allocator);
     defer parse_result.arena.deinit();
 
-    var context = try makeContext(allocator);
+    const context = try makeContext(allocator);
     var result = try execution.executeProgramWithContext(allocator, &parse_result.program, context);
     defer result.deinit(allocator);
 
@@ -402,7 +402,7 @@ test "Integration: Memory management in complex scenarios" {
         var parse_result = try geode.parseGql(query, allocator);
         defer parse_result.arena.deinit();
 
-        var context = try makeContext(allocator);
+        const context = try makeContext(allocator);
         var result = try execution.executeProgramWithContext(allocator, &parse_result.program, context);
         defer result.deinit(allocator);
     }
