@@ -40,7 +40,7 @@ test "group by basic non-profile" {
     defer env.deinit();
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
 
-    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--result-format", "json" }, allocator);
+    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", addr }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Pipe;
     server.stderr_behavior = .Pipe;

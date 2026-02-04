@@ -11,9 +11,6 @@ const config_lib = @import("config");
 
 /// Server configuration parsed from CLI arguments
 pub const ServerConfig = struct {
-    // Output formatting
-    result_format_txt: bool = false,
-
     // Network configuration
     listen_quic: ?[]const u8 = null,
     listen_grpc: ?[]const u8 = null,
@@ -136,7 +133,6 @@ pub fn printHelp() void {
     std.debug.print("  --key <path>                 Path to TLS private key (default: auto-generate)\n", .{});
     std.debug.print("  --data_dir <path>            Data directory for storage and generated certs\n", .{});
     std.debug.print("  --data-dir <path>            Alias for --data_dir\n", .{});
-    std.debug.print("  --result-format <txt|json>   Result format (default: json)\n", .{});
     std.debug.print("  --order-keys expr            Allow expressions in ORDER BY\n", .{});
     std.debug.print("  --log-level <lvl>            Set log level trace|debug|info|warn|error|critical (default info)\n", .{});
     std.debug.print("  --help                       Show this help message\n", .{});
@@ -203,13 +199,7 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
     while (ai < args.len) : (ai += 1) {
         const arg = args[ai];
 
-        if (std.mem.eql(u8, arg, "--result-format") and ai + 1 < args.len) {
-            const f = args[ai + 1];
-            if (std.mem.eql(u8, f, "txt") or std.mem.eql(u8, f, "text")) {
-                config.result_format_txt = true;
-            }
-            ai += 1;
-        } else if ((std.mem.eql(u8, arg, "--listen-quic") or std.mem.eql(u8, arg, "--listen")) and ai + 1 < args.len) {
+        if ((std.mem.eql(u8, arg, "--listen-quic") or std.mem.eql(u8, arg, "--listen")) and ai + 1 < args.len) {
             config.listen_quic = try allocator.dupe(u8, args[ai + 1]);
             config._allocated_listen_quic = true;
             ai += 1;

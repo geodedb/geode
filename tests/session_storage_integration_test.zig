@@ -3,13 +3,17 @@
 
 const std = @import("std");
 const testing = std.testing;
+const proto_util = @import("proto_test_util.zig");
 
-fn getTestServer(allocator: std.mem.Allocator) ![]u8 {
-    return std.process.getEnvVarOwned(allocator, "GEODE_TEST_SERVER") catch return error.SkipZigTest;
+fn spawnTestServer(allocator: std.mem.Allocator) !proto_util.ServerHandle {
+    return proto_util.spawnServerRandom(allocator, proto_util.TestEnv.standard());
 }
 
 test "auth login with --save-session creates credentials file" {
     const allocator = testing.allocator;
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     // Backup existing credentials
     const home = std.posix.getenv("HOME") orelse return error.NoHomeDirectory;
@@ -36,6 +40,9 @@ test "auth login with --save-session creates credentials file" {
             "integration_test_user",
             "-P",
             "integration_test_pass",
+            "--server",
+            addr,
+            "--insecure",
             "--save-session",
         },
     });
@@ -63,6 +70,9 @@ test "auth login with --save-session creates credentials file" {
 
 test "auth logout clears credentials file" {
     const allocator = testing.allocator;
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     const home = std.posix.getenv("HOME") orelse return error.NoHomeDirectory;
     const creds_path = try std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{home});
@@ -88,6 +98,9 @@ test "auth logout clears credentials file" {
             "logout_test_user",
             "-P",
             "logout_test_pass",
+            "--server",
+            addr,
+            "--insecure",
             "--save-session",
         },
     });
@@ -119,8 +132,9 @@ test "auth logout clears credentials file" {
 test "query command auto-loads saved session" {
     const allocator = testing.allocator;
 
-    const server = try getTestServer(allocator);
-    defer allocator.free(server);
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     const home = std.posix.getenv("HOME") orelse return error.NoHomeDirectory;
     const creds_path = try std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{home});
@@ -147,7 +161,8 @@ test "query command auto-loads saved session" {
             "-P",
             "query_test_pass",
             "--server",
-            server,
+            addr,
+            "--insecure",
             "--save-session",
         },
     });
@@ -161,7 +176,7 @@ test "query command auto-loads saved session" {
             "./zig-out/bin/geode",
             "query",
             "--server",
-            server,
+            addr,
             "--insecure",
             "RETURN 1 AS auto_session_test",
         },
@@ -179,8 +194,9 @@ test "query command auto-loads saved session" {
 test "query with --no-saved-session ignores credentials file" {
     const allocator = testing.allocator;
 
-    const server = try getTestServer(allocator);
-    defer allocator.free(server);
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     const home = std.posix.getenv("HOME") orelse return error.NoHomeDirectory;
     const creds_path = try std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{home});
@@ -207,7 +223,8 @@ test "query with --no-saved-session ignores credentials file" {
             "-P",
             "nosession_test_pass",
             "--server",
-            server,
+            addr,
+            "--insecure",
             "--save-session",
         },
     });
@@ -221,7 +238,7 @@ test "query with --no-saved-session ignores credentials file" {
             "./zig-out/bin/geode",
             "query",
             "--server",
-            server,
+            addr,
             "--insecure",
             "--no-saved-session",
             "RETURN 1 AS no_session_test",
@@ -239,6 +256,9 @@ test "query with --no-saved-session ignores credentials file" {
 
 test "session token has correct file permissions (600)" {
     const allocator = testing.allocator;
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     const home = std.posix.getenv("HOME") orelse return error.NoHomeDirectory;
     const creds_path = try std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{home});
@@ -264,6 +284,9 @@ test "session token has correct file permissions (600)" {
             "perms_test_user",
             "-P",
             "perms_test_pass",
+            "--server",
+            addr,
+            "--insecure",
             "--save-session",
         },
     });

@@ -53,7 +53,6 @@ const ConnectionContext = struct {
     allocator: std.mem.Allocator,
     transport: *quic_transport.QuicTransport,
     conn: *quic_transport.QuicConnection,
-    result_format_txt: bool,
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
@@ -70,7 +69,6 @@ fn handleConnectionAsync(context: *anyopaque) void {
         ctx.allocator,
         ctx.transport,
         ctx.conn,
-        ctx.result_format_txt,
         ctx.disable_estimates,
         ctx.compact_profile,
         ctx.memcurve_profile,
@@ -238,7 +236,6 @@ pub fn main() !void {
     defer config.deinit(gpa);
 
     // Extract config values into local variables for compatibility with existing code
-    const result_format_txt = config.result_format_txt;
     var memcurve_profile = false;
     const listen_quic = config.listen_quic;
     const listen_grpc = config.listen_grpc;
@@ -465,7 +462,7 @@ pub fn main() !void {
                     });
                     continue;
                 };
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err2| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err2| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err2)),
                     });
@@ -501,7 +498,7 @@ pub fn main() !void {
             // GAP-0202: Create context for async connection handling
             const ctx = gpa.create(ConnectionContext) catch {
                 log.err("Failed to allocate connection context, handling sync", &.{});
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err)),
                     });
@@ -513,7 +510,6 @@ pub fn main() !void {
                 .allocator = gpa,
                 .transport = &transport,
                 .conn = conn,
-                .result_format_txt = result_format_txt,
                 .disable_estimates = disable_estimates,
                 .compact_profile = compact_profile,
                 .memcurve_profile = memcurve_profile,

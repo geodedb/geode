@@ -278,7 +278,6 @@ pub fn handleQuicConnection(
     gpa: std.mem.Allocator,
     transport: *quic_transport.QuicTransport,
     conn: *quic_transport.QuicConnection,
-    result_format_txt: bool,
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
@@ -437,7 +436,7 @@ pub fn handleQuicConnection(
         };
 
         // Process protobuf message and emit responses directly
-        handleClientMessage(gpa, &state, stream, msg, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |err| {
+        handleClientMessage(gpa, &state, stream, msg, disable_estimates, compact_profile, memcurve_profile) catch |err| {
             log.err("Protobuf process error", &.{Attr.err("error", err)});
             try sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{});
             continue;
@@ -480,13 +479,10 @@ fn handleClientMessage(
     state: *ServerState,
     stream: *quic_transport.QuicStream,
     msg: schema.QuicClientMessage,
-    result_format_txt: bool,
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
 ) !void {
-    _ = result_format_txt;
-
     switch (msg) {
         .hello => |hello_req| {
             var caps = std.ArrayList([]const u8).initCapacity(gpa, 3) catch return error.OutOfMemory;

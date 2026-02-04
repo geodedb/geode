@@ -4,9 +4,10 @@
 const std = @import("std");
 const testing = std.testing;
 const expect = testing.expect;
+const proto_util = @import("proto_test_util.zig");
 
-fn getTestServer(allocator: std.mem.Allocator) ![]u8 {
-    return std.process.getEnvVarOwned(allocator, "GEODE_TEST_SERVER") catch return error.SkipZigTest;
+fn spawnTestServer(allocator: std.mem.Allocator) !proto_util.ServerHandle {
+    return proto_util.spawnServerRandom(allocator, proto_util.TestEnv.standard());
 }
 
 // Helper to execute command and get just exit code
@@ -32,15 +33,16 @@ fn getExitCode(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
 test "integration --insecure returns exit code 0" {
     const allocator = testing.allocator;
 
-    const server = try getTestServer(allocator);
-    defer allocator.free(server);
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     const exit_code = try getExitCode(allocator, &[_][]const u8{
         "./zig-out/bin/geode",
         "query",
         "RETURN 1 AS test",
         "--server",
-        server,
+        addr,
         "--insecure",
     });
 
@@ -87,8 +89,9 @@ test "integration invalid command returns non-zero exit code" {
 test "integration various queries with --insecure return success" {
     const allocator = testing.allocator;
 
-    const server = try getTestServer(allocator);
-    defer allocator.free(server);
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     const test_queries = [_][]const u8{
         "RETURN 1",
@@ -103,7 +106,7 @@ test "integration various queries with --insecure return success" {
             "query",
             query,
             "--server",
-            server,
+            addr,
             "--insecure",
         });
 
@@ -130,8 +133,9 @@ test "integration invalid server address returns error" {
 test "integration binary execution smoke test" {
     const allocator = testing.allocator;
 
-    const server = try getTestServer(allocator);
-    defer allocator.free(server);
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     // Just verify we can execute the binary without crashing
     const exit_code = try getExitCode(allocator, &[_][]const u8{
@@ -139,7 +143,7 @@ test "integration binary execution smoke test" {
         "query",
         "RETURN 'smoke test'",
         "--server",
-        server,
+        addr,
         "--insecure",
     });
 
@@ -151,8 +155,9 @@ test "integration binary execution smoke test" {
 test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_003" {
     const allocator = testing.allocator;
 
-    const server = try getTestServer(allocator);
-    defer allocator.free(server);
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     // This test verifies CLI subprocess elimination integration functionality
     // as specified in REQ-CLI-SUBPROCESS-INTEGRATION-003
@@ -162,7 +167,7 @@ test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_003" {
         "query",
         "CANARY TEST",
         "--server",
-        server,
+        addr,
         "--insecure",
     });
 

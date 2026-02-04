@@ -4,24 +4,26 @@
 const std = @import("std");
 const testing = std.testing;
 const expect = testing.expect;
+const proto_util = @import("proto_test_util.zig");
 
-fn getTestServer(allocator: std.mem.Allocator) ![]u8 {
-    return std.process.getEnvVarOwned(allocator, "GEODE_TEST_SERVER") catch return error.SkipZigTest;
+fn spawnTestServer(allocator: std.mem.Allocator) !proto_util.ServerHandle {
+    return proto_util.spawnServerRandom(allocator, proto_util.TestEnv.standard());
 }
 
 // Test the actual --insecure flag with a simple execution
 test "integration --insecure flag basic functionality" {
     const allocator = testing.allocator;
 
-    const server = try getTestServer(allocator);
-    defer allocator.free(server);
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     var child = std.process.Child.init(&[_][]const u8{
         "./zig-out/bin/geode",
         "query",
         "RETURN 1 AS test",
         "--server",
-        server,
+        addr,
         "--insecure",
     }, allocator);
 
@@ -119,15 +121,16 @@ test "integration help command functionality" {
 test "integration no subprocess spawning" {
     const allocator = testing.allocator;
 
-    const server = try getTestServer(allocator);
-    defer allocator.free(server);
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     var child = std.process.Child.init(&[_][]const u8{
         "./zig-out/bin/geode",
         "query",
         "RETURN 'subprocess test'",
         "--server",
-        server,
+        addr,
         "--insecure",
     }, allocator);
 
@@ -160,8 +163,9 @@ test "integration no subprocess spawning" {
 test "integration binary existence and execution" {
     const allocator = testing.allocator;
 
-    const server = try getTestServer(allocator);
-    defer allocator.free(server);
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     // Test that the binary exists
     std.fs.cwd().access("./zig-out/bin/geode", .{}) catch |err| {
@@ -175,7 +179,7 @@ test "integration binary existence and execution" {
         "query",
         "RETURN 'existence test'",
         "--server",
-        server,
+        addr,
         "--insecure",
     }, allocator);
 

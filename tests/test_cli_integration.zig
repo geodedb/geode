@@ -1,10 +1,11 @@
 const std = @import("std");
 const testing = std.testing;
 const builtin = @import("builtin");
+const proto_util = @import("proto_test_util.zig");
 
 // Integration tests for unified CLI - testing actual process spawning and communication
-fn getTestServer(allocator: std.mem.Allocator) ![]u8 {
-    return std.process.getEnvVarOwned(allocator, "GEODE_TEST_SERVER") catch return error.SkipZigTest;
+fn spawnTestServer(allocator: std.mem.Allocator) !proto_util.ServerHandle {
+    return proto_util.spawnServerRandom(allocator, proto_util.TestEnv.standard());
 }
 
 test "geode unified binary exists and responds" {
@@ -74,10 +75,11 @@ test "geode query help shows client options" {
 test "geode query executes with configured server" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    const server = try getTestServer(testing.allocator);
-    defer testing.allocator.free(server);
+    var server = try spawnTestServer(testing.allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 1 AS x", "--server", server, "--insecure" }, testing.allocator);
+    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 1 AS x", "--server", addr, "--insecure" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -168,11 +170,12 @@ test "query without arguments returns usage error" {
 test "query responds to basic query" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    const server = try getTestServer(testing.allocator);
-    defer testing.allocator.free(server);
+    var server = try spawnTestServer(testing.allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     // Test basic query execution against configured server
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 'hello' AS greeting", "--server", server, "--insecure", "--format", "json" }, testing.allocator);
+    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 'hello' AS greeting", "--server", addr, "--insecure", "--format", "json" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -196,11 +199,12 @@ test "query responds to basic query" {
 test "query error handling for invalid syntax" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    const server = try getTestServer(testing.allocator);
-    defer testing.allocator.free(server);
+    var server = try spawnTestServer(testing.allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     // Test error handling with invalid syntax
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "SELECT * FROM nonexistent_table", "--server", server, "--insecure" }, testing.allocator);
+    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "SELECT * FROM nonexistent_table", "--server", addr, "--insecure" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -220,11 +224,12 @@ test "query error handling for invalid syntax" {
 test "process argument forwarding" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    const server = try getTestServer(testing.allocator);
-    defer testing.allocator.free(server);
+    var server = try spawnTestServer(testing.allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     // Test that arguments are properly forwarded to configured server
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 42 AS answer", "--server", server, "--insecure", "--format", "json" }, testing.allocator);
+    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 42 AS answer", "--server", addr, "--insecure", "--format", "json" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -245,8 +250,9 @@ test "process argument forwarding" {
 test "concurrent query execution" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    const server = try getTestServer(testing.allocator);
-    defer testing.allocator.free(server);
+    var server = try spawnTestServer(testing.allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     // Test that multiple queries can be executed concurrently
     const query_count = 3;
@@ -257,7 +263,7 @@ test "concurrent query execution" {
         const query = try std.fmt.allocPrint(testing.allocator, "RETURN {d} AS id", .{i});
         defer testing.allocator.free(query);
 
-        child.* = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", query, "--server", server, "--insecure" }, testing.allocator);
+        child.* = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", query, "--server", addr, "--insecure" }, testing.allocator);
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
 

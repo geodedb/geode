@@ -63,7 +63,7 @@ test "protocol: transport parity varlen dataset rows QUIC (gated)" {
     defer env.deinit();
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
 
-    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--result-format", "json", "--data_dir", data_dir }, allocator);
+    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", data_dir }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Pipe;
     server.stderr_behavior = .Pipe;

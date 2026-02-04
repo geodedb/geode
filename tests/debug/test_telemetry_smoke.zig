@@ -29,7 +29,7 @@ test "Telemetry emits PULL_PAGE" {
         if (f) |*fh| fh.close();
     }
     try server_env.put("GEODE_CAPTURE_SERVER_STDERR", tmp_path);
-    var server = std.process.Child.init(&.{ server_path, "serve", "--listen", "127.0.0.1:7567", "--result-format", "json" }, allocator);
+    var server = std.process.Child.init(&.{ server_path, "serve", "--listen", "127.0.0.1:7567" }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Ignore;
     server.stderr_behavior = .Pipe;

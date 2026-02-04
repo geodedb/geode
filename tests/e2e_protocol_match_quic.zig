@@ -47,7 +47,7 @@ test "protocol QUIC: MATCH ORDER/LIMIT ordered metadata" {
     defer env.deinit();
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
 
-    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--result-format", "json" }, allocator);
+    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", addr }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Pipe;
     server.stderr_behavior = .Pipe;
@@ -95,7 +95,7 @@ test "protocol QUIC: MATCH LIMIT+OFFSET without ORDER (US001)" {
     defer env.deinit();
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
 
-    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--result-format", "json" }, allocator);
+    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", addr }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Pipe;
     server.stderr_behavior = .Pipe;
@@ -142,7 +142,7 @@ test "protocol QUIC: OPTIONAL MATCH null-preserving semantics" {
     defer env.deinit();
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
 
-    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--result-format", "json" }, allocator);
+    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", addr }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Pipe;
     server.stderr_behavior = .Pipe;

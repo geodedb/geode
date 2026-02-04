@@ -84,7 +84,7 @@ test "mvcc visibility snapshot isolation (QUIC)" {
 
     var server = try proto_util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--result-format", "json" },
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
         proto_util.TestEnv.standard(),
     );
     defer server.deinit();
@@ -123,7 +123,7 @@ test "TestCANARY_REQ_GQL_013_SSIPhantomPrevention" {
 
     var server = try proto_util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--result-format", "json" },
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
         proto_util.TestEnv.standard(),
     );
     defer server.deinit();

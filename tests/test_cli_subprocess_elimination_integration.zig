@@ -4,6 +4,7 @@
 const std = @import("std");
 const testing = std.testing;
 const expect = testing.expect;
+const proto_util = @import("proto_test_util.zig");
 
 // Helper function to execute CLI commands and capture output
 fn executeCommand(allocator: std.mem.Allocator, args: []const []const u8) !struct {
@@ -41,23 +42,24 @@ fn executeCommand(allocator: std.mem.Allocator, args: []const []const u8) !struc
     };
 }
 
-fn getTestServer(allocator: std.mem.Allocator) ![]u8 {
-    return std.process.getEnvVarOwned(allocator, "GEODE_TEST_SERVER") catch return error.SkipZigTest;
+fn spawnTestServer(allocator: std.mem.Allocator) !proto_util.ServerHandle {
+    return proto_util.spawnServerRandom(allocator, proto_util.TestEnv.standard());
 }
 
 // Test actual --insecure flag with unified binary
 test "integration query executes with configured server" {
     const allocator = testing.allocator;
 
-    const server = try getTestServer(allocator);
-    defer allocator.free(server);
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     const args = [_][]const u8{
         "./zig-out/bin/geode",
         "query",
         "RETURN 1 AS test",
         "--server",
-        server,
+        addr,
         "--insecure",
     };
 
@@ -108,8 +110,9 @@ test "integration query without text returns usage error" {
 test "integration complex query with --insecure" {
     const allocator = testing.allocator;
 
-    const server = try getTestServer(allocator);
-    defer allocator.free(server);
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     const complex_query = "MATCH (person:Person)-[:KNOWS]->(friend:Person) WHERE person.age > 25 RETURN person.name, friend.name";
 
@@ -118,7 +121,7 @@ test "integration complex query with --insecure" {
         "query",
         complex_query,
         "--server",
-        server,
+        addr,
         "--insecure",
     };
 
@@ -161,8 +164,9 @@ test "integration server address in error message" {
 test "integration no subprocess spawning verification" {
     const allocator = testing.allocator;
 
-    const server = try getTestServer(allocator);
-    defer allocator.free(server);
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     // Test with --insecure to ensure it doesn't try to spawn external helpers
     const args = [_][]const u8{
@@ -170,7 +174,7 @@ test "integration no subprocess spawning verification" {
         "query",
         "RETURN 'subprocess test' AS message",
         "--server",
-        server,
+        addr,
         "--insecure",
     };
 
@@ -240,8 +244,9 @@ test "integration shell command compatibility" {
 test "integration output format consistency" {
     const allocator = testing.allocator;
 
-    const server = try getTestServer(allocator);
-    defer allocator.free(server);
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     const test_cases = [_]struct {
         query: []const u8,
@@ -258,7 +263,7 @@ test "integration output format consistency" {
             "query",
             test_case.query,
             "--server",
-            server,
+            addr,
             "--insecure",
         };
 
@@ -283,8 +288,9 @@ test "integration output format consistency" {
 test "integration performance timing" {
     const allocator = testing.allocator;
 
-    const server = try getTestServer(allocator);
-    defer allocator.free(server);
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     const start_time = std.time.milliTimestamp();
 
@@ -293,7 +299,7 @@ test "integration performance timing" {
         "query",
         "RETURN 'performance test' AS message",
         "--server",
-        server,
+        addr,
         "--insecure",
     };
 
@@ -317,8 +323,9 @@ test "integration performance timing" {
 test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_001" {
     const allocator = testing.allocator;
 
-    const server = try getTestServer(allocator);
-    defer allocator.free(server);
+    var server = try spawnTestServer(allocator);
+    defer server.deinit();
+    const addr = server.getAddr();
 
     // This test verifies CLI subprocess elimination integration functionality
     // as specified in REQ-CLI-SUBPROCESS-INTEGRATION-001
@@ -328,7 +335,7 @@ test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_001" {
         "query",
         "CANARY INTEGRATION TEST",
         "--server",
-        server,
+        addr,
         "--insecure",
     };
 
