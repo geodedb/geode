@@ -3,6 +3,7 @@ const protobuf = @import("protobuf");
 const schema = @import("schema");
 const quic = @import("transport/quic");
 const grpc_client = @import("grpc_client");
+const profile_payload = @import("server/profile_payload.zig");
 
 pub const ServerHandle = struct {
     allocator: std.mem.Allocator,
@@ -609,6 +610,31 @@ pub const QuicProtoClient = struct {
             .error_code = error_code,
             .error_message = error_message,
         };
+    }
+
+    pub fn executeProfileJson(
+        self: *QuicProtoClient,
+        allocator: std.mem.Allocator,
+        query: []const u8,
+    ) ![]u8 {
+        try self.ensureHello(allocator);
+        const req = schema.ExecuteRequest{
+            .session_id = self.session_id,
+            .query = query,
+            .params = std.ArrayList(schema.Param){},
+        };
+        try self.writeMessage(.{ .execute = req });
+
+        var packet = try self.readPacket(allocator, 5000);
+        defer packet.deinit(allocator);
+        const msg = packet.quic orelse return error.InvalidMessage;
+        if (msg != .execute) return error.InvalidMessage;
+        const exec_resp = msg.execute;
+        if (exec_resp.payload) |payload| switch (payload) {
+            .profile => |prof| return try profile_payload.profilePayloadToJson(allocator, prof),
+            else => {},
+        };
+        return error.InvalidResponse;
     }
 };
 
