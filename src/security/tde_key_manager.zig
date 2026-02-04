@@ -31,7 +31,6 @@ pub const KeyProvider = enum {
 pub const KeyHierarchyResult = struct {
     master_key_id: []const u8,
     data_keys: u32,
-    wal_keys: u32,
     backup_keys: u32,
 };
 
@@ -48,7 +47,6 @@ pub const EncryptionStatusResult = struct {
     enabled: bool,
     key_loaded: bool,
     data_encrypted: bool,
-    wal_encrypted: bool,
     backups_encrypted: bool,
     algorithm: []const u8,
     key_length: u32,
@@ -90,14 +88,6 @@ pub const DeriveDataKeyResult = struct {
     key_hash: []const u8,
     key_type: []const u8,
     derivation_method: []const u8,
-};
-
-/// WAL key derivation result
-pub const DeriveWalKeyResult = struct {
-    segment_id: u32,
-    key_hash: []const u8,
-    key_strength_bits: u32,
-    rotation_required: bool,
 };
 
 /// Cleanup result
@@ -180,22 +170,10 @@ pub fn deriveKey(raw_hex: []const u8, out: *[KeyBytes]u8) !void {
     }
 }
 
-/// Load raw key from environment or test override
-pub fn loadRawKey(allocator: std.mem.Allocator, test_override_enabled: bool) !?[KeyBytes]u8 {
+/// Load raw key from GEODE_TDE_KEY (hex-encoded) or return null if unset.
+pub fn loadRawKey(allocator: std.mem.Allocator) !?[KeyBytes]u8 {
     const key_buf = std.process.getEnvVarOwned(allocator, "GEODE_TDE_KEY") catch |e| switch (e) {
-        error.EnvironmentVariableNotFound => {
-            // If test override is enabled and no env var, provide a test key
-            // This allows tests to use the REAL encrypt/decrypt functions without env setup
-            if (test_override_enabled) {
-                return [_]u8{
-                    0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe,
-                    0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81,
-                    0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7,
-                    0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4,
-                };
-            }
-            return null;
-        },
+        error.EnvironmentVariableNotFound => return null,
         else => return e,
     };
     if (key_buf.len == 0) return null; // treat empty as not present
@@ -205,7 +183,7 @@ pub fn loadRawKey(allocator: std.mem.Allocator, test_override_enabled: bool) !?[
     return k;
 }
 
-/// Initialize key hierarchy with master/data/wal keys
+/// Initialize key hierarchy with master/data/backup keys
 pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !KeyHierarchyResult {
     // Generate master key
     var master_key: [32]u8 = undefined;
@@ -213,7 +191,6 @@ pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !KeyHierarchyResult 
 
     // Generate derived keys
     const data_key_count: u32 = 10; // Number of data encryption keys
-    const wal_key_count: u32 = 5; // Number of WAL encryption keys
     const backup_key_count: u32 = 3; // Number of backup encryption keys
 
     // Create data keys using inline derivation
@@ -226,18 +203,6 @@ pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !KeyHierarchyResult 
         hasher.update(&i_bytes);
         var data_key: [32]u8 = undefined;
         hasher.final(&data_key);
-    }
-
-    // Create WAL keys using inline derivation
-    for (0..wal_key_count) |i| {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&master_key);
-        hasher.update("wal_key");
-        var i_bytes: [8]u8 = undefined;
-        std.mem.writeInt(u64, &i_bytes, i, .little);
-        hasher.update(&i_bytes);
-        var wal_key: [32]u8 = undefined;
-        hasher.final(&wal_key);
     }
 
     // Create backup keys using inline derivation
@@ -264,17 +229,16 @@ pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !KeyHierarchyResult 
     return .{
         .master_key_id = key_id,
         .data_keys = data_key_count,
-        .wal_keys = wal_key_count,
         .backup_keys = backup_key_count,
     };
 }
 
 /// Rotate encryption keys with zero-downtime migration
-pub fn rotateKeys(allocator: std.mem.Allocator, test_override_enabled: bool) !RotateKeysResult {
+pub fn rotateKeys(allocator: std.mem.Allocator) !RotateKeysResult {
     const start_time = std.time.milliTimestamp();
 
     // Load current key
-    const old_key = try loadRawKey(allocator, test_override_enabled) orelse return error.NoCurrentKey;
+    const old_key = try loadRawKey(allocator) orelse return error.NoCurrentKey;
 
     // Generate new master key
     var new_master_key: [32]u8 = undefined;
@@ -324,21 +288,19 @@ pub fn rotateKeys(allocator: std.mem.Allocator, test_override_enabled: bool) !Ro
 }
 
 /// Get comprehensive encryption status across all components
-pub fn getEncryptionStatus(allocator: std.mem.Allocator, enabled: bool, test_override_enabled: bool) !EncryptionStatusResult {
+pub fn getEncryptionStatus(allocator: std.mem.Allocator, enabled: bool) !EncryptionStatusResult {
     const is_enabled = enabled;
-    const key_loaded = if (try loadRawKey(allocator, test_override_enabled)) |_| true else false;
+    const key_loaded = if (try loadRawKey(allocator)) |_| true else false;
 
     // Check encryption status of different components
     // In production, these would check actual file headers/metadata
     const data_encrypted = is_enabled and key_loaded;
-    const wal_encrypted = is_enabled and key_loaded;
     const backups_encrypted = is_enabled and key_loaded;
 
     return .{
         .enabled = is_enabled,
         .key_loaded = key_loaded,
         .data_encrypted = data_encrypted,
-        .wal_encrypted = wal_encrypted,
         .backups_encrypted = backups_encrypted,
         .algorithm = try allocator.dupe(u8, "AES-256-GCM"),
         .key_length = 256,
@@ -495,42 +457,37 @@ pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKeyRe
     };
 }
 
-/// Derive WAL encryption key from master key
-pub fn deriveWalKey(allocator: std.mem.Allocator, wal_segment: u32) !DeriveWalKeyResult {
-    // Generate WAL-specific key material
-    var master: [32]u8 = undefined;
-    std.crypto.random.bytes(&master);
+/// Derive backup encryption key from master key
+pub fn deriveBackupKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKeyResult {
+    var ikm: [32]u8 = undefined;
+    std.crypto.random.bytes(&ikm);
 
-    // Derive WAL key with segment-specific salt
-    var wal_key: [32]u8 = undefined;
-    const salt_bytes = std.mem.asBytes(&wal_segment);
+    var derived_key: [32]u8 = undefined;
+    const salt = "geode-backup-key";
+    const info_bytes = std.mem.asBytes(&key_id);
 
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("WAL-KEY");
-    hasher.update(&master);
-    hasher.update(salt_bytes);
-    hasher.final(&wal_key);
+    hasher.update(salt);
+    hasher.update(&ikm);
+    hasher.update(info_bytes);
+    hasher.final(&derived_key);
 
-    // Calculate key hash
-    var hash: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(&wal_key, &hash, .{});
-    const hash_str = try std.fmt.allocPrint(allocator, "{x}", .{hash});
-
-    // Check if rotation is needed (every 100 segments)
-    const rotation_required = (wal_segment % 100) == 99;
+    var key_hash_bytes: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(&derived_key, &key_hash_bytes, .{});
+    const key_hash = try std.fmt.allocPrint(allocator, "{x}", .{key_hash_bytes});
 
     return .{
-        .segment_id = wal_segment,
-        .key_hash = hash_str,
-        .key_strength_bits = 256,
-        .rotation_required = rotation_required,
+        .key_id = key_id,
+        .key_hash = key_hash,
+        .key_type = try allocator.dupe(u8, "BACKUP_ENCRYPTION_KEY"),
+        .derivation_method = try allocator.dupe(u8, "HKDF-SHA256"),
     };
 }
 
 /// Cleanup key hierarchy
 pub fn cleanupKeyHierarchy(_: std.mem.Allocator) !CleanupKeyHierarchyResult {
     // Zeroize all keys in hierarchy
-    var keys: [5][32]u8 = undefined;
+    var keys: [3][32]u8 = undefined;
     for (&keys) |*key| {
         @memset(key, 0);
     }
@@ -542,7 +499,7 @@ pub fn cleanupKeyHierarchy(_: std.mem.Allocator) !CleanupKeyHierarchyResult {
     rotation_state.scheduled_rotation = null;
 
     return .{
-        .keys_zeroized = 5,
+        .keys_zeroized = 3,
         .hierarchy_cleared = true,
     };
 }
@@ -584,7 +541,6 @@ test "initializeKeyHierarchy - creates keys" {
     defer testing.allocator.free(result.master_key_id);
 
     try testing.expectEqual(@as(u32, 10), result.data_keys);
-    try testing.expectEqual(@as(u32, 5), result.wal_keys);
     try testing.expectEqual(@as(u32, 3), result.backup_keys);
     try testing.expect(result.master_key_id.len == 64);
 }
@@ -636,22 +592,11 @@ test "deriveDataKey - generates key" {
     try testing.expect(std.mem.eql(u8, result.key_type, "DATA_ENCRYPTION_KEY"));
 }
 
-test "deriveWalKey - generates key" {
-    const testing = std.testing;
-
-    const result = try deriveWalKey(testing.allocator, 42);
-    defer testing.allocator.free(result.key_hash);
-
-    try testing.expectEqual(@as(u32, 42), result.segment_id);
-    try testing.expectEqual(@as(u32, 256), result.key_strength_bits);
-    try testing.expect(!result.rotation_required);
-}
-
 test "cleanupKeyHierarchy - resets state" {
     const testing = std.testing;
 
     const result = try cleanupKeyHierarchy(testing.allocator);
 
-    try testing.expectEqual(@as(i64, 5), result.keys_zeroized);
+    try testing.expectEqual(@as(i64, 3), result.keys_zeroized);
     try testing.expect(result.hierarchy_cleared);
 }

@@ -7,9 +7,7 @@ pub fn benchmarkEncryption(allocator: std.mem.Allocator) !struct {
     operations_tested: u32,
     encryption_mode: []const u8,
 } {
-    // Enable TDE for testing
-    tde.enableForTests();
-    defer tde.disableForTests();
+    // Require TDE to be enabled via environment configuration
 
     const iterations: u32 = 1000;
     var total_bytes: u64 = 0;
@@ -59,9 +57,7 @@ pub fn simulateOLTPWorkload(allocator: std.mem.Allocator, duration_seconds: u32,
     tps_without_encryption: i64,
     degradation_percentage: f64,
 } {
-    // Enable TDE for this test (uses REAL encrypt/decrypt functions)
-    tde.enableForTests();
-    defer tde.disableForTests();
+    // Require TDE to be enabled via environment configuration
 
     _ = concurrent_transactions;
 

@@ -418,9 +418,10 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
 
-        // Use real MFA enrollment
-        mfa.enableForTests(); // Enable MFA feature for this operation
-        defer mfa.disableForTests();
+        if (!mfa.globallyEnabled()) {
+            std.debug.print("Error: MFA is disabled. Set GEODE_ENABLE_MFA=1 to enable.\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
 
         const enrollment = mfa.enroll(allocator, username) catch |err| {
             std.debug.print("Error: MFA enrollment failed: {any}\n", .{err});
@@ -572,9 +573,10 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                     std.debug.print("Error: invalid code format - must contain only digits\n", .{});
                     std.process.exit(@intFromEnum(ExitCode.general_error));
                 }
-                // Validate actual code using MFA library
-                mfa.enableForTests();
-                defer mfa.disableForTests();
+                if (!mfa.globallyEnabled()) {
+                    std.debug.print("Error: MFA is disabled. Set GEODE_ENABLE_MFA=1 to enable.\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.general_error));
+                }
 
                 // Get the enrollment to verify against
                 const enrollment = mfa.enroll(allocator, username) catch {

@@ -1870,10 +1870,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         // CANARY: REQ=REQ-TDE-PROC-005; FEATURE="TDEProcedures"; ASPECT=EncryptionTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.test_encryption() -> success, bytes_encrypted, encryption_time_ms
 
-        // Enable TDE for testing
-        tde_mod.enableForTests();
-        defer tde_mod.disableForTests();
-
         // Test data
         const test_plaintext = "This is a test message for TDE encryption functionality.";
         const test_aad = "additional_authenticated_data";
@@ -1925,10 +1921,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     } else if (std.mem.eql(u8, proc_name, "tde.test_decryption")) {
         // CANARY: REQ=REQ-TDE-PROC-006; FEATURE="TDEProcedures"; ASPECT=DecryptionTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.test_decryption() -> success, bytes_decrypted, decryption_time_ms
-
-        // Enable TDE for testing
-        tde_mod.enableForTests();
-        defer tde_mod.disableForTests();
 
         // Test data
         const test_plaintext = "This is test data for decryption verification after encryption.";
@@ -2020,10 +2012,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     } else if (std.mem.eql(u8, proc_name, "tde.test_key_rotation")) {
         // CANARY: REQ=REQ-TDE-PROC-009; FEATURE="TDEProcedures"; ASPECT=KeyRotationTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
         // tde.test_key_rotation() -> success, rotation_successful, data_integrity_verified
-
-        // Enable TDE for testing
-        tde_mod.enableForTests();
-        defer tde_mod.disableForTests();
 
         var success = false;
         var rotation_successful = false;
@@ -2428,7 +2416,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .rows = rows,
             .flags = std.ArrayList([]const u8).empty,
         };
-    } else if (std.mem.eql(u8, proc_name, "tde.derive_wal_key")) {
+    } else if (std.mem.eql(u8, proc_name, "tde.derive_backup_key")) {
         // REQ-TDE-PROC-014
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
@@ -2438,7 +2426,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]Value, 1);
         const row = try allocator.alloc(Value, 3);
         row[0] = Value{ .Bool = true };
-        row[1] = Value{ .Str = "wal-key-00000001" };
+        row[1] = Value{ .Str = "backup-key-00000001" };
         row[2] = Value{ .Str = "AES-256-GCM" };
         rows[0] = row;
 
@@ -2516,11 +2504,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .rows = rows,
             .flags = std.ArrayList([]const u8).empty,
         };
-    } else if (std.mem.eql(u8, proc_name, "tde.encrypt_wal")) {
+    } else if (std.mem.eql(u8, proc_name, "tde.encrypt_backup")) {
         // REQ-TDE-PROC-016
         const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "success");
-        columns[1] = try allocator.dupe(u8, "wal_segment");
+        columns[1] = try allocator.dupe(u8, "backup_id");
         columns[2] = try allocator.dupe(u8, "encrypted_size");
 
         const rows = try allocator.alloc([]Value, 1);
@@ -2823,25 +2811,19 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         // Phase 6: TDE Core Procedures
     } else if (std.mem.eql(u8, proc_name, "tde.initialize_key_hierarchy")) {
         // CANARY: REQ=REQ-TDE-PROC-038; FEATURE="TDEProcedures"; ASPECT=InitKeyHierarchy; STATUS=TESTED; OWNER=tde; UPDATED=2025-10-19
-        // Enable TDE for testing
-        tde_mod.enableForTests();
-        defer tde_mod.disableForTests();
-
         // Initialize key hierarchy with real implementation
         const result = try tde_mod.initializeKeyHierarchy(allocator);
 
-        const columns = try allocator.alloc([]const u8, 4);
+        const columns = try allocator.alloc([]const u8, 3);
         columns[0] = try allocator.dupe(u8, "master_key_id");
         columns[1] = try allocator.dupe(u8, "data_keys");
-        columns[2] = try allocator.dupe(u8, "wal_keys");
-        columns[3] = try allocator.dupe(u8, "backup_keys");
+        columns[2] = try allocator.dupe(u8, "backup_keys");
 
         const rows = try allocator.alloc([]Value, 1);
-        const row = try allocator.alloc(Value, 4);
+        const row = try allocator.alloc(Value, 3);
         row[0] = Value{ .Str = result.master_key_id };
         row[1] = Value{ .Int = @intCast(result.data_keys) };
-        row[2] = Value{ .Int = @intCast(result.wal_keys) };
-        row[3] = Value{ .Int = @intCast(result.backup_keys) };
+        row[2] = Value{ .Int = @intCast(result.backup_keys) };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2851,10 +2833,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         };
     } else if (std.mem.eql(u8, proc_name, "tde.rotate_keys")) {
         // CANARY: REQ=REQ-TDE-PROC-039; FEATURE="TDEProcedures"; ASPECT=RotateKeys; STATUS=TESTED; OWNER=tde; UPDATED=2025-10-19
-        // Enable TDE for testing
-        tde_mod.enableForTests();
-        defer tde_mod.disableForTests();
-
         // Rotate keys with real implementation
         const result = try tde_mod.rotateKeys(allocator);
 
@@ -2882,24 +2860,22 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         // Get comprehensive encryption status
         const result = try tde_mod.getEncryptionStatus(allocator);
 
-        const columns = try allocator.alloc([]const u8, 7);
+        const columns = try allocator.alloc([]const u8, 6);
         columns[0] = try allocator.dupe(u8, "enabled");
         columns[1] = try allocator.dupe(u8, "key_loaded");
         columns[2] = try allocator.dupe(u8, "data_encrypted");
-        columns[3] = try allocator.dupe(u8, "wal_encrypted");
-        columns[4] = try allocator.dupe(u8, "backups_encrypted");
-        columns[5] = try allocator.dupe(u8, "algorithm");
-        columns[6] = try allocator.dupe(u8, "key_length");
+        columns[3] = try allocator.dupe(u8, "backups_encrypted");
+        columns[4] = try allocator.dupe(u8, "algorithm");
+        columns[5] = try allocator.dupe(u8, "key_length");
 
         const rows = try allocator.alloc([]Value, 1);
-        const row = try allocator.alloc(Value, 7);
+        const row = try allocator.alloc(Value, 6);
         row[0] = Value{ .Bool = result.enabled };
         row[1] = Value{ .Bool = result.key_loaded };
         row[2] = Value{ .Bool = result.data_encrypted };
-        row[3] = Value{ .Bool = result.wal_encrypted };
-        row[4] = Value{ .Bool = result.backups_encrypted };
-        row[5] = Value{ .Str = result.algorithm };
-        row[6] = Value{ .Int = @intCast(result.key_length) };
+        row[3] = Value{ .Bool = result.backups_encrypted };
+        row[4] = Value{ .Str = result.algorithm };
+        row[5] = Value{ .Int = @intCast(result.key_length) };
         rows[0] = row;
 
         return ExecutionResult{
@@ -2909,10 +2885,6 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         };
     } else if (std.mem.eql(u8, proc_name, "tde.configure_kms")) {
         // CANARY: REQ=REQ-TDE-PROC-041; FEATURE="TDEProcedures"; ASPECT=ConfigureKMS; STATUS=TESTED; OWNER=tde; UPDATED=2025-10-19
-        // Enable TDE for testing
-        tde_mod.enableForTests();
-        defer tde_mod.disableForTests();
-
         // Configure KMS with default provider (aws)
         const result = try tde_mod.configureKMS(allocator, "aws");
 
@@ -2940,20 +2912,18 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         // Verify encrypted state across all components
         const result = try tde_mod.verifyEncryptedState(allocator);
 
-        const columns = try allocator.alloc([]const u8, 5);
+        const columns = try allocator.alloc([]const u8, 4);
         columns[0] = try allocator.dupe(u8, "all_encrypted");
         columns[1] = try allocator.dupe(u8, "data_files_checked");
-        columns[2] = try allocator.dupe(u8, "wal_files_checked");
-        columns[3] = try allocator.dupe(u8, "unencrypted_files");
-        columns[4] = try allocator.dupe(u8, "verification_time_ms");
+        columns[2] = try allocator.dupe(u8, "unencrypted_files");
+        columns[3] = try allocator.dupe(u8, "verification_time_ms");
 
         const rows = try allocator.alloc([]Value, 1);
-        const row = try allocator.alloc(Value, 5);
+        const row = try allocator.alloc(Value, 4);
         row[0] = Value{ .Bool = result.all_encrypted };
         row[1] = Value{ .Int = @intCast(result.data_files_checked) };
-        row[2] = Value{ .Int = @intCast(result.wal_files_checked) };
-        row[3] = Value{ .Int = @intCast(result.unencrypted_files) };
-        row[4] = Value{ .Int = @intCast(result.verification_time_ms) };
+        row[2] = Value{ .Int = @intCast(result.unencrypted_files) };
+        row[3] = Value{ .Int = @intCast(result.verification_time_ms) };
         rows[0] = row;
 
         return ExecutionResult{
@@ -3101,24 +3071,24 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .rows = rows,
             .flags = std.ArrayList([]const u8).empty,
         };
-    } else if (std.mem.eql(u8, proc_name, "tde.encrypt_wal_test")) {
-        // CANARY: REQ=REQ-TDE-PROC-041; FEATURE="TDETestProcedures"; ASPECT=EncryptWALTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
-        // tde.encrypt_wal_test() -> segment_id, encryption_status, segment_size, integrity_verified
+    } else if (std.mem.eql(u8, proc_name, "tde.encrypt_backup_test")) {
+        // CANARY: REQ=REQ-TDE-PROC-041; FEATURE="TDETestProcedures"; ASPECT=EncryptBackupTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+        // tde.encrypt_backup_test() -> backup_id, encryption_status, backup_size, integrity_verified
 
         // Call real TDE function
-        const result = try tde_mod.encryptWalTest(allocator);
+        const result = try tde_mod.encryptBackupTest(allocator);
 
         const columns = try allocator.alloc([]const u8, 4);
-        columns[0] = try allocator.dupe(u8, "segment_id");
+        columns[0] = try allocator.dupe(u8, "backup_id");
         columns[1] = try allocator.dupe(u8, "encryption_status");
-        columns[2] = try allocator.dupe(u8, "segment_size");
+        columns[2] = try allocator.dupe(u8, "backup_size");
         columns[3] = try allocator.dupe(u8, "integrity_verified");
 
         const rows = try allocator.alloc([]Value, 1);
         const row = try allocator.alloc(Value, 4);
-        row[0] = Value{ .Int = result.segment_id };
+        row[0] = Value{ .Int = result.backup_id };
         row[1] = Value{ .Str = result.encryption_status };
-        row[2] = Value{ .Int = result.segment_size };
+        row[2] = Value{ .Int = result.backup_size };
         row[3] = Value{ .Bool = result.integrity_verified };
         rows[0] = row;
 

@@ -158,30 +158,8 @@ pub const AuditLogger = struct {
             return;
         }
 
-        // Check for test mode environment variable to allow random key generation
-        const allow_test_keys = std.process.getEnvVarOwned(self.allocator, "GEODE_ALLOW_TEST_AUDIT_KEYS") catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => null,
-            else => return err,
-        };
-        defer if (allow_test_keys) |k| self.allocator.free(k);
-
-        const test_mode = if (allow_test_keys) |k|
-            std.mem.eql(u8, k, "1") or std.mem.eql(u8, k, "true")
-        else
-            false;
-
-        if (!test_mode) {
-            log.err("Signing keys missing - GEODE_AUDIT_PUB/SEC required in production", &.{});
-            return error.SigningKeysMissing;
-        }
-
-        log.warn("SECURITY WARNING: Using randomly generated audit keys for testing!", &.{});
-
-        // GAP-0110 SECURITY FIX: Use cryptographic random for test key generation
-        // Generate random key pair for testing (not deterministic)
-        var seed_bytes: [32]u8 = undefined;
-        std.crypto.random.bytes(&seed_bytes);
-        self.signing_key = try Ed25519.KeyPair.generateDeterministic(seed_bytes);
+        log.err("Signing keys missing - GEODE_AUDIT_PUB/SEC required", &.{});
+        return error.SigningKeysMissing;
     }
 
     fn initFromTail(self: *AuditLogger) !void {

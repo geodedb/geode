@@ -1,19 +1,13 @@
 const std = @import("std");
 const crypto = std.crypto;
+const flags_mod = @import("../util/feature_flags.zig");
 
 // Multi-Factor Authentication (MFA) - RFC 6238 TOTP implementation (HMAC-SHA1 default)
 // Runtime gated by shared feature flag (GEODE_ENABLE_MFA) via util/feature_flags.zig.
 // CANARY: REQ=REQ-GQL-MFA-CORE-001; FEATURE="MfaCoreTotpRecovery"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeSingleUse|TestCANARY_REQ_GQL_MFA_CORE_001_ReauthIntervalPolicyTrigger|TestCANARY_REQ_GQL_MFA_CORE_001_ElevationTtlExpiry|TestCANARY_REQ_GQL_MFA_CORE_001_DynamicPolicyCacheBypass|TestCANARY_REQ_GQL_MFA_CORE_001_EndToEndElevationFlow; OWNER=security; UPDATED=2025-09-26
 
-var global_enabled: bool = false;
 pub fn globallyEnabled() bool {
-    return global_enabled;
-}
-pub fn enableForTests() void {
-    global_enabled = true;
-}
-pub fn disableForTests() void {
-    global_enabled = false;
+    return flags_mod.global().mfa.enabled();
 }
 
 pub const Enrollment = struct {

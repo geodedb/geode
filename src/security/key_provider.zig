@@ -14,7 +14,7 @@ pub const ProviderType = enum {
 
 pub const KeyMaterial = struct {
     data_key: [32]u8,
-    wal_key: [32]u8,
+    backup_key: [32]u8,
 };
 
 pub const Provider = struct {
@@ -62,7 +62,7 @@ fn loadStatic(allocator: std.mem.Allocator) !?KeyMaterial {
     }
     const tde = @import("tde_hierarchy");
     const kh = tde.KeyHierarchy.init(master);
-    return KeyMaterial{ .data_key = kh.data_key, .wal_key = kh.wal_key };
+    return KeyMaterial{ .data_key = kh.data_key, .backup_key = kh.backup_key };
 }
 
 // Deterministic mock KMS: derives two keys from seed using SHA-256(seed || label)
@@ -136,10 +136,10 @@ fn unwrapKey(seed: u64, wrapped: [32]u8) [32]u8 {
 
 fn Provider_fetchMock(self: Provider) KeyMaterial {
     var data_key: [32]u8 = undefined;
-    var wal_key: [32]u8 = undefined;
+    var backup_key: [32]u8 = undefined;
     derive(self.mock_seed, "DATA", &data_key);
-    derive(self.mock_seed, "WAL", &wal_key);
-    return .{ .data_key = data_key, .wal_key = wal_key };
+    derive(self.mock_seed, "BACKUP", &backup_key);
+    return .{ .data_key = data_key, .backup_key = backup_key };
 }
 
 fn fetchMockKms(self: Provider) ?KeyMaterial {
@@ -178,18 +178,18 @@ fn fetchExternalKms(allocator: std.mem.Allocator) !?KeyMaterial {
     // CANARY: REQ=REQ-GQL-TDE-RANDOM-001; FEATURE="Cryptographic Key Generation"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
     var data_plain: [32]u8 = undefined;
     std.crypto.random.bytes(&data_plain);
-    var wal_plain: [32]u8 = undefined;
-    std.crypto.random.bytes(&wal_plain);
+    var backup_plain: [32]u8 = undefined;
+    std.crypto.random.bytes(&backup_plain);
 
     // Wrap keys via KMS client (uses AES-GCM internally)
     const env_data = try client.wrap(data_plain);
-    const env_wal = try client.wrap(wal_plain);
+    const env_backup = try client.wrap(backup_plain);
 
     // Unwrap to validate round-trip integrity
     const recovered_data = try client.unwrap(env_data);
-    const recovered_wal = try client.unwrap(env_wal);
+    const recovered_backup = try client.unwrap(env_backup);
 
-    return KeyMaterial{ .data_key = recovered_data, .wal_key = recovered_wal };
+    return KeyMaterial{ .data_key = recovered_data, .backup_key = recovered_backup };
 }
 
 fn deriveDigest(base: *const [32]u8, label: []const u8, out: *[32]u8) void {
@@ -224,12 +224,12 @@ test "mock kms deterministic and distinct seeds differ" {
     const km1 = (try p1.fetch(std.testing.allocator)).?;
     const km2 = (try p1.fetch(std.testing.allocator)).?; // repeat fetch, should be identical
     try std.testing.expect(std.mem.eql(u8, &km1.data_key, &km2.data_key));
-    try std.testing.expect(std.mem.eql(u8, &km1.wal_key, &km2.wal_key));
+    try std.testing.expect(std.mem.eql(u8, &km1.backup_key, &km2.backup_key));
     // Different seed => different keys
     var p2 = Provider{ .typ = .MockKms, .mock_seed = 0xDEADBEEFCAFEBABE };
     const km3 = (try p2.fetch(std.testing.allocator)).?;
     try std.testing.expect(!std.mem.eql(u8, &km1.data_key, &km3.data_key));
-    try std.testing.expect(!std.mem.eql(u8, &km1.wal_key, &km3.wal_key));
+    try std.testing.expect(!std.mem.eql(u8, &km1.backup_key, &km3.backup_key));
 }
 
 test "external kms provider generates non-deterministic envelopes but stable seed influences distribution" {
@@ -240,13 +240,13 @@ test "external kms provider generates non-deterministic envelopes but stable see
     const km1 = (try p.fetch(std.testing.allocator)).?;
     const km2 = (try p.fetch(std.testing.allocator)).?; // new random keys each fetch
     // Expect keys differ most of the time (non-deterministic); allow rare collision fallback
-    const identical = std.mem.eql(u8, &km1.data_key, &km2.data_key) and std.mem.eql(u8, &km1.wal_key, &km2.wal_key);
+    const identical = std.mem.eql(u8, &km1.data_key, &km2.data_key) and std.mem.eql(u8, &km1.backup_key, &km2.backup_key);
     if (identical) std.debug.print("WARNING: identical keys generated twice; extremely low probability but acceptable for test rerun\n", .{});
     // Changing API key changes PRNG seed => distribution changes (not directly testable without internal stats)
     std.os.setenvZ("GEODE_KMS_API_KEY", "def456") catch {};
     const km3 = (try p.fetch(std.testing.allocator)).?;
     // Highly likely to differ from first fetch
-    try std.testing.expect(!std.mem.eql(u8, &km1.data_key, &km3.data_key) or !std.mem.eql(u8, &km1.wal_key, &km3.wal_key));
+    try std.testing.expect(!std.mem.eql(u8, &km1.data_key, &km3.data_key) or !std.mem.eql(u8, &km1.backup_key, &km3.backup_key));
 }
 
 // =============================================================================

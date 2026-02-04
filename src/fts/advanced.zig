@@ -17,12 +17,6 @@ const flags_mod = @import("../util/feature_flags.zig");
 fn flag() *flags_mod.Flag {
     return &flags_mod.global().adv_fts;
 }
-pub fn enableForTests() void {
-    flag().enableForTests();
-}
-pub fn disableForTests() void {
-    flag().disableForTests();
-}
 fn enabled() bool {
     return flag().enabled();
 }

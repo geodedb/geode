@@ -11,21 +11,12 @@ var flags_gpa_init = false;
 
 pub const Flag = struct {
     env_var: []const u8,
-    test_override: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn init(env_var: []const u8) Flag {
         return Flag{ .env_var = env_var };
     }
 
-    pub fn enableForTests(self: *Flag) void {
-        self.test_override.store(true, .release);
-    }
-    pub fn disableForTests(self: *Flag) void {
-        self.test_override.store(false, .release);
-    }
-
     pub fn enabled(self: *Flag) bool {
-        if (self.test_override.load(.acquire)) return true;
         // P2-3: Use static GPA for env var check
         if (!flags_gpa_init) {
             flags_gpa_init = true;

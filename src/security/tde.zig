@@ -8,17 +8,10 @@ const log = logging.scoped("security");
 const Attr = logging.Attr;
 
 // Transparent Data Encryption (TDE) minimal AES-256-GCM implementation.
-// Runtime gated by GEODE_ENABLE_TDE or test override via enableForTests().
+// Runtime gated by GEODE_ENABLE_TDE.
 // CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE baseline"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/e2e_security_tde_mfa.zig:1|tests/test_tde_integration.zig:1; OWNER=security; UPDATED=2025-11-12
 
 pub const KeyStatus = key_manager.KeyStatus;
-
-pub fn enableForTests() void {
-    flag().enableForTests();
-}
-pub fn disableForTests() void {
-    flag().disableForTests();
-}
 
 fn flag() *flags_mod.Flag {
     return &flags_mod.global().tde;
@@ -44,7 +37,7 @@ pub const Ciphertext = struct {
 };
 
 fn loadRawKey(allocator: std.mem.Allocator) !?[KeyBytes]u8 {
-    return key_manager.loadRawKey(allocator, flag().test_override.load(.acquire));
+    return key_manager.loadRawKey(allocator);
 }
 
 pub fn encrypt(allocator: std.mem.Allocator, plaintext: []const u8, aad: []const u8) !Ciphertext {
@@ -100,19 +93,19 @@ var rotation_state: RotationState = .{
 
 // Phase 6: TDE Core Functions
 
-/// Initialize key hierarchy with master/data/wal keys
+/// Initialize key hierarchy with master/data/backup keys
 pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !key_manager.KeyHierarchyResult {
     return try key_manager.initializeKeyHierarchy(allocator);
 }
 
 /// Rotate encryption keys with zero-downtime migration
 pub fn rotateKeys(allocator: std.mem.Allocator) !key_manager.RotateKeysResult {
-    return key_manager.rotateKeys(allocator, flag().test_override.load(.acquire));
+    return key_manager.rotateKeys(allocator);
 }
 
 /// Get comprehensive encryption status across all components
 pub fn getEncryptionStatus(allocator: std.mem.Allocator) !key_manager.EncryptionStatusResult {
-    return key_manager.getEncryptionStatus(allocator, enabled(), flag().test_override.load(.acquire));
+    return key_manager.getEncryptionStatus(allocator, enabled());
 }
 
 /// Configure KMS integration for key management
@@ -124,15 +117,14 @@ pub fn configureKMS(allocator: std.mem.Allocator, provider: []const u8) !key_man
 pub fn verifyEncryptedState(_: std.mem.Allocator) !struct {
     all_encrypted: bool,
     data_files_checked: u32,
-    wal_files_checked: u32,
     unencrypted_files: u32,
     verification_time_ms: u64,
 } {
     const start_time = std.time.milliTimestamp();
 
     var data_files_checked: u32 = 0;
-    var wal_files_checked: u32 = 0;
     var unencrypted_files: u32 = 0;
+    const tde_file = @import("../storage/tde_file_encryption.zig");
 
     // Check data files for encryption markers
     const data_dir = std.fs.cwd().openDir(".", .{ .iterate = true }) catch {
@@ -140,7 +132,6 @@ pub fn verifyEncryptedState(_: std.mem.Allocator) !struct {
         return .{
             .all_encrypted = true,
             .data_files_checked = 0,
-            .wal_files_checked = 0,
             .unencrypted_files = 0,
             .verification_time_ms = 0,
         };
@@ -150,8 +141,8 @@ pub fn verifyEncryptedState(_: std.mem.Allocator) !struct {
     while (try data_iter.next()) |entry| {
         if (entry.kind != .file) continue;
 
-        // Check if file has .db extension (data file)
-        if (std.mem.endsWith(u8, entry.name, ".db")) {
+        // Check graph store and backup files for TDE file-level magic
+        if (std.mem.endsWith(u8, entry.name, ".dat") or std.mem.endsWith(u8, entry.name, ".backup")) {
             data_files_checked += 1;
 
             // Check for encryption header (in production)
@@ -162,52 +153,25 @@ pub fn verifyEncryptedState(_: std.mem.Allocator) !struct {
             };
             defer file.close();
 
-            // Read first 16 bytes for encryption marker
-            var header: [16]u8 = undefined;
+            // Read header for encryption marker
+            var header: [tde_file.MAGIC.len]u8 = undefined;
             _ = file.read(&header) catch {
                 unencrypted_files += 1;
                 continue;
             };
 
-            // Check for TDE magic bytes (simplified)
-            const tde_magic = "GEODE_TDE_V1";
-            if (!std.mem.startsWith(u8, &header, tde_magic)) {
-                unencrypted_files += 1;
-            }
-        }
-
-        // Check WAL files
-        if (std.mem.endsWith(u8, entry.name, ".wal")) {
-            wal_files_checked += 1;
-
-            // Similar check for WAL files
-            const file = std.fs.cwd().openFile(entry.name, .{}) catch {
-                unencrypted_files += 1;
-                continue;
-            };
-            defer file.close();
-
-            // Check WAL encryption header
-            var header: [16]u8 = undefined;
-            _ = file.read(&header) catch {
-                unencrypted_files += 1;
-                continue;
-            };
-
-            const wal_magic = "GEODE_WAL_ENC";
-            if (!std.mem.startsWith(u8, &header, wal_magic)) {
+            if (!std.mem.eql(u8, &header, &tde_file.MAGIC)) {
                 unencrypted_files += 1;
             }
         }
     }
 
     const verification_time_ms: u64 = @intCast(std.time.milliTimestamp() - start_time);
-    const all_encrypted = unencrypted_files == 0 and (data_files_checked > 0 or wal_files_checked > 0);
+    const all_encrypted = unencrypted_files == 0 and data_files_checked > 0;
 
     return .{
         .all_encrypted = all_encrypted,
         .data_files_checked = data_files_checked,
-        .wal_files_checked = wal_files_checked,
         .unencrypted_files = unencrypted_files,
         .verification_time_ms = verification_time_ms,
     };
@@ -221,9 +185,7 @@ pub fn benchmarkEncryption(allocator: std.mem.Allocator) !struct {
     operations_tested: u32,
     encryption_mode: []const u8,
 } {
-    // Enable TDE for testing
-    enableForTests();
-    defer disableForTests();
+    if (!enabled()) return error.FeatureDisabled;
 
     const iterations: u32 = 1000;
     var total_bytes: u64 = 0;
@@ -274,8 +236,7 @@ pub fn backupEncrypted(allocator: std.mem.Allocator, backup_path: []const u8) !s
     files_backed_up: u32,
     backup_hash: []const u8,
 } {
-    enableForTests();
-    defer disableForTests();
+    if (!enabled()) return error.FeatureDisabled;
 
     var backup_size: u64 = 0;
     var original_size: u64 = 0;
@@ -419,9 +380,9 @@ pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !key_manager.Der
     return key_manager.deriveDataKey(allocator, key_id);
 }
 
-/// Derive WAL encryption key from master key
-pub fn deriveWalKey(allocator: std.mem.Allocator, wal_segment: u32) !key_manager.DeriveWalKeyResult {
-    return key_manager.deriveWalKey(allocator, wal_segment);
+/// Derive backup encryption key from master key
+pub fn deriveBackupKey(allocator: std.mem.Allocator, key_id: u32) !key_manager.DeriveDataKeyResult {
+    return key_manager.deriveBackupKey(allocator, key_id);
 }
 
 /// Shamir's Secret Sharing over GF(256) using irreducible polynomial x^8 + x^4 + x^3 + x + 1
@@ -581,8 +542,7 @@ pub fn testTransparentEncryption(allocator: std.mem.Allocator) !struct {
     performance_impact_pct: f64,
     errors_encountered: u32,
 } {
-    enableForTests();
-    defer disableForTests();
+    if (!enabled()) return error.FeatureDisabled;
 
     var types_tested: u32 = 0;
     var errors: u32 = 0;
@@ -658,17 +618,13 @@ pub fn configureRotation(allocator: std.mem.Allocator, max_age_hours: u32) !key_
     return key_manager.configureRotation(allocator, max_age_hours);
 }
 
-/// Test page-level encryption
+/// Test block-level encryption
 pub fn encryptPageTest(allocator: std.mem.Allocator) !struct {
     page_id: i64,
     encryption_status: []const u8,
     page_size_encrypted: i64,
     integrity_check: bool,
 } {
-    // Enable TDE for this test (uses REAL encrypt/decrypt functions)
-    enableForTests();
-    defer disableForTests();
-
     // Create actual page data
     const page_size: usize = 8192;
     const page_data = try allocator.alloc(u8, page_size);
@@ -693,37 +649,33 @@ pub fn encryptPageTest(allocator: std.mem.Allocator) !struct {
     };
 }
 
-/// Test WAL segment encryption
-pub fn encryptWalTest(allocator: std.mem.Allocator) !struct {
-    segment_id: i64,
+/// Test backup payload encryption
+pub fn encryptBackupTest(allocator: std.mem.Allocator) !struct {
+    backup_id: i64,
     encryption_status: []const u8,
-    segment_size: i64,
+    backup_size: i64,
     integrity_verified: bool,
 } {
-    // Enable TDE for this test (uses REAL encrypt/decrypt functions)
-    enableForTests();
-    defer disableForTests();
+    // Create actual backup payload data (reduced from 16MB to 64KB for test performance)
+    const backup_size: usize = 65536; // 64KB
+    const backup_data = try allocator.alloc(u8, backup_size);
+    defer allocator.free(backup_data);
+    std.crypto.random.bytes(backup_data);
 
-    // Create actual WAL segment data (reduced from 16MB to 64KB for test performance)
-    const wal_size: usize = 65536; // 64KB
-    const wal_data = try allocator.alloc(u8, wal_size);
-    defer allocator.free(wal_data);
-    std.crypto.random.bytes(wal_data);
-
-    // Actually encrypt the WAL segment
-    const encrypted = try encrypt(allocator, wal_data, "wal_encryption");
+    // Actually encrypt the backup payload
+    const encrypted = try encrypt(allocator, backup_data, "backup_encryption");
     defer allocator.free(encrypted.data);
 
     // Verify decryption works
-    const decrypted = try decrypt(allocator, encrypted, "wal_encryption");
+    const decrypted = try decrypt(allocator, encrypted, "backup_encryption");
     defer allocator.free(decrypted);
 
-    const integrity_ok = std.mem.eql(u8, wal_data, decrypted);
+    const integrity_ok = std.mem.eql(u8, backup_data, decrypted);
 
     return .{
-        .segment_id = 1,
+        .backup_id = 1,
         .encryption_status = try allocator.dupe(u8, if (integrity_ok) "encrypted" else "failed"),
-        .segment_size = @intCast(encrypted.data.len),
+        .backup_size = @intCast(encrypted.data.len),
         .integrity_verified = integrity_ok,
     };
 }
@@ -734,10 +686,6 @@ pub fn roundtripTest(allocator: std.mem.Allocator, test_data: []const u8) !struc
     decrypted_data: []const u8,
     roundtrip_success: bool,
 } {
-    // Enable TDE for this test (uses REAL encrypt/decrypt functions)
-    enableForTests();
-    defer disableForTests();
-
     // Actually encrypt the data
     const encrypted = try encrypt(allocator, test_data, "roundtrip_test");
     defer allocator.free(encrypted.data);
@@ -762,9 +710,7 @@ pub fn createEncryptedBackup(allocator: std.mem.Allocator, backup_path: []const 
     backup_size: i64,
     integrity_hash: []const u8,
 } {
-    // Enable TDE for this test (uses REAL encrypt/decrypt functions)
-    enableForTests();
-    defer disableForTests();
+    if (!enabled()) return error.FeatureDisabled;
 
     // Load current key
     const key = try loadRawKey(allocator) orelse return error.KeyNotLoaded;
@@ -802,9 +748,7 @@ pub fn restoreWithKeys(allocator: std.mem.Allocator, backup_path: []const u8, ma
     records_restored: i64,
     keys_verified: bool,
 } {
-    // Enable TDE for this test (uses REAL encrypt/decrypt functions)
-    enableForTests();
-    defer disableForTests();
+    if (!enabled()) return error.FeatureDisabled;
 
     _ = backup_path;
     _ = manifest_path;
@@ -837,9 +781,7 @@ pub fn measureOverhead(allocator: std.mem.Allocator) !struct {
     overhead_percentage: f64,
     passes_threshold: bool,
 } {
-    // Enable TDE for this test (uses REAL encrypt/decrypt functions)
-    enableForTests();
-    defer disableForTests();
+    if (!enabled()) return error.FeatureDisabled;
 
     const iterations: usize = 1000;
     const test_data = try allocator.alloc(u8, 1024);
@@ -883,9 +825,7 @@ pub fn simulateOLTPWorkload(allocator: std.mem.Allocator, duration_seconds: u32,
     tps_without_encryption: i64,
     degradation_percentage: f64,
 } {
-    // Enable TDE for this test (uses REAL encrypt/decrypt functions)
-    enableForTests();
-    defer disableForTests();
+    if (!enabled()) return error.FeatureDisabled;
 
     _ = concurrent_transactions;
 
@@ -1034,9 +974,7 @@ pub fn testKmsWrapUnwrap(allocator: std.mem.Allocator) !struct {
     roundtrip_verified: bool,
     latency_ms: i64,
 } {
-    // Enable TDE for this test (uses REAL encrypt/decrypt functions)
-    enableForTests();
-    defer disableForTests();
+    if (!enabled()) return error.FeatureDisabled;
 
     const start = std.time.milliTimestamp();
 
@@ -1211,12 +1149,10 @@ pub fn testPrivilegedUnwrap(allocator: std.mem.Allocator) !struct {
     }
 
     // Only perform unwrap if permission granted
+    if (!enabled()) return error.FeatureDisabled;
+
     var unwrap_ok = false;
     if (access_granted) {
-        // Enable TDE and perform test unwrap
-        enableForTests();
-        defer disableForTests();
-
         // Create test wrapped key and verify unwrap works
         const test_key = [_]u8{0xDE} ** 32;
         const encrypted = try encrypt(allocator, &test_key, "priv_test");
@@ -1251,9 +1187,7 @@ pub fn testKeyRecovery(allocator: std.mem.Allocator) !struct {
     master_key_recovered: bool,
     data_accessible: bool,
 } {
-    // Enable TDE for this test (uses REAL encrypt/decrypt functions)
-    enableForTests();
-    defer disableForTests();
+    if (!enabled()) return error.FeatureDisabled;
 
     // Test recovery process
     const test_data = try allocator.alloc(u8, 128);
@@ -1328,9 +1262,7 @@ pub fn testCorruptedKeyHandling(allocator: std.mem.Allocator) !struct {
     recovery_attempted: bool,
     data_recoverable: bool,
 } {
-    // Enable TDE for this test (uses REAL encrypt/decrypt functions)
-    enableForTests();
-    defer disableForTests();
+    if (!enabled()) return error.FeatureDisabled;
 
     // Create test data
     const test_data = try allocator.alloc(u8, 128);
@@ -1368,7 +1300,7 @@ pub fn cleanupKeyHierarchy(allocator: std.mem.Allocator) !struct {
     _ = allocator;
 
     // Zeroize all keys in hierarchy
-    var keys: [5][32]u8 = undefined;
+    var keys: [3][32]u8 = undefined;
     for (&keys) |*key| {
         @memset(key, 0);
     }
@@ -1380,7 +1312,7 @@ pub fn cleanupKeyHierarchy(allocator: std.mem.Allocator) !struct {
     rotation_state.scheduled_rotation = null;
 
     return .{
-        .keys_zeroized = 5,
+        .keys_zeroized = 3,
         .hierarchy_cleared = true,
     };
 }

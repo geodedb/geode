@@ -103,10 +103,10 @@ pub const TDEKeyManager = struct {
         return self.hierarchy.?.data_key;
     }
 
-    /// Get WAL encryption key
-    pub fn getWALKey(self: *TDEKeyManager) ![32]u8 {
+    /// Get backup encryption key
+    pub fn getBackupKey(self: *TDEKeyManager) ![32]u8 {
         if (!self.key_status.loaded) return error.TDENotInitialized;
-        return self.hierarchy.?.wal_key;
+        return self.hierarchy.?.backup_key;
     }
 
     /// Rotate keys using KMS provider
@@ -181,16 +181,16 @@ pub const TDEOperations = struct {
         return decryptWithKey(allocator, encrypted, aad, data_key);
     }
 
-    /// Encrypt WAL record using TDE WAL key
-    pub fn encryptWAL(self: *TDEOperations, allocator: std.mem.Allocator, plaintext: []const u8, aad: []const u8) !EncryptedData {
-        const wal_key = try self.key_manager.getWALKey();
-        return encryptWithKey(allocator, plaintext, aad, wal_key);
+    /// Encrypt backup payload using TDE backup key
+    pub fn encryptBackup(self: *TDEOperations, allocator: std.mem.Allocator, plaintext: []const u8, aad: []const u8) !EncryptedData {
+        const backup_key = try self.key_manager.getBackupKey();
+        return encryptWithKey(allocator, plaintext, aad, backup_key);
     }
 
-    /// Decrypt WAL record using TDE WAL key
-    pub fn decryptWAL(self: *TDEOperations, allocator: std.mem.Allocator, encrypted: EncryptedData, aad: []const u8) ![]u8 {
-        const wal_key = try self.key_manager.getWALKey();
-        return decryptWithKey(allocator, encrypted, aad, wal_key);
+    /// Decrypt backup payload using TDE backup key
+    pub fn decryptBackup(self: *TDEOperations, allocator: std.mem.Allocator, encrypted: EncryptedData, aad: []const u8) ![]u8 {
+        const backup_key = try self.key_manager.getBackupKey();
+        return decryptWithKey(allocator, encrypted, aad, backup_key);
     }
 };
 
