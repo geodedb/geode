@@ -149,7 +149,7 @@ pub const SentinelAllocator = struct {
 };
 
 /// GAP-0218 FIX: Returns sentinel-wrapped allocator when enabled, otherwise returns base
-/// Enable sentinel checking with -Dsan build option
+/// Sentinel protection is opt-in via createSentinelAllocator; no build flag required.
 pub fn maybeSentinel(base: std.mem.Allocator) std.mem.Allocator {
     const builtin = @import("builtin");
 

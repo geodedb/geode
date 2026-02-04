@@ -2,19 +2,10 @@ const std = @import("std");
 const testing = std.testing;
 const cluster = @import("../src/distributed/cluster.zig");
 const raft = @import("../src/distributed/raft_consensus.zig");
-const bo = @import("build_options");
-
 // Concrete CANARY tests replacing stubbed REQ-GQL-078 aspects.
 // CANARY promotion intent: implement real assertions for leader election, shard map, raft interface.
 
-fn skipIfDisabled() void {
-    if (!bo.feature_cluster) {
-        std.debug.print("SKIP cluster (feature flag disabled)\n", .{});
-    }
-}
-
 pub fn TestCANARY_REQ_GQL_078_LeaderStub() !void {
-    if (!bo.feature_cluster) return; // honor feature flag
     const allocator = testing.allocator;
 
     // 3 node peer config (single process simulation)
@@ -36,7 +27,6 @@ pub fn TestCANARY_REQ_GQL_078_LeaderStub() !void {
 }
 
 pub fn TestCANARY_REQ_GQL_078_ShardMapStub() !void {
-    if (!bo.feature_cluster) return;
     const allocator = testing.allocator;
     const peers = &[_]cluster.ClusterCoordinator.PeerConfig{
         .{ .id = 1, .address = "127.0.0.1", .port = 8668 },
@@ -88,7 +78,6 @@ pub fn TestCANARY_REQ_GQL_078_ShardMapStub() !void {
 }
 
 pub fn TestCANARY_REQ_GQL_078_RaftInterfaceValidation() !void {
-    if (!bo.feature_cluster) return;
     const allocator = testing.allocator;
 
     // Build a simple Raft request_vote message and round-trip encode/decode via frame helpers.

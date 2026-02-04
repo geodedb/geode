@@ -1,6 +1,4 @@
 const std = @import("std");
-const bo = @import("build_options");
-
 pub const MetricKind = enum { counter, gauge, histogram };
 
 pub const Counter = struct {
@@ -59,7 +57,6 @@ pub const Registry = struct {
     }
 
     pub fn exportPrometheus(self: *Registry, w: anytype) !void {
-        if (!bo.feature_monitoring) return; // feature gated
         try w.print("# HELP geode_query_latency_ms Query latency histogram in ms\n", .{});
         try w.print("# TYPE geode_query_latency_ms histogram\n", .{});
         const edges = [_]u64{ 1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000 };

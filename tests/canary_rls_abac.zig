@@ -1,7 +1,5 @@
 const std = @import("std");
 const testing = std.testing;
-const bo = @import("build_options");
-
 // Placeholder minimal policy structures (mirroring expected future interfaces). For now we simulate catalog + cache behavior.
 
 pub const Policy = struct {
@@ -67,7 +65,6 @@ fn enforce(policies: []const Policy, label: []const u8, attr: []const u8) bool {
 }
 
 pub fn TestCANARY_REQ_GQL_080_PolicyCatalog() !void {
-    if (!bo.feature_rls_abac) return;
     var catalog = PolicyCatalog.init(testing.allocator);
     defer catalog.deinit();
     try catalog.add(.{ .id = "p1", .expr = "label=Person;attr=region:eu" });
@@ -77,7 +74,6 @@ pub fn TestCANARY_REQ_GQL_080_PolicyCatalog() !void {
 }
 
 pub fn TestCANARY_REQ_GQL_080_EnforcementHook() !void {
-    if (!bo.feature_rls_abac) return;
     const pols = [_]Policy{
         .{ .id = "p1", .expr = "label=Person;attr=region:eu" },
         .{ .id = "p2", .expr = "label=Account;attr=tier:gold" },
@@ -88,7 +84,6 @@ pub fn TestCANARY_REQ_GQL_080_EnforcementHook() !void {
 }
 
 pub fn TestCANARY_REQ_GQL_080_PolicyCache() !void {
-    if (!bo.feature_rls_abac) return;
     var catalog = PolicyCatalog.init(testing.allocator);
     defer catalog.deinit();
     try catalog.add(.{ .id = "p1", .expr = "label=Person;attr=region:eu" });
@@ -103,7 +98,6 @@ pub fn TestCANARY_REQ_GQL_080_PolicyCache() !void {
 }
 
 pub fn TestCANARY_REQ_GQL_080_PolicyCacheInvalidationRace() !void {
-    if (!bo.feature_rls_abac) return;
     var catalog = PolicyCatalog.init(testing.allocator);
     defer catalog.deinit();
     try catalog.add(.{ .id = "p1", .expr = "label=Person;attr=region:eu" });

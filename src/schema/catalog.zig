@@ -327,6 +327,21 @@ pub const Catalog = struct {
             try self.graphs.put(name, {});
         }
 
+        // Ensure catalog graphs exist in GraphStore registry
+        const store = graph_store.getGlobalStore(self.allocator);
+        var graph_iter = self.graphs.iterator();
+        while (graph_iter.next()) |entry| {
+            const graph_name = entry.key_ptr.*;
+            if (!store.graphExists(graph_name)) {
+                _ = store.createGraph(graph_name) catch |err| {
+                    log.err("Failed to ensure graph in store", &.{
+                        Attr.string("name", graph_name),
+                        Attr.err("error", err),
+                    });
+                };
+            }
+        }
+
         // Read indexes
         i = 0;
         while (i < index_count) : (i += 1) {
@@ -541,6 +556,40 @@ pub const Catalog = struct {
         return result.toOwnedSlice();
     }
 
+    /// Add a schema to the catalog and persist
+    pub fn addSchema(self: *Catalog, name: []const u8) !void {
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
+        if (self.schemas.contains(name)) {
+            return error.DuplicateSchema;
+        }
+
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+
+        try self.schemas.put(owned_name, {});
+        try self.save();
+    }
+
+    /// Remove a schema from the catalog and persist
+    pub fn removeSchema(self: *Catalog, name: []const u8) !void {
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
+        const entry = self.schemas.fetchRemove(name) orelse return error.SchemaNotFound;
+        self.allocator.free(entry.key);
+        try self.save();
+    }
+
+    /// Check if schema exists in the catalog
+    pub fn hasSchema(self: *Catalog, name: []const u8) bool {
+        self.rwlock.lockShared();
+        defer self.rwlock.unlockShared();
+
+        return self.schemas.contains(name);
+    }
+
     // CANARY: REQ=REQ-GRAPH-META-001; FEATURE="GraphMetadataPersistence"; ASPECT=AddGraph; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-01-09
     /// Add a graph to the catalog and persist
     pub fn addGraph(self: *Catalog, name: []const u8) !void {
@@ -583,6 +632,11 @@ pub const Catalog = struct {
         return self.graphs.contains(name);
     }
 
+    /// Alias for graphExists (schema manager compatibility)
+    pub fn hasGraph(self: *Catalog, name: []const u8) bool {
+        return self.graphExists(name);
+    }
+
     /// List all graphs in the catalog
     /// Returns an owned slice of graph names. Caller must free each name and the slice.
     pub fn listGraphs(self: *Catalog, allocator: std.mem.Allocator) ![][]const u8 {
@@ -606,15 +660,55 @@ pub const Catalog = struct {
         return result.toOwnedSlice(allocator);
     }
 
-    /// Back-compat: registerGraph delegates to addGraph
-    pub fn registerGraph(self: *Catalog, name: []const u8) !void {
-        return self.addGraph(name);
+    /// Add an index to the catalog and persist
+    pub fn addIndex(self: *Catalog, info: IndexInfo) !void {
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
+        const scoped_key = try getScopedIndexKey(self.allocator, info.table_name, info.name);
+        errdefer self.allocator.free(scoped_key);
+
+        if (self.indexes.contains(scoped_key)) {
+            self.allocator.free(scoped_key);
+            return error.DuplicateIndex;
+        }
+
+        const owned_name = try self.allocator.dupe(u8, info.name);
+        errdefer self.allocator.free(owned_name);
+        const owned_type = try self.allocator.dupe(u8, info.index_type);
+        errdefer self.allocator.free(owned_type);
+        const owned_table = try self.allocator.dupe(u8, info.table_name);
+        errdefer self.allocator.free(owned_table);
+
+        const owned_cols = try self.allocator.alloc([]const u8, info.columns.len);
+        errdefer self.allocator.free(owned_cols);
+        for (info.columns, 0..) |col, idx| {
+            owned_cols[idx] = try self.allocator.dupe(u8, col);
+        }
+
+        const owned_info = IndexInfo{
+            .name = owned_name,
+            .index_type = owned_type,
+            .table_name = owned_table,
+            .columns = owned_cols,
+        };
+
+        try self.indexes.put(scoped_key, owned_info);
+        try self.save();
     }
 
-    /// Back-compat: dropGraph delegates to removeGraph and returns success boolean
-    pub fn dropGraph(self: *Catalog, name: []const u8) bool {
-        self.removeGraph(name) catch return false;
-        return true;
+    /// Get index metadata by label and name (scoped key)
+    pub fn getIndex(self: *Catalog, label: []const u8, index_name: []const u8) !?IndexInfo {
+        self.rwlock.lockShared();
+        defer self.rwlock.unlockShared();
+
+        var key_buf: [512]u8 = undefined;
+        const scoped_key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ label, index_name }) catch {
+            const owned = try getScopedIndexKey(self.allocator, label, index_name);
+            defer self.allocator.free(owned);
+            return self.indexes.get(owned);
+        };
+        return self.indexes.get(scoped_key);
     }
 
     // GAP-0139: SHOW INDEXES implementation
@@ -664,309 +758,22 @@ pub const Catalog = struct {
         defer self.rwlock.unlockShared();
 
         var result = std.ArrayList([]const u8).empty;
-        errdefer result.deinit(allocator);
+        errdefer {
+            for (result.items) |name| {
+                allocator.free(name);
+            }
+            result.deinit(allocator);
+        }
 
         var iter = self.schemas.iterator();
         while (iter.next()) |entry| {
-            try result.append(allocator, entry.key_ptr.*);
+            const name_copy = try allocator.dupe(u8, entry.key_ptr.*);
+            try result.append(allocator, name_copy);
         }
 
         return result.toOwnedSlice(allocator);
     }
 };
-
-// GAP-0131: Global catalog state maintained for backward compatibility
-// CANARY: REQ=REQ-CATALOG-DEPRECATION-001; FEATURE="Legacy Global Catalog"; ASPECT=BackwardCompatibility; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-13
-// WARNING: These globals are DEPRECATED. New code should use Catalog instance methods.
-// Migration path: Replace initCatalog() with Catalog.init(allocator) and use instance methods
-// Callers to migrate: execution.zig (5 call sites)
-// Target removal: After all callers migrated to instance-based API
-pub var catalog_rwlock = std.Thread.RwLock{};
-pub var catalog_initialized = false;
-pub var last_catalog_data_dir: ?[]u8 = null;
-
-/// P2-3: Global allocator for catalog operations (better than page_allocator)
-var catalog_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
-var catalog_allocator_init = false;
-
-pub var catalog: struct {
-    schemas: std.StringHashMap(void),
-    graphs: std.StringHashMap(void),
-    indexes: std.StringHashMap(IndexInfo),
-} = undefined;
-
-pub fn initCatalog() void {
-    // P2-3: Initialize global allocator on first use
-    if (!catalog_allocator_init) {
-        catalog_allocator_init = true;
-    }
-    const allocator = catalog_gpa.allocator();
-
-    // Check if GEODE_DATA_DIR has changed
-    const current_data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
-        if (err == error.EnvironmentVariableNotFound) {
-            break :blk allocator.dupe(u8, "/tmp") catch "/tmp";
-        }
-        break :blk "/tmp";
-    };
-
-    // Phase 3: Write lock for catalog initialization/modification
-    catalog_rwlock.lock();
-    defer catalog_rwlock.unlock();
-
-    // Check if we need to reinitialize due to data dir change
-    var needs_reinit = !catalog_initialized;
-    if (last_catalog_data_dir) |last_dir| {
-        if (!std.mem.eql(u8, current_data_dir, last_dir)) {
-            needs_reinit = true;
-            // Clean up old catalog
-            if (catalog_initialized) {
-                catalog.schemas.deinit();
-                catalog.graphs.deinit();
-                catalog.indexes.deinit();
-                catalog_initialized = false;
-            }
-            allocator.free(last_dir);
-        }
-    } else {
-        needs_reinit = true;
-    }
-
-    if (needs_reinit) {
-        catalog.schemas = std.StringHashMap(void).init(allocator);
-        catalog.graphs = std.StringHashMap(void).init(allocator);
-        catalog.indexes = std.StringHashMap(IndexInfo).init(allocator);
-        catalog_initialized = true;
-
-        // Update last data dir
-        if (last_catalog_data_dir) |last_dir| {
-            allocator.free(last_dir);
-        }
-        last_catalog_data_dir = allocator.dupe(u8, current_data_dir) catch null;
-
-        // Load persisted catalog if it exists
-        loadCatalog() catch |err| {
-            log.warn("Failed to load catalog from disk", &.{
-                Attr.err("error", err),
-            });
-        };
-    } else {
-        allocator.free(current_data_dir);
-    }
-}
-
-pub fn saveCatalog() !void {
-    // P2-3: Use catalog global allocator instead of page_allocator
-    const allocator = catalog_gpa.allocator();
-
-    // Get catalog path from GEODE_DATA_DIR or use default
-    const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
-        if (err == error.EnvironmentVariableNotFound) {
-            break :blk try allocator.dupe(u8, "/tmp");
-        }
-        return err;
-    };
-    defer allocator.free(data_dir);
-
-    const catalog_path = try std.fmt.allocPrint(allocator, "{s}/geode_catalog.dat", .{data_dir});
-    defer allocator.free(catalog_path);
-
-    const file = try std.fs.cwd().createFile(catalog_path, .{});
-    defer file.close();
-
-    // Write header: schema_count, graph_count, index_count
-    var header: [12]u8 = undefined;
-    std.mem.writeInt(u32, header[0..4], @intCast(catalog.schemas.count()), .little);
-    std.mem.writeInt(u32, header[4..8], @intCast(catalog.graphs.count()), .little);
-    std.mem.writeInt(u32, header[8..12], @intCast(catalog.indexes.count()), .little);
-    _ = try file.write(&header);
-
-    // Write schemas (just names)
-    var schema_iter = catalog.schemas.iterator();
-    while (schema_iter.next()) |entry| {
-        const name = entry.key_ptr.*;
-        var len_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &len_buf, @intCast(name.len), .little);
-        _ = try file.write(&len_buf);
-        _ = try file.write(name);
-    }
-
-    // Write graphs (just names)
-    var graph_iter = catalog.graphs.iterator();
-    while (graph_iter.next()) |entry| {
-        const name = entry.key_ptr.*;
-        var len_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &len_buf, @intCast(name.len), .little);
-        _ = try file.write(&len_buf);
-        _ = try file.write(name);
-    }
-
-    // Write indexes
-    var index_iter = catalog.indexes.iterator();
-    while (index_iter.next()) |entry| {
-        const index_info = entry.value_ptr.*;
-
-        // Write index name
-        var name_len_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &name_len_buf, @intCast(index_info.name.len), .little);
-        _ = try file.write(&name_len_buf);
-        _ = try file.write(index_info.name);
-
-        // Write index type
-        var type_len_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &type_len_buf, @intCast(index_info.index_type.len), .little);
-        _ = try file.write(&type_len_buf);
-        _ = try file.write(index_info.index_type);
-
-        // Write table name
-        var table_len_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &table_len_buf, @intCast(index_info.table_name.len), .little);
-        _ = try file.write(&table_len_buf);
-        _ = try file.write(index_info.table_name);
-
-        // Write column count and columns
-        var col_count_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &col_count_buf, @intCast(index_info.columns.len), .little);
-        _ = try file.write(&col_count_buf);
-
-        for (index_info.columns) |col| {
-            var col_len_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &col_len_buf, @intCast(col.len), .little);
-            _ = try file.write(&col_len_buf);
-            _ = try file.write(col);
-        }
-    }
-}
-
-pub fn loadCatalog() !void {
-    // P2-3: Use catalog global allocator instead of page_allocator
-    const allocator = catalog_gpa.allocator();
-
-    // Get catalog path from GEODE_DATA_DIR or use default
-    const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
-        if (err == error.EnvironmentVariableNotFound) {
-            break :blk try allocator.dupe(u8, "/tmp");
-        }
-        return err;
-    };
-    defer allocator.free(data_dir);
-
-    const catalog_path = try std.fmt.allocPrint(allocator, "{s}/geode_catalog.dat", .{data_dir});
-    defer allocator.free(catalog_path);
-
-    const file = std.fs.cwd().openFile(catalog_path, .{}) catch |err| {
-        if (err == error.FileNotFound) return;
-        return err;
-    };
-    defer file.close();
-
-    // Read header
-    var header: [12]u8 = undefined;
-    const bytes_read = try file.read(&header);
-    if (bytes_read < 12) return error.InvalidCatalogFile;
-
-    const schema_count = std.mem.readInt(u32, header[0..4], .little);
-    const graph_count = std.mem.readInt(u32, header[4..8], .little);
-    const index_count = std.mem.readInt(u32, header[8..12], .little);
-
-    // Read schemas
-    var i: u32 = 0;
-    while (i < schema_count) : (i += 1) {
-        var len_buf: [4]u8 = undefined;
-        if ((try file.read(&len_buf)) < 4) return error.InvalidCatalogFile;
-        const name_len = std.mem.readInt(u32, &len_buf, .little);
-
-        const name = try allocator.alloc(u8, name_len);
-        if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
-
-        try catalog.schemas.put(name, {});
-    }
-
-    // Read graphs - collect names first, then load data
-    // CANARY: REQ=REQ-GRAPH-PERSIST-002; FEATURE="NamedGraphPersistence"; ASPECT=CatalogLoad; STATUS=IMPL; OWNER=storage; UPDATED=2026-01-29
-    var graph_names = try std.ArrayList([]const u8).initCapacity(allocator, graph_count);
-    defer graph_names.deinit(allocator);
-
-    i = 0;
-    while (i < graph_count) : (i += 1) {
-        var len_buf: [4]u8 = undefined;
-        if ((try file.read(&len_buf)) < 4) return error.InvalidCatalogFile;
-        const name_len = std.mem.readInt(u32, &len_buf, .little);
-
-        const name = try allocator.alloc(u8, name_len);
-        if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
-
-        try catalog.graphs.put(name, {});
-        try graph_names.append(allocator, name);
-    }
-
-    // Ensure all catalog graphs exist in the global GraphStore.
-    const store = graph_store.getGlobalStore(allocator);
-    for (graph_names.items) |name| {
-        if (!store.graphExists(name)) {
-            _ = store.createGraph(name) catch |err| {
-                log.err("Failed to ensure graph in store", &.{
-                    Attr.string("name", name),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
-        }
-    }
-
-    // Read indexes
-    i = 0;
-    while (i < index_count) : (i += 1) {
-        // Read index name
-        var name_len_buf: [4]u8 = undefined;
-        if ((try file.read(&name_len_buf)) < 4) return error.InvalidCatalogFile;
-        const name_len = std.mem.readInt(u32, &name_len_buf, .little);
-        const name = try allocator.alloc(u8, name_len);
-        if ((try file.read(name)) < name_len) return error.InvalidCatalogFile;
-
-        // Read index type
-        var type_len_buf: [4]u8 = undefined;
-        if ((try file.read(&type_len_buf)) < 4) return error.InvalidCatalogFile;
-        const type_len = std.mem.readInt(u32, &type_len_buf, .little);
-        const index_type = try allocator.alloc(u8, type_len);
-        if ((try file.read(index_type)) < type_len) return error.InvalidCatalogFile;
-
-        // Read table name
-        var table_len_buf: [4]u8 = undefined;
-        if ((try file.read(&table_len_buf)) < 4) return error.InvalidCatalogFile;
-        const table_len = std.mem.readInt(u32, &table_len_buf, .little);
-        const table_name = try allocator.alloc(u8, table_len);
-        if ((try file.read(table_name)) < table_len) return error.InvalidCatalogFile;
-
-        // Read column count
-        var col_count_buf: [4]u8 = undefined;
-        if ((try file.read(&col_count_buf)) < 4) return error.InvalidCatalogFile;
-        const col_count = std.mem.readInt(u32, &col_count_buf, .little);
-
-        // Read columns
-        const columns = try allocator.alloc([]const u8, col_count);
-        var col_idx: u32 = 0;
-        while (col_idx < col_count) : (col_idx += 1) {
-            var col_len_buf: [4]u8 = undefined;
-            if ((try file.read(&col_len_buf)) < 4) return error.InvalidCatalogFile;
-            const col_len = std.mem.readInt(u32, &col_len_buf, .little);
-            const col = try allocator.alloc(u8, col_len);
-            if ((try file.read(col)) < col_len) return error.InvalidCatalogFile;
-            columns[col_idx] = col;
-        }
-
-        const index_info = IndexInfo{
-            .name = name,
-            .index_type = index_type,
-            .table_name = table_name,
-            .columns = columns,
-        };
-
-        // Reconstruct scoped key: "label:index_name"
-        // This ensures compatibility with new scoped key format
-        const scoped_key = try getScopedIndexKey(allocator, table_name, name);
-        try catalog.indexes.put(scoped_key, index_info);
-    }
-}
 
 // ============================================================================
 // Unit Tests
@@ -976,15 +783,51 @@ pub fn loadCatalog() !void {
 
 const testing = std.testing;
 
+const TestCatalog = struct {
+    allocator: std.mem.Allocator,
+    tmp: std.testing.TmpDir,
+    data_dir: []u8,
+    cat: *Catalog,
+
+    pub fn init(allocator: std.mem.Allocator) !TestCatalog {
+        var tmp = std.testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+
+        const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+        errdefer allocator.free(data_dir);
+
+        const cat = try Catalog.init(allocator, data_dir);
+        errdefer {
+            cat.deinit();
+            allocator.destroy(cat);
+        }
+
+        return .{
+            .allocator = allocator,
+            .tmp = tmp,
+            .data_dir = data_dir,
+            .cat = cat,
+        };
+    }
+
+    pub fn deinit(self: *TestCatalog) void {
+        self.cat.deinit();
+        self.allocator.destroy(self.cat);
+        self.allocator.free(self.data_dir);
+        self.tmp.cleanup();
+    }
+};
+
 test "GAP384_Catalog_init_creates_empty_catalog" {
     // Issue #384: Test that Catalog initializes with empty graphs map
     const allocator = testing.allocator;
 
-    const cat = try Catalog.init(allocator);
-    defer cat.deinit();
+    var ctx = try TestCatalog.init(allocator);
+    defer ctx.deinit();
+    const cat = ctx.cat;
 
     try testing.expectEqual(@as(usize, 0), cat.graphs.count());
-    try testing.expectEqual(@as(usize, 0), cat.tables.count());
+    try testing.expectEqual(@as(usize, 0), cat.schemas.count());
     try testing.expectEqual(@as(usize, 0), cat.indexes.count());
     try testing.expectEqual(@as(usize, 0), cat.constraints.count());
 }
@@ -993,10 +836,11 @@ test "GAP384_Catalog_register_graph_works" {
     // Issue #384: Test that registerGraph adds a graph to the catalog
     const allocator = testing.allocator;
 
-    var cat = try Catalog.init(allocator);
-    defer cat.deinit();
+    var ctx = try TestCatalog.init(allocator);
+    defer ctx.deinit();
+    const cat = ctx.cat;
 
-    try cat.registerGraph("test_graph");
+    try cat.addGraph("test_graph");
 
     try testing.expectEqual(@as(usize, 1), cat.graphs.count());
     try testing.expect(cat.graphs.contains("test_graph"));
@@ -1006,12 +850,13 @@ test "GAP384_Catalog_register_multiple_graphs" {
     // Issue #384: Test multiple graph registration
     const allocator = testing.allocator;
 
-    var cat = try Catalog.init(allocator);
-    defer cat.deinit();
+    var ctx = try TestCatalog.init(allocator);
+    defer ctx.deinit();
+    const cat = ctx.cat;
 
-    try cat.registerGraph("graph1");
-    try cat.registerGraph("graph2");
-    try cat.registerGraph("graph3");
+    try cat.addGraph("graph1");
+    try cat.addGraph("graph2");
+    try cat.addGraph("graph3");
 
     try testing.expectEqual(@as(usize, 3), cat.graphs.count());
     try testing.expect(cat.graphs.contains("graph1"));
@@ -1023,14 +868,14 @@ test "GAP384_Catalog_drop_graph_works" {
     // Issue #384: Test that dropGraph removes a graph from the catalog
     const allocator = testing.allocator;
 
-    var cat = try Catalog.init(allocator);
-    defer cat.deinit();
+    var ctx = try TestCatalog.init(allocator);
+    defer ctx.deinit();
+    const cat = ctx.cat;
 
-    try cat.registerGraph("temp_graph");
+    try cat.addGraph("temp_graph");
     try testing.expect(cat.graphs.contains("temp_graph"));
 
-    const dropped = cat.dropGraph("temp_graph");
-    try testing.expect(dropped);
+    try cat.removeGraph("temp_graph");
     try testing.expect(!cat.graphs.contains("temp_graph"));
 }
 
@@ -1038,25 +883,30 @@ test "GAP384_Catalog_drop_nonexistent_graph_returns_false" {
     // Issue #384: Test that dropping non-existent graph returns false
     const allocator = testing.allocator;
 
-    var cat = try Catalog.init(allocator);
-    defer cat.deinit();
+    var ctx = try TestCatalog.init(allocator);
+    defer ctx.deinit();
+    const cat = ctx.cat;
 
-    const dropped = cat.dropGraph("nonexistent_graph");
-    try testing.expect(!dropped);
+    const result = cat.removeGraph("nonexistent_graph");
+    try testing.expectError(error.GraphNotFound, result);
 }
 
 test "GAP384_Catalog_list_graphs_returns_all_graphs" {
     // Issue #384: Test that listGraphs returns all registered graphs
     const allocator = testing.allocator;
 
-    var cat = try Catalog.init(allocator);
-    defer cat.deinit();
+    var ctx = try TestCatalog.init(allocator);
+    defer ctx.deinit();
+    const cat = ctx.cat;
 
-    try cat.registerGraph("alpha");
-    try cat.registerGraph("beta");
+    try cat.addGraph("alpha");
+    try cat.addGraph("beta");
 
     const graphs = try cat.listGraphs(allocator);
-    defer allocator.free(graphs);
+    defer {
+        for (graphs) |name| allocator.free(name);
+        allocator.free(graphs);
+    }
 
     try testing.expectEqual(@as(usize, 2), graphs.len);
     // Note: Order may vary due to hash map iteration

@@ -106,20 +106,13 @@ pub const SchemaManager = struct {
     ///
     /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-009; FEATURE="Schema Creation"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn createSchema(self: *SchemaManager, schema_name: []const u8) !void {
-        self.db_catalog.rwlock.lock();
-        defer self.db_catalog.rwlock.unlock();
-
         try self.db_catalog.addSchema(schema_name);
-        try self.db_catalog.save();
     }
 
     /// Check if schema exists
     ///
     /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-010; FEATURE="Schema Existence Check"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn schemaExists(self: *SchemaManager, schema_name: []const u8) bool {
-        self.db_catalog.rwlock.lockShared();
-        defer self.db_catalog.rwlock.unlockShared();
-
         return self.db_catalog.hasSchema(schema_name);
     }
 
@@ -127,20 +120,13 @@ pub const SchemaManager = struct {
     ///
     /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-011; FEATURE="Graph Creation"; ASPECT=Graph; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn createGraph(self: *SchemaManager, graph_name: []const u8) !void {
-        self.db_catalog.rwlock.lock();
-        defer self.db_catalog.rwlock.unlock();
-
         try self.db_catalog.addGraph(graph_name);
-        try self.db_catalog.save();
     }
 
     /// Check if graph exists
     ///
     /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-012; FEATURE="Graph Existence Check"; ASPECT=Graph; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn graphExists(self: *SchemaManager, graph_name: []const u8) bool {
-        self.db_catalog.rwlock.lockShared();
-        defer self.db_catalog.rwlock.unlockShared();
-
         return self.db_catalog.hasGraph(graph_name);
     }
 
@@ -148,20 +134,13 @@ pub const SchemaManager = struct {
     ///
     /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-013; FEATURE="Index Creation"; ASPECT=Index; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn createIndex(self: *SchemaManager, index_info: IndexInfo) !void {
-        self.db_catalog.rwlock.lock();
-        defer self.db_catalog.rwlock.unlock();
-
         try self.db_catalog.addIndex(index_info);
-        try self.db_catalog.save();
     }
 
     /// Get index information
     ///
     /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-014; FEATURE="Index Retrieval"; ASPECT=Index; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn getIndex(self: *SchemaManager, label: []const u8, index_name: []const u8) !?IndexInfo {
-        self.db_catalog.rwlock.lockShared();
-        defer self.db_catalog.rwlock.unlockShared();
-
         return self.db_catalog.getIndex(label, index_name);
     }
 

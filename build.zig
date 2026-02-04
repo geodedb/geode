@@ -103,8 +103,6 @@ fn getGitVersion(b: *std.Build) []const u8 {
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const enable_san = b.option(bool, "san", "Enable sentinel allocator in runtime components") orelse false;
-    const enable_llvm_fuzzer = b.option(bool, "enable-llvm-fuzzer", "Enable LLVM libFuzzer fallback for fuzz tests") orelse false;
 
     // Get version from git tags
     const version = getGitVersion(b);
@@ -291,8 +289,6 @@ pub fn build(b: *std.Build) void {
     spice_wrapper_mod.addImport("spice", spice_mod);
 
     const build_opts = b.addOptions();
-    build_opts.addOption(bool, "enable_sentinel", enable_san);
-    build_opts.addOption(bool, "enable_llvm_fuzzer", enable_llvm_fuzzer);
     build_opts.addOption([]const u8, "version", version);
 
     const lib = b.addLibrary(.{
@@ -1040,7 +1036,6 @@ pub fn build(b: *std.Build) void {
     const spice_bench = b.addExecutable(.{ .name = "bench_spice_parallelism", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_spice_parallelism.zig"), .target = target, .optimize = .ReleaseFast }) });
     spice_bench.root_module.addImport("spice", spice_mod);
     spice_bench.root_module.addImport("parallel/spice", spice_wrapper_mod);
-    b.installArtifact(spice_bench);
     const run_spice_bench = b.addRunArtifact(spice_bench);
     const spice_bench_step = b.step("bench-spice", "Run spice fork/join parallelism benchmarks");
     spice_bench_step.dependOn(&run_spice_bench.step);
@@ -1050,7 +1045,6 @@ pub fn build(b: *std.Build) void {
     const transport_throughput_bench = b.addExecutable(.{ .name = "bench_transport_throughput", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_transport_throughput.zig"), .target = target, .optimize = optimize }) });
     transport_throughput_bench.root_module.addImport("transport/thread_pool", thread_pool_mod);
     transport_throughput_bench.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
-    b.installArtifact(transport_throughput_bench);
     // Note: Not adding to test_step as it's a manual benchmark run, not automated test
     const transport_bench_step = b.step("bench-transport", "Run transport layer throughput benchmarks");
     const run_transport_bench = b.addRunArtifact(transport_throughput_bench);
@@ -1059,11 +1053,9 @@ pub fn build(b: *std.Build) void {
     // Benchmarks (MFA latency + recovery contention) as executables for manual run / CI capture
     const mfa_stepup_latency_bench = b.addExecutable(.{ .name = "bench_mfa_stepup_latency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_mfa_stepup_latency.zig"), .target = target, .optimize = optimize }) });
     mfa_stepup_latency_bench.root_module.addImport("security/mfa_risk.zig", mfa_risk_mod);
-    b.installArtifact(mfa_stepup_latency_bench);
     const run_mfa_stepup_latency_bench = b.addRunArtifact(mfa_stepup_latency_bench);
     test_step.dependOn(&run_mfa_stepup_latency_bench.step);
     const mfa_recovery_contention_bench = b.addExecutable(.{ .name = "bench_mfa_recovery_code_contention", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_mfa_recovery_code_contention.zig"), .target = target, .optimize = optimize }) });
-    b.installArtifact(mfa_recovery_contention_bench);
     const run_mfa_recovery_contention_bench = b.addRunArtifact(mfa_recovery_contention_bench);
     test_step.dependOn(&run_mfa_recovery_contention_bench.step);
     quic_tls_tests.root_module.addImport("geode", root_mod);
@@ -1152,7 +1144,6 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag == .windows) {
         remote_kms_concurrency_bench.linkLibC();
     }
-    b.installArtifact(remote_kms_concurrency_bench);
     const run_remote_kms_concurrency_bench = b.addRunArtifact(remote_kms_concurrency_bench);
     test_step.dependOn(&run_remote_kms_concurrency_bench.step);
 
@@ -1168,7 +1159,6 @@ pub fn build(b: *std.Build) void {
     });
     fuzz_exe.root_module.addImport("geode", root_mod);
     // GQL is accessed through geode module
-    b.installArtifact(fuzz_exe);
     const fuzz_run = b.addRunArtifact(fuzz_exe);
     const fuzz_step = b.step("fuzz", "Run fuzz harnesses (placeholder)");
     fuzz_step.dependOn(&fuzz_run.step);
@@ -1179,7 +1169,6 @@ pub fn build(b: *std.Build) void {
     });
     bench_exe.root_module.addImport("geode", root_mod);
     // GQL is accessed through geode module
-    b.installArtifact(bench_exe);
     const bench_run = b.addRunArtifact(bench_exe);
     // Reuse earlier bench_step defined near top (captures TDE bench). We capture it by name via labeled block pattern.
     // Simpler: declare a variable earlier holding the step (retrofit below) - here we assume 'bench_step' still in scope.
@@ -1189,28 +1178,24 @@ pub fn build(b: *std.Build) void {
     const bias_clamp_variance_bench = b.addExecutable(.{ .name = "bench_bias_clamp_variance", .root_module = b.createModule(.{ .root_source_file = b.path("tests/debug/benchmark_bias_clamp_variance.zig"), .target = target, .optimize = optimize }) });
     bias_clamp_variance_bench.root_module.addImport("geode", root_mod);
     bias_clamp_variance_bench.root_module.addImport("cost_seed", b.createModule(.{ .root_source_file = b.path("src/planner/cost_seed.zig"), .target = target, .optimize = optimize }));
-    b.installArtifact(bias_clamp_variance_bench);
     const run_bias_clamp_variance_bench = b.addRunArtifact(bias_clamp_variance_bench);
     test_step.dependOn(&run_bias_clamp_variance_bench.step);
 
     // PathCache degree bucket utilization variance benchmark (S-015)
     const pathcache_degree_util_bench = b.addExecutable(.{ .name = "bench_pathcache_degree_util", .root_module = b.createModule(.{ .root_source_file = b.path("tests/benchmark_path_cache_degree_bucket_utilization.zig"), .target = target, .optimize = optimize }) });
     pathcache_degree_util_bench.root_module.addImport("geode", root_mod);
-    b.installArtifact(pathcache_degree_util_bench);
     const run_pathcache_degree_util_bench = b.addRunArtifact(pathcache_degree_util_bench);
     test_step.dependOn(&run_pathcache_degree_util_bench.step);
 
     // Federation mismatch false-positive guard benchmark (optional SLO)
     const federation_mismatch_guard_bench = b.addExecutable(.{ .name = "bench_federation_mismatch_guard", .root_module = b.createModule(.{ .root_source_file = b.path("tests/debug/benchmark_federation_mismatch_frequency.zig"), .target = target, .optimize = optimize }) });
     federation_mismatch_guard_bench.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
-    b.installArtifact(federation_mismatch_guard_bench);
     const run_federation_mismatch_guard_bench = b.addRunArtifact(federation_mismatch_guard_bench);
     test_step.dependOn(&run_federation_mismatch_guard_bench.step);
 
     // Federation mismatch latency variance envelope benchmark (optional SLO, unpromoted IMPL)
     const federation_mismatch_latency_bench = b.addExecutable(.{ .name = "bench_federation_mismatch_latency", .root_module = b.createModule(.{ .root_source_file = b.path("tests/debug/benchmark_federation_mismatch_latency.zig"), .target = target, .optimize = optimize }) });
     federation_mismatch_latency_bench.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
-    b.installArtifact(federation_mismatch_latency_bench);
     const run_federation_mismatch_latency_bench = b.addRunArtifact(federation_mismatch_latency_bench);
     test_step.dependOn(&run_federation_mismatch_latency_bench.step);
     // Also compile its tests explicitly (so the test block runs under the zig test harness aside from executable run)
@@ -1221,7 +1206,6 @@ pub fn build(b: *std.Build) void {
     // Redo optimization delta variance benchmark (S-016)
     const redo_opt_delta_bench = b.addExecutable(.{ .name = "bench_redo_optimization_delta", .root_module = b.createModule(.{ .root_source_file = b.path("tests/benchmark_redo_optimization_delta.zig"), .target = target, .optimize = optimize }) });
     redo_opt_delta_bench.root_module.addImport("geode", root_mod);
-    b.installArtifact(redo_opt_delta_bench);
     const run_redo_opt_delta_bench = b.addRunArtifact(redo_opt_delta_bench);
     test_step.dependOn(&run_redo_opt_delta_bench.step);
 
@@ -1283,7 +1267,6 @@ pub fn build(b: *std.Build) void {
     doccheck_step.dependOn(&doccheck_run.step);
 
     const gen_fuzz_exe = b.addExecutable(.{ .name = "gen_fuzz", .root_module = b.createModule(.{ .root_source_file = b.path("tools/gen_fuzz.zig"), .target = target, .optimize = optimize }) });
-    b.installArtifact(gen_fuzz_exe);
     const gen_fuzz_run = b.addRunArtifact(gen_fuzz_exe);
     if (b.args) |a| gen_fuzz_run.addArgs(a);
     const gen_fuzz_step = b.step("gen-fuzz", "Generate fuzz target scaffold");
@@ -1364,7 +1347,6 @@ pub fn build(b: *std.Build) void {
         }),
     });
     gen_fuzz_dict_exe.root_module.addImport("geode", root_mod);
-    b.installArtifact(gen_fuzz_dict_exe);
     const gen_fuzz_dict_run = b.addRunArtifact(gen_fuzz_dict_exe);
     const gen_fuzz_dict_step = b.step("generate-fuzz-dict", "Generate fuzzing dictionary from metadata");
     gen_fuzz_dict_step.dependOn(&gen_fuzz_dict_run.step);
@@ -1377,7 +1359,6 @@ pub fn build(b: *std.Build) void {
         .name = "bench_extract",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/bench_extract.zig"), .target = target, .optimize = optimize }),
     });
-    b.installArtifact(bench_extract_exe);
     tools_step.dependOn(&bench_extract_exe.step);
 
     // High-throughput bulk loader for internet-scale data ingestion
@@ -1394,7 +1375,6 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/bench_regress.zig"), .target = target, .optimize = optimize }),
     });
     bench_regress_exe.root_module.addImport("logging", logging_mod);
-    b.installArtifact(bench_regress_exe);
     tools_step.dependOn(&bench_regress_exe.step);
 
     // Federation latency multi-run aggregation tool
@@ -1402,7 +1382,6 @@ pub fn build(b: *std.Build) void {
         .name = "fed_latency_aggregate",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/fed_latency_aggregate.zig"), .target = target, .optimize = optimize }),
     });
-    b.installArtifact(fed_latency_aggregate_exe);
     tools_step.dependOn(&fed_latency_aggregate_exe.step);
 
     // Federation latency JSON schema validation tool
@@ -1410,7 +1389,6 @@ pub fn build(b: *std.Build) void {
         .name = "fed_latency_validate",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/fed_latency_validate.zig"), .target = target, .optimize = optimize }),
     });
-    b.installArtifact(fed_latency_validate_exe);
     tools_step.dependOn(&fed_latency_validate_exe.step);
 
     // Federation latency streak analysis tool
@@ -1418,7 +1396,6 @@ pub fn build(b: *std.Build) void {
         .name = "fed_latency_streak",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/fed_latency_streak.zig"), .target = target, .optimize = optimize }),
     });
-    b.installArtifact(fed_latency_streak_exe);
     tools_step.dependOn(&fed_latency_streak_exe.step);
 
     // Federation latency governance summary tool
@@ -1427,7 +1404,6 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/fed_latency_governance.zig"), .target = target, .optimize = optimize }),
     });
     fed_latency_governance_exe.root_module.addImport("logging", logging_mod);
-    b.installArtifact(fed_latency_governance_exe);
     tools_step.dependOn(&fed_latency_governance_exe.step);
 
     // Variance benchmark runner tool (aggregates benchmarks that don't surface via test harness)
@@ -1436,20 +1412,16 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/run_variance_benches.zig"), .target = target, .optimize = optimize }),
     });
     run_variance_benches_exe.root_module.addImport("geode", root_mod);
-    b.installArtifact(run_variance_benches_exe);
     tools_step.dependOn(&run_variance_benches_exe.step);
     // Dedicated step to build only the variance benchmark runner (useful for CI or manual metric capture)
     const variance_step = b.step("variance", "Build variance benchmark runner (run_variance_benches)");
     variance_step.dependOn(&run_variance_benches_exe.step);
-    // Ensure the artifact is actually installed to zig-out/bin when invoking just `zig build variance`.
-    variance_step.dependOn(b.getInstallStep());
 
     // Implementation reality delta tool
     const impl_reality_delta_exe = b.addExecutable(.{
         .name = "impl_reality_delta",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/implementation_reality_delta.zig"), .target = target, .optimize = optimize }),
     });
-    b.installArtifact(impl_reality_delta_exe);
     tools_step.dependOn(&impl_reality_delta_exe.step);
     const delta_run = b.addRunArtifact(impl_reality_delta_exe);
     // Provide args placeholders: status.json docs/IMPLEMENTATION_REALITY.md prev snapshot path

@@ -398,6 +398,15 @@ pub const GraphStore = struct {
         return store;
     }
 
+    /// Pre-allocate storage for nodes/edges to avoid rehash churn during bulk loads.
+    pub fn reserve(self: *GraphStore, node_capacity: usize, edge_capacity: usize) !void {
+        try self.nodes.ensureTotalCapacity(node_capacity);
+        try self.edges.ensureTotalCapacity(edge_capacity);
+        try self.outgoing_edges.ensureTotalCapacity(edge_capacity);
+        try self.incoming_edges.ensureTotalCapacity(edge_capacity);
+        try self.label_index.ensureTotalCapacity(node_capacity);
+    }
+
     /// Set tenant ID for this graph store (used when context changes)
     pub fn setTenant(self: *GraphStore, tenant_id: []const u8) void {
         self.tenant_id = tenant_id;

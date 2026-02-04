@@ -51,12 +51,8 @@ const txn_undo_log = @import("txn_undo_log.zig");
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-022; FEATURE="JSON Library Migration"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-24
 const json_lib = @import("json");
 
-// Re-export catalog functionality for backward compatibility
-// Using direct aliases instead of usingnamespace for Zig 0.15.1 compatibility
+// Re-export catalog types/helpers (avoid usingnamespace for Zig 0.15.1 compatibility)
 pub const IndexInfo = catalog_mod.IndexInfo;
-pub const initCatalog = catalog_mod.initCatalog;
-pub const saveCatalog = catalog_mod.saveCatalog;
-pub const loadCatalog = catalog_mod.loadCatalog;
 pub const getScopedIndexKey = catalog_mod.getScopedIndexKey;
 
 // Re-export graph algorithm functions for backward compatibility (M1 Phase 1 extraction)
@@ -271,14 +267,6 @@ pub fn cleanupCatalogInstance() void {
         global_catalog_instance = null;
     }
 }
-
-// DEPRECATED: Access to old global catalog state for backward compatibility
-// TODO P2-2 Phase 3: Remove after all callers migrated to instance
-const catalog_rwlock = &catalog_mod.catalog_rwlock;
-const catalog_initialized = &catalog_mod.catalog_initialized;
-const last_catalog_data_dir = &catalog_mod.last_catalog_data_dir;
-const catalog = &catalog_mod.catalog;
-var catalog_mutex: std.Thread.Mutex = .{};
 
 // Re-export FLE hooks for backward compatibility (made public for CRUD module)
 pub const encryptPropertyIfNeeded = fle_hooks_mod.encryptPropertyIfNeeded;
@@ -935,21 +923,22 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return executeProfile(allocator, prof, context);
         },
         .CreateIndex => |ci| {
-            // CREATE INDEX implementation with validation
-            initCatalog();
-
+            // CREATE INDEX implementation with validation (Catalog instance)
+            const cat = context.catalog;
             const index_name = ci.name;
 
-            catalog_mutex.lock();
-            defer catalog_mutex.unlock();
-
-            // Use scoped key format (label:index_name) to match loadCatalog behavior
-            const scoped_key = try catalog_mod.getScopedIndexKey(std.heap.page_allocator, ci.label, index_name);
-            defer std.heap.page_allocator.free(scoped_key);
-
-            // Check if index already exists
-            if (!ci.if_not_exists and catalog.indexes.contains(scoped_key)) {
-                return error.DuplicateIndex;
+            if (ci.if_not_exists) {
+                const existing = cat.getIndex(ci.label, index_name) catch null;
+                if (existing != null) {
+                    return ExecutionResult{
+                        .columns = try allocator.alloc([]const u8, 0),
+                        .rows = try allocator.alloc([]Value, 0),
+                        .flags = blk: {
+                            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                            break :blk list;
+                        },
+                    };
+                }
             }
 
             // Validate index type compatibility with property
@@ -976,37 +965,36 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 }
             }
 
-            // Add to catalog if not exists (use scoped key)
-            if (!catalog.indexes.contains(scoped_key)) {
-                // Create IndexInfo with all the details
-                const index_info = IndexInfo{
-                    .name = try std.heap.page_allocator.dupe(u8, index_name),
-                    .index_type = switch (ci.index_type) {
-                        .btree => "btree",
-                        .hash => "hash",
-                        .fulltext => "fulltext",
-                        .spatial => "spatial",
-                        .vector => "vector",
-                        .vector_f32 => "vector_f32",
-                        .spatial_geographic => "spatial_geographic",
-                        .network_cidr => "network_cidr",
-                        .signature_crypto => "signature_crypto",
-                    },
-                    .table_name = try std.heap.page_allocator.dupe(u8, ci.label),
-                    .columns = blk: {
-                        var cols = try std.heap.page_allocator.alloc([]const u8, ci.properties.len);
-                        for (ci.properties, 0..) |prop, i| {
-                            cols[i] = try std.heap.page_allocator.dupe(u8, prop);
-                        }
-                        break :blk cols;
-                    },
-                };
-                // Use scoped key for storage
-                const scoped_key_persistent = try std.heap.page_allocator.dupe(u8, scoped_key);
-                try catalog.indexes.put(scoped_key_persistent, index_info);
-                // Save catalog to disk after creating index
-                saveCatalog() catch {};
-            }
+            const index_info = IndexInfo{
+                .name = index_name,
+                .index_type = switch (ci.index_type) {
+                    .btree => "btree",
+                    .hash => "hash",
+                    .fulltext => "fulltext",
+                    .spatial => "spatial",
+                    .vector => "vector",
+                    .vector_f32 => "vector_f32",
+                    .spatial_geographic => "spatial_geographic",
+                    .network_cidr => "network_cidr",
+                    .signature_crypto => "signature_crypto",
+                },
+                .table_name = ci.label,
+                .columns = @as([][]const u8, @constCast(ci.properties)),
+            };
+
+            cat.addIndex(index_info) catch |err| {
+                if (err == error.DuplicateIndex and ci.if_not_exists) {
+                    return ExecutionResult{
+                        .columns = try allocator.alloc([]const u8, 0),
+                        .rows = try allocator.alloc([]Value, 0),
+                        .flags = blk: {
+                            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                            break :blk list;
+                        },
+                    };
+                }
+                return err;
+            };
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
@@ -1151,42 +1139,42 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return result;
         },
         .CreateGraph => |cg| {
-            // CREATE GRAPH implementation with duplicate detection
-            initCatalog();
-
+            // CREATE GRAPH implementation with duplicate detection (Catalog instance)
             const graph_name = cg.name;
+            const cat = context.catalog;
+            const store = graph_store.getGlobalStore(allocator);
 
-            catalog_mutex.lock();
-            defer catalog_mutex.unlock();
+            const in_catalog = cat.hasGraph(graph_name);
+            const in_store = store.graphExists(graph_name);
 
-            // Handle OR REPLACE
             if (cg.or_replace) {
-                // Remove existing graph if it exists
-                _ = catalog.graphs.remove(graph_name);
-            } else {
-                // Check if graph already exists
-                if (catalog.graphs.contains(graph_name)) {
-                    // If IF NOT EXISTS is specified, silently succeed
-                    if (cg.if_not_exists) {
-                        return ExecutionResult{
-                            .columns = try allocator.alloc([]const u8, 0),
-                            .rows = try allocator.alloc([]Value, 0),
-                            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
-                        };
-                    }
-                    return error.DuplicateGraph;
+                cat.removeGraph(graph_name) catch |err| {
+                    if (err != error.GraphNotFound) return err;
+                };
+                store.dropGraph(graph_name) catch {};
+            } else if (in_catalog or in_store) {
+                if (cg.if_not_exists) {
+                    return ExecutionResult{
+                        .columns = try allocator.alloc([]const u8, 0),
+                        .rows = try allocator.alloc([]Value, 0),
+                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    };
                 }
+                return error.DuplicateGraph;
             }
 
-            // Add to catalog
-            try catalog.graphs.put(try std.heap.page_allocator.dupe(u8, graph_name), {});
-            // Save catalog to disk after creating graph
-            saveCatalog() catch {};
+            cat.addGraph(graph_name) catch |err| {
+                if (err == error.GraphAlreadyExists and cg.if_not_exists) {
+                    return ExecutionResult{
+                        .columns = try allocator.alloc([]const u8, 0),
+                        .rows = try allocator.alloc([]Value, 0),
+                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    };
+                }
+                return err;
+            };
 
-            // CRITICAL: Also create graph storage so DROP GRAPH can find it
-            // and queries can be executed against this graph
-            _ = graph_store.getGlobalStore(allocator).createGraph(graph_name) catch |err| {
-                // If storage creation fails (e.g., already exists), that's OK - log and continue
+            _ = store.createGraph(graph_name) catch |err| {
                 log.debug("Graph storage creation failed", &.{
                     Attr.string("graph_name", graph_name),
                     Attr.err("error", err),
@@ -1209,29 +1197,25 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .DropGraph => |dg| {
-            // DROP GRAPH implementation with existence check
-            initCatalog();
-
+            // DROP GRAPH implementation with existence check (Catalog instance)
             const graph_name = dg.name;
+            const cat = context.catalog;
+            const store = graph_store.getGlobalStore(allocator);
 
-            catalog_mutex.lock();
-            defer catalog_mutex.unlock();
-
-            // Check if graph exists in catalog or storage (unless IF EXISTS is used)
-            const in_catalog = catalog.graphs.contains(graph_name);
-            const in_storage = graph_store.getGlobalStore(allocator).graphExists(graph_name);
+            const in_catalog = cat.hasGraph(graph_name);
+            const in_storage = store.graphExists(graph_name);
 
             if (!dg.if_exists and !in_catalog and !in_storage) {
                 return error.GraphNotFound;
             }
 
-            // Remove from catalog if it exists
-            _ = catalog.graphs.remove(graph_name);
+            if (in_catalog) {
+                cat.removeGraph(graph_name) catch |err| {
+                    if (err != error.GraphNotFound) return err;
+                };
+            }
 
-            // CRITICAL: Also remove from graph storage manager
-            // This ensures SHOW GRAPHS no longer lists this graph
-            graph_store.getGlobalStore(allocator).dropGraph(graph_name) catch |err| {
-                // Log but don't fail - graph might only exist in one place
+            store.dropGraph(graph_name) catch |err| {
                 log.warn("dropGraphStore failed", &.{
                     Attr.string("graph_name", graph_name),
                     Attr.err("error", err),
@@ -1254,25 +1238,31 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .CreateSchema => |cs| {
-            // CREATE SCHEMA implementation with duplicate detection
-            initCatalog();
-
+            // CREATE SCHEMA implementation with duplicate detection (Catalog instance)
             const schema_name = cs.name;
+            const cat = context.catalog;
 
-            catalog_mutex.lock();
-            defer catalog_mutex.unlock();
-
-            // Check if schema already exists
-            if (!cs.if_not_exists and catalog.schemas.contains(schema_name)) {
+            if (cat.hasSchema(schema_name)) {
+                if (cs.if_not_exists) {
+                    return ExecutionResult{
+                        .columns = try allocator.alloc([]const u8, 0),
+                        .rows = try allocator.alloc([]Value, 0),
+                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    };
+                }
                 return error.DuplicateSchema;
             }
 
-            // Add to catalog if not exists
-            if (!catalog.schemas.contains(schema_name)) {
-                try catalog.schemas.put(try std.heap.page_allocator.dupe(u8, schema_name), {});
-                // Save catalog to disk after creating schema
-                saveCatalog() catch {};
-            }
+            cat.addSchema(schema_name) catch |err| {
+                if (err == error.DuplicateSchema and cs.if_not_exists) {
+                    return ExecutionResult{
+                        .columns = try allocator.alloc([]const u8, 0),
+                        .rows = try allocator.alloc([]Value, 0),
+                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    };
+                }
+                return err;
+            };
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
@@ -1281,21 +1271,24 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .DropSchema => |ds| {
-            // DROP SCHEMA implementation with existence check
-            initCatalog();
-
+            // DROP SCHEMA implementation with existence check (Catalog instance)
             const schema_name = ds.name;
+            const cat = context.catalog;
 
-            catalog_mutex.lock();
-            defer catalog_mutex.unlock();
-
-            // Check if schema exists (unless IF EXISTS is used)
-            if (!ds.if_exists and !catalog.schemas.contains(schema_name)) {
-                return error.SchemaNotFound;
+            if (!cat.hasSchema(schema_name)) {
+                if (!ds.if_exists) {
+                    return error.SchemaNotFound;
+                }
+                return ExecutionResult{
+                    .columns = try allocator.alloc([]const u8, 0),
+                    .rows = try allocator.alloc([]Value, 0),
+                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                };
             }
 
-            // Remove from catalog if it exists
-            _ = catalog.schemas.remove(schema_name);
+            cat.removeSchema(schema_name) catch |err| {
+                if (err != error.SchemaNotFound) return err;
+            };
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),

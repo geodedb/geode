@@ -1,1 +1,1 @@
-pub const enable_sentinel: bool = false; // populated via build options
+pub const version: []const u8 = "dev";
