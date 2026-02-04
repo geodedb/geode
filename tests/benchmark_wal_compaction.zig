@@ -1,35 +1,43 @@
 const std = @import("std");
-const wal = @import("../src/storage/wal_compactor.zig");
+const graph_store = @import("geode").graph_store;
 
-// BenchmarkCANARY_REQ_GQL_028_WalCompact - synthetic benchmark for WAL compaction cycle.
-
+// BenchmarkCANARY_REQ_GQL_028_GraphStoreCompact - synthetic benchmark for snapshot rewrite/compaction.
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Prepare synthetic log segments metadata; we assume wal.compact takes a context with segments list.
-    var segments = std.ArrayList(wal.SegmentMeta).init(allocator);
-    defer segments.deinit();
+    const dir = try std.fmt.allocPrint(allocator, "/tmp/geode_graphstore_compact_{d}", .{std.time.milliTimestamp()});
+    defer allocator.free(dir);
+    std.fs.cwd().makePath(dir) catch {};
+    defer std.fs.cwd().deleteTree(dir) catch {};
 
+    graph_store.setDataDirOverride(allocator, dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+
+    var ids = std.ArrayList(u64).init(allocator);
+    defer ids.deinit(allocator);
     var i: usize = 0;
     while (i < 2000) : (i += 1) {
-        const id: u32 = @intCast(i);
-        try segments.append(.{ .id = id, .live_bytes = 1024, .dead_bytes = 256 });
+        const id = try store.createNode(&.{ "bench" });
+        try ids.append(allocator, id);
     }
+    try store.saveToFile();
 
-    var ctx = wal.CompactionContext{ .segments = segments.items, .threshold = 0.20 }; // stub style context
+    // Delete some nodes to simulate reclaimable space.
+    for (ids.items[0..500]) |id| store.deleteNode(id);
 
     var timer = try std.time.Timer.start();
     const rounds: usize = 200;
     var r: usize = 0;
-    var total_compacted: usize = 0;
     while (r < rounds) : (r += 1) {
-        const c = wal.compact(&ctx) catch 0; // ignore errors for synthetic run
-        total_compacted += c;
+        store.saveToFile() catch {};
     }
     const ns = timer.read();
 
     const stdout = std.io.getStdOut().writer();
-    try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_028_WalCompact\",\"rounds\":{d},\"segments\":{d},\"total_compacted\":{d},\"total_ns\":{d}}\n", .{ rounds, segments.items.len, total_compacted, ns });
+    try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_028_GraphStoreCompact\",\"rounds\":{d},\"nodes\":{d},\"total_ns\":{d}}\n", .{ rounds, store.getNodeCount(), ns });
 }

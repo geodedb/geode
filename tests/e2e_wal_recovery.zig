@@ -1,49 +1,27 @@
 const std = @import("std");
-const wal = @import("../src/wal/wal.zig");
-const storage = @import("../src/storage/page_manager.zig");
+const graph_store = @import("geode").graph_store;
 
-test "wal recovery applies only committed txns" {
+test "graphstore recovery applies only persisted snapshot" {
+    const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const log_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/test.wal", .{tmp.dir_path});
-    defer std.testing.allocator.free(log_path);
 
-    // Phase 1: create WAL, write two txns (one committed, one not), then drop state.
-    var w = wal.Wal.init(std.testing.allocator);
-    defer w.deinit();
-    try w.openFile(log_path);
+    graph_store.setDataDirOverride(allocator, tmp.dir_path);
+    defer graph_store.setDataDirOverride(allocator, null);
 
-    const TXN_COMMIT: u64 = 1;
-    const TXN_UNCOMMIT: u64 = 2;
+    // Phase 1: persist first node, then add another without saving.
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    const id_alpha = try store.createNode(&.{ "alpha" });
+    try store.saveToFile();
+    const id_beta = try store.createNode(&.{ "beta" });
 
-    var prev1: u64 = 0;
-    prev1 = (try w.append(TXN_COMMIT, .Begin, &.{}, prev1)).value;
-    const ins1_payload = try wal.Wal.encodeInsert(std.testing.allocator, 0, 0, "alpha");
-    defer std.testing.allocator.free(ins1_payload);
-    prev1 = (try w.append(TXN_COMMIT, .Insert, ins1_payload, prev1)).value;
-    _ = try w.append(TXN_COMMIT, .Commit, &.{}, prev1);
+    // Simulate crash: new store loads from snapshot.
+    var store2 = graph_store.GraphStore.init(allocator);
+    defer store2.deinit();
+    try store2.loadFromFile();
 
-    _ = try w.append(TXN_UNCOMMIT, .Begin, &.{});
-    var prev2: u64 = 0;
-    prev2 = (try w.append(TXN_UNCOMMIT, .Begin, &.{}, prev2)).value;
-    const ins2_payload = try wal.Wal.encodeInsert(std.testing.allocator, 0, 1, "beta");
-    defer std.testing.allocator.free(ins2_payload);
-    prev2 = (try w.append(TXN_UNCOMMIT, .Insert, ins2_payload, prev2)).value;
-    // no commit record for TXN_UNCOMMIT
-    try w.fsync();
-
-    // Simulate crash: new WAL instance + empty page manager, run recovery.
-    var pm = storage.PageManager.init(std.testing.allocator, 512);
-    defer pm.deinit();
-    var w2 = wal.Wal.init(std.testing.allocator);
-    defer w2.deinit();
-    const applied = try w2.recover(&pm, log_path);
-    try std.testing.expectEqual(@as(usize, 1), applied);
-
-    // Read back first page, ensure exactly one record with payload 'alpha'.
-    // We directly inspect slotCount and record bytes as convenience.
-    var p = pm.asPage(0);
-    try std.testing.expectEqual(@as(u16, 1), p.slotCount());
-    const rec = try p.read(0);
-    try std.testing.expectEqualStrings("alpha", rec);
+    try std.testing.expect(store2.getNodePtr(id_alpha) != null);
+    try std.testing.expect(store2.getNodePtr(id_beta) == null);
+    try std.testing.expectEqual(@as(usize, 1), store2.getNodeCount());
 }

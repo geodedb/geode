@@ -48,8 +48,9 @@ test "GAP-0165: InitContext includes SecurityManager fields" {
 
     // Create minimal InitContext to verify fields exist
     const ctx = server_init.InitContext{
-        .wal = undefined,
         .env_config = server_init.EnvironmentConfig{},
+        .shared_ast_cache = null,
+        .shared_ast_cache_storage = null,
         .security_manager = null,
         .security_manager_storage = null,
     };

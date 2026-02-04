@@ -1847,9 +1847,16 @@ fn executeRestore(allocator: std.mem.Allocator, source: []const u8, target_time:
     };
 
     // Perform restore
-    if (target_timestamp) |_| {
-        std.debug.print("Error: Point-in-time restore is not supported with GraphStore snapshots\n", .{});
-        return error.UnsupportedBackupMode;
+    if (target_timestamp) |ts| {
+        const metadata = try restore_manager.restoreToPointInTime(source, ts);
+        std.debug.print("RESTORE: Point-in-time restore completed\n", .{});
+        std.debug.print("  Backup ID: {x}\n", .{metadata.source_backup_id});
+        std.debug.print("  Backup type: {s}\n", .{@tagName(metadata.backup_type)});
+        std.debug.print("  Data size: {d} bytes\n", .{metadata.data_size_bytes});
+        std.debug.print("  Checksum verified: {}\n", .{metadata.checksum_verified});
+        if (metadata.target_time) |t| {
+            std.debug.print("  Target time (ms): {d}\n", .{t});
+        }
     } else {
         const metadata = try restore_manager.restoreFromBackup(source);
         std.debug.print("RESTORE: Full backup restore completed\n", .{});
@@ -1985,8 +1992,17 @@ const SimplifiedRestoreManager = struct {
         defer out.close();
         try out.writeAll(decompressed);
 
+        const backup_id = blk: {
+            const base = std.fs.path.basename(backup_path);
+            if (std.mem.startsWith(u8, base, "full_") and std.mem.endsWith(u8, base, ".backup")) {
+                const hex = base["full_".len .. base.len - ".backup".len];
+                break :blk std.fmt.parseInt(u128, hex, 16) catch 0;
+            }
+            break :blk 0;
+        };
+
         return RestoreMetadata{
-            .source_backup_id = 0,
+            .source_backup_id = backup_id,
             .restore_timestamp = std.time.timestamp(),
             .backup_type = header.backup_type,
             .data_size_bytes = decompressed.len,
@@ -1995,13 +2011,46 @@ const SimplifiedRestoreManager = struct {
         };
     }
 
-    // CANARY: REQ=REQ-PITR-WAL-001; FEATURE="Point-in-Time Recovery"; ASPECT=WALReplay; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-09
-    /// Restore to a specific point in time by replaying WAL records
-    fn restoreToPointInTime(self: SimplifiedRestoreManager, backup_path: []const u8, target_time: i64) !RestoreMetadata {
-        _ = self;
-        _ = backup_path;
-        _ = target_time;
-        return error.UnsupportedBackupMode;
+    // CANARY: REQ=REQ-PITR-GS-001; FEATURE="Point-in-Time Recovery"; ASPECT=SnapshotSelection; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-02-04
+    /// Restore to a specific point in time by selecting the latest snapshot before target_time.
+    fn restoreToPointInTime(self: SimplifiedRestoreManager, _: []const u8, target_time: i64) !RestoreMetadata {
+        const metadata_path = try std.fmt.allocPrint(self.allocator, "{s}/metadata.json", .{self.backup_dir});
+        defer self.allocator.free(metadata_path);
+
+        const file = std.fs.cwd().openFile(metadata_path, .{ .mode = .read_only }) catch |err| switch (err) {
+            error.FileNotFound => return error.BackupMetadataNotFound,
+            else => return err,
+        };
+        defer file.close();
+
+        const data = try file.readToEndAlloc(self.allocator, 2 * 1024 * 1024);
+        defer self.allocator.free(data);
+
+        const parsed = try std.json.parseFromSlice([]backup_types.BackupMetadata, self.allocator, data, .{});
+        defer parsed.deinit();
+
+        var chosen: ?backup_types.BackupMetadata = null;
+        for (parsed.value) |entry| {
+            if (entry.timestamp > target_time) continue;
+            if (chosen == null or entry.timestamp > chosen.?.timestamp) {
+                chosen = entry;
+            }
+        }
+
+        if (chosen == null) return error.BackupNotFound;
+        const selected = chosen.?;
+        const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, selected.backup_id });
+        defer self.allocator.free(backup_path);
+
+        const metadata = try self.restoreFromBackup(backup_path);
+        return RestoreMetadata{
+            .source_backup_id = selected.backup_id,
+            .restore_timestamp = metadata.restore_timestamp,
+            .backup_type = metadata.backup_type,
+            .data_size_bytes = metadata.data_size_bytes,
+            .checksum_verified = metadata.checksum_verified,
+            .target_time = target_time,
+        };
     }
 };
 

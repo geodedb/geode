@@ -286,7 +286,7 @@ pub const TextFormatter = struct {
         // Estimates vs actuals (if available)
         try self.formatProfileEstimates(&writer, root);
 
-        // WAL and storage metrics
+        // Storage metrics
         try self.formatProfileStorage(&writer, root);
 
         // Transaction information

@@ -1,10 +1,10 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-028; FEATURE="WAL Compaction"; ASPECT=WalCompactionVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_WalCompactionVarianceEnvelope; OWNER=storage; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Compaction"; ASPECT=SnapshotCompactionVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotCompactionVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
 
-// Simulate WAL compaction time variance: scanning segments, rewriting live records, skipping tombstones.
+// Simulate snapshot compaction time variance: scanning records, rewriting live entries, skipping tombstones.
 
-fn simulateWalCompact(segments: usize, live_ratio_ppm: u32, seed_in: *u64) u64 {
+fn simulateSnapshotCompact(segments: usize, live_ratio_ppm: u32, seed_in: *u64) u64 {
     var seed = seed_in.*;
     var work: u64 = 0;
     var s: usize = 0;
@@ -34,14 +34,14 @@ fn simulateWalCompact(segments: usize, live_ratio_ppm: u32, seed_in: *u64) u64 {
     return work;
 }
 
-test "BenchmarkCANARY_REQ_GQL_028_WalCompactionVarianceEnvelope" {
+test "BenchmarkCANARY_REQ_GQL_028_SnapshotCompactionVarianceEnvelope" {
     const Runs = 26;
     var samples: [Runs]u64 = undefined;
     var r: usize = 0;
     while (r < Runs) : (r += 1) {
         var seed: u64 = 0xC0DE_028 ^ @as(u64, @intCast(r));
         const start = std.time.nanoTimestamp();
-        _ = simulateWalCompact(18, 750_000, &seed); // 75% live density
+        _ = simulateSnapshotCompact(18, 750_000, &seed); // 75% live density
         const end = std.time.nanoTimestamp();
         samples[r] = @intCast(end - start);
     }
@@ -61,10 +61,10 @@ test "BenchmarkCANARY_REQ_GQL_028_WalCompactionVarianceEnvelope" {
     std.sort.heap(u64, &sorted, {}, comptime std.sort.asc(u64));
     const p95 = sorted[@min(sorted.len - 1, (sorted.len * 95) / 100)];
 
-    // WAL compaction moderately variable: CV < 0.19, p95 < 2.35x mean
+    // Snapshot compaction moderately variable: CV < 0.19, p95 < 2.35x mean
     try std.testing.expect(cv < 0.19);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.35);
 
     const stderr = std.io.getStdErr().writer();
-    try stderr.print("{\"benchmark\":\"wal_compaction_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
+    try stderr.print("{\"benchmark\":\"snapshot_compaction_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

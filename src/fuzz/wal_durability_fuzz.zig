@@ -1,50 +1,47 @@
 const std = @import("std");
-const Wal = @import("wal").Wal;
-const RecordType = @import("wal").RecordType;
+const graph_store = @import("../graph_store.zig");
 
-// Fuzz-like test of WAL durability: partial-truncate crash simulation and recovery invariants
-
-test "wal durability fuzz recovery invariants" {
+// Fuzz-like durability test for GraphStore snapshots: truncate and verify recovery invariants.
+test "graphstore durability fuzz recovery invariants" {
     const allocator = std.testing.allocator;
-    const base_path = "wal_fuzz_test";
-    // Clean up any existing segments (best-effort)
-    const cwd = std.fs.cwd();
-    _ = cwd.deleteFile(base_path ++ ".wal.0");
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
 
-    // Writer WAL
-    var wal1 = Wal.init(allocator);
-    defer wal1.deinit();
-    try wal1.openFile(base_path);
-    // TXN 1: Begin, two inserts, Commit
-    wal1.buf.append(allocator, .{}); // ensure buffer non-empty for commit count
-    _ = wal1.append(1, RecordType.Begin, &.{}, 0) catch {};
-    _ = wal1.append(1, RecordType.Insert, "A", 1) catch {};
-    _ = wal1.append(1, RecordType.Insert, "B", 1) catch {};
-    _ = wal1.append(1, RecordType.Commit, &.{}, 0) catch {};
-    // TXN 2: Begin, insert, Abort
-    _ = wal1.append(2, RecordType.Begin, &.{}, 0) catch {};
-    _ = wal1.append(2, RecordType.Insert, "C", 1) catch {};
-    _ = wal1.append(2, RecordType.Abort, &.{}, 0) catch {};
+    graph_store.setDataDirOverride(allocator, tmp.dir_path);
+    defer graph_store.setDataDirOverride(allocator, null);
 
-    // Check committed txn count
-    const committed1 = wal1.committedTxnTotal();
-    try std.testing.expect(committed1 == 1);
+    // Build a small graph and persist.
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.createNode(&.{ "A" });
+    _ = try store.createNode(&.{ "B" });
+    _ = try store.createNode(&.{ "C" });
+    try store.saveToFile();
 
-    // Close segment file to flush
-    if (wal1.file) |f| f.close();
+    const saved_nodes = store.nodes.count();
 
-    const segment_file = base_path ++ ".wal.0";
-    // Truncate mid-file to simulate crash
-    var f = try cwd.openFile(segment_file, .{ .mode = .read_write });
+    // Truncate the persisted snapshot to simulate crash.
+    const file_path = try graph_store.getPersistenceFilePath(allocator);
+    defer allocator.free(file_path);
+    var f = try std.fs.cwd().openFile(file_path, .{ .mode = .read_write });
     const st = try f.stat();
     try f.truncate(st.size / 2);
     f.close();
 
-    // Recover
-    var wal2 = Wal.init(allocator);
-    defer wal2.deinit();
-    try wal2.openFile(base_path);
-    const committed2 = wal2.committedTxnTotal();
-    // Invariant: recovered committed <= original committed
-    try std.testing.expect(committed2 <= committed1);
+    // Recovery should detect corruption.
+    var store2 = graph_store.GraphStore.init(allocator);
+    defer store2.deinit();
+    const load_err = store2.loadFromFile();
+    if (load_err) |_| {} else |err| switch (err) {
+        error.ChecksumMismatch, error.InvalidHeader, error.InvalidMagic => {},
+        else => return err,
+    }
+    try std.testing.expect(graph_store.lastLoadHadChecksumError());
+
+    // Re-save a clean snapshot and verify node count loads correctly.
+    try store.saveToFile();
+    var store3 = graph_store.GraphStore.init(allocator);
+    defer store3.deinit();
+    try store3.loadFromFile();
+    try std.testing.expectEqual(saved_nodes, store3.nodes.count());
 }

@@ -1,12 +1,12 @@
 const std = @import("std");
-const wal_qd = @import("../src/storage/wal_queue_depth.zig");
+const qd_mod = @import("../src/storage/queue_depth.zig");
 
-// CANARY: REQ=REQ-GQL-028; FEATURE="WAL Page Flush Queue Depth"; ASPECT=WALPageFlushQueueDepthVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_WALPageFlushQueueDepthVarianceEnvelope; OWNER=storage; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Flush Queue Depth"; ASPECT=SnapshotFlushQueueDepthVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotFlushQueueDepthVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
 // Benchmark rationale: Ensure enqueue/dequeue path and sampling remain stable (low variance) under
 // synthetic contention pattern approximating burst flush scheduling and steady draining.
 // Thresholds: CV < 0.22, p95/mean < 2.4.
 
-fn simulateWork(qd: *wal_qd.QueueDepth, iteration: usize) void {
+fn simulateWork(qd: *qd_mod.QueueDepth, iteration: usize) void {
     // Burst size pattern with mild deterministic jitter (bit-mixing iteration index)
     var seed: u64 = 0xA51E_1B59 ^ (@as(u64, iteration) *% 0x9E3779B97F4A7C15);
     seed ^= seed >> 27;
@@ -25,9 +25,9 @@ fn simulateWork(qd: *wal_qd.QueueDepth, iteration: usize) void {
     }
 }
 
-test "BenchmarkCANARY_REQ_GQL_028_WALPageFlushQueueDepthVarianceEnvelope" {
+test "BenchmarkCANARY_REQ_GQL_028_SnapshotFlushQueueDepthVarianceEnvelope" {
     const Runs = 40;
-    var qd: wal_qd.QueueDepth = .{};
+    var qd: qd_mod.QueueDepth = .{};
     var samples: [Runs]u64 = undefined;
     var iter: usize = 0;
     while (iter < Runs) : (iter += 1) {
@@ -35,8 +35,8 @@ test "BenchmarkCANARY_REQ_GQL_028_WALPageFlushQueueDepthVarianceEnvelope" {
         var inner: usize = 0;
         while (inner < 64) : (inner += 1) simulateWork(&qd, iter * 64 + inner);
         // Perform sampling sweep (lightweight) to mimic periodic metrics scrape.
-        var buf: [8]wal_qd.Sample = undefined;
-        var sampler = wal_qd.Sampler.init(&qd);
+        var buf: [8]qd_mod.Sample = undefined;
+        var sampler = qd_mod.Sampler.init(&qd);
         _ = sampler.collect(&buf);
         const end = std.time.nanoTimestamp();
         samples[iter] = @intCast(end - start);
@@ -57,7 +57,7 @@ test "BenchmarkCANARY_REQ_GQL_028_WALPageFlushQueueDepthVarianceEnvelope" {
     for (samples, 0..) |s, idx| sorted[idx] = s;
     std.sort.heap(u64, &sorted, {}, comptime std.sort.asc(u64));
     const p95 = sorted[@min(sorted.len - 1, (sorted.len * 95) / 100)];
-    std.debug.print("benchmark=wal_queue_depth_variance mean_ns={} cv={:.6} p95_ns={} threshold_cv=0.22 threshold_p95_ratio=2.4 max_observed={}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95, qd.sample().max });
+    std.debug.print("benchmark=snapshot_queue_depth_variance mean_ns={} cv={:.6} p95_ns={} threshold_cv=0.22 threshold_p95_ratio=2.4 max_observed={}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95, qd.sample().max });
     try std.testing.expect(cv < 0.22);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.4);
     // Ensure watermark grew (evidence of bursts)

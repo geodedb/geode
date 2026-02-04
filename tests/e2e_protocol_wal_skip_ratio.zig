@@ -25,14 +25,14 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     return .{ .code = code, .out = out, .err = err };
 }
 
-// Protocol test for WAL skip_ratio override via PROFILE
-// Client flag --test-wal-skip-ratio should propagate to server PROFILE output
-test "protocol: PROFILE skip_ratio override" {
+// Protocol test: PROFILE includes GraphStore metrics in CLI output.
+test "protocol: PROFILE graph_store metrics" {
     const exe = "./zig-out/bin/geode";
-    const res = try run(&.{ exe, "PROFILE RETURN 1 AS x", "0.75" });
+    const res = try run(&.{ exe, "PROFILE RETURN 1 AS x" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
-    // Expect skip_ratio field in PROFILE JSON
-    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"skip_ratio\":0.75") != null);
+    // Expect GraphStore metrics in PROFILE JSON
+    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"graph_store_nodes\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"graph_store_dirty\":") != null);
 }

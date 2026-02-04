@@ -1,7 +1,5 @@
 const std = @import("std");
-const geode = @import("geode");
-const eval = geode.eval;
-const graph_exec = @import("graph/exec.zig");
+const value_types = @import("../value_types.zig");
 
 // Advanced UNION type inference and optimization system
 pub const UnionTypeInference = struct {
@@ -12,7 +10,13 @@ pub const UnionTypeInference = struct {
     }
 
     // Enhanced type compatibility checking for UNION operations
-    pub fn inferUnionTypes(self: *UnionTypeInference, left_cols: []const []const u8, right_cols: []const []const u8, left_rows: []const []const u8, right_rows: []const []const u8) ![]UnionColumnType {
+    pub fn inferUnionTypes(
+        self: *UnionTypeInference,
+        left_cols: []const []const u8,
+        right_cols: []const []const u8,
+        left_rows: []const []const value_types.Value,
+        right_rows: []const []const value_types.Value,
+    ) ![]UnionColumnType {
         if (left_cols.len != right_cols.len) {
             return error.ColumnCountMismatch;
         }
@@ -23,8 +27,8 @@ pub const UnionTypeInference = struct {
             const right_col = right_cols[i];
 
             // Analyze types from sample data
-            const left_type = try self.inferColumnType(left_col, left_rows);
-            const right_type = try self.inferColumnType(right_col, right_rows);
+            const left_type = try self.inferColumnType(i, left_rows);
+            const right_type = try self.inferColumnType(i, right_rows);
 
             // Determine compatible result type
             result_types[i] = UnionColumnType{
@@ -40,7 +44,7 @@ pub const UnionTypeInference = struct {
     }
 
     // Infer column type from sample data
-    pub fn inferColumnType(self: *UnionTypeInference, col_name: []const u8, rows: []const []const u8) ![]const u8 {
+    pub fn inferColumnType(self: *UnionTypeInference, col_idx: usize, rows: []const []const value_types.Value) ![]const u8 {
         var type_counts = std.StringHashMap(u32).init(self.allocator);
         defer type_counts.deinit();
 
@@ -48,36 +52,11 @@ pub const UnionTypeInference = struct {
         const sample_size = @min(rows.len, 100);
 
         for (rows[0..sample_size]) |row| {
-            if (std.json.parseFromSlice(std.json.Value, self.allocator, row, .{})) |parsed| {
-                defer parsed.deinit();
-
-                // Handle both array format [{"col": "value"}] and object format {"col": "value"}
-                const row_obj = switch (parsed.value) {
-                    .array => |arr| if (arr.items.len > 0) arr.items[0] else continue,
-                    .object => parsed.value,
-                    else => continue,
-                };
-
-                if (row_obj.object.get(col_name)) |value| {
-                    const type_name = switch (value) {
-                        .string => "STRING",
-                        .integer => "INT",
-                        .float => "DECIMAL",
-                        .bool => "BOOL",
-                        .null => "NULL",
-                        .array => "ARRAY",
-                        .object => "OBJECT",
-                        .number_string => "DECIMAL", // Treat number strings as decimal
-                    };
-
-                    const current = type_counts.get(type_name) orelse 0;
-                    try type_counts.put(type_name, current + 1);
-                }
-            } else |_| {
-                // Failed to parse, assume STRING
-                const current = type_counts.get("STRING") orelse 0;
-                try type_counts.put("STRING", current + 1);
-            }
+            if (col_idx >= row.len) continue;
+            const value = row[col_idx];
+            const type_name = typeNameForValue(value);
+            const current = type_counts.get(type_name) orelse 0;
+            try type_counts.put(type_name, current + 1);
         }
 
         // Find most common type
@@ -139,6 +118,36 @@ pub const UnionTypeInference = struct {
             std.mem.eql(u8, type_name, "FLOAT");
     }
 };
+
+fn typeNameForValue(value: value_types.Value) []const u8 {
+    return switch (value) {
+        .Null => "NULL",
+        .Int, .SmallInt, .BigInt => "INT",
+        .Decimal => "DECIMAL",
+        .Real, .Double => "FLOAT",
+        .Bool => "BOOL",
+        .Str, .Text, .Char, .Varchar => "STRING",
+        .List => "ARRAY",
+        .Map => "OBJECT",
+        .Node => "NODE",
+        .Edge => "EDGE",
+        .Path => "PATH",
+        .ExtValue,
+        .Date,
+        .Time,
+        .TimeTZ,
+        .Timestamp,
+        .TimestampTZ,
+        .Interval,
+        .Bytea,
+        .Json,
+        .Jsonb,
+        .Xml,
+        .Url,
+        .Domain,
+        => "OBJECT",
+    };
+}
 
 pub const UnionColumnType = struct {
     name: []const u8,

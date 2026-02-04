@@ -1,15 +1,15 @@
 const std = @import("std");
 const util = @import("proto_test_util.zig");
 
-// E2E: PROFILE should include wal_skip_ratio when override is set.
+// E2E: PROFILE should include GraphStore metrics.
 
-test "protocol PROFILE wal_skip_ratio override" {
+test "protocol PROFILE graph_store metrics present" {
     const allocator = std.testing.allocator;
     const addr = "127.0.0.1:3193";
     var server = try util.spawnServer(
         allocator,
         &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
-        &.{ "GEODE_WAL_SKIP_RATIO_OVERRIDE=0.7500" },
+        &.{},
     );
     defer server.deinit();
 
@@ -43,8 +43,10 @@ test "protocol PROFILE wal_skip_ratio override" {
     defer allocator.free(err);
     _ = try child.wait();
 
-    if (std.mem.indexOf(u8, out, "\"wal_skip_ratio\":0.7500") == null) {
+    if (std.mem.indexOf(u8, out, "\"graph_store_nodes\":") == null or
+        std.mem.indexOf(u8, out, "\"graph_store_dirty\":") == null)
+    {
         std.debug.print("STDOUT=\n{s}\nSTDERR=\n{s}\n", .{ out, err });
-        return error.MissingWalSkipRatio;
+        return error.MissingGraphStoreMetrics;
     }
 }

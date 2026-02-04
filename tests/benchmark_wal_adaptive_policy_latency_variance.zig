@@ -1,13 +1,11 @@
 const std = @import("std");
-const geode = @import("geode");
+// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Adaptive Policy"; ASPECT=SnapshotAdaptivePolicyLatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotAdaptivePolicyLatencyVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
 
-// CANARY: REQ=REQ-GQL-028; FEATURE="WAL Adaptive Policy"; ASPECT=WalAdaptivePolicyLatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_WalAdaptivePolicyLatencyVarianceEnvelope; OWNER=storage; UPDATED=2025-09-21
-
-// Synthetic variance benchmark for WAL adaptive policy latency. We simulate batches of log records
+// Synthetic variance benchmark for snapshot adaptive policy latency. We simulate batches of writes
 // with variable size and apply an adaptive flush heuristic (threshold adjusts based on moving avg).
 // Goal: latency stability across runs (low CV) and bounded p95 relative to mean.
 
-fn simulateWalAdaptive(batch_count: usize, base_threshold: u64) u64 {
+fn simulateSnapshotAdaptive(batch_count: usize, base_threshold: u64) u64 {
     var total_flush_latency: u64 = 0;
     var dyn_threshold = base_threshold;
     var i: usize = 0;
@@ -32,13 +30,13 @@ fn simulateWalAdaptive(batch_count: usize, base_threshold: u64) u64 {
     return total_flush_latency;
 }
 
-test "BenchmarkCANARY_REQ_GQL_028_WalAdaptivePolicyLatencyVarianceEnvelope" {
+test "BenchmarkCANARY_REQ_GQL_028_SnapshotAdaptivePolicyLatencyVarianceEnvelope" {
     const Runs = 30;
     var samples: [Runs]u64 = undefined;
     var r: usize = 0;
     while (r < Runs) : (r += 1) {
         const start = std.time.nanoTimestamp();
-        _ = simulateWalAdaptive(12_000, 4096);
+        _ = simulateSnapshotAdaptive(12_000, 4096);
         const end = std.time.nanoTimestamp();
         samples[r] = @intCast(end - start);
     }
@@ -62,5 +60,5 @@ test "BenchmarkCANARY_REQ_GQL_028_WalAdaptivePolicyLatencyVarianceEnvelope" {
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.6);
 
     const stderr = std.io.getStdErr().writer();
-    try stderr.print("{\"benchmark\":\"wal_adaptive_policy_latency_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
+    try stderr.print("{\"benchmark\":\"snapshot_adaptive_policy_latency_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

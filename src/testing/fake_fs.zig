@@ -87,7 +87,7 @@ pub const FakeFile = struct {
         // Find file data
         const ptr = self.env.files.getPtr(self.path) orelse return error.FileNotFound;
 
-        // Append or overwrite? simplistic append for WAL
+        // Append or overwrite? simplistic append for snapshot-like writes
         try ptr.content.appendSlice(data);
         self.pos += data.len;
     }
@@ -119,15 +119,15 @@ test "fake fs durability" {
     var env = FakeEnv.init(testing.allocator);
     defer env.deinit();
 
-    var file = try env.createFile("log.wal");
+    var file = try env.createFile("graph_store.dat");
     defer file.close();
 
     try file.writeAll("entry1");
-    try testing.expectEqual(@as(usize, 6), env.files.get("log.wal").?.content.items.len);
-    try testing.expectEqual(@as(usize, 0), env.files.get("log.wal").?.synced_len);
+    try testing.expectEqual(@as(usize, 6), env.files.get("graph_store.dat").?.content.items.len);
+    try testing.expectEqual(@as(usize, 0), env.files.get("graph_store.dat").?.synced_len);
 
     try file.sync();
-    try testing.expectEqual(@as(usize, 6), env.files.get("log.wal").?.synced_len);
+    try testing.expectEqual(@as(usize, 6), env.files.get("graph_store.dat").?.synced_len);
 
     env.fail_next_fsync = true;
     try testing.expectError(error.InputOutput, file.sync());

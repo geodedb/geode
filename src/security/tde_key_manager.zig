@@ -592,6 +592,18 @@ test "deriveDataKey - generates key" {
     try testing.expect(std.mem.eql(u8, result.key_type, "DATA_ENCRYPTION_KEY"));
 }
 
+test "deriveBackupKey - generates key" {
+    const testing = std.testing;
+
+    const result = try deriveBackupKey(testing.allocator, 7);
+    defer testing.allocator.free(result.key_hash);
+    defer testing.allocator.free(result.key_type);
+    defer testing.allocator.free(result.derivation_method);
+
+    try testing.expectEqual(@as(u32, 7), result.key_id);
+    try testing.expect(std.mem.eql(u8, result.key_type, "BACKUP_ENCRYPTION_KEY"));
+}
+
 test "cleanupKeyHierarchy - resets state" {
     const testing = std.testing;
 

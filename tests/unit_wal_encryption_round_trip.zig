@@ -1,19 +1,21 @@
 const std = @import("std");
-const wal_mod = @import("wal");
-const storage = @import("storage_page_manager");
-const tde_h = @import("tde_hierarchy");
+const graph_store = @import("geode").graph_store;
+const tde_file = @import("storage/tde_file_encryption.zig");
 
-// Basic WAL encryption round-trip test. Ensures ciphertext differs from plaintext and recovery yields original payload semantics (insert applied).
-// CANARY: REQ=REQ-GQL-TDE-002; FEATURE="WAL encryption"; ASPECT=TEST; STATUS=TESTED; OWNER=security; UPDATED=2025-09-26
+// Basic snapshot encryption round-trip test. Ensures ciphertext differs from plaintext and load yields original data.
+// CANARY: REQ=REQ-GQL-TDE-002; FEATURE="Snapshot encryption"; ASPECT=TEST; STATUS=TESTED; OWNER=security; UPDATED=2026-02-04
 
-pub fn main() !void {}
-
-test "wal encryption round trip insert+recover" {
+test "graphstore encryption round trip save+load" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Prepare master key (hex) for WAL key derivation via tde_hierarchy.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    graph_store.setDataDirOverride(allocator, tmp.dir_path);
+    defer graph_store.setDataDirOverride(allocator, null);
+
+    // Prepare TDE key (64 hex chars).
     var master: [32]u8 = undefined;
     @memset(&master, 0x11);
     var hex: [64]u8 = undefined;
@@ -22,39 +24,23 @@ test "wal encryption round trip insert+recover" {
         const nib = if (i % 2 == 0) (b >> 4) & 0xF else b & 0xF;
         c.* = "0123456789abcdef"[nib];
     }
-    try std.os.setenvZ("GEODE_WAL_ENCRYPTION", "on");
-    try std.os.setenvZ("GEODE_DISK_ENCRYPTION", "on");
-    try std.os.setenvZ("GEODE_DISK_KEY_HEX", &hex);
+    try std.os.setenvZ("GEODE_TDE_KEY", &hex);
+    defer std.os.unsetenv("GEODE_TDE_KEY") catch {};
 
-    // Create WAL
-    var w = wal_mod.Wal.init(allocator);
-    defer w.deinit();
-    try w.openFile("/tmp/geode_wal_enc_test");
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.createNode(&.{ "hello" });
+    try store.saveToFile();
 
-    // Write an INSERT record
-    const payload = try wal_mod.Wal.encodeInsert(allocator, 0, 0, "hello");
-    defer allocator.free(payload);
-    _ = try w.append(123, .Insert, payload, 0);
-    _ = try w.append(123, .Commit, &.{}, 0);
-    try w.fsync();
-
-    // Read raw WAL segment file and assert plaintext 'hello' not present (best-effort heuristic)
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
-    const path = try std.fmt.allocPrint(allocator, "{s}.wal.0", .{"/tmp/geode_wal_enc_test"});
+    const path = try graph_store.getPersistenceFilePath(allocator);
     defer allocator.free(path);
-    const f = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
-    defer f.close();
-    try buf.ensureTotalCapacity(allocator, 4096);
-    const n = try f.readAll(buf.writer().context.buffer[0..4096]);
-    buf.writer().context.buffer.len = n;
-    std.testing.expectEqual(false, std.mem.indexOf(u8, buf.items, "hello") != null) catch |e| return e;
+    const data = try std.fs.cwd().readFileAlloc(allocator, path, 1 << 20);
+    defer allocator.free(data);
+    try std.testing.expect(tde_file.isEncrypted(data));
+    try std.testing.expect(std.mem.indexOf(u8, data, "hello") == null);
 
-    // Recover into fresh page manager
-    var pm = storage.PageManager.init(allocator);
-    defer pm.deinit();
-    // Force new page so page 0 exists after redo
-    try pm.newPage();
-    const applied = try w.recover(&pm, path);
-    std.testing.expect(applied >= 1);
+    var store2 = graph_store.GraphStore.init(allocator);
+    defer store2.deinit();
+    try store2.loadFromFile();
+    try std.testing.expectEqual(@as(usize, 1), store2.getNodeCount());
 }

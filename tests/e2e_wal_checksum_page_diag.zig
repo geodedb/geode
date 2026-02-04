@@ -1,34 +1,29 @@
 const std = @import("std");
-const wal_mod = @import("../src/wal/wal.zig");
-const storage = @import("../src/storage/page_manager.zig");
+const graph_store = @import("geode").graph_store;
 
-// NOTE: This test simulates a page checksum failure by corrupting on-disk page image and expecting
-// recovery to skip/stop without panic. Diagnostic mapping to protocol not yet integrated; placeholder assertion.
+// NOTE: This test simulates snapshot checksum failure and expects load to fail cleanly.
+test "graphstore checksum diagnostic" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
 
-pub fn main() !void {
-    var gpa = std.heap.page_allocator;
-    var wal = wal_mod.Wal.init(gpa);
-    defer wal.deinit();
-    try wal.openFile("/tmp/geode_chk");
-    // Write a few inserts referencing same page to create page file via PageManager interactions post recovery.
-    var pm = storage.PageManager.init(gpa, 512);
-    defer pm.deinit();
-    var i: usize = 0;
-    while (i < 10) : (i += 1) {
-        const payload = try wal_mod.Wal.encodeInsert(gpa, 0, 0, &.{ 9, 9, 9 });
-        defer gpa.free(payload);
-        _ = try wal.append(1, .Insert, payload, 0);
-    }
-    try wal.fsync();
-    // Create a fake page file and corrupt checksum
-    try pm.newPage();
-    var p = pm.asPage(0);
-    const orig = std.mem.readInt(u32, p.buf[storage.Page.ChecksumOffset .. storage.Page.ChecksumOffset + 4], .little);
-    std.mem.writeInt(u32, p.buf[storage.Page.ChecksumOffset .. storage.Page.ChecksumOffset + 4], orig ^ 0xFFFF_FFFF, .little);
-    // Attempt recovery (should not panic)
-    const path = try std.fmt.allocPrint(gpa, "/tmp/geode_chk.wal.0", .{});
-    defer gpa.free(path);
-    _ = wal.recover(&pm, path) catch |err| switch (err) {
-        else => return err,
-    };
+    graph_store.setDataDirOverride(allocator, tmp.dir_path);
+    defer graph_store.setDataDirOverride(allocator, null);
+
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.createNode(&.{ "x" });
+    try store.saveToFile();
+
+    const file_path = try graph_store.getPersistenceFilePath(allocator);
+    defer allocator.free(file_path);
+    var f = try std.fs.cwd().openFile(file_path, .{ .mode = .read_write });
+    defer f.close();
+    try f.seekTo(56);
+    const flip: [4]u8 = .{ 0xFF, 0xFF, 0xFF, 0xFF };
+    try f.writeAll(&flip);
+
+    var store2 = graph_store.GraphStore.init(allocator);
+    defer store2.deinit();
+    try std.testing.expectError(error.ChecksumMismatch, store2.loadFromFile());
 }

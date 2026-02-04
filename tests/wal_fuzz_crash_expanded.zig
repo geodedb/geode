@@ -1,68 +1,56 @@
 const std = @import("std");
-const wal = @import("../src/wal/wal.zig");
-const storage = @import("../src/storage/page_manager.zig");
+const graph_store = @import("geode").graph_store;
 
 // Expanded recovery fuzz: 1000 seeds, random truncation & checksum corruption injection.
 // Invariants:
-//  - After recovery committed inserts must have durable visible rows (>= commits) unless truncated before commit record.
-//  - No visible rows from uncommitted (loser) txns.
-//  - Recovery idempotent (second pass yields same slotCount + lsn state).
-// For simplicity we only use page 0.
-test "wal crash fuzz expanded 1k" {
+//  - Recovery does not crash on corruption.
+//  - Load is idempotent when it succeeds.
+test "graphstore crash fuzz expanded 1k" {
+    const allocator = std.testing.allocator;
     var seed: u64 = 1;
     while (seed <= 1000) : (seed += 1) {
         var prng = std.rand.DefaultPrng.init(seed);
         const R = prng.random();
         var tmp = std.testing.tmpDir(.{});
         defer tmp.cleanup();
-        const log_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/fuzz.wal", .{tmp.dir_path});
-        defer std.testing.allocator.free(log_path);
-        var w = wal.Wal.init(std.testing.allocator);
-        try w.openFile(log_path);
-        var prev: [4]u64 = .{ 0, 0, 0, 0 };
-        var committed: [4]bool = .{ false, false, false, false };
-        var committed_rows: usize = 0;
-        // Generate up to 80 operations.
+
+        graph_store.setDataDirOverride(allocator, tmp.dir_path);
+        defer graph_store.setDataDirOverride(allocator, null);
+
+        var store = graph_store.GraphStore.init(allocator);
+        defer store.deinit();
+
+        var ids = std.ArrayList(u64).init(allocator);
+        defer ids.deinit(allocator);
+
         var op: usize = 0;
-        while (op < 80) : (op += 1) {
-            const t = R.intRangeLessThan(usize, 0, 4);
-            const tid: u64 = @intCast(t + 1);
-            if (prev[t] == 0) prev[t] = (try w.append(tid, .Begin, &.{}, 0)).value;
-            const choice = R.int(u8) % 5;
-            switch (choice) {
-                0, 1 => { // insert
-                    const payload = try wal.Wal.encodeInsert(std.testing.allocator, 0, 0, "x");
-                    defer std.testing.allocator.free(payload);
-                    prev[t] = (try w.append(tid, .Insert, payload, prev[t])).value;
-                },
-                2 => { // delete
-                    const delp = try wal.Wal.encodeDelete(std.testing.allocator, 0, 0);
-                    defer std.testing.allocator.free(delp);
-                    prev[t] = (try w.append(tid, .Delete, delp, prev[t])).value;
-                },
-                3 => { // commit
-                    if (!committed[t]) {
-                        prev[t] = (try w.append(tid, .Commit, &.{}, prev[t])).value;
-                        committed[t] = true;
-                        committed_rows += 1; // track logical rows (approx)
-                    }
-                },
-                else => {},
+        while (op < 120) : (op += 1) {
+            if (ids.items.len == 0 or (R.int(u8) % 3) != 0) {
+                const id = try store.createNode(&.{ "x" });
+                try ids.append(allocator, id);
+            } else {
+                const idx = R.intRangeLessThan(usize, 0, ids.items.len);
+                const id = ids.items[idx];
+                store.deleteNode(id);
+                _ = ids.swapRemove(idx);
             }
-            if (R.int(u8) % 29 == 0) break; // early crash
+            if (R.int(u8) % 41 == 0) break;
         }
-        try w.fsync();
-        w.deinit();
-        // Introduce random tail truncation or checksum corruption in-place ~20% probability each.
-        var f = try std.fs.cwd().openFile(log_path, .{ .read = true, .write = true });
+
+        try store.saveToFile();
+        const saved_nodes = store.getNodeCount();
+
+        // Random tail truncation or checksum corruption.
+        const file_path = try graph_store.getPersistenceFilePath(allocator);
+        defer allocator.free(file_path);
+        var f = try std.fs.cwd().openFile(file_path, .{ .mode = .read_write });
         const file_size = try f.getEndPos();
         if (file_size > 64) {
             const dice = R.int(u8);
-            if (dice < 51) { // 20% truncation approx
+            if (dice < 51) { // ~20% truncation
                 const cut = file_size - @as(u64, dice % 32);
                 try f.setEndPos(cut);
-            } else if (dice < 102) { // 20% checksum flip approx
-                // Flip 4 bytes near tail (may hit header/sentinel) to force checksum stop.
+            } else if (dice < 102) { // ~20% checksum flip
                 const off = file_size - 8;
                 var buf: [4]u8 = undefined;
                 if (try f.readAt(off, &buf) == 4) {
@@ -75,32 +63,19 @@ test "wal crash fuzz expanded 1k" {
             }
         }
         f.close();
-        // Recover twice.
-        var pm = storage.PageManager.init(std.testing.allocator, 512);
-        defer pm.deinit();
-        var w2 = wal.Wal.init(std.testing.allocator);
-        defer w2.deinit();
-        _ = try w2.recover(&pm, log_path);
-        var w3 = wal.Wal.init(std.testing.allocator);
-        defer w3.deinit();
-        const applied_second = try w3.recover(&pm, log_path);
-        // Idempotence: second applied should generally be 0 (pages already up to LSN). Allow >0 if corruption truncated log mid-record.
-        try std.testing.expect(applied_second == 0 or applied_second < 5);
-        if (pm.pages.items.len > 0) {
-            var p = pm.asPage(0);
-            // If no commits survived (committed_rows==0) expect zero live rows.
-            var live: usize = 0;
-            var i_slot: u16 = 0;
-            while (i_slot < p.slotCount()) : (i_slot += 1) {
-                if (p.read(i_slot)) |_| {
-                    live += 1;
-                } else |_| {
-                    // ignore deleted/corrupt slots
-                }
-            }
-            if (committed_rows == 0) {
-                try std.testing.expect(live == 0);
-            }
+
+        var store2 = graph_store.GraphStore.init(allocator);
+        defer store2.deinit();
+        const res = store2.loadFromFile();
+        if (res) |_| {
+            var store3 = graph_store.GraphStore.init(allocator);
+            defer store3.deinit();
+            try store3.loadFromFile();
+            try std.testing.expectEqual(store2.getNodeCount(), store3.getNodeCount());
+            try std.testing.expect(store3.getNodeCount() <= saved_nodes);
+        } else |err| switch (err) {
+            error.ChecksumMismatch, error.InvalidHeader, error.InvalidMagic => {},
+            else => return err,
         }
     }
 }

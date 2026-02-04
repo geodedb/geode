@@ -1,36 +1,33 @@
 const std = @import("std");
-const geode = @import("geode");
-const wal = @import("wal");
-const storage_mem = @import("storage_mem");
+const graph_store = @import("geode").graph_store;
 
-// Corrupt last WAL record checksum and ensure recovery stops before it (no panic).
-test "wal: checksum corruption truncates tail" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-    var w = wal.Wal.init(allocator);
-    defer w.deinit();
-    try w.openFile("/tmp/geode_wal_checksum_test.log");
-    defer std.fs.cwd().deleteFile("/tmp/geode_wal_checksum_test.log") catch {};
-    // Append two inserts
-    const p1 = try wal.Wal.encodeInsert(allocator, 0, 0, "abc");
-    defer allocator.free(p1);
-    _ = try w.append(1, .Insert, p1, 0);
-    const p2 = try wal.Wal.encodeInsert(allocator, 0, 0, "def");
-    defer allocator.free(p2);
-    _ = try w.append(1, .Insert, p2, 1);
-    try w.fsync();
-    // Corrupt last 4 bytes (checksum) in file
-    var f = try std.fs.cwd().openFile("/tmp/geode_wal_checksum_test.log", .{ .write = true, .read = true });
+// Corrupt snapshot checksum and ensure load fails cleanly.
+test "graphstore: checksum corruption detected" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    graph_store.setDataDirOverride(allocator, tmp.dir_path);
+    defer graph_store.setDataDirOverride(allocator, null);
+
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.createNode(&.{ "abc" });
+    _ = try store.createNode(&.{ "def" });
+    try store.saveToFile();
+
+    const file_path = try graph_store.getPersistenceFilePath(allocator);
+    defer allocator.free(file_path);
+    var f = try std.fs.cwd().openFile(file_path, .{ .mode = .read_write });
     defer f.close();
-    const file_size = try f.getEndPos();
-    if (file_size >= 4) {
-        try f.seekTo(file_size - 4);
-        var zeros: [4]u8 = .{ 0, 0, 0, 0 };
-        try f.writeAll(&zeros);
-    }
-    // Recover into fresh page manager
-    var pm = storage_mem.PageManager.init(allocator);
-    const applied = try w.recover(&pm, "/tmp/geode_wal_checksum_test.log");
-    try std.testing.expect(applied >= 1); // at least first record applied
+
+    // Overwrite checksum bytes in header.
+    try f.seekTo(56);
+    const zeros: [4]u8 = .{ 0, 0, 0, 0 };
+    try f.writeAll(&zeros);
+
+    var store2 = graph_store.GraphStore.init(allocator);
+    defer store2.deinit();
+    try std.testing.expectError(error.ChecksumMismatch, store2.loadFromFile());
+    try std.testing.expect(graph_store.lastLoadHadChecksumError());
 }

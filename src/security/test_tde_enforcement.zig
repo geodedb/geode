@@ -266,17 +266,17 @@ test "TestTDE_Backup_EncryptionMetadata" {
 // Test: Key hierarchy derivation
 test "TestTDE_KeyHierarchy_DerivedKeys" {
     // Master Key -> Data Key (for pages)
-    //            -> WAL Key (for WAL records)
-    // This allows key rotation without re-encrypting all data
+    //            -> Backup Key (for backups/snapshots)
+    // This allows key rotation without re-encrypting all data or backups
 
     // Different derived keys for different purposes
     const master_key_id = 0;
     const data_key_id = 1;
-    const wal_key_id = 2;
+    const backup_key_id = 2;
 
     try testing.expect(master_key_id != data_key_id);
-    try testing.expect(master_key_id != wal_key_id);
-    try testing.expect(data_key_id != wal_key_id);
+    try testing.expect(master_key_id != backup_key_id);
+    try testing.expect(data_key_id != backup_key_id);
 }
 
 // ============================================================================
@@ -285,18 +285,16 @@ test "TestTDE_KeyHierarchy_DerivedKeys" {
 // These tests document potential bypass vectors that need additional guards
 // ============================================================================
 
-// Test: WAL compaction must preserve encryption
-test "TestTDE_Bypass_WALCompaction" {
-    // WAL compaction pipeline (wal_compaction_pipeline.zig) writes to archive
-    // CRITICAL: Archive writes must also be encrypted when TDE is enabled
-    // Currently identified as potential bypass at lines 132, 155
+// Test: GraphStore snapshot writes must preserve encryption
+test "TestTDE_Bypass_SnapshotSave" {
+    // GraphStore save (graph_store.zig) writes the persistent snapshot
+    // CRITICAL: Snapshot writes must remain encrypted when TDE is enabled
 }
 
-// Test: WAL compactor must preserve encryption
-test "TestTDE_Bypass_WALCompactor" {
-    // WAL compactor (wal_compactor.zig) writes compacted WAL
-    // CRITICAL: Compacted writes must be encrypted when TDE is enabled
-    // Currently identified as potential bypass at line 176
+// Test: GraphStore snapshot rewrites must preserve encryption
+test "TestTDE_Bypass_SnapshotRewrite" {
+    // Any snapshot rewrite path (saveToFile/loadFromFile) must keep encrypted data at rest
+    // CRITICAL: No plaintext snapshot should be written when TDE is enabled
 }
 
 // Test: Backup restore must not write unencrypted
