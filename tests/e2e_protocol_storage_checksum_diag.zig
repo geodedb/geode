@@ -1,7 +1,7 @@
 const std = @import("std");
 const proto = @import("proto_test_util.zig");
 const schema = @import("schema");
-const graph_store = @import("../src/graph_store.zig");
+const graph_store = @import("geode").graph_store;
 
 // E2E: simulate checksum mismatch by corrupting GraphStore snapshot before server load.
 // Expect StoragePageChecksum to appear in additional_statuses on first query.

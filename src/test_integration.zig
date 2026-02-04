@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 const eval = geode.eval;
-const heap = @import("storage/heap.zig");
+const heap = geode.heap;
 const evaluator_functions = geode.types.evaluator_functions;
 
 test "Integration: Math function composition" {

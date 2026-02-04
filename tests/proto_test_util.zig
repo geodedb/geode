@@ -3,7 +3,7 @@ const protobuf = @import("protobuf");
 const schema = @import("schema");
 const quic = @import("transport/quic");
 const grpc_client = @import("grpc_client");
-const profile_payload = @import("server/profile_payload.zig");
+const profile_payload = @import("geode").profile_payload;
 
 pub const ServerHandle = struct {
     allocator: std.mem.Allocator,
@@ -337,6 +337,22 @@ pub const QuicProtoClient = struct {
         const msg = packet.quic orelse return error.InvalidMessage;
         if (msg != .cdc_diag) return error.InvalidMessage;
         return try copyCdcDiagnostics(allocator, msg.cdc_diag);
+    }
+
+    pub fn cdcControl(self: *QuicProtoClient, allocator: std.mem.Allocator, action: []const u8) !schema.CdcControlResponse {
+        try self.ensureHello(allocator);
+        const req = schema.CdcControlRequest{ .action = action };
+        try self.writeMessage(.{ .cdc_ctrl = req });
+        var packet = try self.readPacket(allocator, 5000);
+        defer packet.deinit(allocator);
+        const msg = packet.quic orelse return error.InvalidMessage;
+        if (msg != .cdc_ctrl) return error.InvalidMessage;
+        const resp = msg.cdc_ctrl;
+        return .{
+            .success = resp.success,
+            .status = try allocator.dupe(u8, resp.status),
+            .guardrail_epoch = resp.guardrail_epoch,
+        };
     }
 
     pub fn begin(self: *QuicProtoClient, allocator: std.mem.Allocator) !BeginResult {

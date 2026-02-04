@@ -3,7 +3,7 @@ const geode = @import("geode");
 const Value = geode.protocol.Value;
 const evaluator_functions = geode.types.evaluator_functions;
 const hash_module = geode.types.hash;
-const heap = @import("../src/storage/heap.zig");
+const heap = geode.heap;
 
 test "evaluate Hash constructor with BLAKE2b algorithms" {
     const allocator = std.testing.allocator;

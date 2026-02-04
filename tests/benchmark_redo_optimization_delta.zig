@@ -14,10 +14,10 @@ fn buildSnapshot(allocator: std.mem.Allocator) !void {
 
     try store.reserve(NODE_COUNT, 0);
 
-    const labels = [_][]const u8{ "Bench" };
+    var labels = [_][]const u8{"Bench"};
     var i: usize = 0;
     while (i < NODE_COUNT) : (i += 1) {
-        const node_id = try store.createNode(labels[0..]);
+        const node_id = try store.createNode(&labels);
         try store.setNodeProperty(node_id, "v", .{ .Int = @intCast(i) });
     }
 
@@ -97,19 +97,19 @@ pub fn runRedoOptimizationDeltaVarianceEnvelope() !void {
     @memcpy(copy_speedups, speedups);
     std.sort.pdq(f128, copy_speedups, {}, comptime std.sort.asc(f128));
     const trimmed_speedups = varcfg.trimSlice(f128, copy_speedups, cfg.trim_edges);
-    var trimmed_stats = varcfg.computeStatsF128(aa, trimmed_speedups);
+    const trimmed_stats = varcfg.computeStatsF128(aa, trimmed_speedups);
 
     const copy_baseline = try aa.alloc(f128, N);
     @memcpy(copy_baseline, baseline_means);
     std.sort.pdq(f128, copy_baseline, {}, comptime std.sort.asc(f128));
     const trimmed_baseline = varcfg.trimSlice(f128, copy_baseline, cfg.trim_edges);
-    var baseline_stats = varcfg.computeStatsF128(aa, trimmed_baseline);
+    const baseline_stats = varcfg.computeStatsF128(aa, trimmed_baseline);
 
     const copy_optimized = try aa.alloc(f128, N);
     @memcpy(copy_optimized, optimized_means);
     std.sort.pdq(f128, copy_optimized, {}, comptime std.sort.asc(f128));
     const trimmed_optimized = varcfg.trimSlice(f128, copy_optimized, cfg.trim_edges);
-    var optimized_stats = varcfg.computeStatsF128(aa, trimmed_optimized);
+    const optimized_stats = varcfg.computeStatsF128(aa, trimmed_optimized);
 
     const thresholds = varcfg.thresholdsForBenchmark("redo_optimization_delta");
     var raw_sum: f128 = 0;

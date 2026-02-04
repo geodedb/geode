@@ -696,6 +696,7 @@ pub fn build(b: *std.Build) void {
     gql_conformance_tests.root_module.addImport("schema", schema_mod);
     gql_conformance_tests.root_module.addImport("transport/quic", transport_quic_mod);
     gql_conformance_tests.root_module.addImport("grpc_client", grpc_client_mod);
+    gql_conformance_tests.root_module.addImport("geode", root_mod);
 
     // Add new ISO conformance patch tests
     const conformance_patch_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/conformance_tests.zig"), .target = target, .optimize = optimize }) });
@@ -916,6 +917,7 @@ pub fn build(b: *std.Build) void {
     // Provide tde_hierarchy for encryption import (even if disabled)
     const tde_hierarchy_mod_tests = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
     redo_canary_test.root_module.addImport("tde_hierarchy", tde_hierarchy_mod_tests);
+    redo_canary_test.root_module.addImport("geode", root_mod);
     test_step.dependOn(&redo_canary_test.step);
 
     const quic_tls_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_quic_tls_comprehensive.zig"), .target = target, .optimize = optimize }) });
@@ -963,6 +965,7 @@ pub fn build(b: *std.Build) void {
     write_skew_tests.root_module.addImport("txn", txn_manager_mod_for_write_skew);
     const redo_delta_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_storage_redo_delta.zig"), .target = target, .optimize = optimize }) });
     const recovery_corrupt_latency_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_recovery_corrupt_latency.zig"), .target = target, .optimize = optimize }) });
+    recovery_corrupt_latency_tests.root_module.addImport("geode", root_mod);
     const planner_plan_selection_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_plan_selection.zig"), .target = target, .optimize = optimize }) });
     planner_plan_selection_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
     // Planner enumeration pruning tests
@@ -1467,6 +1470,7 @@ pub fn build(b: *std.Build) void {
     const multi_graph_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_multi_graph.zig"), .target = target, .optimize = optimize }),
     });
+    multi_graph_test.root_module.addImport("geode", root_mod);
     test_step.dependOn(&multi_graph_test.step);
 
     // Newly added scaffold acceptance tests (runtime-flag gated components)
@@ -1793,6 +1797,7 @@ pub fn build(b: *std.Build) void {
     e2e_rls_test.root_module.addImport("rls", rls_mod);
     e2e_rls_test.root_module.addImport("user_manager", user_manager_mod);
     e2e_rls_test.root_module.addImport("user_storage", user_storage_mod);
+    e2e_rls_test.root_module.addImport("geode", root_mod);
     test_step.dependOn(&e2e_rls_test.step);
 
     // Client builds

@@ -1,6 +1,6 @@
 const std = @import("std");
 const backup_mod = @import("storage_backup");
-const graph_store = @import("../src/graph_store.zig");
+const graph_store = @import("geode").graph_store;
 
 fn makeTempDir(allocator: std.mem.Allocator) ![]u8 {
     const base = try std.fs.cwd().realpathAlloc(allocator, ".");
@@ -16,7 +16,8 @@ test "TestCANARY_REQ_GQL_082_FullBackup" {
 
     var store = graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{"Person"});
+    var person_labels = [_][]const u8{"Person"};
+    _ = try store.createNode(&person_labels);
 
     const dir = try makeTempDir(allocator);
     defer allocator.free(dir);
@@ -55,7 +56,8 @@ test "TestCANARY_REQ_GQL_082_MetadataLog" {
     const allocator = std.testing.allocator;
     var store = graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{"Seed"});
+    var seed_labels = [_][]const u8{"Seed"};
+    _ = try store.createNode(&seed_labels);
 
     const dir = try makeTempDir(allocator);
     defer allocator.free(dir);
@@ -73,7 +75,8 @@ test "TestCANARY_REQ_GQL_082_RestoreDriver" {
 
     var store = graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{"Restore"});
+    var restore_labels = [_][]const u8{"Restore"};
+    _ = try store.createNode(&restore_labels);
 
     const dir = try makeTempDir(allocator);
     defer allocator.free(dir);

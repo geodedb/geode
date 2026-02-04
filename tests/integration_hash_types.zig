@@ -1,6 +1,6 @@
 const std = @import("std");
 const geode = @import("geode");
-const heap = @import("../src/storage/heap.zig");
+const heap = geode.heap;
 
 test "CANARY blake2b hash types integration" {
     const allocator = std.testing.allocator;

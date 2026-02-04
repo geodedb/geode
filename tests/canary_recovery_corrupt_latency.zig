@@ -1,5 +1,5 @@
 const std = @import("std");
-const graph_store = @import("../src/graph_store.zig");
+const graph_store = @import("geode").graph_store;
 
 // CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=CorruptPageRecoveryLatency; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency; OWNER=storage; UPDATED=2026-02-04
 // CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=CorruptPageRecoveryLatency; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
@@ -28,7 +28,8 @@ test "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency" {
 
     var store = graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{"Person"});
+    var labels = [_][]const u8{"Person"};
+    _ = try store.createNode(&labels);
     try store.saveToFile();
 
     const path = try graph_store.getPersistenceFilePath(allocator);
@@ -67,8 +68,9 @@ test "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope" {
         var store = graph_store.GraphStore.init(allocator);
         defer store.deinit();
         var t: usize = 0;
+        var bench_labels = [_][]const u8{"Bench"};
         while (t < 20) : (t += 1) {
-            _ = try store.createNode(&.{"Bench"});
+            _ = try store.createNode(&bench_labels);
         }
         try store.saveToFile();
 

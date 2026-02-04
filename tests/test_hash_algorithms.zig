@@ -1,6 +1,6 @@
 const std = @import("std");
 const geode = @import("geode");
-const heap = @import("../src/storage/heap.zig");
+const heap = geode.heap;
 const hash = geode.types.hash;
 const evaluator_functions = geode.types.evaluator_functions;
 

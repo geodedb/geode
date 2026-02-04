@@ -1,7 +1,7 @@
 const std = @import("std");
 const proto = @import("proto_test_util.zig");
 const schema = @import("schema");
-const graph_store = @import("../src/graph_store.zig");
+const graph_store = @import("geode").graph_store;
 
 // Recovery test: corrupt GraphStore snapshot checksum then start server and ensure
 // StoragePageChecksum diagnostic is surfaced alongside PROFILE metrics.

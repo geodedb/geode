@@ -18,7 +18,21 @@ fn flag() *flags_mod.Flag {
     return &flags_mod.global().adv_fts;
 }
 fn enabled() bool {
+    if (test_override_active) return test_override_enabled;
     return flag().enabled();
+}
+
+// Test override flag for unit tests (since std.process.setEnvVar may not be available in all contexts)
+var test_override_enabled: bool = false;
+var test_override_active: bool = false;
+
+pub fn enableForTests() void {
+    test_override_active = true;
+    test_override_enabled = true;
+}
+pub fn disableForTests() void {
+    test_override_active = false;
+    test_override_enabled = false;
 }
 
 pub const Hit = struct { doc_id: u64, score: f64, fragments: [][]const u8 };

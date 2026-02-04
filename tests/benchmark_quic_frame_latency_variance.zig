@@ -1,4 +1,6 @@
 const std = @import("std");
+const protobuf = @import("protobuf");
+const schema = @import("schema");
 
 // CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QuicFrameLatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_074_QuicFrameLatencyVarianceEnvelope; OWNER=wire; UPDATED=2025-09-22
 // Bench objective: capture encode/decode + round-trip (simulated) latencies for QUIC-like frame sends.
@@ -24,7 +26,17 @@ fn stats(values: []u64) struct { mean: f64, stddev: f64, cv: f64, p95: u64 } {
     return .{ .mean = mean_cast, .stddev = stddev, .cv = if (mean_cast == 0) 0 else stddev / mean_cast, .p95 = p95 };
 }
 
-// Simulate a frame encode by writing JSON payload to an in-memory buffer.
+// Encode a protobuf packet to bytes to simulate real QUIC payload sizes.
+fn encodePacket(allocator: std.mem.Allocator, msg: schema.QuicClientMessage) ![]u8 {
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 256);
+    defer aw.deinit();
+    const packet = schema.ClientPacket{ .quic = msg };
+    try protobuf.encode(&aw.writer, allocator, packet);
+    const body = aw.writer.buffer[0..aw.writer.end];
+    return try allocator.dupe(u8, body);
+}
+
+// Simulate a frame encode by writing protobuf payload to an in-memory buffer.
 fn simulateEncode(payload: []const u8) u64 {
     var timer = std.time.Timer.start() catch unreachable;
     var sink: [4096]u8 = undefined;
@@ -34,12 +46,12 @@ fn simulateEncode(payload: []const u8) u64 {
     return timer.read();
 }
 
-// Simulate a frame decode by parsing minimal JSON tokens (very naive) or scanning bytes.
+// Simulate a frame decode by scanning bytes (payload is protobuf).
 fn simulateDecode(payload: []const u8) u64 {
     var timer = std.time.Timer.start() catch unreachable;
     var count: usize = 0;
     for (payload) |c| {
-        if (c == '"' or c == '{' or c == '}' or c == ':') {
+        if (c == 0 or c == 10 or c == 13) {
             count += 1; // trivial scan
         }
     }
@@ -63,18 +75,24 @@ test "BenchmarkCANARY_REQ_GQL_074_QuicFrameLatencyVarianceEnvelope" {
     const runs: usize = 64; // >= 48 as required.
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
-    var encode = try gpa.allocator().alloc(u64, runs);
-    defer gpa.allocator().free(encode);
-    var decode = try gpa.allocator().alloc(u64, runs);
-    defer gpa.allocator().free(decode);
-    var rtt = try gpa.allocator().alloc(u64, runs);
-    defer gpa.allocator().free(rtt);
+    var encode = try allocator.alloc(u64, runs);
+    defer allocator.free(encode);
+    var decode = try allocator.alloc(u64, runs);
+    defer allocator.free(decode);
+    var rtt = try allocator.alloc(u64, runs);
+    defer allocator.free(rtt);
 
     // Payloads rotate through small/medium/large typical frame sizes.
-    const small = "{\"type\":\"HELLO\",\"client\":\"bench\"}";
-    const medium = "{\"type\":\"RUN_GQL\",\"text\":\"RETURN 1 AS x ORDER BY x LIMIT 1\",\"params\":{}}";
-    const large = "{\"type\":\"RUN_GQL\",\"text\":\"RETURN 1 AS x UNION RETURN 1 AS x UNION RETURN 1 AS x UNION RETURN 1 AS x\",\"params\":{}}";
+    const small = try encodePacket(allocator, .{ .hello = .{ .username = "bench", .password = "bench", .tenant_id = null } });
+    defer allocator.free(small);
+    var params = std.ArrayList(schema.Param).init(allocator);
+    defer params.deinit(allocator);
+    const medium = try encodePacket(allocator, .{ .execute = .{ .session_id = "", .query = "RETURN 1 AS x ORDER BY x LIMIT 1", .params = params } });
+    defer allocator.free(medium);
+    const large = try encodePacket(allocator, .{ .execute = .{ .session_id = "", .query = "RETURN 1 AS x UNION RETURN 1 AS x UNION RETURN 1 AS x UNION RETURN 1 AS x", .params = params } });
+    defer allocator.free(large);
     var i: usize = 0;
     while (i < runs) : (i += 1) {
         const payload = switch (i % 3) {

@@ -122,7 +122,7 @@ test "Thresholds: values are reasonable" {
     try testing.expect(Thresholds.forEach > 0);
     try testing.expect(Thresholds.hnswBatchDistance > 0);
     try testing.expect(Thresholds.cboSubsets > 0);
-    try testing.expect(Thresholds.walSegments > 0);
+    try testing.expect(Thresholds.graphStoreSegments > 0);
 }
 
 test "shouldUseParallelism: correct behavior" {

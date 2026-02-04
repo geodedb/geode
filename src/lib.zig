@@ -187,6 +187,8 @@ pub const proto_util = @import("server/proto_util.zig");
 // Re-export explain/profile payload builders for server handlers and tests
 pub const explain_payload = @import("server/explain_payload.zig");
 pub const profile_payload = @import("server/profile_payload.zig");
+// Re-export heap for test_integration and other modules
+pub const heap = @import("storage/heap.zig");
 
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {

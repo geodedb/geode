@@ -10,10 +10,10 @@ fn buildSnapshot(allocator: std.mem.Allocator) !void {
     defer store.deinit();
 
     try store.reserve(NODE_COUNT, 0);
-    const labels = [_][]const u8{ "Redo" };
+    var labels = [_][]const u8{"Redo"};
     var i: usize = 0;
     while (i < NODE_COUNT) : (i += 1) {
-        const node_id = try store.createNode(labels[0..]);
+        const node_id = try store.createNode(&labels);
         try store.setNodeProperty(node_id, "seq", .{ .Int = @intCast(i) });
     }
     try store.saveToFile();
