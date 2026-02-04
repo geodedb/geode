@@ -126,7 +126,7 @@ fn printBackupUsage() void {
         "  cleanup       Clean up old backup files\n" ++
         "\n" ++
         "Examples:\n" ++
-        "  geode backup create --type full --output ./backup.gz\n" ++
+        "  geode backup create --output ./backup.gz\n" ++
         "  geode backup list\n" ++
         "  geode backup info ./backup.gz\n" ++
         "\n" ++
@@ -136,9 +136,10 @@ fn printBackupUsage() void {
 // GAP-0137: Updated to support TLS certificate verification
 fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var output: ?[]const u8 = null;
-    var backup_type: []const u8 = "full";
     var server: []const u8 = "127.0.0.1:3141";
     var compress: bool = false;
+    var username: ?[]const u8 = null;
+    var password: ?[]const u8 = null;
     // GAP-0137: TLS configuration options
     var tls_config = TlsConfig{};
 
@@ -152,8 +153,9 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "\n" ++
                 "Options:\n" ++
                 "  --output <path>        Backup output file (required)\n" ++
-                "  --type <type>          Backup type: full (default: full)\n" ++
                 "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
+                "  --user <username>      Username for authentication\n" ++
+                "  --password <password>  Password for authentication\n" ++
                 "  --compress             Compress backup file\n" ++
                 "  --insecure             Skip TLS certificate verification\n" ++
                 "  --ca-cert <path>       CA certificate path for server verification\n" ++
@@ -166,7 +168,7 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "  For enterprise PKI/mutual TLS, provide --ca-cert, --client-cert, --client-key.\n" ++
                 "\n" ++
                 "Examples:\n" ++
-                "  geode backup create --type full --output ./backup.gz --compress\n" ++
+                "  geode backup create --output ./backup.gz --compress\n" ++
                 "  geode backup create --output ./backup.gz --insecure\n" ++
                 "  geode backup create --output ./backup.gz --ca-cert /etc/ssl/ca.crt\n" ++
                 "\n", .{});
@@ -178,16 +180,6 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
             }
             i += 1;
             output = argv[i];
-        } else if (std.mem.eql(u8, argv[i], "--type")) {
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --type requires a value\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
-            i += 1;
-            backup_type = argv[i];
-        } else if (std.mem.eql(u8, argv[i], "--parent")) {
-            std.debug.print("Error: --parent is not supported with GraphStore backups\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
         } else if (std.mem.eql(u8, argv[i], "--server")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --server requires a value\n", .{});
@@ -195,6 +187,20 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
             }
             i += 1;
             server = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--user") or std.mem.eql(u8, argv[i], "-U")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --user requires a value\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            username = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--password") or std.mem.eql(u8, argv[i], "-P")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --password requires a value\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            password = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--compress")) {
             compress = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
@@ -234,14 +240,10 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    // Validate type
-    if (!std.mem.eql(u8, backup_type, "full")) {
-        std.debug.print("Error: only full backups are supported with GraphStore\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    }
+    const backup_type: []const u8 = "full";
 
     // Execute backup
-    try executeBackup(allocator, output.?, backup_type, server, compress, tls_config);
+    try executeBackup(allocator, output.?, backup_type, server, compress, tls_config, username, password);
 
     std.debug.print("Backup created successfully: {s}\n", .{output.?});
     if (compress) {
@@ -609,6 +611,8 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     var target_time: ?[]const u8 = null;
     var server: []const u8 = "127.0.0.1:3141";
     var skip_confirmation: bool = false;
+    var username: ?[]const u8 = null;
+    var password: ?[]const u8 = null;
     // GAP-0137: TLS configuration options
     var tls_config = TlsConfig{};
 
@@ -628,6 +632,8 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
                 "  --source <URI>         Backup source (alternative to positional)\n" ++
                 "  --target-time <time>   Restore to specific timestamp\n" ++
                 "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
+                "  --user <username>      Username for authentication\n" ++
+                "  --password <password>  Password for authentication\n" ++
                 "  --yes                  Skip confirmation prompts\n" ++
                 "  --confirm              Skip confirmation prompts (alias for --yes)\n" ++
                 "  --insecure             Skip TLS certificate verification\n" ++
@@ -668,6 +674,20 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
             }
             i += 1;
             server = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--user") or std.mem.eql(u8, argv[i], "-U")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --user requires a value\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            username = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--password") or std.mem.eql(u8, argv[i], "-P")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --password requires a value\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            password = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--yes") or std.mem.eql(u8, argv[i], "--confirm")) {
             skip_confirmation = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
@@ -752,7 +772,7 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     }
 
     // Execute restore (GAP-0137: pass TLS config)
-    try executeRestore(allocator, source.?, target_time, server, tls_config);
+    try executeRestore(allocator, source.?, target_time, server, tls_config, username, password);
 
     std.debug.print("Restore completed successfully\n", .{});
     std.process.exit(@intFromEnum(ExitCode.success));
@@ -1332,7 +1352,16 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 // CANARY: REQ=REQ-BACKUP-REMOTE-001; FEATURE="RemoteBackup"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=geodetestlab/specs/backup_operations_basic.yml; OWNER=cli; UPDATED=2026-01-09
 // GAP-0137: Updated to support TLS certificate verification
 // Remote server backup execution function using QUIC protocol
-fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, server: []const u8, compress: bool, tls_config: TlsConfig) !void {
+fn executeRemoteBackup(
+    allocator: std.mem.Allocator,
+    dest: []const u8,
+    mode: []const u8,
+    server: []const u8,
+    compress: bool,
+    tls_config: TlsConfig,
+    username: ?[]const u8,
+    password: ?[]const u8,
+) !void {
     // Parse server address
     const colon_idx = std.mem.lastIndexOf(u8, server, ":") orelse return error.InvalidAddress;
     const host = server[0..colon_idx];
@@ -1377,6 +1406,8 @@ fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []c
 
     // Send HELLO (Protobuf)
     const hello_req = schema.HelloRequest{
+        .username = username orelse "",
+        .password = password orelse "",
         .client_name = "geode-backup",
         .client_version = "0.1.0",
         .wanted_conformance = "GQL/1.0",
