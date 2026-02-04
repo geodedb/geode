@@ -79,13 +79,13 @@ Enable alternate policies via configuration/flagger only; default is enforced.
 
 ## Transports and Parity
 
-- stdio (local) and QUIC (network) are supported.
-- Determinism and results are validated by transport parity tests (gated by `GEODE_CI_QUIC_SMOKE=1`).
+- QUIC and gRPC are supported (protobuf wire format).
+- Determinism and results are validated by transport parity tests.
 
 Run a single parity test (example):
 
 ```bash
-GEODE_CI_QUIC_SMOKE=1 zig test tests/e2e_protocol_transport_parity_match_varlen_rows.zig
+zig test tests/e2e_protocol_transport_parity_match_varlen_rows.zig
 ```
 
 ## Notes

@@ -17,8 +17,7 @@ This document captures currently claimed features and implementation-defined/dep
 ### Deterministic Transport Parity Evidence (Curated Datasets)
 
 - Curated varlen determinism dataset (`data/varlen_determinism`) exercises equal-length path expansions to validate whole-row JSON lex tie-break and UA005/UA006 ordering consistency.
-- Transport parity (STDIO vs QUIC) verified for: simple RETURN ordering, set operations DISTINCT, projection slices, ORDER/LIMIT/OFFSET pagination, MATCH variable-length expansions, diagnostics (US001, IllegalOrderKey), CASE 3VL null semantics, and nulls-last ordering.
-- New client passthrough flag `--server-arg` enables supplying graph dataset (e.g., `--server-arg --data_dir --server-arg ./data/varlen_determinism`) under stdio spawning to mirror external QUIC server configuration; feature included in parity matrix.
+- Transport parity (QUIC vs gRPC) verified for: simple RETURN ordering, set operations DISTINCT, projection slices, ORDER/LIMIT/OFFSET pagination, MATCH variable-length expansions, diagnostics (US001, IllegalOrderKey), CASE 3VL null semantics, and nulls-last ordering.
 
 // CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity VarLen Dataset Rows"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows; OWNER=engine; UPDATED=2025-09-24
 // CANARY: REQ=REQ-GQL-091; FEATURE="Client Server Arg Passthrough"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_091_ClientServerArgPassthrough; OWNER=client; UPDATED=2025-09-24
@@ -29,8 +28,8 @@ This document captures currently claimed features and implementation-defined/dep
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity ORDER/LIMIT/OFFSET Rows"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_OrderPaginationRows; OWNER=engine; UPDATED=2025-09-24
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity MATCH VarLen Rows"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_MatchVarLenRows; OWNER=engine; UPDATED=2025-09-24
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Path Determinism UA005/UA006"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_VarLenDeterminism_STDIO; OWNER=engine; UPDATED=2025-09-24
 // CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Path Determinism UA005/UA006"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_VarLenDeterminism_QUIC; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Path Determinism UA005/UA006"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_VarLenDeterminism_GRPC; OWNER=engine; UPDATED=2025-09-24
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Diagnostics US001"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_US001; OWNER=engine; UPDATED=2025-09-24
 
 ## Policies and Diagnostics

@@ -106,7 +106,7 @@ See `vendor/quic/test-clients/quinn-client/` for working quinn example.
 Key differences from test client:
 
 - Test client uses simple HTTP/0.9 protocol
-- Geode client needs bidirectional streams with JSON protocol
+- Geode client needs bidirectional streams with protobuf protocol
 - Need to handle HELLO handshake, query/response flow, paging
 
 ### Estimated Effort

@@ -78,7 +78,7 @@ loop {
    - `write_json()`: Write to stream with packet flushing
    - `read_line()`: Event loop reading from stream and UDP socket
    - `flush_send()`: Drive packet transmission
-   - Proper buffering for line-delimited JSON protocol
+   - Proper buffering for length-prefixed protobuf protocol
 
 3. **Query Protocol** (lines 486-582):
    - HELLO handshake

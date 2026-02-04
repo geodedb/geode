@@ -1,49 +1,105 @@
 const std = @import("std");
-const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
-const E = struct {
-    fn run_with_env(args: []const []const u8, envs: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
-        const allocator = std.testing.allocator;
-        var child = Child.init(args, allocator);
-        child.stdin_behavior = .Ignore;
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
-        child.env_map = std.process.getEnvMap(allocator) catch null;
-        if (child.env_map) |*m| {
-            var i: usize = 0;
-            while (i + 1 < envs.len) : (i += 2) {
-                _ = m.put(envs[i], envs[i + 1]) catch {};
-            }
-        }
-        try child.spawn();
-        const out = try child.stdout.?.readToEndAlloc(allocator, 1 << 20);
-        const err = try child.stderr.?.readToEndAlloc(allocator, 1 << 20);
-        const term = try child.wait();
-        const code: i32 = switch (term) {
-            .Exited => |st| st,
-            else => 2,
-        };
-        return .{ .code = code, .out = out, .err = err };
-    }
-    fn contains(hay: []const u8, needle: []const u8) bool {
-        return std.mem.indexOf(u8, hay, needle) != null;
-    }
-};
+const testing = std.testing;
+const util = @import("proto_test_util.zig");
+const schema = @import("schema");
 
-test "storage: EXPAND_FROM_N two-hop" {
-    const exe = "./zig-out/bin/geode";
-    // tiny+: 0->1, 0->2, 1->3
-    const res = try E.run_with_env(&.{ exe, "RETURN EXPAND_FROM_N(0, 2) AS m ORDER BY m" }, &.{ "GEODE_ENGINE", "storage", "GEODE_TEST_GRAPH", "tiny_plus" });
-    defer std.testing.allocator.free(res.out);
-    defer std.testing.allocator.free(res.err);
-    try std.testing.expectEqual(@as(i32, 0), res.code);
-    try std.testing.expect(E.contains(res.out, "{\"m\":3}"));
+fn expectInt(val: util.TestValue, expected: i64) !void {
+    switch (val) {
+        .int => |v| try testing.expectEqual(expected, v),
+        else => return error.UnexpectedValueType,
+    }
 }
 
-test "storage: EXPAND_FROM_LABELED one-hop" {
-    const exe = "./zig-out/bin/geode";
-    const res = try E.run_with_env(&.{ exe, "RETURN EXPAND_FROM_LABELED(0, \"A\") AS m ORDER BY m" }, &.{ "GEODE_ENGINE", "storage", "GEODE_TEST_GRAPH", "tiny_labels" });
-    defer std.testing.allocator.free(res.out);
-    defer std.testing.allocator.free(res.err);
-    try std.testing.expectEqual(@as(i32, 0), res.code);
-    try std.testing.expect(E.contains(res.out, "{\"m\":1}"));
+fn execOk(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query: []const u8) !void {
+    var params = std.ArrayList(schema.Param).init(allocator);
+    defer params.deinit(allocator);
+    var res = try client.executeAndCollect(allocator, query, params, 1000);
+    defer res.deinit(allocator);
+    try testing.expectEqualStrings("00000", res.status_class);
+}
+
+fn seedTwoHop(client: *util.QuicProtoClient, allocator: std.mem.Allocator) !void {
+    const seed = [_][]const u8{
+        "CREATE (:Node {id: 0})",
+        "CREATE (:Node {id: 1})",
+        "CREATE (:Node {id: 2})",
+        "CREATE (:Node {id: 3})",
+        "MATCH (a:Node {id: 0}), (b:Node {id: 1}) CREATE (a)-[:LINK]->(b)",
+        "MATCH (a:Node {id: 0}), (b:Node {id: 2}) CREATE (a)-[:LINK]->(b)",
+        "MATCH (a:Node {id: 1}), (b:Node {id: 3}) CREATE (a)-[:LINK]->(b)",
+    };
+    for (seed) |q| try execOk(client, allocator, q);
+}
+
+fn seedLabeled(client: *util.QuicProtoClient, allocator: std.mem.Allocator) !void {
+    const seed = [_][]const u8{
+        "CREATE (:Node {id: 0})",
+        "CREATE (:Node {id: 1})",
+        "CREATE (:Node {id: 2})",
+        "MATCH (a:Node {id: 0}), (b:Node {id: 1}) CREATE (a)-[:A]->(b)",
+        "MATCH (a:Node {id: 0}), (b:Node {id: 2}) CREATE (a)-[:B]->(b)",
+    };
+    for (seed) |q| try execOk(client, allocator, q);
+}
+
+test "storage: two-hop expansion (GraphStore)" {
+    const allocator = testing.allocator;
+    const addr = "127.0.0.1:8576";
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var server = try util.spawnServer(
+        allocator,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
+        null,
+    );
+    defer server.deinit();
+
+    var client = try util.QuicProtoClient.connect(allocator, addr);
+    defer client.deinit();
+
+    var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
+    defer hello.deinit(allocator);
+
+    try seedTwoHop(&client, allocator);
+
+    var params = std.ArrayList(schema.Param).init(allocator);
+    defer params.deinit(allocator);
+    var res = try client.executeAndCollect(allocator, "MATCH (a:Node {id: 0})-[:LINK]->()-[:LINK]->(c) RETURN c.id AS m ORDER BY m", params, 1000);
+    defer res.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), res.rows.len);
+    try expectInt(res.rows[0][0], 3);
+}
+
+test "storage: labeled expansion (GraphStore)" {
+    const allocator = testing.allocator;
+    const addr = "127.0.0.1:8577";
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var server = try util.spawnServer(
+        allocator,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
+        null,
+    );
+    defer server.deinit();
+
+    var client = try util.QuicProtoClient.connect(allocator, addr);
+    defer client.deinit();
+
+    var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
+    defer hello.deinit(allocator);
+
+    try seedLabeled(&client, allocator);
+
+    var params = std.ArrayList(schema.Param).init(allocator);
+    defer params.deinit(allocator);
+    var res = try client.executeAndCollect(allocator, "MATCH (a:Node {id: 0})-[:A]->(b) RETURN b.id AS m ORDER BY m", params, 1000);
+    defer res.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), res.rows.len);
+    try expectInt(res.rows[0][0], 1);
 }

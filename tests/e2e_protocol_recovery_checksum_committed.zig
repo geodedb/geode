@@ -50,7 +50,7 @@ test "protocol recovery checksum + committed_txns" {
     defer allocator.free(profile_json);
     try std.testing.expect(std.mem.indexOf(u8, profile_json, "\"committed_txns\"") != null);
 
-    var params = std.ArrayList(schema.Param).init(allocator);
+    const params = std.ArrayList(schema.Param).init(allocator);
     const exec = try client.executeAndCollect(allocator, "RETURN 1 AS x", params, 100);
     defer exec.deinit(allocator);
 

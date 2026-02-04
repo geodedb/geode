@@ -89,8 +89,6 @@ test "S3 full backup restore to exact snapshot" {
     // Verify checksums match
     const restored_checksum = try calculateDirectoryChecksum(test_dir);
     try testing.expectEqual(original_checksum, restored_checksum);
-
-    _ = full_backup_meta;
 }
 
 // Test multipart upload with checksums

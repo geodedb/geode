@@ -1,33 +1,29 @@
 const std = @import("std");
 const testing = std.testing;
-const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
+const util = @import("proto_test_util.zig");
 
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDCControlProtocol"; ASPECT=E2EUnsupported; STATUS=TESTED; TEST=protocol_CDC_CONTROL_unsupported; OWNER=cdc; UPDATED=2025-09-20
 
 test "protocol: CDC control unsupported action" {
-    var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
-    defer std.debug.assert(!gpa_allocator.deinit());
-    const gpa = gpa_allocator.allocator();
+    const allocator = testing.allocator;
+    const addr = "127.0.0.1:8578";
 
-    var proc = Child.init(&[_][]const u8{"./zig-out/bin/geode"}, gpa.*);
-    proc.stdin_behavior = .Pipe;
-    proc.stdout_behavior = .Pipe;
-    proc.stderr_behavior = .Pipe;
-    proc.env_map = try std.process.getEnvMap(gpa.*);
-    defer proc.env_map.deinit();
-    try proc.env_map.put("GEODE_CDC_ENABLE", "1");
-    try proc.spawn();
+    var server = try util.spawnServer(
+        allocator,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
+        &.{ "GEODE_CDC_ENABLE=1" },
+    );
+    defer server.deinit();
 
-    const input = "{\"type\":\"CDC_CONTROL\",\"action\":\"UNKNOWN_ACTION\"}\n";
-    if (proc.stdin) |stdin| {
-        try stdin.writeAll(input);
-        stdin.close();
-    }
+    var client = try util.QuicProtoClient.connect(allocator, addr);
+    defer client.deinit();
 
-    const out = try proc.stdout.?.reader().readAllAlloc(gpa, 100_000);
-    defer gpa.free(out);
-    _ = try proc.wait();
+    var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
+    defer hello.deinit(allocator);
 
-    // Expect UNSUPPORTED status
-    try testing.expect(std.mem.indexOf(u8, out, "\"status\":\"UNSUPPORTED\"") != null);
+    var ctrl = try client.cdcControl(allocator, "UNKNOWN_ACTION");
+    defer ctrl.deinit(allocator);
+
+    try testing.expect(!ctrl.success);
+    try testing.expect(std.mem.eql(u8, ctrl.status, "UNSUPPORTED"));
 }

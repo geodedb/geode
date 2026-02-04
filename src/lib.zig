@@ -189,6 +189,10 @@ pub const explain_payload = @import("server/explain_payload.zig");
 pub const profile_payload = @import("server/profile_payload.zig");
 // Re-export heap for test_integration and other modules
 pub const heap = @import("storage/heap.zig");
+// Re-export catalog for tests
+pub const catalog = @import("schema/catalog.zig");
+// Re-export tde_file_encryption for tests
+pub const tde_file_encryption = @import("storage/tde_file_encryption.zig");
 
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {

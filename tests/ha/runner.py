@@ -66,7 +66,7 @@ def chaos_packet_loss(container_name, duration="10s", loss_percent="20"):
 
 
 def verify_leader(containers):
-    # Check which node is leader via geodec or metrics
+    # Check which node is leader via geode CLI or metrics
     # Simple check: Ask each node who the leader is
     leader = None
     for c in containers:

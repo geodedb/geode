@@ -19,7 +19,7 @@ Complete documentation for QUIC/TLS 1.3 transport in Geode.
 
 ## Overview
 
-Geode uses QUIC over TLS 1.3 as its **only network transport**. No TCP fallback exists. For local development, process mode (stdio) remains available.
+Geode uses QUIC over TLS 1.3 as its **only network transport**. No TCP fallback exists. The server accepts QUIC and optional gRPC only.
 
 **Key Characteristics**:
 - Vendored Zig QUIC implementation in `vendor/quic/`
@@ -291,13 +291,7 @@ const response = try stream.read(buffer);
 
 ### Go Client
 
-Uses stdio mode for process communication (quic-go incompatible with vendor/quic).
-
-```go
-cmd := exec.Command(geode_path, "serve", "--stdio")
-stdin, _ := cmd.StdinPipe()
-stdout, _ := cmd.StdoutPipe()
-```
+Uses protobuf over QUIC (or gRPC) with `geode/1` ALPN. No stdio/process mode is supported.
 
 ### Python/Rust Clients
 
@@ -400,7 +394,7 @@ Ensure all clients use `geode/1` as the ALPN protocol identifier.
 |--------|---------|------------|
 | Zig | vendor/quic | Yes (native) |
 | Python | aioquic | Yes |
-| Go | quic-go | No (use stdio) |
+| Go | quic-go | Yes (protobuf) |
 | Rust | quiche | Yes |
 
 ---

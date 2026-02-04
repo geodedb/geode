@@ -669,10 +669,10 @@ This bug affects **ALL clients** that use the vendor/quic QUIC transport impleme
 
 **Why All Clients Are Affected**:
 
-1. All clients send newline-delimited JSON messages
-2. All messages go through the same `QuicStream.readLine()` function on the server
+1. All clients send length-prefixed protobuf messages
+2. All messages go through the same QUIC stream read path on the server
 3. The bug causes the server to return partial messages for ALL clients
-4. ALL clients receive "Invalid JSON" errors from the server
+4. ALL clients receive decode errors from the server
 
 **Fix Scope**:
 

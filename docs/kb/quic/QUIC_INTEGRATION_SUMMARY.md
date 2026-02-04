@@ -2,7 +2,7 @@
 
 ## Overview
 
-Geode integrates a vendored QUIC implementation (Zig 0.15.1) in `vendor/quic/` and exposes it through a stable public API wired via build.zig. The geode transport layer (`src/transport/quic.zig`) uses this API for server/client. Network transport is QUIC-only; for local development, process mode (stdio) remains. All CANARY evidence and benches are in place.
+Geode integrates a vendored QUIC implementation (Zig 0.15.1) in `vendor/quic/` and exposes it through a stable public API wired via build.zig. The geode transport layer (`src/transport/quic.zig`) uses this API for server/client. Network transport is QUIC-only (with optional gRPC); stdio/process mode is not supported. All CANARY evidence and benches are in place.
 
 ## Modules and Named Imports
 

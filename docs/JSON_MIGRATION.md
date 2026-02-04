@@ -1,6 +1,6 @@
-# JSON Library Migration Plan
+# JSON Library Migration Plan (Archived)
 
-> **Status**: IN PROGRESS - Phase 7 Complete (Core Server Files)
+> **Status**: ARCHIVED - Legacy JSON wire protocol removed; protobuf is the only supported wire format.
 > **Created**: 2026-01-24
 > **Updated**: 2026-01-24
 > **Priority**: HIGH - Technical Debt Reduction
@@ -16,7 +16,7 @@
 > - `transaction_handlers.zig` - 8 patterns migrated (TXN_BEGIN, TXN_COMMIT, TXN_ROLLBACK)
 > - `query_executor.zig` - 70+ patterns migrated (index ops, backup, schema, graph, session)
 > - `cli/main.zig` - 6 patterns migrated (error responses, column defs)
-> **Remaining**: 10 files with low-priority patterns (test harness, tools, client, distributed)
+> **Remaining**: Historical only (no active JSON wire protocol paths remain).
 
 ## Executive Summary
 
@@ -41,7 +41,7 @@ This document outlines the migration plan for replacing manual JSON string compo
 | `src/server/query_executor.zig` | Query result serialization | Core query path |
 | `src/execution/crud_operations.zig` | Value-to-JSON conversion | Data persistence |
 | `src/cli/main.zig` | CLI response formatting | User interface |
-| `src/server/stdio_message_handler.zig` | STDIO protocol | MCP integration |
+| `src/server/stdio_message_handler.zig` | **Removed** (legacy stdio protocol) | MCP integration |
 
 ### High-Impact Files (Priority 2)
 
@@ -237,7 +237,7 @@ pub fn buildSchemaLine(allocator: std.mem.Allocator, cols: []const SchemaCol, ad
 
 1. `src/protocol.zig` - `buildSchemaLine`, `buildBindingsLine`, `buildExplainLine`, `buildProfileLine`, `buildErrorLine*`, `buildCdc*Line`
 2. `src/server/query_executor.zig` - `bindingValueRowToJson`
-3. `src/server/stdio_message_handler.zig` - Response formatting
+3. `src/server/stdio_message_handler.zig` - **Removed** (legacy stdio protocol)
 
 ### Phase 2: Execution Layer (Week 2-3) - COMPLETED
 
@@ -672,7 +672,7 @@ Add tracking markers for migration progress:
 - [x] `src/server/query_executor.zig` - **COMPLETED** (bindingValueRowToJson, writeJsonValue)
 - [ ] `src/execution/crud_operations.zig`
 - [ ] `src/cli/main.zig`
-- [x] `src/server/stdio_message_handler.zig` - **COMPLETED** (error response encoding)
+- [x] `src/server/stdio_message_handler.zig` - **REMOVED** (legacy stdio protocol)
 
 ### Priority 2 - High Impact (11 files) - Phase 4 Complete
 
@@ -814,7 +814,7 @@ try encoder.endObject();
    - Added `writeEscapedJsonString()` helper for proper escape sequences
    - Added `formatDecimalValue()` helper for precise decimal representation
 
-3. **`src/server/stdio_message_handler.zig`** - STDIO protocol
+3. **`src/server/stdio_message_handler.zig`** - **Removed** (legacy stdio protocol)
    - Error response encoding using `StdioErrorResponse` struct
    - Added `json_lib` import
 

@@ -3,9 +3,11 @@
 
 const std = @import("std");
 const testing = std.testing;
-const process = std.process;
+const util = @import("../proto_test_util.zig");
 
 const test_timeout = 30 * std.time.ns_per_s; // 30 seconds per test
+const default_user: []const u8 = "geode";
+const default_pass: []const u8 = "geode-test-password";
 
 pub fn runCommand(allocator: std.mem.Allocator, argv: []const []const u8) !std.ChildProcess.ExecResult {
     return try std.ChildProcess.exec(.{
@@ -15,7 +17,22 @@ pub fn runCommand(allocator: std.mem.Allocator, argv: []const []const u8) !std.C
     });
 }
 
-pub fn loadMigrations(allocator: std.mem.Allocator) !void {
+fn runQuery(allocator: std.mem.Allocator, addr: []const u8, query: []const u8) !std.ChildProcess.ExecResult {
+    return runCommand(allocator, &.{
+        "./zig-out/bin/geode",
+        "query",
+        "--server",
+        addr,
+        "--insecure",
+        "--user",
+        default_user,
+        "--password",
+        default_pass,
+        query,
+    });
+}
+
+pub fn loadMigrations(allocator: std.mem.Allocator, addr: []const u8) !void {
     const migrations = [_][]const u8{
         "migrations/001_social_network_schema.gql",
         "migrations/002_social_network_data.gql",
@@ -25,15 +42,19 @@ pub fn loadMigrations(allocator: std.mem.Allocator) !void {
 
     for (migrations) |migration| {
         std.debug.print("Loading migration: {s}\n", .{migration});
-
-        // Read migration file
-        const file = try std.fs.cwd().openFile(migration, .{});
-        defer file.close();
-        const content = try file.readToEndAlloc(allocator, 1024 * 1024);
-        defer allocator.free(content);
-
-        // Execute migration
-        const result = try runCommand(allocator, &.{ "./zig-out/bin/geode", "query", "--host", "127.0.0.1", "--port", "3141", content });
+        const result = try runCommand(allocator, &.{
+            "./zig-out/bin/geode",
+            "query",
+            "--server",
+            addr,
+            "--insecure",
+            "--user",
+            default_user,
+            "--password",
+            default_pass,
+            "--file",
+            migration,
+        });
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
@@ -46,20 +67,26 @@ pub fn loadMigrations(allocator: std.mem.Allocator) !void {
 
 test "dataset migration system loads successfully" {
     const allocator = testing.allocator;
+    const addr = "127.0.0.1:8580";
 
-    // Start server in background
-    var server = std.ChildProcess.init(&.{ "./zig-out/bin/geode", "query", "--data_dir", "./test_data", "--port", "3141" }, allocator);
-    try server.spawn();
-    defer _ = server.kill() catch {};
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var server = try util.spawnServer(
+        allocator,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
+        null,
+    );
+    defer server.deinit();
 
     // Wait for server to start
     std.time.sleep(2 * std.time.ns_per_s);
 
     // Load migrations
-    try loadMigrations(allocator);
+    try loadMigrations(allocator, addr);
 
     // Verify node count
-    const result = try runCommand(allocator, &.{ "./zig-out/bin/geode", "MATCH (n) RETURN count(n) AS count" });
+    const result = try runQuery(allocator, addr, "MATCH (n) RETURN count(n) AS count");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -69,9 +96,23 @@ test "dataset migration system loads successfully" {
 
 test "dataset has correct schema after migration" {
     const allocator = testing.allocator;
+    const addr = "127.0.0.1:8581";
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var server = try util.spawnServer(
+        allocator,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
+        null,
+    );
+    defer server.deinit();
+
+    std.time.sleep(2 * std.time.ns_per_s);
+    try loadMigrations(allocator, addr);
 
     // Check User label exists with properties
-    const result = try runCommand(allocator, &.{ "./zig-out/bin/geode", "query", "MATCH (u:User) RETURN u LIMIT 1" });
+    const result = try runQuery(allocator, addr, "MATCH (u:User) RETURN u LIMIT 1");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -83,6 +124,20 @@ test "dataset has correct schema after migration" {
 
 test "network types work correctly" {
     const allocator = testing.allocator;
+    const addr = "127.0.0.1:8582";
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var server = try util.spawnServer(
+        allocator,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
+        null,
+    );
+    defer server.deinit();
+
+    std.time.sleep(2 * std.time.ns_per_s);
+    try loadMigrations(allocator, addr);
 
     // Test IP address operations
     const queries = [_]struct {
@@ -104,7 +159,7 @@ test "network types work correctly" {
     };
 
     for (queries) |q| {
-        const result = try runCommand(allocator, &.{ "./zig-out/bin/geode", q.query });
+        const result = try runQuery(allocator, addr, q.query);
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
@@ -115,13 +170,28 @@ test "network types work correctly" {
 
 test "geographic types and queries work" {
     const allocator = testing.allocator;
+    const addr = "127.0.0.1:8583";
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var server = try util.spawnServer(
+        allocator,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
+        null,
+    );
+    defer server.deinit();
+
+    std.time.sleep(2 * std.time.ns_per_s);
+    try loadMigrations(allocator, addr);
 
     // Test distance calculation
-    const result = try runCommand(allocator, &.{
-        "./zig-out/bin/geode",
+    const result = try runQuery(
+        allocator,
+        addr,
         "MATCH (l1:Location {name: 'San Francisco'}), (l2:Location {name: 'New York'}) " ++
             "RETURN distance_haversine(l1.coordinates, l2.coordinates) AS distance",
-    });
+    );
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -132,12 +202,28 @@ test "geographic types and queries work" {
 
 test "vector similarity search works" {
     const allocator = testing.allocator;
+    const addr = "127.0.0.1:8584";
 
-    const result = try runCommand(allocator, &.{
-        "./zig-out/bin/geode", "query", "MATCH (p1:Post {id: 'post-1'}), (p2:Post) " ++
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var server = try util.spawnServer(
+        allocator,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
+        null,
+    );
+    defer server.deinit();
+
+    std.time.sleep(2 * std.time.ns_per_s);
+    try loadMigrations(allocator, addr);
+
+    const result = try runQuery(
+        allocator,
+        addr,
+        "MATCH (p1:Post {id: 'post-1'}), (p2:Post) " ++
             "WHERE p1 <> p2 AND vector_cosine_similarity(p1.content_vector, p2.content_vector) > 0.5 " ++
             "RETURN count(p2) AS similar_count",
-    });
+    );
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -147,6 +233,20 @@ test "vector similarity search works" {
 
 test "relationships are correctly established" {
     const allocator = testing.allocator;
+    const addr = "127.0.0.1:8585";
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var server = try util.spawnServer(
+        allocator,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
+        null,
+    );
+    defer server.deinit();
+
+    std.time.sleep(2 * std.time.ns_per_s);
+    try loadMigrations(allocator, addr);
 
     // Test various relationship patterns
     const queries = [_][]const u8{
@@ -158,7 +258,7 @@ test "relationships are correctly established" {
     };
 
     for (queries) |query| {
-        const result = try runCommand(allocator, &.{ "./zig-out/bin/geode", query });
+        const result = try runQuery(allocator, addr, query);
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
@@ -174,12 +274,23 @@ test "relationships are correctly established" {
 
 test "materialized views are created and populated" {
     const allocator = testing.allocator;
+    const addr = "127.0.0.1:8586";
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var server = try util.spawnServer(
+        allocator,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
+        null,
+    );
+    defer server.deinit();
+
+    std.time.sleep(2 * std.time.ns_per_s);
+    try loadMigrations(allocator, addr);
 
     // Query the trending_posts materialized view
-    const result = try runCommand(allocator, &.{
-        "./zig-out/bin/geode",
-        "SELECT * FROM trending_posts LIMIT 5",
-    });
+    const result = try runQuery(allocator, addr, "SELECT * FROM trending_posts LIMIT 5");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -189,12 +300,27 @@ test "materialized views are created and populated" {
 
 test "constraints are enforced" {
     const allocator = testing.allocator;
+    const addr = "127.0.0.1:8587";
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var server = try util.spawnServer(
+        allocator,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
+        null,
+    );
+    defer server.deinit();
+
+    std.time.sleep(2 * std.time.ns_per_s);
+    try loadMigrations(allocator, addr);
 
     // Try to violate unique constraint on User email
-    const result = try runCommand(allocator, &.{
-        "./zig-out/bin/geode",
+    const result = try runQuery(
+        allocator,
+        addr,
         "CREATE (:User {id: 'test-dup', email: 'alice.johnson@example.com', username: 'test'})",
-    });
+    );
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 

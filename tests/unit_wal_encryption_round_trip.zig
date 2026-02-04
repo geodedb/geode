@@ -1,6 +1,7 @@
 const std = @import("std");
-const graph_store = @import("geode").graph_store;
-const tde_file = @import("storage/tde_file_encryption.zig");
+const geode = @import("geode");
+const graph_store = geode.graph_store;
+const tde_file = geode.tde_file_encryption;
 
 // Basic snapshot encryption round-trip test. Ensures ciphertext differs from plaintext and load yields original data.
 // CANARY: REQ=REQ-GQL-TDE-002; FEATURE="Snapshot encryption"; ASPECT=TEST; STATUS=TESTED; OWNER=security; UPDATED=2026-02-04

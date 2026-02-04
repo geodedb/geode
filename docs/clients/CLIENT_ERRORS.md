@@ -1,6 +1,6 @@
 ## Client error tracking
 
-- Updated Rust QUIC client to mirror the Python/Go protocol (newline-delimited HELLO/RUN_GQL/PULL on a persistent stream), added hostname resolution, and hardened timeouts/retries. Basic spec now passes fully via `python3 clients/test-harness/run_tests.py --clients rust --spec specs/basic.yaml`.
+- Updated Rust QUIC client to mirror the Python/Go protocol (length-prefixed protobuf HELLO/EXECUTE/PULL on a persistent stream), added hostname resolution, and hardened timeouts/retries. Basic spec now passes fully via `python3 clients/test-harness/run_tests.py --clients rust --spec specs/basic.yaml`.
 - Harness fix: per-test YAMLs now include spec-level setup/cleanup for all runners. This removed cross-test contamination and fixed the `transaction-with-parameters` failures across Python/Go/Rust (verified with `python3 clients/test-harness/run_tests.py --clients python,go,rust --spec specs/transactions.yaml`).
 - Zig client is now passing natively with the vendor/quic transport (no delegation). `clients/test-harness/runners/zig_runner_new.zig` uses the Zig client directly and all suites pass via `make clean && make test-comprehensive`.
 - Root Makefile now runs the client test harness comprehensive suite as part of both `make all` and `make geodetestlab` to keep client parity in the default workflows.

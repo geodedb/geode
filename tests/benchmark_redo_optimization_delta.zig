@@ -189,5 +189,5 @@ fn emitJsonV3(m: anytype) void {
     std.debug.print(",\"p95_ratio_threshold\":{d}", .{m.p95_ratio_threshold});
     std.debug.print(",\"min_speedup_threshold\":{d}", .{m.min_speedup_threshold});
     std.debug.print(",\"pass\":{s}", .{if (m.pass) "true" else "false"});
-    std.debug.print("}\n", .{});
+    std.debug.print("}}\n", .{});
 }

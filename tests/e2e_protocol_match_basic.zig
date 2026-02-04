@@ -11,6 +11,6 @@ test "TestCANARY_REQ_GQL_017_E2EMatchBasic" {
     var parsed = try geode.parseGql(query, allocator);
     defer parsed.deinit();
     // We rely on existing higher-level protocol tests for full frame emission; here ensure execute path doesn't error.
-    // A true protocol round-trip would start geoded; omitted for brevity in unit E2E hybrid.
+    // Full protocol round-trip runs via geode serve + QUIC/gRPC in dedicated tests.
     try std.testing.expect(parsed.program.statements.len > 0);
 }

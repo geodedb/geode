@@ -1,52 +1,65 @@
 const std = @import("std");
-const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
+const testing = std.testing;
+const util = @import("proto_test_util.zig");
+const schema = @import("schema");
 
-fn run_with_env(args: []const []const u8, envs: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
-    const allocator = std.testing.allocator;
-    var argv = std.ArrayList([]const u8).init(allocator);
-    defer argv.deinit(allocator);
-    try argv.append(allocator, args[0]);
-    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
-        try argv.append(allocator, "query");
+fn expectInt(val: util.TestValue, expected: i64) !void {
+    switch (val) {
+        .int => |v| try testing.expectEqual(expected, v),
+        else => return error.UnexpectedValueType,
     }
-    try argv.appendSlice(allocator, args[1..]);
-    var child = Child.init(argv.items, allocator);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    child.env_map = std.process.getEnvMap(allocator) catch null;
-    if (child.env_map) |*m| {
-        var i: usize = 0;
-        while (i < envs.len) : (i += 2) {
-            _ = m.put(envs[i], envs[i + 1]) catch {};
-        }
-    }
-    try child.spawn();
-    const out = try child.stdout.?.readToEndAlloc(allocator, 1 << 20);
-    const err = try child.stderr.?.readToEndAlloc(allocator, 1 << 20);
-    const term = try child.wait();
-    const code: i32 = switch (term) {
-        .Exited => |st| st,
-        else => 2,
+}
+
+fn execOk(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query: []const u8) !void {
+    var params = std.ArrayList(schema.Param).init(allocator);
+    defer params.deinit(allocator);
+    var res = try client.executeAndCollect(allocator, query, params, 1000);
+    defer res.deinit(allocator);
+    try testing.expectEqualStrings("00000", res.status_class);
+}
+
+fn seedTiny(client: *util.QuicProtoClient, allocator: std.mem.Allocator) !void {
+    const seed = [_][]const u8{
+        "CREATE (:Node {id: 0})",
+        "CREATE (:Node {id: 1})",
+        "CREATE (:Node {id: 2})",
+        "MATCH (a:Node {id: 0}), (b:Node {id: 1}) CREATE (a)-[:LINK]->(b)",
+        "MATCH (a:Node {id: 0}), (b:Node {id: 2}) CREATE (a)-[:LINK]->(b)",
     };
-    return .{ .code = code, .out = out, .err = err };
+    for (seed) |q| try execOk(client, allocator, q);
 }
 
-fn contains(hay: []const u8, needle: []const u8) bool {
-    return std.mem.indexOf(u8, hay, needle) != null;
-}
+test "storage: 1-hop expansion (GraphStore)" {
+    const allocator = testing.allocator;
+    const addr = "127.0.0.1:8575";
 
-test "storage: EXPAND_FROM smoke under storage engine" {
-    const exe = "./zig-out/bin/geode";
-    const res = try run_with_env(&.{ exe, "RETURN EXPAND_FROM(0) AS n ORDER BY n" }, &.{ "GEODE_ENGINE", "storage", "GEODE_TEST_GRAPH", "tiny" });
-    defer std.testing.allocator.free(res.out);
-    defer std.testing.allocator.free(res.err);
-    try std.testing.expectEqual(@as(i32, 0), res.code);
-    try std.testing.expect(contains(res.out, "\"columns\""));
-    try std.testing.expect(contains(res.out, "\"rows\""));
-    try std.testing.expect(contains(res.out, "\"status_class\""));
-    try std.testing.expect(contains(res.out, "\"ordered\":true"));
-    try std.testing.expect(contains(res.out, "\"order_keys\":[\"n\"]"));
-    try std.testing.expect(contains(res.out, "{\"n\":1}"));
-    try std.testing.expect(contains(res.out, "{\"n\":2}"));
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var server = try util.spawnServer(
+        allocator,
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
+        null,
+    );
+    defer server.deinit();
+
+    var client = try util.QuicProtoClient.connect(allocator, addr);
+    defer client.deinit();
+
+    var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
+    defer hello.deinit(allocator);
+
+    try seedTiny(&client, allocator);
+
+    var params = std.ArrayList(schema.Param).init(allocator);
+    defer params.deinit(allocator);
+    var res = try client.executeAndCollect(allocator, "MATCH (a:Node {id: 0})-[:LINK]->(b) RETURN b.id AS n ORDER BY n", params, 1000);
+    defer res.deinit(allocator);
+
+    try testing.expect(res.ordered);
+    try testing.expectEqual(@as(usize, 1), res.order_keys.len);
+    try testing.expectEqualStrings("n", res.order_keys[0]);
+    try testing.expectEqual(@as(usize, 2), res.rows.len);
+    try expectInt(res.rows[0][0], 1);
+    try expectInt(res.rows[1][0], 2);
 }

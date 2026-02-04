@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
 **Key Features**:
 
 - Bidirectional stream management
-- Line-delimited JSON protocol support
+- Length-prefixed protobuf protocol support
 - Full Geode protocol: HELLO, RUN_GQL, PULL, BEGIN, COMMIT, ROLLBACK
 - Graceful error handling
 - Type-safe value decoding

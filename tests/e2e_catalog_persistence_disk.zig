@@ -1,5 +1,6 @@
 const std = @import("std");
-const catalog = @import("../src/schema/catalog.zig");
+const geode = @import("geode");
+const catalog = geode.catalog;
 
 // E2E: persistent catalog on disk without server; verifies Catalog persistence
 test "catalog persists to disk via Catalog.init" {
