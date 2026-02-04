@@ -60,8 +60,6 @@ fn extract_rows(allocator: std.mem.Allocator, out: []const u8) ![]u8 {
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity ORDER/LIMIT/OFFSET Rows"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_OrderPaginationRows; OWNER=engine; UPDATED=2025-09-24
 test "protocol: transport parity QUIC (ORDER BY with LIMIT/OFFSET)" {
-    // Gate to avoid flaky vendor QUIC teardown in default runs
-    if (std.posix.getenv("GEODE_CI_QUIC_SMOKE") == null) return error.SkipZigTest;
 
     const exe = "./zig-out/bin/geode";
     // Construct 3 rows then slice middle two deterministically.

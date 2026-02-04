@@ -3,15 +3,24 @@ const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 test "HELLO returns capabilities and PING returns ok" {
-    const allocator = testing.allocator;
-    const addr = "127.0.0.1:17685";
+    util.testStart("HELLO returns capabilities and PING returns ok");
+    errdefer util.testFail();
 
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, null);
+    const allocator = testing.allocator;
+
+    // Use random port to avoid conflicts
+    var server = util.spawnServerRandom(allocator, util.TestEnv.standard()) catch |err| {
+        util.progress("Server spawn failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
     defer server.deinit();
 
-    var client = try util.QuicProtoClient.connect(allocator, addr);
+    util.progress("Connecting to {s}...", .{server.getAddr()});
+    var client = try util.QuicProtoClient.connect(allocator, server.getAddr());
     defer client.deinit();
 
+    util.progress("Sending HELLO...", .{});
     var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
     defer hello.deinit(allocator);
     try testing.expect(hello.success);
@@ -26,5 +35,8 @@ test "HELLO returns capabilities and PING returns ok" {
     }
     try testing.expect(saw_proto);
 
+    util.progress("Sending PING...", .{});
     try testing.expect(try client.ping(allocator));
+
+    util.testPass();
 }

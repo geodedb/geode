@@ -60,8 +60,6 @@ fn extract_rows(allocator: std.mem.Allocator, out: []const u8) ![]u8 {
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity SetOp DISTINCT"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_SetOpDistinct; OWNER=engine; UPDATED=2025-09-24
 test "protocol: transport parity QUIC (UNION DISTINCT rows equal)" {
-    // Gate to avoid flaky vendor QUIC teardown in default runs
-    if (std.posix.getenv("GEODE_CI_QUIC_SMOKE") == null) return error.SkipZigTest;
 
     const exe = "./zig-out/bin/geode";
     const q = "RETURN 1 AS x UNION RETURN 1 AS x";

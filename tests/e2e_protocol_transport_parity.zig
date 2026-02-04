@@ -5,8 +5,6 @@ const parity = @import("transport_parity_util.zig");
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Ordered Rows"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_QUICvsGRPC; OWNER=engine; UPDATED=2025-09-24
 test "protocol: transport parity QUIC vs gRPC (ordered rows equal)" {
-    // Gate to avoid flaky vendor QUIC teardown in default runs
-    if (std.posix.getenv("GEODE_CI_QUIC_SMOKE") == null) return error.SkipZigTest;
 
     const allocator = testing.allocator;
     const q = "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name AS a, b.name AS b ORDER BY a, b LIMIT 10";

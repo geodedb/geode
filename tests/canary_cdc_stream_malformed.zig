@@ -4,7 +4,7 @@ const cdc_mod = @import("../src/streaming/cdc_enhanced.zig");
 // TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformed
 // Ensures malformed change records (missing braces) are ignored.
 
-test "TestCANARY_REQ_GQL_042_CDC_WalTailMalformed" {
+test "TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformed" {
     const allocator = std.testing.allocator;
     var engine = try cdc_mod.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 8 });
     defer engine.deinit();

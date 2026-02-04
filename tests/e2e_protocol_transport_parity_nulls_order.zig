@@ -60,7 +60,6 @@ fn extract_rows(allocator: std.mem.Allocator, out: []const u8) ![]u8 {
 
 // CANARY: REQ=REQ-GQL-024; FEATURE="Nulls-Last Ordering Parity"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_TransportParity_NullsLastOrder; OWNER=engine; UPDATED=2025-09-24
 test "protocol: transport parity nulls-last ordering QUIC (gated)" {
-    if (std.posix.getenv("GEODE_CI_QUIC_SMOKE") == null) return error.SkipZigTest;
 
     const exe = "./zig-out/bin/geode";
     const q = "RETURN null AS a, 1 AS b UNION RETURN 1 AS a, 1 AS b ORDER BY a, b LIMIT 2";

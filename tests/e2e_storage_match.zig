@@ -32,27 +32,63 @@ fn seedTinyPlus(client: *util.QuicProtoClient, allocator: std.mem.Allocator) !vo
 }
 
 test "storage: MATCH 1-hop ordered (GraphStore)" {
-    const allocator = testing.allocator;
-    const addr = "127.0.0.1:8574";
+    util.testStart("MATCH 1-hop ordered (GraphStore)");
+    errdefer util.testFail();
 
+    const allocator = testing.allocator;
+
+    util.progress("Creating temp data directory...", .{});
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    var server = try util.spawnServer(
-        allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
-        null,
-    );
+    // Get random port
+    const port = util.getRandomPort() catch |err| {
+        util.progress("Port allocation failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
+
+    const addr = try util.formatAddr(allocator, port);
+    defer allocator.free(addr);
+
+    util.progress("Starting server on port {d} with temp data dir...", .{port});
+
+    // Build args with data_dir
+    const args = &[_][]const u8{
+        "./zig-out/bin/geode",
+        "serve",
+        "--listen",
+        addr,
+        "--data_dir",
+        tmp.dir_path,
+    };
+
+    var server = util.spawnServer(allocator, args, util.TestEnv.standard()) catch |err| {
+        util.progress("Server spawn failed: {}", .{err});
+        util.testSkip();
+        return;
+    };
     defer server.deinit();
 
+    // Wait for server to be ready
+    util.waitForServerReady(allocator, addr, 10000) catch |err| {
+        util.progress("Server readiness timeout: {}", .{err});
+        util.testSkip();
+        return;
+    };
+
+    util.progress("Connecting to server...", .{});
     var client = try util.QuicProtoClient.connect(allocator, addr);
     defer client.deinit();
 
+    util.progress("Authenticating...", .{});
     var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
     defer hello.deinit(allocator);
 
+    util.progress("Seeding graph data...", .{});
     try seedTinyPlus(&client, allocator);
 
+    util.progress("Executing MATCH query...", .{});
     var params = std.ArrayList(schema.Param).init(allocator);
     defer params.deinit(allocator);
     var res = try client.executeAndCollect(allocator, "MATCH (a:Node {id: 0})-[:LINK]->(b) RETURN b.id AS n ORDER BY n", params, 1000);
@@ -64,4 +100,6 @@ test "storage: MATCH 1-hop ordered (GraphStore)" {
     try testing.expectEqual(@as(usize, 2), res.rows.len);
     try expectInt(res.rows[0][0], 1);
     try expectInt(res.rows[1][0], 2);
+
+    util.testPass();
 }

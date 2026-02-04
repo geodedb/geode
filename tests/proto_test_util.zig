@@ -1,14 +1,112 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
 const quic = @import("transport/quic");
 const grpc_client = @import("grpc_client");
 const profile_payload = @import("geode").profile_payload;
+const posix = std.posix;
+
+// ============================================================================
+// Progress Indicators
+// ============================================================================
+
+/// Print test start message with flush
+pub fn testStart(comptime name: []const u8) void {
+    std.debug.print("[TEST] {s}...", .{name});
+}
+
+/// Print test success with checkmark
+pub fn testPass() void {
+    std.debug.print(" ✓\n", .{});
+}
+
+/// Print test failure with X
+pub fn testFail() void {
+    std.debug.print(" ✗\n", .{});
+}
+
+/// Print test skip with dash
+pub fn testSkip() void {
+    std.debug.print(" -\n", .{});
+}
+
+/// Print test warning
+pub fn testWarn() void {
+    std.debug.print(" ⚠\n", .{});
+}
+
+/// Print progress message during test
+pub fn progress(comptime fmt: []const u8, args: anytype) void {
+    std.debug.print("  " ++ fmt ++ "\n", args);
+}
+
+// ============================================================================
+// Port Randomization
+// ============================================================================
+
+/// Get a random available port by binding to port 0 and reading the assigned port.
+/// This uses UDP to avoid leaving a connection in TIME_WAIT state.
+pub fn getRandomPort() !u16 {
+    const sock = try posix.socket(posix.AF.INET, posix.SOCK.DGRAM, 0);
+    defer posix.close(sock);
+
+    var addr = posix.sockaddr.in{
+        .family = posix.AF.INET,
+        .port = 0, // Let OS assign a port
+        .addr = 0, // INADDR_ANY
+    };
+
+    try posix.bind(sock, @ptrCast(&addr), @sizeOf(posix.sockaddr.in));
+
+    var bound_addr: posix.sockaddr.in = undefined;
+    var addr_len: posix.socklen_t = @sizeOf(posix.sockaddr.in);
+    try posix.getsockname(sock, @ptrCast(&bound_addr), &addr_len);
+
+    // Port is in network byte order, convert to host
+    return std.mem.bigToNative(u16, bound_addr.port);
+}
+
+/// Format an address string with the given port
+pub fn formatAddr(allocator: std.mem.Allocator, port: u16) ![]u8 {
+    return std.fmt.allocPrint(allocator, "127.0.0.1:{d}", .{port});
+}
+
+// ============================================================================
+// Test Environment Configuration
+// ============================================================================
+
+/// Standard test environment variables
+pub const TestEnv = struct {
+    /// Allow running without authentication (for testing)
+    pub const GEODE_ALLOW_NO_AUTH = "GEODE_ALLOW_NO_AUTH=1";
+    /// Disable audit logging (for faster tests)
+    pub const GEODE_DISABLE_AUDIT = "GEODE_DISABLE_AUDIT=1";
+    /// Enable test mode
+    pub const GEODE_TEST_MODE = "GEODE_TEST_MODE=1";
+    /// Disable TLS verification for tests
+    pub const GEODE_INSECURE = "GEODE_INSECURE=1";
+
+    /// Get standard test environment variables
+    pub fn standard() []const []const u8 {
+        return &.{
+            GEODE_ALLOW_NO_AUTH,
+            GEODE_DISABLE_AUDIT,
+            GEODE_TEST_MODE,
+        };
+    }
+};
+
+// ============================================================================
+// Server Handle
+// ============================================================================
 
 pub const ServerHandle = struct {
     allocator: std.mem.Allocator,
     child: std.process.Child,
     env_map: ?std.process.EnvMap = null,
+    port: u16 = 0,
+    addr: []const u8 = "",
 
     pub fn deinit(self: *ServerHandle) void {
         _ = self.child.kill() catch {};
@@ -16,8 +114,75 @@ pub const ServerHandle = struct {
         if (self.env_map) |*env| {
             env.deinit();
         }
+        if (self.addr.len > 0) {
+            self.allocator.free(self.addr);
+        }
+    }
+
+    /// Get the server address for connecting
+    pub fn getAddr(self: *const ServerHandle) []const u8 {
+        return self.addr;
+    }
+
+    /// Get the server port
+    pub fn getPort(self: *const ServerHandle) u16 {
+        return self.port;
     }
 };
+
+/// Wait for server to be ready by attempting to connect
+pub fn waitForServerReady(allocator: std.mem.Allocator, addr: []const u8, timeout_ms: u64) !void {
+    const start = std.time.milliTimestamp();
+    const deadline = start + @as(i64, @intCast(timeout_ms));
+
+    while (std.time.milliTimestamp() < deadline) {
+        // Try to connect
+        var client = QuicProtoClient.connect(allocator, addr) catch {
+            // Connection failed, wait a bit and retry
+            std.time.sleep(100 * std.time.ns_per_ms);
+            continue;
+        };
+        client.deinit();
+        return; // Successfully connected
+    }
+
+    return error.ServerStartupTimeout;
+}
+
+/// Spawn a server with a random port and wait for it to be ready
+pub fn spawnServerRandom(
+    allocator: std.mem.Allocator,
+    env: ?[]const []const u8,
+) !ServerHandle {
+    const port = try getRandomPort();
+    const addr = try formatAddr(allocator, port);
+    errdefer allocator.free(addr);
+
+    progress("Starting server on port {d}...", .{port});
+
+    var handle = try spawnServerWithAddr(allocator, addr, env);
+    handle.port = port;
+    handle.addr = addr;
+
+    // Wait for server to be ready
+    waitForServerReady(allocator, addr, 10000) catch |err| {
+        handle.deinit();
+        return err;
+    };
+
+    progress("Server ready on {s}", .{addr});
+    return handle;
+}
+
+/// Spawn a server with a specific address
+pub fn spawnServerWithAddr(
+    allocator: std.mem.Allocator,
+    addr: []const u8,
+    env: ?[]const []const u8,
+) !ServerHandle {
+    const args = &[_][]const u8{ "./zig-out/bin/geode", "serve", "--listen", addr };
+    return spawnServer(allocator, args, env);
+}
 
 pub const DefaultAuth = struct {
     pub const username: []const u8 = "geode";

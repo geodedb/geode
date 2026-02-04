@@ -54,7 +54,7 @@ pub fn TestCANARY_REQ_GQL_081_PrometheusEndpoint() !void {
     var fba = std.io.fixedBufferStream(&buf);
     try g.exportPrometheus(fba.writer());
     const out = fba.getWritten();
-    // Required lines (subset): bucket, count, active txns, wal bytes, hits/misses
+    // Required lines (subset): bucket, count, active txns, snapshot bytes, hits/misses
     if (std.mem.indexOf(u8, out, "geode_query_latency_ms_bucket") == null) return error.TestExpectedFound;
     if (std.mem.indexOf(u8, out, "geode_query_latency_ms_count") == null) return error.TestExpectedFound;
     if (std.mem.indexOf(u8, out, "geode_active_transactions 5") == null) return error.TestExpectedFound;
@@ -86,7 +86,7 @@ pub fn TestCANARY_REQ_GQL_082_RestoreDriver() !void {
     try std.testing.expect(true);
 }
 
-// WalCompaction stubs
+// Snapshot compaction stubs
 pub fn TestCANARY_REQ_GQL_083_CheckpointSelection() !void {
     try std.testing.expect(true);
 }

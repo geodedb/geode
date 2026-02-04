@@ -25,9 +25,7 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     return .{ .code = code, .out = out, .err = err };
 }
 
-// Env-gated: only runs when GEODE_CI_QUIC_SMOKE=1 is set to avoid flaky vendor teardown.
 test "quic: EXPLAIN schema then explain (smoke)" {
-    if (std.posix.getenv("GEODE_CI_QUIC_SMOKE") == null) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
     const geode = "./zig-out/bin/geode";
@@ -56,14 +54,6 @@ test "quic: EXPLAIN schema then explain (smoke)" {
     _ = srv.kill() catch {};
     _ = srv.wait() catch {};
 
-    // Smoke policy: require EXPLAIN only when explicitly requested; otherwise accept SCHEMA as success.
-    const require_explain = std.posix.getenv("GEODE_CI_QUIC_REQUIRE_EXPLAIN") != null;
-    const has_explain = std.mem.indexOf(u8, res.out, "\"result\":{\"type\":\"EXPLAIN\"") != null;
-    if (require_explain) {
-        try std.testing.expect(has_explain);
-    } else {
-        // Non-strict smoke: do not assert further; reaching here means QUIC server/client codepaths exercised.
-        // Intentionally no checks to avoid environment-specific flakiness.
-        return;
-    }
+    try std.testing.expectEqual(@as(i32, 0), res.code);
+    try std.testing.expect(std.mem.indexOf(u8, res.out, "\"explain\"") != null);
 }

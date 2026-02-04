@@ -1,9 +1,9 @@
 const std = @import("std");
 const cdc = @import("../src/streaming/cdc_enhanced.zig");
 
-// TestCANARY_REQ_GQL_042_CDC_WalIngest
+// TestCANARY_REQ_GQL_042_CDC_ChangeStreamIngest
 
-test "TestCANARY_REQ_GQL_042_CDC_WalIngest" {
+test "TestCANARY_REQ_GQL_042_CDC_ChangeStreamIngest" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();

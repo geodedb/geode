@@ -60,8 +60,6 @@ fn extract_rows(allocator: std.mem.Allocator, out: []const u8) ![]u8 {
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Projection Rows"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_ProjectionRows; OWNER=engine; UPDATED=2025-09-24
 test "protocol: transport parity QUIC (projection rows, ORDER)" {
-    // Gate to avoid flaky vendor QUIC teardown in default runs
-    if (std.posix.getenv("GEODE_CI_QUIC_SMOKE") == null) return error.SkipZigTest;
 
     const exe = "./zig-out/bin/geode";
     // Two-row, two-column deterministic projection; explicit ORDER for stable pagination semantics even if not slicing here.

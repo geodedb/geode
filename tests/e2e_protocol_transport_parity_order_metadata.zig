@@ -5,7 +5,6 @@ const parity = @import("transport_parity_util.zig");
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Order Metadata"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_OrderMetadata; OWNER=engine; UPDATED=2025-09-24
 test "protocol: transport parity order metadata (ordered + order_keys)" {
-    if (std.posix.getenv("GEODE_CI_QUIC_SMOKE") == null) return error.SkipZigTest;
 
     const allocator = testing.allocator;
     const q = "RETURN 2 AS a, 1 AS b UNION RETURN 1 AS a, 2 AS b ORDER BY a, b LIMIT 2";

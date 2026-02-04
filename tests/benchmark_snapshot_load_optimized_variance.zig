@@ -42,7 +42,7 @@ fn Stats(comptime N: usize) type {
     };
 }
 
-test "BenchmarkCANARY_REQ_GQL_028_RedoOptimizedVarianceEnvelope" {
+test "BenchmarkCANARY_REQ_GQL_028_SnapshotLoadOptimizedVarianceEnvelope" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     graph_store.setDataDirOverride(std.testing.allocator, tmp.dir_path);

@@ -39,9 +39,7 @@ fn extract_rows(allocator: std.mem.Allocator, out: []const u8) ![]u8 {
 
 // CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity VarLen Dataset Rows"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows; OWNER=engine; UPDATED=2025-09-24
 // Uses curated dataset under data/varlen_determinism to stress equal-length path tiebreaks; compares full rows across transports.
-// Gated by GEODE_CI_QUIC_SMOKE.
 test "protocol: transport parity varlen dataset rows QUIC (gated)" {
-    if (std.posix.getenv("GEODE_CI_QUIC_SMOKE") == null) return error.SkipZigTest;
 
     const exe = "./zig-out/bin/geode";
     const data_dir = "./data/varlen_determinism";

@@ -54,7 +54,6 @@ fn contains(hay: []const u8, needle: []const u8) bool {
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Diagnostics US001"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_US001; OWNER=engine; UPDATED=2025-09-24
 test "protocol: transport parity diagnostics (US001) QUIC (gated)" {
-    if (std.posix.getenv("GEODE_CI_QUIC_SMOKE") == null) return error.SkipZigTest;
 
     const exe = "./zig-out/bin/geode";
     const q = "RETURN 1 LIMIT 10 OFFSET 5";

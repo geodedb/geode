@@ -4,24 +4,20 @@
 
 const std = @import("std");
 const testing = std.testing;
+const tde_file = @import("../storage/tde_file_encryption.zig");
 
 // ============================================================================
 // TDE ENFORCEMENT UNIT TESTS
 // CANARY: REQ=REQ-TDE-ENFORCE-002; FEATURE="TDEEnforcement"; ASPECT=CoreTests; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 // ============================================================================
 
-// Test: Page encryption header structure
-test "TestTDE_PageEncryption_HeaderStructure" {
-    // AES-256-GCM page encryption produces: nonce(12) + tag(16) + ciphertext
-    const nonce_size = 12;
-    const tag_size = 16;
-    const overhead = nonce_size + tag_size;
-
-    // Verify overhead constant is correct
-    try testing.expectEqual(@as(usize, 28), overhead);
-
-    // Any encrypted page should have at minimum this overhead
-    // Plaintext page of size N becomes encrypted page of size N + 28
+// Test: File-level encryption header structure
+test "TestTDE_FileEncryption_HeaderStructure" {
+    // AES-256-GCM file encryption: MAGIC + nonce(12) + tag(16) + ciphertext
+    try testing.expectEqual(@as(usize, 12), tde_file.NONCE_BYTES);
+    try testing.expectEqual(@as(usize, 16), tde_file.TAG_BYTES);
+    try testing.expectEqual(@as(usize, 28), tde_file.OVERHEAD);
+    try testing.expectEqual(@as(usize, 8), tde_file.MAGIC.len);
 }
 
 // Test: TDE key format validation
@@ -86,67 +82,79 @@ test "TestTDE_KeyFormat_RejectNonHexChars" {
 }
 
 // ============================================================================
-// WAL ENCRYPTION TESTS
-// CANARY: REQ=REQ-TDE-ENFORCE-003; FEATURE="TDEEnforcement"; ASPECT=WALEncryption; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+// SNAPSHOT ENCRYPTION TESTS (GraphStore)
+// CANARY: REQ=REQ-TDE-ENFORCE-003; FEATURE="TDEEnforcement"; ASPECT=SnapshotEncryption; STATUS=TESTED; OWNER=security; UPDATED=2026-02-04
 // ============================================================================
 
-// Test: WAL nonce derivation from LSN
-test "TestTDE_WAL_NonceDerivation" {
-    // WAL nonce = 8 bytes LSN (little-endian) + 4 bytes hash
-    // This ensures each WAL record has a unique nonce
-    const lsn1: u64 = 1;
-    const lsn2: u64 = 2;
+// Test: Snapshot nonce derivation is deterministic and content-sensitive.
+test "TestTDE_Snapshot_NonceDerivation" {
+    const key: [tde_file.KEY_BYTES]u8 = [_]u8{0x11} ** tde_file.KEY_BYTES;
+    const allocator = testing.allocator;
 
-    // Different LSNs should produce different nonce prefixes
-    var nonce1: [8]u8 = undefined;
-    var nonce2: [8]u8 = undefined;
+    const payload_a = "snapshot-a";
+    const payload_b = "snapshot-b";
 
-    std.mem.writeInt(u64, &nonce1, lsn1, .little);
-    std.mem.writeInt(u64, &nonce2, lsn2, .little);
+    const enc_a = try tde_file.encryptWithKey(allocator, payload_a, key);
+    defer allocator.free(enc_a);
+    const enc_b = try tde_file.encryptWithKey(allocator, payload_b, key);
+    defer allocator.free(enc_b);
+    const enc_a2 = try tde_file.encryptWithKey(allocator, payload_a, key);
+    defer allocator.free(enc_a2);
 
-    try testing.expect(!std.mem.eql(u8, &nonce1, &nonce2));
+    const nonce_a = enc_a[tde_file.MAGIC.len .. tde_file.MAGIC.len + tde_file.NONCE_BYTES];
+    const nonce_b = enc_b[tde_file.MAGIC.len .. tde_file.MAGIC.len + tde_file.NONCE_BYTES];
+    const nonce_a2 = enc_a2[tde_file.MAGIC.len .. tde_file.MAGIC.len + tde_file.NONCE_BYTES];
+
+    try testing.expect(!std.mem.eql(u8, nonce_a, nonce_b));
+    try testing.expect(std.mem.eql(u8, nonce_a, nonce_a2));
 }
 
-// Test: WAL record structure with encryption
-test "TestTDE_WAL_RecordStructure" {
-    // Encrypted WAL record format:
-    // Header: type(1) + txn_id(8) + payload_len(4) + lsn(8) + prev_lsn(8) + checksum(4) = 33 bytes
-    // Payload: nonce(12) + tag(16) + ciphertext(variable)
-    // Sentinel: 4 bytes (0xEC0DDBAD)
-    const header_len = 1 + 8 + 4 + 8 + 8 + 4;
-    try testing.expectEqual(@as(usize, 33), header_len);
+// Test: Snapshot record structure with encryption.
+test "TestTDE_Snapshot_RecordStructure" {
+    const key: [tde_file.KEY_BYTES]u8 = [_]u8{0x22} ** tde_file.KEY_BYTES;
+    const allocator = testing.allocator;
+    const payload = "graphstore-snapshot";
 
-    const sentinel: u32 = 0xEC0DDBAD;
-    try testing.expectEqual(@as(u32, 0xEC0DDBAD), sentinel);
+    const enc = try tde_file.encryptWithKey(allocator, payload, key);
+    defer allocator.free(enc);
+
+    try testing.expect(tde_file.isEncrypted(enc));
+    try testing.expectEqual(payload.len + tde_file.MAGIC.len + tde_file.OVERHEAD, enc.len);
 }
 
 // ============================================================================
-// PAGE ENCRYPTION TESTS
-// CANARY: REQ=REQ-TDE-ENFORCE-004; FEATURE="TDEEnforcement"; ASPECT=PageEncryption; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+// FILE-LEVEL ENCRYPTION TESTS
+// CANARY: REQ=REQ-TDE-ENFORCE-004; FEATURE="TDEEnforcement"; ASPECT=FileEncryption; STATUS=TESTED; OWNER=security; UPDATED=2026-02-04
 // ============================================================================
 
-// Test: Page size with encryption overhead
-test "TestTDE_Page_EncryptedSize" {
-    // Encrypted page size = plaintext size + overhead (28 bytes)
-    const page_sizes = [_]usize{ 4096, 8192, 16384 };
-    const overhead = 28;
+// Test: Encrypted file size includes magic + overhead.
+test "TestTDE_File_EncryptedSize" {
+    const key: [tde_file.KEY_BYTES]u8 = [_]u8{0x33} ** tde_file.KEY_BYTES;
+    const allocator = testing.allocator;
+    const payload_sizes = [_]usize{ 64, 4096, 8192 };
 
-    for (page_sizes) |page_size| {
-        const encrypted_size = page_size + overhead;
-        try testing.expect(encrypted_size > page_size);
-        try testing.expectEqual(page_size + overhead, encrypted_size);
+    for (payload_sizes) |payload_size| {
+        const payload = try allocator.alloc(u8, payload_size);
+        defer allocator.free(payload);
+        @memset(payload, 0xA5);
+
+        const enc = try tde_file.encryptWithKey(allocator, payload, key);
+        defer allocator.free(enc);
+        try testing.expectEqual(payload_size + tde_file.MAGIC.len + tde_file.OVERHEAD, enc.len);
     }
 }
 
-// Test: Page encryption uses AAD (Additional Authenticated Data)
-test "TestTDE_Page_AADIsPageIndex" {
-    // AAD should be the page index to prevent page swapping attacks
-    // If attacker swaps encrypted pages, decryption will fail due to AAD mismatch
-    const page_index1: usize = 0;
-    const page_index2: usize = 1;
+// Test: Magic header detection distinguishes encrypted vs plaintext.
+test "TestTDE_File_MagicHeaderDetection" {
+    const key: [tde_file.KEY_BYTES]u8 = [_]u8{0x44} ** tde_file.KEY_BYTES;
+    const allocator = testing.allocator;
+    const payload = "plain-snapshot";
 
-    // Different page indices should produce different decryption contexts
-    try testing.expect(page_index1 != page_index2);
+    const enc = try tde_file.encryptWithKey(allocator, payload, key);
+    defer allocator.free(enc);
+
+    try testing.expect(tde_file.isEncrypted(enc));
+    try testing.expect(!tde_file.isEncrypted(payload));
 }
 
 // ============================================================================
@@ -154,23 +162,28 @@ test "TestTDE_Page_AADIsPageIndex" {
 // CANARY: REQ=REQ-TDE-ENFORCE-005; FEATURE="TDEEnforcement"; ASPECT=StateEnforcement; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 // ============================================================================
 
-// Test: TDE enabled when key is present
+// Test: TDE enabled when key is provided to encryption functions.
 test "TestTDE_State_EnabledWithKey" {
-    // When GEODE_TDE_KEY is set with valid key, TDE must be enabled
-    // This is verified by loadEncConfig() in page_manager.zig
+    const key: [tde_file.KEY_BYTES]u8 = [_]u8{0x55} ** tde_file.KEY_BYTES;
+    const allocator = testing.allocator;
+    const payload = "tde-state-enabled";
 
-    // Simulate key validation
-    const valid_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    try testing.expectEqual(@as(usize, 64), valid_key.len);
+    const enc = try tde_file.encryptWithKey(allocator, payload, key);
+    defer allocator.free(enc);
+    try testing.expect(tde_file.isEncrypted(enc));
 
-    // With valid key, enc_enabled should be true
-    // (Actual check is in page_manager.loadEncConfig at line 270)
+    const dec = try tde_file.decryptWithKey(allocator, enc, key);
+    defer allocator.free(dec);
+    try testing.expect(std.mem.eql(u8, dec, payload));
 }
 
-// Test: TDE disabled without key
+// Test: TDE disabled when data is not encrypted (no magic header).
 test "TestTDE_State_DisabledWithoutKey" {
-    // When GEODE_TDE_KEY is not set, TDE is disabled
-    // No encryption should occur, but also no unintended data exposure
+    const allocator = testing.allocator;
+    const payload = "plain-data";
+    const dec = try tde_file.decrypt(allocator, payload);
+    defer allocator.free(dec);
+    try testing.expect(std.mem.eql(u8, dec, payload));
 }
 
 // ============================================================================
@@ -227,7 +240,7 @@ test "TestTDE_Disk_XTSKeyStructure" {
 
 // Test: XTS tweak structure
 test "TestTDE_Disk_XTSTweak" {
-    // XTS tweak is 128 bits, typically derived from page ID + sector number
+    // XTS tweak is 128 bits, typically derived from sector index in block encryption
     const tweak_size = 16; // 128 bits
     try testing.expectEqual(@as(usize, 16), tweak_size);
 }
@@ -265,18 +278,18 @@ test "TestTDE_Backup_EncryptionMetadata" {
 
 // Test: Key hierarchy derivation
 test "TestTDE_KeyHierarchy_DerivedKeys" {
-    // Master Key -> Data Key (for pages)
+    // Master Key -> Snapshot Key (for GraphStore files)
     //            -> Backup Key (for backups/snapshots)
     // This allows key rotation without re-encrypting all data or backups
 
     // Different derived keys for different purposes
     const master_key_id = 0;
-    const data_key_id = 1;
+    const snapshot_key_id = 1;
     const backup_key_id = 2;
 
-    try testing.expect(master_key_id != data_key_id);
+    try testing.expect(master_key_id != snapshot_key_id);
     try testing.expect(master_key_id != backup_key_id);
-    try testing.expect(data_key_id != backup_key_id);
+    try testing.expect(snapshot_key_id != backup_key_id);
 }
 
 // ============================================================================
@@ -327,18 +340,19 @@ test "TestTDE_Bypass_S3BackupRestore" {
 test "TestTDE_Nonce_Uniqueness" {
     // AES-GCM security requires unique nonces for each encryption with same key
     // Nonce reuse breaks confidentiality and authenticity
-
-    // Page encryption: nonce derived from content hash + size (deterministic)
-    // WAL encryption: nonce derived from LSN + hash (deterministic)
-
+    // Snapshot encryption: nonce derived from content hash + size (deterministic)
     // WARNING: Deterministic nonces are OK only if:
     // 1. The combination of nonce + key is never reused
     // 2. Same plaintext always produces same nonce (which is fine)
-
-    // For LSN-based nonces, as long as LSN is monotonic and unique, nonces are unique
-    const lsn1: u64 = 1;
-    const lsn2: u64 = 2;
-    try testing.expect(lsn1 != lsn2);
+    const key: [tde_file.KEY_BYTES]u8 = [_]u8{0x66} ** tde_file.KEY_BYTES;
+    const allocator = testing.allocator;
+    const enc1 = try tde_file.encryptWithKey(allocator, "nonce-a", key);
+    defer allocator.free(enc1);
+    const enc2 = try tde_file.encryptWithKey(allocator, "nonce-b", key);
+    defer allocator.free(enc2);
+    const nonce1 = enc1[tde_file.MAGIC.len .. tde_file.MAGIC.len + tde_file.NONCE_BYTES];
+    const nonce2 = enc2[tde_file.MAGIC.len .. tde_file.MAGIC.len + tde_file.NONCE_BYTES];
+    try testing.expect(!std.mem.eql(u8, nonce1, nonce2));
 }
 
 // Test: Counter-based nonce for high-volume writes
@@ -373,9 +387,8 @@ test "TestTDE_Memory_PlaintextCleared" {
     // Prevents memory disclosure attacks
 
     // This is particularly important for:
-    // 1. Page buffers before write
-    // 2. WAL payloads before write
-    // 3. Backup data before write
+    // 1. GraphStore snapshot buffers before write
+    // 2. Backup payloads before write
 }
 
 // ============================================================================
@@ -405,8 +418,8 @@ test "TestTDE_Verification_TamperDetection" {
 
 // Test: Decryption with wrong AAD fails
 test "TestTDE_Verification_AADMismatch" {
-    // Decryption with wrong AAD (page index) must fail
-    // This prevents page swapping attacks
+    // File-level encryption uses empty AAD; integrity is enforced by GCM tag.
+    // Any ciphertext tampering should fail verification.
 }
 
 // ============================================================================

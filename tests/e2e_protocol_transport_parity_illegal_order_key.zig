@@ -16,7 +16,6 @@ fn execGrpc(client: *util.GrpcProtoClient, allocator: std.mem.Allocator, query: 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Diagnostics IllegalOrderKey"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_IllegalOrderKey; OWNER=engine; UPDATED=2025-09-24
 
 test "protocol: transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC (gated)" {
-    if (std.posix.getenv("GEODE_CI_QUIC_SMOKE") == null) return error.SkipZigTest;
 
     const allocator = testing.allocator;
     const addr = "127.0.0.1:3191";

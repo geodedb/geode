@@ -142,15 +142,13 @@ make bench
 
 ## Test Infrastructure Features
 
-### Embedded Server Mode
+### Server-Backed Mode (QUIC/gRPC)
 
-The CLI includes an embedded server for testing without external dependencies:
+All CLI and integration tests run against an external server process. The unified `geode` binary starts the server with QUIC/TLS (and optional gRPC):
 
 ```bash
-# Query with embedded server (--process flag)
-./zig-out/bin/geode query "RETURN 1 AS x" --process
-
-# Runs query in embedded mode without needing external server
+./zig-out/bin/geode serve --listen 127.0.0.1:3141
+./zig-out/bin/geode query "RETURN 1 AS x" --server 127.0.0.1:3141 --insecure
 ```
 
 ### Authentication Testing
@@ -179,11 +177,10 @@ Tests validate structured JSON output for machine-readable results:
 ```json
 {
   "status_class": "00000",
-  "status": "00000",
-  "result": {
-    "columns": [{"name": "x", "type": "INTEGER"}],
-    "rows": [{"x": 1}]
-  }
+  "columns": [{"name": "x", "type": "ANY"}],
+  "rows": [{"x": 1}],
+  "ordered": false,
+  "order_keys": []
 }
 ```
 
