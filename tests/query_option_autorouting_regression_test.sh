@@ -35,14 +35,14 @@ if [[ $result == *"FAIL"* ]]; then
 fi
 echo "PASS: --page-size flag auto-routing"
 
-# Test 4: --json-param flag auto-routing
-echo "Test 4: --json-param flag auto-routing"
-result=$($GEODE_BIN --json-param test_param test_value "RETURN 'json_param_test' AS test" --insecure 2>/dev/null | grep '"test":"json_param_test"' || echo "FAIL")
+# Test 4: --param flag auto-routing
+echo "Test 4: --param flag auto-routing"
+result=$($GEODE_BIN --param test_param test_value "RETURN 'json_param_test' AS test" --insecure 2>/dev/null | grep '"test":"json_param_test"' || echo "FAIL")
 if [[ $result == *"FAIL"* ]]; then
-    echo "FAIL: --json-param flag should auto-route to query command"
+    echo "FAIL: --param flag should auto-route to query command"
     exit 1
 fi
-echo "PASS: --json-param flag auto-routing"
+echo "PASS: --param flag auto-routing"
 
 # Test 5: Multiple query flags auto-routing
 echo "Test 5: Multiple query flags auto-routing"

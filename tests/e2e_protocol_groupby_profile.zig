@@ -24,7 +24,7 @@ test "e2e: PROFILE returns metrics for GROUP BY" {
     var hello = try client.hello(allocator, "", "");
     hello.deinit(allocator);
 
-    const res = try client.executeAndCollect(allocator, "PROFILE RETURN count(*) GROUP BY x", null, 100);
+    const res = try client.executeAndCollect(allocator, "PROFILE RETURN count(*) GROUP BY x", util.emptyParams(), 100);
     defer res.deinit(allocator);
 
     try testing.expect(res.error_code == null);

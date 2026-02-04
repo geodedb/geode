@@ -125,7 +125,7 @@ test "protocol: CASE expression sanity with params" {
     const res = try run(&.{
         exe,
         "RETURN CASE WHEN a IS NULL THEN 'n' WHEN a THEN 't' ELSE 'f' END AS r",
-        "--json-param",
+        "--param",
         "a",
         "[null,true,false]",
     });

@@ -82,7 +82,7 @@ test "fuzz: extended ORDER BY multi-key nulls strings pagination" {
         const offset_clause = if (rnd.boolean()) " OFFSET 1" else "";
         const query_buf = std.fmt.allocPrint(std.testing.allocator, "RETURN {s}a AS x, a AS y ORDER BY x, y{s}{s}", .{ distinct_clause, offset_clause, limit_clause }) catch continue;
         defer std.testing.allocator.free(query_buf);
-        const res = run(&.{ exe, query_buf, "--json-param", "a", arr_json }) catch continue;
+        const res = run(&.{ exe, query_buf, "--param", "a", arr_json }) catch continue;
         defer std.testing.allocator.free(res.out);
         defer std.testing.allocator.free(res.err);
         if (res.code != 0) continue; // ignore failures: diagnostics tested elsewhere

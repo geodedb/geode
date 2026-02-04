@@ -74,33 +74,11 @@ test "Command line argument parsing patterns" {
     }
 }
 
-test "Legacy binary name compatibility detection" {
-    // Test that we can detect when running as legacy binary names
-    const test_cases = [_]struct {
-        binary_name: []const u8,
-        is_legacy: bool,
-        expected_mode: []const u8,
-    }{
-        .{ .binary_name = "geode", .is_legacy = false, .expected_mode = "unified" },
-        .{ .binary_name = "geodec", .is_legacy = true, .expected_mode = "client" },
-        .{ .binary_name = "geoded", .is_legacy = true, .expected_mode = "server" },
-        .{ .binary_name = "/usr/bin/geode", .is_legacy = false, .expected_mode = "unified" },
-        .{ .binary_name = "./zig-out/bin/geode", .is_legacy = true, .expected_mode = "client" },
-    };
-
-    for (test_cases) |case| {
-        const basename = std.fs.path.basename(case.binary_name);
-        const is_legacy = std.mem.eql(u8, basename, "geodec") or std.mem.eql(u8, basename", "geoded");
-        try testing.expect(is_legacy == case.is_legacy);
-
-        if (is_legacy) {
-            if (std.mem.eql(u8, basename, "geodec")) {
-                try testing.expectEqualStrings("client", case.expected_mode);
-            } else if (std.mem.eql(u8, basename, "geoded")) {
-                try testing.expectEqualStrings("server", case.expected_mode);
-            }
-        }
-    }
+test "Unified binary naming only" {
+    const basename = std.fs.path.basename("/usr/local/bin/geode");
+    try testing.expectEqualStrings("geode", basename);
+    try testing.expect(!std.mem.eql(u8, "geode", "geodec"));
+    try testing.expect(!std.mem.eql(u8, "geode", "geoded"));
 }
 
 test "Server configuration validation" {
@@ -140,7 +118,7 @@ test "Server configuration validation" {
     var config3 = ServerConfig{ .log_level = "invalid" };
     try testing.expectError(error.InvalidLogLevel, config3.validate());
 
-    var config4 = ServerConfig{ .listen_quic = " };
+    var config4 = ServerConfig{ .listen_quic = "" };
     try testing.expectError(error.EmptyListenAddress, config4.validate());
 
     var config5 = ServerConfig{ .listen_quic = "127.0.0.1" };

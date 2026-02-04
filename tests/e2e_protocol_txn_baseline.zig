@@ -28,7 +28,7 @@ test "e2e: transaction baseline BEGIN/COMMIT/ROLLBACK" {
     defer begin_ok.deinit(allocator);
     try testing.expect(begin_ok.tx_id.len > 0);
 
-    const exec = try ctx.client.executeAndCollect(allocator, "RETURN 1 AS x", null, 100);
+    const exec = try ctx.client.executeAndCollect(allocator, "RETURN 1 AS x", util.emptyParams(), 100);
     defer exec.deinit(allocator);
     try testing.expect(exec.error_code == null);
     try testing.expect(exec.rows.len == 1);
@@ -58,7 +58,7 @@ test "e2e: transaction rollback" {
     defer begin_ok.deinit(allocator);
     try testing.expect(begin_ok.tx_id.len > 0);
 
-    _ = try ctx.client.executeAndCollect(allocator, "RETURN 1 AS x", null, 100);
+    _ = try ctx.client.executeAndCollect(allocator, "RETURN 1 AS x", util.emptyParams(), 100);
 
     const rollback_ok = try ctx.client.rollback(allocator);
     try testing.expect(rollback_ok);

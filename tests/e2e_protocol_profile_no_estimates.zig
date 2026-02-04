@@ -15,7 +15,7 @@ fn run(args: []const []const u8) !struct { out: []u8 } {
 
 test "protocol: PROFILE --no-estimates suppresses planner_estimates" {
     const exe = "zig-out/bin/geode";
-    const res = try run(&.{ exe, "--no-estimates", "PROFILE RETURN a AS x DISTINCT LIMIT 2", "--json-param", "a", "[1,2,2,3]" });
+    const res = try run(&.{ exe, "--no-estimates", "PROFILE RETURN a AS x DISTINCT LIMIT 2", "--param", "a", "[1,2,2,3]" });
     defer testing.allocator.free(res.out);
     var it = std.mem.splitScalar(u8, res.out, '\n');
     _ = it.next();

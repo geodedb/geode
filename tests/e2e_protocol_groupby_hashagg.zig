@@ -23,8 +23,10 @@ test "e2e: GROUP BY execution with aggregation" {
     hello.deinit(allocator);
 
     // a:[1,1,2], b:[10,1,5] -> (a=1,sum=11),(a=2,sum=5)
-    const param_json = "{\"a\":[1,1,2],\"b\":[10,1,5]}";
-    const res = try client.executeAndCollect(allocator, "RETURN a, SUM(b) AS total GROUP BY a ORDER BY a", param_json, 100);
+    var params = util.emptyParams();
+    try params.append(allocator, try util.makeIntListParam(allocator, "a", &.{ 1, 1, 2 }));
+    try params.append(allocator, try util.makeIntListParam(allocator, "b", &.{ 10, 1, 5 }));
+    const res = try client.executeAndCollect(allocator, "RETURN a, SUM(b) AS total GROUP BY a ORDER BY a", params, 100);
     defer res.deinit(allocator);
 
     try testing.expect(res.error_code == null);
@@ -56,8 +58,10 @@ test "e2e: HashAgg with memory pressure" {
     var hello = try client.hello(allocator, "", "");
     hello.deinit(allocator);
 
-    const param_json = "{\"a\":[1,1,2,2,3,3,4,4,5,5],\"b\":[10,1,5,3,7,2,8,4,9,6]}";
-    const res = try client.executeAndCollect(allocator, "RETURN a, SUM(b) AS total GROUP BY a ORDER BY a", param_json, 100);
+    var params = util.emptyParams();
+    try params.append(allocator, try util.makeIntListParam(allocator, "a", &.{ 1, 1, 2, 2, 3, 3, 4, 4, 5, 5 }));
+    try params.append(allocator, try util.makeIntListParam(allocator, "b", &.{ 10, 1, 5, 3, 7, 2, 8, 4, 9, 6 }));
+    const res = try client.executeAndCollect(allocator, "RETURN a, SUM(b) AS total GROUP BY a ORDER BY a", params, 100);
     defer res.deinit(allocator);
 
     try testing.expect(res.error_code == null);

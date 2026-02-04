@@ -1061,10 +1061,11 @@ pub const ClientSession = struct {
             return error.Interrupted;
         }
 
+        const params = std.ArrayList(proto_schema.Param){};
         const exec_req = proto_schema.ExecuteRequest{
             .session_id = self.session_id orelse "",
             .query = gql,
-            .params_json = "",
+            .params = params,
         };
         const msg = try encodeClientPacket(self.allocator, .{ .execute = exec_req });
         defer self.allocator.free(msg);

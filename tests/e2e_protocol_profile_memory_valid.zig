@@ -16,7 +16,7 @@ fn run(args: []const []const u8) !struct { out: []u8 } {
 test "protocol: PROFILE memory percent_peak validity" {
     const exe = "zig-out/bin/geode";
     // Exercise multiple stages to get non-trivial allocations.
-    const res = try run(&.{ exe, "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 2", "--json-param", "a", "[1,2,2,3,4,5,6]" });
+    const res = try run(&.{ exe, "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 2", "--param", "a", "[1,2,2,3,4,5,6]" });
     defer testing.allocator.free(res.out);
     var it = std.mem.splitScalar(u8, res.out, '\n');
     _ = it.next(); // schema line

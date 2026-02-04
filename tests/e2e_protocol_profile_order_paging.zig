@@ -33,7 +33,7 @@ fn contains(h: []const u8, n: []const u8) bool {
 test "protocol: PROFILE ORDER+OFFSET+LIMIT row transitions" {
     const exe = "./zig-out/bin/geode";
     // 4 param rows -> after OFFSET 1 => 3 -> LIMIT 2 => 2
-    const res = try run(&.{ exe, "PROFILE RETURN a AS x ORDER BY x OFFSET 1 LIMIT 2", "--json-param", "a", "[1,2,3,4]" });
+    const res = try run(&.{ exe, "PROFILE RETURN a AS x ORDER BY x OFFSET 1 LIMIT 2", "--param", "a", "[1,2,3,4]" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);

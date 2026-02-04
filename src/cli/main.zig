@@ -445,8 +445,10 @@ fn printQueryUsage() void {
         "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
         "  --client-key <path>    Client private key path for mutual TLS\n" ++
         "  --format <fmt>         Output format: json|table|csv|dot (default: json)\n" ++
-        "  --json-param <name> <value>  Add JSON parameter\n" ++
+        "  --param <name> <value>       Add query parameter (JSON literal)\n" ++
         "  --page-size <n>        Page size for results (default: 1000)\n" ++
+        "  --pull-all             Pull all result pages (default behavior)\n" ++
+        "  --extra-pull <n>       Issue extra PULL requests after final (debug)\n" ++
         "  --timeout <secs>       Connection timeout in seconds (default: 10)\n" ++
         "  --retry <count>        Number of retry attempts on failure (default: 0)\n" ++
         "  --begin                Start transaction\n" ++
@@ -495,7 +497,7 @@ fn printQueryUsage() void {
         "  geode query --ca-cert /etc/ssl/ca.crt --client-cert /etc/ssl/client.crt --client-key /etc/ssl/client.key --server secure.example.com:3141 \"RETURN 1\"\n" ++
         "  geode query --format table \"MATCH (u:User) RETURN u.name, u.email\"\n" ++
         "  geode query --format dot \"MATCH (a)-[r]->(b) RETURN a, r, b\" | dot -Tpng -o graph.png\n" ++
-        "  geode query --json-param id 123 \"MATCH (n) WHERE id(n) = $id RETURN n\"\n" ++
+        "  geode query --param id 123 \"MATCH (n) WHERE id(n) = $id RETURN n\"\n" ++
         "  geode query --server remote:3141 --timeout 5 --retry 3 \"RETURN 1 AS x\"\n" ++
         "  echo \"RETURN 1 AS x\" | geode query -\n" ++
         "\n" ++
@@ -972,6 +974,8 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var query_text: ?[]const u8 = null;
     var timeout_secs: u32 = 10; // Default 10 second timeout
     var retry_count: u32 = 0; // Default no retries
+    var page_size: u32 = 1000; // Default page size for PULL requests
+    var extra_pulls: u32 = 0; // Extra PULL requests after final (advanced)
     var use_saved_session = true; // Auto-load saved session by default
     // CANARY: REQ=REQ-CLI-GRAPH-FLAG-001; FEATURE="GraphFlag"; ASPECT=QueryCommand; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
     // Issue #393: Add --graph flag to specify which graph to query against
@@ -983,6 +987,14 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // CANARY: REQ=REQ-CLI-FILE-FLAG-001; FEATURE="QueryFileFlag"; ASPECT=FileInput; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-31
     // Issue GAP-384: Add --file flag to execute GQL from a file (same as /source in shell)
     var source_file: ?[]const u8 = null;
+    var params = std.ArrayList(schema.Param){};
+    var params_owned = true;
+    defer if (params_owned) {
+        for (params.items) |*param| {
+            param.deinit(allocator);
+        }
+        params.deinit(allocator);
+    };
 
     i = start_idx + 1;
     while (i < argv.len) : (i += 1) {
@@ -1074,19 +1086,28 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
             token = argv[i + 1];
             i += 1;
-        } else if (std.mem.eql(u8, arg, "--json-param")) {
+        } else if (std.mem.eql(u8, arg, "--param")) {
             if (i + 2 >= argv.len) {
-                std.debug.print("Error: --json-param requires name and value\n", .{});
+                std.debug.print("Error: --param requires name and value\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             const param_name = argv[i + 1];
             const param_value = argv[i + 2];
-            // Validate JSON parameter
-            if (std.mem.eql(u8, param_name, "bad_json") or std.mem.indexOf(u8, param_value, "{invalid") != null) {
+            const parsed_value = parseParamValue(allocator, param_value) catch |err| {
                 const stderr_fd = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
-                _ = try stderr_fd.writeAll("JSON malformed parse error\n");
+                _ = try stderr_fd.writeAll("Parameter parse error\n");
+                log.err("parameter parse failed", &.{Attr.string("error", @errorName(err))});
                 std.process.exit(1);
-            }
+            };
+            const name_copy = try allocator.dupe(u8, param_name);
+            var param = schema.Param{
+                .name = name_copy,
+                .value = parsed_value,
+            };
+            params.append(allocator, param) catch |err| {
+                param.deinit(allocator);
+                return err;
+            };
             i += 2;
         } else if (std.mem.eql(u8, arg, "--timeout")) {
             if (i + 1 >= argv.len) {
@@ -1095,6 +1116,28 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
             timeout_secs = std.fmt.parseInt(u32, argv[i + 1], 10) catch {
                 std.debug.print("Error: --timeout value must be a positive integer\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            };
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--page-size")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --page-size requires a positive integer\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            page_size = std.fmt.parseInt(u32, argv[i + 1], 10) catch {
+                std.debug.print("Error: --page-size value must be a positive integer\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            };
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--pull-all")) {
+            // Compatibility flag; client already pulls until final.
+        } else if (std.mem.eql(u8, arg, "--extra-pull")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --extra-pull requires a count\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            extra_pulls = std.fmt.parseInt(u32, argv[i + 1], 10) catch {
+                std.debug.print("Error: --extra-pull value must be a positive integer\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             };
             i += 1;
@@ -1356,6 +1399,10 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-004; FEATURE="ChunkedExecution"; ASPECT=BatchExecution; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
     // Handle chunked execution for large files
     if (file_statements) |statements| {
+        if (params.items.len > 0) {
+            std.debug.print("Error: --param is not supported with --file\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
         try executeChunkedQueries(allocator, .{
             .server_addr = server_addr,
             .statements = statements.items,
@@ -1376,6 +1423,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // GAP-0113: Execute query via QUIC connection with optional certificate verification
     // CANARY: REQ=REQ-CLI-GRAPH-FLAG-003; FEATURE="GraphFlag"; ASPECT=ExecuteWithGraph; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
     // Quality fix #405: Using options struct instead of 13 positional parameters
+    params_owned = false;
     try executeQuicQuery(allocator, .{
         .server_addr = server_addr,
         .query_text = query_text.?,
@@ -1389,6 +1437,9 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         .client_cert_path = client_cert_path,
         .client_key_path = client_key_path,
         .graph = graph,
+        .page_size = page_size,
+        .extra_pulls = extra_pulls,
+        .params = params,
     });
 }
 
@@ -1449,6 +1500,45 @@ fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     return result;
 }
 
+const PARAM_MAX_SIZE: usize = 1 * 1024 * 1024; // 1 MB max param payload
+const PARAM_MAX_DEPTH: usize = 64;
+
+fn parseParamValue(allocator: std.mem.Allocator, input: []const u8) !schema.Value {
+    if (input.len > PARAM_MAX_SIZE) return error.ParamsTooLarge;
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, input, .{});
+    defer parsed.deinit();
+    return jsonToProtoValue(allocator, parsed.value, 0);
+}
+
+fn jsonToProtoValue(allocator: std.mem.Allocator, value: std.json.Value, depth: usize) !schema.Value {
+    if (depth > PARAM_MAX_DEPTH) return error.ParamsTooDeep;
+    return switch (value) {
+        .null => .{ .kind = .{ .null_val = .{} } },
+        .bool => |b| .{ .kind = .{ .bool_val = b } },
+        .integer => |i| .{ .kind = .{ .int_val = .{ .value = i, .kind = .INT } } },
+        .float => |f| .{ .kind = .{ .double_val = .{ .value = f, .kind = .DOUBLE } } },
+        .number_string => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
+        .string => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
+        .array => |arr| blk: {
+            var values = std.ArrayList(schema.Value).initCapacity(allocator, arr.items.len) catch return error.OutOfMemory;
+            for (arr.items) |item| {
+                try values.append(allocator, try jsonToProtoValue(allocator, item, depth + 1));
+            }
+            break :blk .{ .kind = .{ .list_val = .{ .values = values } } };
+        },
+        .object => |obj| blk: {
+            var entries = std.ArrayList(schema.MapEntry).initCapacity(allocator, obj.count()) catch return error.OutOfMemory;
+            var it = obj.iterator();
+            while (it.next()) |entry| {
+                const key = try allocator.dupe(u8, entry.key_ptr.*);
+                const val = try jsonToProtoValue(allocator, entry.value_ptr.*, depth + 1);
+                try entries.append(allocator, .{ .key = key, .value = val });
+            }
+            break :blk .{ .kind = .{ .map_val = .{ .entries = entries } } };
+        },
+    };
+}
+
 // GAP-0113 SECURITY FIX: Add TLS certificate verification support
 // CANARY: REQ=REQ-TLS-CERT-002; FEATURE="TLSCertVerification"; ASPECT=Core; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-12
 // CANARY: REQ=REQ-CLI-GRAPH-FLAG-004; FEATURE="GraphFlag"; ASPECT=ExecuteQuicQuery; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
@@ -1466,6 +1556,9 @@ const QuicQueryOptions = struct {
     client_cert_path: ?[]const u8 = null,
     client_key_path: ?[]const u8 = null,
     graph: ?[]const u8 = null,
+    page_size: u32 = 1000,
+    extra_pulls: u32 = 0,
+    params: std.ArrayList(schema.Param),
 };
 
 // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-005; FEATURE="ChunkedExecution"; ASPECT=OptionsStruct; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
@@ -1523,6 +1616,7 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
         const chunk_count = chunk_end - chunk_start;
         std.debug.print("Executing chunk {d}-{d} of {d} statements...\n", .{ chunk_start + 1, chunk_end, statements.len });
 
+        const empty_params = std.ArrayList(schema.Param){};
         executeQuicQuery(allocator, .{
             .server_addr = opts.server_addr,
             .query_text = chunk_query.items,
@@ -1536,6 +1630,9 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
             .client_cert_path = opts.client_cert_path,
             .client_key_path = opts.client_key_path,
             .graph = opts.graph,
+            .page_size = 1000,
+            .extra_pulls = 0,
+            .params = empty_params,
         }) catch |err| {
             std.debug.print("Error executing chunk: {}\n", .{err});
             error_count += 1;
@@ -1566,6 +1663,16 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     const client_cert_path = opts.client_cert_path;
     const client_key_path = opts.client_key_path;
     const graph = opts.graph;
+    const page_size = opts.page_size;
+    const extra_pulls = opts.extra_pulls;
+    var params = opts.params;
+    var params_transferred = false;
+    defer if (!params_transferred) {
+        for (params.items) |*param| {
+            param.deinit(allocator);
+        }
+        params.deinit(allocator);
+    };
     const stderr = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
 
     var addr_port = std.mem.splitSequence(u8, server_addr, ":");
@@ -1610,7 +1717,8 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
             const handshake_err = quic_client.waitForHandshake(handshake_timeout);
             if (handshake_err) |_| {
                 // Handshake successful, proceed with query execution
-                return try executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph, timeout_secs);
+                params_transferred = true;
+                return try executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph, params, page_size, extra_pulls, timeout_secs);
             } else |_| {
                 last_error = "connection timeout";
             }
@@ -1710,7 +1818,19 @@ fn writeProtoMessage(allocator: std.mem.Allocator, stream: anytype, msg: schema.
 }
 
 // CANARY: REQ=REQ-CLI-GRAPH-FLAG-005; FEATURE="GraphFlag"; ASPECT=ExecuteOnConnection; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.QuicClient, query_text: []const u8, format: []const u8, username: ?[]const u8, password: ?[]const u8, graph: ?[]const u8, timeout_secs: u32) !void {
+fn executeQueryOnConnection(
+    allocator: std.mem.Allocator,
+    quic_client: *quic.QuicClient,
+    query_text: []const u8,
+    format: []const u8,
+    username: ?[]const u8,
+    password: ?[]const u8,
+    graph: ?[]const u8,
+    params: std.ArrayList(schema.Param),
+    page_size: u32,
+    extra_pulls: u32,
+    timeout_secs: u32,
+) !void {
     // Get stdout and stderr handles for output
     const stdout = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable };
     const stderr_handle = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
@@ -1782,13 +1902,24 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
         final_query = allocated_query.?;
     }
 
+    var owned_params = params;
+    defer {
+        for (owned_params.items) |*param| {
+            param.deinit(allocator);
+        }
+        owned_params.deinit(allocator);
+    }
+
     // Send query using Protobuf (ExecuteRequest)
+    const exec_session_id = try allocator.dupe(u8, session_id);
+    defer allocator.free(exec_session_id);
+    const query_copy = try allocator.dupe(u8, final_query);
+    defer allocator.free(query_copy);
     const run_gql_req = schema.ExecuteRequest{
-        .session_id = session_id,
-        .query = try allocator.dupe(u8, final_query),
-        .params_json = "",
+        .session_id = exec_session_id,
+        .query = query_copy,
+        .params = owned_params,
     };
-    defer allocator.free(run_gql_req.query);
 
     try writeProtoMessage(allocator, stream, .{ .execute = run_gql_req });
     log.debug("Client query sent successfully", &.{});
@@ -1818,9 +1949,28 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
         order_keys.deinit(allocator);
     }
 
+    var status_class = try allocator.dupe(u8, "00000");
+    defer allocator.free(status_class);
+    var additional_statuses = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    defer {
+        for (additional_statuses.items) |s| allocator.free(s);
+        additional_statuses.deinit(allocator);
+    }
+    var flagger_findings = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    defer {
+        for (flagger_findings.items) |s| allocator.free(s);
+        flagger_findings.deinit(allocator);
+    }
+    var status_captured = false;
+
     var has_error: bool = false;
     var error_message: []const u8 = "";
     var error_status: []const u8 = "58000";
+    var extra_pull_errors = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    defer {
+        for (extra_pull_errors.items) |msg| allocator.free(msg);
+        extra_pull_errors.deinit(allocator);
+    }
 
     const RowAppender = struct {
         fn valueToString(alloc: std.mem.Allocator, v: schema.Value) ![]const u8 {
@@ -1941,6 +2091,46 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
         }
     };
 
+    const captureStatus = struct {
+        fn apply(
+            alloc: std.mem.Allocator,
+            status_opt: ?schema.Status,
+            status_out: *[]const u8,
+            additional_out: *std.ArrayList([]const u8),
+            flagger_out: *std.ArrayList([]const u8),
+            captured: *bool,
+        ) !void {
+            if (captured.*) return;
+            if (status_opt == null) return;
+            const status = status_opt.?;
+            captured.* = true;
+            alloc.free(status_out.*);
+            status_out.* = try alloc.dupe(u8, status.status_class);
+            for (status.additional_statuses.items) |s| {
+                try additional_out.append(alloc, try alloc.dupe(u8, s));
+            }
+            for (status.flagger_findings.items) |s| {
+                try flagger_out.append(alloc, try alloc.dupe(u8, s));
+            }
+        }
+    };
+
+    const Json = struct {
+        fn writeStringArray(out: anytype, alloc: std.mem.Allocator, items: []const []const u8) !void {
+            _ = out.writeAll("[") catch {};
+            for (items, 0..) |item, idx| {
+                if (idx > 0) _ = out.writeAll(",") catch {};
+                const escaped = escapeJsonString(alloc, item) catch item;
+                const needs_free = escaped.ptr != item.ptr;
+                defer if (needs_free) alloc.free(escaped);
+                const entry = try std.fmt.allocPrint(alloc, "\"{s}\"", .{escaped});
+                defer alloc.free(entry);
+                _ = out.writeAll(entry) catch {};
+            }
+            _ = out.writeAll("]") catch {};
+        }
+    };
+
     // Receive responses loop
     var loop_arena = std.heap.ArenaAllocator.init(allocator);
     defer loop_arena.deinit();
@@ -1960,6 +2150,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
 
         switch (resp) {
             .execute => |exec_resp| {
+                try captureStatus.apply(allocator, exec_resp.status, &status_class, &additional_statuses, &flagger_findings, &status_captured);
                 if (exec_resp.payload) |val| {
                     switch (val) {
                         .schema => |s| {
@@ -2043,14 +2234,14 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
         _ = loop_arena.reset(.retain_capacity);
     }
 
+    var request_id: u64 = 1;
     if (!has_error and (!inline_final or need_pull)) {
-        var request_id: u64 = 1;
         var done = false;
 
         while (!done and !has_error) : (request_id += 1) {
             const pull_req = schema.PullRequest{
                 .request_id = request_id,
-                .page_size = 0,
+                .page_size = page_size,
                 .session_id = session_id,
             };
             try writeProtoMessage(allocator, stream, .{ .pull = pull_req });
@@ -2064,6 +2255,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
             switch (resp) {
                 .pull => |pull_resp| {
                     const exec_resp = pull_resp.response orelse break;
+                    try captureStatus.apply(allocator, exec_resp.status, &status_class, &additional_statuses, &flagger_findings, &status_captured);
                     if (exec_resp.payload) |val| switch (val) {
                         .page => |p| {
                             try captureOrderMeta.apply(allocator, p, &ordered, &order_keys);
@@ -2081,6 +2273,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                     };
                 },
                 .execute => |exec_resp| {
+                    try captureStatus.apply(allocator, exec_resp.status, &status_class, &additional_statuses, &flagger_findings, &status_captured);
                     if (exec_resp.payload) |val| switch (val) {
                         .page => |p| {
                             try captureOrderMeta.apply(allocator, p, &ordered, &order_keys);
@@ -2104,40 +2297,93 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
         }
     }
 
+    if (!has_error and extra_pulls > 0) {
+        var extra_id = request_id;
+        var extra_idx: u32 = 0;
+        while (extra_idx < extra_pulls) : (extra_idx += 1) {
+            const pull_req = schema.PullRequest{
+                .request_id = extra_id,
+                .page_size = page_size,
+                .session_id = session_id,
+            };
+            extra_id += 1;
+            try writeProtoMessage(allocator, stream, .{ .pull = pull_req });
+
+            const loop_allocator = loop_arena.allocator();
+            const resp = readProtoMessage(loop_allocator, stream, quic_client, timeout_secs) catch |err| {
+                if (err == error.EndOfStream or err == error.Timeout) break;
+                return err;
+            };
+
+            switch (resp) {
+                .pull => |pull_resp| {
+                    const exec_resp = pull_resp.response orelse continue;
+                    try captureStatus.apply(allocator, exec_resp.status, &status_class, &additional_statuses, &flagger_findings, &status_captured);
+                    if (exec_resp.payload) |val| switch (val) {
+                        .@"error" => |e| {
+                            const msg = if (e.message.len > 0) e.message else "NoResult";
+                            try extra_pull_errors.append(allocator, try allocator.dupe(u8, msg));
+                        },
+                        else => {},
+                    };
+                },
+                .execute => |exec_resp| {
+                    try captureStatus.apply(allocator, exec_resp.status, &status_class, &additional_statuses, &flagger_findings, &status_captured);
+                    if (exec_resp.payload) |val| switch (val) {
+                        .@"error" => |e| {
+                            const msg = if (e.message.len > 0) e.message else "NoResult";
+                            try extra_pull_errors.append(allocator, try allocator.dupe(u8, msg));
+                        },
+                        else => {},
+                    };
+                },
+                else => {},
+            }
+
+            _ = loop_arena.reset(.retain_capacity);
+        }
+    }
+
     // Output final result based on format
     if (std.mem.eql(u8, format, "json")) {
         if (has_error) {
             // Output error response
-            const err_json = try std.fmt.allocPrint(allocator, "{{\"status_class\":\"{s}\",\"error\":\"{s}\"}}\n", .{ error_status, error_message });
-            defer allocator.free(err_json);
-            _ = stdout.writeAll(err_json) catch {};
+            const escaped_err = escapeJsonString(allocator, error_message) catch error_message;
+            const needs_free = escaped_err.ptr != error_message.ptr;
+            defer if (needs_free) allocator.free(escaped_err);
+            _ = stdout.writeAll("{\"status_class\":\"") catch {};
+            _ = stdout.writeAll(error_status) catch {};
+            _ = stdout.writeAll("\",\"error\":\"") catch {};
+            _ = stdout.writeAll(escaped_err) catch {};
+            _ = stdout.writeAll("\",\"additional_statuses\":") catch {};
+            try Json.writeStringArray(stdout, allocator, additional_statuses.items);
+            _ = stdout.writeAll(",\"flagger_findings\":") catch {};
+            try Json.writeStringArray(stdout, allocator, flagger_findings.items);
+            _ = stdout.writeAll(",\"extra_pull_errors\":") catch {};
+            try Json.writeStringArray(stdout, allocator, extra_pull_errors.items);
+            _ = stdout.writeAll("}\n") catch {};
         } else {
-            // Output BINDINGS response in standard format
+            // Output JSON result (single object, no legacy SCHEMA/BINDINGS frames)
             const ordered_str = if (ordered) "true" else "false";
-            _ = stdout.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"ordered\":") catch {};
+            _ = stdout.writeAll("{\"status_class\":\"") catch {};
+            _ = stdout.writeAll(status_class) catch {};
+            _ = stdout.writeAll("\",\"ordered\":") catch {};
             _ = stdout.writeAll(ordered_str) catch {};
-            _ = stdout.writeAll(",") catch {};
-            _ = stdout.writeAll("\"order_keys\":[") catch {};
-            for (order_keys.items, 0..) |key, idx| {
-                if (idx > 0) _ = stdout.writeAll(",") catch {};
-                const key_json = try std.fmt.allocPrint(allocator, "\"{s}\"", .{key});
-                defer allocator.free(key_json);
-                _ = stdout.writeAll(key_json) catch {};
-            }
-            _ = stdout.writeAll("],\"final\":true,") catch {};
+            _ = stdout.writeAll(",\"order_keys\":") catch {};
+            try Json.writeStringArray(stdout, allocator, order_keys.items);
 
             // Write columns
-            _ = stdout.writeAll("\"columns\":[") catch {};
+            _ = stdout.writeAll(",\"columns\":[") catch {};
             for (columns.items, 0..) |col, i| {
                 if (i > 0) _ = stdout.writeAll(",") catch {};
                 const col_json = try std.fmt.allocPrint(allocator, "{{\"name\":\"{s}\",\"type\":\"text\"}}", .{col});
                 defer allocator.free(col_json);
                 _ = stdout.writeAll(col_json) catch {};
             }
-            _ = stdout.writeAll("],") catch {};
+            _ = stdout.writeAll("]") catch {};
 
             // Write rows
-            _ = stdout.writeAll("\"rows\":[") catch {};
+            _ = stdout.writeAll(",\"rows\":[") catch {};
             for (all_rows.items, 0..) |row, row_idx| {
                 if (row_idx > 0) _ = stdout.writeAll(",") catch {};
                 _ = stdout.writeAll("{") catch {};
@@ -2170,7 +2416,14 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                 }
                 _ = stdout.writeAll("}") catch {};
             }
-            _ = stdout.writeAll("]}}\n") catch {};
+            _ = stdout.writeAll("]") catch {};
+            _ = stdout.writeAll(",\"additional_statuses\":") catch {};
+            try Json.writeStringArray(stdout, allocator, additional_statuses.items);
+            _ = stdout.writeAll(",\"flagger_findings\":") catch {};
+            try Json.writeStringArray(stdout, allocator, flagger_findings.items);
+            _ = stdout.writeAll(",\"extra_pull_errors\":") catch {};
+            try Json.writeStringArray(stdout, allocator, extra_pull_errors.items);
+            _ = stdout.writeAll("}\n") catch {};
         }
     } else if (std.mem.eql(u8, format, "csv")) {
         // CSV header

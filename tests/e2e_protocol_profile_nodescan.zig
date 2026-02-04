@@ -15,7 +15,7 @@ fn run(args: []const []const u8) !struct { out: []u8 } {
 
 test "protocol: PROFILE includes NodeScan synthetic stage" {
     const exe = "zig-out/bin/geode";
-    const res = try run(&.{ exe, "PROFILE RETURN a AS x DISTINCT LIMIT 2", "--json-param", "a", "[1,2,2,3]" });
+    const res = try run(&.{ exe, "PROFILE RETURN a AS x DISTINCT LIMIT 2", "--param", "a", "[1,2,2,3]" });
     defer testing.allocator.free(res.out);
     var it = std.mem.splitScalar(u8, res.out, '\n');
     _ = it.next();

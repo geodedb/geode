@@ -18,29 +18,23 @@ pub const ErrorInfo = struct {
     message: []const u8,
 };
 
-pub fn parseParamsJson(allocator: std.mem.Allocator, params_json: []const u8) !ParamBindings {
-    const trimmed = std.mem.trim(u8, params_json, " \t\r\n");
-    if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "null")) {
+pub fn parseParams(allocator: std.mem.Allocator, params: []const schema.Param) !ParamBindings {
+    if (params.len == 0) {
         return .{ .names = &.{}, .values = &.{} };
     }
-    if (trimmed.len > 1_048_576) return error.ParamsTooLarge;
 
-    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{});
-    defer parsed.deinit();
-
-    if (parsed.value != .object) return error.InvalidParams;
-
-    const obj = parsed.value.object;
-    var names = try allocator.alloc([]const u8, obj.count());
+    var names = try allocator.alloc([]const u8, params.len);
     errdefer allocator.free(names);
-    var values = try allocator.alloc(value_types.Value, obj.count());
+    var values = try allocator.alloc(value_types.Value, params.len);
     errdefer allocator.free(values);
 
-    var i: usize = 0;
-    var it = obj.iterator();
-    while (it.next()) |entry| : (i += 1) {
-        names[i] = try allocator.dupe(u8, entry.key_ptr.*);
-        values[i] = try jsonToValue(allocator, entry.value_ptr.*, 0);
+    for (params, 0..) |param, i| {
+        names[i] = try allocator.dupe(u8, param.name);
+        if (param.value) |val| {
+            values[i] = try protoValueToValue(allocator, val, 0);
+        } else {
+            values[i] = .Null;
+        }
     }
 
     return .{ .names = names, .values = values };
@@ -48,46 +42,84 @@ pub fn parseParamsJson(allocator: std.mem.Allocator, params_json: []const u8) !P
 
 pub fn freeParamBindings(allocator: std.mem.Allocator, bindings: ParamBindings) void {
     for (bindings.names) |name| allocator.free(name);
-    for (bindings.values) |val| freeJsonValue(allocator, val);
+    for (bindings.values) |val| freeParamValue(allocator, val);
     allocator.free(bindings.names);
     allocator.free(bindings.values);
 }
 
-fn jsonToValue(allocator: std.mem.Allocator, val: std.json.Value, depth: usize) !value_types.Value {
-    if (depth > 64) return error.JsonTooDeep;
-    return switch (val) {
-        .null => .Null,
-        .bool => |b| .{ .Bool = b },
-        .integer => |i| .{ .Int = i },
-        .float => |f| .{ .Double = f },
-        .number_string => |s| .{ .Str = try allocator.dupe(u8, s) },
-        .string => |s| .{ .Str = try allocator.dupe(u8, s) },
-        .array => |arr| blk: {
-            const list = try allocator.alloc(value_types.Value, arr.items.len);
-            for (arr.items, 0..) |item, idx| {
-                list[idx] = try jsonToValue(allocator, item, depth + 1);
+fn protoValueToValue(allocator: std.mem.Allocator, value: schema.Value, depth: usize) !value_types.Value {
+    if (depth > 64) return error.ParamsTooDeep;
+    const kind = value.kind orelse return .Null;
+    return switch (kind) {
+        .null_val => .Null,
+        .bool_val => |b| .{ .Bool = b },
+        .int_val => |iv| switch (iv.kind) {
+            .INT => .{ .Int = iv.value },
+            .SMALLINT => .{ .SmallInt = @intCast(iv.value) },
+            .BIGINT => .{ .BigInt = iv.value },
+            else => .{ .Int = iv.value },
+        },
+        .double_val => |dv| switch (dv.kind) {
+            .REAL => .{ .Real = @floatCast(dv.value) },
+            .DOUBLE => .{ .Double = dv.value },
+            else => .{ .Double = dv.value },
+        },
+        .string_val => |sv| switch (sv.kind) {
+            .CHAR => .{ .Char = .{ .data = try allocator.dupe(u8, sv.value), .n = @intCast(sv.value.len) } },
+            .VARCHAR => .{ .Varchar = .{ .data = try allocator.dupe(u8, sv.value), .n = @intCast(sv.value.len) } },
+            .TEXT => .{ .Text = try allocator.dupe(u8, sv.value) },
+            else => .{ .Str = try allocator.dupe(u8, sv.value) },
+        },
+        .decimal_val => |dec| blk: {
+            const coeff = std.fmt.parseInt(i128, dec.coeff, 10) catch return error.InvalidParams;
+            const orig_repr = if (dec.orig_repr.len > 0)
+                try allocator.dupe(u8, dec.orig_repr)
+            else
+                null;
+            break :blk .{ .Decimal = .{
+                .coeff = coeff,
+                .scale = @intCast(dec.scale),
+                .orig_scale = @intCast(dec.orig_scale),
+                .orig_repr = orig_repr,
+            } };
+        },
+        .bytes_val => |bv| .{ .Bytea = try allocator.dupe(u8, bv.value) },
+        .list_val => |lv| blk: {
+            const list = try allocator.alloc(value_types.Value, lv.values.items.len);
+            for (lv.values.items, 0..) |item, idx| {
+                list[idx] = try protoValueToValue(allocator, item, depth + 1);
             }
             break :blk .{ .List = list };
         },
-        .object => |obj| blk: {
+        .map_val => |mv| blk: {
             var map = std.StringHashMap(value_types.Value).init(allocator);
             errdefer map.deinit();
-            var it = obj.iterator();
-            while (it.next()) |entry| {
-                const key = try allocator.dupe(u8, entry.key_ptr.*);
-                const value = try jsonToValue(allocator, entry.value_ptr.*, depth + 1);
-                try map.put(key, value);
+            for (mv.entries.items) |entry| {
+                const key = try allocator.dupe(u8, entry.key);
+                const val = if (entry.value) |v|
+                    try protoValueToValue(allocator, v, depth + 1)
+                else
+                    value_types.Value.Null;
+                try map.put(key, val);
             }
             break :blk .{ .Map = map };
         },
+        .ext_val => return error.UnsupportedParamType,
+        .node_val, .edge_val, .path_val => return error.UnsupportedParamType,
     };
 }
 
-fn freeJsonValue(allocator: std.mem.Allocator, value: value_types.Value) void {
+fn freeParamValue(allocator: std.mem.Allocator, value: value_types.Value) void {
     switch (value) {
         .Str => |s| allocator.free(s),
+        .Text => |s| allocator.free(s),
+        .Char => |c| allocator.free(c.data),
+        .Varchar => |v| allocator.free(v.data),
+        .Bytea => |b| allocator.free(b),
+        .Json => |j| allocator.free(j),
+        .Decimal => |d| if (d.orig_repr) |repr| allocator.free(repr),
         .List => |list| {
-            for (list) |item| freeJsonValue(allocator, item);
+            for (list) |item| freeParamValue(allocator, item);
             allocator.free(list);
         },
         .Map => |map_const| {
@@ -95,7 +127,7 @@ fn freeJsonValue(allocator: std.mem.Allocator, value: value_types.Value) void {
             var iter = map.iterator();
             while (iter.next()) |entry| {
                 allocator.free(entry.key_ptr.*);
-                freeJsonValue(allocator, entry.value_ptr.*);
+                freeParamValue(allocator, entry.value_ptr.*);
             }
             map.deinit();
         },

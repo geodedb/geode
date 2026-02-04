@@ -4,7 +4,7 @@ const util = @import("profile_test_util.zig");
 
 test "profile: spill_reason=threshold when peak exceeds threshold" {
     const exe = "./zig-out/bin/geode";
-    var child = std.process.Child.init(&.{ exe, "PROFILE RETURN a AS x ORDER BY x LIMIT 2", "--json-param", "a", "[1,2,3,4,5,6,7,8,9,10]" }, testing.allocator);
+    var child = std.process.Child.init(&.{ exe, "PROFILE RETURN a AS x ORDER BY x LIMIT 2", "--param", "a", "[1,2,3,4,5,6,7,8,9,10]" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     child.env_map = try std.process.getEnvMap(testing.allocator);

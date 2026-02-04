@@ -8,7 +8,7 @@ const FRAG_SLACK_DEN: usize = 10; // denominator
 test "protocol: PROFILE memory fragmentation slack bound" {
     const exe = "./zig-out/bin/geode";
     // Use a query with multiple operators to accumulate allocations.
-    const out = try util.runCli(testing.allocator, &.{ exe, "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 3", "--json-param", "a", "[9,8,7,6,5,5,4,3,2,1]" });
+    const out = try util.runCli(testing.allocator, &.{ exe, "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 3", "--param", "a", "[9,8,7,6,5,5,4,3,2,1]" });
     defer testing.allocator.free(out);
     const pl = util.findProfileLine(out) orelse return error.MissingProfile;
     // Parse ops to sum bytes_alloc

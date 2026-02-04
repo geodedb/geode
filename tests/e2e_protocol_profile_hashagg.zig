@@ -24,7 +24,7 @@ test "protocol PROFILE returns metrics table" {
     var hello = try client.hello(allocator, "", "");
     hello.deinit(allocator);
 
-    const res = try client.executeAndCollect(allocator, "PROFILE RETURN 1 AS k GROUP BY k", null, 100);
+    const res = try client.executeAndCollect(allocator, "PROFILE RETURN 1 AS k GROUP BY k", util.emptyParams(), 100);
     defer res.deinit(allocator);
 
     try testing.expect(res.error_code == null);

@@ -47,7 +47,7 @@ test "protocol: ORDER BY alias and ordinal" {
 
 test "protocol: aggregates ORDER BY alias" {
     const exe = "./zig-out/bin/geode";
-    const res = try run(&.{ exe, "RETURN SUM(v) AS s ORDER BY s LIMIT 1", "--json-param", "v", "[3,2,1]" });
+    const res = try run(&.{ exe, "RETURN SUM(v) AS s ORDER BY s LIMIT 1", "--param", "v", "[3,2,1]" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
@@ -77,7 +77,7 @@ test "protocol: GROUP BY illegality surfaces diagnostics" {
 test "protocol: pagination multi-page PULL final flag" {
     const exe = "./zig-out/bin/geode";
     // Build a query with three rows using params array
-    const res = try run(&.{ exe, "RETURN a AS v", "--json-param", "a", "[1,2,3]" });
+    const res = try run(&.{ exe, "RETURN a AS v", "--param", "a", "[1,2,3]" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     // Expect two lines (SCHEMA + first page) because client only requests one PULL of size 1000 by default.
@@ -93,7 +93,7 @@ test "protocol: pagination multi-page PULL final flag" {
 
 test "protocol: pagination multi-page pull-all sequence" {
     const exe = "./zig-out/bin/geode";
-    const res = try run(&.{ exe, "RETURN a AS v", "--json-param", "a", "[10,11,12]", "--page-size", "1", "--pull-all" });
+    const res = try run(&.{ exe, "RETURN a AS v", "--param", "a", "[10,11,12]", "--page-size", "1", "--pull-all" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
@@ -119,7 +119,7 @@ test "protocol: pagination multi-page pull-all sequence" {
 test "TestCANARY_REQ_GQL_004_PaginationStreamingOrderedEmission" {
     const exe = "./zig-out/bin/geode";
     // Build an ordered sequence with explicit ORDER BY to ensure stable order
-    const res = try run(&.{ exe, "RETURN a AS x ORDER BY x", "--json-param", "a", "[3,1,2]", "--page-size", "1", "--pull-all" });
+    const res = try run(&.{ exe, "RETURN a AS x ORDER BY x", "--param", "a", "[3,1,2]", "--page-size", "1", "--pull-all" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
@@ -152,7 +152,7 @@ test "TestCANARY_REQ_GQL_004_PaginationStreamingOrderedEmission" {
 test "protocol: pagination NoResult after final extra pull" {
     const exe = "./zig-out/bin/geode";
     // page-size 1 so we get multiple pulls then issue two extra pulls after final
-    const res = try run(&.{ exe, "RETURN a AS v", "--json-param", "a", "[7,8]", "--page-size", "1", "--pull-all", "--extra-pull", "2" });
+    const res = try run(&.{ exe, "RETURN a AS v", "--param", "a", "[7,8]", "--page-size", "1", "--pull-all", "--extra-pull", "2" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
@@ -170,7 +170,7 @@ test "TestCANARY_REQ_GQL_090_TelemetryPagingPull" {
     // Set minimal env vars; inherit for child process
     std.posix.setenvZ("GEODE_TELEMETRY_PAGING", "1", 1) catch {};
     std.posix.setenvZ("GEODE_CAPTURE_SERVER_STDERR", "1", 1) catch {};
-    const res = try run(&.{ exe, "RETURN a AS v", "--json-param", "a", "[5,6]", "--page-size", "1", "--pull-all" });
+    const res = try run(&.{ exe, "RETURN a AS v", "--param", "a", "[5,6]", "--page-size", "1", "--pull-all" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);

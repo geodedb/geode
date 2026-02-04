@@ -60,7 +60,7 @@ test "planner: set op then ORDER BY LIMIT" {
 
 test "planner: GROUP BY + HAVING + ORDER BY pipeline" {
     const exe = "./zig-out/bin/geode";
-    const res = try run(&.{ exe, "RETURN a, COUNT(*) AS c GROUP BY a HAVING c > 1 ORDER BY c DESC LIMIT 1", "--json-param", "a", "[1,1,2]" });
+    const res = try run(&.{ exe, "RETURN a, COUNT(*) AS c GROUP BY a HAVING c > 1 ORDER BY c DESC LIMIT 1", "--param", "a", "[1,1,2]" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);

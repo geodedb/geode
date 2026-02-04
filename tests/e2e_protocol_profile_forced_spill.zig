@@ -25,7 +25,7 @@ test "protocol: forced spill reason appears when env forces spill" {
     defer env_map.deinit();
     try env_map.put("GEODE_FORCE_SORT_SPILL", "1");
     const q = "PROFILE RETURN a AS x ORDER BY x LIMIT 5";
-    const out = try runWithEnv(&.{ exe, q, "--json-param", "a", "[5,4,3,2,1]" }, &env_map);
+    const out = try runWithEnv(&.{ exe, q, "--param", "a", "[5,4,3,2,1]" }, &env_map);
     defer testing.allocator.free(out);
     const pl = util.findProfileLine(out) orelse return error.MissingProfile;
     // We expect spill_reason forced and sort_spills >=1

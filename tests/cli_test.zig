@@ -134,14 +134,12 @@ test "exit codes are defined correctly" {
 
 test "unified CLI binary name detection" {
     // Test basename extraction for unified CLI
-    try testing.expectEqualStrings("geoded", std.fs.path.basename("/usr/local/bin/geoded"));
+    try testing.expectEqualStrings("geode", std.fs.path.basename("/usr/local/bin/geode"));
     try testing.expectEqualStrings("geode", std.fs.path.basename("./zig-out/bin/geode"));
     try testing.expectEqualStrings("geode-auth", std.fs.path.basename("geode-auth"));
     try testing.expectEqualStrings("geode", std.fs.path.basename("/path/to/geode"));
 
-    // Test legacy detection logic
-    try testing.expect(std.mem.endsWith(u8, "geoded", "geoded"));
-    try testing.expect(std.mem.endsWith(u8, "geodec", "geodec"));
-    try testing.expect(std.mem.endsWith(u8, "geode-auth", "geode-auth"));
+    // Unified binary should not be confused with legacy names
     try testing.expect(!std.mem.endsWith(u8, "geode", "geoded"));
+    try testing.expect(!std.mem.endsWith(u8, "geode", "geodec"));
 }

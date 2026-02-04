@@ -506,7 +506,7 @@ pub fn dispatch(
     } else {
         // Check if this is an option that should be handled by query command
         if (std.mem.startsWith(u8, subcommand, "--format") or
-            std.mem.startsWith(u8, subcommand, "--json-param") or
+            std.mem.startsWith(u8, subcommand, "--param") or
             std.mem.startsWith(u8, subcommand, "--page-size") or
             std.mem.startsWith(u8, subcommand, "--server"))
         {
@@ -686,7 +686,7 @@ fn printBashCompletions() void {
         \\            return 0
         \\            ;;
         \\        query)
-        \\            COMPREPLY=( $(compgen -W "--server --format --json-param --help" -- "${cur}") )
+        \\            COMPREPLY=( $(compgen -W "--server --format --param --help" -- "${cur}") )
         \\            return 0
         \\            ;;
         \\        shell)

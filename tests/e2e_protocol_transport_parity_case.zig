@@ -122,7 +122,7 @@ test "protocol: transport parity stdio vs QUIC (CASE 3VL)" {
     const q = "RETURN CASE WHEN a IS NULL THEN 'n' WHEN a THEN 't' ELSE 'f' END AS r";
     const param = "[null,true,false]";
 
-    const sres = try run(&.{ exe, q, "--json-param", "a", param", "--format", "json" });
+    const sres = try run(&.{ exe, q, "--param", "a", param", "--format", "json" });
     defer std.testing.allocator.free(sres.out);
     defer std.testing.allocator.free(sres.err);
     try std.testing.expectEqual(@as(i32, 0), sres.code);
@@ -136,7 +136,7 @@ test "protocol: transport parity stdio vs QUIC (CASE 3VL)" {
     }
     std.Thread.sleep(300 * std.time.ns_per_ms);
 
-    const qres = try run(&.{ exe, q, "--json-param", "a", param", "--server", "127.0.0.1:17670", "--quic", "--format", "json" });
+    const qres = try run(&.{ exe, q, "--param", "a", param", "--server", "127.0.0.1:17670", "--quic", "--format", "json" });
     defer std.testing.allocator.free(qres.out);
     defer std.testing.allocator.free(qres.err);
     try std.testing.expectEqual(@as(i32, 0), qres.code);

@@ -57,9 +57,9 @@ fn extractRows(out: []const u8) [][]const u8 {
 test "protocol: ORDER BY nulls policy toggle" {
     const exe = "zig-out/bin/geode";
     // Use params to produce rows: param vector [2,null,1]
-    const res_first = try run(&.{ exe, "RETURN a AS x ORDER BY x", "--json-param", "a", "[2,null,1]" }, false);
+    const res_first = try run(&.{ exe, "RETURN a AS x ORDER BY x", "--param", "a", "[2,null,1]" }, false);
     defer testing.allocator.free(res_first.out);
-    const res_last = try run(&.{ exe, "RETURN a AS x ORDER BY x", "--json-param", "a", "[2,null,1]" }, true);
+    const res_last = try run(&.{ exe, "RETURN a AS x ORDER BY x", "--param", "a", "[2,null,1]" }, true);
     defer testing.allocator.free(res_last.out);
     // Grab bindings lines (second line in each output)
     var it1 = std.mem.splitScalar(u8, res_first.out, '\n');

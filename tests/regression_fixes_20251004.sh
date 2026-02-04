@@ -74,8 +74,8 @@ test_case "negative-decimal" 0 "$GEODE_BIN" query "RETURN -123.45 AS neg_decimal
 
 # Fix 4: JSON parameter validation
 echo "--- Fix 4: JSON Parameter Validation ---"
-test_case "valid-json-param" 0 "$GEODE_BIN" query "RETURN \$value AS result" --json-param value '"hello"' --insecure
-test_case "invalid-json-param" 2 "$GEODE_BIN" query "RETURN \$value AS result" --json-param value badvalue --insecure
+test_case "valid-json-param" 0 "$GEODE_BIN" query "RETURN \$value AS result" --param value '"hello"' --insecure
+test_case "invalid-json-param" 2 "$GEODE_BIN" query "RETURN \$value AS result" --param value badvalue --insecure
 
 # Fix 5: Exit code corrections
 echo "--- Fix 5: Exit Code Corrections ---"

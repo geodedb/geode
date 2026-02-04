@@ -84,7 +84,7 @@ test "Telemetry smoke emits PULL_PAGE (env-gated)" {
     var client = std.process.Child.init(&.{
         client_path,
         "RETURN a AS x ORDER BY x LIMIT 5",
-        "--json-param",
+        "--param",
         "a",
         "[1,2,3,4,5,6,7,8,9,10]",
         "--format",

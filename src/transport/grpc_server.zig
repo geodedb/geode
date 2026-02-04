@@ -306,36 +306,126 @@ pub const GeodeGrpcServer = struct {
     }
 
     fn registerHandlers(self: *GeodeGrpcServer) !void {
+        // grpc_zig routes only the first handler; use a packet wrapper to dispatch
         try self.server.handlers.append(self.allocator, .{
-            .name = "Handshake",
-            .handler_fn = handleHandshake,
-        });
-        try self.server.handlers.append(self.allocator, .{
-            .name = "Execute",
-            .handler_fn = handleExecute,
-        });
-        try self.server.handlers.append(self.allocator, .{
-            .name = "Pull",
-            .handler_fn = handlePull,
-        });
-        try self.server.handlers.append(self.allocator, .{
-            .name = "Ping",
-            .handler_fn = handlePing,
-        });
-        try self.server.handlers.append(self.allocator, .{
-            .name = "Begin",
-            .handler_fn = handleBegin,
-        });
-        try self.server.handlers.append(self.allocator, .{
-            .name = "Commit",
-            .handler_fn = handleCommit,
-        });
-        try self.server.handlers.append(self.allocator, .{
-            .name = "Rollback",
-            .handler_fn = handleRollback,
+            .name = "Packet",
+            .handler_fn = handlePacket,
         });
     }
 };
+
+fn buildPacketError(
+    allocator: std.mem.Allocator,
+    code: []const u8,
+    message: []const u8,
+) ![]u8 {
+    var resp = try buildErrorResponse(allocator, code, message, &.{}, &.{});
+    defer resp.deinit(allocator);
+    var packet = schema.ServerPacket{ .quic = .{ .execute = resp } };
+    defer packet.deinit(allocator);
+    return encodeMessage(allocator, packet);
+}
+
+fn handlePacket(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    var reader: std.Io.Reader = .fixed(request_bytes);
+    var packet = protobuf.decode(schema.ClientPacket, &reader, allocator) catch |err| {
+        log.err("Failed to decode gRPC packet", &.{Attr.err("error", err)});
+        return buildPacketError(allocator, "22023", "Invalid client packet");
+    };
+    defer packet.deinit(allocator);
+
+    const msg = packet.quic orelse {
+        return buildPacketError(allocator, "22023", "Missing client message");
+    };
+
+    return switch (msg) {
+        .hello => |req| blk: {
+            const req_bytes = try encodeMessage(allocator, req);
+            defer allocator.free(req_bytes);
+            const resp_bytes = try handleHandshake(req_bytes, allocator);
+            defer allocator.free(resp_bytes);
+
+            var resp_reader: std.Io.Reader = .fixed(resp_bytes);
+            const resp = try protobuf.decode(schema.HelloResponse, &resp_reader, allocator);
+            var out = schema.ServerPacket{ .quic = .{ .hello = resp } };
+            defer out.deinit(allocator);
+            break :blk encodeMessage(allocator, out);
+        },
+        .execute => |req| blk: {
+            const req_bytes = try encodeMessage(allocator, req);
+            defer allocator.free(req_bytes);
+            const resp_bytes = try handleExecute(req_bytes, allocator);
+            defer allocator.free(resp_bytes);
+
+            var resp_reader: std.Io.Reader = .fixed(resp_bytes);
+            const resp = try protobuf.decode(schema.ExecutionResponse, &resp_reader, allocator);
+            var out = schema.ServerPacket{ .quic = .{ .execute = resp } };
+            defer out.deinit(allocator);
+            break :blk encodeMessage(allocator, out);
+        },
+        .pull => |req| blk: {
+            const req_bytes = try encodeMessage(allocator, req);
+            defer allocator.free(req_bytes);
+            const resp_bytes = try handlePull(req_bytes, allocator);
+            defer allocator.free(resp_bytes);
+
+            var resp_reader: std.Io.Reader = .fixed(resp_bytes);
+            const resp = try protobuf.decode(schema.PullResponse, &resp_reader, allocator);
+            var out = schema.ServerPacket{ .quic = .{ .pull = resp } };
+            defer out.deinit(allocator);
+            break :blk encodeMessage(allocator, out);
+        },
+        .ping => |req| blk: {
+            const req_bytes = try encodeMessage(allocator, req);
+            defer allocator.free(req_bytes);
+            const resp_bytes = try handlePing(req_bytes, allocator);
+            defer allocator.free(resp_bytes);
+
+            var resp_reader: std.Io.Reader = .fixed(resp_bytes);
+            const resp = try protobuf.decode(schema.PingResponse, &resp_reader, allocator);
+            var out = schema.ServerPacket{ .quic = .{ .ping = resp } };
+            defer out.deinit(allocator);
+            break :blk encodeMessage(allocator, out);
+        },
+        .begin => |req| blk: {
+            const req_bytes = try encodeMessage(allocator, req);
+            defer allocator.free(req_bytes);
+            const resp_bytes = try handleBegin(req_bytes, allocator);
+            defer allocator.free(resp_bytes);
+
+            var resp_reader: std.Io.Reader = .fixed(resp_bytes);
+            const resp = try protobuf.decode(schema.BeginResponse, &resp_reader, allocator);
+            var out = schema.ServerPacket{ .quic = .{ .begin = resp } };
+            defer out.deinit(allocator);
+            break :blk encodeMessage(allocator, out);
+        },
+        .commit => |req| blk: {
+            const req_bytes = try encodeMessage(allocator, req);
+            defer allocator.free(req_bytes);
+            const resp_bytes = try handleCommit(req_bytes, allocator);
+            defer allocator.free(resp_bytes);
+
+            var resp_reader: std.Io.Reader = .fixed(resp_bytes);
+            const resp = try protobuf.decode(schema.CommitResponse, &resp_reader, allocator);
+            var out = schema.ServerPacket{ .quic = .{ .commit = resp } };
+            defer out.deinit(allocator);
+            break :blk encodeMessage(allocator, out);
+        },
+        .rollback => |req| blk: {
+            const req_bytes = try encodeMessage(allocator, req);
+            defer allocator.free(req_bytes);
+            const resp_bytes = try handleRollback(req_bytes, allocator);
+            defer allocator.free(resp_bytes);
+
+            var resp_reader: std.Io.Reader = .fixed(resp_bytes);
+            const resp = try protobuf.decode(schema.RollbackResponse, &resp_reader, allocator);
+            var out = schema.ServerPacket{ .quic = .{ .rollback = resp } };
+            defer out.deinit(allocator);
+            break :blk encodeMessage(allocator, out);
+        },
+        else => buildPacketError(allocator, "0A000", "Unsupported client message"),
+    };
+}
 
 fn handlePing(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
     const response = schema.PingResponse{ .ok = true };
@@ -450,7 +540,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
         return encodeMessage(allocator, resp);
     }
 
-    const bindings = proto_util.parseParamsJson(allocator, req.params_json) catch |err| {
+    const bindings = proto_util.parseParams(allocator, req.params.items) catch |err| {
         var resp = try buildErrorResponse(allocator, "22023", @errorName(err), &.{}, &.{});
         defer resp.deinit(allocator);
         return encodeMessage(allocator, resp);

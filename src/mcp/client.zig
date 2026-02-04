@@ -399,10 +399,18 @@ pub const GeodeClient = struct {
         try self.ensureConnected();
 
         const session_id = self.session_id orelse "";
+        var param_list = try parseParamsJson(self.allocator, params);
+        defer {
+            for (param_list.items) |*param| {
+                param.deinit(self.allocator);
+            }
+            param_list.deinit(self.allocator);
+        }
+
         const exec_req = schema.ExecuteRequest{
             .session_id = session_id,
             .query = gql,
-            .params_json = params orelse "",
+            .params = param_list,
         };
         try self.writeProtoMessage(.{ .execute = exec_req });
 
@@ -608,6 +616,63 @@ pub const GeodeClient = struct {
         try self.ensureConnected();
     }
 };
+
+const PARAM_MAX_SIZE: usize = 1 * 1024 * 1024;
+const PARAM_MAX_DEPTH: usize = 64;
+
+fn parseParamsJson(allocator: std.mem.Allocator, params_json: ?[]const u8) !std.ArrayList(schema.Param) {
+    var params = std.ArrayList(schema.Param){};
+    if (params_json == null) return params;
+
+    const trimmed = std.mem.trim(u8, params_json.?, " \t\r\n");
+    if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "null")) {
+        return params;
+    }
+    if (trimmed.len > PARAM_MAX_SIZE) return error.ParamsTooLarge;
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{});
+    defer parsed.deinit();
+
+    if (parsed.value != .object) return error.InvalidParams;
+
+    var it = parsed.value.object.iterator();
+    while (it.next()) |entry| {
+        const name = try allocator.dupe(u8, entry.key_ptr.*);
+        const value = try jsonToProtoValue(allocator, entry.value_ptr.*, 0);
+        try params.append(allocator, .{ .name = name, .value = value });
+    }
+
+    return params;
+}
+
+fn jsonToProtoValue(allocator: std.mem.Allocator, value: std.json.Value, depth: usize) !schema.Value {
+    if (depth > PARAM_MAX_DEPTH) return error.ParamsTooDeep;
+    return switch (value) {
+        .null => .{ .kind = .{ .null_val = .{} } },
+        .bool => |b| .{ .kind = .{ .bool_val = b } },
+        .integer => |i| .{ .kind = .{ .int_val = .{ .value = i, .kind = .INT } } },
+        .float => |f| .{ .kind = .{ .double_val = .{ .value = f, .kind = .DOUBLE } } },
+        .number_string => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
+        .string => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
+        .array => |arr| blk: {
+            var values = std.ArrayList(schema.Value).initCapacity(allocator, arr.items.len) catch return error.OutOfMemory;
+            for (arr.items) |item| {
+                try values.append(allocator, try jsonToProtoValue(allocator, item, depth + 1));
+            }
+            break :blk .{ .kind = .{ .list_val = .{ .values = values } } };
+        },
+        .object => |obj| blk: {
+            var entries = std.ArrayList(schema.MapEntry).initCapacity(allocator, obj.count()) catch return error.OutOfMemory;
+            var it = obj.iterator();
+            while (it.next()) |entry| {
+                const key = try allocator.dupe(u8, entry.key_ptr.*);
+                const val = try jsonToProtoValue(allocator, entry.value_ptr.*, depth + 1);
+                try entries.append(allocator, .{ .key = key, .value = val });
+            }
+            break :blk .{ .kind = .{ .map_val = .{ .entries = entries } } };
+        },
+    };
+}
 
 // escapeJsonString removed - JSON library handles escaping automatically
 

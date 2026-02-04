@@ -82,15 +82,29 @@ pub const HelloResponse = struct {
 pub const ExecuteRequest = struct {
     session_id: []const u8 = "",
     query: []const u8 = "",
-    params_json: []const u8 = "",
+    params: std.ArrayList(Param),
 
     pub const _desc_table = .{
         .session_id = fd(1, .{ .scalar = .string }),
         .query = fd(2, .{ .scalar = .string }),
-        .params_json = fd(3, .{ .scalar = .string }),
+        .params = fd(3, .{ .repeated = .{ .submessage = {} } }),
     };
 
     pub fn deinit(self: *ExecuteRequest, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+pub const Param = struct {
+    name: []const u8 = "",
+    value: ?Value = null,
+
+    pub const _desc_table = .{
+        .name = fd(1, .{ .scalar = .string }),
+        .value = fd(2, .{ .submessage = {} }),
+    };
+
+    pub fn deinit(self: *Param, allocator: std.mem.Allocator) void {
         protobuf.deinit(allocator, self);
     }
 };

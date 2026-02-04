@@ -15,7 +15,7 @@ fn run(args: []const []const u8) !struct { out: []u8 } {
 
 test "protocol: PROFILE time consistency cumulative vs total" {
     const exe = "zig-out/bin/geode";
-    const res = try run(&.{ exe, "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 5", "--json-param", "a", "[1,2,2,3,4,5,6,7,8,9]" });
+    const res = try run(&.{ exe, "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 5", "--param", "a", "[1,2,2,3,4,5,6,7,8,9]" });
     defer testing.allocator.free(res.out);
     var it = std.mem.splitScalar(u8, res.out, '\n');
     _ = it.next();

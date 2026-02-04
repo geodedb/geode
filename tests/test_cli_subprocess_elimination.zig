@@ -126,7 +126,7 @@ test "Client configuration supports unified binary operation" {
         .begin = true,
         .commit = false,
         .rollback = false,
-        .process_path = "/usr/bin/geoded",
+        .process_path = "/usr/bin/geode",
         .insecure = false,
         .server_args = &.{ "--verbose", "--debug" },
     };
@@ -141,7 +141,7 @@ test "Client configuration supports unified binary operation" {
     try testing.expect(config.begin == true);
     try testing.expect(config.commit == false);
     try testing.expect(config.rollback == false);
-    try testing.expect(std.mem.eql(u8, config.process_path.?, "/usr/bin/geoded"));
+    try testing.expect(std.mem.eql(u8, config.process_path.?, "/usr/bin/geode"));
     try testing.expect(config.insecure == false);
     try testing.expect(config.server_args.len == 2);
 

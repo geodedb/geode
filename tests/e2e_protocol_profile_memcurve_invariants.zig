@@ -53,7 +53,7 @@ fn parseMemCurve(profile_line: []const u8) !struct { indices: []usize, nets: []u
 
 test "protocol: PROFILE mem_curve invariants monotonic indices & nets" {
     const exe = "zig-out/bin/geode";
-    const out = try run(&.{ exe, "--profile-memcurve", "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 2", "--json-param", "a", "[1,1,2,3,5,8]" });
+    const out = try run(&.{ exe, "--profile-memcurve", "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 2", "--param", "a", "[1,1,2,3,5,8]" });
     defer testing.allocator.free(out);
     var it = std.mem.splitScalar(u8, out, '\n');
     _ = it.next(); // schema

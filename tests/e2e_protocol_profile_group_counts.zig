@@ -33,7 +33,7 @@ fn contains(h: []const u8, n: []const u8) bool {
 test "protocol: PROFILE GROUP BY shows agg_rows_in from params" {
     const exe = "./zig-out/bin/geode";
     // Provide param array a with three values; query groups by a returning a and COUNT(*)
-    const res = try run(&.{ exe, "PROFILE RETURN a, COUNT(*) AS c GROUP BY a", "--json-param", "a", "[1,1,2]" });
+    const res = try run(&.{ exe, "PROFILE RETURN a, COUNT(*) AS c GROUP BY a", "--param", "a", "[1,1,2]" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);

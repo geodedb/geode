@@ -615,7 +615,7 @@ fn handleClientMessage(
                 return;
             }
 
-            const bindings = proto_util.parseParamsJson(gpa, exec_req.params_json) catch |err| {
+            const bindings = proto_util.parseParams(gpa, exec_req.params.items) catch |err| {
                 const err_msg = @errorName(err);
                 try sendExecuteError(gpa, stream, "22023", err_msg, &.{}, &.{});
                 return;

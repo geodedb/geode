@@ -27,7 +27,7 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
 
 test "protocol: multi param aligned arrays" {
     const exe = "./zig-out/bin/geode";
-    const res = try run(&.{ exe, "RETURN a AS a, b AS b", "--json-param", "a", "[1,2]", "--json-param", "b", "[3,4]" });
+    const res = try run(&.{ exe, "RETURN a AS a, b AS b", "--param", "a", "[1,2]", "--param", "b", "[3,4]" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
@@ -37,7 +37,7 @@ test "protocol: multi param aligned arrays" {
 
 test "protocol: multi param length mismatch" {
     const exe = "./zig-out/bin/geode";
-    const res = try run(&.{ exe, "RETURN a AS a, b AS b", "--json-param", "a", "[1,2]", "--json-param", "b", "[9]" });
+    const res = try run(&.{ exe, "RETURN a AS a, b AS b", "--param", "a", "[1,2]", "--param", "b", "[9]" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 2), res.code);

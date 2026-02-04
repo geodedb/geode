@@ -23,7 +23,7 @@ test "transactions e2e basic lifecycle" {
     defer begin_nested.deinit(allocator);
     try testing.expect(begin_nested.tx_id.len == 0);
 
-    const exec = try client.executeAndCollect(allocator, "RETURN 1 AS x ORDER BY x LIMIT 1", null, 100);
+    const exec = try client.executeAndCollect(allocator, "RETURN 1 AS x ORDER BY x LIMIT 1", util.emptyParams(), 100);
     defer exec.deinit(allocator);
     try testing.expect(exec.error_code == null);
     try testing.expect(exec.rows.len == 1);

@@ -1063,10 +1063,11 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
     const session_id = session_id_buf orelse return error.ApplyFailed;
     defer ctx.allocator.free(session_id);
 
+    const params = std.ArrayList(schema.Param){};
     const exec_req = schema.ExecuteRequest{
         .session_id = session_id,
         .query = script,
-        .params_json = "",
+        .params = params,
     };
     try writeProtoMessage(ctx.allocator, stream, .{ .execute = exec_req });
 

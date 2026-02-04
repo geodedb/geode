@@ -44,10 +44,22 @@ test "protobuf: HelloRequest roundtrip" {
 test "protobuf: ExecuteRequest roundtrip" {
     const allocator = testing.allocator;
 
+    var params = std.ArrayList(schema.Param).init(allocator);
+    defer {
+        for (params.items) |*param| {
+            param.deinit(allocator);
+        }
+        params.deinit(allocator);
+    }
+    try params.append(allocator, .{
+        .name = try allocator.dupe(u8, "id"),
+        .value = .{ .kind = .{ .int_val = .{ .value = 42, .kind = .INT } } },
+    });
+
     const req = schema.ExecuteRequest{
         .session_id = "session-123",
         .query = "MATCH (n) RETURN n",
-        .params_json = "{}",
+        .params = params,
     };
 
     const encoded = try encodeToBytes(allocator, req);

@@ -82,7 +82,12 @@ message HelloResponse {
 message ExecuteRequest {
   string session_id = 1;
   string query = 2;
-  string params_json = 3; // Raw JSON string for parameters (legacy semantics preserved)
+  repeated Param params = 3;
+}
+
+message Param {
+  string name = 1;
+  Value value = 2;
 }
 
 message PullRequest {
