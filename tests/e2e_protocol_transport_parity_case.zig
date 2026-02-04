@@ -122,7 +122,7 @@ test "protocol: transport parity QUIC (CASE 3VL)" {
     }
     std.Thread.sleep(300 * std.time.ns_per_ms);
 
-    const qres = try run(&.{ exe, q, "--param", "a", param", "--server", "127.0.0.1:17670", "--format", "json" });
+    const qres = try run(&.{ exe, q, "--param", "a", param, "--server", "127.0.0.1:17670", "--format", "json" });
     defer std.testing.allocator.free(qres.out);
     defer std.testing.allocator.free(qres.err);
     try std.testing.expectEqual(@as(i32, 0), qres.code);
@@ -131,7 +131,7 @@ test "protocol: transport parity QUIC (CASE 3VL)" {
     defer std.testing.allocator.free(qrows);
     defer std.testing.allocator.free(qnorm);
 
-    const qres2 = try run(&.{ exe, q, "--param", "a", param", "--server", "127.0.0.1:17670", "--format", "json" });
+    const qres2 = try run(&.{ exe, q, "--param", "a", param, "--server", "127.0.0.1:17670", "--format", "json" });
     defer std.testing.allocator.free(qres2.out);
     defer std.testing.allocator.free(qres2.err);
     try std.testing.expectEqual(@as(i32, 0), qres2.code);

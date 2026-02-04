@@ -6,8 +6,9 @@ const std = @import("std");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
 const spice_wrapper = @import("parallel/spice");
-const explain_payload = @import("../server/explain_payload.zig");
-const profile_payload = @import("../server/profile_payload.zig");
+const geode = @import("geode");
+const explain_payload = geode.explain_payload;
+const profile_payload = geode.profile_payload;
 
 // Import quic_transport through the parent module to ensure module resolution
 const quic_transport = @import("mod.zig").quic_transport;

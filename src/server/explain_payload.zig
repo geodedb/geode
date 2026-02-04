@@ -32,8 +32,8 @@ pub fn buildExplainPayload(
         const op_entry = schema.ExplainOp{
             .idx = @intCast(idx),
             .kind = try allocator.dupe(u8, kind_name),
-            .est_rows = @intCast(@floor(est_card.rows)),
-            .cost = @intCast(@floor(op_cost)),
+            .est_rows = @intFromFloat(@floor(est_card.rows)),
+            .cost = @intFromFloat(@floor(op_cost)),
         };
         try op_list.append(allocator, op_entry);
         prev_est = est_card;
@@ -61,7 +61,7 @@ pub fn buildExplainPayload(
     var payload = schema.ExplainPayload{
         .schema = try allocator.dupe(u8, schema_name),
         .ops = op_list,
-        .totals = .{ .est_rows = @intCast(@floor(total_est_rows)), .cost = @intCast(@floor(total_cost)) },
+        .totals = .{ .est_rows = @intFromFloat(@floor(total_est_rows)), .cost = @intFromFloat(@floor(total_cost)) },
         .properties = properties,
         .calibration = calibration_opt,
         .profile_version = 2,
