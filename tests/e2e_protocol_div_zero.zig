@@ -23,7 +23,7 @@ inline fn contains(h: []const u8, n: []const u8) bool {
 // Expect TypeMismatch diagnostic (division by zero) with anchor possibly empty.
 
 test "protocol: division by zero TypeMismatch" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "RETURN 1/0 AS x" });
     // Error expected
     try testing.expect(res.code == 2);

@@ -52,7 +52,7 @@ fn isOrderedAsc(out: []const u8, key: []const u8) bool {
 }
 
 test "fuzz: extended ORDER BY multi-key nulls strings pagination" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     var prng = std.rand.DefaultPrng.init(0xA11CE5);
     const rnd = prng.random();
     var iter: usize = 0;

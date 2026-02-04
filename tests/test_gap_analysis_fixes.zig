@@ -30,11 +30,11 @@ test "GAP-0001: AES-256-GCM encryption basic roundtrip" {
     var tag: [tag_len]u8 = undefined;
 
     // Encrypt
-    AesGcm.encrypt(&ciphertext, &tag, plaintext, "", nonce, key);
+    AesGcm.encrypt(&ciphertext, &tag, plaintext, nonce, key);
 
     // Decrypt
     var decrypted: [plaintext.len]u8 = undefined;
-    try AesGcm.decrypt(&decrypted, &ciphertext, tag, "", nonce, key);
+    try AesGcm.decrypt(&decrypted, &ciphertext, tag, nonce, key);
 
     try testing.expectEqualStrings(plaintext, &decrypted);
 }
@@ -54,14 +54,14 @@ test "GAP-0001: AES-256-GCM detects tampered ciphertext" {
     var ciphertext: [plaintext.len]u8 = undefined;
     var tag: [tag_len]u8 = undefined;
 
-    AesGcm.encrypt(&ciphertext, &tag, plaintext, "", nonce, key);
+    AesGcm.encrypt(&ciphertext, &tag, plaintext, nonce, key);
 
     // Tamper with ciphertext
     ciphertext[0] ^= 0xFF;
 
     // Decryption should fail with authentication error
     var decrypted: [plaintext.len]u8 = undefined;
-    const result = AesGcm.decrypt(&decrypted, &ciphertext, tag, "", nonce, key);
+    const result = AesGcm.decrypt(&decrypted, &ciphertext, tag, nonce, key);
     try testing.expectError(error.AuthenticationFailed, result);
 }
 
@@ -80,14 +80,14 @@ test "GAP-0001: AES-256-GCM detects tampered authentication tag" {
     var ciphertext: [plaintext.len]u8 = undefined;
     var tag: [tag_len]u8 = undefined;
 
-    AesGcm.encrypt(&ciphertext, &tag, plaintext, "", nonce, key);
+    AesGcm.encrypt(&ciphertext, &tag, plaintext, nonce, key);
 
     // Tamper with tag
     tag[0] ^= 0xFF;
 
     // Decryption should fail
     var decrypted: [plaintext.len]u8 = undefined;
-    const result = AesGcm.decrypt(&decrypted, &ciphertext, tag, "", nonce, key);
+    const result = AesGcm.decrypt(&decrypted, &ciphertext, tag, nonce, key);
     try testing.expectError(error.AuthenticationFailed, result);
 }
 
@@ -110,8 +110,8 @@ test "GAP-0001: AES-256-GCM unique nonces produce different ciphertexts" {
     std.crypto.random.bytes(&nonce1);
     std.crypto.random.bytes(&nonce2);
 
-    AesGcm.encrypt(&ciphertext1, &tag1, plaintext, "", nonce1, key);
-    AesGcm.encrypt(&ciphertext2, &tag2, plaintext, "", nonce2, key);
+    AesGcm.encrypt(&ciphertext1, &tag1, plaintext, nonce1, key);
+    AesGcm.encrypt(&ciphertext2, &tag2, plaintext, nonce2, key);
 
     // Ciphertexts should be different with different nonces
     try testing.expect(!std.mem.eql(u8, &ciphertext1, &ciphertext2));
@@ -132,10 +132,10 @@ test "GAP-0001: AES-256-GCM empty plaintext handling" {
     var ciphertext: [0]u8 = undefined;
     var tag: [tag_len]u8 = undefined;
 
-    AesGcm.encrypt(&ciphertext, &tag, plaintext, "", nonce, key);
+    AesGcm.encrypt(&ciphertext, &tag, plaintext, nonce, key);
 
     var decrypted: [0]u8 = undefined;
-    try AesGcm.decrypt(&decrypted, &ciphertext, tag, "", nonce, key);
+    try AesGcm.decrypt(&decrypted, &ciphertext, tag, nonce, key);
 
     try testing.expectEqualStrings(plaintext, &decrypted);
 }
@@ -708,7 +708,7 @@ test "Integration: regex patterns comprehensive" {
         .{ .input = "test123", .pattern = "test[0-9]+", .expected = true },
         .{ .input = "ABC", .pattern = "[A-Z][A-Z][A-Z]", .expected = true },
         .{ .input = "abc", .pattern = "[A-Z][A-Z][A-Z]", .expected = false },
-        .{ .input = "", .pattern = "", .expected = true },
+        .{ .input = ", .pattern = ", .expected = true },
         .{ .input = "anything", .pattern = ".*", .expected = true },
     };
 

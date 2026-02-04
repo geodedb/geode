@@ -16,7 +16,7 @@ fn runWithEnv(args: []const []const u8, env_map: *std.process.EnvMap) ![]u8 {
 }
 
 test "protocol: forced spill reason appears when env forces spill" {
-    const exe = "zig-out/bin/geoded";
+    const exe = "zig-out/bin/geode";
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -30,5 +30,5 @@ test "protocol: forced spill reason appears when env forces spill" {
     const pl = util.findProfileLine(out) orelse return error.MissingProfile;
     // We expect spill_reason forced and sort_spills >=1
     try testing.expect(std.mem.indexOf(u8, pl, "\"spill_reason\":\"forced\"") != null);
-    try testing.expect(std.mem.indexOf(u8, pl, "\"sort_spills\":1") != null or std.mem.indexOf(u8, pl, "\"sort_spills\":2") != null);
+    try testing.expect(std.mem.indexOf(u8, pl, "\"sort_spills\":1") != null or std.mem.indexOf(u8, pl", "\"sort_spills\":2") != null);
 }

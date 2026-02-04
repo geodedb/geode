@@ -256,7 +256,7 @@ test "user field length validation" {
 
     // Test email too long
     const long_email = "user@" ++ ("a" ** 125) ++ ".com";
-    const result2 = user_store.persistUser(2, "user", long_email, "hash");
+    const result2 = user_store.persistUser(2, "user", long_email", "hash");
     try testing.expectError(error.FieldTooLong, result2);
 
     // Test password too long

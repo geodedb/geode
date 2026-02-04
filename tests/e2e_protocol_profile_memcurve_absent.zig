@@ -6,7 +6,7 @@ const util = @import("profile_test_util.zig");
 // (negative counterpart to memcurve presence tests)
 
 test "protocol: PROFILE mem_curve absent by default" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const out = try util.runCli(testing.allocator, &.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer testing.allocator.free(out);
     const pl = util.findProfileLine(out) orelse return error.MissingProfile;

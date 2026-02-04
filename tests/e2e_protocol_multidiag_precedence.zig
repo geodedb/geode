@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 fn runCli(alloc: std.mem.Allocator, query: []const u8) !struct { code: u8, err: []u8 } {
-    var argv = [_][]const u8{ "./zig-out/bin/geodec", query };
+    var argv = [_][]const u8{ "./zig-out/bin/geode", query };
     var child = std.process.Child.init(&argv, alloc);
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Pipe;

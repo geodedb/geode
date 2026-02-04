@@ -18,6 +18,7 @@ const server_main = @import("../server/main.zig");
 const protobuf = @import("protobuf");
 const json_lib = @import("json");
 const schema = @import("schema");
+const spice_wrapper = @import("parallel/spice");
 
 // GAP-0203: Gate hot-path debug logging to eliminate overhead in production
 // CANARY: REQ=REQ-PERF-LOG-GATE-001; FEATURE="HotPathLogGating"; ASPECT=DebugLogControl; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
@@ -1810,6 +1811,12 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
         }
         all_rows.deinit(allocator);
     }
+    var ordered: bool = false;
+    var order_keys = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    defer {
+        for (order_keys.items) |key| allocator.free(key);
+        order_keys.deinit(allocator);
+    }
 
     var has_error: bool = false;
     var error_message: []const u8 = "";
@@ -1844,6 +1851,63 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
             page: schema.DataPage,
             rows_list: *std.ArrayList(std.ArrayList([]const u8)),
         ) !void {
+            const row_count = page.rows.items.len;
+            if (row_count == 0) return;
+
+            if (spice_wrapper.shouldUseParallelism(row_count, spice_wrapper.Thresholds.map)) {
+                var pool = spice_wrapper.SpicePool.init(alloc, null);
+                pool.start();
+                defer pool.deinit();
+
+                var ts_alloc = std.heap.ThreadSafeAllocator{ .child_allocator = alloc };
+                const safe_alloc = ts_alloc.allocator();
+
+                const RowInput = struct { row: schema.Row, allocator: std.mem.Allocator };
+                const RowResult = struct { row: std.ArrayList([]const u8), err: ?anyerror, allocator: std.mem.Allocator };
+
+                const inputs = try alloc.alloc(RowInput, row_count);
+                defer alloc.free(inputs);
+                for (page.rows.items, 0..) |row, i| inputs[i] = .{ .row = row, .allocator = safe_alloc };
+
+                const results = try alloc.alloc(RowResult, row_count);
+                defer alloc.free(results);
+                for (results) |*r| r.* = .{ .row = std.ArrayList([]const u8).initCapacity(safe_alloc, 0) catch unreachable, .err = null, .allocator = safe_alloc };
+
+                try pool.map(RowInput, RowResult, inputs, results, struct {
+                    fn map(ctx: spice_wrapper.TaskContext, input: RowInput, out: *RowResult) void {
+                        _ = ctx;
+                        const a = input.allocator;
+                        var row_values = std.ArrayList([]const u8).initCapacity(a, input.row.values.items.len) catch {
+                            out.* = .{ .row = std.ArrayList([]const u8).initCapacity(a, 0) catch unreachable, .err = error.OutOfMemory, .allocator = a };
+                            return;
+                        };
+
+                        for (input.row.values.items) |v| {
+                            const cell_str = valueToString(a, v) catch |err| {
+                                out.* = .{ .row = row_values, .err = err, .allocator = a };
+                                return;
+                            };
+                            row_values.append(a, cell_str) catch |err| {
+                                out.* = .{ .row = row_values, .err = err, .allocator = a };
+                                return;
+                            };
+                        }
+
+                        out.* = .{ .row = row_values, .err = null, .allocator = a };
+                    }
+                }.map);
+
+                for (results) |*res| {
+                    if (res.err) |err| {
+                        for (res.row.items) |cell| res.allocator.free(cell);
+                        res.row.deinit(res.allocator);
+                        return err;
+                    }
+                    try rows_list.append(alloc, res.row);
+                }
+                return;
+            }
+
             for (page.rows.items) |row| {
                 var row_values = try std.ArrayList([]const u8).initCapacity(alloc, row.values.items.len);
                 errdefer {
@@ -1857,6 +1921,22 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                 }
 
                 try rows_list.append(alloc, row_values);
+            }
+        }
+    };
+
+    const captureOrderMeta = struct {
+        fn apply(
+            alloc: std.mem.Allocator,
+            page: schema.DataPage,
+            ordered_flag: *bool,
+            keys: *std.ArrayList([]const u8),
+        ) !void {
+            if (page.ordered) ordered_flag.* = true;
+            if (keys.items.len == 0 and page.order_keys.items.len > 0) {
+                for (page.order_keys.items) |key| {
+                    try keys.append(alloc, try alloc.dupe(u8, key));
+                }
             }
         }
     };
@@ -1891,6 +1971,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                         },
                         .page => |p| {
                             saw_inline_page = true;
+                            try captureOrderMeta.apply(allocator, p, &ordered, &order_keys);
                             try RowAppender.appendPage(allocator, p, &all_rows);
                             if (p.final) {
                                 inline_final = true;
@@ -1937,6 +2018,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                     if (exec_resp.payload) |val| switch (val) {
                         .page => |p| {
                             saw_inline_page = true;
+                            try captureOrderMeta.apply(allocator, p, &ordered, &order_keys);
                             try RowAppender.appendPage(allocator, p, &all_rows);
                             if (p.final) {
                                 inline_final = true;
@@ -1984,6 +2066,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                     const exec_resp = pull_resp.response orelse break;
                     if (exec_resp.payload) |val| switch (val) {
                         .page => |p| {
+                            try captureOrderMeta.apply(allocator, p, &ordered, &order_keys);
                             try RowAppender.appendPage(allocator, p, &all_rows);
                             if (p.final) done = true;
                         },
@@ -2000,6 +2083,7 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
                 .execute => |exec_resp| {
                     if (exec_resp.payload) |val| switch (val) {
                         .page => |p| {
+                            try captureOrderMeta.apply(allocator, p, &ordered, &order_keys);
                             try RowAppender.appendPage(allocator, p, &all_rows);
                             if (p.final) done = true;
                         },
@@ -2029,7 +2113,18 @@ fn executeQueryOnConnection(allocator: std.mem.Allocator, quic_client: *quic.Qui
             _ = stdout.writeAll(err_json) catch {};
         } else {
             // Output BINDINGS response in standard format
-            _ = stdout.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"ordered\":false,\"final\":true,") catch {};
+            const ordered_str = if (ordered) "true" else "false";
+            _ = stdout.writeAll("{\"status_class\":\"00000\",\"result\":{\"type\":\"BINDINGS\",\"ordered\":") catch {};
+            _ = stdout.writeAll(ordered_str) catch {};
+            _ = stdout.writeAll(",") catch {};
+            _ = stdout.writeAll("\"order_keys\":[") catch {};
+            for (order_keys.items, 0..) |key, idx| {
+                if (idx > 0) _ = stdout.writeAll(",") catch {};
+                const key_json = try std.fmt.allocPrint(allocator, "\"{s}\"", .{key});
+                defer allocator.free(key_json);
+                _ = stdout.writeAll(key_json) catch {};
+            }
+            _ = stdout.writeAll("],\"final\":true,") catch {};
 
             // Write columns
             _ = stdout.writeAll("\"columns\":[") catch {};

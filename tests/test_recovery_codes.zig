@@ -25,7 +25,7 @@ test "recovery code single-use" {
     _ = tok1; // not expected to be returned when MFA required
 
     // Use recovery code RCODE1 (pass code=0, recovery_code set)
-    const session1 = try auth.authenticateWithMFA("alice", "password123", 0, "RCODE1");
+    const session1 = try auth.authenticateWithMFA("alice", "password123", 0", "RCODE1");
     try std.testing.expect(auth.requireStepUp(session1) == false);
     // Verify audit log includes recovery code consumption marker
     var found_recovery = false;
@@ -39,10 +39,10 @@ test "recovery code single-use" {
     try std.testing.expect(found_recovery);
 
     // Attempt reuse of same recovery code should fail
-    const reuse_err = auth.authenticateWithMFA("alice", "password123", 0, "RCODE1");
+    const reuse_err = auth.authenticateWithMFA("alice", "password123", 0", "RCODE1");
     try std.testing.expectError(error.MFAInvalidCode, reuse_err);
 
     // Use second recovery code
-    const session2 = try auth.authenticateWithMFA("alice", "password123", 0, "RCODE2");
+    const session2 = try auth.authenticateWithMFA("alice", "password123", 0", "RCODE2");
     try std.testing.expect(auth.requireStepUp(session2) == false);
 }

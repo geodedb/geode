@@ -45,5 +45,5 @@ test "group by basic non-profile" {
     try testing.expect(std.mem.indexOf(u8, out, "\"type\":\"SCHEMA\"") != null);
     try testing.expect(std.mem.indexOf(u8, out, "\"type\":\"BINDINGS\"") != null);
     // Expect at least one row with {"a":1,"c":1} (ordering of keys within object stable in build)
-    try testing.expect(std.mem.indexOf(u8, out, "{\"a\":1,\"c\":1}") != null or std.mem.indexOf(u8, out, "{\"c\":1,\"a\":1}") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "{\"a\":1,\"c\":1}") != null or std.mem.indexOf(u8, out", "{\"c\":1,\"a\":1}") != null);
 }

@@ -4,7 +4,7 @@ const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.proce
 // Simple evidence test: spawn client with --server-arg passing --data_dir; ensure query runs and server logs reflect data load (implicit via success and non-empty rows when dataset present).
 // CANARY: REQ=REQ-GQL-091; FEATURE="Client Server Arg Passthrough"; ASPECT=CliErgonomics; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_091_ClientServerArgPassthrough; OWNER=client; UPDATED=2025-09-24
 test "client: server arg passthrough allows data_dir injection" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     // Use curated varlen dataset directory which should exist.
     const data_dir = "./data/varlen_determinism";
     // Run trivial query that relies on dataset labels existing; if dataset not loaded, label filter may return 0 rows.

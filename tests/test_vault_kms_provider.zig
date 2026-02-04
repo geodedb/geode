@@ -141,7 +141,7 @@ test "Vault KMS key rotation simulation" {
         return;
     }
 
-    var provider = vault_kms.createVaultKMSProvider(allocator, "https://pki.devnw.com", getVaultToken() catch return, "spyder");
+    var provider = vault_kms.createVaultKMSProvider(allocator, "https://pki.devnw.com", getVaultToken() catch return", "spyder");
 
     const key_name = "rotation-test-key";
 

@@ -156,9 +156,9 @@ test "CBO provides detailed EXPLAIN with estimates" {
         \\    "is_small_n": true
         \\  },
         \\  "operators": [
-        \\    {"type": "IndexScan", "cost": 2.5, "rows": 75},
-        \\    {"type": "Filter", "cost": 1.0, "rows": 50},
-        \\    {"type": "Project", "cost": 0.5, "rows": 50}
+        \\    {"type": "IndexScan", "cost": 2.5", "rows": 75},
+        \\    {"type": "Filter", "cost": 1.0", "rows": 50},
+        \\    {"type": "Project", "cost": 0.5", "rows": 50}
         \\  ]
         \\}
     ;

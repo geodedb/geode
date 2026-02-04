@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 fn start_server(allocator: std.mem.Allocator) !std.ChildProcess {
-    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7570" }, allocator);
+    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:7570" }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Inherit;
     server.stderr_behavior = .Inherit;
@@ -32,7 +32,7 @@ fn run_cli(allocator: std.mem.Allocator, args: []const []const u8) ![]const u8 {
 fn send(allocator: std.mem.Allocator, server: []const u8, text: []const u8) ![]const u8 {
     var args = std.ArrayList([]const u8).init(allocator);
     defer args.deinit();
-    try args.appendSlice(&.{ "./zig-out/bin/geodec", text, "--server", server });
+    try args.appendSlice(&.{ "./zig-out/bin/geode", text", "--server", server });
     return try run_cli(allocator, args.items);
 }
 

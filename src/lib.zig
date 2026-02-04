@@ -149,10 +149,7 @@ pub const graph_common = @import("types/graph_common.zig");
 // Re-export materialized views
 pub const materialized_views = @import("query/materialized_views.zig");
 
-const builtin = @import("builtin");
-
-// Re-export test harness only for test builds (production uses a stub).
-pub const test_harness = if (builtin.is_test) @import("test_harness.zig") else @import("test_harness_stub.zig");
+// Test harness is not exported from production modules; tests import it directly.
 
 // CANARY: REQ=REQ-TXN-UNDO-003; FEATURE="TransactionUndoLog"; ASPECT=LibExport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 // Re-export transaction undo log for CLI rollback support

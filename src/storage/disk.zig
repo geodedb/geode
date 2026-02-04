@@ -3,7 +3,7 @@
 // CANARY: REQ=REQ-GQL-027; FEATURE="WAL/ARIES"; ASPECT=Storage; STATUS=TESTED; TEST=tests/e2e_wal_recovery.zig; OWNER=storage; UPDATED=2025-09-20
 
 const std = @import("std");
-const iface = @import("interface");
+const types = @import("types");
 
 // CANARY: REQ=REQ-DISK-AES-001; FEATURE="AES-256 Disk Encryption"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=storage; UPDATED=2026-01-10
 const aes = struct {
@@ -69,12 +69,12 @@ pub const Disk = struct {
         self.file.close();
     }
 
-    fn tweakFor(page_id: iface.PageId, sector: u64) u128 {
+    fn tweakFor(page_id: types.PageId, sector: u64) u128 {
         return (@as(u128, page_id) << 64) | @as(u128, sector);
     }
 
     // CANARY: REQ=REQ-DISK-AES-001; FEATURE="AES-256 XTS Page Encryption"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=storage; UPDATED=2026-01-10
-    fn encryptPage(self: *Disk, page_id: iface.PageId, buf: []u8) void {
+    fn encryptPage(self: *Disk, page_id: types.PageId, buf: []u8) void {
         if (!self.enc_enabled) return;
         const tweak_u128 = tweakFor(page_id, 0);
         var tweak: [16]u8 = undefined;
@@ -99,7 +99,7 @@ pub const Disk = struct {
     }
 
     // CANARY: REQ=REQ-DISK-AES-001; FEATURE="AES-256 XTS Page Decryption"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=storage; UPDATED=2026-01-10
-    fn decryptPage(self: *Disk, page_id: iface.PageId, buf: []u8) void {
+    fn decryptPage(self: *Disk, page_id: types.PageId, buf: []u8) void {
         if (!self.enc_enabled) return;
         const tweak_u128 = tweakFor(page_id, 0);
         var tweak: [16]u8 = undefined;

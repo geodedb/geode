@@ -10,7 +10,7 @@ test "protocol: CDC control when engine disabled" {
     const gpa = gpa_allocator.allocator();
 
     // Start without GEODE_CDC_ENABLE env var
-    var proc = Child.init(&[_][]const u8{"./zig-out/bin/geoded"}, gpa.*);
+    var proc = Child.init(&[_][]const u8{"./zig-out/bin/geode"}, gpa.*);
     proc.stdin_behavior = .Pipe;
     proc.stdout_behavior = .Pipe;
     proc.stderr_behavior = .Pipe;

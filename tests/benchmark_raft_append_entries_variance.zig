@@ -30,7 +30,7 @@ fn makeNode(allocator: std.mem.Allocator, id: u64, peers: []const u64) !*raft.Ra
     var builder = raft.RaftBuilder.init(allocator, .{});
     defer builder.deinit();
     var p = try allocator.alloc(raft.PeerConfig, peers.len);
-    for (peers, 0..) |pid, i| p[i] = .{ .id = pid, .address = "" };
+    for (peers, 0..) |pid, i| p[i] = .{ .id = pid, .address = " };
     return try builder.buildNode(id, p);
 }
 

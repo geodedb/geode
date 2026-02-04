@@ -55,7 +55,7 @@ fn extractRows(out: []const u8) [][]const u8 {
 }
 
 test "protocol: ORDER BY nulls policy toggle" {
-    const exe = "zig-out/bin/geoded";
+    const exe = "zig-out/bin/geode";
     // Use params to produce rows: param vector [2,null,1]
     const res_first = try run(&.{ exe, "RETURN a AS x ORDER BY x", "--json-param", "a", "[2,null,1]" }, false);
     defer testing.allocator.free(res_first.out);

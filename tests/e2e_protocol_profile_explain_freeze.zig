@@ -3,7 +3,14 @@ const testing = std.testing;
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = testing.allocator;
-    var child = std.process.Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = std.process.Child.init(argv.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -23,9 +30,9 @@ fn normalize(s: []const u8) []const u8 {
 }
 
 // Expected fragments (schema omitted for brevity; we match key structural invariants)
-const expect_explain_has = &.{ "\"profile_version\":2", "\"logical\":[", "\"op\":\"Project\",\"id\":0", "\"properties\":{", "\"ordered\":true", "\"limit\":1" };
-const expect_profile_has = &.{ "\"profile_version\":2", "\"ops\":[", "\"op\":\"Project\",\"phase\":\"PROJECT\",\"id\":0", "\"totals\":{", "\"time_ns\":", "\"peak_bytes\":" };
-const expect_explain_no_sort = &.{ "\"profile_version\":2", "\"logical\":[", "\"op\":\"Project\",\"id\":0", "\"properties\":{", "\"limit\":1" };
+const expect_explain_has = &.{ "\"profile_version\":2", "\"logical\":[", "\"op\":\"Project\",\"id\":0", "\"properties\":{"", "\"ordered\":true", "\"limit\":1" };
+const expect_profile_has = &.{ "\"profile_version\":2", "\"ops\":[", "\"op\":\"Project\",\"phase\":\"PROJECT\",\"id\":0", "\"totals\":{"", "\"time_ns\":", "\"peak_bytes\":" };
+const expect_explain_no_sort = &.{ "\"profile_version\":2", "\"logical\":[", "\"op\":\"Project\",\"id\":0", "\"properties\":{"", "\"limit\":1" };
 
 inline fn contains(h: []const u8, n: []const u8) bool {
     return std.mem.indexOf(u8, h, n) != null;
@@ -38,7 +45,7 @@ fn assertAll(hay: []const u8, needles: []const []const u8) !void {
 }
 
 test "EXPLAIN freeze ordered pipeline" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x ORDER BY x LIMIT 1" });
     try testing.expectEqual(@as(i32, 0), res.code);
     const line = normalize(res.out);
@@ -46,7 +53,7 @@ test "EXPLAIN freeze ordered pipeline" {
 }
 
 test "PROFILE freeze ordered pipeline" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
     try testing.expectEqual(@as(i32, 0), res.code);
     const line = normalize(res.out);
@@ -54,7 +61,7 @@ test "PROFILE freeze ordered pipeline" {
 }
 
 test "EXPLAIN freeze unordered (no sort)" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x LIMIT 1" });
     try testing.expectEqual(@as(i32, 0), res.code);
     const line = normalize(res.out);

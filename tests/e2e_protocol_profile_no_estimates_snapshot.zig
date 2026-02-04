@@ -23,7 +23,7 @@ fn signature(allocator: std.mem.Allocator, line: []const u8) ![]u8 {
 const EXPECTED = "planner_estimates\":{\"sum_estimate_bytes\":0,\"sum_actual_bytes\":0,\"count_estimated_ops\":0,\"min_error_abs_pct\":0,\"max_error_abs_pct\":0"; // baseline substring
 
 test "protocol: PROFILE --no-estimates structural stability" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const out = try run(&.{ exe, "PROFILE RETURN 1 AS x LIMIT 1", "--no-estimates" });
     defer testing.allocator.free(out);
     const pl = util.findProfileLine(out) orelse return error.MissingProfile;

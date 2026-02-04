@@ -896,6 +896,45 @@ fn handleClientMessage(
                 .start_lsn = metadata.start_lsn,
                 .end_lsn = metadata.end_lsn,
             } });
+
+            // Stream backup file bytes after sending metadata response.
+            if (metadata.size_bytes > 0) {
+                const backup_path = if (metadata.backup_type == .full)
+                    try std.fmt.allocPrint(gpa, "{s}/full_{x}.backup", .{ backup_dir, metadata.backup_id })
+                else
+                    try std.fmt.allocPrint(gpa, "{s}/incr_{x}.backup", .{ backup_dir, metadata.backup_id });
+                defer gpa.free(backup_path);
+
+                if (std.fs.cwd().openFile(backup_path, .{})) |file| {
+                    defer file.close();
+                    var buf: [65536]u8 = undefined;
+                    var remaining: u64 = metadata.size_bytes;
+                    while (remaining > 0) {
+                        const chunk = @min(remaining, buf.len);
+                        const n = file.read(buf[0..chunk]) catch |err| {
+                            log.err("Failed to read backup file", &.{
+                                Attr.string("path", backup_path),
+                                Attr.string("error", @errorName(err)),
+                            });
+                            break;
+                        };
+                        if (n == 0) break;
+                        _ = stream.write(buf[0..n]) catch |err| {
+                            log.err("Failed to stream backup bytes", &.{
+                                Attr.string("path", backup_path),
+                                Attr.string("error", @errorName(err)),
+                            });
+                            break;
+                        };
+                        remaining -= n;
+                    }
+                } else |err| {
+                    log.err("Backup file missing for streaming", &.{
+                        Attr.string("path", backup_path),
+                        Attr.string("error", @errorName(err)),
+                    });
+                }
+            }
         },
         .restore => |restore_req| {
             if (!restore_req.confirm) {

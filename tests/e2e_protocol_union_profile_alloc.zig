@@ -21,7 +21,7 @@ fn contains(h: []const u8, n: []const u8) bool {
 }
 
 test "protocol: PROFILE UNION allocation deltas present" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x UNION RETURN 1 AS x" });
     defer std.testing.allocator.free(res.out);
     try std.testing.expectEqual(@as(i32, 0), res.code);

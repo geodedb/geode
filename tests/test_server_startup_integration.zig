@@ -148,7 +148,7 @@ test "server_startup_data_directory_persistence" {
     std.fs.cwd().deleteTree(test_data_dir) catch {};
 
     // Start server with non-existent data directory
-    var server = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", test_data_dir, "--listen-quic", "127.0.0.1:7571" }, allocator);
+    var server = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", test_data_dir", "--listen-quic", "127.0.0.1:7571" }, allocator);
 
     server.stdout_behavior = .Pipe;
     try server.spawn();
@@ -251,7 +251,7 @@ test "server_startup_resource_cleanup" {
     // This is a basic check - in a real implementation we might check for specific resources
     const check_result = std.process.Child.run(.{
         .allocator = allocator,
-        .argv = &[_][]const u8{ "ps", "-p", try std.fmt.allocPrint(allocator, "{d}", .{server_pid}) },
+        .argv = &[_][]const u8{ "ps", "-p", try std.fmt.allocPrint(allocator", "{d}", .{server_pid}) },
         .max_output_bytes = 1024,
     }) catch {
         // ps command failed, which might indicate process doesn't exist (good)

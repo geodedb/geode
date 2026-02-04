@@ -78,7 +78,7 @@ test "massive storage stress test" {
 
         // Periodic commit simulation (every 1000 items)
         if (i % 1000 == 0) {
-            _ = try wal_inst.append(1, .Commit, "", lsn);
+            _ = try wal_inst.append(1, .Commit, ", lsn);
         }
     }
 
@@ -107,7 +107,7 @@ test "massive storage stress test" {
         const item = &items.items[idx];
 
         // WAL log
-        const lsn = try wal_inst.append(1, .Delete, "", 0);
+        const lsn = try wal_inst.append(1, .Delete, ", 0);
 
         // Tombstone
         try pm.tombstone(item.page_id, item.slot_id);
@@ -115,7 +115,7 @@ test "massive storage stress test" {
         deleted_count += 1;
 
         if (deleted_count % 1000 == 0) {
-            _ = try wal_inst.append(1, .Commit, "", lsn);
+            _ = try wal_inst.append(1, .Commit, ", lsn);
         }
     }
 
@@ -145,7 +145,7 @@ test "massive storage stress test" {
         if (loc.page_id >= initial_pages) reload_new_pages += 1;
 
         if (i % 1000 == 0) {
-            _ = try wal_inst.append(1, .Commit, "", lsn);
+            _ = try wal_inst.append(1, .Commit, ", lsn);
         }
     }
 

@@ -4,7 +4,7 @@ const std = @import("std");
 
 test "protocol PROFILE committed_txns" {
     const gpa = std.testing.allocator;
-    const exe_path = "./zig-out/bin/geoded";
+    const exe_path = "./zig-out/bin/geode";
     var child = std.process.Child.init(&[_][]const u8{exe_path}, gpa);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;

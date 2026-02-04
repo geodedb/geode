@@ -124,7 +124,7 @@ const lexer_compliance_suite = TestSuite{
     .cases = &[_]TestCase{
         .{ .name = "Basic identifiers", .query = "RETURN identifier_name", .should_parse = true },
         .{ .name = "Quoted identifiers", .query = "RETURN `quoted identifier`", .should_parse = true },
-        .{ .name = "Delimited identifiers", .query = "RETURN \"delimited identifier\"", .should_parse = true },
+        .{ .name = "Delimited identifiers", .query = "RETURN \"delimited identifier\", .should_parse = true },
         .{ .name = "Unicode identifiers", .query = "RETURN café_münchen_北京", .should_parse = true },
         .{ .name = "Keywords as identifiers", .query = "RETURN `MATCH`, `WHERE`", .should_parse = true },
         .{ .name = "Case insensitive keywords", .query = "match (n) return n", .should_parse = true },
@@ -260,7 +260,7 @@ const data_types_compliance_suite = TestSuite{
         .{ .name = "Boolean literals", .query = "RETURN true, false, TRUE, FALSE", .should_parse = true },
         .{ .name = "Integer literals", .query = "RETURN 42, -123, 0, 9223372036854775807", .should_parse = true },
         .{ .name = "Float literals", .query = "RETURN 3.14, -2.5, 1.0e10, 1E-5", .should_parse = true },
-        .{ .name = "String literals", .query = "RETURN 'hello', \"world\", 'can\\'t', \"quote\\\"test\"", .should_parse = true },
+        .{ .name = "String literals", .query = "RETURN 'hello', \"world\", 'can\\'t', \"quote\\\"test\", .should_parse = true },
         .{ .name = "Null literal", .query = "RETURN null, NULL, Null", .should_parse = true },
 
         // Temporal types
@@ -803,7 +803,7 @@ const error_handling_compliance_suite = TestSuite{
         .{ .name = "Zero", .query = "RETURN 0", .should_parse = true },
         .{ .name = "Very long identifier", .query = "RETURN very_very_very_long_identifier_name_that_should_still_parse_correctly", .should_parse = true },
         .{ .name = "Unicode in strings", .query = "RETURN 'Hello 世界 🌍'", .should_parse = true },
-        .{ .name = "Escaped quotes", .query = "RETURN 'can\\'t', \"quote\\\"test\"", .should_parse = true },
+        .{ .name = "Escaped quotes", .query = "RETURN 'can\\'t', \"quote\\\"test\", .should_parse = true },
         .{ .name = "Multiple spaces", .query = "MATCH    (   n   )    RETURN    n", .should_parse = true },
         .{ .name = "Newlines and tabs", .query = "MATCH\n\t(n)\nRETURN\n\tn", .should_parse = true },
 

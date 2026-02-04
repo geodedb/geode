@@ -1,5 +1,4 @@
 const std = @import("std");
-const storage = @import("../src/storage/interface.zig");
 const paths = @import("../src/graph/path_algorithms.zig");
 
 // CANARY: REQ=REQ-GQL-016; FEATURE="Weighted Path Cost"; ASPECT=Planner; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_016_PathWeightedCost; OWNER=planner; UPDATED=2025-09-20

@@ -85,12 +85,12 @@ test "Legacy binary name compatibility detection" {
         .{ .binary_name = "geodec", .is_legacy = true, .expected_mode = "client" },
         .{ .binary_name = "geoded", .is_legacy = true, .expected_mode = "server" },
         .{ .binary_name = "/usr/bin/geode", .is_legacy = false, .expected_mode = "unified" },
-        .{ .binary_name = "./zig-out/bin/geodec", .is_legacy = true, .expected_mode = "client" },
+        .{ .binary_name = "./zig-out/bin/geode", .is_legacy = true, .expected_mode = "client" },
     };
 
     for (test_cases) |case| {
         const basename = std.fs.path.basename(case.binary_name);
-        const is_legacy = std.mem.eql(u8, basename, "geodec") or std.mem.eql(u8, basename, "geoded");
+        const is_legacy = std.mem.eql(u8, basename, "geodec") or std.mem.eql(u8, basename", "geoded");
         try testing.expect(is_legacy == case.is_legacy);
 
         if (is_legacy) {
@@ -140,7 +140,7 @@ test "Server configuration validation" {
     var config3 = ServerConfig{ .log_level = "invalid" };
     try testing.expectError(error.InvalidLogLevel, config3.validate());
 
-    var config4 = ServerConfig{ .listen_quic = "" };
+    var config4 = ServerConfig{ .listen_quic = " };
     try testing.expectError(error.EmptyListenAddress, config4.validate());
 
     var config5 = ServerConfig{ .listen_quic = "127.0.0.1" };
@@ -182,7 +182,7 @@ test "Client configuration validation" {
     try config2.validate();
 
     // Invalid configurations
-    var config3 = ClientConfig{ .query_text = "" };
+    var config3 = ClientConfig{ .query_text = " };
     try testing.expectError(error.EmptyQuery, config3.validate());
 
     var config4 = ClientConfig{ .query_text = "RETURN 1", .format = "xml" };
@@ -211,7 +211,7 @@ test "Command dispatch logic" {
             if (std.mem.eql(u8, s, "shell")) return .shell;
             if (std.mem.eql(u8, s, "backup")) return .backup;
             if (std.mem.eql(u8, s, "user")) return .user;
-            if (std.mem.eql(u8, s, "--help") or std.mem.eql(u8, s, "help")) return .help;
+            if (std.mem.eql(u8, s, "--help") or std.mem.eql(u8, s", "help")) return .help;
             return .unknown;
         }
     }.call;
@@ -248,7 +248,7 @@ test "Process argument building" {
 
     // Build server arguments
     var server_args = try std.ArrayList([]const u8).initCapacity(allocator, 5);
-    try server_args.append(allocator, "./zig-out/bin/geoded");
+    try server_args.append(allocator, "./zig-out/bin/geode");
     try server_args.append(allocator, "--data-dir");
     try server_args.append(allocator, "./test_data");
     try server_args.append(allocator, "--listen-quic");
@@ -256,13 +256,13 @@ test "Process argument building" {
 
     const server_argv = try server_args.toOwnedSlice(allocator);
     try testing.expect(server_argv.len == 5);
-    try testing.expectEqualStrings("./zig-out/bin/geoded", server_argv[0]);
+    try testing.expectEqualStrings("./zig-out/bin/geode", server_argv[0]);
     try testing.expectEqualStrings("--data-dir", server_argv[1]);
     try testing.expectEqualStrings("./test_data", server_argv[2]);
 
     // Build client arguments
     var client_args = try std.ArrayList([]const u8).initCapacity(allocator, 5);
-    try client_args.append(allocator, "./zig-out/bin/geodec");
+    try client_args.append(allocator, "./zig-out/bin/geode");
     try client_args.append(allocator, "RETURN 1 AS x");
     try client_args.append(allocator, "--insecure");
     try client_args.append(allocator, "--format");
@@ -270,7 +270,7 @@ test "Process argument building" {
 
     const client_argv = try client_args.toOwnedSlice(allocator);
     try testing.expect(client_argv.len == 5);
-    try testing.expectEqualStrings("./zig-out/bin/geodec", client_argv[0]);
+    try testing.expectEqualStrings("./zig-out/bin/geode", client_argv[0]);
     try testing.expectEqualStrings("RETURN 1 AS x", client_argv[1]);
     try testing.expectEqualStrings("--insecure", client_argv[2]);
 }

@@ -9,7 +9,7 @@ test "protocol: CDC control missing action treated as UNSUPPORTED" {
     defer std.debug.assert(!gpa_allocator.deinit());
     const gpa = gpa_allocator.allocator();
 
-    var proc = Child.init(&[_][]const u8{"./zig-out/bin/geoded"}, gpa.*);
+    var proc = Child.init(&[_][]const u8{"./zig-out/bin/geode"}, gpa.*);
     proc.stdin_behavior = .Pipe;
     proc.stdout_behavior = .Pipe;
     proc.stderr_behavior = .Pipe;

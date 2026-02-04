@@ -14,7 +14,7 @@ fn run(args: []const []const u8) ![]u8 {
 }
 
 test "protocol: PROFILE includes Expand stage after NodeScan" {
-    const exe = "zig-out/bin/geoded";
+    const exe = "zig-out/bin/geode";
     const out = try run(&.{ exe, "PROFILE RETURN 1 AS x LIMIT 1" });
     defer testing.allocator.free(out);
     var it = std.mem.splitScalar(u8, out, '\n');

@@ -14,7 +14,7 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8 } {
 }
 
 test "profile long query truncated capture still works" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     // Build long predicate chain exceeding 4096 chars.
     var buf = std.ArrayList(u8).init(testing.allocator);
     defer buf.deinit();

@@ -15,7 +15,7 @@ fn run(args: []const []const u8) ![]u8 {
 }
 
 test "protocol: per-stage allocation deltas and op ordering" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     // DISTINCT + ORDER + OFFSET + LIMIT to exercise multiple phases.
     const out = try run(&.{ exe, "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 2", "--json-param", "a", "[5,4,4,3,2,1]" });
     defer testing.allocator.free(out);

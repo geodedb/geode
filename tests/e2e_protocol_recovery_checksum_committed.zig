@@ -10,7 +10,7 @@ const std = @import("std");
 
 test "protocol recovery checksum + committed_txns" {
     const gpa = std.testing.allocator;
-    const exe_path = "./zig-out/bin/geoded";
+    const exe_path = "./zig-out/bin/geode";
     // Use a temp directory for pages
     var tmpdir = std.testing.tmpDir(.{});
     defer tmpdir.cleanup();

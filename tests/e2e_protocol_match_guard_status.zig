@@ -3,7 +3,14 @@ const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.proce
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
-    var child = Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = Child.init(argv.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -31,11 +38,11 @@ fn makeQuery() []const u8 {
 }
 
 test "protocol: MATCH guard trip surfaces additional ExecutionGuardTrip" {
-    const exe = "./zig-out/bin/geodec";
-    const server = "./zig-out/bin/geoded"; // spawn server as child so env override propagates
+    const exe = "./zig-out/bin/geode";
+    const server = "./zig-out/bin/geode"; // spawn server as child so env override propagates
     const q = makeQuery();
     // Pass server path to force stdio spawn; include --server before args per geodec usage.
-    const res = try run(&.{ exe, q, "--server", server, "--server-arg", "--match-max-results", "--server-arg", "1" });
+    const res = try run(&.{ exe, q, "--server", server", "--server-arg", "--match-max-results", "--server-arg", "1" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     // Success exit (0) or partial success (0) expected; guard trip should not force non-zero exit (engine treats it as warning-class)

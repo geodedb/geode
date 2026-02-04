@@ -122,7 +122,7 @@ test "keymap toggle" {
     state.pending_operator = 'd';
     // Simulate dw
     state.buffer.clearRetainingCapacity();
-    try testing.expectEqualStrings("", state.buffer.items);
+    try testing.expectEqualStrings(", state.buffer.items);
 
     // Switch to Emacs mode
     state.keymap = .emacs;
@@ -137,7 +137,7 @@ test "keymap toggle" {
     state.kill_ring.clearRetainingCapacity();
     try state.kill_ring.appendSlice(allocator, state.buffer.items[state.cursor..]);
     state.buffer.items.len = state.cursor;
-    try testing.expectEqualStrings("", state.buffer.items);
+    try testing.expectEqualStrings(", state.buffer.items);
     try testing.expectEqualStrings("abc", state.kill_ring.items);
 }
 

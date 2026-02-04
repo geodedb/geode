@@ -94,7 +94,7 @@ test "config library can parse TOML content" {
 test "config library can parse JSON content" {
     const allocator = testing.allocator;
     const json_content =
-        \\{"host": "localhost", "port": 8080, "debug": true}
+        \\{"host": "localhost", "port": 8080", "debug": true}
     ;
 
     var value = try config_lib.parseContent(allocator, json_content, .json);

@@ -33,7 +33,7 @@ pub fn loadMigrations(allocator: std.mem.Allocator) !void {
         defer allocator.free(content);
 
         // Execute migration
-        const result = try runCommand(allocator, &.{ "./zig-out/bin/geodec", "--host", "127.0.0.1", "--port", "3141", content });
+        const result = try runCommand(allocator, &.{ "./zig-out/bin/geode", "query", "--host", "127.0.0.1", "--port", "3141", content });
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
@@ -48,7 +48,7 @@ test "dataset migration system loads successfully" {
     const allocator = testing.allocator;
 
     // Start server in background
-    var server = std.ChildProcess.init(&.{ "./zig-out/bin/geoded", "--data_dir", "./test_data", "--port", "3141" }, allocator);
+    var server = std.ChildProcess.init(&.{ "./zig-out/bin/geode", "query", "--data_dir", "./test_data", "--port", "3141" }, allocator);
     try server.spawn();
     defer _ = server.kill() catch {};
 
@@ -59,7 +59,7 @@ test "dataset migration system loads successfully" {
     try loadMigrations(allocator);
 
     // Verify node count
-    const result = try runCommand(allocator, &.{ "./zig-out/bin/geodec", "MATCH (n) RETURN count(n) AS count" });
+    const result = try runCommand(allocator, &.{ "./zig-out/bin/geode", "MATCH (n) RETURN count(n) AS count" });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -71,7 +71,7 @@ test "dataset has correct schema after migration" {
     const allocator = testing.allocator;
 
     // Check User label exists with properties
-    const result = try runCommand(allocator, &.{ "./zig-out/bin/geodec", "MATCH (u:User) RETURN u LIMIT 1" });
+    const result = try runCommand(allocator, &.{ "./zig-out/bin/geode", "query", "MATCH (u:User) RETURN u LIMIT 1" });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -104,7 +104,7 @@ test "network types work correctly" {
     };
 
     for (queries) |q| {
-        const result = try runCommand(allocator, &.{ "./zig-out/bin/geodec", q.query });
+        const result = try runCommand(allocator, &.{ "./zig-out/bin/geode", q.query });
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
@@ -118,7 +118,7 @@ test "geographic types and queries work" {
 
     // Test distance calculation
     const result = try runCommand(allocator, &.{
-        "./zig-out/bin/geodec",
+        "./zig-out/bin/geode",
         "MATCH (l1:Location {name: 'San Francisco'}), (l2:Location {name: 'New York'}) " ++
             "RETURN distance_haversine(l1.coordinates, l2.coordinates) AS distance",
     });
@@ -134,8 +134,7 @@ test "vector similarity search works" {
     const allocator = testing.allocator;
 
     const result = try runCommand(allocator, &.{
-        "./zig-out/bin/geodec",
-        "MATCH (p1:Post {id: 'post-1'}), (p2:Post) " ++
+        "./zig-out/bin/geode", "query", "MATCH (p1:Post {id: 'post-1'}), (p2:Post) " ++
             "WHERE p1 <> p2 AND vector_cosine_similarity(p1.content_vector, p2.content_vector) > 0.5 " ++
             "RETURN count(p2) AS similar_count",
     });
@@ -159,7 +158,7 @@ test "relationships are correctly established" {
     };
 
     for (queries) |query| {
-        const result = try runCommand(allocator, &.{ "./zig-out/bin/geodec", query });
+        const result = try runCommand(allocator, &.{ "./zig-out/bin/geode", query });
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
@@ -178,7 +177,7 @@ test "materialized views are created and populated" {
 
     // Query the trending_posts materialized view
     const result = try runCommand(allocator, &.{
-        "./zig-out/bin/geodec",
+        "./zig-out/bin/geode",
         "SELECT * FROM trending_posts LIMIT 5",
     });
     defer allocator.free(result.stdout);
@@ -193,7 +192,7 @@ test "constraints are enforced" {
 
     // Try to violate unique constraint on User email
     const result = try runCommand(allocator, &.{
-        "./zig-out/bin/geodec",
+        "./zig-out/bin/geode",
         "CREATE (:User {id: 'test-dup', email: 'alice.johnson@example.com', username: 'test'})",
     });
     defer allocator.free(result.stdout);
@@ -211,7 +210,7 @@ test "indexes improve query performance" {
     // Query using indexed field (should be fast)
     const start = std.time.nanoTimestamp();
     const result = try runCommand(allocator, &.{
-        "./zig-out/bin/geodec",
+        "./zig-out/bin/geode",
         "MATCH (u:User) WHERE u.email = 'alice.johnson@example.com' RETURN u.username",
     });
     const elapsed = std.time.nanoTimestamp() - start;
@@ -228,7 +227,7 @@ test "full-text search works on indexed fields" {
     const allocator = testing.allocator;
 
     const result = try runCommand(allocator, &.{
-        "./zig-out/bin/geodec",
+        "./zig-out/bin/geode",
         "MATCH (p:Post) WHERE fulltext_search(p.content, 'graph database') RETURN count(p) AS matches",
     });
     defer allocator.free(result.stdout);
@@ -243,9 +242,9 @@ test "spatial index queries work efficiently" {
 
     // Find all locations within a bounding box
     const result = try runCommand(allocator, &.{
-        "./zig-out/bin/geodec",
+        "./zig-out/bin/geode",
         "MATCH (l:Location) " ++
-            "WHERE st_within(l.coordinates, " ++
+            "WHERE st_within(l.coordinates", " ++
             "  st_makeenvelope(-123, 37, -122, 38)) " ++
             "RETURN count(l) AS in_box",
     });
@@ -259,17 +258,17 @@ test "transaction rollback works correctly" {
     const allocator = testing.allocator;
 
     // Start transaction
-    _ = try runCommand(allocator, &.{ "./zig-out/bin/geodec", "BEGIN" });
+    _ = try runCommand(allocator, &.{ "./zig-out/bin/geode", "query", "BEGIN" });
 
     // Create a test node
-    _ = try runCommand(allocator, &.{ "./zig-out/bin/geodec", "CREATE (:TestNode {id: 'rollback-test'})" });
+    _ = try runCommand(allocator, &.{ "./zig-out/bin/geode", "query", "CREATE (:TestNode {id: 'rollback-test'})" });
 
     // Rollback
-    _ = try runCommand(allocator, &.{ "./zig-out/bin/geodec", "ROLLBACK" });
+    _ = try runCommand(allocator, &.{ "./zig-out/bin/geode", "query", "ROLLBACK" });
 
     // Verify node doesn't exist
     const result = try runCommand(allocator, &.{
-        "./zig-out/bin/geodec",
+        "./zig-out/bin/geode",
         "MATCH (n:TestNode {id: 'rollback-test'}) RETURN count(n) AS count",
     });
     defer allocator.free(result.stdout);

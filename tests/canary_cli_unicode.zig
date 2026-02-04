@@ -28,7 +28,7 @@ test "TestCANARY_ClientCli_NormalizeNfc" {
     defer _ = gpa.deinit();
     // Decomposed e + combining acute U+0065 U+0301
     const decomposed = "RETURN 'e\xCC\x81' AS v LIMIT 1"; // LIMIT to force schema+bindings
-    const res = try run(&.{ "./zig-out/bin/geodec", decomposed, "--normalize-nfc" }, gpa.allocator());
+    const res = try run(&.{ "./zig-out/bin/geode", decomposed", "--normalize-nfc" }, gpa.allocator());
     defer gpa.allocator().free(res.out);
     defer gpa.allocator().free(res.err);
     try std.testing.expectEqual(@as(u8, 0), res.code);
@@ -42,7 +42,7 @@ test "TestCANARY_ClientCli_FoldCase" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const q = "RETURN 'Stra\xC3\x9Fe' AS v LIMIT 1"; // Straße
-    const res = try run(&.{ "./zig-out/bin/geodec", q, "--fold-case" }, gpa.allocator());
+    const res = try run(&.{ "./zig-out/bin/geode", q", "--fold-case" }, gpa.allocator());
     defer gpa.allocator().free(res.out);
     defer gpa.allocator().free(res.err);
     try std.testing.expectEqual(@as(u8, 0), res.code);
@@ -59,7 +59,7 @@ test "TestCANARY_ClientCli_Utf16Input" {
     // RETURN 1 AS x  encoded as hexadecimal 16-bit units. This exercises the decode path; successful execution implies
     // the units were converted to a valid UTF-8 query prior to send.
     const utf16_return = "0052 0045 0054 0055 0052 004E 0020 0031 0020 0041 0053 0020 0078"; // "RETURN 1 AS x"
-    const res = try run(&.{ "./zig-out/bin/geodec", utf16_return, "--utf16-input" }, gpa.allocator());
+    const res = try run(&.{ "./zig-out/bin/geode", utf16_return", "--utf16-input" }, gpa.allocator());
     defer gpa.allocator().free(res.out);
     defer gpa.allocator().free(res.err);
     try std.testing.expectEqual(@as(u8, 0), res.code);

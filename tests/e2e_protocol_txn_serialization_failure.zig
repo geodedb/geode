@@ -4,7 +4,7 @@ test "e2e: transaction serialization failure mapping to status_class 25000" {
     const allocator = std.testing.allocator;
     const exe_dir = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(exe_dir);
-    const exe_path = try std.fmt.allocPrint(allocator, "{s}/zig-out/bin/geoded", .{exe_dir});
+    const exe_path = try std.fmt.allocPrint(allocator, "{s}/zig-out/bin/geode", .{exe_dir});
     defer allocator.free(exe_path);
 
     var child = std.process.Child.init(&[_][]const u8{exe_path}, allocator);

@@ -3,7 +3,14 @@ const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.proce
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
-    var child = Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = Child.init(argv.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -26,10 +33,10 @@ fn query() []const u8 {
 }
 
 test "protocol: MATCH guard trip with --match-max-results 2 surfaces advisory" {
-    const exe = "./zig-out/bin/geodec";
-    const server = "./zig-out/bin/geoded";
+    const exe = "./zig-out/bin/geode";
+    const server = "./zig-out/bin/geode";
     const q = query();
-    const res = try run(&.{ exe, q, "--server", server, "--server-arg", "--match-max-results", "--server-arg", "2" });
+    const res = try run(&.{ exe, q, "--server", server", "--server-arg", "--match-max-results", "--server-arg", "2" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);

@@ -1,40 +1,18 @@
 const std = @import("std");
-const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
+const testing = std.testing;
+const util = @import("proto_test_util.zig");
 
-fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
-    const allocator = std.testing.allocator;
-    var child = Child.init(args, allocator);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
+test "PING ok in single-node raft mode" {
+    const allocator = testing.allocator;
+    const addr = "127.0.0.1:17686";
 
-    // HELLO (consume capabilities line)
-    try child.stdin.?.writeAll("{\"type\":\"HELLO\",\"client_name\":\"test\",\"client_ver\":\"0.1\",\"wanted_conformance\":\"min\"}\n");
-    const hello = try child.stdout.?.readToEndAlloc(allocator, 1 << 20);
-    defer allocator.free(hello);
-    try std.testing.expect(std.mem.indexOf(u8, hello, "\"conformance\":{") != null);
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen-quic", addr, "--dist-enable-raft", "--disable-auth" }, null);
+    defer server.deinit();
 
-    // PING
-    try child.stdin.?.writeAll("{\"type\":\"PING\"}\n");
-    const ping = try child.stdout.?.readToEndAlloc(allocator, 1 << 20);
-    defer allocator.free(ping);
-    // Expect dist object and is_leader:true for single-node raft
-    try std.testing.expect(std.mem.indexOf(u8, ping, "\"dist\":{") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ping, "\"is_leader\":true") != null);
+    var client = try util.QuicProtoClient.connect(allocator, addr);
+    defer client.deinit();
+    var hello = try client.hello(allocator, "", "");
+    hello.deinit(allocator);
 
-    child.stdin.?.close();
-    child.stdout.?.close();
-    const term = try child.wait();
-    const code: i32 = switch (term) {
-        .Exited => |st| st,
-        else => 2,
-    };
-    try std.testing.expectEqual(@as(i32, 0), code);
-}
-
-test "PING includes dist object and is_leader true in single-node raft" {
-    const exe = "./zig-out/bin/geoded";
-    const res = try run(&.{ exe, "--dist-enable-raft" });
-    _ = res;
+    try testing.expect(try client.ping(allocator));
 }

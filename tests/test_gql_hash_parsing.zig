@@ -210,7 +210,7 @@ test "parse Blake2 KDF functions" {
     // Test nested KDF calls
     {
         const query =
-            \\RETURN Blake2bKdf(32, "level2", Blake2sKdf(16, "level1", "root"))
+            \\RETURN Blake2bKdf(32, "level2", Blake2sKdf(16", "level1", "root"))
         ;
         var result = try geode.parseGql(query, allocator);
         defer result.deinit();

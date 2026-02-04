@@ -77,7 +77,7 @@ test "geode query executes with configured server" {
     const server = try getTestServer(testing.allocator);
     defer testing.allocator.free(server);
 
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 1 AS x", "--server", server, "--insecure" }, testing.allocator);
+    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 1 AS x", "--server", server", "--insecure" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -172,7 +172,7 @@ test "query responds to basic query" {
     defer testing.allocator.free(server);
 
     // Test basic query execution against configured server
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 'hello' AS greeting", "--server", server, "--insecure", "--format", "json" }, testing.allocator);
+    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 'hello' AS greeting", "--server", server", "--insecure", "--format", "json" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -198,7 +198,7 @@ test "query error handling for invalid syntax" {
     defer testing.allocator.free(server);
 
     // Test error handling with invalid syntax
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "SELECT * FROM nonexistent_table", "--server", server, "--insecure" }, testing.allocator);
+    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "SELECT * FROM nonexistent_table", "--server", server", "--insecure" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -222,7 +222,7 @@ test "process argument forwarding" {
     defer testing.allocator.free(server);
 
     // Test that arguments are properly forwarded to configured server
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 42 AS answer", "--server", server, "--insecure", "--format", "json" }, testing.allocator);
+    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 42 AS answer", "--server", server", "--insecure", "--format", "json" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -255,7 +255,7 @@ test "concurrent query execution" {
         const query = try std.fmt.allocPrint(testing.allocator, "RETURN {d} AS id", .{i});
         defer testing.allocator.free(query);
 
-        child.* = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", query, "--server", server, "--insecure" }, testing.allocator);
+        child.* = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", query", "--server", server", "--insecure" }, testing.allocator);
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
 

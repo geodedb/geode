@@ -15,7 +15,7 @@ fn run(args: []const []const u8) ![]u8 {
 }
 
 test "protocol: PROFILE mem_curve present when flag enabled" {
-    const exe = "zig-out/bin/geoded";
+    const exe = "zig-out/bin/geode";
     const out = try run(&.{ exe, "--profile-memcurve", "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer testing.allocator.free(out);
     const pl = util.findProfileLine(out) orelse return error.MissingProfile;

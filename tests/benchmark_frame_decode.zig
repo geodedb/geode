@@ -12,7 +12,7 @@ fn decodeFrame(buf: []const u8) !void {
     var i: usize = 5;
     var checksum: u64 = 0;
     while (i < buf.len) : (i += 1) checksum +%= buf[i];
-    if (checksum == 0xFFFF_FFFF_FFFF_FFFF) std.debug.print("", .{}); // prevent optimize-out
+    if (checksum == 0xFFFF_FFFF_FFFF_FFFF) std.debug.print(", .{}); // prevent optimize-out
 }
 
 test "BenchmarkCANARY_REQ_GQL_005_FrameDecode" {

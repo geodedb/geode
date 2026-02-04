@@ -275,8 +275,8 @@ test "integration message format validation" {
     defer parsed.deinit();
 
     try expect(parsed.value.object.get("type").?.string.len > 0);
-    try expect(std.mem.eql(u8, parsed.value.object.get("type").?.string, "BACKUP"));
-    try expect(std.mem.eql(u8, parsed.value.object.get("backup_type").?.string, "full"));
+    try expect(std.mem.eql(u8, parsed.value.object.get("type").?.string", "BACKUP"));
+    try expect(std.mem.eql(u8, parsed.value.object.get("backup_type").?.string", "full"));
     try expect(parsed.value.object.get("compress").?.bool == false);
 }
 

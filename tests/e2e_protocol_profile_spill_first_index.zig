@@ -3,7 +3,14 @@ const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.proce
 
 fn runWithEnv(args: []const []const u8, spill_distinct: bool, spill_sort: bool) !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
-    var child = Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = Child.init(argv.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -60,7 +67,7 @@ fn parseProfile(line: []const u8) !struct { distinct_index: ?usize, sort_index: 
 }
 
 test "profile: first_spill_op_index prefers earlier Distinct over Sort when both spill" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const q = "PROFILE RETURN DISTINCT 1 AS x, 1 AS y ORDER BY x LIMIT 5";
     const res = try runWithEnv(&.{ exe, q }, true, true);
     defer std.testing.allocator.free(res.out);
@@ -78,7 +85,7 @@ test "profile: first_spill_op_index prefers earlier Distinct over Sort when both
 }
 
 test "profile: first_spill_op_index is Sort when only sort spills" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const q = "PROFILE RETURN 1 AS x ORDER BY x LIMIT 5";
     const res = try runWithEnv(&.{ exe, q }, false, true);
     defer std.testing.allocator.free(res.out);

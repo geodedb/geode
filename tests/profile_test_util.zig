@@ -100,7 +100,14 @@ pub fn sliceMemory(profile_line: []const u8) ?[]const u8 {
 
 // Unified CLI runner for tests (geodec). Accepts argv slice, returns stdout or error if exit!=0
 pub fn runCli(allocator: std.mem.Allocator, args: []const []const u8) ![]u8 {
-    var child = std.process.Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = std.process.Child.init(argv.items, allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     try child.spawn();

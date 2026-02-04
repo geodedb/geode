@@ -5,7 +5,7 @@ const util = @import("profile_test_util.zig");
 // use shared util.runCli
 
 test "protocol: PROFILE conforms to schema v1 minimal" {
-    const exe = "zig-out/bin/geoded";
+    const exe = "zig-out/bin/geode";
     const out = try util.runCli(testing.allocator, &.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer testing.allocator.free(out);
     const profile_line = util.findProfileLine(out) orelse return error.MissingProfile;
@@ -37,7 +37,7 @@ test "protocol: PROFILE conforms to schema v1 minimal" {
         try testing.expect(std.mem.indexOf(u8, profile_line, "peak_bytes_at_spill") != null);
         // first_spill_op_index optional; if present, must be followed by a digit
         if (std.mem.indexOf(u8, profile_line, "first_spill_op_index") != null) {
-            try testing.expect(std.mem.indexOf(u8, profile_line, "first_spill_op_index\":0") != null or std.mem.indexOf(u8, profile_line, "first_spill_op_index\":1") != null or true);
+            try testing.expect(std.mem.indexOf(u8, profile_line, "first_spill_op_index\":0") != null or std.mem.indexOf(u8, profile_line", "first_spill_op_index\":1") != null or true);
         }
     }
     // mem_curve optional; if present must look like an array start

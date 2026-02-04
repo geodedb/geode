@@ -24,7 +24,7 @@ inline fn contains(h: []const u8, n: []const u8) bool {
 // We assert substrings in expected relative order to avoid brittle full-line goldens while freezing key fields.
 
 test "protocol: PROFILE golden simple query" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
     try testing.expectEqual(@as(i32, 0), res.code);
     // Output has two JSON lines: SCHEMA then PROFILE
@@ -35,8 +35,8 @@ test "protocol: PROFILE golden simple query" {
         const req = [_][]const u8{
             "\"profile_version\":1",
             "\"ops\":[",
-            "\"op\":\"Project\"",
-            "\"phase\":\"PROJECT\"",
+            "\"op\":\"Project\",
+            "\"phase\":\"PROJECT\",
             "\"id\":0",
             "\"op_index\":0",
             "\"rows\":1",

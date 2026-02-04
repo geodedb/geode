@@ -9,12 +9,12 @@ fn run(gql: []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
     const server = try getServerAddr(allocator);
     defer allocator.free(server);
-    var child = Child.init(&.{ "./zig-out/bin/geodec", gql, "--server", server, "--insecure" }, allocator);
+    var child = Child.init(&.{ "./zig-out/bin/geode", "query", gql, "--server", server, "--insecure" }, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     try child.spawn();
-    // Read SCHEMA then BINDINGS lines
+    // Read JSON output
     var out_buf = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable;
     defer out_buf.deinit(allocator);
     var tmpb: [8192]u8 = undefined;

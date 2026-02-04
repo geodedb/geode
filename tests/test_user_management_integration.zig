@@ -439,9 +439,9 @@ test "role and permission management workflow" {
     _ = try ums.createRole("manager", "Team manager", "analyst", 80);
 
     // Create permissions
-    _ = try ums.createPermission("read_data", "data", .read, "department = user.department");
+    _ = try ums.createPermission("read_data", "data", .read", "department = user.department");
     _ = try ums.createPermission("write_reports", "reports", .write, null);
-    _ = try ums.createPermission("manage_team", "users", .admin, "manager_id = user.id");
+    _ = try ums.createPermission("manage_team", "users", .admin", "manager_id = user.id");
 
     // Grant permissions to roles
     try ums.grantPermissionToRole("analyst", "read_data");
@@ -545,7 +545,7 @@ test "hierarchical role inheritance workflow" {
 
     // Create permissions for each level
     _ = try ums.createPermission("view_public", "public", .read, null);
-    _ = try ums.createPermission("view_user_data", "user_data", .read, "user_id = current_user_id()");
+    _ = try ums.createPermission("view_user_data", "user_data", .read", "user_id = current_user_id()");
     _ = try ums.createPermission("analyze_data", "analytics", .read, null);
     _ = try ums.createPermission("manage_team", "team", .admin, null);
     _ = try ums.createPermission("admin_all", "*", .admin, null);

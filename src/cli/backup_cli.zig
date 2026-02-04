@@ -9,7 +9,6 @@ const quic = @import("transport/quic");
 const migration = @import("migration");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
-const json_lib = @import("json");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CLI; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -24,23 +23,6 @@ const Attr = logging.Attr;
 
 // GAP-0221 SECURITY FIX: Replace silent catch 0 with logged error handling
 // CANARY: REQ=REQ-BACKUP-ERROR-HANDLING-001; FEATURE="BackupErrorHandling"; ASPECT=Security; STATUS=TESTED; TEST=test_gap_0221_backup_error_handling; OWNER=cli; UPDATED=2026-01-16
-
-// Helper function to read a line with polling (similar to main.zig)
-fn readLineWithPoll(quic_client: *quic.QuicClient, stream: *quic.QuicClientStream, max_size: usize, timeout_ms: u64) ![]u8 {
-    const start = std.time.milliTimestamp();
-    while (true) {
-        const line = stream.readLine(max_size) catch |err| {
-            if (err == error.WouldBlock or err == error.EndOfStream) {
-                if (std.time.milliTimestamp() - start >= @as(i64, @intCast(timeout_ms))) return err;
-                quic_client.poll(5) catch {};
-                std.Thread.sleep(5 * std.time.ns_per_ms);
-                continue;
-            }
-            return err;
-        };
-        return line;
-    }
-}
 
 // Exit codes for consistency with main CLI
 const ExitCode = enum(u8) {
@@ -1516,76 +1498,65 @@ fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []c
     };
     defer stream.deinit();
 
-    // Send HELLO message
-    // CANARY: REQ=REQ-LIB-MIGRATION-JSON-033; FEATURE="JSON Library Migration"; ASPECT=BackupHello; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
-    const BackupClientHello = struct {
-        type: []const u8 = "HELLO",
-        client_name: []const u8 = "geode-backup",
-        client_ver: []const u8 = "0.1.0",
-        wanted_conformance: []const u8 = "GQL/1.0",
+    // Send HELLO (Protobuf)
+    const hello_req = schema.HelloRequest{
+        .client_name = "geode-backup",
+        .client_version = "0.1.0",
+        .wanted_conformance = "GQL/1.0",
     };
-    const hello_json = try json_lib.encode(allocator, BackupClientHello{}, .{});
-    defer allocator.free(hello_json);
-    const hello_msg = try std.fmt.allocPrint(allocator, "{s}\n", .{hello_json});
-    defer allocator.free(hello_msg);
-    stream.writeAll(hello_msg) catch |err| {
+    writeProtoMessage(allocator, stream, .{ .hello = hello_req }) catch |err| {
         std.debug.print("Error: Failed to send HELLO: {}\n", .{err});
         return err;
     };
 
-    // Wait for HELLO response
-    const hello_response = readLineWithPoll(&client, stream, 4096, 5000) catch |err| {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const hello_resp = readProtoMessage(arena.allocator(), &client, stream, 5000) catch |err| {
         std.debug.print("Error: Failed to receive HELLO response: {}\n", .{err});
         return err;
     };
-    defer allocator.free(hello_response);
-
-    // Check for errors in HELLO response
-    if (std.mem.indexOf(u8, hello_response, "\"type\":\"ERROR\"") != null) {
-        std.debug.print("Error from server: {s}\n", .{hello_response});
-        return error.ServerError;
+    switch (hello_resp) {
+        .hello => |h| {
+            if (!h.success) {
+                std.debug.print("Error: {s}\n", .{h.error_message});
+                return error.ServerError;
+            }
+        },
+        else => {
+            std.debug.print("Error: Unexpected HELLO response type\n", .{});
+            return error.ServerError;
+        },
     }
 
-    // Build BACKUP request message
-    var backup_msg_buf: [512]u8 = undefined;
-    const backup_msg = if (parent_id) |pid|
-        try std.fmt.bufPrint(&backup_msg_buf, "{{\"type\":\"BACKUP\",\"backup_type\":\"{s}\",\"parent_id\":\"{s}\",\"compress\":{}}}\n", .{ mode, pid, compress })
-    else
-        try std.fmt.bufPrint(&backup_msg_buf, "{{\"type\":\"BACKUP\",\"backup_type\":\"{s}\",\"compress\":{}}}\n", .{ mode, compress });
-
-    // Send BACKUP request
-    stream.writeAll(backup_msg) catch |err| {
+    // Send BACKUP request (Protobuf)
+    const backup_req = schema.BackupRequest{
+        .backup_type = mode,
+        .parent_id = parent_id orelse "",
+        .compress = compress,
+    };
+    writeProtoMessage(allocator, stream, .{ .backup = backup_req }) catch |err| {
         std.debug.print("Error: Failed to send BACKUP request: {}\n", .{err});
         return err;
     };
 
-    // Receive backup response (metadata)
-    const metadata_response = readLineWithPoll(&client, stream, 8192, 30000) catch |err| {
-        std.debug.print("Error: Failed to receive backup metadata: {}\n", .{err});
+    const backup_resp_msg = readProtoMessage(arena.allocator(), &client, stream, 30000) catch |err| {
+        std.debug.print("Error: Failed to receive backup response: {}\n", .{err});
         return err;
     };
-    defer allocator.free(metadata_response);
-
-    // Check for errors
-    if (std.mem.indexOf(u8, metadata_response, "\"type\":\"ERROR\"") != null) {
-        std.debug.print("Backup error: {s}\n", .{metadata_response});
+    const backup_resp = switch (backup_resp_msg) {
+        .backup => |b| b,
+        else => {
+            std.debug.print("Error: Unexpected backup response type\n", .{});
+            return error.BackupFailed;
+        },
+    };
+    if (!backup_resp.success) {
+        std.debug.print("Backup error: {s}\n", .{backup_resp.message});
         return error.BackupFailed;
     }
 
-    // Parse metadata to get backup size
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, metadata_response, .{}) catch |err| {
-        std.debug.print("Error: Invalid backup metadata: {}\n", .{err});
-        return err;
-    };
-    defer parsed.deinit();
-
-    if (parsed.value != .object) return error.InvalidBackupMetadata;
-    const result = parsed.value.object.get("result") orelse return error.InvalidBackupMetadata;
-    if (result != .object) return error.InvalidBackupMetadata;
-
-    const size_bytes_val = result.object.get("size_bytes") orelse return error.InvalidBackupMetadata;
-    const backup_size: u64 = if (size_bytes_val == .integer) @intCast(size_bytes_val.integer) else return error.InvalidBackupMetadata;
-
+    const backup_size = backup_resp.size_bytes;
     std.debug.print("Receiving backup ({} bytes) from {s}...\n", .{ backup_size, server });
 
     // Create destination file
@@ -1599,13 +1570,6 @@ fn executeRemoteBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []c
     while (bytes_received < backup_size) {
         const remaining = backup_size - bytes_received;
         const chunk_size = @min(remaining, chunk_buf.len);
-
-        // Request next chunk
-        const pull_msg = "{\"type\":\"PULL\",\"page_size\":65536}\n";
-        stream.writeAll(pull_msg) catch |err| {
-            std.debug.print("Error: Failed to request data chunk: {}\n", .{err});
-            return err;
-        };
 
         // Read chunk
         const bytes_read = stream.read(chunk_buf[0..chunk_size]) catch |err| {
@@ -2149,71 +2113,72 @@ fn executeRemoteRestore(allocator: std.mem.Allocator, source: []const u8, target
     const stream = try client.openStream(true);
     defer stream.close();
 
-    // Send HELLO message
-    // CANARY: REQ=REQ-LIB-MIGRATION-JSON-034; FEATURE="JSON Library Migration"; ASPECT=RestoreHello; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
-    const RestoreClientHello = struct {
-        type: []const u8 = "HELLO",
-        client_name: []const u8 = "geode-restore",
-        client_ver: []const u8 = "0.18.0",
+    // Send HELLO (Protobuf)
+    const hello_req = schema.HelloRequest{
+        .client_name = "geode-restore",
+        .client_version = "0.18.0",
     };
-    const hello_json = try json_lib.encode(allocator, RestoreClientHello{}, .{});
-    defer allocator.free(hello_json);
-    const hello_msg = try std.fmt.allocPrint(allocator, "{s}\n", .{hello_json});
-    defer allocator.free(hello_msg);
-    try stream.writeAll(hello_msg);
+    writeProtoMessage(allocator, stream, .{ .hello = hello_req }) catch |err| {
+        std.debug.print("RESTORE: Failed to send HELLO: {}\n", .{err});
+        return error.ConnectionFailed;
+    };
 
-    // Send RESTORE message
-    // CANARY: REQ=REQ-LIB-MIGRATION-JSON-035; FEATURE="JSON Library Migration"; ASPECT=RestoreMessage; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
-    const RestoreMessage = struct {
-        type: []const u8 = "RESTORE",
-        source: []const u8,
-        target_time: ?[]const u8 = null,
-    };
-    const restore_struct = RestoreMessage{
-        .source = source,
-        .target_time = target_time,
-    };
-    const restore_json = try json_lib.encode(allocator, restore_struct, .{ .emit_null_optional_fields = false });
-    defer allocator.free(restore_json);
-    const restore_msg = try std.fmt.allocPrint(allocator, "{s}\n", .{restore_json});
-    defer allocator.free(restore_msg);
-    try stream.writeAll(restore_msg);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
-    // Poll and read response
-    try client.poll(100);
-    const response = stream.readLine(4096) catch |err| {
+    const hello_resp = readProtoMessage(arena.allocator(), &client, stream, 5000) catch |err| {
+        std.debug.print("RESTORE: Failed to receive HELLO response: {}\n", .{err});
+        return error.ReadFailed;
+    };
+    switch (hello_resp) {
+        .hello => |h| {
+            if (!h.success) {
+                std.debug.print("RESTORE: Server error: {s}\n", .{h.error_message});
+                return error.ServerError;
+            }
+        },
+        else => {
+            std.debug.print("RESTORE: Unexpected HELLO response\n", .{});
+            return error.ServerError;
+        },
+    }
+
+    if (source.len > 0) {
+        std.debug.print("RESTORE: Note - remote restore uses server-managed backups; source URI is not transferred.\n", .{});
+    }
+
+    const restore_req = schema.RestoreRequest{
+        .target_time = target_time orelse "",
+        .confirm = true,
+    };
+    writeProtoMessage(allocator, stream, .{ .restore = restore_req }) catch |err| {
+        std.debug.print("RESTORE: Failed to send restore request: {}\n", .{err});
+        return error.WriteFailed;
+    };
+
+    const resp_msg = readProtoMessage(arena.allocator(), &client, stream, 30000) catch |err| {
         std.debug.print("RESTORE: Failed to read server response: {}\n", .{err});
         return error.ReadFailed;
     };
-    defer allocator.free(response);
 
-    // Check response status
-    if (std.mem.indexOf(u8, response, "\"status\":\"OK\"") != null) {
-        std.debug.print("RESTORE: Server initiated restore successfully\n", .{});
-    } else if (std.mem.indexOf(u8, response, "\"status\":\"ERR\"") != null) {
-        std.debug.print("RESTORE: Server returned error: {s}\n", .{response});
-        return error.ServerError;
-    }
-
-    // Wait for restore completion
-    std.debug.print("RESTORE: Waiting for restore to complete...\n", .{});
-
-    // Read completion message
-    try client.poll(5000); // Wait up to 5 seconds for completion
-    const completion = stream.readLine(4096) catch |err| {
-        // If we timeout, the restore might still be in progress
-        if (err == error.WouldBlock) {
-            std.debug.print("RESTORE: Restore may still be in progress on server\n", .{});
-            return;
-        }
-        return err;
-    };
-    defer allocator.free(completion);
-
-    if (std.mem.indexOf(u8, completion, "\"status\":\"COMPLETE\"") != null) {
-        std.debug.print("RESTORE: Restore completed successfully\n", .{});
-    } else {
-        std.debug.print("RESTORE: Final status: {s}\n", .{completion});
+    switch (resp_msg) {
+        .restore => |resp| {
+            if (!resp.success) {
+                std.debug.print("RESTORE: Server returned error: {s}\n", .{resp.message});
+                return error.ServerError;
+            }
+            std.debug.print("RESTORE: Restore initiated successfully\n", .{});
+            if (resp.restore_dir.len > 0) {
+                std.debug.print("  Restore dir: {s}\n", .{resp.restore_dir});
+            }
+            if (resp.target_time.len > 0) {
+                std.debug.print("  Target time: {s}\n", .{resp.target_time});
+            }
+        },
+        else => {
+            std.debug.print("RESTORE: Unexpected restore response\n", .{});
+            return error.ServerError;
+        },
     }
 }
 

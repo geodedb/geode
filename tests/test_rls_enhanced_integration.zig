@@ -840,7 +840,7 @@ test "test_error_handling_robustness" {
     try std.testing.expect(rewritten_empty.len >= 0);
 
     // Test with extremely long query
-    const long_query = "SELECT " ++ "column1, " ** 1000 ++ "id FROM very_long_table_name_that_goes_on_and_on";
+    const long_query = "SELECT " ++ "column1", " ** 1000 ++ "id FROM very_long_table_name_that_goes_on_and_on";
     const rewritten_long = try engine.rewriteQueryEnhanced(long_query, &context, "test_graph");
     defer allocator.free(rewritten_long);
 

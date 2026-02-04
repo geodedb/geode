@@ -474,7 +474,7 @@ test "mockHandleUploadBackupRequest missing checksum" {
 
     const upload_req = MockUploadBackup{
         .size_bytes = 1024,
-        .checksum = "",
+        .checksum = ",
     };
 
     const response = try mockHandleUploadBackupRequest(allocator, &state, upload_req);

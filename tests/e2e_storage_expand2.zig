@@ -30,7 +30,7 @@ const E = struct {
 };
 
 test "storage: EXPAND_FROM_N two-hop" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     // tiny+: 0->1, 0->2, 1->3
     const res = try E.run_with_env(&.{ exe, "RETURN EXPAND_FROM_N(0, 2) AS m ORDER BY m" }, &.{ "GEODE_ENGINE", "storage", "GEODE_TEST_GRAPH", "tiny_plus" });
     defer std.testing.allocator.free(res.out);
@@ -40,7 +40,7 @@ test "storage: EXPAND_FROM_N two-hop" {
 }
 
 test "storage: EXPAND_FROM_LABELED one-hop" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try E.run_with_env(&.{ exe, "RETURN EXPAND_FROM_LABELED(0, \"A\") AS m ORDER BY m" }, &.{ "GEODE_ENGINE", "storage", "GEODE_TEST_GRAPH", "tiny_labels" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);

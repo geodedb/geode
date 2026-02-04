@@ -18,7 +18,7 @@ test "TestCANARY_REQ_GQL_UNION_001_PropertyAccessComprehensive" {
         .{
             .name = "basic_property_access",
             .query = "MATCH (n:Person) RETURN n.name",
-            .expected_contains = &[_][]const u8{ "\"name\": \"Alice\"", "\"name\": \"Bob\"" },
+            .expected_contains = &[_][]const u8{ "\"name\": \"Alice\"", "\"name\": \"Bob\" },
         },
         .{
             .name = "multiple_properties",
@@ -28,17 +28,17 @@ test "TestCANARY_REQ_GQL_UNION_001_PropertyAccessComprehensive" {
         .{
             .name = "union_property_access",
             .query = "MATCH (n:Person) RETURN n.name UNION MATCH (m:Person) RETURN m.name",
-            .expected_contains = &[_][]const u8{ "\"name\": \"Alice\"", "\"name\": \"Bob\"" },
+            .expected_contains = &[_][]const u8{ "\"name\": \"Alice\"", "\"name\": \"Bob\" },
         },
         .{
             .name = "union_with_where",
             .query = "MATCH (p:Person) WHERE p.age > 26 RETURN p.name UNION MATCH (q:Person) WHERE q.age < 28 RETURN q.name",
-            .expected_contains = &[_][]const u8{ "\"name\": \"Alice\"", "\"name\": \"Bob\"" },
+            .expected_contains = &[_][]const u8{ "\"name\": \"Alice\"", "\"name\": \"Bob\" },
         },
         .{
             .name = "full_node_serialization",
             .query = "MATCH (n:Person) RETURN n LIMIT 1",
-            .expected_contains = &[_][]const u8{ "\"properties\": {", "\"name\":", "\"age\":", "\"labels\": [\"Person\"]" },
+            .expected_contains = &[_][]const u8{ "\"properties\": {"", "\"name\":", "\"age\":", "\"labels\": [\"Person\"]" },
         },
     };
 

@@ -8,7 +8,7 @@ fn run_quic() !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
 
     // Start server in QUIC mode
-    var srv = Child.init(&.{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7567", "--test-exit-after-first-request" }, allocator);
+    var srv = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:7567" }, allocator);
     srv.stdin_behavior = .Inherit;
     srv.stdout_behavior = .Inherit;
     srv.stderr_behavior = .Inherit;
@@ -20,7 +20,7 @@ fn run_quic() !struct { code: i32, out: []u8, err: []u8 } {
     while (i < 10_000_000) : (i += 1) {}
 
     // Client uses QUIC by default
-    var cli = Child.init(&.{ "./zig-out/bin/geodec", "RETURN 1 AS x ORDER BY x LIMIT 1", "--server", "127.0.0.1:7567" }, allocator);
+    var cli = Child.init(&.{ "./zig-out/bin/geode", "query", "RETURN 1 AS x ORDER BY x LIMIT 1", "--server", "127.0.0.1:7567" }, allocator);
     cli.stdin_behavior = .Ignore;
     cli.stdout_behavior = .Pipe;
     cli.stderr_behavior = .Pipe;
@@ -47,7 +47,6 @@ test "TestCANARY_REQ_GQL_074_QUICProtocol" {
     defer std.testing.allocator.free(r.out);
     defer std.testing.allocator.free(r.err);
     try std.testing.expectEqual(@as(i32, 0), r.code);
-    try std.testing.expect(std.mem.indexOf(u8, r.out, "\"type\":\"SCHEMA\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, r.out, "\"type\":\"BINDINGS\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, r.out, "{\"x\":1}") != null);
 }

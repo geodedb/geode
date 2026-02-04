@@ -22,7 +22,7 @@ fn normalize(line: []const u8, allocator: std.mem.Allocator) ![]u8 {
 const EXPECTED = "mem_curve\":[{\"op_index\":0,\"net_after_op\":0}"; // intentionally truncated prefix for stability
 
 test "protocol: PROFILE mem_curve snapshot prefix" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const out = try run(&.{ exe, "PROFILE RETURN 1 AS x LIMIT 1", "--profile-memcurve" });
     defer testing.allocator.free(out);
     const pl = util.findProfileLine(out) orelse return error.MissingProfile;

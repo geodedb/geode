@@ -19,9 +19,9 @@ fn runEnv(env_key: []const u8, env_val: []const u8, args: []const []const u8) ![
 }
 
 test "protocol: spill_reason=threshold when peak exceeds threshold" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     // Very small threshold to guarantee crossing even minimal allocations
-    const out = try runEnv("GEODE_SPILL_THRESHOLD_BYTES", "1", &.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
+    const out = try runEnv("GEODE_SPILL_THRESHOLD_BYTES", "1", &.{ exe", "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer testing.allocator.free(out);
     // Find PROFILE line
     const pl = util.findProfileLine(out) orelse return error.MissingProfile;

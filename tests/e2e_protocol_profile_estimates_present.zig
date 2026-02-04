@@ -3,7 +3,7 @@ const testing = std.testing;
 const util = @import("profile_test_util.zig");
 
 test "protocol: PROFILE planner_estimates present (default)" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const out = try util.runCli(testing.allocator, &.{ exe, "PROFILE RETURN 1 AS x LIMIT 1" });
     defer testing.allocator.free(out);
     const pl = util.findProfileLine(out) orelse return error.MissingProfile;

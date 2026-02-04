@@ -6,7 +6,7 @@ test "OPTIONAL MATCH returns NULL for unmatched patterns" {
 
     // Start server
     var server = try std.process.Child.init(&.{
-        "./zig-out/bin/geoded",
+        "./zig-out/bin/geode",
         "--listen-quic",
         "127.0.0.1:17567",
     }, allocator);
@@ -18,7 +18,7 @@ test "OPTIONAL MATCH returns NULL for unmatched patterns" {
 
     // Connect and test
     const client = try std.process.Child.init(&.{
-        "./zig-out/bin/geodec",
+        "./zig-out/bin/geode",
         "CREATE (n:Person {name: 'Alice'})",
         "--server",
         "127.0.0.1:17567",
@@ -33,7 +33,7 @@ test "OPTIONAL MATCH returns NULL for unmatched patterns" {
 
     // Test OPTIONAL MATCH
     const client2 = try std.process.Child.init(&.{
-        "./zig-out/bin/geodec",
+        "./zig-out/bin/geode",
         "MATCH (n:Person) OPTIONAL MATCH (n)-[r:KNOWS]->(m:Person) RETURN n.name, m.name",
         "--server",
         "127.0.0.1:17567",
@@ -51,7 +51,7 @@ test "Variable-length path expansion" {
 
     // Start server
     var server = try std.process.Child.init(&.{
-        "./zig-out/bin/geoded",
+        "./zig-out/bin/geode",
         "--listen-quic",
         "127.0.0.1:17568",
     }, allocator);
@@ -74,7 +74,7 @@ test "Variable-length path expansion" {
 
     for (queries) |query| {
         const client = try std.process.Child.init(&.{
-            "./zig-out/bin/geodec",
+            "./zig-out/bin/geode",
             query,
             "--server",
             "127.0.0.1:17568",
@@ -87,8 +87,7 @@ test "Variable-length path expansion" {
 
     // Test variable-length path
     const client = try std.process.Child.init(&.{
-        "./zig-out/bin/geodec",
-        "MATCH (a:Node {id: 1})-[:NEXT*1..3]->(b) RETURN a.id, b.id",
+        "./zig-out/bin/geode", "query", "MATCH (a:Node {id: 1})-[:NEXT*1..3]->(b) RETURN a.id, b.id",
         "--server",
         "127.0.0.1:17568",
         "--format=json",
@@ -105,7 +104,7 @@ test "MVCC conflict detection - write-write conflict" {
 
     // Start server
     var server = try std.process.Child.init(&.{
-        "./zig-out/bin/geoded",
+        "./zig-out/bin/geode",
         "--listen-quic",
         "127.0.0.1:17569",
     }, allocator);
@@ -117,7 +116,7 @@ test "MVCC conflict detection - write-write conflict" {
 
     // Create initial data
     const client1 = try std.process.Child.init(&.{
-        "./zig-out/bin/geodec",
+        "./zig-out/bin/geode",
         "CREATE (n:Account {id: 1, balance: 100})",
         "--server",
         "127.0.0.1:17569",
@@ -130,8 +129,7 @@ test "MVCC conflict detection - write-write conflict" {
     // Start two transactions that will conflict
     // Transaction 1: BEGIN
     const txn1_begin = try std.process.Child.init(&.{
-        "./zig-out/bin/geodec",
-        "BEGIN",
+        "./zig-out/bin/geode", "query", "BEGIN",
         "--server",
         "127.0.0.1:17569",
         "--format=json",
@@ -140,8 +138,7 @@ test "MVCC conflict detection - write-write conflict" {
 
     // Transaction 2: BEGIN
     const txn2_begin = try std.process.Child.init(&.{
-        "./zig-out/bin/geodec",
-        "BEGIN",
+        "./zig-out/bin/geode", "query", "BEGIN",
         "--server",
         "127.0.0.1:17569",
         "--format=json",
@@ -162,7 +159,7 @@ test "Storage catalog persistence" {
 
     // Start server with data_dir
     var server = try std.process.Child.init(&.{
-        "./zig-out/bin/geoded",
+        "./zig-out/bin/geode",
         "--listen-quic",
         "127.0.0.1:17570",
         "--data_dir",
@@ -175,7 +172,7 @@ test "Storage catalog persistence" {
 
     // Create some data
     const client = try std.process.Child.init(&.{
-        "./zig-out/bin/geodec",
+        "./zig-out/bin/geode",
         "CREATE (n:Person {name: 'Alice', age: 30})",
         "--server",
         "127.0.0.1:17570",
@@ -190,7 +187,7 @@ test "Storage catalog persistence" {
 
     // Restart server with same data_dir
     var server2 = try std.process.Child.init(&.{
-        "./zig-out/bin/geoded",
+        "./zig-out/bin/geode",
         "--listen-quic",
         "127.0.0.1:17570",
         "--data_dir",
@@ -204,7 +201,7 @@ test "Storage catalog persistence" {
 
     // Query the data - should still be there
     const client2 = try std.process.Child.init(&.{
-        "./zig-out/bin/geodec",
+        "./zig-out/bin/geode",
         "MATCH (n:Person {name: 'Alice'}) RETURN n.name, n.age",
         "--server",
         "127.0.0.1:17570",

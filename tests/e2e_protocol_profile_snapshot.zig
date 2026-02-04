@@ -27,7 +27,7 @@ const EXPECTED_SIGNATURE = "{\"status_class\":\"0\",\"result\":{\"type\":\"PROFI
 
 test "protocol: PROFILE structural snapshot" {
     // Use client CLI which already manages PULL sequence for deferred PROFILE.
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const out = try run(&.{ exe, "PROFILE RETURN 1 AS x LIMIT 1" });
     defer testing.allocator.free(out);
     const prof = util.findProfileLine(out) orelse return error.MissingProfile;

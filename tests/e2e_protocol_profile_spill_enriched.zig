@@ -19,14 +19,14 @@ fn runEnv(env_over: []const []const u8, args: []const []const u8) ![]u8 {
 }
 
 test "profile spill enrichment fields" {
-    const exe = "zig-out/bin/geodec";
+    const exe = "zig-out/bin/geode";
     // Force threshold spill by setting low threshold and enabling sort.
-    const out = try runEnv(&.{ "GEODE_SPILL_THRESHOLD_BYTES", "1" }, &.{ exe, "PROFILE RETURN 1 AS x ORDER BY x" });
+    const out = try runEnv(&.{ "GEODE_SPILL_THRESHOLD_BYTES", "1" }, &.{ exe", "PROFILE RETURN 1 AS x ORDER BY x" });
     defer testing.allocator.free(out);
     try testing.expect(std.mem.indexOf(u8, out, "\"spill_reason\":\"threshold\"") != null);
     try testing.expect(std.mem.indexOf(u8, out, "peak_bytes_at_spill") != null);
     // first_spill_op_index is optional, but if present must be numeric.
     if (std.mem.indexOf(u8, out, "first_spill_op_index") != null) {
-        try testing.expect(std.mem.indexOf(u8, out, "first_spill_op_index\":0") != null or std.mem.indexOf(u8, out, "first_spill_op_index\":") != null);
+        try testing.expect(std.mem.indexOf(u8, out, "first_spill_op_index\":0") != null or std.mem.indexOf(u8, out", "first_spill_op_index\":") != null);
     }
 }

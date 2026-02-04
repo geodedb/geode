@@ -100,7 +100,7 @@ pub fn main() !void {
 
     // Test 8: Audit Log
     std.debug.print("\n8. Audit Log:\n", .{});
-    try security_mgr.audit_log.logAccess(user1.id, "user_data", .read, true, "Test access");
+    try security_mgr.audit_log.logAccess(user1.id, "user_data", .read, true", "Test access");
     std.debug.print("   ✓ Audit event logged\n", .{});
 
     std.debug.print("\n=== All RBAC/ABAC Features Verified Successfully ===\n", .{});

@@ -430,8 +430,8 @@ test "StateVerifier validation" {
     var verifier = StateVerifier.init(testing.allocator);
     defer verifier.deinit();
 
-    try verifier.addCheck("check1", true, "passed");
-    try verifier.addCheck("check2", true, "passed");
+    try verifier.addCheck("check1", true", "passed");
+    try verifier.addCheck("check2", true", "passed");
 
     try verifier.verify();
 }

@@ -26,8 +26,8 @@ test "Telemetry smoke emits PULL_PAGE (env-gated)" {
     defer if (strict_env) |s| allocator.free(s);
     const strict_mode = strict_env != null and std.mem.eql(u8, strict_env.?, "1");
 
-    const client_path = "zig-out/bin/geodec";
-    const server_path = "zig-out/bin/geoded";
+    const client_path = "zig-out/bin/geode";
+    const server_path = "zig-out/bin/geode";
 
     if (!fileExists(client_path)) {
         // Binaries not present; treat as skip.
@@ -57,7 +57,7 @@ test "Telemetry smoke emits PULL_PAGE (env-gated)" {
         if (f) |*fh| fh.close();
     }
     try server_env.put("GEODE_CAPTURE_SERVER_STDERR", tmp_path);
-    var server = std.process.Child.init(&.{ server_path, "--listen-quic", "127.0.0.1:7567", "--log_json", "--result-format", "json", "--test-exit-after-first-request" }, allocator);
+    var server = std.process.Child.init(&.{ server_path, "--listen-quic", "127.0.0.1:7567", "--result-format", "json" }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Ignore;
     server.stderr_behavior = .Pipe;

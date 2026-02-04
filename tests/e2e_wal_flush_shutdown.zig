@@ -4,7 +4,7 @@ const std = @import("std");
 
 test "wal flush on shutdown" {
     const gpa = std.testing.allocator;
-    const exe = "./zig-out/bin/geoded";
+    const exe = "./zig-out/bin/geode";
     // temp directory for pages/WAL
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

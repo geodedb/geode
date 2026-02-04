@@ -196,7 +196,7 @@ test "Spinner handles empty message" {
     const allocator = testing.allocator;
     const spinner = Spinner.init(allocator, "");
 
-    try testing.expectEqualStrings("", spinner.message);
+    try testing.expectEqualStrings(", spinner.message);
 }
 
 test "Spinner handles very long message" {

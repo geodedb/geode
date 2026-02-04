@@ -21,7 +21,7 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8 } {
 // Hard assert for now to exercise path.
 
 test "profile heuristic emits NodeIndexScan" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const q = "PROFILE RETURN 1 AS x WHERE x=1"; // includes WHERE and '='
     const res = try run(&.{ exe, q });
     try testing.expectEqual(@as(i32, 0), res.code);

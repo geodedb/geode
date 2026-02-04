@@ -1,5 +1,5 @@
 const std = @import("std");
-const iface = @import("interface");
+const types = @import("types");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=EXEMPT; OWNER=storage; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -471,7 +471,7 @@ pub const PageManager = struct {
         };
     }
 
-    pub fn insert(self: *PageManager, bytes: []const u8) !iface.RecordId {
+    pub fn insert(self: *PageManager, bytes: []const u8) !types.RecordId {
         var i = try self.ensurePage();
         var p = self.asPage(i);
         if (p.insert(bytes)) |slot| {
@@ -500,7 +500,7 @@ pub const PageManager = struct {
         }
     }
 
-    pub fn read(self: *PageManager, rid: iface.RecordId) ![]const u8 {
+    pub fn read(self: *PageManager, rid: types.RecordId) ![]const u8 {
         if (rid.page >= self.pages.items.len) return error.BadPage;
         var p = self.asPage(@intCast(rid.page));
         return p.read(rid.slot);

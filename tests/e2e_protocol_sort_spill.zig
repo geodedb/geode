@@ -5,7 +5,7 @@ const std = @import("std");
 test "protocol PROFILE sort_spill" {
     const gpa = std.testing.allocator;
     std.os.setEnv("GEODE_SPILL_THRESHOLD_BYTES", "1", true) catch unreachable;
-    const exe = "./zig-out/bin/geoded";
+    const exe = "./zig-out/bin/geode";
     var child = std.process.Child.init(&[_][]const u8{exe}, gpa);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;

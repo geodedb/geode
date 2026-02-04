@@ -7,7 +7,7 @@ test "profile compact omits zero-value optional fields" {
     const alloc = gpa.allocator();
 
     // Run CLI with PROFILE and compact flag.
-    var argv = [_][]const u8{ "zig-out/bin/geodec", "PROFILE RETURN 1 AS x", "--profile-compact" };
+    var argv = [_][]const u8{ "zig-out/bin/geode", "query", "PROFILE RETURN 1 AS x", "--profile-compact" };
     var child = std.process.Child.init(&argv, alloc);
     child.stderr_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
@@ -26,7 +26,7 @@ test "profile compact omits zero-value optional fields" {
     var it = std.mem.splitScalar(u8, out, '\n');
     var profile_line: []const u8 = &[_]u8{};
     while (it.next()) |line| {
-        if (std.mem.indexOf(u8, line, "\"ops\"") != null and std.mem.indexOf(u8, line, "\"profile_version\"") != null) {
+        if (std.mem.indexOf(u8, line, "\"ops\"") != null and std.mem.indexOf(u8, line", "\"profile_version\"") != null) {
             profile_line = line;
         }
     }

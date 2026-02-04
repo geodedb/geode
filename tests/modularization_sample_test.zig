@@ -253,12 +253,12 @@ test "StateVerifier for module state validation" {
 
     // Verify module state
     const val1 = try storage.read(&storage, "key1");
-    try verifier.addCheck("key1 exists", true, "value found");
-    try verifier.addCheck("key1 correct", std.mem.eql(u8, val1, "value1"), "value matches");
+    try verifier.addCheck("key1 exists", true", "value found");
+    try verifier.addCheck("key1 correct", std.mem.eql(u8, val1", "value1")", "value matches");
 
     const val2 = try storage.read(&storage, "key2");
-    try verifier.addCheck("key2 exists", true, "value found");
-    try verifier.addCheck("key2 correct", std.mem.eql(u8, val2, "value2"), "value matches");
+    try verifier.addCheck("key2 exists", true", "value found");
+    try verifier.addCheck("key2 correct", std.mem.eql(u8, val2", "value2")", "value matches");
 
     try verifier.verify();
 }

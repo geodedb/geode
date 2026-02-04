@@ -11,6 +11,9 @@ pub const Worker = spice.Worker;
 pub const Task = spice.Task;
 pub const Future = spice.Future;
 
+/// Task context type for map operations
+pub const TaskContext = *Task;
+
 /// Global SpicePool instance for managing fork/join parallelism
 /// CANARY: REQ=REQ-PERF-SPICE-004; FEATURE="SpicePool"; ASPECT=GlobalPool; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
 pub const SpicePool = struct {
@@ -55,6 +58,93 @@ pub const SpicePool = struct {
             self.start();
         }
         return self.pool.call(T, func, arg);
+    }
+
+    /// In-place parallel map operation
+    /// Maps inputs to outputs using the provided map function
+    /// CANARY: REQ=REQ-PERF-SPICE-008; FEATURE="SpicePoolMap"; ASPECT=InPlaceMap; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-03
+    pub fn map(
+        self: *SpicePool,
+        comptime Input: type,
+        comptime Output: type,
+        inputs: []const Input,
+        outputs: []Output,
+        comptime mapFn: fn (TaskContext, Input, *Output) void,
+    ) !void {
+        if (inputs.len != outputs.len) {
+            return error.LengthMismatch;
+        }
+        if (inputs.len == 0) return;
+
+        if (!self.started) {
+            self.start();
+        }
+
+        const threshold = Thresholds.map;
+
+        if (inputs.len <= threshold) {
+            // Sequential fallback for small workloads
+            for (inputs, 0..) |input, i| {
+                var dummy_task: Task = undefined;
+                mapFn(&dummy_task, input, &outputs[i]);
+            }
+            return;
+        }
+
+        // Use fork/join for larger workloads
+        const Context = struct {
+            inputs: []const Input,
+            outputs: []Output,
+            start_idx: usize,
+            end_idx: usize,
+            threshold_val: usize,
+        };
+
+        const parallelMapWorker = struct {
+            fn work(task: *Task, ctx: Context) void {
+                const len = ctx.end_idx - ctx.start_idx;
+
+                if (len <= ctx.threshold_val) {
+                    // Base case: process sequentially
+                    for (ctx.start_idx..ctx.end_idx) |i| {
+                        mapFn(task, ctx.inputs[i], &ctx.outputs[i]);
+                    }
+                    return;
+                }
+
+                const mid = ctx.start_idx + len / 2;
+
+                // Fork: split work in half
+                var future = Future(Context, void).init();
+                future.fork(task, work, .{
+                    .inputs = ctx.inputs,
+                    .outputs = ctx.outputs,
+                    .start_idx = ctx.start_idx,
+                    .end_idx = mid,
+                    .threshold_val = ctx.threshold_val,
+                });
+
+                // Do right half in current task
+                work(task, .{
+                    .inputs = ctx.inputs,
+                    .outputs = ctx.outputs,
+                    .start_idx = mid,
+                    .end_idx = ctx.end_idx,
+                    .threshold_val = ctx.threshold_val,
+                });
+
+                // Join: wait for left half
+                _ = future.join(task);
+            }
+        }.work;
+
+        _ = self.pool.call(void, parallelMapWorker, Context{
+            .inputs = inputs,
+            .outputs = outputs,
+            .start_idx = 0,
+            .end_idx = inputs.len,
+            .threshold_val = threshold,
+        });
     }
 };
 

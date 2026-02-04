@@ -484,11 +484,11 @@ test "GAP-0015: KMS AES-256-GCM wrap/unwrap roundtrip" {
 
     var ciphertext: [32]u8 = undefined;
     var tag: [16]u8 = undefined;
-    AesGcm.encrypt(&ciphertext, &tag, &dek, "", nonce, kek);
+    AesGcm.encrypt(&ciphertext, &tag, &dek, nonce, kek);
 
     // Unwrap (decrypt)
     var unwrapped: [32]u8 = undefined;
-    try AesGcm.decrypt(&unwrapped, &ciphertext, tag, "", nonce, kek);
+    try AesGcm.decrypt(&unwrapped, &ciphertext, tag, nonce, kek);
 
     try testing.expectEqualSlices(u8, &dek, &unwrapped);
 }
@@ -842,11 +842,11 @@ test "Integration: KMS key rotation simulation" {
 
     var old_ciphertext: [32]u8 = undefined;
     var old_tag: [16]u8 = undefined;
-    AesGcm.encrypt(&old_ciphertext, &old_tag, &dek, "", old_nonce, old_kek);
+    AesGcm.encrypt(&old_ciphertext, &old_tag, &dek, old_nonce, old_kek);
 
     // Rotation: decrypt with old KEK
     var decrypted_dek: [32]u8 = undefined;
-    try AesGcm.decrypt(&decrypted_dek, &old_ciphertext, old_tag, "", old_nonce, old_kek);
+    try AesGcm.decrypt(&decrypted_dek, &old_ciphertext, old_tag, old_nonce, old_kek);
 
     // Re-encrypt with new KEK
     var new_nonce: [12]u8 = undefined;
@@ -854,11 +854,11 @@ test "Integration: KMS key rotation simulation" {
 
     var new_ciphertext: [32]u8 = undefined;
     var new_tag: [16]u8 = undefined;
-    AesGcm.encrypt(&new_ciphertext, &new_tag, &decrypted_dek, "", new_nonce, new_kek);
+    AesGcm.encrypt(&new_ciphertext, &new_tag, &decrypted_dek, new_nonce, new_kek);
 
     // Verify: decrypt with new KEK should recover original DEK
     var final_dek: [32]u8 = undefined;
-    try AesGcm.decrypt(&final_dek, &new_ciphertext, new_tag, "", new_nonce, new_kek);
+    try AesGcm.decrypt(&final_dek, &new_ciphertext, new_tag, new_nonce, new_kek);
 
     try testing.expectEqualSlices(u8, &dek, &final_dek);
 }

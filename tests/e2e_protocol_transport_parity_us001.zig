@@ -5,7 +5,14 @@ const RunResult = struct { code: i32, out: []u8, err: []u8 };
 
 fn run(args: []const []const u8) !RunResult {
     const allocator = std.testing.allocator;
-    var child = Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = Child.init(argv.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -25,7 +32,14 @@ fn run_server(args: []const []const u8) !struct { child: Child } {
     var env = try std.process.getEnvMap(allocator);
     defer env.deinit();
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
-    var child = Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = Child.init(argv.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -42,7 +56,7 @@ fn contains(hay: []const u8, needle: []const u8) bool {
 test "protocol: transport parity diagnostics (US001) stdio vs QUIC (gated)" {
     if (std.posix.getenv("GEODE_CI_QUIC_SMOKE") == null) return error.SkipZigTest;
 
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const q = "RETURN 1 LIMIT 10 OFFSET 5";
 
     const sres = try run(&.{ exe, q, "--format", "json" });
@@ -52,7 +66,7 @@ test "protocol: transport parity diagnostics (US001) stdio vs QUIC (gated)" {
     try std.testing.expect(contains(sres.err, "US001"));
     try std.testing.expect(contains(sres.err, "16.18"));
 
-    var server = try run_server(&.{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:17667", "--log_json", "--result-format", "json", "--test-exit-after-first-request" });
+    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:17667", "--result-format", "json" });
     defer {
         _ = server.child.kill() catch {};
     }

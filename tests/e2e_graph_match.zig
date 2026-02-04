@@ -25,7 +25,7 @@ fn run_query(allocator: std.mem.Allocator, exe: []const u8, query: []const u8) !
 
 fn run_server_and_query(allocator: std.mem.Allocator, query: []const u8) ![]const u8 {
     // Start server in background
-    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:7567" }, allocator);
+    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:7567" }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Inherit;
     server.stderr_behavior = .Inherit;
@@ -36,7 +36,7 @@ fn run_server_and_query(allocator: std.mem.Allocator, query: []const u8) ![]cons
     std.Thread.sleep(200 * std.time.ns_per_ms);
 
     // Use CLI over TCP
-    var argv = [_][]const u8{ "./zig-out/bin/geodec", query, "--server", "127.0.0.1:7567", "--insecure" };
+    var argv = [_][]const u8{ "./zig-out/bin/geode", query", "--server", "127.0.0.1:7567", "--insecure" };
     var child = std.ChildProcess.init(&argv, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;

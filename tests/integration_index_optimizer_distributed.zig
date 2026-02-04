@@ -25,7 +25,7 @@ test "TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_INTEGRATION_001_ServerIntegrati
     try testing.expect(federation_config.coordinator_enabled == true);
 
     // Test distributed cost estimation through server integration
-    const distributed_estimate = index_optimizer.estimateDistributedQueryCost(&[_][]const u8{"Person"}, "name", geode.PropertyValue{ .String = "Alice" }, federation_config.shard_count, federation_config.enabled);
+    const distributed_estimate = index_optimizer.estimateDistributedQueryCost(&[_][]const u8{"Person"}", "name", geode.PropertyValue{ .String = "Alice" }, federation_config.shard_count, federation_config.enabled);
 
     // Verify that distributed estimation is working
     try testing.expect(distributed_estimate.total_cost > 0);
@@ -33,7 +33,7 @@ test "TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_INTEGRATION_001_ServerIntegrati
     try testing.expect(distributed_estimate.parallelism_factor > 0);
 
     // Test integration with existing IndexOptimizer functionality
-    const local_plan = index_optimizer.optimizeNodeScan(&[_][]const u8{"Person"}, "name", geode.PropertyValue{ .String = "Alice" });
+    const local_plan = index_optimizer.optimizeNodeScan(&[_][]const u8{"Person"}", "name", geode.PropertyValue{ .String = "Alice" });
 
     // Local plan should still work normally
     try testing.expect(local_plan.estimated_cost > 0);
@@ -222,7 +222,7 @@ test "Distributed optimizer memory management and cleanup" {
 
     // Test distributed operations on all optimizers
     for (optimizers.items) |optimizer| {
-        const distributed_cost = optimizer.estimateDistributedQueryCost(&[_][]const u8{"TestNode"}, "test_property", geode.PropertyValue{ .String = "test" }, 4, true);
+        const distributed_cost = optimizer.estimateDistributedQueryCost(&[_][]const u8{"TestNode"}", "test_property", geode.PropertyValue{ .String = "test" }, 4, true);
 
         try testing.expect(distributed_cost.total_cost > 0);
         try testing.expect(!std.math.isNan(distributed_cost.total_cost));
@@ -301,7 +301,7 @@ test "Distributed optimization with edge case shard configurations" {
     const shard_counts = [_]u32{ 1, 2, 3, 7, 16, 32, 64, 128 };
 
     for (shard_counts) |shard_count| {
-        const distributed_cost = index_optimizer.estimateDistributedQueryCost(&[_][]const u8{"EdgeCaseNode"}, "test_prop", geode.PropertyValue{ .String = "test" }, shard_count, shard_count > 1 // Enable federation for multi-shard
+        const distributed_cost = index_optimizer.estimateDistributedQueryCost(&[_][]const u8{"EdgeCaseNode"}", "test_prop", geode.PropertyValue{ .String = "test" }, shard_count, shard_count > 1 // Enable federation for multi-shard
         );
 
         // All configurations should produce valid costs

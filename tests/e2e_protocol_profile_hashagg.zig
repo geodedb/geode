@@ -1,36 +1,34 @@
 const std = @import("std");
+const testing = std.testing;
+const util = @import("proto_test_util.zig");
 
-// PROFILE query exercising GROUP BY to ensure HashAggBuild/HashAggEmit appear in PROFILE ops.
-
-test "protocol PROFILE HashAgg ops" {
-    const gpa = std.testing.allocator;
-    const exe_path = try std.fmt.allocPrint(gpa, "{s}/zig-out/bin/geoded", .{std.fs.cwd().realpathAlloc(gpa, ".") catch "."});
-    defer gpa.free(exe_path);
-    var child = std.process.Child.init(&[_][]const u8{exe_path}, gpa);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    try child.spawn();
-    if (child.stdin) |stdin| {
-        try stdin.writer().writeAll("{\"type\":\"HELLO\"}\n");
-        // Use params to produce multiple input rows for grouping: a param array and UNNEST semantics simulated by evaluator (each param row becomes one env row)
-        try stdin.writer().writeAll("{\"type\":\"RUN_GQL\",\"text\":\"PROFILE RETURN 1 AS k GROUP BY k\"}\n");
-        try stdin.writer().writeAll("{\"type\":\"PULL\"}\n");
-        try stdin.close();
-    }
-    var out_buf = std.ArrayList(u8).init(gpa);
-    defer out_buf.deinit();
-    if (child.stdout) |so| {
-        var tmp: [8192]u8 = undefined;
-        while (true) {
-            const n = so.read(&tmp) catch 0;
-            if (n == 0) break;
-            try out_buf.appendSlice(tmp[0..n]);
+fn hasMetricRow(rows: [][]util.TestValue, name: []const u8) bool {
+    for (rows) |row| {
+        if (row.len < 2) continue;
+        if (row[0] == .string and std.mem.eql(u8, row[0].string, name)) {
+            return true;
         }
     }
-    _ = child.wait() catch {};
-    const out = out_buf.items;
-    if (std.mem.indexOf(u8, out, "HashAggBuild") == null or std.mem.indexOf(u8, out, "HashAggEmit") == null) {
-        std.debug.print("OUTPUT=\n{s}\n", .{out});
-        return error.MissingHashAggOps;
-    }
+    return false;
+}
+
+test "protocol PROFILE returns metrics table" {
+    const allocator = testing.allocator;
+    const addr = "127.0.0.1:17689";
+
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen-quic", addr, "--disable-auth" }, null);
+    defer server.deinit();
+
+    var client = try util.QuicProtoClient.connect(allocator, addr);
+    defer client.deinit();
+    var hello = try client.hello(allocator, "", "");
+    hello.deinit(allocator);
+
+    const res = try client.executeAndCollect(allocator, "PROFILE RETURN 1 AS k GROUP BY k", null, 100);
+    defer res.deinit(allocator);
+
+    try testing.expect(res.error_code == null);
+    try testing.expect(res.columns.len == 2);
+    try testing.expect(hasMetricRow(res.rows, "profile"));
+    try testing.expect(hasMetricRow(res.rows, "rows"));
 }

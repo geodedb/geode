@@ -34,8 +34,8 @@ test "TestCANARY_REQ_VECTOR_INDEX_INTEGRATION_001_PropertyValueHandling" {
             // Test JSON serialization format (like in main.zig:871)
             var json_output = std.ArrayList(u8).init(allocator);
             defer json_output.deinit();
-            try std.fmt.format(json_output.writer(), "\"[vector:{d}x{d}]\"", .{ v.dim, v.data.len });
-            try testing.expectEqualStrings("\"[vector:5x5]\"", json_output.items);
+            try std.fmt.format(json_output.writer(), "\"[vector:{d}x{d}]\", .{ v.dim, v.data.len });
+            try testing.expectEqualStrings("\"[vector:5x5]\", json_output.items);
         },
         else => {
             try testing.expect(false); // Should not reach here
@@ -118,7 +118,7 @@ test "TestCANARY_REQ_VECTOR_INDEX_INTEGRATION_003_PerformanceValidation" {
 
     switch (prop_value) {
         .VectorF32 => |vec| {
-            try std.fmt.format(json_result.writer(), "\"[vector:{d}x{d}]\"", .{ vec.dim, vec.data.len });
+            try std.fmt.format(json_result.writer(), "\"[vector:{d}x{d}]\", .{ vec.dim, vec.data.len });
         },
         else => try json_result.appendSlice("null"),
     }
@@ -127,7 +127,7 @@ test "TestCANARY_REQ_VECTOR_INDEX_INTEGRATION_003_PerformanceValidation" {
     const json_duration = json_end - json_start;
 
     try testing.expect(json_duration < 1_000_000); // Less than 1ms for JSON formatting
-    try testing.expectEqualStrings("\"[vector:1024x1024]\"", json_result.items);
+    try testing.expectEqualStrings("\"[vector:1024x1024]\", json_result.items);
 }
 
 test "VectorF32 PropertyValue comprehensive type handling" {

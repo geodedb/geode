@@ -8,7 +8,7 @@ pub fn main() !void {}
 test "protocol PROFILE wal_skip_ratio override" {
     const gpa = std.testing.allocator;
     // Build server executable path
-    const exe_path = try std.fmt.allocPrint(gpa, "{s}/zig-out/bin/geoded", .{std.fs.cwd().realpathAlloc(gpa, ".") catch "."});
+    const exe_path = try std.fmt.allocPrint(gpa, "{s}/zig-out/bin/geode", .{std.fs.cwd().realpathAlloc(gpa", ".") catch "."});
     defer gpa.free(exe_path);
     // Spawn server process and feed one PROFILE query line; capture output.
     var child = std.process.Child.init(&[_][]const u8{ exe_path, "--test-wal-skip-ratio", "0.7500" }, gpa);
@@ -35,7 +35,7 @@ test "protocol PROFILE wal_skip_ratio override" {
     _ = child.wait() catch {};
     const out_str = stdout_buf.items;
     // Expect wal_skip_ratio and alias skip_ratio to appear with 0.7500
-    if (std.mem.indexOf(u8, out_str, "\"wal_skip_ratio\":0.7500") == null or std.mem.indexOf(u8, out_str, "\"skip_ratio\":0.7500") == null) {
+    if (std.mem.indexOf(u8, out_str, "\"wal_skip_ratio\":0.7500") == null or std.mem.indexOf(u8, out_str", "\"skip_ratio\":0.7500") == null) {
         std.debug.print("OUTPUT=\n{s}\n", .{out_str});
         return error.MissingWalSkipRatio;
     }

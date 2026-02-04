@@ -3,24 +3,13 @@ const std = @import("std");
 // CANARY: REQ=REQ-LIB-MIGRATION-MCP-008; FEATURE="External Library Migration"; ASPECT=MCPClient; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // GeodeClient - QUIC connection management for MCP server integration
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-045; FEATURE="JSON Library Migration"; ASPECT=MCPClient; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
-const json_lib = @import("json");
+const protobuf = @import("protobuf");
+const schema = @import("schema");
+const spice_wrapper = @import("parallel/spice");
 
 // Import quic_transport through the parent module to ensure module resolution
 const quic_transport = @import("mod.zig").quic_transport;
 
-// MCP Client Protocol Message Types
-const ClientRunGqlMessage = struct {
-    type: []const u8 = "RUN_GQL",
-    text: []const u8,
-    params: ?[]const u8 = null,
-};
-
-// For raw params embedding (pre-formatted JSON string)
-const ClientRunGqlWithParams = struct {
-    type: []const u8 = "RUN_GQL",
-    text: []const u8,
-};
 
 pub const GeodeClientError = error{
     ConnectionFailed,
@@ -44,6 +33,7 @@ pub const GeodeClient = struct {
     stream: ?*quic_transport.QuicClientStream,
     connected: bool,
     handshake_done: bool,
+    session_id: ?[]const u8,
 
     const Self = @This();
 
@@ -68,6 +58,7 @@ pub const GeodeClient = struct {
             .stream = null,
             .connected = false,
             .handshake_done = false,
+            .session_id = null,
         };
 
         return self;
@@ -75,6 +66,9 @@ pub const GeodeClient = struct {
 
     pub fn deinit(self: *Self) void {
         self.disconnect();
+        if (self.session_id) |sid| {
+            self.allocator.free(sid);
+        }
         self.allocator.free(self.endpoint);
         self.allocator.destroy(self);
     }
@@ -90,6 +84,10 @@ pub const GeodeClient = struct {
         }
         self.connected = false;
         self.handshake_done = false;
+        if (self.session_id) |sid| {
+            self.allocator.free(sid);
+            self.session_id = null;
+        }
     }
 
     /// Ensure connection is established (lazy connect)
@@ -123,120 +121,407 @@ pub const GeodeClient = struct {
             return GeodeClientError.StreamError;
         };
 
-        // Send HELLO and wait for acknowledgment
-        const hello_msg = "{\"type\":\"HELLO\",\"client_name\":\"geode-mcp\",\"client_ver\":\"0.19.0\",\"wanted_conformance\":\"min\"}\n";
-        self.stream.?.writeAll(hello_msg) catch |err| {
+        // Send HELLO (protobuf) and wait for acknowledgment
+        const hello_req = schema.HelloRequest{
+            .username = "",
+            .password = "",
+            .tenant_id = null,
+            .client_name = "geode-mcp",
+            .client_version = "0.19.0",
+            .wanted_conformance = "min",
+        };
+        self.writeProtoMessage(.{ .hello = hello_req }) catch |err| {
             self.disconnect();
             std.debug.print("[MCP-CLIENT] HELLO send failed: {}\n", .{err});
             return GeodeClientError.StreamError;
         };
 
-        // Read HELLO response
-        const hello_response = self.readLineWithRetry() catch |err| {
+        var hello_packet = self.readProtoMessage(self.allocator, 5000) catch |err| {
             self.disconnect();
             std.debug.print("[MCP-CLIENT] HELLO response failed: {}\n", .{err});
             return GeodeClientError.StreamError;
         };
-        defer self.allocator.free(hello_response);
+        defer hello_packet.deinit(self.allocator);
+
+        const hello_resp_msg = hello_packet.quic orelse return GeodeClientError.InvalidResponse;
+
+        if (hello_resp_msg != .hello or !hello_resp_msg.hello.success) {
+            self.disconnect();
+            return GeodeClientError.HandshakeFailed;
+        }
+
+        if (hello_resp_msg.hello.session_id.len > 0) {
+            self.session_id = try self.allocator.dupe(u8, hello_resp_msg.hello.session_id);
+        }
 
         self.connected = true;
         self.handshake_done = true;
     }
 
-    /// Read a line with retry logic for QUIC transport
-    fn readLineWithRetry(self: *Self) ![]u8 {
+    fn writeProtoMessage(self: *Self, msg: schema.QuicClientMessage) !void {
+        const stream = self.stream orelse return GeodeClientError.NotConnected;
+        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 4096);
+        defer aw.deinit();
+
+        const packet = schema.ClientPacket{ .quic = msg };
+        try protobuf.encode(&aw.writer, self.allocator, packet);
+        const body = aw.writer.buffer[0..aw.writer.end];
+
+        var len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &len_buf, @intCast(body.len), .big);
+        try stream.writeAll(&len_buf);
+        try stream.writeAll(body);
+    }
+
+    fn readProtoMessage(self: *Self, allocator: std.mem.Allocator, timeout_ms: u32) !schema.ServerPacket {
         const stream = self.stream orelse return GeodeClientError.NotConnected;
 
-        var retry_count: usize = 0;
-        const max_retries: usize = 100;
+        var len_buf: [4]u8 = undefined;
+        var total_read: usize = 0;
+        var attempts: usize = 0;
+        const max_attempts = @max(@as(usize, 1), timeout_ms / 10);
 
-        while (retry_count < max_retries) {
-            const result = stream.readLine(1 << 20) catch |err| {
+        while (total_read < 4) {
+            const n = stream.read(len_buf[total_read..]) catch |err| {
                 if (err == error.WouldBlock) {
-                    retry_count += 1;
-                    self.quic_client.?.poll(10) catch {};
+                    attempts += 1;
+                    if (attempts > max_attempts) return GeodeClientError.Timeout;
+                    self.quic_client.?.poll(1) catch {};
                     std.Thread.sleep(10 * std.time.ns_per_ms);
                     continue;
                 }
                 return err;
             };
-            return result;
+            if (n == 0) return GeodeClientError.StreamError;
+            total_read += n;
         }
 
-        return GeodeClientError.Timeout;
+        const msg_len = std.mem.readInt(u32, &len_buf, .big);
+        if (msg_len > 16 * 1024 * 1024) return GeodeClientError.InvalidResponse;
+
+        const msg_bytes = try allocator.alloc(u8, msg_len);
+        defer allocator.free(msg_bytes);
+
+        total_read = 0;
+        attempts = 0;
+        while (total_read < msg_len) {
+            const n = stream.read(msg_bytes[total_read..]) catch |err| {
+                if (err == error.WouldBlock) {
+                    attempts += 1;
+                    if (attempts > max_attempts) return GeodeClientError.Timeout;
+                    self.quic_client.?.poll(1) catch {};
+                    std.Thread.sleep(10 * std.time.ns_per_ms);
+                    continue;
+                }
+                return err;
+            };
+            if (n == 0) return GeodeClientError.StreamError;
+            total_read += n;
+        }
+
+        var reader: std.Io.Reader = .fixed(msg_bytes);
+        return try protobuf.decode(schema.ServerPacket, &reader, allocator);
     }
 
-    /// Execute a GQL query and return the JSON response
-    /// CANARY: REQ=REQ-LIB-MIGRATION-JSON-046; FEATURE="JSON Library Migration"; ASPECT=ClientQuery; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
+    fn jsonNumberFromU64(allocator: std.mem.Allocator, value: u64) !std.json.Value {
+        if (value <= @as(u64, std.math.maxInt(i64))) {
+            return .{ .integer = @intCast(value) };
+        }
+        const num_str = try std.fmt.allocPrint(allocator, "{d}", .{value});
+        return .{ .number_string = num_str };
+    }
+
+    fn base64Encode(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
+        const out = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(bytes.len));
+        _ = std.base64.standard.Encoder.encode(out, bytes);
+        return out;
+    }
+
+    fn protoMapEntriesToJson(allocator: std.mem.Allocator, entries: []const schema.MapEntry) anyerror!std.json.ObjectMap {
+        var obj = std.json.ObjectMap.init(allocator);
+        for (entries) |entry| {
+            const key = try allocator.dupe(u8, entry.key);
+            const val = if (entry.value) |v|
+                try protoValueToJson(allocator, v)
+            else
+                std.json.Value.null;
+            try obj.put(key, val);
+        }
+        return obj;
+    }
+
+    fn protoNodeToJson(allocator: std.mem.Allocator, node: schema.NodeValue) !std.json.Value {
+        var obj = std.json.ObjectMap.init(allocator);
+        try obj.put("id", try jsonNumberFromU64(allocator, node.id));
+
+        var labels = std.json.Array.init(allocator);
+        for (node.labels.items) |label| {
+            try labels.append(.{ .string = try allocator.dupe(u8, label) });
+        }
+        try obj.put("labels", .{ .array = labels });
+
+        const props_obj = try protoMapEntriesToJson(allocator, node.properties.items);
+        try obj.put("properties", .{ .object = props_obj });
+        return .{ .object = obj };
+    }
+
+    fn protoEdgeToJson(allocator: std.mem.Allocator, edge: schema.EdgeValue) !std.json.Value {
+        var obj = std.json.ObjectMap.init(allocator);
+        try obj.put("id", try jsonNumberFromU64(allocator, edge.id));
+        try obj.put("from_id", try jsonNumberFromU64(allocator, edge.from_id));
+        try obj.put("to_id", try jsonNumberFromU64(allocator, edge.to_id));
+        try obj.put("label", .{ .string = try allocator.dupe(u8, edge.label) });
+
+        const props_obj = try protoMapEntriesToJson(allocator, edge.properties.items);
+        try obj.put("properties", .{ .object = props_obj });
+        return .{ .object = obj };
+    }
+
+    fn protoPathToJson(allocator: std.mem.Allocator, path: schema.PathValue) !std.json.Value {
+        var obj = std.json.ObjectMap.init(allocator);
+        var nodes = std.json.Array.init(allocator);
+        for (path.nodes.items) |node| {
+            try nodes.append(try protoNodeToJson(allocator, node));
+        }
+        try obj.put("nodes", .{ .array = nodes });
+
+        var edges = std.json.Array.init(allocator);
+        for (path.edges.items) |edge| {
+            try edges.append(try protoEdgeToJson(allocator, edge));
+        }
+        try obj.put("edges", .{ .array = edges });
+        return .{ .object = obj };
+    }
+
+    fn protoExtendedToJson(allocator: std.mem.Allocator, ext: schema.ExtendedValue) !std.json.Value {
+        var obj = std.json.ObjectMap.init(allocator);
+        if (ext.type_name.len > 0) {
+            try obj.put("type", .{ .string = try allocator.dupe(u8, ext.type_name) });
+        }
+        if (ext.data) |data| {
+            const val: std.json.Value = switch (data) {
+                .text => |t| .{ .string = try allocator.dupe(u8, t) },
+                .bytes => |b| .{ .string = try base64Encode(allocator, b) },
+                .int_val => |n| .{ .integer = n },
+                .double_val => |f| .{ .float = f },
+                .bool_val => |b| .{ .bool = b },
+            };
+            try obj.put("value", val);
+        }
+        return .{ .object = obj };
+    }
+
+    fn protoValueToJson(allocator: std.mem.Allocator, value: schema.Value) anyerror!std.json.Value {
+        const kind = value.kind orelse return std.json.Value.null;
+        return switch (kind) {
+            .null_val => std.json.Value.null,
+            .int_val => |v| .{ .integer = v.value },
+            .double_val => |v| .{ .float = v.value },
+            .bool_val => |b| .{ .bool = b },
+            .string_val => |v| .{ .string = try allocator.dupe(u8, v.value) },
+            .decimal_val => |v| blk: {
+                const repr = if (v.orig_repr.len > 0) v.orig_repr else v.coeff;
+                break :blk .{ .string = try allocator.dupe(u8, repr) };
+            },
+            .bytes_val => |v| .{ .string = try base64Encode(allocator, v.value) },
+            .list_val => |v| blk: {
+                var arr = std.json.Array.init(allocator);
+                for (v.values.items) |item| {
+                    try arr.append(try protoValueToJson(allocator, item));
+                }
+                break :blk .{ .array = arr };
+            },
+            .map_val => |v| blk: {
+                const obj = try protoMapEntriesToJson(allocator, v.entries.items);
+                break :blk .{ .object = obj };
+            },
+            .node_val => |v| try protoNodeToJson(allocator, v),
+            .edge_val => |v| try protoEdgeToJson(allocator, v),
+            .path_val => |v| try protoPathToJson(allocator, v),
+            .ext_val => |v| try protoExtendedToJson(allocator, v),
+        };
+    }
+
+    fn rowToJsonArray(allocator: std.mem.Allocator, row: schema.Row) !std.json.Value {
+        var arr = std.json.Array.init(allocator);
+        for (row.values.items) |val| {
+            try arr.append(try protoValueToJson(allocator, val));
+        }
+        return .{ .array = arr };
+    }
+
+    fn buildRowsJsonArray(allocator: std.mem.Allocator, rows: []const schema.Row) !std.json.Array {
+        var arr = std.json.Array.init(allocator);
+        if (rows.len == 0) return arr;
+
+        if (spice_wrapper.shouldUseParallelism(rows.len, spice_wrapper.Thresholds.map)) {
+            var pool = spice_wrapper.SpicePool.init(allocator, null);
+            pool.start();
+            defer pool.deinit();
+
+            var ts_alloc = std.heap.ThreadSafeAllocator{ .child_allocator = allocator };
+            const safe_alloc = ts_alloc.allocator();
+
+            const RowInput = struct { row: *const schema.Row, allocator: std.mem.Allocator };
+            const RowResult = struct { value: std.json.Value, err: ?anyerror };
+
+            const inputs = try allocator.alloc(RowInput, rows.len);
+            defer allocator.free(inputs);
+            for (rows, 0..) |*row, i| inputs[i] = .{ .row = row, .allocator = safe_alloc };
+
+            const mapFn = struct {
+                fn map(_: *spice_wrapper.Task, input: RowInput) RowResult {
+                    const value = rowToJsonArray(input.allocator, input.row.*) catch |err| {
+                        return .{ .value = std.json.Value.null, .err = err };
+                    };
+                    return .{ .value = value, .err = null };
+                }
+            }.map;
+
+            const results = try spice_wrapper.parallelMap(RowInput, RowResult, &pool, inputs, mapFn, spice_wrapper.Thresholds.map);
+            defer allocator.free(results);
+
+            for (results) |r| {
+                if (r.err) |err| return err;
+                try arr.append(r.value);
+            }
+            return arr;
+        }
+
+        for (rows) |row| {
+            try arr.append(try rowToJsonArray(allocator, row));
+        }
+        return arr;
+    }
+
+    /// Execute a GQL query and return JSON output derived from protobuf responses.
     pub fn query(self: *Self, gql: []const u8, params: ?[]const u8) ![]u8 {
         try self.ensureConnected();
 
-        const stream = self.stream orelse return GeodeClientError.NotConnected;
+        const session_id = self.session_id orelse "";
+        const exec_req = schema.ExecuteRequest{
+            .session_id = session_id,
+            .query = gql,
+            .params_json = params orelse "",
+        };
+        try self.writeProtoMessage(.{ .execute = exec_req });
 
-        // Build RUN_GQL message using JSON library (handles escaping automatically)
-        var msg: []u8 = undefined;
-        if (params) |p| {
-            // Use streaming encoder for raw JSON params embedding
-            var buf = try std.ArrayList(u8).initCapacity(self.allocator, 256);
-            defer buf.deinit(self.allocator);
-            var encoder = json_lib.streamingEncoder(self.allocator, buf.writer(self.allocator), .{});
-            defer encoder.deinit();
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
 
-            try encoder.beginObject();
-            try encoder.writeKey("type");
-            try encoder.writeString("RUN_GQL");
-            try encoder.writeKey("text");
-            try encoder.writeString(gql);
-            try encoder.writeKey("params");
-            try encoder.writeRaw(p);
-            try encoder.endObject();
+        var columns = std.json.Array.init(a);
+        var rows = std.json.Array.init(a);
+        var ordered = false;
+        var order_keys = std.json.Array.init(a);
 
-            // Add newline for line protocol
-            try buf.append(self.allocator, '\n');
-            msg = try buf.toOwnedSlice(self.allocator);
-        } else {
-            // Use struct encoding for simple case
-            const message = ClientRunGqlMessage{ .text = gql };
-            const json_bytes = try json_lib.encode(self.allocator, message, .{});
-            defer self.allocator.free(json_bytes);
-            msg = try std.fmt.allocPrint(self.allocator, "{s}\n", .{json_bytes});
+        var status_class: []const u8 = "00000";
+        var error_code: ?[]const u8 = null;
+        var error_message: ?[]const u8 = null;
+
+        var schema_received = false;
+        while (!schema_received and error_code == null) {
+            var packet = try self.readProtoMessage(self.allocator, 5000);
+            defer packet.deinit(self.allocator);
+            const msg = packet.quic orelse return GeodeClientError.InvalidResponse;
+            if (msg != .execute) return GeodeClientError.InvalidResponse;
+
+            const exec_resp = msg.execute;
+            if (exec_resp.status) |status| {
+                status_class = try a.dupe(u8, status.status_class);
+            }
+
+            if (exec_resp.payload) |payload| switch (payload) {
+                .schema => |schema_def| {
+                    for (schema_def.columns.items) |col| {
+                        var obj = std.json.ObjectMap.init(a);
+                        try obj.put("name", .{ .string = try a.dupe(u8, col.name) });
+                        try obj.put("type", .{ .string = try a.dupe(u8, col.type) });
+                        try columns.append(.{ .object = obj });
+                    }
+                    schema_received = true;
+                },
+                .page => |p| {
+                    ordered = ordered or p.ordered;
+                    if (p.order_keys.items.len > 0 and order_keys.items.len == 0) {
+                        for (p.order_keys.items) |k| try order_keys.append(.{ .string = try a.dupe(u8, k) });
+                    }
+                    const page_rows = try buildRowsJsonArray(a, p.rows.items);
+                    for (page_rows.items) |row_val| {
+                        try rows.append(row_val);
+                    }
+                    if (!p.final) schema_received = true;
+                },
+                .@"error" => |e| {
+                    error_code = try a.dupe(u8, e.code);
+                    error_message = try a.dupe(u8, e.message);
+                },
+                else => {},
+            };
         }
-        defer self.allocator.free(msg);
 
-        stream.writeAll(msg) catch |err| {
-            self.disconnect();
-            return err;
-        };
+        if (error_code == null) {
+            var done = false;
+            var request_id: u64 = 1;
+            while (!done) : (request_id += 1) {
+                const pull_req = schema.PullRequest{ .request_id = request_id, .page_size = 0, .session_id = session_id };
+                try self.writeProtoMessage(.{ .pull = pull_req });
 
-        // Read SCHEMA response
-        const schema_line = self.readLineWithRetry() catch |err| {
-            self.disconnect();
-            return err;
-        };
+                var packet = try self.readProtoMessage(self.allocator, 5000);
+                defer packet.deinit(self.allocator);
 
-        // Check for error
-        if (std.mem.indexOf(u8, schema_line, "\"type\":\"ERROR\"") != null) {
-            return schema_line; // Return error response as-is
+                const msg = packet.quic orelse return GeodeClientError.InvalidResponse;
+                const exec_resp = switch (msg) {
+                    .pull => |p| p.response orelse return GeodeClientError.InvalidResponse,
+                    .execute => |e| e,
+                    else => return GeodeClientError.InvalidResponse,
+                };
+
+                if (exec_resp.payload) |payload| switch (payload) {
+                    .page => |p| {
+                        ordered = ordered or p.ordered;
+                        if (p.order_keys.items.len > 0 and order_keys.items.len == 0) {
+                            for (p.order_keys.items) |k| try order_keys.append(.{ .string = try a.dupe(u8, k) });
+                        }
+                        const page_rows = try buildRowsJsonArray(a, p.rows.items);
+                        for (page_rows.items) |row_val| {
+                            try rows.append(row_val);
+                        }
+                        if (p.final) done = true;
+                    },
+                    .@"error" => |e| {
+                        error_code = try a.dupe(u8, e.code);
+                        error_message = try a.dupe(u8, e.message);
+                        done = true;
+                    },
+                    else => {},
+                };
+            }
         }
 
-        // Read BINDINGS response
-        const bindings_line = self.readLineWithRetry() catch |err| {
-            self.allocator.free(schema_line);
-            self.disconnect();
-            return err;
-        };
+        if (error_code) |code| {
+            const msg = error_message orelse "error";
+            var err_obj = std.json.ObjectMap.init(a);
+            try err_obj.put("status_class", .{ .string = try a.dupe(u8, code) });
+            try err_obj.put("error", .{ .string = try a.dupe(u8, msg) });
+            const err_val = std.json.Value{ .object = err_obj };
+            return try std.json.Stringify.valueAlloc(self.allocator, err_val, .{});
+        }
 
-        // Combine schema and bindings into a single result
-        const combined = try std.fmt.allocPrint(
-            self.allocator,
-            "{{\"schema\":{s},\"bindings\":{s}}}",
-            .{ schema_line, bindings_line },
-        );
+        var result_obj = std.json.ObjectMap.init(a);
+        try result_obj.put("type", .{ .string = "BINDINGS" });
+        try result_obj.put("ordered", .{ .bool = ordered });
+        try result_obj.put("order_keys", .{ .array = order_keys });
+        try result_obj.put("final", .{ .bool = true });
+        try result_obj.put("columns", .{ .array = columns });
+        try result_obj.put("rows", .{ .array = rows });
 
-        self.allocator.free(schema_line);
-        self.allocator.free(bindings_line);
+        var root_obj = std.json.ObjectMap.init(a);
+        try root_obj.put("status_class", .{ .string = status_class });
+        try root_obj.put("result", .{ .object = result_obj });
 
-        return combined;
+        const root_val = std.json.Value{ .object = root_obj };
+        return try std.json.Stringify.valueAlloc(self.allocator, root_val, .{});
     }
 
     /// Get database schema information
@@ -261,34 +546,10 @@ pub const GeodeClient = struct {
     }
 
     /// Explain a GQL query plan
-    /// CANARY: REQ=REQ-LIB-MIGRATION-JSON-047; FEATURE="JSON Library Migration"; ASPECT=ClientExplain; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
     pub fn explain(self: *Self, gql: []const u8) ![]u8 {
-        try self.ensureConnected();
-
-        const stream = self.stream orelse return GeodeClientError.NotConnected;
-
-        // Build RUN_GQL message with EXPLAIN prefix using JSON library
         const explain_query = try std.fmt.allocPrint(self.allocator, "EXPLAIN {s}", .{gql});
         defer self.allocator.free(explain_query);
-
-        const message = ClientRunGqlMessage{ .text = explain_query };
-        const json_bytes = try json_lib.encode(self.allocator, message, .{});
-        defer self.allocator.free(json_bytes);
-        const msg = try std.fmt.allocPrint(self.allocator, "{s}\n", .{json_bytes});
-        defer self.allocator.free(msg);
-
-        stream.writeAll(msg) catch |err| {
-            self.disconnect();
-            return err;
-        };
-
-        // Read response
-        const response = self.readLineWithRetry() catch |err| {
-            self.disconnect();
-            return err;
-        };
-
-        return response;
+        return self.query(explain_query, null);
     }
 
     /// List available catalogs
@@ -387,7 +648,7 @@ test "JSON library handles escaping" {
     // Verify JSON library properly escapes special characters
     const TestMessage = struct { text: []const u8 };
     const message = TestMessage{ .text = "say \"hello\"\nworld" };
-    const result = try json_lib.encode(allocator, message, .{});
+    const result = try std.json.Stringify.valueAlloc(allocator, message, .{});
     defer allocator.free(result);
 
     // Should contain escaped quotes and newline
@@ -435,7 +696,7 @@ test "JSON library unicode passthrough" {
     // Verify JSON library handles unicode correctly
     const TestMessage = struct { text: []const u8 };
     const message = TestMessage{ .text = "Hello 世界 🌍" };
-    const result = try json_lib.encode(allocator, message, .{});
+    const result = try std.json.Stringify.valueAlloc(allocator, message, .{});
     defer allocator.free(result);
 
     // Unicode should be present in output

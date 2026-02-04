@@ -3,7 +3,6 @@ const auth = @import("geode_auth");
 const rls = @import("rls");
 const user_manager = @import("user_manager");
 const user_storage = @import("user_storage");
-const storage_interface = @import("interface");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -26,35 +25,6 @@ pub fn main() !void {
 
     var rls_engine = try rls.RLSEngine.init(allocator);
     defer rls_engine.deinit();
-
-    var inmem_storage = @import("storage/inmemory").InMemory.init(allocator);
-    defer inmem_storage.deinit();
-
-    // Create a storage engine interface
-    const storage_iface = @import("interface");
-    const storage_backend = storage_iface.StorageEngine{
-        .ctx = &inmem_storage,
-        .vtable = &.{
-            .deinit = struct {
-                fn deinit(ctx: *anyopaque) void {
-                    _ = ctx;
-                    // Deinit handled above
-                }
-            }.deinit,
-            .csrAddEdge = struct {
-                fn csrAddEdge(ctx: *anyopaque, src: u64, dst: u64) anyerror!void {
-                    const self: *@import("storage/inmemory").InMemory = @ptrCast(@alignCast(ctx));
-                    return self.addEdge(src, dst);
-                }
-            }.csrAddEdge,
-            .csrNeighbors = struct {
-                fn csrNeighbors(ctx: *anyopaque, src: u64) anyerror!storage_iface.NeighborIter {
-                    const self: *@import("storage/inmemory").InMemory = @ptrCast(@alignCast(ctx));
-                    return self.neighbors(src);
-                }
-            }.csrNeighbors,
-        },
-    };
 
     // Create a mock page manager for user storage
     // Note: This is a temporary mock implementation for CLI tool
@@ -86,7 +56,6 @@ pub fn main() !void {
         allocator,
         &security_manager,
         &rls_engine,
-        storage_backend,
         &user_storage_backend,
     );
     defer mgr.deinit();

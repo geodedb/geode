@@ -11,7 +11,14 @@ fn getTestServer(allocator: std.mem.Allocator) ![]u8 {
 
 // Helper to execute command and get just exit code
 fn getExitCode(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
-    var child = std.process.Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = std.process.Child.init(argv.items, allocator);
     try child.spawn();
     const exit_status = try child.wait();
 

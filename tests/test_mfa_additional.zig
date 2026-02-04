@@ -72,11 +72,11 @@ test "TestCANARY_REQ_GQL_MFA_007_RecoverySingleUse" {
     };
 
     // Use recovery code successfully
-    const tok1 = try sm.authenticateWithMFA("user4", "Password1!\n", 0, "RECOV-CODE-1");
+    const tok1 = try sm.authenticateWithMFA("user4", "Password1!\n", 0", "RECOV-CODE-1");
     try std.testing.expect(tok1.len > 0);
 
     // Second use should fail (code removed)
-    _ = sm.authenticateWithMFA("user4", "Password1!\n", 0, "RECOV-CODE-1") catch |e| {
+    _ = sm.authenticateWithMFA("user4", "Password1!\n", 0", "RECOV-CODE-1") catch |e| {
         try std.testing.expect(e == error.MFAInvalidCode);
         return; // expected path
     };

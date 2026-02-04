@@ -6,7 +6,7 @@ pub fn main() !void {
     // Test inputs
     const tests = [_][]const u8{
         "RETURN 'test'",
-        "RETURN \"test\"",
+        "RETURN \"test\",
         "CREATE (n {name: 'alice'})",
         "CREATE (n {name: \"alice\"})",
     };

@@ -2,7 +2,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const auth = @import("geode_auth");
 const rls = @import("rls");
-const storage = @import("interface");
 const user_storage = @import("user_storage");
 const logging = @import("logging");
 const log = logging.scoped("security");
@@ -13,7 +12,6 @@ pub const UserManager = struct {
     allocator: Allocator,
     security_manager: *auth.SecurityManager,
     rls_engine: *rls.RLSEngine,
-    storage_backend: storage.StorageEngine,
     user_storage: *user_storage.UserStorageBackend,
 
     const Self = @This();
@@ -22,14 +20,12 @@ pub const UserManager = struct {
         allocator: Allocator,
         security_manager: *auth.SecurityManager,
         rls_engine: *rls.RLSEngine,
-        storage_backend: storage.StorageEngine,
         user_storage_backend: *user_storage.UserStorageBackend,
     ) !Self {
         return Self{
             .allocator = allocator,
             .security_manager = security_manager,
             .rls_engine = rls_engine,
-            .storage_backend = storage_backend,
             .user_storage = user_storage_backend,
         };
     }

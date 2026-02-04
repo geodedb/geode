@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const interface = @import("interface");
+const types = @import("types");
 const page_manager = @import("storage_page_manager");
 
 // Persistent storage backend for user management system
@@ -9,10 +9,10 @@ const page_manager = @import("storage_page_manager");
 pub const UserStorageBackend = struct {
     allocator: Allocator,
     page_manager: *page_manager.PageManager,
-    users_page_id: ?interface.PageId = null,
-    roles_page_id: ?interface.PageId = null,
-    permissions_page_id: ?interface.PageId = null,
-    policies_page_id: ?interface.PageId = null,
+    users_page_id: ?types.PageId = null,
+    roles_page_id: ?types.PageId = null,
+    permissions_page_id: ?types.PageId = null,
+    policies_page_id: ?types.PageId = null,
 
     // In-memory cache for fast lookups
     user_cache: std.AutoHashMap(u64, UserRecord),
@@ -248,7 +248,7 @@ pub const UserStorageBackend = struct {
         }
     }
 
-    fn loadUsersFromPage(self: *Self, page_id: interface.PageId) !void {
+    fn loadUsersFromPage(self: *Self, page_id: types.PageId) !void {
         const page_data = try self.page_manager.getPage(@intCast(page_id));
         var offset: usize = 0;
 
@@ -274,7 +274,7 @@ pub const UserStorageBackend = struct {
         }
     }
 
-    fn loadRolesFromPage(self: *Self, page_id: interface.PageId) !void {
+    fn loadRolesFromPage(self: *Self, page_id: types.PageId) !void {
         const page_data = try self.page_manager.getPage(@intCast(page_id));
         var offset: usize = 0;
 
@@ -293,7 +293,7 @@ pub const UserStorageBackend = struct {
         }
     }
 
-    fn loadPermissionsFromPage(self: *Self, page_id: interface.PageId) !void {
+    fn loadPermissionsFromPage(self: *Self, page_id: types.PageId) !void {
         const page_data = try self.page_manager.getPage(@intCast(page_id));
         var offset: usize = 0;
 
@@ -312,7 +312,7 @@ pub const UserStorageBackend = struct {
         }
     }
 
-    fn loadPoliciesFromPage(self: *Self, page_id: interface.PageId) !void {
+    fn loadPoliciesFromPage(self: *Self, page_id: types.PageId) !void {
         const page_data = try self.page_manager.getPage(@intCast(page_id));
         var offset: usize = 0;
 

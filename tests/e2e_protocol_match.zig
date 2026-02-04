@@ -3,7 +3,14 @@ const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.proce
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
-    var child = Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = Child.init(argv.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -21,7 +28,7 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
 // Basic E2E over stdio for MATCH ORDER/LIMIT and US001 policy
 // CANARY: REQ=REQ-GQL-017; FEATURE="MATCH ORDER/LIMIT determinism"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_MatchOrderLimit; OWNER=engine; UPDATED=2025-09-24
 test "protocol: MATCH ORDER/LIMIT ordered metadata" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "MATCH (n) RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -35,7 +42,7 @@ test "protocol: MATCH ORDER/LIMIT ordered metadata" {
 
 // CANARY: REQ=REQ-GQL-010; FEATURE="Pagination Legality (US001)"; ASPECT=Execution; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_MatchUnorderedPaginationReject; OWNER=planner; UPDATED=2025-09-24
 test "protocol: MATCH LIMIT+OFFSET without ORDER (US001)" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "MATCH (n) RETURN 1 LIMIT 10 OFFSET 5" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -45,7 +52,7 @@ test "protocol: MATCH LIMIT+OFFSET without ORDER (US001)" {
 }
 
 test "protocol: MATCH DISTINCT dedup rows" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     // Two identical rows under MATCH projection should dedup to a single row when DISTINCT present.
     const res = try run(&.{ exe, "MATCH (n) RETURN DISTINCT 1 AS x" });
     defer std.testing.allocator.free(res.out);

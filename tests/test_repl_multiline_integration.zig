@@ -380,7 +380,7 @@ test "Empty lines and whitespace handling" {
 
     const lines = [_][]const u8{
         "MATCH (n)",
-        "", // Empty line
+        ", // Empty line
         "   ", // Whitespace only
         "RETURN n;", // Completion
     };

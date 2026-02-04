@@ -8,7 +8,7 @@ fn makeNode(allocator: std.mem.Allocator, id: u64, peer_ids: []const u64) !*raft
     var builder = raft.RaftBuilder.init(allocator, .{});
     defer builder.deinit();
     var peers = try allocator.alloc(raft.PeerConfig, peer_ids.len);
-    for (peer_ids, 0..) |pid, i| peers[i] = .{ .id = pid, .address = "" };
+    for (peer_ids, 0..) |pid, i| peers[i] = .{ .id = pid, .address = " };
     return try builder.buildNode(id, peers);
 }
 

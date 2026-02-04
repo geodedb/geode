@@ -3,7 +3,14 @@ const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.proce
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
-    var child = Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = Child.init(argv.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -28,7 +35,7 @@ fn contains(h: []const u8, n: []const u8) bool {
 // (Server text mode tested separately via direct invocation.)
 
 test "client: --format txt simple RETURN" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "RETURN 2 AS x ORDER BY x LIMIT 1", "--format", "txt" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -38,7 +45,7 @@ test "client: --format txt simple RETURN" {
 }
 
 test "client: --format txt EXPLAIN parity" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x ORDER BY x LIMIT 1", "--format", "txt" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -48,7 +55,7 @@ test "client: --format txt EXPLAIN parity" {
 }
 
 test "client: --format txt PROFILE parity" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1", "--format", "txt" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);

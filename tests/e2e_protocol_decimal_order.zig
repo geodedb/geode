@@ -3,7 +3,14 @@ const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.proce
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
-    var child = Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = Child.init(argv.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -28,7 +35,7 @@ inline fn contains(h: []const u8, n: []const u8) bool {
 // NOTE: If decimal literal syntax not yet implemented, this test just ensures existing INT ordering is stable; adjust once decimals are exposed at parse level.
 
 test "protocol: numeric ordering stable (placeholder for decimal)" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "RETURN 2 AS x UNION RETURN 1 AS x UNION RETURN 3 AS x ORDER BY x" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -41,7 +48,7 @@ test "protocol: numeric ordering stable (placeholder for decimal)" {
 
 // Mixed scale decimals with negatives: ensure normalization treats -1.2 and -1.20 as equal and ordering places them before 0 and positive values.
 test "protocol: decimal ordering negatives and mixed scales" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "RETURN -1.2 AS a UNION RETURN -1.20 AS a UNION RETURN 0 AS a UNION RETURN 1.2 AS a ORDER BY a" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -63,7 +70,7 @@ test "protocol: decimal ordering negatives and mixed scales" {
 
 // Mixed ints and decimals ordering: negatives, zeros, positives with decimal granularity.
 test "protocol: numeric ordering mixed ints and decimals" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "RETURN -2 AS x UNION RETURN -1.5 AS x UNION RETURN -1 AS x UNION RETURN 0 AS x UNION RETURN 1 AS x UNION RETURN 1.25 AS x UNION RETURN 2 AS x ORDER BY x" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -101,7 +108,7 @@ test "protocol: numeric ordering mixed ints and decimals" {
 
 // Dedup across int and decimal forms of same numeric value.
 test "protocol: union distinct dedup int vs decimal canonical equality" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "RETURN 1 AS x UNION RETURN 1.0 AS x UNION RETURN 1.00 AS x" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);

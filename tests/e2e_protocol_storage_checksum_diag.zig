@@ -20,7 +20,7 @@ test "protocol StoragePageChecksum diagnostic" {
 
     const exe_dir = try std.fs.cwd().realpathAlloc(gpa, ".");
     defer gpa.free(exe_dir);
-    const exe_path = try std.fmt.allocPrint(gpa, "{s}/zig-out/bin/geoded", .{exe_dir});
+    const exe_path = try std.fmt.allocPrint(gpa, "{s}/zig-out/bin/geode", .{exe_dir});
     defer gpa.free(exe_path);
 
     var child = std.process.Child.init(&[_][]const u8{exe_path}, gpa);

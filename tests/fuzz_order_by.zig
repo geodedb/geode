@@ -48,7 +48,7 @@ fn isNonDescendingNumeric(lines: []const u8) bool {
 test "fuzz: ORDER BY numeric stability" {
     var prng = std.rand.DefaultPrng.init(0xC0FFEE);
     const rnd = prng.random();
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     var iter: usize = 0;
     while (iter < 50) : (iter += 1) {
         // Build a simple RETURN of constants with ORDER BY x LIMIT to force sort path.
@@ -72,7 +72,7 @@ test "fuzz: ORDER BY numeric stability" {
                     var s: u8 = 0;
                     while (s < scale) : (s += 1) pow *= 10;
                     // produce decimal with optional trailing zeros
-                    w.print("{d}.{s}", .{ iv, "0" }) catch {};
+                    w.print("{d}.{s}", .{ iv", "0" }) catch {};
                 } else {
                     w.print("{d}", .{iv}) catch {};
                 }

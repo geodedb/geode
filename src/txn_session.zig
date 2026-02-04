@@ -1,5 +1,6 @@
 const std = @import("std");
-const execution = @import("execution.zig");
+const geode = @import("geode");
+const execution = geode.execution;
 
 /// Transaction session persistence for CLI mode
 /// Stores transaction state in a file to persist across CLI invocations

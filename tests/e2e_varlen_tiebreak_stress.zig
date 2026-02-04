@@ -3,7 +3,14 @@ const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.proce
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
-    var child = Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = Child.init(argv.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -24,7 +31,7 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
 // We emulate by projecting node names in ORDER BY (a, c, via) where via is the middle node id.
 // CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Multi-branch UA005/UA006"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_VarLenMultiBranchDeterminism; OWNER=engine; UPDATED=2025-09-24
 test "protocol: varlen tie-break determinism multi-branch (stdio)" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     // Note: Depends on default example graph providing ambiguous 2-hop choices; if not present, this remains a presence smoke.
     const q = "MATCH (a:Person)-[:KNOWS*2..2]->(c:Person) RETURN a.name AS a, c.name AS c ORDER BY a, c LIMIT 20";
     const res = try run(&.{ exe, q, "--format", "json" });

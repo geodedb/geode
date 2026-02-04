@@ -1,24 +1,33 @@
 const std = @import("std");
 const testing = std.testing;
+const util = @import("proto_test_util.zig");
 
-test "e2e: PROFILE GROUP BY emits HashAgg ops" {
-    // Launch server process
-    var child = std.process.Child.init(&.{"zig-out/bin/geoded"}, testing.allocator);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    try child.spawn();
-    defer child.kill() catch {};
-    defer child.wait() catch {};
-    const stdin_writer = child.stdin.?.writer();
-    const stdout_reader = child.stdout.?.reader();
-    // Send PROFILE query with GROUP BY
-    const q = "{\"type\":\"RUN_GQL\",\"text\":\"PROFILE RETURN count(*) GROUP BY x\"}\n";
-    try stdin_writer.writeAll(q);
-    // PULL to force PROFILE emission
-    try stdin_writer.writeAll("{\"type\":\"PULL\"}\n");
-    var buf: [65536]u8 = undefined;
-    const n = try stdout_reader.read(&buf);
-    const out = buf[0..n];
-    try testing.expect(std.mem.indexOf(u8, out, "HashAggBuild") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "HashAggEmit") != null);
+fn hasMetricRow(rows: [][]util.TestValue, name: []const u8) bool {
+    for (rows) |row| {
+        if (row.len < 2) continue;
+        if (row[0] == .string and std.mem.eql(u8, row[0].string, name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+test "e2e: PROFILE returns metrics for GROUP BY" {
+    const allocator = testing.allocator;
+    const addr = "127.0.0.1:17690";
+
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen-quic", addr, "--disable-auth" }, null);
+    defer server.deinit();
+
+    var client = try util.QuicProtoClient.connect(allocator, addr);
+    defer client.deinit();
+    var hello = try client.hello(allocator, "", "");
+    hello.deinit(allocator);
+
+    const res = try client.executeAndCollect(allocator, "PROFILE RETURN count(*) GROUP BY x", null, 100);
+    defer res.deinit(allocator);
+
+    try testing.expect(res.error_code == null);
+    try testing.expect(hasMetricRow(res.rows, "profile"));
+    try testing.expect(hasMetricRow(res.rows, "rows"));
 }

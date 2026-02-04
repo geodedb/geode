@@ -6,7 +6,7 @@ const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.proce
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDCControlProtocol"; ASPECT=E2E; STATUS=TESTED; TEST=protocol_CDC_CONTROL_reset; OWNER=cdc; UPDATED=2025-09-20
 
 fn runGeoded(gpa: *std.mem.Allocator, input: []const u8, env: [][]const u8) !struct { stdout: []u8, stderr: []u8, exit_code: u8 } {
-    var proc = Child.init(&[_][]const u8{"./zig-out/bin/geoded"}, gpa.*);
+    var proc = Child.init(&[_][]const u8{"./zig-out/bin/geode"}, gpa.*);
     proc.stdin_behavior = .Pipe;
     proc.stdout_behavior = .Pipe;
     proc.stderr_behavior = .Pipe;

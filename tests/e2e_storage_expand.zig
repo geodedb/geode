@@ -3,7 +3,14 @@ const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.proce
 
 fn run_with_env(args: []const []const u8, envs: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
-    var child = Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = Child.init(argv.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -30,7 +37,7 @@ fn contains(hay: []const u8, needle: []const u8) bool {
 }
 
 test "storage: EXPAND_FROM smoke under storage engine" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run_with_env(&.{ exe, "RETURN EXPAND_FROM(0) AS n ORDER BY n" }, &.{ "GEODE_ENGINE", "storage", "GEODE_TEST_GRAPH", "tiny" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);

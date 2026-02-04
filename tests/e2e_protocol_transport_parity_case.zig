@@ -5,7 +5,14 @@ const RunResult = struct { code: i32, out: []u8, err: []u8 };
 
 fn run(args: []const []const u8) !RunResult {
     const allocator = std.testing.allocator;
-    var child = Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = Child.init(argv.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -25,7 +32,14 @@ fn run_server(args: []const []const u8) !struct { child: Child } {
     var env = try std.process.getEnvMap(allocator);
     defer env.deinit();
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
-    var child = Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = Child.init(argv.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -104,11 +118,11 @@ fn normalize_rows(allocator: std.mem.Allocator, rows_json: []const u8) ![]u8 {
 test "protocol: transport parity stdio vs QUIC (CASE 3VL)" {
     if (std.posix.getenv("GEODE_CI_QUIC_SMOKE") == null) return error.SkipZigTest;
 
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const q = "RETURN CASE WHEN a IS NULL THEN 'n' WHEN a THEN 't' ELSE 'f' END AS r";
     const param = "[null,true,false]";
 
-    const sres = try run(&.{ exe, q, "--json-param", "a", param, "--format", "json" });
+    const sres = try run(&.{ exe, q, "--json-param", "a", param", "--format", "json" });
     defer std.testing.allocator.free(sres.out);
     defer std.testing.allocator.free(sres.err);
     try std.testing.expectEqual(@as(i32, 0), sres.code);
@@ -116,13 +130,13 @@ test "protocol: transport parity stdio vs QUIC (CASE 3VL)" {
     const snorm = try normalize_rows(std.testing.allocator, srows);
     defer std.testing.allocator.free(snorm);
 
-    var server = try run_server(&.{ "./zig-out/bin/geoded", "--listen-quic", "127.0.0.1:17670", "--log_json", "--result-format", "json", "--test-exit-after-first-request" });
+    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:17670", "--result-format", "json" });
     defer {
         _ = server.child.kill() catch {};
     }
     std.Thread.sleep(300 * std.time.ns_per_ms);
 
-    const qres = try run(&.{ exe, q, "--json-param", "a", param, "--server", "127.0.0.1:17670", "--quic", "--format", "json" });
+    const qres = try run(&.{ exe, q, "--json-param", "a", param", "--server", "127.0.0.1:17670", "--quic", "--format", "json" });
     defer std.testing.allocator.free(qres.out);
     defer std.testing.allocator.free(qres.err);
     try std.testing.expectEqual(@as(i32, 0), qres.code);

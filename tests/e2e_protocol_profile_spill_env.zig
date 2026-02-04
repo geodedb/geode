@@ -3,7 +3,14 @@ const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.proce
 
 fn runEnv(env_over: []const []const u8, args: []const []const u8) !struct { code: i32, out: []u8 } {
     const allocator = std.testing.allocator;
-    var child = Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = Child.init(argv.items, allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -29,8 +36,8 @@ fn contains(h: []const u8, n: []const u8) bool {
 }
 
 test "profile spills env simple" {
-    const exe = "./zig-out/bin/geodec";
-    const res = try runEnv(&.{ "GEODE_FORCE_SORT_SPILL", "1", "GEODE_FORCE_DISTINCT_SPILL", "2", "GEODE_FORCE_UNION_SPILL", "3" }, &.{ exe, "PROFILE RETURN 1 AS x" });
+    const exe = "./zig-out/bin/geode";
+    const res = try runEnv(&.{ "GEODE_FORCE_SORT_SPILL", "1", "GEODE_FORCE_DISTINCT_SPILL", "2", "GEODE_FORCE_UNION_SPILL", "3" }, &.{ exe", "PROFILE RETURN 1 AS x" });
     defer std.testing.allocator.free(res.out);
     try std.testing.expectEqual(@as(i32, 0), res.code);
     try std.testing.expect(contains(res.out, "\"sort_spills\":1"));
@@ -39,8 +46,8 @@ test "profile spills env simple" {
 }
 
 test "profile spills env union" {
-    const exe = "./zig-out/bin/geodec";
-    const res = try runEnv(&.{ "GEODE_FORCE_UNION_SPILL", "7" }, &.{ exe, "PROFILE RETURN 1 AS x UNION RETURN 1 AS x" });
+    const exe = "./zig-out/bin/geode";
+    const res = try runEnv(&.{ "GEODE_FORCE_UNION_SPILL", "7" }, &.{ exe", "PROFILE RETURN 1 AS x UNION RETURN 1 AS x" });
     defer std.testing.allocator.free(res.out);
     try std.testing.expectEqual(@as(i32, 0), res.code);
     try std.testing.expect(contains(res.out, "\"union_spills\":1")); // dedup path uses state.spill_union==1 when env present

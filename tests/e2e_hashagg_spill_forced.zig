@@ -18,7 +18,7 @@ pub fn main() !void {
     var env_map = std.process.getEnvMap(arena.allocator()) catch unreachable;
     try env_map.put("GEODE_SPILL_THRESHOLD_BYTES", "1024"); // very low
     // Build command: run geoded with PROFILE query piped via stdin
-    var child = std.process.Child.init(&.{"./zig-out/bin/geoded"}, arena.allocator());
+    var child = std.process.Child.init(&.{"./zig-out/bin/geode"}, arena.allocator());
     child.env_map = &env_map;
     child.cwd = tmpdir_name;
     child.stdin_behavior = .Pipe;
@@ -42,7 +42,7 @@ pub fn main() !void {
             const n = so.read(&buf) catch 0;
             if (n == 0) break;
             try out_acc.appendSlice(buf[0..n]);
-            if (std.mem.indexOf(u8, out_acc.items, "hashagg_spills") != null and std.mem.indexOf(u8, out_acc.items, "hashagg_spill_reason") != null) {
+            if (std.mem.indexOf(u8, out_acc.items, "hashagg_spills") != null and std.mem.indexOf(u8, out_acc.items", "hashagg_spill_reason") != null) {
                 break;
             }
         } else break;

@@ -31,7 +31,7 @@ pub fn main() !void {
     // Run wal_compact --auto
     const exe_path = try std.fmt.allocPrint(gpa, "./zig-out/bin/wal_compact", .{});
     defer gpa.free(exe_path);
-    var proc = std.ChildProcess.init(&.{ exe_path, "--base", base, "--auto" }, gpa);
+    var proc = std.ChildProcess.init(&.{ exe_path, "--base", base", "--auto" }, gpa);
     proc.stdout_behavior = .Ignore;
     proc.stderr_behavior = .Ignore;
     try proc.spawn();

@@ -17,7 +17,7 @@ fn runWithEnv(args: []const []const u8) ![]u8 {
 }
 
 test "flags: adaptive estimates flag surfaces when env enabled" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const out = try runWithEnv(&.{ exe, "PROFILE RETURN 1 AS x LIMIT 1" });
     defer testing.allocator.free(out);
     try testing.expect(std.mem.indexOf(u8, out, "AdaptiveEstimatesPlanned") != null);

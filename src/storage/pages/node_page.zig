@@ -1,7 +1,6 @@
 const std = @import("std");
 const page_manager = @import("../page_manager.zig");
 const Page = page_manager.Page;
-const interface = @import("interface");
 
 pub const NodePage = struct {
     page: *Page,

@@ -23,7 +23,7 @@ test "TestCANARY_REQ_GQL_VECTOR_OPS_001_Integration: Advanced Vector Operations"
     const test_index = vector_manager.getIndex("test_embeddings").?;
 
     // Initialize statistics for the vector index
-    try stats_manager.createIndexStatistics("test_embeddings", .vector_f32, "Document", &[_][]const u8{"embedding"});
+    try stats_manager.createIndexStatistics("test_embeddings", .vector_f32", "Document", &[_][]const u8{"embedding"});
 
     // Set vector parameters
     if (stats_manager.getIndexStatistics("test_embeddings")) |stats| {

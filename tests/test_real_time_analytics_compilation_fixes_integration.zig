@@ -148,8 +148,8 @@ test "CANARY_REQ_ANALYTICS_COMPILATION_INTEGRATION_002_CDC_Streaming_Pipeline" {
             .timestamp = base_timestamp + @as(i64, @intCast(i * 1000)), // 1 second intervals
             .transaction_id = (i / 5) + 1, // Group events into transactions
             .sequence_number = i,
-            .old_values = if (std.mem.eql(u8, operation, "UPDATE") or std.mem.eql(u8, operation, "DELETE")) .{} else null,
-            .new_values = if (std.mem.eql(u8, operation, "INSERT") or std.mem.eql(u8, operation, "UPDATE")) .{} else null,
+            .old_values = if (std.mem.eql(u8, operation, "UPDATE") or std.mem.eql(u8, operation", "DELETE")) .{} else null,
+            .new_values = if (std.mem.eql(u8, operation, "INSERT") or std.mem.eql(u8, operation", "UPDATE")) .{} else null,
         };
 
         // Process CDC event through integration layer

@@ -35,7 +35,7 @@ pub fn main() !void {
 
         std.debug.print("✅ Compilation successful!\n", .{});
         std.debug.print("   Generated PTX size: {} bytes\n", .{ptx.len});
-        std.debug.print("   Contains test_add: {}\n\n", .{std.mem.indexOf(u8, ptx, "test_add") != null});
+        std.debug.print("   Contains test_add: {}\n\n", .{std.mem.indexOf(u8, ptx", "test_add") != null});
 
         // Test 3: Compile INTERSECT kernel from kernel_sources
         std.debug.print("Testing INTERSECT kernel compilation...\n", .{});
@@ -49,9 +49,9 @@ pub fn main() !void {
 
         std.debug.print("✅ INTERSECT kernel compilation successful!\n", .{});
         std.debug.print("   Generated PTX size: {} bytes\n", .{intersect_ptx.len});
-        std.debug.print("   Contains intersect_kernel: {}\n", .{std.mem.indexOf(u8, intersect_ptx, "intersect_kernel") != null});
-        std.debug.print("   Contains bitonic_sort_kernel: {}\n", .{std.mem.indexOf(u8, intersect_ptx, "bitonic_sort_kernel") != null});
-        std.debug.print("   Contains unique_kernel: {}\n\n", .{std.mem.indexOf(u8, intersect_ptx, "unique_kernel") != null});
+        std.debug.print("   Contains intersect_kernel: {}\n", .{std.mem.indexOf(u8, intersect_ptx", "intersect_kernel") != null});
+        std.debug.print("   Contains bitonic_sort_kernel: {}\n", .{std.mem.indexOf(u8, intersect_ptx", "bitonic_sort_kernel") != null});
+        std.debug.print("   Contains unique_kernel: {}\n\n", .{std.mem.indexOf(u8, intersect_ptx", "unique_kernel") != null});
 
         std.debug.print("✅ All NVRTC tests passed!\n", .{});
         std.debug.print("   GPU kernels can now use optimized CUDA C implementations\n", .{});

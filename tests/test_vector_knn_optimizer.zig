@@ -143,7 +143,7 @@ test "TestCANARY_REQ_GQL_203_VectorKNNOptimization" {
     defer index_manager.deinit();
 
     // Add vector index
-    try index_manager.addVectorIndex("embedding_hnsw", 3, "l2", 1000);
+    try index_manager.addVectorIndex("embedding_hnsw", 3", "l2", 1000);
 
     // Add index info for the property
     try index_manager.addPropertyIndex("embedding", graph_common.IndexInfo{
@@ -159,7 +159,7 @@ test "TestCANARY_REQ_GQL_203_VectorKNNOptimization" {
     const query_vector = [_]f32{ 0.7, 0.3, 0.1 };
     const labels = [_][]const u8{"Document"};
 
-    const scan_plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "embedding", &query_vector, 5, "l2", &labels);
+    const scan_plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "embedding", &query_vector, 5", "l2", &labels);
 
     // Verify the optimization chose vector K-NN over sequential scan
     try testing.expect(scan_plan.type == .vector_knn);
@@ -187,8 +187,8 @@ test "vector index selection and cost estimation" {
     defer index_manager.deinit();
 
     // Add multiple vector indexes with different characteristics
-    try index_manager.addVectorIndex("small_hnsw", 64, "l2", 100);
-    try index_manager.addVectorIndex("large_hnsw", 512, "cosine", 10000);
+    try index_manager.addVectorIndex("small_hnsw", 64", "l2", 100);
+    try index_manager.addVectorIndex("large_hnsw", 512", "cosine", 10000);
 
     // Add both indexes to the same property
     try index_manager.addPropertyIndex("embedding", graph_common.IndexInfo{
@@ -209,7 +209,7 @@ test "vector index selection and cost estimation" {
     defer allocator.free(small_vector);
     @memset(small_vector, 0.5);
 
-    const small_plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "embedding", small_vector, 10, "l2", &[_][]const u8{"Document"});
+    const small_plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "embedding", small_vector, 10", "l2", &[_][]const u8{"Document"});
 
     try testing.expect(small_plan.type == .vector_knn);
     try testing.expect(small_plan.estimated_cost > 0);
@@ -219,7 +219,7 @@ test "vector index selection and cost estimation" {
     defer allocator.free(large_vector);
     @memset(large_vector, 0.3);
 
-    const large_plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "embedding", large_vector, 10, "cosine", &[_][]const u8{"Document"});
+    const large_plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "embedding", large_vector, 10", "cosine", &[_][]const u8{"Document"});
 
     try testing.expect(large_plan.type == .vector_knn);
     try testing.expect(large_plan.estimated_cost > small_plan.estimated_cost); // Higher dimension = higher cost
@@ -239,7 +239,7 @@ test "fallback to sequential scan" {
     const query_vector = [_]f32{ 1.0, 0.0, 0.0 };
     const labels = [_][]const u8{"Document"};
 
-    const scan_plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "embedding", &query_vector, 5, "l2", &labels);
+    const scan_plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "embedding", &query_vector, 5", "l2", &labels);
 
     // Should fallback to sequential scan
     try testing.expect(scan_plan.type == .sequential);
@@ -282,7 +282,7 @@ test "vector K-NN execution simulation" {
     var index_manager = MockIndexManager.init(allocator);
     defer index_manager.deinit();
 
-    try index_manager.addVectorIndex("embedding_hnsw", 3, "l2", 5);
+    try index_manager.addVectorIndex("embedding_hnsw", 3", "l2", 5);
 
     var optimizer = IndexOptimizer.init(allocator, &index_manager);
 
@@ -296,7 +296,7 @@ test "vector K-NN execution simulation" {
         .property = "embedding",
     };
 
-    const results = VectorKNNOptimizer.executeSequentialVectorScan(&optimizer, &graph, knn_info, &[_][]const u8{"Document"}, "n") catch |err| {
+    const results = VectorKNNOptimizer.executeSequentialVectorScan(&optimizer, &graph, knn_info, &[_][]const u8{"Document"}", "n") catch |err| {
         std.debug.print("Sequential vector scan failed: {}\n", .{err});
         return err;
     };
@@ -329,7 +329,7 @@ test "vector dimension and metric validation" {
     defer index_manager.deinit();
 
     // Add vector index with specific characteristics
-    try index_manager.addVectorIndex("precise_hnsw", 128, "cosine", 5000);
+    try index_manager.addVectorIndex("precise_hnsw", 128", "cosine", 5000);
     try index_manager.addPropertyIndex("embeddings", graph_common.IndexInfo{
         .name = "precise_hnsw",
         .index_type = .vector_hnsw,
@@ -343,14 +343,14 @@ test "vector dimension and metric validation" {
     defer allocator.free(correct_vector);
     @memset(correct_vector, 0.1);
 
-    const plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "embeddings", correct_vector, 10, "cosine", &[_][]const u8{"Document"});
+    const plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "embeddings", correct_vector, 10", "cosine", &[_][]const u8{"Document"});
 
     try testing.expect(plan.type == .vector_knn);
 
     // Test cost scaling with k parameter
-    const small_k_plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "embeddings", correct_vector, 5, "cosine", &[_][]const u8{"Document"});
+    const small_k_plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "embeddings", correct_vector, 5", "cosine", &[_][]const u8{"Document"});
 
-    const large_k_plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "embeddings", correct_vector, 50, "cosine", &[_][]const u8{"Document"});
+    const large_k_plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "embeddings", correct_vector, 50", "cosine", &[_][]const u8{"Document"});
 
     try testing.expect(large_k_plan.estimated_cost > small_k_plan.estimated_cost);
     try testing.expect(large_k_plan.estimated_rows > small_k_plan.estimated_rows);
@@ -364,7 +364,7 @@ test "EXPLAIN output for vector operations" {
     var index_manager = MockIndexManager.init(allocator);
     defer index_manager.deinit();
 
-    try index_manager.addVectorIndex("explain_hnsw", 256, "dot", 2000);
+    try index_manager.addVectorIndex("explain_hnsw", 256", "dot", 2000);
     try index_manager.addPropertyIndex("features", graph_common.IndexInfo{
         .name = "explain_hnsw",
         .index_type = .vector_hnsw,
@@ -377,7 +377,7 @@ test "EXPLAIN output for vector operations" {
     defer allocator.free(query_vector);
     @memset(query_vector, 0.25);
 
-    const plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "features", query_vector, 20, "dot", &[_][]const u8{"Product"});
+    const plan = VectorKNNOptimizer.optimizeVectorKNNScan(&optimizer, "features", query_vector, 20", "dot", &[_][]const u8{"Product"});
 
     try testing.expect(plan.explain_info != null);
 

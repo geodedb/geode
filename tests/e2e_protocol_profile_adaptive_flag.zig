@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 test "protocol: PROFILE adaptive estimates flag when env enabled" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     var child = std.process.Child.init(&.{ exe, "PROFILE RETURN 1 AS x LIMIT 1" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;

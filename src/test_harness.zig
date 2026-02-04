@@ -1,37 +1,99 @@
 const std = @import("std");
-const gql = @import("lib.zig");
-const execution = @import("execution.zig");
-const txn_session = @import("txn_session.zig");
+const geode = @import("geode");
+const gql = geode;
+const execution = geode.execution;
+const txn_session = @import("txn_session");
 const auth = @import("geode_auth");
 const rls = @import("rls");
-const user_manager = @import("security/user_manager.zig");
-const user_storage = @import("storage/user_storage.zig");
-const storage_inmemory = @import("storage/inmemory.zig");
-const storage_interface = @import("interface");
-const value_types = @import("value_types.zig");
+const user_manager = @import("user_manager");
+const user_storage = @import("user_storage");
+const value_types = geode.value_types;
+const proto_util = geode.proto_util;
+const protobuf = @import("protobuf");
+const schema = @import("schema");
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-069; FEATURE="JSON Library Migration"; ASPECT=TestHarness; STATUS=EXEMPT; OWNER=testing; UPDATED=2026-01-25
-const json_lib = @import("json");
+fn encodeServerPacket(allocator: std.mem.Allocator, msg: schema.QuicServerMessage, out: *std.ArrayList(u8)) !void {
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 1024);
+    defer aw.deinit();
 
-// JSON error response types for test harness
-const TestErrorResponse = struct {
+    const packet = schema.ServerPacket{ .quic = msg };
+    try protobuf.encode(&aw.writer, allocator, packet);
+
+    const body = aw.writer.buffer[0..aw.writer.end];
+    var len_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &len_buf, @intCast(body.len), .big);
+    try out.appendSlice(allocator, &len_buf);
+    try out.appendSlice(allocator, body);
+}
+
+fn buildErrorResponse(
+    allocator: std.mem.Allocator,
     status_class: []const u8,
-    message: ?[]const u8 = null,
-    @"error": ?[]const u8 = null,
-    additional_statuses: []const AdditionalStatus = &.{},
-
-    const AdditionalStatus = struct {};
-};
-
-/// Helper to build test error response JSON
-fn buildTestErrorResponse(allocator: *std.mem.Allocator, status_class: []const u8, message: ?[]const u8, err: ?[]const u8) ![]u8 {
-    const response = TestErrorResponse{
-        .status_class = status_class,
-        .message = message,
-        .@"error" = err,
+    message: []const u8,
+    additional_statuses: []const []const u8,
+    flagger_findings: []const []const u8,
+) !schema.ExecutionResponse {
+    const status = try proto_util.buildStatusFull(allocator, status_class, additional_statuses, flagger_findings);
+    return .{
+        .status = status,
+        .payload = .{
+            .@"error" = .{
+                .code = try allocator.dupe(u8, status_class),
+                .message = try allocator.dupe(u8, message),
+                .type = try allocator.dupe(u8, "ERROR"),
+                .anchor = try allocator.dupe(u8, ""),
+            },
+        },
     };
-    const json_str = try json_lib.encode(allocator.*, response, .{ .emit_null_optional_fields = false });
-    return json_str;
+}
+
+fn buildErrorPacketBytes(
+    allocator: std.mem.Allocator,
+    status_class: []const u8,
+    message: []const u8,
+    additional_statuses: []const []const u8,
+    flagger_findings: []const []const u8,
+) ![]u8 {
+    var out = try std.ArrayList(u8).initCapacity(allocator, 256);
+    errdefer out.deinit(allocator);
+    var resp = try buildErrorResponse(allocator, status_class, message, additional_statuses, flagger_findings);
+    defer resp.deinit(allocator);
+    try encodeServerPacket(allocator, .{ .execute = resp }, &out);
+    return out.toOwnedSlice(allocator);
+}
+
+fn buildSuccessPacketBytes(
+    allocator: std.mem.Allocator,
+    exec_result: *const execution.ExecutionResult,
+    extra_flags: []const []const u8,
+) ![]u8 {
+    var out = try std.ArrayList(u8).initCapacity(allocator, 512);
+    errdefer out.deinit(allocator);
+
+    var combined_flags = try std.ArrayList([]const u8).initCapacity(allocator, exec_result.flags.items.len + extra_flags.len);
+    defer combined_flags.deinit(allocator);
+    try combined_flags.appendSlice(allocator, exec_result.flags.items);
+    try combined_flags.appendSlice(allocator, extra_flags);
+
+    const status = try proto_util.buildStatus(allocator, "00000", combined_flags.items);
+    const schema_def = try proto_util.buildSchemaDefinition(allocator, exec_result);
+    var schema_resp = schema.ExecutionResponse{
+        .status = status,
+        .payload = .{ .schema = schema_def },
+    };
+    defer schema_resp.deinit(allocator);
+    try encodeServerPacket(allocator, .{ .execute = schema_resp }, &out);
+
+    const page = try proto_util.buildDataPage(allocator, exec_result, 0, 0, false, &.{});
+    const page_status = try proto_util.buildStatus(allocator, "00000", combined_flags.items);
+    var page_resp = schema.ExecutionResponse{
+        .status = page_status,
+        .payload = .{ .page = page },
+    };
+    defer page_resp.deinit(allocator);
+    try encodeServerPacket(allocator, .{ .execute = page_resp }, &out);
+
+    return out.toOwnedSlice(allocator);
 }
 
 // Cleanup function for test catalog - called at end of tests
@@ -61,7 +123,7 @@ pub const QueryOptions = struct {
     skip_txn_session_file: bool = false,
 
     pub const PreValidatedAuth = struct {
-        role: ?@import("security/user_management.zig").Role,
+        role: ?geode.user_management.Role,
         username: ?[]const u8,
     };
 };
@@ -101,7 +163,7 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
             return error.TransactionError;
         }
 
-        return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42000\",\"error\":\"Syntax error in query\",\"additional_statuses\":[]}}", .{});
+        return try buildErrorPacketBytes(allocator.*, "42000", "Syntax error in query", &.{}, &.{});
     };
     defer {
         var mut_pr = parse_result;
@@ -110,7 +172,7 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
 
     // Check if the query used double-dash comments (GB02 - disabled)
     if (parse_result.has_double_dash_comment) {
-        return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42000\",\"message\":\"syntax error: double-hyphen comments disabled (GB02)\",\"additional_statuses\":[]}}", .{});
+        return try buildErrorPacketBytes(allocator.*, "42000", "syntax error: double-hyphen comments disabled (GB02)", &.{}, &.{});
     }
 
     // Check if the FIRST statement is START TRANSACTION
@@ -152,7 +214,7 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
     // Authenticate user if credentials provided
     // GAP-0203: Use pre-validated role from HELLO to skip per-query password hashing
     // CANARY: REQ=REQ-PERF-AUTH-SKIP-001; FEATURE="AuthSkipOptimization"; ASPECT=PreValidatedRole; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
-    const user_mgmt = @import("security/user_management.zig");
+    const user_mgmt = geode.user_management;
     var authenticated_user: ?[]const u8 = null;
     var user_role: ?user_mgmt.Role = null;
 
@@ -163,7 +225,7 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
     } else if (options.user != null and options.password != null) {
         // Slow path: password-based authentication (CLI mode)
         user_role = user_mgmt.authenticate(options.user.?, options.password.?) catch {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "28000", "Authentication failed", &.{}, &.{});
         };
         authenticated_user = options.user;
     } else if (options.user != null and options.token != null) {
@@ -173,7 +235,7 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         user_role = user_mgmt.Role.User; // Default role for token auth
     } else if (options.user != null or options.password != null) {
         // Partial credentials provided (user without password/token, or password without user) - invalid
-        return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"28000\",\"message\":\"Authentication failed\",\"additional_statuses\":[]}}", .{});
+        return try buildErrorPacketBytes(allocator.*, "28000", "Authentication failed", &.{}, &.{});
     }
 
     // Create execution context with authentication and transaction state
@@ -203,70 +265,70 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
     const exec_result = execution.executeProgramWithContext(allocator.*, &parse_result.program, exec_context) catch |err| {
         // Return appropriate error for execution failures
         if (err == error.GroupingError) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42000\",\"message\":\"grouping error: non-aggregated expression not in GROUP BY\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "42000", "grouping error: non-aggregated expression not in GROUP BY", &.{}, &.{});
         }
         if (err == error.UnorderedPagination) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"US001\",\"message\":\"OFFSET requires ORDER BY clause\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "US001", "OFFSET requires ORDER BY clause", &.{}, &.{});
         }
         if (err == error.TransactionAlreadyActive) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"25001\",\"message\":\"Transaction already active\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "25001", "Transaction already active", &.{}, &.{});
         }
         if (err == error.UnionColumnCountMismatch) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42601\",\"message\":\"UNION column count mismatch\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "42601", "UNION column count mismatch", &.{}, &.{});
         }
         if (err == error.DuplicateGraph) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42P07\",\"message\":\"Duplicate graph name\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "42P07", "Duplicate graph name", &.{}, &.{});
         }
         if (err == error.GraphNotFound) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"3F000\",\"message\":\"Graph does not exist\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "3F000", "Graph does not exist", &.{}, &.{});
         }
         if (err == error.DuplicateSchema) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42P07\",\"message\":\"Duplicate schema name\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "42P07", "Duplicate schema name", &.{}, &.{});
         }
         if (err == error.SchemaNotFound) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"3F000\",\"message\":\"Schema does not exist\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "3F000", "Schema does not exist", &.{}, &.{});
         }
         if (err == error.DuplicateIndex) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42P07\",\"message\":\"Duplicate index name\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "42P07", "Duplicate index name", &.{}, &.{});
         }
         if (err == error.InvalidIndexType) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42704\",\"message\":\"Invalid index type\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "42704", "Invalid index type", &.{}, &.{});
         }
         if (err == error.IncompatibleIndexDataType) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42804\",\"message\":\"Incompatible index data type\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "42804", "Incompatible index data type", &.{}, &.{});
         }
         if (err == error.InvalidTypeConversion) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"22003\",\"message\":\"Invalid type conversion\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "22003", "Invalid type conversion", &.{}, &.{});
         }
         if (err == error.CharLengthExceeded) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"22001\",\"message\":\"String data right truncation\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "22001", "String data right truncation", &.{}, &.{});
         }
         if (err == error.InvalidKeyProvider) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42704\",\"message\":\"Invalid TDE key provider\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "42704", "Invalid TDE key provider", &.{}, &.{});
         }
         if (err == error.InvalidGuardrailConfiguration) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42704\",\"message\":\"Invalid CDC guardrail configuration\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "42704", "Invalid CDC guardrail configuration", &.{}, &.{});
         }
         if (err == error.UnknownProcedure) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42883\",\"message\":\"Unknown procedure\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "42883", "Unknown procedure", &.{}, &.{});
         }
         if (err == error.Unauthenticated) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"28000\",\"message\":\"Authentication required\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "28000", "Authentication required", &.{}, &.{});
         }
         if (err == error.Unauthorized) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42501\",\"message\":\"Permission denied\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "42501", "Permission denied", &.{}, &.{});
         }
         if (err == error.SearchNotPermitted) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"42501\",\"error\":\"SEARCH_NOT_PERMITTED\",\"message\":\"Access denied: READ_PLAINTEXT privilege required for encrypted searchable field\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "42501", "Access denied: READ_PLAINTEXT privilege required for encrypted searchable field", &.{}, &.{});
         }
         if (err == error.InvalidIpAddress) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"22P02\",\"message\":\"Invalid IP address format\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "22P02", "Invalid IP address format", &.{}, &.{});
         }
         if (err == error.InvalidMac) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"22P02\",\"message\":\"Invalid MAC address format\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "22P02", "Invalid MAC address format", &.{}, &.{});
         }
         if (err == error.DecimalDivZero) {
-            return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"22012\",\"message\":\"Division by zero\",\"additional_statuses\":[]}}", .{});
+            return try buildErrorPacketBytes(allocator.*, "22012", "Division by zero", &.{}, &.{});
         }
         const error_msg = switch (err) {
             error.NotImplemented => "Feature not yet implemented",
@@ -288,7 +350,7 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
             error.Unauthorized => unreachable,
             else => @errorName(err),
         };
-        return try std.fmt.allocPrint(allocator.*, "{{\"status_class\":\"0A000\",\"error\":\"{s}\",\"additional_statuses\":[]}}", .{error_msg});
+        return try buildErrorPacketBytes(allocator.*, "0A000", error_msg, &.{}, &.{});
     };
     defer {
         var mut_result = exec_result;
@@ -336,9 +398,9 @@ pub fn runQueryWithAuth(allocator: *std.mem.Allocator, query: []const u8, option
         }
     }
 
-    // Convert execution result to JSON
+    // Convert execution result to protobuf server packets
     if (flags.items.len > 0) {
-        return try exec_result.toJsonWithFlags(allocator.*, flags.items);
+        return try buildSuccessPacketBytes(allocator.*, &exec_result, flags.items);
     }
-    return try exec_result.toJson(allocator.*);
+    return try buildSuccessPacketBytes(allocator.*, &exec_result, &.{});
 }

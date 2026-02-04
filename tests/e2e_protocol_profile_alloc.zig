@@ -33,7 +33,7 @@ pub fn parseNumberField(json: []const u8, field: []const u8) ?usize {
 }
 
 test "protocol: PROFILE allocation deltas non-negative" {
-    const exe = "zig-out/bin/geoded";
+    const exe = "zig-out/bin/geode";
     // All stages: DISTINCT + ORDER BY + OFFSET + LIMIT.
     const res = try run(&.{ exe, "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 2", "--json-param", "a", "[1,2,2,3]" });
     // Split lines

@@ -31,7 +31,7 @@ const TestRunner = struct {
 
         return MockProcessResult{
             .exit_code = 1,
-            .stdout = "",
+            .stdout = ",
             .stderr = "Unknown command",
         };
     }
@@ -72,7 +72,7 @@ const TestRunner = struct {
         if (output_path == null) {
             return MockProcessResult{
                 .exit_code = 1,
-                .stdout = "",
+                .stdout = ",
                 .stderr = "Error: --output is required",
             };
         }
@@ -80,7 +80,7 @@ const TestRunner = struct {
         if (std.mem.eql(u8, backup_type, "incremental") and parent_id == null) {
             return MockProcessResult{
                 .exit_code = 1,
-                .stdout = "",
+                .stdout = ",
                 .stderr = "Error: Incremental backup requires parent ID",
             };
         }
@@ -89,7 +89,7 @@ const TestRunner = struct {
         const file = std.fs.cwd().createFile(output_path.?, .{}) catch {
             return MockProcessResult{
                 .exit_code = 1,
-                .stdout = "",
+                .stdout = ",
                 .stderr = "Failed to create backup file",
             };
         };
@@ -100,7 +100,7 @@ const TestRunner = struct {
         file.writeAll(backup_content) catch {
             return MockProcessResult{
                 .exit_code = 1,
-                .stdout = "",
+                .stdout = ",
                 .stderr = "Failed to write backup data",
             };
         };
@@ -108,7 +108,7 @@ const TestRunner = struct {
         // Generate mock success response
         const compression_str = if (compress) "zstd" else "none";
         const parent_str = if (parent_id) |pid|
-            try std.fmt.allocPrint(std.testing.allocator, ",\n  \"parent_backup_id\": \"{s}\"", .{pid})
+            try std.fmt.allocPrint(std.testing.allocator, ",\n  \"parent_backup_id\": \"{s}\", .{pid})
         else
             "";
         defer if (parent_id != null) std.testing.allocator.free(parent_str);
@@ -132,7 +132,7 @@ const TestRunner = struct {
         return MockProcessResult{
             .exit_code = 0,
             .stdout = stdout,
-            .stderr = "",
+            .stderr = ",
         };
     }
 
@@ -158,7 +158,7 @@ const TestRunner = struct {
         if (source_path == null) {
             return MockProcessResult{
                 .exit_code = 1,
-                .stdout = "",
+                .stdout = ",
                 .stderr = "Error: --source is required",
             };
         }
@@ -167,7 +167,7 @@ const TestRunner = struct {
         const file = std.fs.cwd().openFile(source_path.?, .{}) catch {
             return MockProcessResult{
                 .exit_code = 1,
-                .stdout = "",
+                .stdout = ",
                 .stderr = "Error: Backup file not found",
             };
         };
@@ -176,7 +176,7 @@ const TestRunner = struct {
         if (!confirmed) {
             return MockProcessResult{
                 .exit_code = 1,
-                .stdout = "",
+                .stdout = ",
                 .stderr = "Error: Restore requires confirmation with --yes",
             };
         }
@@ -206,7 +206,7 @@ const TestRunner = struct {
         return MockProcessResult{
             .exit_code = 0,
             .stdout = stdout,
-            .stderr = "",
+            .stderr = ",
         };
     }
 };

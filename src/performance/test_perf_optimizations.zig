@@ -1,6 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
+// Test harness is imported as a separate module configured in build.zig
+const test_harness = @import("test_harness");
 
 // CANARY: REQ=REQ-PERF-GAP0203-TESTS; FEATURE="QueryPipelineOptimization"; ASPECT=UnitTests; STATUS=TESTED; OWNER=perf; UPDATED=2026-01-27
 // GAP-0203: Unit tests for all performance optimizations (Fixes #2-#11)
@@ -105,7 +107,7 @@ test "GAP-0203 Fix #5: ensureCatalogInstance returns same instance on repeated c
     try testing.expectEqual(@intFromPtr(instance2), @intFromPtr(instance3));
 
     // Clean up singleton to prevent memory leak in test
-    geode.test_harness.cleanupTestCatalog();
+    test_harness.cleanupTestCatalog();
 }
 
 // ============================================================================
@@ -114,9 +116,9 @@ test "GAP-0203 Fix #5: ensureCatalogInstance returns same instance on repeated c
 
 test "GAP-0203 Fix #6: ensureEvaluatorInitialized is idempotent" {
     // Calling multiple times should not panic or cause issues
-    geode.test_harness.ensureEvaluatorInitialized();
-    geode.test_harness.ensureEvaluatorInitialized();
-    geode.test_harness.ensureEvaluatorInitialized();
+    test_harness.ensureEvaluatorInitialized();
+    test_harness.ensureEvaluatorInitialized();
+    test_harness.ensureEvaluatorInitialized();
     // If we get here, it's idempotent (no crash/assert)
 }
 
@@ -125,7 +127,7 @@ test "GAP-0203 Fix #6: ensureEvaluatorInitialized is idempotent" {
 // ============================================================================
 
 test "GAP-0203 Fix #7: QueryOptions defaults preserve backward compatibility" {
-    const opts = geode.test_harness.QueryOptions{};
+    const opts = test_harness.QueryOptions{};
 
     // All new performance fields should default to backward-compatible values
     try testing.expect(opts.pre_validated_role == null);
@@ -138,7 +140,7 @@ test "GAP-0203 Fix #7: QueryOptions defaults preserve backward compatibility" {
 }
 
 test "GAP-0203 Fix #7: QueryOptions with pre-validated auth" {
-    const opts = geode.test_harness.QueryOptions{
+    const opts = test_harness.QueryOptions{
         .pre_validated_role = .{
             .role = null,
             .username = "admin",
@@ -214,7 +216,7 @@ test "GAP-0203 Fix #3: RESULT response format for error/status" {
 // ============================================================================
 
 test "GAP-0203 Fix #4: skip_txn_session_file disables file I/O" {
-    const opts = geode.test_harness.QueryOptions{
+    const opts = test_harness.QueryOptions{
         .skip_txn_session_file = true,
     };
     try testing.expect(opts.skip_txn_session_file);
@@ -282,12 +284,12 @@ test "GAP-0203 Benchmark: Query execution throughput baseline" {
     const allocator = testing.allocator;
 
     // Ensure evaluator is initialized
-    geode.test_harness.ensureEvaluatorInitialized();
+    test_harness.ensureEvaluatorInitialized();
 
     // Warm up
     {
         var alloc = allocator;
-        const r = geode.test_harness.runQuery(&alloc, "RETURN 1 AS x") catch |err| {
+        const r = test_harness.runQuery(&alloc, "RETURN 1 AS x") catch |err| {
             // If server not running, skip benchmark gracefully
             std.debug.print("Benchmark skipped (server not running): {}\n", .{err});
             return;
@@ -300,7 +302,7 @@ test "GAP-0203 Benchmark: Query execution throughput baseline" {
 
     for (0..iterations) |_| {
         var alloc = allocator;
-        const result = geode.test_harness.runQuery(&alloc, "RETURN 1 AS x") catch {
+        const result = test_harness.runQuery(&alloc, "RETURN 1 AS x") catch {
             return; // skip if query fails
         };
         alloc.free(result);
@@ -319,12 +321,12 @@ test "GAP-0203 Benchmark: Query execution throughput baseline" {
 test "GAP-0203 Benchmark: Query execution with skip options" {
     const allocator = testing.allocator;
 
-    geode.test_harness.ensureEvaluatorInitialized();
+    test_harness.ensureEvaluatorInitialized();
 
     // Warm up
     {
         var alloc = allocator;
-        const r = geode.test_harness.runQuery(&alloc, "RETURN 1 AS x") catch {
+        const r = test_harness.runQuery(&alloc, "RETURN 1 AS x") catch {
             std.debug.print("Benchmark skipped (server not running)\n", .{});
             return;
         };
@@ -337,7 +339,7 @@ test "GAP-0203 Benchmark: Query execution with skip options" {
     var timer_default = try std.time.Timer.start();
     for (0..iterations) |_| {
         var alloc = allocator;
-        const result = geode.test_harness.runQueryWithAuth(&alloc, "RETURN 1 AS x", .{}) catch {
+        const result = test_harness.runQueryWithAuth(&alloc, "RETURN 1 AS x", .{}) catch {
             return;
         };
         alloc.free(result);
@@ -348,7 +350,7 @@ test "GAP-0203 Benchmark: Query execution with skip options" {
     var timer_opt = try std.time.Timer.start();
     for (0..iterations) |_| {
         var alloc = allocator;
-        const result = geode.test_harness.runQueryWithAuth(&alloc, "RETURN 1 AS x", .{
+        const result = test_harness.runQueryWithAuth(&alloc, "RETURN 1 AS x", .{
             .skip_txn_session_file = true,
             .pre_validated_role = .{ .role = null, .username = null },
         }) catch {

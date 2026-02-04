@@ -14,7 +14,7 @@ fn run(args: []const []const u8) !struct { out: []u8 } {
 }
 
 test "protocol: PROFILE UNION DISTINCT efficiency metric" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     // Duplicate rows ensure dedup difference; two identical branches.
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x UNION RETURN 1 AS x" });
     defer testing.allocator.free(res.out);

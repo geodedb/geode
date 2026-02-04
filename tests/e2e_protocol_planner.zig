@@ -3,7 +3,14 @@ const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.proce
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
-    var child = Child.init(args, allocator);
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit(allocator);
+    try argv.append(allocator, args[0]);
+    if (args.len > 1 and !std.mem.eql(u8, args[1], "query")) {
+        try argv.append(allocator, "query");
+    }
+    try argv.appendSlice(allocator, args[1..]);
+    var child = Child.init(argv.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -23,7 +30,7 @@ fn contains(hay: []const u8, needle: []const u8) bool {
 }
 
 test "planner: ORDER BY multi-keys" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "RETURN 1 AS x, 2 AS y ORDER BY x, y LIMIT 1" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -33,7 +40,7 @@ test "planner: ORDER BY multi-keys" {
 }
 
 test "planner: OFFSET with stable ORDER allowed" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "RETURN 1 AS x ORDER BY x LIMIT 10 OFFSET 5" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -42,7 +49,7 @@ test "planner: OFFSET with stable ORDER allowed" {
 }
 
 test "planner: set op then ORDER BY LIMIT" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "(RETURN 2 AS x UNION RETURN 1 AS x) ORDER BY x LIMIT 1" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -52,7 +59,7 @@ test "planner: set op then ORDER BY LIMIT" {
 }
 
 test "planner: GROUP BY + HAVING + ORDER BY pipeline" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const res = try run(&.{ exe, "RETURN a, COUNT(*) AS c GROUP BY a HAVING c > 1 ORDER BY c DESC LIMIT 1", "--json-param", "a", "[1,1,2]" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);

@@ -33,7 +33,7 @@ test "mvcc visibility and wal_skip_ratio deprecation flag" {
     var saw_deprecation = false;
     var it = std.mem.splitScalar(u8, child_a.stdout_buffer.items, '\n');
     while (it.next()) |line| {
-        if (std.mem.indexOf(u8, line, "\"type\":\"BINDINGS\"") != null and std.mem.indexOf(u8, line, "{\"v\":1}") != null) {
+        if (std.mem.indexOf(u8, line, "\"type\":\"BINDINGS\"") != null and std.mem.indexOf(u8, line", "{\"v\":1}") != null) {
             // Could be visibility after commit or during txn; accept as success for committed case.
             saw_committed = true;
         }

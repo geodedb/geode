@@ -16,7 +16,7 @@ test "readStream returns WouldBlock when inbox is empty" {
     defer quic_lib.destroyEndpoint(endpoint);
 
     // Create a connection
-    const conn = try quic_lib.connect(endpoint, "127.0.0.1", 3141, "localhost");
+    const conn = try quic_lib.connect(endpoint, "127.0.0.1", 3141", "localhost");
     defer quic_lib.closeConnection(conn, 0);
 
     // Open a stream

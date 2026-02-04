@@ -285,6 +285,10 @@ pub fn build(b: *std.Build) void {
     // Add logging to storage_page_manager_shared (defined earlier in Level 0)
     storage_page_manager_shared.addImport("logging", logging_mod);
 
+    // Storage types module for PageId and other shared types
+    const storage_types_mod = b.createModule(.{ .root_source_file = b.path("src/storage/types.zig"), .target = target, .optimize = optimize });
+    storage_page_manager_shared.addImport("types", storage_types_mod);
+
     // Modules - Level 1 (Depends on Level 0)
 
     // WAL Mod
@@ -482,6 +486,11 @@ pub fn build(b: *std.Build) void {
     mcp_cli_mod.addImport("geode", root_mod);
     // JSON library for MCP response encoding
     mcp_cli_mod.addImport("json", json_mod);
+    // Schema module for protobuf message types
+    mcp_cli_mod.addImport("schema", schema_mod);
+    mcp_cli_mod.addImport("protobuf", protobuf_mod);
+    // Parallel processing for row mapping
+    mcp_cli_mod.addImport("parallel/spice", spice_wrapper_mod);
     geode_exe.root_module.addImport("geode_mcp", mcp_cli_mod);
 
     // M12: Add storage/stress_test module for CLI
@@ -637,6 +646,8 @@ pub fn build(b: *std.Build) void {
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
     custom_tests.root_module.addImport("json", json_mod);
+    custom_tests.root_module.addImport("protobuf", protobuf_mod);
+    custom_tests.root_module.addImport("schema", schema_mod);
 
     // New unit tests for recent implementations
     // NOTE: These tests stay in src/ due to relative @import dependencies on src/types/* and src/storage/*
@@ -683,6 +694,7 @@ pub fn build(b: *std.Build) void {
     // GAP-0203: Query pipeline optimization tests and benchmarks
     const gap0203_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/performance/test_perf_optimizations.zig"), .target = target, .optimize = optimize }) });
     gap0203_tests.root_module.addImport("geode", root_mod);
+    // test_harness import added later after test_harness_mod is defined
     const run_gap0203_tests = b.addRunArtifact(gap0203_tests);
 
     // GAP-384: Graph persistence tests
@@ -734,6 +746,8 @@ pub fn build(b: *std.Build) void {
 
     // GQL Conformance tests
     const gql_conformance_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gql_conformance.zig"), .target = target, .optimize = optimize }) });
+    gql_conformance_tests.root_module.addImport("protobuf", protobuf_mod);
+    gql_conformance_tests.root_module.addImport("schema", schema_mod);
 
     // Add new ISO conformance patch tests
     const conformance_patch_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/conformance_tests.zig"), .target = target, .optimize = optimize }) });
@@ -1335,12 +1349,9 @@ pub fn build(b: *std.Build) void {
     audit_security_mod.addImport("logging", logging_mod);
     audit_security_mod.addImport("json", json_mod);
 
-    const storage_interface_mod = b.createModule(.{ .root_source_file = b.path("src/storage/interface.zig"), .target = target, .optimize = optimize });
-
     // Add security module imports to test_harness_mod (defined earlier)
     test_harness_mod.addImport("geode_auth", auth_mod);
     test_harness_mod.addImport("rls", rls_mod);
-    test_harness_mod.addImport("interface", storage_interface_mod);
     // FLE modules
     test_harness_mod.addImport("fle_key_manager", fle_key_manager_mod);
     test_harness_mod.addImport("fle_key_types", fle_key_types_mod);
@@ -1354,33 +1365,36 @@ pub fn build(b: *std.Build) void {
     test_harness_mod.addImport("transport/thread_pool", thread_pool_mod); // GAP-0201: Thread pool
     test_harness_mod.addImport("transport/stream_scheduler", stream_scheduler_mod); // GAP-0201: DRR scheduling
     test_harness_mod.addImport("logging", logging_mod);
-    test_harness_mod.addImport("json", json_mod);
+    test_harness_mod.addImport("protobuf", protobuf_mod);
+    test_harness_mod.addImport("schema", schema_mod);
+    test_harness_mod.addImport("geode", root_mod);
 
-    // Add interface to page manager module
-    storage_page_manager_shared.addImport("interface", storage_interface_mod);
+    // GAP-0203: Add test_harness to gap0203_tests now that it's defined
+    gap0203_tests.root_module.addImport("test_harness", test_harness_mod);
 
     // Create user storage module
     const user_storage_mod = b.createModule(.{ .root_source_file = b.path("src/storage/user_storage.zig"), .target = target, .optimize = optimize });
-    user_storage_mod.addImport("interface", storage_interface_mod);
     user_storage_mod.addImport("storage_page_manager", storage_page_manager_shared);
+    user_storage_mod.addImport("types", storage_types_mod);
 
     const user_manager_mod = b.createModule(.{ .root_source_file = b.path("src/security/user_manager.zig"), .target = target, .optimize = optimize });
     user_manager_mod.addImport("geode_auth", auth_mod);
     user_manager_mod.addImport("rls", rls_mod);
-    user_manager_mod.addImport("interface", storage_interface_mod);
     user_manager_mod.addImport("user_storage", user_storage_mod);
     user_manager_mod.addImport("logging", logging_mod);
 
-    // Create a new inmemory storage module that imports interface
-    const storage_inmemory_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
-    storage_inmemory_mod.addImport("interface", storage_interface_mod);
-    storage_inmemory_mod.addImport("logging", logging_mod);
+    // Add user_manager and user_storage to test_harness_mod
+    test_harness_mod.addImport("user_manager", user_manager_mod);
+    test_harness_mod.addImport("user_storage", user_storage_mod);
+
+    // Create txn_session module for test_harness
+    const txn_session_mod = b.createModule(.{ .root_source_file = b.path("src/txn_session.zig"), .target = target, .optimize = optimize });
+    txn_session_mod.addImport("geode", root_mod);
+    test_harness_mod.addImport("txn_session", txn_session_mod);
 
     user_auth_exe.root_module.addImport("geode_auth", auth_mod);
     user_auth_exe.root_module.addImport("rls", rls_mod);
     user_auth_exe.root_module.addImport("user_manager", user_manager_mod);
-    user_auth_exe.root_module.addImport("storage/inmemory", storage_inmemory_mod);
-    user_auth_exe.root_module.addImport("interface", storage_interface_mod);
     user_auth_exe.root_module.addImport("user_storage", user_storage_mod);
 
     b.installArtifact(user_auth_exe);
@@ -1940,8 +1954,6 @@ pub fn build(b: *std.Build) void {
     e2e_rls_test.root_module.addImport("auth", auth_mod);
     e2e_rls_test.root_module.addImport("rls", rls_mod);
     e2e_rls_test.root_module.addImport("user_manager", user_manager_mod);
-    e2e_rls_test.root_module.addImport("storage/inmemory", storage_inmemory_mod);
-    e2e_rls_test.root_module.addImport("interface", storage_interface_mod);
     e2e_rls_test.root_module.addImport("user_storage", user_storage_mod);
     test_step.dependOn(&e2e_rls_test.step);
 

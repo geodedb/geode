@@ -9,7 +9,7 @@ const test_timeout = 30 * std.time.ns_per_s;
 
 // Helper to run geodec commands
 fn runGeodec(allocator: std.mem.Allocator, query: []const u8) !std.ChildProcess.ExecResult {
-    const argv = [_][]const u8{ "./zig-out/bin/geodec", "--host", "127.0.0.1", "--port", "3141", query };
+    const argv = [_][]const u8{ "./zig-out/bin/geode", "query", "--host", "127.0.0.1", "--port", "3141", query };
     return try std.ChildProcess.exec(.{
         .allocator = allocator,
         .argv = &argv,
@@ -49,7 +49,7 @@ test "dataset migration and basic queries" {
     const allocator = testing.allocator;
 
     // Start server
-    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geoded", "--data_dir", "./test_data", "--port", "3141" }, allocator);
+    var server = std.ChildProcess.init(&[_][]const u8{ "./zig-out/bin/geode", "query", "--data_dir", "./test_data", "--port", "3141" }, allocator);
     try server.spawn();
     defer _ = server.kill() catch {};
 

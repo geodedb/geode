@@ -54,7 +54,7 @@ test "TestCANARY_REQ_GQL_016_IndexStatisticsIntegration" {
 
     // Create statistics for the index
     const properties = [_][]const u8{"email"};
-    try stats_manager.createIndexStatistics("User_email_hash_idx", .hash, "User", &properties);
+    try stats_manager.createIndexStatistics("User_email_hash_idx", .hash", "User", &properties);
 
     // Simulate some data being indexed
     const test_entries = [_][]const u8{ "user1@example.com", "user2@example.com", "admin@company.com" };
@@ -114,8 +114,8 @@ test "index statistics collection workflow" {
     const email_props = [_][]const u8{"email"};
     const name_props = [_][]const u8{"name"};
 
-    try stats_manager.createIndexStatistics("user_email_hash", .hash, "User", &email_props);
-    try stats_manager.createIndexStatistics("user_name_btree", .btree, "User", &name_props);
+    try stats_manager.createIndexStatistics("user_email_hash", .hash", "User", &email_props);
+    try stats_manager.createIndexStatistics("user_name_btree", .btree", "User", &name_props);
 
     // Simulate different access patterns
 
@@ -164,10 +164,10 @@ test "index statistics usage analysis" {
     const props = [_][]const u8{"test_prop"};
 
     // Unused index
-    try stats_manager.createIndexStatistics("unused_index", .btree, "Test", &props);
+    try stats_manager.createIndexStatistics("unused_index", .btree", "Test", &props);
 
     // Inefficient index
-    try stats_manager.createIndexStatistics("inefficient_index", .hash, "Test", &props);
+    try stats_manager.createIndexStatistics("inefficient_index", .hash", "Test", &props);
     for (0..10) |i| {
         var key_buf: [16]u8 = undefined;
         const key = try std.fmt.bufPrint(&key_buf, "key{d}", .{i});
@@ -176,7 +176,7 @@ test "index statistics usage analysis" {
     stats_manager.recordIndexAccess("inefficient_index", 1, 20); // Very low hit ratio
 
     // Excellent index
-    try stats_manager.createIndexStatistics("excellent_index", .hash, "Test", &props);
+    try stats_manager.createIndexStatistics("excellent_index", .hash", "Test", &props);
     for (0..100) |i| {
         var key_buf: [16]u8 = undefined;
         const key = try std.fmt.bufPrint(&key_buf, "key{d}", .{i});

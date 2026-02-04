@@ -1,215 +1,89 @@
 const std = @import("std");
 const testing = std.testing;
-const mv = @import("../src/storage/materialized_views.zig");
-const storage = @import("../src/storage/interface.zig");
+const geode = @import("geode");
+const mv = geode.materialized_views;
 
-test "materialized view - create and populate" {
+test "materialized view - create and refresh" {
     const allocator = testing.allocator;
 
-    var storage_engine = try storage.StorageEngine.init(allocator, .{});
-    defer storage_engine.deinit();
-
-    var manager = try mv.MaterializedViewManager.init(allocator, &storage_engine);
+    var manager = try mv.MaterializedViewManager.init(allocator, .{});
     defer manager.deinit();
 
-    // Create a materialized view
-    try manager.createMaterializedView(
+    try manager.createView(
         "user_stats_mv",
-        \\MATCH (u:User)-[r:POSTED]->(p:Post)
-        \\RETURN u.id AS user_id, COUNT(p) AS post_count
-        \\GROUP BY u.id
-    ,
-        .{
-            .storage_type = .heap,
-            .refresh_method = .complete,
-            .refresh_timing = .on_demand,
-            .populate_initially = true,
-        },
+        "RETURN 1 AS user_id, 2 AS post_count",
+        .manual,
+        null,
     );
 
-    // Verify view was created
-    try testing.expectEqual(@as(u64, 1), manager.statistics.total_views);
-    try testing.expectEqual(@as(u64, 1), manager.statistics.active_views);
+    try manager.refreshView("user_stats_mv");
 
-    // Check view exists in catalog
-    const view = manager.view_catalog.views.get("user_stats_mv");
-    try testing.expect(view != null);
+    const stats = try manager.getViewStatistics("user_stats_mv");
+    try testing.expect(stats.total_refreshes == 1);
+    try testing.expect(stats.successful_refreshes == 1);
+
+    const meta = manager.views.get("user_stats_mv") orelse return error.MissingView;
+    try testing.expectEqual(@as(u64, 1), meta.row_count);
+    try testing.expect(meta.state == .ready);
 }
 
-test "materialized view - incremental refresh" {
+test "materialized view - manager statistics update" {
     const allocator = testing.allocator;
 
-    var storage_engine = try storage.StorageEngine.init(allocator, .{});
-    defer storage_engine.deinit();
-
-    var manager = try mv.MaterializedViewManager.init(allocator, &storage_engine);
+    var manager = try mv.MaterializedViewManager.init(allocator, .{});
     defer manager.deinit();
 
-    // Create view with incremental refresh
-    try manager.createMaterializedView(
-        "incremental_mv",
-        "MATCH (n) RETURN n.id, n.timestamp WHERE n.timestamp > $last_refresh",
-        .{
-            .refresh_method = .incremental,
-            .enable_incremental = true,
-            .refresh_timing = .{ .continuous = .{
-                .lag_threshold_ms = 1000,
-                .batch_size = 100,
-            } },
-        },
-    );
+    try manager.createView("mv_a", "RETURN 1 AS x", .manual, null);
+    try manager.createView("mv_b", "RETURN 2 AS y", .manual, null);
 
-    const view_id: u64 = 1; // First view created
-
-    // Perform incremental refresh
-    try manager.refreshView(view_id, .{
-        .force_complete = false,
-        .wait_for_completion = true,
-    });
-
-    // Check refresh statistics
-    const view = manager.view_catalog.view_by_id.get(view_id);
-    try testing.expect(view != null);
-    try testing.expect(view.?.statistics.refresh_count > 0);
+    const stats = manager.getManagerStatistics();
+    try testing.expectEqual(@as(u64, 2), stats.total_views);
 }
 
-test "materialized view - automatic refresh on data changes" {
+test "materialized view - scheduled refresh job created" {
     const allocator = testing.allocator;
 
-    var storage_engine = try storage.StorageEngine.init(allocator, .{});
-    defer storage_engine.deinit();
-
-    var manager = try mv.MaterializedViewManager.init(allocator, &storage_engine);
+    var manager = try mv.MaterializedViewManager.init(allocator, .{});
     defer manager.deinit();
 
-    // Create view with automatic refresh
-    try manager.createMaterializedView(
-        "auto_refresh_mv",
-        "MATCH (n:Node) RETURN COUNT(n) AS node_count",
-        .{
-            .refresh_method = .incremental,
-            .refresh_timing = .on_commit,
-        },
-    );
-
-    // Simulate data change event
-    const invalidation_event = mv.DependencyTracker.InvalidationEvent{
-        .timestamp = std.time.milliTimestamp(),
-        .source_object = 100, // Table ID
-        .event_type = .insert,
-        .affected_views = try allocator.dupe(u64, &[_]u64{1}),
-        .propagation_depth = 1,
-    };
-
-    try manager.dependency_tracker.invalidation_queue.append(invalidation_event);
-
-    // Verify invalidation was queued
-    try testing.expectEqual(@as(usize, 1), manager.dependency_tracker.invalidation_queue.items.len);
-}
-
-test "materialized view - query rewriting to use views" {
-    const allocator = testing.allocator;
-
-    var storage_engine = try storage.StorageEngine.init(allocator, .{});
-    defer storage_engine.deinit();
-
-    var manager = try mv.MaterializedViewManager.init(allocator, &storage_engine);
-    defer manager.deinit();
-
-    // Create a materialized view for aggregations
-    try manager.createMaterializedView(
-        "sales_summary_mv",
-        \\MATCH (s:Sale)
-        \\RETURN s.product_id AS product_id,
-        \\       SUM(s.amount) AS total_sales,
-        \\       COUNT(s) AS sale_count
-        \\GROUP BY s.product_id
-    ,
-        .{
-            .storage_type = .columnar,
-            .primary_key = &[_][]const u8{"product_id"},
-        },
-    );
-
-    // Test query rewriting
-    const original_query =
-        \\MATCH (s:Sale)
-        \\WHERE s.product_id = 123
-        \\RETURN SUM(s.amount) AS total
-    ;
-
-    // Parse query (simplified for test)
-    var ast_query = ast.Query{
-        .type = .match,
-        .pattern = undefined,
-    };
-
-    const rewritten = try manager.rewriteQuery(&ast_query);
-
-    // Should rewrite to use materialized view
-    try testing.expect(rewritten != &ast_query); // Different query object if rewritten
-}
-
-test "materialized view - scheduled refresh" {
-    const allocator = testing.allocator;
-
-    var storage_engine = try storage.StorageEngine.init(allocator, .{});
-    defer storage_engine.deinit();
-
-    var manager = try mv.MaterializedViewManager.init(allocator, &storage_engine);
-    defer manager.deinit();
-
-    // Create view with scheduled refresh
-    try manager.createMaterializedView(
+    try manager.createView(
         "scheduled_mv",
-        "MATCH (n) RETURN COUNT(n)",
-        .{
-            .refresh_timing = .{
-                .scheduled = .{
-                    .interval_seconds = 3600, // Every hour
-                    .last_refresh = 0,
-                    .next_refresh = std.time.milliTimestamp() + 3600000,
-                },
-            },
-        },
+        "RETURN 1 AS x",
+        .auto_scheduled,
+        3600,
     );
 
-    // Check scheduler
-    const schedule_entry = manager.refresh_manager.scheduler.schedule_table.get(1);
-    try testing.expect(schedule_entry != null);
-    try testing.expectEqual(@as(u64, 3600), schedule_entry.?.interval_seconds.?);
+    try testing.expectEqual(@as(usize, 1), manager.refresh_scheduler.scheduled_jobs.items.len);
+    try testing.expect(std.mem.eql(u8, manager.refresh_scheduler.scheduled_jobs.items[0].view_name, "scheduled_mv"));
 }
 
-test "materialized view - dependency tracking" {
+test "materialized view - dependency tracking extracts labels" {
     const allocator = testing.allocator;
 
-    var storage_engine = try storage.StorageEngine.init(allocator, .{});
-    defer storage_engine.deinit();
-
-    var manager = try mv.MaterializedViewManager.init(allocator, &storage_engine);
+    var manager = try mv.MaterializedViewManager.init(allocator, .{});
     defer manager.deinit();
 
-    // Create base view
-    try manager.createMaterializedView(
-        "base_mv",
-        "MATCH (n:Node) RETURN n.id, n.value",
-        .{},
+    try manager.createView(
+        "dep_mv",
+        "MATCH (n:Node)-[r:LINKS]->(m:Node) RETURN n, m",
+        .manual,
+        null,
     );
 
-    // Create dependent view
-    try manager.createMaterializedView(
-        "derived_mv",
-        "MATCH (n) WHERE n IN base_mv RETURN SUM(n.value)",
-        .{},
-    );
+    const deps = manager.dependency_tracker.view_dependencies.get("dep_mv") orelse return error.MissingDependencies;
+    try testing.expect(deps.items.len > 0);
+}
 
-    // Check dependency graph
-    const graph = &manager.dependency_tracker.dependency_graph;
-    try testing.expect(graph.nodes.count() >= 2);
+test "materialized view - query compatibility check" {
+    const allocator = testing.allocator;
 
-    // Verify dependency relationship exists
-    if (graph.nodes.get(2)) |derived_node| {
-        try testing.expect(derived_node.dependencies.items.len > 0);
-        try testing.expectEqual(@as(u64, 1), derived_node.dependencies.items[0]);
-    }
+    var manager = try mv.MaterializedViewManager.init(allocator, .{});
+    defer manager.deinit();
+
+    const query = "RETURN 1 AS x, 2 AS y";
+    try manager.createView("compat_mv", query, .manual, null);
+
+    const match = manager.canSatisfyQuery(query);
+    try testing.expect(match != null);
+    try testing.expect(std.mem.eql(u8, match.?, "compat_mv"));
 }

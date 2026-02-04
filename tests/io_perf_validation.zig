@@ -381,7 +381,7 @@ test "CANARY: REQ=REQ-PERF-IO-001 - File I/O optimization integration" {
 
     // Simulate writing query results (similar to JSON response streaming)
     for (0..2000) |i| {
-        try writer.writeFormatted("{{\"id\":{d},\"name\":\"record{d}\",\"data\":\"", .{ i, i });
+        try writer.writeFormatted("{{\"id\":{d},\"name\":\"record{d}\",\"data\":\", .{ i, i });
 
         // Add some bulk data to simulate complex query results
         for (0..25) |j| {

@@ -47,7 +47,7 @@ fn runCriticalComplianceTests(arena: *std.heap.ArenaAllocator) !void {
         .{ .name = "Boolean literals", .query = "RETURN true, false", .should_parse = true },
         .{ .name = "Integer literals", .query = "RETURN 42, -123", .should_parse = true },
         .{ .name = "Float literals", .query = "RETURN 3.14, -2.5", .should_parse = true },
-        .{ .name = "String literals", .query = "RETURN 'hello', \"world\"", .should_parse = true },
+        .{ .name = "String literals", .query = "RETURN 'hello', \"world\", .should_parse = true },
         .{ .name = "Null literal", .query = "RETURN null", .should_parse = true },
         .{ .name = "List literals", .query = "RETURN [1, 2, 3]", .should_parse = true },
         .{ .name = "Map literals", .query = "RETURN {name: 'Alice', age: 30}", .should_parse = true },

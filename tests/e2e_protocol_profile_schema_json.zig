@@ -13,7 +13,7 @@ fn hasField(obj: std.json.ObjectMap, name: []const u8) bool {
 }
 
 test "protocol: PROFILE matches core schema fields (light validator)" {
-    const exe = "./zig-out/bin/geodec";
+    const exe = "./zig-out/bin/geode";
     const out = try util.runCli(testing.allocator, &.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer testing.allocator.free(out);
     const pl = util.findProfileLine(out) orelse return error.MissingProfile;

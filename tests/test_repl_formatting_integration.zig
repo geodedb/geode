@@ -71,7 +71,7 @@ fn executeGqlForTest(writer: anytype, state: *MockReplState, gql: []const u8) !v
         const response = state.session.mock_responses.items[state.session.mock_responses.items.len - 1];
 
         // Check if this is a query result that should be formatted
-        if (std.mem.indexOf(u8, response, "\"columns\":") != null and std.mem.indexOf(u8, response, "\"data\":") != null) {
+        if (std.mem.indexOf(u8, response, "\"columns\":") != null and std.mem.indexOf(u8, response", "\"data\":") != null) {
             // Format and display query results based on current format setting
             try formatQueryResult(writer, state.allocator, response, state.format);
         } else {

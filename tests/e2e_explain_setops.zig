@@ -9,7 +9,7 @@ fn run(gql: []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
     const server = try getServerAddr(allocator);
     defer allocator.free(server);
-    var child = Child.init(&.{ "./zig-out/bin/geodec", gql, "--server", server, "--insecure" }, allocator);
+    var child = Child.init(&.{ "./zig-out/bin/geode", "query", gql, "--server", server, "--insecure" }, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;

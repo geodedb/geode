@@ -20,8 +20,8 @@ const rls_core = @import("../src/security/rls_core.zig");
 const aead = @import("../src/crypto/aead.zig");
 const hkdf = @import("../src/crypto/hkdf.zig");
 
-// Storage modules
-const materialized_views = @import("../src/storage/materialized_views.zig");
+// Storage/query modules
+const materialized_views = @import("../src/query/materialized_views.zig");
 
 // Distributed modules
 const federation = @import("../src/distributed/federation.zig");
@@ -80,15 +80,15 @@ test "REQ-FLE-DOC-001: field-level encryption implementation" {
 
 test "REQ-MATVIEW-SYSTEM: materialized view system" {
     // Verify materialized views module has required types and functions
-    try testing.expect(@hasDecl(materialized_views, "MaterializedView"));
+    try testing.expect(@hasDecl(materialized_views, "MaterializedViewMetadata"));
     try testing.expect(@hasDecl(materialized_views, "MaterializedViewManager"));
 
-    // Verify refresh strategy enum exists (immediate, lazy, scheduled)
+    // Verify refresh strategy enum exists (manual, auto, scheduled)
     try testing.expect(@hasDecl(materialized_views, "RefreshStrategy"));
 
     // Test that we can reference the RefreshStrategy enum values
-    const strategy = materialized_views.RefreshStrategy.immediate;
-    try testing.expect(strategy == .immediate);
+    const strategy = materialized_views.RefreshStrategy.manual;
+    try testing.expect(strategy == .manual);
 }
 
 // =============================================================================
@@ -139,7 +139,7 @@ test "REQ-AUTH-POLICY-011: pre-auth policy check" {
     try testing.expect(@hasDecl(geode_auth_lib, "AuthResult"));
 
     // Verify rate limiting capability exists
-    try testing.expect(@hasDecl(geode_auth_lib, "RateLimiter") or @hasDecl(geode_auth_lib, "AuthState"));
+    try testing.expect(@hasDecl(geode_auth_lib, "RateLimiter") or @hasDecl(geode_auth_lib", "AuthState"));
 }
 
 // =============================================================================
@@ -211,7 +211,7 @@ test "REQ-GQL-OPTIONAL-UNDIRECTED-001: optional undirected patterns" {
 // CANARY: REQ=REQ-GQL-ORDERBY-NULLS-001; FEATURE="GQL ORDER BY NULLS"; ASPECT=Sorting; STATUS=TESTED; TEST=tests/test_requirement_traceability.zig; OWNER=gql; UPDATED=2026-01-15
 test "REQ-GQL-ORDERBY-NULLS-001: ORDER BY NULLS FIRST/LAST" {
     // Verify parser has ORDER BY related types
-    try testing.expect(@hasDecl(parser, "OrderByItem") or @hasDecl(parser, "SortItem"));
+    try testing.expect(@hasDecl(parser, "OrderByItem") or @hasDecl(parser", "SortItem"));
 
     // Verify protocol supports null ordering in federation results
     try testing.expect(@hasField(federation.QueryResults, "nulls_first"));

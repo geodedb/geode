@@ -46,7 +46,7 @@ test "insecure flag preserves success exit code" {
 // Test missing query returns error
 test "missing query returns usage error exit code" {
     const config = ClientConfig{
-        .query_text = "",
+        .query_text = ",
         .insecure = false,
     };
 
@@ -125,7 +125,7 @@ test "server configuration handling" {
 test "edge case handling" {
     // Empty query
     const empty_config = ClientConfig{
-        .query_text = "",
+        .query_text = ",
         .insecure = true,
     };
 

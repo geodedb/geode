@@ -3,7 +3,6 @@ const testing = std.testing;
 const auth = @import("auth");
 const rls = @import("rls");
 const user_manager = @import("user_manager");
-const interface = @import("interface");
 const user_storage = @import("user_storage");
 
 test "User creation and authentication" {
@@ -422,33 +421,6 @@ test "User Manager integration" {
     var rls_engine = try rls.RLSEngine.init(allocator);
     defer rls_engine.deinit();
 
-    var inmem_storage = @import("storage/inmemory").InMemory.init(allocator);
-    defer inmem_storage.deinit();
-
-    // Create storage interface wrapper
-    const storage_backend = interface.StorageEngine{
-        .ctx = &inmem_storage,
-        .vtable = &.{
-            .deinit = struct {
-                fn deinit(ctx: *anyopaque) void {
-                    _ = ctx;
-                }
-            }.deinit,
-            .csrAddEdge = struct {
-                fn csrAddEdge(ctx: *anyopaque, src: u64, dst: u64) anyerror!void {
-                    const self: *@import("storage/inmemory").InMemory = @ptrCast(@alignCast(ctx));
-                    return self.addEdge(src, dst);
-                }
-            }.csrAddEdge,
-            .csrNeighbors = struct {
-                fn csrNeighbors(ctx: *anyopaque, src: u64) anyerror!interface.NeighborIter {
-                    const self: *@import("storage/inmemory").InMemory = @ptrCast(@alignCast(ctx));
-                    return self.neighbors(src);
-                }
-            }.csrNeighbors,
-        },
-    };
-
     // Create a mock page manager for user storage (test)
     var mock_page_mgr = struct {
         const MockPageManager = @This();
@@ -478,7 +450,6 @@ test "User Manager integration" {
         allocator,
         &security_manager,
         &rls_engine,
-        storage_backend,
         &user_storage_backend,
     );
     defer mgr.deinit();

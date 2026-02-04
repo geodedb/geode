@@ -1,163 +1,88 @@
 const std = @import("std");
+const testing = std.testing;
+const util = @import("proto_test_util.zig");
+
+fn startServerAndClient(allocator: std.mem.Allocator, port: u16) !struct {
+    server: util.ServerHandle,
+    client: util.QuicProtoClient,
+} {
+    const addr = try std.fmt.allocPrint(allocator, "127.0.0.1:{d}", .{port});
+    defer allocator.free(addr);
+
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen-quic", addr, "--disable-auth" }, null);
+    var client = try util.QuicProtoClient.connect(allocator, addr);
+    var hello = try client.hello(allocator, "", "");
+    hello.deinit(allocator);
+
+    return .{ .server = server, .client = client };
+}
 
 // Test baseline transaction functionality: BEGIN/COMMIT/ROLLBACK
 test "e2e: transaction baseline BEGIN/COMMIT/ROLLBACK" {
-    const allocator = std.testing.allocator;
+    const allocator = testing.allocator;
+    var ctx = try startServerAndClient(allocator, 17680);
+    defer ctx.client.deinit();
+    defer ctx.server.deinit();
 
-    const exe_dir = try std.fs.cwd().realpathAlloc(allocator, ".");
-    defer allocator.free(exe_dir);
-    const exe_path = try std.fmt.allocPrint(allocator, "{s}/zig-out/bin/geoded", .{exe_dir});
-    defer allocator.free(exe_path);
+    const begin_ok = try ctx.client.begin(allocator);
+    defer begin_ok.deinit(allocator);
+    try testing.expect(begin_ok.tx_id.len > 0);
 
-    var child = std.process.Child.init(&[_][]const u8{exe_path}, allocator);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
+    const exec = try ctx.client.executeAndCollect(allocator, "RETURN 1 AS x", null, 100);
+    defer exec.deinit(allocator);
+    try testing.expect(exec.error_code == null);
+    try testing.expect(exec.rows.len == 1);
+    try testing.expect(exec.rows[0].len == 1);
+    try testing.expect(exec.rows[0][0] == .int and exec.rows[0][0].int == 1);
 
-    if (child.stdin) |stdin| {
-        // Test successful transaction sequence
-        var write_buf: [8192]u8 = undefined;
-        try stdin.writer(&write_buf).writeAll("{\"type\":\"HELLO\",\"client_name\":\"test\",\"client_ver\":\"1.0\",\"wanted_conformance\":\"basic\"}\n");
-        try stdin.writer(&write_buf).writeAll("{\"type\":\"BEGIN\"}\n");
-        try stdin.writer(&write_buf).writeAll("{\"type\":\"RUN_GQL\",\"text\":\"RETURN 1 AS x\"}\n");
-        try stdin.writer(&write_buf).writeAll("{\"type\":\"COMMIT\"}\n");
+    const commit_ok = try ctx.client.commit(allocator);
+    try testing.expect(commit_ok);
 
-        // Test error case: BEGIN when already in transaction
-        try stdin.writer(&write_buf).writeAll("{\"type\":\"BEGIN\"}\n");
-        try stdin.writer(&write_buf).writeAll("{\"type\":\"BEGIN\"}\n"); // Should return error
-        try stdin.writer(&write_buf).writeAll("{\"type\":\"ROLLBACK\"}\n");
+    // Nested BEGIN should be rejected (empty tx_id)
+    const begin_again = try ctx.client.begin(allocator);
+    defer begin_again.deinit(allocator);
+    try testing.expect(begin_again.tx_id.len == 0);
 
-        stdin.close();
-    }
-
-    var out_buf = std.ArrayList(u8).init(allocator);
-    defer out_buf.deinit();
-    if (child.stdout) |so| {
-        var tmpb: [8192]u8 = undefined;
-        while (true) {
-            const n = so.read(&tmpb) catch 0;
-            if (n == 0) break;
-            try out_buf.appendSlice(tmpb[0..n]);
-        }
-    }
-
-    _ = child.wait() catch {};
-    const output = out_buf.items;
-
-    // Verify successful BEGIN and COMMIT both return status_class 00000
-    const success_count = std.mem.count(u8, output, "\"status_class\":\"00000\"");
-    try std.testing.expect(success_count >= 4); // HELLO, BEGIN, RUN_GQL, COMMIT
-
-    // Verify error case: second BEGIN should return error status_class 25000 (active txn)
-    try std.testing.expect(std.mem.indexOf(u8, output, "\"status_class\":\"25000\"") != null);
-
-    // Verify TxnState diagnostic is present
-    try std.testing.expect(std.mem.indexOf(u8, output, "TxnState") != null);
-
-    // Verify additional_status contains TxnState
-    try std.testing.expect(std.mem.indexOf(u8, output, "additional_status") != null or std.mem.indexOf(u8, output, "TxnState") != null);
+    const rollback_ok = try ctx.client.rollback(allocator);
+    try testing.expect(!rollback_ok);
 }
 
 // Test transaction rollback functionality
 test "e2e: transaction rollback" {
-    const allocator = std.testing.allocator;
+    const allocator = testing.allocator;
+    var ctx = try startServerAndClient(allocator, 17681);
+    defer ctx.client.deinit();
+    defer ctx.server.deinit();
 
-    const exe_dir = try std.fs.cwd().realpathAlloc(allocator, ".");
-    defer allocator.free(exe_dir);
-    const exe_path = try std.fmt.allocPrint(allocator, "{s}/zig-out/bin/geoded", .{exe_dir});
-    defer allocator.free(exe_path);
+    const begin_ok = try ctx.client.begin(allocator);
+    defer begin_ok.deinit(allocator);
+    try testing.expect(begin_ok.tx_id.len > 0);
 
-    var child = std.process.Child.init(&[_][]const u8{exe_path}, allocator);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
+    _ = try ctx.client.executeAndCollect(allocator, "RETURN 1 AS x", null, 100);
 
-    if (child.stdin) |stdin| {
-        // Test rollback sequence
-        try stdin.writer().writeAll("{\"type\":\"BEGIN\"}\n");
-        try stdin.writer().writeAll("{\"type\":\"RUN_GQL\",\"text\":\"RETURN 1 AS x\"}\n");
-        try stdin.writer().writeAll("{\"type\":\"ROLLBACK\"}\n");
+    const rollback_ok = try ctx.client.rollback(allocator);
+    try testing.expect(rollback_ok);
 
-        // Test error case: COMMIT when no active transaction
-        try stdin.writer().writeAll("{\"type\":\"COMMIT\"}\n"); // Should return error
-
-        try stdin.close();
-    }
-
-    var out_buf = std.ArrayList(u8).init(allocator);
-    defer out_buf.deinit();
-    if (child.stdout) |so| {
-        var tmpb: [8192]u8 = undefined;
-        while (true) {
-            const n = so.read(&tmpb) catch 0;
-            if (n == 0) break;
-            try out_buf.appendSlice(tmpb[0..n]);
-        }
-    }
-
-    _ = child.wait() catch {};
-    const output = out_buf.items;
-
-    // Verify successful BEGIN, RUN_GQL, and ROLLBACK return status_class 00000
-    const success_count = std.mem.count(u8, output, "\"status_class\":\"00000\"");
-    try std.testing.expect(success_count >= 3); // BEGIN, RUN_GQL, ROLLBACK
-
-    // Verify error case: COMMIT without active transaction should return error
-    try std.testing.expect(std.mem.indexOf(u8, output, "\"status_class\":\"25000\"") != null or
-        std.mem.indexOf(u8, output, "no active transaction") != null);
+    const commit_after = try ctx.client.commit(allocator);
+    try testing.expect(!commit_after);
 }
 
 // Test transaction state management
 test "e2e: transaction state management" {
-    const allocator = std.testing.allocator;
+    const allocator = testing.allocator;
+    var ctx = try startServerAndClient(allocator, 17682);
+    defer ctx.client.deinit();
+    defer ctx.server.deinit();
 
-    const exe_dir = try std.fs.cwd().realpathAlloc(allocator, ".");
-    defer allocator.free(exe_dir);
-    const exe_path = try std.fmt.allocPrint(allocator, "{s}/zig-out/bin/geoded", .{exe_dir});
-    defer allocator.free(exe_path);
+    var begin1 = try ctx.client.begin(allocator);
+    begin1.deinit(allocator);
+    try testing.expect(try ctx.client.commit(allocator));
 
-    var child = std.process.Child.init(&[_][]const u8{exe_path}, allocator);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
+    var begin2 = try ctx.client.begin(allocator);
+    begin2.deinit(allocator);
+    try testing.expect(try ctx.client.rollback(allocator));
 
-    if (child.stdin) |stdin| {
-        // Test multiple transaction cycles
-        try stdin.writer().writeAll("{\"type\":\"BEGIN\"}\n");
-        try stdin.writer().writeAll("{\"type\":\"COMMIT\"}\n");
-
-        try stdin.writer().writeAll("{\"type\":\"BEGIN\"}\n");
-        try stdin.writer().writeAll("{\"type\":\"ROLLBACK\"}\n");
-
-        // Should be able to start new transaction after previous one ended
-        try stdin.writer().writeAll("{\"type\":\"BEGIN\"}\n");
-        try stdin.writer().writeAll("{\"type\":\"COMMIT\"}\n");
-
-        try stdin.close();
-    }
-
-    var out_buf = std.ArrayList(u8).init(allocator);
-    defer out_buf.deinit();
-    if (child.stdout) |so| {
-        var tmpb: [8192]u8 = undefined;
-        while (true) {
-            const n = so.read(&tmpb) catch 0;
-            if (n == 0) break;
-            try out_buf.appendSlice(tmpb[0..n]);
-        }
-    }
-
-    _ = child.wait() catch {};
-    const output = out_buf.items;
-
-    // All operations should succeed (6 operations: 3 BEGIN + 2 COMMIT + 1 ROLLBACK)
-    const success_count = std.mem.count(u8, output, "\"status_class\":\"00000\"");
-    try std.testing.expect(success_count >= 6);
-
-    // Should not have any transaction state errors
-    try std.testing.expect(std.mem.indexOf(u8, output, "already in transaction") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "no active transaction") == null);
+    var begin3 = try ctx.client.begin(allocator);
+    begin3.deinit(allocator);
+    try testing.expect(try ctx.client.commit(allocator));
 }

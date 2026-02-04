@@ -1,35 +1,27 @@
 const std = @import("std");
-
-// E2E: exercise BEGIN, nested BEGIN error, COMMIT, ROLLBACK paths.
+const testing = std.testing;
+const util = @import("proto_test_util.zig");
 
 test "protocol txn basics" {
-    const gpa = std.testing.allocator;
-    const exe_path = try std.fmt.allocPrint(gpa, "{s}/zig-out/bin/geoded", .{std.fs.cwd().realpathAlloc(gpa, ".") catch "."});
-    defer gpa.free(exe_path);
-    var child = std.process.Child.init(&[_][]const u8{exe_path}, gpa);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    try child.spawn();
-    if (child.stdin) |stdin| {
-        try stdin.writer().writeAll("{\"type\":\"HELLO\"}\n");
-        try stdin.writer().writeAll("{\"type\":\"BEGIN\"}\n");
-        try stdin.writer().writeAll("{\"type\":\"BEGIN\"}\n"); // should error
-        try stdin.writer().writeAll("{\"type\":\"COMMIT\"}\n"); // commit active txn
-        try stdin.writer().writeAll("{\"type\":\"ROLLBACK\"}\n"); // no active txn -> error
-        try stdin.close();
-    }
-    var out_buf = std.ArrayList(u8).init(gpa);
-    defer out_buf.deinit();
-    if (child.stdout) |so| {
-        var tmp: [4096]u8 = undefined;
-        while (true) {
-            const n = so.read(&tmp) catch 0;
-            if (n == 0) break;
-            try out_buf.appendSlice(tmp[0..n]);
-        }
-    }
-    _ = child.wait() catch {};
-    const out = out_buf.items;
-    if (std.mem.indexOf(u8, out, "already in transaction") == null) return error.MissingNestedBeginError;
-    if (std.mem.indexOf(u8, out, "no active transaction") == null) return error.MissingNoActiveTxnError;
+    const allocator = testing.allocator;
+    const addr = "127.0.0.1:17683";
+
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen-quic", addr, "--disable-auth" }, null);
+    defer server.deinit();
+
+    var client = try util.QuicProtoClient.connect(allocator, addr);
+    defer client.deinit();
+    var hello = try client.hello(allocator, "", "");
+    hello.deinit(allocator);
+
+    const begin_ok = try client.begin(allocator);
+    defer begin_ok.deinit(allocator);
+    try testing.expect(begin_ok.tx_id.len > 0);
+
+    const begin_nested = try client.begin(allocator);
+    defer begin_nested.deinit(allocator);
+    try testing.expect(begin_nested.tx_id.len == 0);
+
+    try testing.expect(try client.commit(allocator));
+    try testing.expect(!try client.rollback(allocator));
 }

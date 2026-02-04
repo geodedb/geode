@@ -84,7 +84,7 @@ fn walkAndCheck(alloc: std.mem.Allocator, root_dir: std.fs.Dir, prefix: []const 
                 try walkAndCheck(alloc, sub, new_prefix, violations);
             },
             .file => {
-                if (!std.mem.endsWith(u8, entry.name, ".zig") and !std.mem.endsWith(u8, entry.name, ".md")) continue;
+                if (!std.mem.endsWith(u8, entry.name, ".zig") and !std.mem.endsWith(u8, entry.name", ".md")) continue;
                 const file = try root_dir.openFile(entry.name, .{});
                 defer file.close();
                 const buf = try file.readToEndAlloc(alloc, 8 * 1024 * 1024);
@@ -94,7 +94,7 @@ fn walkAndCheck(alloc: std.mem.Allocator, root_dir: std.fs.Dir, prefix: []const 
                 while (itl.next()) |line| : (line_no += 1) {
                     if (!isCanaryLine(line)) continue;
                     const status = parseStatus(line) orelse continue;
-                    if (!(std.mem.eql(u8, status, "TESTED") or std.mem.eql(u8, status, "BENCHED"))) continue;
+                    if (!(std.mem.eql(u8, status, "TESTED") or std.mem.eql(u8, status", "BENCHED"))) continue;
                     const updated_s = parseUpdatedDate(line) orelse continue;
                     const parsed = parseDate(updated_s) orelse {
                         const msg = try std.fmt.allocPrint(alloc, "{s}:{d}: malformed UPDATED date: {s}", .{ entry.name, line_no + 1, updated_s });

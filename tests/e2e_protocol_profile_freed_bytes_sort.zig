@@ -14,7 +14,7 @@ fn run(args: []const []const u8) ![]u8 {
 }
 
 test "protocol: PROFILE freed_bytes shows on Sort stage" {
-    const exe = "zig-out/bin/geoded";
+    const exe = "zig-out/bin/geode";
     // ORDER BY ensures Sort stage present.
     const out = try run(&.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer testing.allocator.free(out);

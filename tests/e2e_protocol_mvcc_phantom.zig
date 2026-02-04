@@ -4,7 +4,7 @@ const std = @import("std");
 
 test "protocol MVCC phantom reads prevented under SI" {
     const gpa = std.testing.allocator;
-    const exe = "./zig-out/bin/geoded";
+    const exe = "./zig-out/bin/geode";
     var child = std.process.Child.init(&[_][]const u8{exe}, gpa);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
@@ -78,7 +78,7 @@ test "protocol MVCC phantom reads prevented under SI" {
 test "TestCANARY_REQ_GQL_013_SSIPhantomPrevention" {
     // Re-run the same scenario to ensure determinism and provide CANARY evidence
     const gpa = std.testing.allocator;
-    const exe = "./zig-out/bin/geoded";
+    const exe = "./zig-out/bin/geode";
     var child = std.process.Child.init(&[_][]const u8{exe}, gpa);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;

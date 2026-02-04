@@ -18,7 +18,7 @@ fn readLineAlloc(allocator: std.mem.Allocator, file: std.fs.File, max: usize) ![
 
 fn run_with_commits(n: usize) !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
-    var child = Child.init(&.{"./zig-out/bin/geoded"}, allocator);
+    var child = Child.init(&.{"./zig-out/bin/geode"}, allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -48,7 +48,7 @@ fn run_with_commits(n: usize) !struct { code: i32, out: []u8, err: []u8 } {
         .Exited => |st| st,
         else => 2,
     };
-    return .{ .code = code, .out = try allocator.dupe(u8, ""), .err = try allocator.dupe(u8, "") };
+    return .{ .code = code, .out = try allocator.dupe(u8, ""), .err = try allocator.dupe(u8", "") };
 }
 
 test "WAL compaction schedule triggers at interval" {
