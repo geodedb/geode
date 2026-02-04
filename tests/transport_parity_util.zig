@@ -40,28 +40,10 @@ pub fn runParityRandom(
 
     util.progress("Starting parity server (QUIC: {d}, gRPC: {d})...", .{ quic_port, grpc_port });
 
-    // Merge env with standard test env
-    var merged_env: [8][]const u8 = undefined;
-    var env_count: usize = 0;
-    merged_env[env_count] = util.TestEnv.GEODE_ALLOW_NO_AUTH;
-    env_count += 1;
-    merged_env[env_count] = util.TestEnv.GEODE_DISABLE_AUDIT;
-    env_count += 1;
-    merged_env[env_count] = util.TestEnv.GEODE_TEST_MODE;
-    env_count += 1;
-    if (env) |e| {
-        for (e) |v| {
-            if (env_count < merged_env.len) {
-                merged_env[env_count] = v;
-                env_count += 1;
-            }
-        }
-    }
-
     var server = try util.spawnServer(
         allocator,
         &.{ "./zig-out/bin/geode", "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr },
-        merged_env[0..env_count],
+        env,
     );
     errdefer server.deinit();
 

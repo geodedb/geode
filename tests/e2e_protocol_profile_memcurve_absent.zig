@@ -6,9 +6,7 @@ const util = @import("profile_test_util.zig");
 // (negative counterpart to memcurve presence tests)
 
 test "protocol: PROFILE mem_curve absent by default" {
-    const exe = "./zig-out/bin/geode";
-    const out = try util.runCli(testing.allocator, &.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
+    const out = try util.runProfile(testing.allocator, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1", null);
     defer testing.allocator.free(out);
-    const pl = util.findProfileLine(out) orelse return error.MissingProfile;
-    try testing.expect(std.mem.indexOf(u8, pl, "\"mem_curve\":") == null);
+    try testing.expect(std.mem.indexOf(u8, out, "\"mem_curve\":") == null);
 }

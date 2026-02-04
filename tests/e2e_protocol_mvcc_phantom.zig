@@ -45,9 +45,6 @@ fn runPhantomTest() !void {
     defer allocator.free(addr);
 
     const env = &[_][]const u8{
-        proto.TestEnv.GEODE_ALLOW_NO_AUTH,
-        proto.TestEnv.GEODE_DISABLE_AUDIT,
-        proto.TestEnv.GEODE_TEST_MODE,
         env_kv,
     };
 

@@ -49,12 +49,7 @@ test "protocol: PROFILE adaptive estimates flag when env enabled" {
     var server = try util.spawnServer(
         allocator,
         &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
-        &.{
-            util.TestEnv.GEODE_ALLOW_NO_AUTH,
-            util.TestEnv.GEODE_DISABLE_AUDIT,
-            util.TestEnv.GEODE_TEST_MODE,
-            "GEODE_ADAPT_ESTIMATES=1",
-        },
+        &.{"GEODE_ADAPT_ESTIMATES=1"},
     );
     defer server.deinit();
 

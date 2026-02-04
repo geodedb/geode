@@ -490,7 +490,6 @@ const HttpClient = struct {
 /// S3 backup metrics
 const S3Metrics = struct {
     full_backups: u64,
-    incremental_backups: u64,
     total_bytes_uploaded: u64,
     total_bytes_downloaded: u64,
     upload_errors: u64,
@@ -499,7 +498,6 @@ const S3Metrics = struct {
     fn init() S3Metrics {
         return .{
             .full_backups = 0,
-            .incremental_backups = 0,
             .total_bytes_uploaded = 0,
             .total_bytes_downloaded = 0,
             .upload_errors = 0,
@@ -511,8 +509,6 @@ const S3Metrics = struct {
         _ = duration_ms;
         switch (backup_type) {
             .full => self.full_backups += 1,
-            .incremental => self.incremental_backups += 1,
-            .differential => {},
         }
         self.total_bytes_uploaded += size_bytes;
     }

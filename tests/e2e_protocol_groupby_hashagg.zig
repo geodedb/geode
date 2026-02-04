@@ -72,9 +72,6 @@ test "e2e: HashAgg with memory pressure" {
     util.progress("Starting server on port {d} with memory limit...", .{port});
 
     const env = &[_][]const u8{
-        util.TestEnv.GEODE_ALLOW_NO_AUTH,
-        util.TestEnv.GEODE_DISABLE_AUDIT,
-        util.TestEnv.GEODE_TEST_MODE,
         "GEODE_QUERY_MEM_LIMIT_BYTES=1024",
     };
 

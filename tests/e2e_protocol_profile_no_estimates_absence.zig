@@ -3,13 +3,11 @@ const testing = std.testing;
 const util = @import("profile_test_util.zig");
 
 test "protocol: PROFILE --no-estimates omits planner_estimates" {
-    const exe = "./zig-out/bin/geode";
-    const out = try util.runCli(testing.allocator, &.{ exe, "PROFILE RETURN 1 AS x LIMIT 1", "--no-estimates" });
+    const out = try util.runProfile(testing.allocator, "PROFILE RETURN 1 AS x LIMIT 1", &.{"GEODE_DISABLE_ESTIMATES=1"});
     defer testing.allocator.free(out);
-    const pl = util.findProfileLine(out) orelse return error.MissingProfile;
-    try testing.expect(std.mem.indexOf(u8, pl, "\"planner_estimates\"") == null);
+    try testing.expect(std.mem.indexOf(u8, out, "\"planner_estimates\"") == null);
     // Ensure none of the key fields appear at top-level either
     inline for ([_][]const u8{ "sum_estimate_bytes", "sum_actual_bytes", "count_estimated_ops" }) |k| {
-        try testing.expect(std.mem.indexOf(u8, pl, k) == null);
+        try testing.expect(std.mem.indexOf(u8, out, k) == null);
     }
 }

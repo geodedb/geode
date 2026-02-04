@@ -78,22 +78,9 @@ pub fn formatAddr(allocator: std.mem.Allocator, port: u16) ![]u8 {
 
 /// Standard test environment variables
 pub const TestEnv = struct {
-    /// Allow running without authentication (for testing)
-    pub const GEODE_ALLOW_NO_AUTH = "GEODE_ALLOW_NO_AUTH=1";
-    /// Disable audit logging (for faster tests)
-    pub const GEODE_DISABLE_AUDIT = "GEODE_DISABLE_AUDIT=1";
-    /// Enable test mode
-    pub const GEODE_TEST_MODE = "GEODE_TEST_MODE=1";
-    /// Disable TLS verification for tests
-    pub const GEODE_INSECURE = "GEODE_INSECURE=1";
-
-    /// Get standard test environment variables
+    /// Get standard test environment variables (empty by default).
     pub fn standard() []const []const u8 {
-        return &.{
-            GEODE_ALLOW_NO_AUTH,
-            GEODE_DISABLE_AUDIT,
-            GEODE_TEST_MODE,
-        };
+        return &.{};
     }
 };
 

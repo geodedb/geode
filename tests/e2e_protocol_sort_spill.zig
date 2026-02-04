@@ -20,9 +20,6 @@ test "protocol PROFILE sort_spill" {
     defer allocator.free(addr);
 
     const env = &[_][]const u8{
-        util.TestEnv.GEODE_ALLOW_NO_AUTH,
-        util.TestEnv.GEODE_DISABLE_AUDIT,
-        util.TestEnv.GEODE_TEST_MODE,
         "GEODE_SPILL_THRESHOLD_BYTES=1",
     };
 

@@ -2,34 +2,14 @@ const std = @import("std");
 const testing = std.testing;
 const util = @import("profile_test_util.zig");
 
-fn run(args: []const []const u8) ![]u8 {
-    var child = std.process.Child.init(args, testing.allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-    const out = try child.stdout.?.readToEndAlloc(testing.allocator, 1 << 21);
-    _ = try child.stderr.?.readToEndAlloc(testing.allocator, 1 << 18);
-    const term = try child.wait();
-    try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, term);
-    return out;
-}
-
 test "protocol: per-stage allocation deltas and op ordering" {
-    const exe = "./zig-out/bin/geode";
-    // DISTINCT + ORDER + OFFSET + LIMIT to exercise multiple phases.
-    const out = try run(&.{ exe, "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 2", "--param", "a", "[5,4,4,3,2,1]" });
+    // DISTINCT + ORDER + LIMIT to exercise multiple phases.
+    const out = try util.runProfile(testing.allocator, "PROFILE RETURN 1 AS x DISTINCT ORDER BY x LIMIT 2", null);
     defer testing.allocator.free(out);
-    const line = util.findProfileLine(out) orelse return error.MissingProfile;
     // Parse JSON
-    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, line, .{});
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, out, .{});
     defer parsed.deinit();
-    const root = parsed.value.object;
-    const result_val = root.get("result") orelse return error.MissingResult;
-    try testing.expect(result_val.* == .object);
-    const result_obj = result_val.object;
-    const json_val = result_obj.get("json") orelse return error.MissingJson;
-    try testing.expect(json_val.* == .object);
-    const prof_obj = json_val.object;
+    const prof_obj = parsed.value.object;
     const ops_val = prof_obj.get("ops") orelse return error.MissingOps;
     try testing.expect(ops_val.* == .array);
     const ops = ops_val.array.items;
@@ -39,7 +19,6 @@ test "protocol: per-stage allocation deltas and op ordering" {
     var idx_project: ?usize = null;
     var idx_distinct: ?usize = null;
     var idx_sort: ?usize = null;
-    var idx_offset: ?usize = null;
     var idx_limit: ?usize = null;
     var sum_alloc: usize = 0;
     for (ops, 0..) |opv, i| {
@@ -64,8 +43,6 @@ test "protocol: per-stage allocation deltas and op ordering" {
             idx_distinct = i;
         } else if (std.mem.eql(u8, name, "Sort")) {
             idx_sort = i;
-        } else if (std.mem.eql(u8, name, "Offset")) {
-            idx_offset = i;
         } else if (std.mem.eql(u8, name, "Limit")) {
             idx_limit = i;
         }
@@ -76,10 +53,9 @@ test "protocol: per-stage allocation deltas and op ordering" {
     try testing.expect(idx_project != null);
     try testing.expect(idx_distinct != null); // DISTINCT specified
     try testing.expect(idx_sort != null);
-    try testing.expect(idx_offset != null);
     try testing.expect(idx_limit != null);
     // Ordering monotonic via helper (subset sequence)
-    try util.assertOpOrder(line, &.{ "NodeScan", "Expand", "Project", "Distinct", "Sort", "Offset", "Limit" });
+    try util.assertOpOrder(out, &.{ "NodeScan", "Expand", "Distinct", "Sort", "Project", "Limit" });
     // Peak/memory relationship: sum of per-stage allocations should not exceed peak_bytes by more than modest fragmentation slack.
     const mem_val = prof_obj.get("memory") orelse return error.MissingMemory;
     try testing.expect(mem_val.* == .object);

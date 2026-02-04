@@ -13,9 +13,6 @@ test "protocol: CDC diagnostics protobuf roundtrip" {
 
     // Use random port with CDC enabled
     const env = &[_][]const u8{
-        util.TestEnv.GEODE_ALLOW_NO_AUTH,
-        util.TestEnv.GEODE_DISABLE_AUDIT,
-        util.TestEnv.GEODE_TEST_MODE,
         "GEODE_CDC_ENABLE=1",
     };
 

@@ -1,4 +1,25 @@
 const std = @import("std");
+const proto = @import("proto_test_util.zig");
+
+pub fn runProfile(allocator: std.mem.Allocator, query: []const u8, env: ?[]const []const u8) ![]u8 {
+    const port = try proto.getRandomPort();
+    const addr = try proto.formatAddr(allocator, port);
+    errdefer allocator.free(addr);
+
+    var server = try proto.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, env);
+    errdefer server.deinit();
+    try proto.waitForServerReady(allocator, addr, 10000);
+
+    var client = try proto.QuicProtoClient.connect(allocator, addr);
+    defer client.deinit();
+    var hello = try client.hello(allocator, proto.defaultUsername(), proto.defaultPassword());
+    hello.deinit(allocator);
+
+    const json = try client.executeProfileJson(allocator, query);
+    server.deinit();
+    allocator.free(addr);
+    return json;
+}
 
 pub fn findProfileLine(out: []const u8) ?[]const u8 {
     // New JSON output embeds profile under "profile"

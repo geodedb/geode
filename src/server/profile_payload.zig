@@ -205,7 +205,7 @@ pub fn buildProfilePayload(
     };
 
     const spill_active = opts.spill_threshold > 0 and peak_bytes > opts.spill_threshold;
-    var spill_reason: ?[]const u8 = if (spill_active) "threshold" else null;
+    const spill_reason: ?[]const u8 = if (spill_active) "threshold" else null;
     const spill_sort: u64 = if (spill_active and traits.ordered) 1 else 0;
     const spill_distinct: u64 = if (spill_active and traits.distinct) 1 else 0;
     const spill_union: u64 = if (spill_active and traits.has_union) 1 else 0;
@@ -221,7 +221,7 @@ pub fn buildProfilePayload(
     if (spill_reason) |reason| {
         spills.spill_reason = try allocator.dupe(u8, reason);
         spills.peak_bytes_at_spill = peak_bytes;
-        if (firstSpillIndex(ops.items, .{ .sort = spill_sort, .distinct = spill_distinct, .union = spill_union })) |first_idx| {
+        if (firstSpillIndex(ops.items, .{ .sort = spill_sort, .distinct = spill_distinct, .set_union = spill_union })) |first_idx| {
             spills.first_spill_op_index = @intCast(first_idx);
         }
     }
@@ -592,7 +592,7 @@ fn buildPeakContributors(
 const SpillCounts = struct {
     sort: u64,
     distinct: u64,
-    union: u64,
+    set_union: u64,
 };
 
 fn firstSpillIndex(ops: []const OpSpec, spills: SpillCounts) ?usize {
@@ -604,7 +604,7 @@ fn firstSpillIndex(ops: []const OpSpec, spills: SpillCounts) ?usize {
     }
     if (spills.distinct > 0 and distinct_idx != null) return distinct_idx;
     if (spills.sort > 0 and sort_idx != null) return sort_idx;
-    if (spills.union > 0) {
+    if (spills.set_union > 0) {
         for (ops, 0..) |op, i| if (std.mem.eql(u8, op.name, "SetOpUnion")) return i;
     }
     return null;
