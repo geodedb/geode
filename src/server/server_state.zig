@@ -269,8 +269,6 @@ pub const ServerState = struct {
     spill_union: usize = 0,
     spill_hashagg: usize = 0,
 
-    // WAL integration (phase: skip ratio exposure) — optional pointer injected during server bootstrap.
-    wal_ptr: ?*anyopaque = null,
     // Storage corruption state flags captured at startup (e.g. checksum mismatch on persisted page load).
     storage_checksum_error: bool = false,
     // Original GQL text (used heuristically for NodeIndexScan selection in PROFILE).

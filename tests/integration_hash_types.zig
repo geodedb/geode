@@ -1,5 +1,6 @@
 const std = @import("std");
 const geode = @import("geode");
+const heap = @import("../src/storage/heap.zig");
 
 test "CANARY blake2b hash types integration" {
     const allocator = std.testing.allocator;
@@ -11,7 +12,7 @@ test "CANARY blake2b hash types integration" {
         defer allocator.free(h.digest);
 
         try std.testing.expectEqual(@as(usize, 32), h.digest.len);
-        try std.testing.expectEqual(geode.storage.heap.HashAlg.BLAKE2B_256, h.alg);
+        try std.testing.expectEqual(heap.HashAlg.BLAKE2B_256, h.alg);
         std.debug.print("CANARY blake2b-256 integrated successfully\n", .{});
     }
 
@@ -21,7 +22,7 @@ test "CANARY blake2b hash types integration" {
         defer allocator.free(h.digest);
 
         try std.testing.expectEqual(@as(usize, 64), h.digest.len);
-        try std.testing.expectEqual(geode.storage.heap.HashAlg.BLAKE2B_512, h.alg);
+        try std.testing.expectEqual(heap.HashAlg.BLAKE2B_512, h.alg);
         std.debug.print("CANARY blake2b-512 integrated successfully\n", .{});
     }
 }
@@ -34,7 +35,7 @@ test "CANARY blake2s hash type integration" {
     defer allocator.free(h.digest);
 
     try std.testing.expectEqual(@as(usize, 32), h.digest.len);
-    try std.testing.expectEqual(geode.storage.heap.HashAlg.BLAKE2S_256, h.alg);
+    try std.testing.expectEqual(heap.HashAlg.BLAKE2S_256, h.alg);
     std.debug.print("CANARY blake2s-256 integrated successfully\n", .{});
 }
 
@@ -50,7 +51,7 @@ test "CANARY argon2id hash type integration" {
     defer if (h.salt) |s| allocator.free(s);
 
     try std.testing.expectEqual(@as(usize, 32), h.digest.len);
-    try std.testing.expectEqual(geode.storage.heap.HashAlg.ARGON2ID, h.alg);
+    try std.testing.expectEqual(heap.HashAlg.ARGON2ID, h.alg);
     try std.testing.expect(h.salt != null);
     try std.testing.expect(h.params != null);
     std.debug.print("CANARY argon2id integrated successfully with salt\n", .{});
@@ -82,10 +83,10 @@ test "CANARY blake2 KDF functions integration" {
 test "CANARY hash algorithm name parsing" {
     const hash_module = geode.types.hash;
 
-    try std.testing.expectEqual(geode.storage.heap.HashAlg.BLAKE2B_256, try hash_module.parseAlg("BLAKE2b-256"));
-    try std.testing.expectEqual(geode.storage.heap.HashAlg.BLAKE2B_512, try hash_module.parseAlg("BLAKE2b-512"));
-    try std.testing.expectEqual(geode.storage.heap.HashAlg.BLAKE2S_256, try hash_module.parseAlg("BLAKE2s-256"));
-    try std.testing.expectEqual(geode.storage.heap.HashAlg.ARGON2ID, try hash_module.parseAlg("Argon2id"));
+    try std.testing.expectEqual(heap.HashAlg.BLAKE2B_256, try hash_module.parseAlg("BLAKE2b-256"));
+    try std.testing.expectEqual(heap.HashAlg.BLAKE2B_512, try hash_module.parseAlg("BLAKE2b-512"));
+    try std.testing.expectEqual(heap.HashAlg.BLAKE2S_256, try hash_module.parseAlg("BLAKE2s-256"));
+    try std.testing.expectEqual(heap.HashAlg.ARGON2ID, try hash_module.parseAlg("Argon2id"));
 
     std.debug.print("CANARY hash algorithm parsing integrated successfully\n", .{});
 }

@@ -3,9 +3,8 @@ const parser = @import("parser.zig");
 const planner = @import("../planner.zig");
 const exec = @import("../exec.zig");
 const txn = @import("../transactions/manager.zig");
-const storage_mod = @import("storage_page_manager");
-const interface = storage_mod.interface;
-const storage = interface; // Align with existing usage
+const graph_store = @import("../graph_store.zig");
+const json = std.json;
 const rls = @import("rls");
 const diagnostics = @import("../diagnostics.zig");
 
@@ -596,21 +595,21 @@ pub const WhereEngine = struct {
 // DML Operations
 pub const DMLEngine = struct {
     allocator: std.mem.Allocator,
-    storage_engine: *storage.StorageEngine,
+    graph: *graph_store.GraphStore,
     txn_manager: *txn.TransactionManager,
     rls_engine: *rls.RLSEngine,
     audit: *rls.AuditLogger,
 
     pub fn init(
         allocator: std.mem.Allocator,
-        storage: *storage.StorageEngine,
+        graph: *graph_store.GraphStore,
         txn_mgr: *txn.TransactionManager,
         rls: *rls.RLSEngine,
         audit: *rls.AuditLogger,
     ) DMLEngine {
         return .{
             .allocator = allocator,
-            .storage_engine = storage,
+            .graph = graph,
             .txn_manager = txn_mgr,
             .rls_engine = rls,
             .audit = audit,
@@ -618,6 +617,7 @@ pub const DMLEngine = struct {
     }
 
     pub fn insertNode(self: *DMLEngine, tx: *txn.Transaction, label: []const u8, props: MatchEngine.PropertyMap) !MatchEngine.NodeId {
+        _ = tx;
         // Check RLS policies for INSERT
         const policies = try self.rls_engine.getPoliciesForOperation(.insert, "node", label);
 
@@ -631,8 +631,16 @@ pub const DMLEngine = struct {
             }
         }
 
-        // Perform the insert
-        const node_id = try self.storage_engine.createNode(tx, label, props);
+        // Perform the insert (GraphStore)
+        const labels = [_][]const u8{label};
+        const node_id = try self.graph.createNode(&labels);
+
+        var it = props.iterator();
+        while (it.next()) |entry| {
+            const prop_val = try self.matchValueToPropertyValue(entry.value_ptr.*);
+            defer self.freeTempPropertyValue(prop_val);
+            try self.graph.setNodeProperty(node_id, entry.key_ptr.*, prop_val);
+        }
 
         // Log successful operation
         try self.audit.logSuccess(.insert, "node", label, node_id);
@@ -648,6 +656,7 @@ pub const DMLEngine = struct {
         label: []const u8,
         props: MatchEngine.PropertyMap,
     ) !MatchEngine.EdgeId {
+        _ = tx;
         // Check RLS policies
         const policies = try self.rls_engine.getPoliciesForOperation(.insert, "edge", label);
 
@@ -660,15 +669,22 @@ pub const DMLEngine = struct {
             }
         }
 
-        const edge_id = try self.storage_engine.createEdge(tx, src, dst, label, props);
+        const edge_id = try self.graph.createEdge(src, dst, label);
+        var it = props.iterator();
+        while (it.next()) |entry| {
+            const prop_val = try self.matchValueToPropertyValue(entry.value_ptr.*);
+            defer self.freeTempPropertyValue(prop_val);
+            try self.graph.setEdgeProperty(edge_id, entry.key_ptr.*, prop_val);
+        }
         try self.audit.logSuccess(.insert, "edge", label, edge_id);
 
         return edge_id;
     }
 
     pub fn updateProps(self: *DMLEngine, tx: *txn.Transaction, id: MatchEngine.GraphId, patch: MatchEngine.PropertyPatch) !void {
+        _ = tx;
         // Get entity type and label
-        const entity_info = try self.storage_engine.getEntityInfo(tx, id);
+        const entity_info = try self.getEntityInfo(id);
 
         // Check RLS policies
         const policies = try self.rls_engine.getPoliciesForOperation(
@@ -678,7 +694,8 @@ pub const DMLEngine = struct {
         );
 
         // Get current properties for RLS check
-        const current_props = try self.storage_engine.getProperties(tx, id);
+        var current_props = try self.getProperties(id);
+        defer self.freePropertyMap(&current_props);
 
         for (policies) |policy| {
             if (policy.using_expr) |expr| {
@@ -691,11 +708,13 @@ pub const DMLEngine = struct {
 
             if (policy.check_expr) |expr| {
                 // Check if new values pass CHECK expression
-                var new_props = try current_props.clone();
+                var new_props = try self.clonePropertyMap(current_props);
+                defer self.freePropertyMap(&new_props);
                 if (patch.set) |set_props| {
                     var it = set_props.iterator();
                     while (it.next()) |entry| {
-                        try new_props.put(entry.key_ptr.*, entry.value_ptr.*);
+                        const copied = try self.cloneMatchValue(entry.value_ptr.*);
+                        try new_props.put(entry.key_ptr.*, copied);
                     }
                 }
                 if (patch.unset) |unset_keys| {
@@ -712,12 +731,31 @@ pub const DMLEngine = struct {
         }
 
         // Perform the update
-        try self.storage_engine.updateProperties(tx, id, patch);
+        if (patch.set) |set_props| {
+            var it = set_props.iterator();
+            while (it.next()) |entry| {
+                const prop_val = try self.matchValueToPropertyValue(entry.value_ptr.*);
+                defer self.freeTempPropertyValue(prop_val);
+                switch (id) {
+                    .node => |nid| try self.graph.setNodeProperty(nid, entry.key_ptr.*, prop_val),
+                    .edge => |eid| try self.graph.setEdgeProperty(eid, entry.key_ptr.*, prop_val),
+                }
+            }
+        }
+        if (patch.unset) |unset_keys| {
+            for (unset_keys) |key| {
+                switch (id) {
+                    .node => |nid| self.graph.removeNodeProperty(nid, key),
+                    .edge => |eid| self.graph.removeEdgeProperty(eid, key),
+                }
+            }
+        }
         try self.audit.logSuccess(.update, entity_info.entity_type, entity_info.label, id);
     }
 
     pub fn deleteEntity(self: *DMLEngine, tx: *txn.Transaction, id: MatchEngine.GraphId) !void {
-        const entity_info = try self.storage_engine.getEntityInfo(tx, id);
+        _ = tx;
+        const entity_info = try self.getEntityInfo(id);
 
         // Check RLS policies
         const policies = try self.rls_engine.getPoliciesForOperation(
@@ -726,7 +764,8 @@ pub const DMLEngine = struct {
             entity_info.label,
         );
 
-        const current_props = try self.storage_engine.getProperties(tx, id);
+        var current_props = try self.getProperties(id);
+        defer self.freePropertyMap(&current_props);
 
         for (policies) |policy| {
             if (policy.using_expr) |expr| {
@@ -738,7 +777,10 @@ pub const DMLEngine = struct {
         }
 
         // Perform the delete
-        try self.storage_engine.deleteEntity(tx, id);
+        switch (id) {
+            .node => |nid| self.graph.deleteNode(nid),
+            .edge => |eid| self.graph.deleteEdge(eid),
+        }
         try self.audit.logSuccess(.delete, entity_info.entity_type, entity_info.label, id);
     }
 
@@ -750,7 +792,184 @@ pub const DMLEngine = struct {
         // In real implementation, this would evaluate the expression against properties
         return true;
     }
+
+    const EntityInfo = struct {
+        entity_type: []const u8,
+        label: []const u8,
+    };
+
+    fn getEntityInfo(self: *DMLEngine, id: MatchEngine.GraphId) !EntityInfo {
+        _ = self;
+        return switch (id) {
+            .node => |nid| blk: {
+                const node = self.graph.getNodePtr(nid) orelse return error.EntityNotFound;
+                const label = if (node.labels.len > 0) node.labels[0] else "";
+                break :blk EntityInfo{ .entity_type = "node", .label = label };
+            },
+            .edge => |eid| blk: {
+                const edge = self.graph.getEdgePtr(eid) orelse return error.EntityNotFound;
+                break :blk EntityInfo{ .entity_type = "edge", .label = edge.label };
+            },
+        };
+    }
+
+    fn getProperties(self: *DMLEngine, id: MatchEngine.GraphId) !MatchEngine.PropertyMap {
+        var map = MatchEngine.PropertyMap.init(self.allocator);
+        switch (id) {
+            .node => |nid| {
+                const node = self.graph.getNodePtr(nid) orelse return error.EntityNotFound;
+                var it = node.properties.iterator();
+                while (it.next()) |entry| {
+                    const key = try self.allocator.dupe(u8, entry.key_ptr.*);
+                    const val = try self.propertyValueToMatchValue(entry.value_ptr.*);
+                    try map.put(key, val);
+                }
+            },
+            .edge => |eid| {
+                const edge = self.graph.getEdgePtr(eid) orelse return error.EntityNotFound;
+                var it = edge.properties.iterator();
+                while (it.next()) |entry| {
+                    const key = try self.allocator.dupe(u8, entry.key_ptr.*);
+                    const val = try self.propertyValueToMatchValue(entry.value_ptr.*);
+                    try map.put(key, val);
+                }
+            },
+        }
+        return map;
+    }
+
+    fn clonePropertyMap(self: *DMLEngine, props: MatchEngine.PropertyMap) !MatchEngine.PropertyMap {
+        var map = MatchEngine.PropertyMap.init(self.allocator);
+        var it = props.iterator();
+        while (it.next()) |entry| {
+            const key = try self.allocator.dupe(u8, entry.key_ptr.*);
+            const val = try self.cloneMatchValue(entry.value_ptr.*);
+            try map.put(key, val);
+        }
+        return map;
+    }
+
+    fn cloneMatchValue(self: *DMLEngine, value: MatchEngine.Value) !MatchEngine.Value {
+        return switch (value) {
+            .string => |s| .{ .string = try self.allocator.dupe(u8, s) },
+            .list => |vals| blk: {
+                var out = try self.allocator.alloc(MatchEngine.Value, vals.len);
+                for (vals, 0..) |v, idx| {
+                    out[idx] = try self.cloneMatchValue(v);
+                }
+                break :blk .{ .list = out };
+            },
+            .map => |m| blk: {
+                var cloned = try self.clonePropertyMap(m);
+                break :blk .{ .map = cloned };
+            },
+            else => value,
+        };
+    }
+
+    fn freePropertyMap(self: *DMLEngine, map: *MatchEngine.PropertyMap) void {
+        var it = map.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.freeMatchValue(entry.value_ptr.*);
+        }
+        map.deinit();
+    }
+
+    fn freeMatchValue(self: *DMLEngine, value: MatchEngine.Value) void {
+        switch (value) {
+            .string => |s| self.allocator.free(s),
+            .list => |vals| {
+                for (vals) |v| self.freeMatchValue(v);
+                self.allocator.free(vals);
+            },
+            .map => |m| {
+                var tmp = m;
+                self.freePropertyMap(&tmp);
+            },
+            else => {},
+        }
+    }
+
+    fn matchValueToPropertyValue(self: *DMLEngine, value: MatchEngine.Value) !graph_store.PropertyValue {
+        _ = self;
+        return switch (value) {
+            .null => graph_store.PropertyValue{ .Null = {} },
+            .bool => |b| graph_store.PropertyValue{ .Bool = b },
+            .int => |i| graph_store.PropertyValue{ .Int = i },
+            .float => |f| graph_store.PropertyValue{ .Float = f },
+            .string => |s| graph_store.PropertyValue{ .String = try self.allocator.dupe(u8, s) },
+            .list, .map => |*_| blk: {
+                const encoded = try matchValueToJson(self.allocator, value);
+                break :blk graph_store.PropertyValue{ .ExtValue = .{ .Json = encoded } };
+            },
+        };
+    }
+
+    fn propertyValueToMatchValue(self: *DMLEngine, value: graph_store.PropertyValue) !MatchEngine.Value {
+        return switch (value) {
+            .Null => .{ .null = {} },
+            .Bool => |b| .{ .bool = b },
+            .Int => |i| .{ .int = i },
+            .Float => |f| .{ .float = f },
+            .String => |s| .{ .string = try self.allocator.dupe(u8, s) },
+            .Decimal => |d| .{ .float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @as(f64, @floatFromInt(d.scale))) },
+            .ExtValue => |ext| switch (ext) {
+                .Json => |js| .{ .string = try self.allocator.dupe(u8, js) },
+                else => .{ .null = {} },
+            },
+        };
+    }
+
+    fn freeTempPropertyValue(self: *DMLEngine, value: graph_store.PropertyValue) void {
+        switch (value) {
+            .String => |s| self.allocator.free(s),
+            .ExtValue => |ext| switch (ext) {
+                .Json => |js| self.allocator.free(js),
+                else => {},
+            },
+            else => {},
+        }
+    }
 };
+
+fn matchValueToJson(allocator: std.mem.Allocator, value: MatchEngine.Value) ![]u8 {
+    var buffer = std.ArrayList(u8).init(allocator);
+    errdefer buffer.deinit(allocator);
+    try encodeMatchValueToStream(value, buffer.writer());
+    return buffer.toOwnedSlice();
+}
+
+fn encodeMatchValueToStream(value: MatchEngine.Value, writer: anytype) !void {
+    switch (value) {
+        .null => try writer.writeAll("null"),
+        .bool => |b| try writer.writeAll(if (b) "true" else "false"),
+        .int => |i| try writer.print("{}", .{i}),
+        .float => |f| try writer.print("{d}", .{f}),
+        .string => |s| try json.stringify(s, .{}, writer),
+        .list => |vals| {
+            try writer.writeAll("[");
+            for (vals, 0..) |v, idx| {
+                if (idx > 0) try writer.writeAll(",");
+                try encodeMatchValueToStream(v, writer);
+            }
+            try writer.writeAll("]");
+        },
+        .map => |m| {
+            try writer.writeAll("{");
+            var it = m.iterator();
+            var first = true;
+            while (it.next()) |entry| {
+                if (!first) try writer.writeAll(",");
+                first = false;
+                try json.stringify(entry.key_ptr.*, .{}, writer);
+                try writer.writeAll(":");
+                try encodeMatchValueToStream(entry.value_ptr.*, writer);
+            }
+            try writer.writeAll("}");
+        },
+    }
+}
 
 test "complex MATCH patterns" {
     // Test nested OPTIONAL and filtered variable-length paths

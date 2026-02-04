@@ -29,8 +29,23 @@ pub const ServerConfig = struct {
     // Query behavior
     order_keys_mode_expr: bool = false, // ident-only by default; env/flag can enable
 
-    // Catalog
-    catalog_create_name: ?[]const u8 = null,
+    // Track which fields were allocated (vs static strings)
+    _allocated_listen_quic: bool = false,
+    _allocated_listen_grpc: bool = false,
+    _allocated_cert_path: bool = false,
+    _allocated_key_path: bool = false,
+    _allocated_data_dir: bool = false,
+    _allocated_log_level_arg: bool = false,
+
+    /// Free all allocated memory
+    pub fn deinit(self: *ServerConfig, allocator: std.mem.Allocator) void {
+        if (self._allocated_listen_quic) if (self.listen_quic) |s| allocator.free(s);
+        if (self._allocated_listen_grpc) if (self.listen_grpc) |s| allocator.free(s);
+        if (self._allocated_cert_path) if (self.cert_path) |s| allocator.free(s);
+        if (self._allocated_key_path) if (self.key_path) |s| allocator.free(s);
+        if (self._allocated_data_dir) if (self.data_dir) |s| allocator.free(s);
+        if (self._allocated_log_level_arg) if (self.log_level_arg) |s| allocator.free(s);
+    }
 };
 
 /// Get XDG-compliant config directory path for Geode
@@ -196,18 +211,23 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
             ai += 1;
         } else if ((std.mem.eql(u8, arg, "--listen-quic") or std.mem.eql(u8, arg, "--listen")) and ai + 1 < args.len) {
             config.listen_quic = try allocator.dupe(u8, args[ai + 1]);
+            config._allocated_listen_quic = true;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--listen-grpc") and ai + 1 < args.len) {
             config.listen_grpc = try allocator.dupe(u8, args[ai + 1]);
+            config._allocated_listen_grpc = true;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--cert") and ai + 1 < args.len) {
             config.cert_path = try allocator.dupe(u8, args[ai + 1]);
+            config._allocated_cert_path = true;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--key") and ai + 1 < args.len) {
             config.key_path = try allocator.dupe(u8, args[ai + 1]);
+            config._allocated_key_path = true;
             ai += 1;
         } else if ((std.mem.eql(u8, arg, "--data_dir") or std.mem.eql(u8, arg, "--data-dir")) and ai + 1 < args.len) {
             config.data_dir = try allocator.dupe(u8, args[ai + 1]);
+            config._allocated_data_dir = true;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--order-keys") and ai + 1 < args.len) {
             const mode = args[ai + 1];
@@ -219,9 +239,7 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--log-level") and ai + 1 < args.len) {
             config.log_level_arg = try allocator.dupe(u8, args[ai + 1]);
-            ai += 1;
-        } else if (std.mem.eql(u8, arg, "--catalog-create") and ai + 1 < args.len) {
-            config.catalog_create_name = try allocator.dupe(u8, args[ai + 1]);
+            config._allocated_log_level_arg = true;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--config") or std.mem.eql(u8, arg, "-c")) {
             // Already processed in first pass, skip value
@@ -242,18 +260,23 @@ pub fn resolveCertPaths(allocator: std.mem.Allocator, config: *ServerConfig) !st
     if (config.listen_quic != null) {
         if (config.cert_path == null or config.key_path == null) {
             // Use default paths or fallback to /tmp
-            const default_cert = if (config.data_dir) |dir|
-                try std.fmt.allocPrint(allocator, "{s}/server.crt", .{dir})
-            else
-                "/tmp/geode-server.crt";
+            if (config.cert_path == null) {
+                if (config.data_dir) |dir| {
+                    config.cert_path = try std.fmt.allocPrint(allocator, "{s}/server.crt", .{dir});
+                    config._allocated_cert_path = true;
+                } else {
+                    config.cert_path = "/tmp/geode-server.crt";
+                }
+            }
 
-            const default_key = if (config.data_dir) |dir|
-                try std.fmt.allocPrint(allocator, "{s}/server.key", .{dir})
-            else
-                "/tmp/geode-server.key";
-
-            config.cert_path = config.cert_path orelse default_cert;
-            config.key_path = config.key_path orelse default_key;
+            if (config.key_path == null) {
+                if (config.data_dir) |dir| {
+                    config.key_path = try std.fmt.allocPrint(allocator, "{s}/server.key", .{dir});
+                    config._allocated_key_path = true;
+                } else {
+                    config.key_path = "/tmp/geode-server.key";
+                }
+            }
         }
     } else {
         // For non-QUIC, use dummy paths if not specified

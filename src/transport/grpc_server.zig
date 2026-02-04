@@ -16,7 +16,6 @@ const txn_undo_log = geode.txn_undo_log;
 const user_mgmt = geode.user_management;
 const gql_ast = geode.gql.ast;
 const gql_print = geode.printer;
-const wal_manager = geode.wal_manager;
 const geode_auth = @import("geode_auth");
 
 const logging = @import("logging");
@@ -29,7 +28,6 @@ pub const GrpcConfig = struct {
     spill_union: usize = 0,
     spill_threshold: usize = 0,
     storage_checksum_error: bool = false,
-    wal_skip_ratio_override: ?f64 = null,
     disable_estimates: bool = false,
     compact_profile: bool = false,
     memcurve_profile: bool = false,
@@ -111,7 +109,6 @@ const SessionStore = struct {
 var g_session_store: ?*SessionStore = null;
 
 fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_state.ServerState {
-    const wal_mgr = try wal_manager.getOrCreateWalManager(allocator);
     const state = try allocator.create(server_state.ServerState);
     state.* = .{ .allocator = allocator };
     state.exec_session = execution.SessionState.init(allocator);
@@ -124,7 +121,6 @@ fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_st
     state.catalog_schemas = std.HashMap([]const u8, server_state.CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
     state.catalog_graphs = std.HashMap([]const u8, server_state.CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
     state.graph_types = std.HashMap([]const u8, server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
-    state.wal_ptr = @ptrCast(wal_mgr);
     state.spill_sort = config.spill_sort;
     state.spill_distinct = config.spill_distinct;
     state.spill_union = config.spill_union;
@@ -664,14 +660,6 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                         try appendFlagIfMissing(allocator, &exec_result.flags, flag);
                     }
 
-                    var wal_skip_ratio: f64 = 0.0;
-                    if (store.config.wal_skip_ratio_override) |override| {
-                        wal_skip_ratio = override;
-                    } else if (state.wal_ptr) |ptr| {
-                        const wal_mgr: *wal_manager.WalManager = @ptrCast(@alignCast(ptr));
-                        wal_skip_ratio = wal_mgr.wal.skipRatio();
-                    }
-
                     const profile_json = try profile_payload.buildProfileJson(allocator, traits, exec_result.rows.len, .{
                         .compact = store.config.compact_profile,
                         .include_mem_curve = store.config.memcurve_profile,
@@ -681,7 +669,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                         .spill_union = state.spill_union,
                         .spill_hashagg = state.spill_hashagg,
                         .spill_threshold = state.query_mem_limit_bytes,
-                        .wal_skip_ratio = wal_skip_ratio,
+                        .wal_skip_ratio = -1,
                         .committed_txns = state.global_commit_ts,
                         .flagger_findings = exec_result.flags.items,
                         .union_part_count = analysis.union_part_count,

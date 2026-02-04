@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const geode = @import("geode");
+const graph_store = geode.graph_store;
 // Import backup types directly from storage/backup module
 const backup_types = @import("storage/backup");
 // QUIC transport for remote backup operations
@@ -155,8 +156,7 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "\n" ++
                 "Options:\n" ++
                 "  --output <path>        Backup output file (required)\n" ++
-                "  --type <type>          Backup type: full|incremental (default: full)\n" ++
-                "  --parent <id>          Parent backup ID (for incremental)\n" ++
+                "  --type <type>          Backup type: full (default: full)\n" ++
                 "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
                 "  --compress             Compress backup file\n" ++
                 "  --insecure             Skip TLS certificate verification\n" ++
@@ -171,7 +171,6 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "\n" ++
                 "Examples:\n" ++
                 "  geode backup create --type full --output ./backup.gz --compress\n" ++
-                "  geode backup create --type incremental --output ./incr.gz --parent abc123\n" ++
                 "  geode backup create --output ./backup.gz --insecure\n" ++
                 "  geode backup create --output ./backup.gz --ca-cert /etc/ssl/ca.crt\n" ++
                 "\n", .{});
@@ -191,12 +190,8 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
             i += 1;
             backup_type = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--parent")) {
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --parent requires a value\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
-            i += 1;
-            parent_id = argv[i];
+            std.debug.print("Error: incremental backups are not supported with GraphStore\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
         } else if (std.mem.eql(u8, argv[i], "--server")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --server requires a value\n", .{});
@@ -244,8 +239,8 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
     }
 
     // Validate type
-    if (!std.mem.eql(u8, backup_type, "full") and !std.mem.eql(u8, backup_type, "incremental")) {
-        std.debug.print("Error: --type must be 'full' or 'incremental'\n", .{});
+    if (!std.mem.eql(u8, backup_type, "full")) {
+        std.debug.print("Error: only full backups are supported with GraphStore\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
@@ -558,19 +553,8 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                     std.debug.print("  timestamp:     Unknown\n", .{});
                 }
 
-                // Try to read catalog size (next 8 bytes after header)
-                var catalog_size_buf: [8]u8 = undefined;
-                // GAP-0221 FIX: Log read errors instead of silent catch 0
-                const catalog_bytes = file.readAll(&catalog_size_buf) catch |err| blk: {
-                    log.debug("Failed to read catalog size", &.{
-                        Attr.err("error", err),
-                    });
-                    break :blk 0;
-                };
-                if (catalog_bytes == 8) {
-                    const catalog_size = std.mem.readInt(u64, &catalog_size_buf, .little);
-                    std.debug.print("  Catalog Size:  {} bytes\n", .{catalog_size});
-                }
+                std.debug.print("  Payload Size:  {} bytes\n", .{header.payload_len});
+                std.debug.print("  Checksum:      0x{x}\n", .{header.checksum});
             } else {
                 // Not a Geode format backup, show generic info
                 std.debug.print("  Format:        Unknown (not Geode backup format)\n", .{});
@@ -1627,425 +1611,36 @@ fn executeBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u
 // Local directory backup - reads from Geode data directory when server not available
 fn executeLocalDirectoryBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, compress: bool) !void {
     _ = parent_id;
-    _ = mode;
-
-    // Look for Geode data directory in common locations
-    const data_dirs = [_][]const u8{
-        "./data",
-        "./geode_data",
-        "/var/lib/geode/data",
-        std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch "./data",
-    };
-
-    var data_dir: ?std.fs.Dir = null;
-    var data_path: []const u8 = "";
-    for (data_dirs) |dir_path| {
-        if (std.fs.cwd().openDir(dir_path, .{ .iterate = true })) |dir| {
-            data_dir = dir;
-            data_path = dir_path;
-            break;
-        } else |_| {
-            continue;
-        }
+    if (!std.mem.eql(u8, mode, "full")) {
+        return error.UnsupportedBackupMode;
     }
 
-    if (data_dir == null) {
-        std.debug.print("Error: No Geode data directory found. Checked: ", .{});
-        for (data_dirs) |dir_path| {
-            std.debug.print("{s} ", .{dir_path});
-        }
-        std.debug.print("\n", .{});
-        return error.NoDataDirectory;
-    }
-    defer data_dir.?.close();
-
-    std.debug.print("Found data directory: {s}\n", .{data_path});
-
-    // Create backup file
-    const file = try std.fs.cwd().createFile(dest, .{});
-    defer file.close();
-
-    var size_bytes: u64 = 0;
-    const timestamp = std.time.milliTimestamp();
-
-    // Write backup header
-    const header = BackupHeader{
-        .magic = BACKUP_MAGIC,
-        .version = BACKUP_VERSION,
-        .backup_type = .full,
-        .timestamp = timestamp,
-        .compression = if (compress) .zstd else .none,
-    };
-    const header_bytes = @as([*]const u8, @ptrCast(&header))[0..@sizeOf(BackupHeader)];
-    try file.writeAll(header_bytes);
-    size_bytes += @sizeOf(BackupHeader);
-
-    // Read and backup catalog file if it exists
-    var catalog_data: []u8 = undefined;
-    var catalog_found = false;
-    if (data_dir.?.openFile("catalog.db", .{})) |catalog_file| {
-        defer catalog_file.close();
-        catalog_data = try catalog_file.readToEndAlloc(allocator, 10 * 1024 * 1024); // 10MB max
-        catalog_found = true;
-    } else |_| {
-        // Try alternate catalog locations
-        if (data_dir.?.openFile("schema/catalog.db", .{})) |catalog_file| {
-            defer catalog_file.close();
-            catalog_data = try catalog_file.readToEndAlloc(allocator, 10 * 1024 * 1024);
-            catalog_found = true;
-        } else |_| {}
-    }
-
-    if (catalog_found) {
-        defer allocator.free(catalog_data);
-        const catalog_size_bytes = std.mem.toBytes(@as(u64, catalog_data.len));
-        try file.writeAll(catalog_size_bytes[0..]);
-        try file.writeAll(catalog_data);
-        size_bytes += @sizeOf(u64) + catalog_data.len;
-        std.debug.print("  Backed up catalog: {} bytes\n", .{catalog_data.len});
-    } else {
-        // Write empty catalog marker
-        const empty_catalog: u64 = 0;
-        const catalog_size_bytes = std.mem.toBytes(empty_catalog);
-        try file.writeAll(catalog_size_bytes[0..]);
-        size_bytes += @sizeOf(u64);
-        std.debug.print("  No catalog file found\n", .{});
-    }
-
-    // Backup page files
-    var page_count: u64 = 0;
-    var page_files = std.ArrayListUnmanaged([]const u8){};
-    defer {
-        for (page_files.items) |pf| allocator.free(pf);
-        page_files.deinit(allocator);
-    }
-
-    // Collect page file names
-    var dir_iter = data_dir.?.iterate();
-    while (try dir_iter.next()) |entry| {
-        if (entry.kind == .file) {
-            // Match page files (*.page, page_*.db, etc.)
-            if (std.mem.endsWith(u8, entry.name, ".page") or
-                std.mem.startsWith(u8, entry.name, "page_") or
-                std.mem.endsWith(u8, entry.name, ".db"))
-            {
-                try page_files.append(allocator, try allocator.dupe(u8, entry.name));
-            }
-        }
-    }
-
-    page_count = page_files.items.len;
-
-    // Write page count
-    const page_count_bytes = std.mem.toBytes(page_count);
-    try file.writeAll(page_count_bytes[0..]);
-    size_bytes += @sizeOf(u64);
-
-    // Backup each page file
-    for (page_files.items) |page_name| {
-        const page_file = data_dir.?.openFile(page_name, .{}) catch continue;
-        defer page_file.close();
-
-        const page_data = page_file.readToEndAlloc(allocator, 100 * 1024 * 1024) catch continue; // 100MB max per file
-        defer allocator.free(page_data);
-
-        // Write page name length and name
-        const name_len = @as(u32, @intCast(page_name.len));
-        const name_len_bytes = std.mem.toBytes(name_len);
-        try file.writeAll(name_len_bytes[0..]);
-        try file.writeAll(page_name);
-
-        // Write page data length and data
-        const data_len = @as(u32, @intCast(page_data.len));
-        const data_len_bytes = std.mem.toBytes(data_len);
-        try file.writeAll(data_len_bytes[0..]);
-        try file.writeAll(page_data);
-
-        size_bytes += @sizeOf(u32) + page_name.len + @sizeOf(u32) + page_data.len;
-    }
-
-    std.debug.print("  Backed up {} data files\n", .{page_count});
-    std.debug.print("Local backup completed: {s} ({} bytes)\n", .{ dest, size_bytes });
-}
-
-// Legacy fallback backup (kept for compatibility but marked deprecated)
-fn executeFallbackBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, parent_id: ?[]const u8, compress: bool) !void {
-    // mode is used below in the backup_metadata conditional
     const config = backup_types.BackupConfig{
         .compression = if (compress) .zstd else .none,
         .encryption = false,
         .retention_days = 30,
     };
-    const backup_dir = std.fs.path.dirname(dest) orelse "./";
-    var simplified_backup_manager = try SimplifiedBackupManager.init(allocator, backup_dir, config);
-    defer simplified_backup_manager.deinit();
 
-    const backup_metadata = if (std.mem.eql(u8, mode, "full"))
-        try simplified_backup_manager.createFullBackup(dest)
-    else blk: {
-        const parent_backup_id = if (parent_id) |pid|
-            try std.fmt.parseInt(u128, pid, 16)
-        else
-            return error.IncrementalBackupRequiresParent;
+    const backup_dir = std.fs.path.dirname(dest) orelse ".";
+    var mgr = try backup_types.BackupManager.init(allocator, backup_dir, config, graph_store.getGlobalStore(allocator));
+    defer mgr.deinit();
 
-        break :blk try simplified_backup_manager.createIncrementalBackup(dest, parent_backup_id);
-    };
+    const meta = try mgr.createFullBackup();
+    const created_path = try std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ backup_dir, meta.backup_id });
+    defer allocator.free(created_path);
 
-    // Print backup information in JSON format for CLI consumption
-    std.debug.print("Backup completed successfully:\n", .{});
-    std.debug.print("{{\n", .{});
-    std.debug.print("  \"backup_id\": \"{x}\",\n", .{backup_metadata.backup_id});
-    std.debug.print("  \"timestamp\": {},\n", .{backup_metadata.timestamp});
-    std.debug.print("  \"type\": \"{s}\",\n", .{@tagName(backup_metadata.backup_type)});
-    std.debug.print("  \"size_bytes\": {},\n", .{backup_metadata.size_bytes});
-    std.debug.print("  \"compression\": \"{s}\",\n", .{@tagName(backup_metadata.compression)});
-    std.debug.print("  \"encrypted\": {},\n", .{backup_metadata.encrypted});
-    std.debug.print("  \"checksum\": \"{x}\"\n", .{backup_metadata.checksum});
-    if (backup_metadata.parent_backup_id) |parent| {
-        std.debug.print("  \"parent_backup_id\": \"{x}\"\n", .{parent});
+    if (!std.mem.eql(u8, created_path, dest)) {
+        std.fs.cwd().copyFile(created_path, std.fs.cwd(), dest, .{}) catch |err| {
+            std.debug.print("Warning: Failed to copy backup to requested output ({s}): {}\n", .{ dest, err });
+        };
     }
-    std.debug.print("}}\n", .{});
+
+    std.debug.print("Local backup completed: {s}\n", .{dest});
 }
-
-// CANARY: REQ=REQ-BACKUP-REAL-DATA-001; FEATURE="BackupRealData"; ASPECT=DataIntegrity; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-10
-// GAP-0087 RESOLVED: Now reads actual data from data directory instead of placeholder data
-// Simplified backup manager for CLI usage without full server dependencies
-const SimplifiedBackupManager = struct {
-    allocator: std.mem.Allocator,
-    config: backup_types.BackupConfig,
-    backup_dir: []const u8,
-    data_dir: []const u8,
-
-    /// Initialize backup manager with proper data directory
-    pub fn init(allocator: std.mem.Allocator, backup_dir: []const u8, config: backup_types.BackupConfig) !SimplifiedBackupManager {
-        // Determine data directory from environment or default
-        const data_dir = if (std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR")) |dir| blk: {
-            defer allocator.free(dir);
-            break :blk try allocator.dupe(u8, dir);
-        } else |_| try allocator.dupe(u8, "./data");
-
-        return .{
-            .allocator = allocator,
-            .config = config,
-            .backup_dir = backup_dir,
-            .data_dir = data_dir,
-        };
-    }
-
-    pub fn deinit(self: *SimplifiedBackupManager) void {
-        self.allocator.free(self.data_dir);
-    }
-
-    pub fn createFullBackup(self: SimplifiedBackupManager, backup_path: []const u8) !backup_types.BackupMetadata {
-        const backup_id = generateBackupId();
-        const timestamp = std.time.milliTimestamp();
-
-        // Create backup directory if it doesn't exist
-        std.fs.cwd().makePath(self.backup_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => return err,
-        };
-
-        // Create backup file
-        const file = try std.fs.cwd().createFile(backup_path, .{});
-
-        var size_bytes: u64 = 0;
-
-        // Write backup header
-        const header = BackupHeader{
-            .magic = BACKUP_MAGIC,
-            .version = BACKUP_VERSION,
-            .backup_type = .full,
-            .timestamp = timestamp,
-            .compression = self.config.compression,
-        };
-        const header_bytes = @as([*]const u8, @ptrCast(&header))[0..@sizeOf(BackupHeader)];
-        try file.writeAll(header_bytes);
-        size_bytes += @sizeOf(BackupHeader);
-
-        // GAP-0087: Read actual catalog data from data directory
-        var catalog_data: []const u8 = undefined;
-        var catalog_owned = false;
-        const catalog_path = try std.fmt.allocPrint(self.allocator, "{s}/catalog.dat", .{self.data_dir});
-        defer self.allocator.free(catalog_path);
-
-        if (std.fs.cwd().openFile(catalog_path, .{})) |catalog_file| {
-            defer catalog_file.close();
-            catalog_data = try catalog_file.readToEndAlloc(self.allocator, 64 * 1024 * 1024); // 64MB max
-            catalog_owned = true;
-        } else |_| {
-            // No catalog file, write empty marker
-            catalog_data = "-- Empty catalog (no data)\n";
-        }
-        defer if (catalog_owned) self.allocator.free(catalog_data);
-
-        const catalog_size_bytes = std.mem.toBytes(@as(u64, catalog_data.len));
-        try file.writeAll(catalog_size_bytes[0..]);
-        try file.writeAll(catalog_data);
-        size_bytes += @sizeOf(u64) + catalog_data.len;
-
-        // GAP-0087: Find and backup all page files from data directory
-        var page_count: u64 = 0;
-        var page_files = std.ArrayList([]const u8).init(self.allocator);
-        defer {
-            for (page_files.items) |pf| self.allocator.free(pf);
-            page_files.deinit();
-        }
-
-        // Scan data directory for .page and .dat files
-        if (std.fs.cwd().openDir(self.data_dir, .{ .iterate = true })) |*dir| {
-            var dir_mut = dir.*;
-            defer dir_mut.close();
-            var iter = dir_mut.iterate();
-            while (try iter.next()) |entry| {
-                if (entry.kind == .file) {
-                    if (std.mem.endsWith(u8, entry.name, ".page") or
-                        (std.mem.endsWith(u8, entry.name, ".dat") and !std.mem.eql(u8, entry.name, "catalog.dat")))
-                    {
-                        try page_files.append(try self.allocator.dupe(u8, entry.name));
-                        page_count += 1;
-                    }
-                }
-            }
-        } else |_| {
-            // No data directory or can't read it
-        }
-
-        // Write page count
-        const page_count_bytes = std.mem.toBytes(page_count);
-        try file.writeAll(page_count_bytes[0..]);
-        size_bytes += @sizeOf(u64);
-
-        // Write each page file
-        for (page_files.items) |page_name| {
-            const page_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.data_dir, page_name });
-            defer self.allocator.free(page_path);
-
-            // Write page name length and name
-            const name_len_bytes = std.mem.toBytes(@as(u16, @intCast(page_name.len)));
-            try file.writeAll(name_len_bytes[0..]);
-            try file.writeAll(page_name);
-            size_bytes += @sizeOf(u16) + page_name.len;
-
-            // Read and write page data
-            if (std.fs.cwd().openFile(page_path, .{})) |page_file| {
-                defer page_file.close();
-                const page_data = try page_file.readToEndAlloc(self.allocator, 64 * 1024 * 1024);
-                defer self.allocator.free(page_data);
-
-                const page_len_bytes = std.mem.toBytes(@as(u32, @intCast(page_data.len)));
-                try file.writeAll(page_len_bytes[0..]);
-                try file.writeAll(page_data);
-                size_bytes += @sizeOf(u32) + page_data.len;
-            } else |_| {
-                // Failed to read page, write zero-length marker
-                const page_len_bytes = std.mem.toBytes(@as(u32, 0));
-                try file.writeAll(page_len_bytes[0..]);
-                size_bytes += @sizeOf(u32);
-            }
-        }
-
-        // Calculate checksum (close file first, then reopen for reading)
-        file.close();
-        const checksum_file = try std.fs.cwd().openFile(backup_path, .{});
-        defer checksum_file.close();
-        const file_data = try checksum_file.readToEndAlloc(self.allocator, 1024 * 1024 * 1024);
-        defer self.allocator.free(file_data);
-        const checksum = std.hash.crc.Crc32.hash(file_data);
-
-        return backup_types.BackupMetadata{
-            .backup_id = backup_id,
-            .timestamp = timestamp,
-            .backup_type = .full,
-            .start_lsn = 0,
-            .end_lsn = @intCast(page_count),
-            .size_bytes = size_bytes,
-            .compression = self.config.compression,
-            .encrypted = self.config.encryption,
-            .checksum = checksum,
-            .parent_backup_id = null,
-        };
-    }
-
-    pub fn createIncrementalBackup(self: SimplifiedBackupManager, backup_path: []const u8, parent_backup_id: u128) !backup_types.BackupMetadata {
-        const backup_id = generateBackupId();
-        const timestamp = std.time.milliTimestamp();
-
-        // Create backup directory if it doesn't exist
-        std.fs.cwd().makePath(self.backup_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => return err,
-        };
-
-        // Create backup file
-        const file = try std.fs.cwd().createFile(backup_path, .{});
-
-        var size_bytes: u64 = 0;
-
-        // Write backup header
-        const header = BackupHeader{
-            .magic = BACKUP_MAGIC,
-            .version = BACKUP_VERSION,
-            .backup_type = .incremental,
-            .timestamp = timestamp,
-            .compression = self.config.compression,
-        };
-        const header_bytes = @as([*]const u8, @ptrCast(&header))[0..@sizeOf(BackupHeader)];
-        try file.writeAll(header_bytes);
-        size_bytes += @sizeOf(BackupHeader);
-
-        // Write parent backup ID
-        const parent_id_bytes = std.mem.toBytes(parent_backup_id);
-        try file.writeAll(parent_id_bytes[0..]);
-        size_bytes += @sizeOf(u128);
-
-        // GAP-0087: Read actual WAL data for incremental backup
-        var wal_data: []const u8 = undefined;
-        var wal_owned = false;
-        const wal_path = try std.fmt.allocPrint(self.allocator, "{s}/wal.log", .{self.data_dir});
-        defer self.allocator.free(wal_path);
-
-        if (std.fs.cwd().openFile(wal_path, .{})) |wal_file| {
-            defer wal_file.close();
-            wal_data = try wal_file.readToEndAlloc(self.allocator, 256 * 1024 * 1024); // 256MB max
-            wal_owned = true;
-        } else |_| {
-            // No WAL file, write empty marker
-            wal_data = "-- Empty WAL (no changes)\n";
-        }
-        defer if (wal_owned) self.allocator.free(wal_data);
-
-        const data_size_bytes = std.mem.toBytes(@as(u64, wal_data.len));
-        try file.writeAll(data_size_bytes[0..]);
-        try file.writeAll(wal_data);
-        size_bytes += @sizeOf(u64) + wal_data.len;
-
-        // Calculate checksum (close file first, then reopen for reading)
-        file.close();
-        const checksum_file = try std.fs.cwd().openFile(backup_path, .{});
-        defer checksum_file.close();
-        const file_data = try checksum_file.readToEndAlloc(self.allocator, 1024 * 1024 * 1024);
-        defer self.allocator.free(file_data);
-        const checksum = std.hash.crc.Crc32.hash(file_data);
-
-        return backup_types.BackupMetadata{
-            .backup_id = backup_id,
-            .timestamp = timestamp,
-            .backup_type = .incremental,
-            .start_lsn = 0,
-            .end_lsn = 0,
-            .size_bytes = size_bytes,
-            .compression = self.config.compression,
-            .encrypted = self.config.encryption,
-            .checksum = checksum,
-            .parent_backup_id = parent_backup_id,
-        };
-    }
-};
 
 // Constants and helper functions for backup
 const BACKUP_MAGIC: u32 = 0x47454F42; // "GEOB"
-const BACKUP_VERSION: u16 = 1;
+const BACKUP_VERSION: u16 = 4;
 
 const BackupHeader = extern struct {
     magic: u32,
@@ -2055,12 +1650,63 @@ const BackupHeader = extern struct {
     compression: backup_types.CompressionType,
     encrypted: bool = false,
     _padding: [2]u8 = .{0} ** 2,
+    payload_len: u64 = 0,
+    checksum: u64 = 0,
 };
 
-fn generateBackupId() u128 {
-    const timestamp = @as(u128, @intCast(@as(u64, @bitCast(std.time.milliTimestamp()))));
-    const random = std.crypto.random.int(u64);
-    return (timestamp << 64) | random;
+fn parseHexKey(hex_str: []const u8) ![32]u8 {
+    if (hex_str.len != 64) return error.InvalidTdeKeyLength;
+    var key: [32]u8 = undefined;
+    var i: usize = 0;
+    while (i < 32) : (i += 1) {
+        const hi = std.fmt.charToDigit(hex_str[i * 2], 16) catch return error.InvalidTdeKeyHex;
+        const lo = std.fmt.charToDigit(hex_str[i * 2 + 1], 16) catch return error.InvalidTdeKeyHex;
+        key[i] = @as(u8, @intCast(hi * 16 + lo));
+    }
+    return key;
+}
+
+fn decryptData(data: []const u8, key: [32]u8, allocator: std.mem.Allocator) ![]u8 {
+    const NonceSize = 12;
+    const TagSize = 16;
+    const Overhead = NonceSize + TagSize;
+    if (data.len < Overhead) return error.InvalidEncryptedData;
+
+    var nonce: [NonceSize]u8 = undefined;
+    @memcpy(&nonce, data[0..NonceSize]);
+    var tag: [TagSize]u8 = undefined;
+    @memcpy(&tag, data[NonceSize .. NonceSize + TagSize]);
+    const ciphertext = data[Overhead..];
+
+    const plaintext = try allocator.alloc(u8, ciphertext.len);
+    errdefer allocator.free(plaintext);
+    std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(plaintext, ciphertext, tag, "", nonce, key) catch {
+        allocator.free(plaintext);
+        return error.DecryptionFailed;
+    };
+    return plaintext;
+}
+
+fn decompressData(data: []const u8, compression: backup_types.CompressionType, allocator: std.mem.Allocator) ![]u8 {
+    if (compression == .none) return allocator.dupe(u8, data);
+    if (compression == .zstd) {
+        var fbs = std.io.fixedBufferStream(data);
+        var decompressor = try std.compress.zstd.decompressor(fbs.reader());
+        var out = std.ArrayList(u8).init(allocator);
+        defer out.deinit(allocator);
+        var buf: [4096]u8 = undefined;
+        while (true) {
+            const n = try decompressor.read(&buf);
+            if (n == 0) break;
+            try out.appendSlice(allocator, buf[0..n]);
+        }
+        return out.toOwnedSlice();
+    }
+    return error.UnsupportedCompression;
+}
+
+fn computeChecksum(data: []const u8) u64 {
+    return std.hash.crc.Crc32.hash(data);
 }
 
 // CANARY: REQ=REQ-BACKUP-RESTORE-001; FEATURE="Backup Restore"; ASPECT=RemoteRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-09
@@ -2227,13 +1873,9 @@ fn executeRestore(allocator: std.mem.Allocator, source: []const u8, target_time:
     };
 
     // Perform restore
-    if (target_timestamp) |ts| {
-        const metadata = try restore_manager.restoreToPointInTime(source, ts);
-        std.debug.print("RESTORE: Point-in-time restore completed\n", .{});
-        std.debug.print("  Backup ID: {x}\n", .{metadata.source_backup_id});
-        std.debug.print("  Target time: {d}\n", .{metadata.target_time orelse 0});
-        std.debug.print("  Data size: {d} bytes\n", .{metadata.data_size_bytes});
-        std.debug.print("  Checksum verified: {}\n", .{metadata.checksum_verified});
+    if (target_timestamp) |_| {
+        std.debug.print("Error: Point-in-time restore is not supported with GraphStore snapshots\n", .{});
+        return error.UnsupportedBackupMode;
     } else {
         const metadata = try restore_manager.restoreFromBackup(source);
         std.debug.print("RESTORE: Full backup restore completed\n", .{});
@@ -2316,6 +1958,28 @@ const SimplifiedRestoreManager = struct {
         std.debug.print("RESTORE: Compression: {s}\n", .{@tagName(header.compression)});
         std.debug.print("RESTORE: Encrypted: {}\n", .{header.encrypted});
 
+        const payload_offset = @sizeOf(BackupHeader);
+        const payload_len: usize = @intCast(header.payload_len);
+        if (file_data.len < payload_offset + payload_len) return error.InvalidBackupFile;
+        const payload = file_data[payload_offset .. payload_offset + payload_len];
+
+        const checksum_ok = computeChecksum(payload) == header.checksum;
+        if (!checksum_ok) return error.BackupChecksumMismatch;
+
+        var decoded: []u8 = payload;
+        var decoded_owned = false;
+        if (header.encrypted) {
+            const key_raw = std.process.getEnvVarOwned(self.allocator, "GEODE_TDE_KEY") catch return error.MissingEncryptionKey;
+            defer self.allocator.free(key_raw);
+            const key = try parseHexKey(key_raw);
+            decoded = try decryptData(payload, key, self.allocator);
+            decoded_owned = true;
+        }
+        defer if (decoded_owned) self.allocator.free(decoded);
+
+        const decompressed = try decompressData(decoded, header.compression, self.allocator);
+        defer self.allocator.free(decompressed);
+
         // Ensure restore directory exists
         std.fs.cwd().makePath(self.restore_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
@@ -2325,65 +1989,33 @@ const SimplifiedRestoreManager = struct {
             },
         };
 
-        // Restore catalog
-        const catalog_len_raw = reader.readInt(u64, .little) catch return error.ReadError;
-        // Cast to usize for allocation (safe: catalog data must fit in addressable memory)
-        const catalog_len: usize = @intCast(catalog_len_raw);
-        std.debug.print("RESTORE: Reading catalog ({d} bytes)...\n", .{catalog_len});
-
-        const catalog_data = self.allocator.alloc(u8, catalog_len) catch return error.OutOfMemory;
-        defer self.allocator.free(catalog_data);
-        _ = reader.read(catalog_data) catch return error.ReadError;
-
-        const catalog_path = std.fmt.allocPrint(self.allocator, "{s}/catalog.dat", .{self.restore_dir}) catch return error.OutOfMemory;
-        defer self.allocator.free(catalog_path);
-
-        const catalog_file = std.fs.cwd().createFile(catalog_path, .{}) catch |err| {
-            std.debug.print("RESTORE: Failed to create catalog file: {}\n", .{err});
-            return err;
-        };
-        defer catalog_file.close();
-        catalog_file.writeAll(catalog_data) catch return error.WriteError;
-
-        // Restore pages
-        const page_count = reader.readInt(u64, .little) catch return error.ReadError;
-        std.debug.print("RESTORE: Restoring {d} pages...\n", .{page_count});
-
-        var total_data_size: usize = catalog_len;
-        const checksum_ok = true;
-
-        var i: u64 = 0;
-        while (i < page_count) : (i += 1) {
-            const compressed_len = reader.readInt(u32, .little) catch break;
-            const compressed_data = self.allocator.alloc(u8, compressed_len) catch return error.OutOfMemory;
-            defer self.allocator.free(compressed_data);
-            _ = reader.read(compressed_data) catch break;
-
-            total_data_size += compressed_len;
-
-            // Write page (keeping compressed/encrypted data as-is for now)
-            const page_path = std.fmt.allocPrint(self.allocator, "{s}/page_{d}.dat", .{ self.restore_dir, i }) catch continue;
-            defer self.allocator.free(page_path);
-
-            const page_file = std.fs.cwd().createFile(page_path, .{}) catch continue;
-            defer page_file.close();
-            page_file.writeAll(compressed_data) catch continue;
-
-            if ((i + 1) % 100 == 0) {
-                std.debug.print("RESTORE: Progress: {d}/{d} pages\n", .{ i + 1, page_count });
+        const prev_override = graph_store.getDataDirOverride();
+        var prev_owned: ?[]u8 = null;
+        if (prev_override) |ov| {
+            prev_owned = try self.allocator.dupe(u8, ov);
+        }
+        defer {
+            if (prev_owned) |ov| {
+                graph_store.setDataDirOverride(self.allocator, ov);
+                self.allocator.free(ov);
+            } else {
+                graph_store.setDataDirOverride(self.allocator, null);
             }
         }
 
-        std.debug.print("RESTORE: Restored {d} pages\n", .{i});
+        graph_store.setDataDirOverride(self.allocator, self.restore_dir);
+        const restore_path = try graph_store.getPersistenceFilePath(self.allocator);
+        defer self.allocator.free(restore_path);
 
-        // Generate backup ID from header timestamp
-        const backup_id = @as(u128, @intCast(@as(u64, @bitCast(header.timestamp)))) << 64;
+        const out = try std.fs.cwd().createFile(restore_path, .{});
+        defer out.close();
+        try out.writeAll(decompressed);
 
         return RestoreMetadata{
-            .source_backup_id = backup_id,
+            .source_backup_id = 0,
             .restore_timestamp = std.time.timestamp(),
             .backup_type = header.backup_type,
-            .data_size_bytes = total_data_size,
+            .data_size_bytes = decompressed.len,
             .checksum_verified = checksum_ok,
             .target_time = null,
         };
@@ -2392,187 +2024,10 @@ const SimplifiedRestoreManager = struct {
     // CANARY: REQ=REQ-PITR-WAL-001; FEATURE="Point-in-Time Recovery"; ASPECT=WALReplay; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-09
     /// Restore to a specific point in time by replaying WAL records
     fn restoreToPointInTime(self: SimplifiedRestoreManager, backup_path: []const u8, target_time: i64) !RestoreMetadata {
-        std.debug.print("RESTORE: Point-in-time restore to timestamp {d}\n", .{target_time});
-
-        // First, restore the base backup
-        var metadata = try self.restoreFromBackup(backup_path);
-        metadata.target_time = target_time;
-
-        // Find WAL directory (either from backup path parent or restore directory)
-        var wal_dir_buf: [512]u8 = undefined;
-        const wal_dir = std.fmt.bufPrint(&wal_dir_buf, "{s}/wal", .{self.restore_dir}) catch {
-            std.debug.print("RESTORE: PITR complete (no WAL directory found)\n", .{});
-            return metadata;
-        };
-
-        std.debug.print("RESTORE: Looking for WAL files in {s}\n", .{wal_dir});
-
-        // Find and process WAL segment files
-        const cwd = std.fs.cwd();
-        var wal_iterator = cwd.openDir(wal_dir, .{ .iterate = true }) catch {
-            std.debug.print("RESTORE: No WAL directory found, using base backup only\n", .{});
-            return metadata;
-        };
-        defer wal_iterator.close();
-
-        // Collect WAL segment files sorted by name (wal_000001.log, wal_000002.log, etc.)
-        var wal_files = std.ArrayList([]const u8){};
-        defer {
-            for (wal_files.items) |f| self.allocator.free(f);
-            wal_files.deinit(self.allocator);
-        }
-
-        var dir_iter = wal_iterator.iterate();
-        while (dir_iter.next() catch null) |entry| {
-            if (entry.kind == .file and std.mem.startsWith(u8, entry.name, "wal_") and std.mem.endsWith(u8, entry.name, ".log")) {
-                const name_copy = self.allocator.dupe(u8, entry.name) catch continue;
-                wal_files.append(self.allocator, name_copy) catch {
-                    self.allocator.free(name_copy);
-                    continue;
-                };
-            }
-        }
-
-        if (wal_files.items.len == 0) {
-            std.debug.print("RESTORE: No WAL segment files found\n", .{});
-            return metadata;
-        }
-
-        // Sort WAL files by name
-        std.mem.sort([]const u8, wal_files.items, {}, struct {
-            fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-                return std.mem.lessThan(u8, a, b);
-            }
-        }.lessThan);
-
-        std.debug.print("RESTORE: Found {d} WAL segment files\n", .{wal_files.items.len});
-
-        // Apply WAL records up to target_time
-        var records_applied: u64 = 0;
-        var last_applied_lsn: u64 = 0;
-
-        for (wal_files.items) |wal_file_name| {
-            var wal_path_buf: [768]u8 = undefined;
-            const wal_path = std.fmt.bufPrint(&wal_path_buf, "{s}/{s}", .{ wal_dir, wal_file_name }) catch continue;
-
-            const wal_file = cwd.openFile(wal_path, .{}) catch continue;
-            defer wal_file.close();
-
-            // Read WAL records from this segment
-            const result = try self.replayWalSegment(wal_file, target_time);
-            records_applied += result.records_applied;
-            if (result.last_lsn > last_applied_lsn) {
-                last_applied_lsn = result.last_lsn;
-            }
-
-            // Stop if we've reached or passed target_time
-            if (result.reached_target) {
-                std.debug.print("RESTORE: Reached target time, stopping WAL replay\n", .{});
-                break;
-            }
-        }
-
-        std.debug.print("RESTORE: Applied {d} WAL records, last LSN: {d}\n", .{ records_applied, last_applied_lsn });
-        std.debug.print("RESTORE: Point-in-time restore complete\n", .{});
-
-        return metadata;
-    }
-
-    const WalReplayResult = struct {
-        records_applied: u64,
-        last_lsn: u64,
-        reached_target: bool,
-    };
-
-    /// Replay WAL records from a segment file up to target_time
-    fn replayWalSegment(self: SimplifiedRestoreManager, file: std.fs.File, target_time: i64) !WalReplayResult {
-        const HeaderLen = 1 + 8 + 4 + 8 + 8 + 4; // typ + txn_id + plen + lsn + prev_lsn + checksum
-        var result = WalReplayResult{
-            .records_applied = 0,
-            .last_lsn = 0,
-            .reached_target = false,
-        };
-
-        var buf: [HeaderLen]u8 = undefined;
-
-        // Track committed transactions
-        var committed_txns = std.AutoHashMap(u64, void).init(self.allocator);
-        defer committed_txns.deinit();
-
-        while (true) {
-            const n = file.readAll(&buf) catch break;
-            if (n != buf.len) break;
-
-            const typ: u8 = buf[0];
-            const txn_id = std.mem.readInt(u64, buf[1..9], .little);
-            const plen = std.mem.readInt(u32, buf[9..13], .little);
-            const lsn_v = std.mem.readInt(u64, buf[13..21], .little);
-            _ = std.mem.readInt(u64, buf[21..29], .little); // prev_lsn
-            _ = std.mem.readInt(u32, buf[29..33], .little); // checksum
-
-            // Read payload if present
-            var payload: ?[]u8 = null;
-            if (plen > 0) {
-                payload = self.allocator.alloc(u8, plen) catch break;
-                // GAP-0221 FIX: Log read errors for WAL payload
-                const got = file.readAll(payload.?) catch |err| blk: {
-                    log.warn("WAL payload read failed", &.{
-                        Attr.err("error", err),
-                    });
-                    break :blk 0;
-                };
-                if (got != plen) {
-                    if (payload) |p| self.allocator.free(p);
-                    break;
-                }
-            }
-            defer if (payload) |p| self.allocator.free(p);
-
-            // Read and verify sentinel
-            var sentinel_buf: [4]u8 = undefined;
-            // GAP-0221 FIX: Log read errors for WAL sentinel
-            const sn = file.readAll(&sentinel_buf) catch |err| blk: {
-                log.warn("WAL sentinel read failed", &.{
-                    Attr.err("error", err),
-                });
-                break :blk 0;
-            };
-            if (sn != 4) break;
-            const sent_val = std.mem.readInt(u32, &sentinel_buf, .little);
-            if (sent_val != 0xEC0DDBAD) break;
-
-            // Extract timestamp from Insert/Delete payloads if available
-            // Payloads typically have timestamp at offset after page/slot info
-            var record_time: i64 = 0;
-            if (payload) |p| {
-                if (p.len >= 14) { // page(4) + slot(2) + timestamp(8)
-                    record_time = @as(i64, @bitCast(std.mem.readInt(u64, p[6..14], .little)));
-                }
-            }
-
-            // Check if we've passed target time
-            if (record_time > 0 and record_time > target_time) {
-                result.reached_target = true;
-                break;
-            }
-
-            // Track commits
-            if (typ == 5) { // Commit
-                committed_txns.put(txn_id, {}) catch {};
-            }
-
-            // Apply data-bearing records for committed transactions
-            if (typ == 1 or typ == 2) { // Insert or Delete
-                if (committed_txns.contains(txn_id) or true) { // Apply optimistically for now
-                    // In a full implementation, this would apply the change to storage
-                    result.records_applied += 1;
-                }
-            }
-
-            result.last_lsn = lsn_v;
-        }
-
-        return result;
+        _ = self;
+        _ = backup_path;
+        _ = target_time;
+        return error.UnsupportedBackupMode;
     }
 };
 

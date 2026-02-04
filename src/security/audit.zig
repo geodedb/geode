@@ -67,7 +67,7 @@ pub const AuditLogger = struct {
     log_access_events: bool,
 
     pub const Config = struct {
-        enabled: bool = true,
+        enabled: bool = false, // Disabled by default; enable with GEODE_AUDIT_ENABLED=1 or via config
         file_path: []const u8 = "audit.jsonl",
         redact_pii: bool = true,
         log_denies_only: bool = false,
@@ -96,14 +96,20 @@ pub const AuditLogger = struct {
             .encrypted = config.encrypted,
             .log_access_events = config.log_access_events,
         };
+        // Ensure cleanup of digest_buf on error after this point
+        errdefer logger.digest_buf.deinit(allocator);
 
         if (config.enabled) {
             // 1. Open File
-            logger.file = try std.fs.cwd().createFile(config.file_path, .{
+            logger.file = std.fs.cwd().createFile(config.file_path, .{
                 .truncate = false,
                 .read = true, // Needed for initFromTail
                 .exclusive = false,
-            });
+            }) catch |err| {
+                return err;
+            };
+            // Ensure file is closed on subsequent errors
+            errdefer if (logger.file) |f| f.close();
 
             // 2. Load Keys
             try logger.loadKeys();

@@ -10,7 +10,6 @@ const CatalogSchema = geode.server_state.CatalogSchema;
 const CatalogGraph = geode.server_state.CatalogGraph;
 const execution = geode.execution;
 const server_flags = geode.server_flags;
-const wal_manager = geode.wal_manager;
 const graph_store = geode.graph_store;
 const proto_util = geode.proto_util;
 const gql_print = geode.printer;
@@ -339,13 +338,10 @@ pub fn handleQuicConnection(
     env_spill_union: usize,
     env_spill_threshold: usize,
     env_storage_checksum_error: bool,
-    env_wal_compact_interval: usize,
-    env_wal_skip_ratio_override: ?f64,
     _force_serialization_failure_unused: bool,
     security_manager: ?*geode_auth.SecurityManager,
     shared_ast_cache: ?*anyopaque, // Type is query_ast_cache.SharedAstCache
 ) !void {
-    _ = env_wal_compact_interval;
     _ = _force_serialization_failure_unused;
     // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-003; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=EXEMPT; OWNER=server; UPDATED=2025-12-27
     // Use destroyConnection to properly remove from transport list, close, and free resources
@@ -377,10 +373,6 @@ pub fn handleQuicConnection(
     log.debug("Stream accepted successfully", &.{});
     defer stream.close();
 
-    // Initialize (or reuse) shared WAL manager.
-    // This removes per-connection WAL open/close overhead.
-    const wal_mgr = try wal_manager.getOrCreateWalManager(gpa);
-
     // Initialize state
     var state = ServerState{
         .allocator = gpa,
@@ -395,7 +387,6 @@ pub fn handleQuicConnection(
     state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.graph_types = std.HashMap([]const u8, geode.server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
-    state.wal_ptr = @ptrCast(wal_mgr);
     state.spill_sort = env_spill_sort;
     state.spill_distinct = env_spill_distinct;
     state.spill_union = env_spill_union;
@@ -503,7 +494,7 @@ pub fn handleQuicConnection(
         };
 
         // Process protobuf message and emit responses directly
-        handleClientMessage(gpa, &state, stream, msg, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_wal_skip_ratio_override) catch |err| {
+        handleClientMessage(gpa, &state, stream, msg, result_format_txt, disable_estimates, compact_profile, memcurve_profile) catch |err| {
             log.err("Protobuf process error", &.{Attr.err("error", err)});
             try sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{});
             continue;
@@ -550,7 +541,6 @@ fn handleClientMessage(
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
-    wal_skip_ratio_override: ?f64,
 ) !void {
     _ = result_format_txt;
 
@@ -735,14 +725,6 @@ fn handleClientMessage(
                                 try appendFlagIfMissing(gpa, &exec_result.flags, flag);
                             }
 
-                            var wal_skip_ratio: f64 = 0.0;
-                            if (wal_skip_ratio_override) |override| {
-                                wal_skip_ratio = override;
-                            } else if (state.wal_ptr) |ptr| {
-                                const wal_mgr: *wal_manager.WalManager = @ptrCast(@alignCast(ptr));
-                                wal_skip_ratio = wal_mgr.wal.skipRatio();
-                            }
-
                             const profile_json = try profile_payload.buildProfileJson(gpa, traits, exec_result.rows.len, .{
                                 .compact = compact_profile,
                                 .include_mem_curve = memcurve_profile,
@@ -752,7 +734,7 @@ fn handleClientMessage(
                                 .spill_union = state.spill_union,
                                 .spill_hashagg = state.spill_hashagg,
                                 .spill_threshold = state.query_mem_limit_bytes,
-                                .wal_skip_ratio = wal_skip_ratio,
+                                .wal_skip_ratio = -1,
                                 .committed_txns = state.global_commit_ts,
                                 .flagger_findings = exec_result.flags.items,
                                 .union_part_count = analysis.union_part_count,

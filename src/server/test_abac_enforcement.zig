@@ -50,10 +50,6 @@ test "GAP-0165: InitContext includes SecurityManager fields" {
     const ctx = server_init.InitContext{
         .wal = undefined,
         .env_config = server_init.EnvironmentConfig{},
-        .pm_persist_active = false,
-        .pm_persist = undefined,
-        .catalog_inited = false,
-        .catalog = undefined,
         .security_manager = null,
         .security_manager_storage = null,
     };

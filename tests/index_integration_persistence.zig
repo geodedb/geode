@@ -4,7 +4,7 @@ const advanced_types = geode.index.advanced_types_index;
 const jsonb = geode.types.jsonb;
 const url = geode.types.url;
 const range = geode.types.range;
-const heap = geode.storage.heap;
+const heap = @import("../src/storage/heap.zig");
 
 test "Advanced Types Index Persistence Integration" {
     const allocator = std.testing.allocator;

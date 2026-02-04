@@ -1,12 +1,9 @@
 const std = @import("std");
 const geode = @import("geode");
-const storage_pm = @import("storage_page_manager");
-const storage_catalog = @import("storage_catalog");
 const server_flags = geode.server_flags;
 // CANARY: REQ=REQ-BINARY-PERSIST-001; FEATURE="BinaryPersistence"; ASPECT=ServerInit; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
 const graph_store = geode.graph_store;
 const index_catalog = @import("index_catalog.zig");
-const wal_manager = geode.wal_manager;
 const query_ast_cache = @import("query_ast_cache.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager initialization at server startup
@@ -28,8 +25,6 @@ pub const EnvironmentConfig = struct {
     spill_union: usize = 0,
     spill_threshold: usize = 0,
     storage_checksum_error: bool = false,
-    wal_compact_interval: usize = 5,
-    wal_skip_ratio_override: ?f64 = null,
     memcurve_profile: bool = false,
     compact_profile: bool = false,
     disable_estimates: bool = false,
@@ -41,12 +36,7 @@ pub const EnvironmentConfig = struct {
 
 /// Server initialization context containing all initialized resources
 pub const InitContext = struct {
-    wal: *wal_manager.WalManager,
     env_config: EnvironmentConfig,
-    pm_persist_active: bool,
-    pm_persist: storage_pm.PageManager,
-    catalog_inited: bool,
-    catalog: storage_catalog.StorageCatalog,
     // Shared AST cache for cross-connection reuse (optional).
     shared_ast_cache: ?*query_ast_cache.SharedAstCache = null,
     shared_ast_cache_storage: ?query_ast_cache.SharedAstCache = null,
@@ -66,22 +56,8 @@ pub const InitContext = struct {
         if (self.security_manager_storage) |*sm| {
             sm.deinit();
         }
-        if (self.catalog_inited) {
-            self.catalog.save() catch {};
-            self.catalog.deinit();
-        }
-        if (self.pm_persist_active) {
-            self.pm_persist.deinit();
-        }
-        // Shared WAL manager lives across connections; deinit it at shutdown.
-        wal_manager.deinitGlobalWalManager();
     }
 };
-
-/// Initialize WAL (Write-Ahead Log)
-pub fn initializeWAL(allocator: std.mem.Allocator) !*wal_manager.WalManager {
-    return wal_manager.getOrCreateWalManager(allocator);
-}
 
 /// Process environment variables and return configuration
 pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profile_ref: *bool) !EnvironmentConfig {
@@ -99,13 +75,6 @@ pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profil
             config.spill_threshold = std.fmt.parseInt(usize, th, 10) catch config.spill_threshold;
         } else if (env.get("GEODE_SPILL_THRESHOLD_BYTES")) |th| {
             config.spill_threshold = std.fmt.parseInt(usize, th, 10) catch config.spill_threshold;
-        }
-
-        if (env.get("GEODE_WAL_COMPACT_INTERVAL")) |ci| {
-            config.wal_compact_interval = std.fmt.parseInt(usize, ci, 10) catch 5;
-        }
-        if (env.get("GEODE_WAL_SKIP_RATIO_OVERRIDE")) |sr| {
-            config.wal_skip_ratio_override = std.fmt.parseFloat(f64, sr) catch config.wal_skip_ratio_override;
         }
 
         if (env.get("GEODE_NULLS_LAST")) |_| {
@@ -154,73 +123,6 @@ pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profil
     return config;
 }
 
-/// Initialize persistent storage and catalog
-pub fn initializeStorage(
-    allocator: std.mem.Allocator,
-    data_dir: ?[]const u8,
-    catalog_create_name: ?[]const u8,
-) !struct {
-    pm_persist_active: bool,
-    pm_persist: storage_pm.PageManager,
-    catalog_inited: bool,
-    catalog: storage_catalog.StorageCatalog,
-} {
-    var pm_persist_active = false;
-    var pm_persist: storage_pm.PageManager = undefined;
-    var catalog_inited = false;
-    var catalog = storage_catalog.StorageCatalog{
-        .allocator = allocator,
-        .page_manager = undefined,
-        .tables = undefined,
-        .indexes = undefined,
-        .sequences = undefined,
-        .catalog_page_id = null,
-        .graph_metadata = null,
-    };
-
-    if (data_dir) |dd| {
-        std.fs.cwd().makePath(dd) catch {};
-        pm_persist = storage_pm.PageManager.initPersistent(allocator, 4096, dd);
-        pm_persist_active = true;
-        pm_persist.loadPage(dd, 0) catch {};
-        catalog = storage_catalog.StorageCatalog.init(allocator, &pm_persist);
-        catalog.load() catch {};
-        catalog_inited = true;
-
-        if (catalog_create_name) |tname| {
-            catalog.createTable(tname, &.{}) catch {};
-        }
-
-        // CANARY: REQ=REQ-BINARY-PERSIST-002; FEATURE="BinaryPersistence"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
-        // Load graph data from binary format (graph_store.dat) - this is the primary persistence format
-        // getGlobalStore() triggers loadFromFile() which reads from {GEODE_DATA_DIR}/graph_store.dat
-        const global_store = graph_store.getGlobalStore(allocator);
-        const node_count = global_store.getNodeCount();
-        if (node_count > 0) {
-            log.info("Loaded graph data from binary persistence", &.{
-                Attr.int("node_count", @intCast(node_count)),
-            });
-            // Update catalog metadata with loaded graph stats
-            if (catalog.graph_metadata == null) {
-                catalog.initGraphMetadata() catch {};
-            }
-            catalog.saveGraphMetadata(
-                @intCast(node_count),
-                0, // edge_count - would need to iterate
-                0, // max_node_id
-                0, // max_edge_id
-            ) catch {};
-        }
-    }
-
-    return .{
-        .pm_persist_active = pm_persist_active,
-        .pm_persist = pm_persist,
-        .catalog_inited = catalog_inited,
-        .catalog = catalog,
-    };
-}
-
 // CANARY: REQ=REQ-ABAC-WIRE-009; FEATURE="ABAC Enforcement"; ASPECT=SecurityInit; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Initialize SecurityManager for RBAC+ABAC policy enforcement
 /// Initialize SecurityManager if ABAC is enabled
@@ -233,13 +135,8 @@ pub fn initialize(
     allocator: std.mem.Allocator,
     order_keys_mode_expr: bool,
     data_dir: ?[]const u8,
-    catalog_create_name: ?[]const u8,
     memcurve_profile_ref: *bool,
 ) !InitContext {
-    // Initialize WAL
-    const wal = try initializeWAL(allocator);
-    errdefer wal.deinit();
-
     // Initialize index catalog (idempotent)
     index_catalog.initIndexCatalog(allocator);
 
@@ -261,9 +158,6 @@ pub fn initialize(
         env_config.storage_checksum_error = true;
     }
 
-    // Initialize persistent storage and catalog
-    const storage = try initializeStorage(allocator, data_dir, catalog_create_name);
-
     // Initialize shared AST cache (cross-connection) if enabled.
     const ast_cache_size = blk: {
         if (std.process.getEnvVarOwned(allocator, "GEODE_AST_CACHE_SIZE")) |v| {
@@ -277,12 +171,7 @@ pub fn initialize(
     // CANARY: REQ=REQ-ABAC-WIRE-010; FEATURE="ABAC Enforcement"; ASPECT=ServerStartup; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
     // GAP-0165: Initialize SecurityManager at server startup if ABAC is enabled
     var ctx = InitContext{
-        .wal = wal,
         .env_config = env_config,
-        .pm_persist_active = storage.pm_persist_active,
-        .pm_persist = storage.pm_persist,
-        .catalog_inited = storage.catalog_inited,
-        .catalog = storage.catalog,
         .shared_ast_cache = null,
         .shared_ast_cache_storage = null,
         .security_manager = null,

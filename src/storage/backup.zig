@@ -1,5 +1,6 @@
 const std = @import("std");
-const graph_store = @import("../graph_store.zig");
+const geode = @import("geode");
+const graph_store = geode.graph_store;
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=EXEMPT; OWNER=storage; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -162,8 +163,8 @@ pub const BackupManager = struct {
             .allocator = allocator,
             .config = config,
             .backup_dir = try allocator.dupe(u8, backup_dir),
-            .metadata_log = std.ArrayList(BackupMetadata).init(allocator),
-            .current_backup_chain = std.ArrayList(u128).init(allocator),
+            .metadata_log = .{},
+            .current_backup_chain = .{},
             .store = store,
             .enc_key = enc_key,
         };

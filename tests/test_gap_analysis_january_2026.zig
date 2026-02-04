@@ -128,10 +128,9 @@ test "GAP-0195: REQ-LSP-001 - LSP syntax validation" {
 // =============================================================================
 
 test "GAP-0196: REQ-GQL-S3-001 - Storage modules accessible" {
-    // Verify storage subsystem is accessible via geode module
-    try testing.expect(@hasDecl(geode, "storage"));
-    try testing.expect(@hasDecl(geode.storage, "csr"));
-    try testing.expect(@hasDecl(geode.storage, "heap"));
+    // Verify GraphStore and backup modules are accessible via geode module
+    try testing.expect(@hasDecl(geode, "graph_store"));
+    try testing.expect(@hasDecl(geode, "backup"));
 }
 
 // CANARY: REQ=REQ-TXN-ISOLATION-001; FEATURE="EnhancedTransactionIsolation"; ASPECT=IsolationLevels; STATUS=TESTED; TEST=test_gap_analysis_january_2026.zig; OWNER=txn; UPDATED=2026-01-15

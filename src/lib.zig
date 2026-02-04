@@ -182,8 +182,6 @@ pub const server_flags = @import("server/server_flags.zig");
 pub const backup_manager = @import("server/backup_manager.zig");
 // Re-export impl_flagger for unified binary
 pub const impl_flagger = @import("server/flagger_impl_defined.zig");
-// Re-export wal_manager for unified binary
-pub const wal_manager = @import("server/wal_manager.zig");
 // Re-export proto_util for unified binary
 pub const proto_util = @import("server/proto_util.zig");
 // Re-export explain/profile payload builders for server handlers and tests
@@ -201,20 +199,6 @@ pub const benchmarks = struct {
 };
 // Time-series module (initial in-memory scaffold)
 pub const timeseries = @import("timeseries/timeseries.zig");
-// Re-export storage submodules needed across server modules (CSR adjacency)
-pub const storage = struct {
-    // Note: CSR is available to the server binary via build.zig module injection; tests import it directly.
-    // pub const csr = @import("storage/csr_adjacency.zig"); // DEPRECATED: Replaced by HybridTopology
-    pub const hybrid = @import("storage_page_manager").HybridTopology;
-    pub const heap = @import("storage/heap.zig");
-    // pub const constraints = @import("storage/constraints.zig");
-
-    // Core storage components for CLI/tools
-    // Note: These must be imported as modules injected by build.zig to avoid file-in-multiple-modules errors
-    pub const wal = @import("wal");
-    pub const page_manager = @import("storage_page_manager").PageManager;
-    pub const fs_fsync = @import("storage_page_manager").fs_fsync;
-};
 
 // Re-export index modules for specialized data types
 pub const index = struct {

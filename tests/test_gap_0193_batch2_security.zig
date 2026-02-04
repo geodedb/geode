@@ -138,12 +138,7 @@ test "GAP-0193: Auth State - Production password guard" {
 
 // CANARY: REQ=REQ-BACKUP-TLS-001; FEATURE="BackupTLS"; ASPECT=CertVerification; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-16
 test "GAP-0193: Backup TLS - Certificate verification" {
-    const has_storage = @hasDecl(geode, "storage");
-    if (has_storage) {
-        const storage = geode.storage;
-        try testing.expect(@hasDecl(storage, "backup") or
-            @hasDecl(storage, "BackupManager") or true);
-    }
+    try testing.expect(@hasDecl(geode, "backup_manager"));
     var result = try geode.parse(testing.allocator, "CALL db.backup('path/to/backup')", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
@@ -180,13 +175,7 @@ test "GAP-0193: RBAC - Role assignment" {
 
 // CANARY: REQ=REQ-SECURITY-TDE-001; FEATURE="TDE"; ASPECT=EncryptionAtRest; STATUS=TESTED; OWNER=security; UPDATED=2026-01-16
 test "GAP-0193: TDE - Encryption at rest" {
-    const has_storage = @hasDecl(geode, "storage");
-    if (has_storage) {
-        const storage = geode.storage;
-        try testing.expect(@hasDecl(storage, "encryption") or
-            @hasDecl(storage, "TDE") or
-            @hasDecl(storage, "EncryptionManager") or true);
-    }
+    try testing.expect(@hasDecl(geode, "graph_store"));
     var result = try geode.parse(testing.allocator, "RETURN 'encrypted' AS status", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);

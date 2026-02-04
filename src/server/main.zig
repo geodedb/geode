@@ -13,7 +13,6 @@ const quic_transport = @import("transport/quic");
 const grpc_transport = @import("../transport/grpc_server.zig");
 const thread_pool = @import("transport/thread_pool");
 const cert_gen = @import("../tools/cert_gen.zig");
-const wal_manager = geode.wal_manager;
 const query_ast_cache = @import("query_ast_cache.zig");
 // Note: cert_gen now imported for certificate generation (M3.2 Phase 3 CLI extraction)
 // const mvcc = @import("server/txn/mvcc.zig");
@@ -63,8 +62,6 @@ const ConnectionContext = struct {
     env_spill_union: usize,
     env_spill_threshold: usize,
     env_storage_checksum_error: bool,
-    env_wal_compact_interval: usize,
-    env_wal_skip_ratio_override: ?f64,
     security_manager: ?*geode_auth.SecurityManager,
     shared_ast_cache: ?*query_ast_cache.SharedAstCache,
 };
@@ -85,8 +82,6 @@ fn handleConnectionAsync(context: *anyopaque) void {
         ctx.env_spill_union,
         ctx.env_spill_threshold,
         ctx.env_storage_checksum_error,
-        ctx.env_wal_compact_interval,
-        ctx.env_wal_skip_ratio_override,
         false,
         ctx.security_manager,
         ctx.shared_ast_cache,
@@ -246,6 +241,7 @@ pub fn main() !void {
     if (config_opt == null) return; // Help was shown, exit
 
     var config = config_opt.?;
+    defer config.deinit(gpa);
 
     // Extract config values into local variables for compatibility with existing code
     const result_format_txt = config.result_format_txt;
@@ -254,7 +250,6 @@ pub fn main() !void {
     const listen_grpc = config.listen_grpc;
     const order_keys_mode_expr = config.order_keys_mode_expr;
     const data_dir = config.data_dir;
-    const catalog_create_name = config.catalog_create_name;
     const log_level_arg = config.log_level_arg;
 
     // Apply log level and MATCH overrides
@@ -269,6 +264,7 @@ pub fn main() !void {
         log.err("Failed to initialize user store", &.{Attr.string("error", @errorName(err))});
         return err;
     };
+    defer user_mgmt.deinitUserStore();
     user_mgmt.setAuthEnabled(true);
     user_mgmt.ensureDefaultUser(gpa) catch |err| {
         log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
@@ -295,15 +291,26 @@ pub fn main() !void {
     }
 
     // Initialize AuditLogger (Phase 2 Spec Compliance)
+    // Audit logging is disabled by default; enable via GEODE_AUDIT_ENABLED=1
     var audit_config = audit.AuditLogger.Config{};
 
-    // Check for audit disable flag (for testing only)
+    // Check for audit enable flag
+    const audit_enable_env = std.process.getEnvVarOwned(gpa, "GEODE_AUDIT_ENABLED") catch null;
+    defer if (audit_enable_env) |e| gpa.free(e);
+    if (audit_enable_env) |e| {
+        if (std.mem.eql(u8, e, "1") or std.mem.eql(u8, e, "true")) {
+            audit_config.enabled = true;
+            log.info("Audit logging enabled via GEODE_AUDIT_ENABLED", &.{});
+        }
+    }
+
+    // Check for audit disable flag (for explicit disable even if enabled elsewhere)
     const audit_disable_env = std.process.getEnvVarOwned(gpa, "GEODE_DISABLE_AUDIT") catch null;
     defer if (audit_disable_env) |d| gpa.free(d);
     if (audit_disable_env) |d| {
         if (std.mem.eql(u8, d, "1") or std.mem.eql(u8, d, "true")) {
             audit_config.enabled = false;
-            log.warn("SECURITY WARNING: Audit logging disabled via GEODE_DISABLE_AUDIT!", &.{});
+            log.warn("Audit logging disabled via GEODE_DISABLE_AUDIT", &.{});
         }
     }
 
@@ -326,20 +333,16 @@ pub fn main() !void {
         gpa,
         order_keys_mode_expr,
         data_dir,
-        catalog_create_name,
         &memcurve_profile,
     );
     defer init_ctx.deinit();
 
     // Extract initialization values for compatibility with existing code
-    _ = init_ctx.wal; // WAL managed by server_init
     const env_spill_sort = init_ctx.env_config.spill_sort;
     const env_spill_distinct = init_ctx.env_config.spill_distinct;
     const env_spill_union = init_ctx.env_config.spill_union;
     const env_spill_threshold = init_ctx.env_config.spill_threshold;
     const env_storage_checksum_error = init_ctx.env_config.storage_checksum_error;
-    const env_wal_compact_interval = init_ctx.env_config.wal_compact_interval;
-    const env_wal_skip_ratio_override = init_ctx.env_config.wal_skip_ratio_override;
     const disable_estimates = init_ctx.env_config.disable_estimates;
     const compact_profile = init_ctx.env_config.compact_profile;
     memcurve_profile = init_ctx.env_config.memcurve_profile;
@@ -384,7 +387,6 @@ pub fn main() !void {
             .spill_union = env_spill_union,
             .spill_threshold = env_spill_threshold,
             .storage_checksum_error = env_storage_checksum_error,
-            .wal_skip_ratio_override = env_wal_skip_ratio_override,
             .disable_estimates = disable_estimates,
             .compact_profile = compact_profile,
             .memcurve_profile = memcurve_profile,
@@ -475,7 +477,7 @@ pub fn main() !void {
                     });
                     continue;
                 };
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, env_wal_skip_ratio_override, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err2| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err2| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err2)),
                     });
@@ -511,7 +513,7 @@ pub fn main() !void {
             // GAP-0202: Create context for async connection handling
             const ctx = gpa.create(ConnectionContext) catch {
                 log.err("Failed to allocate connection context, handling sync", &.{});
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, env_wal_compact_interval, env_wal_skip_ratio_override, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, result_format_txt, disable_estimates, compact_profile, memcurve_profile, env_spill_sort, env_spill_distinct, env_spill_union, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err)),
                     });
@@ -532,8 +534,6 @@ pub fn main() !void {
                 .env_spill_union = env_spill_union,
                 .env_spill_threshold = env_spill_threshold,
                 .env_storage_checksum_error = env_storage_checksum_error,
-                .env_wal_compact_interval = env_wal_compact_interval,
-                .env_wal_skip_ratio_override = env_wal_skip_ratio_override,
                 .security_manager = init_ctx.security_manager,
                 .shared_ast_cache = init_ctx.shared_ast_cache,
             };
