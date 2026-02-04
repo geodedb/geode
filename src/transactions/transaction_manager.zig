@@ -5,7 +5,7 @@
 // This module provides a centralized interface for all transaction-related operations,
 // consolidating access to:
 // - MVCC transaction manager (begin, commit, abort, locking)
-// - Commit coordination (WAL flush, durability)
+// - Commit coordination (durability hooks)
 // - Two-phase commit (distributed transactions)
 // - Advanced MVCC features (conflict detection, skew filtering)
 // - Range tracking (phantom read prevention)
@@ -17,7 +17,6 @@
 
 const std = @import("std");
 const manager = @import("manager.zig");
-const commit_coordinator = @import("commit_coordinator.zig");
 const two_phase_commit = @import("two_phase_commit.zig");
 const mvcc_adv = @import("mvcc_adv/mod.zig");
 const range_tracker = @import("range_tracker.zig");
@@ -37,13 +36,6 @@ pub const LockEntry = manager.LockEntry;
 pub const ConflictType = manager.ConflictType;
 pub const ConflictMatrix = manager.ConflictMatrix;
 pub const Manager = manager.Manager;
-
-/// Commit coordination types
-/// CANARY: REQ=REQ-M7.2-TXN-MANAGER-003; FEATURE="Commit Coordination Re-export"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_transaction_manager.yml; OWNER=core; UPDATED=2026-01-25
-pub const WalHandle = commit_coordinator.WalHandle;
-pub const registerWal = commit_coordinator.registerWal;
-pub const beforeCommit = commit_coordinator.beforeCommit;
-pub const ensureWalBeforeData = commit_coordinator.ensureWalBeforeData;
 
 /// Two-phase commit types
 /// CANARY: REQ=REQ-M7.2-TXN-MANAGER-004; FEATURE="2PC Re-export"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_transaction_manager.yml; OWNER=core; UPDATED=2026-01-25
@@ -72,7 +64,6 @@ pub const RangeTracker = range_tracker.RangeTracker;
 pub const TransactionManager = struct {
     allocator: std.mem.Allocator,
     mgr: *Manager,
-    wal_handle: ?*WalHandle,
     enable_2pc: bool,
     enable_phantom_prevention: bool,
 
@@ -106,7 +97,6 @@ pub const TransactionManager = struct {
         return .{
             .allocator = allocator,
             .mgr = mgr_inst,
-            .wal_handle = null,
             .enable_2pc = enable_2pc,
             .enable_phantom_prevention = enable_phantom_prevention,
         };
@@ -136,12 +126,6 @@ pub const TransactionManager = struct {
     ///
     /// CANARY: REQ=REQ-M7.2-TXN-MANAGER-011; FEATURE="Commit Transaction"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_transaction_manager.yml; OWNER=core; UPDATED=2026-01-25
     pub fn commit(self: *TransactionManager, txn_id: TxnId) !void {
-        // Ensure WAL durability before commit
-        if (self.wal_handle) |wal| {
-            const lsn = self.mgr.next_ts;
-            try wal.flushUpToFn(lsn);
-        }
-
         const txn = self.mgr.active_txns.getPtr(txn_id) orelse return error.InvalidTransaction;
         return self.mgr.commit(txn);
     }
@@ -297,25 +281,6 @@ pub const TransactionManager = struct {
         if (!self.enable_phantom_prevention) return;
         const txn = self.mgr.active_txns.getPtr(txn_id) orelse return error.InvalidTransaction;
         return self.mgr.checkPhantoms(txn);
-    }
-
-    // ========================================================================
-    // WAL Coordination Operations
-    // ========================================================================
-
-    /// Register WAL handle for commit coordination
-    ///
-    /// CANARY: REQ=REQ-M7.2-TXN-MANAGER-026; FEATURE="WAL Registration"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_transaction_manager.yml; OWNER=core; UPDATED=2026-01-25
-    pub fn registerWalHandle(self: *TransactionManager, wal: *WalHandle) void {
-        self.wal_handle = wal;
-        registerWal(wal);
-    }
-
-    /// Ensure WAL is flushed up to LSN
-    ///
-    /// CANARY: REQ=REQ-M7.2-TXN-MANAGER-027; FEATURE="WAL Flush"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_transaction_manager.yml; OWNER=core; UPDATED=2026-01-25
-    pub fn ensureWalFlushed(self: *TransactionManager, lsn: u64) !void {
-        return ensureWalBeforeData(lsn);
     }
 
     // ========================================================================

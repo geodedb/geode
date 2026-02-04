@@ -1352,10 +1352,9 @@ pub fn build(b: *std.Build) void {
     audit_security_mod.addImport("logging", logging_mod);
     audit_security_mod.addImport("json", json_mod);
 
-    // Create user storage module
+    // Create user storage module (GraphStore-backed)
     const user_storage_mod = b.createModule(.{ .root_source_file = b.path("src/storage/user_storage.zig"), .target = target, .optimize = optimize });
-    user_storage_mod.addImport("storage_page_manager", storage_page_manager_shared);
-    user_storage_mod.addImport("types", storage_types_mod);
+    user_storage_mod.addImport("logging", logging_mod);
 
     const user_manager_mod = b.createModule(.{ .root_source_file = b.path("src/security/user_manager.zig"), .target = target, .optimize = optimize });
     user_manager_mod.addImport("geode_auth", auth_mod);

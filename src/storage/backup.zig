@@ -319,7 +319,7 @@ pub const BackupManager = struct {
         if (self.metadata_log.items.len == 0) return;
 
         const cutoff = std.time.milliTimestamp() - @as(i64, @intCast(self.config.retention_days)) * 24 * 60 * 60 * 1000;
-        var kept = std.ArrayList(BackupMetadata).init(self.allocator);
+        var kept: std.ArrayList(BackupMetadata) = .{};
 
         for (self.metadata_log.items) |entry| {
             if (entry.timestamp >= cutoff) {
@@ -359,7 +359,7 @@ pub const BackupManager = struct {
         defer parsed.deinit();
 
         self.metadata_log.deinit(self.allocator);
-        self.metadata_log = std.ArrayList(BackupMetadata).init(self.allocator);
+        self.metadata_log = .{};
         for (parsed.value) |entry| {
             try self.metadata_log.append(self.allocator, entry);
         }
@@ -371,7 +371,9 @@ pub const BackupManager = struct {
         defer self.allocator.free(path);
         const file = try std.fs.cwd().createFile(path, .{});
         defer file.close();
-        try std.json.stringify(self.metadata_log.items, .{}, file.writer());
+        const json_str = try std.json.Stringify.valueAlloc(self.allocator, self.metadata_log.items, .{});
+        defer self.allocator.free(json_str);
+        try file.writeAll(json_str);
     }
 
     fn metadataPath(self: *BackupManager) ![]u8 {
@@ -390,9 +392,9 @@ pub const BackupManager = struct {
         }
         if (chosen == null) return error.NoBackupFound;
 
-        var chain = std.ArrayList(u128).init(self.allocator);
+        var chain: std.ArrayList(u128) = .{};
         try chain.append(self.allocator, chosen.?.backup_id);
-        const chain_slice = try chain.toOwnedSlice();
+        const chain_slice = try chain.toOwnedSlice(self.allocator);
         return .{
             .timestamp = chosen.?.timestamp,
             .lsn = 0,
@@ -402,7 +404,7 @@ pub const BackupManager = struct {
 };
 
 fn generateBackupId() u128 {
-    var rng = std.rand.DefaultPrng.init(@bitCast(std.time.milliTimestamp()));
+    var rng = std.Random.DefaultPrng.init(@bitCast(std.time.milliTimestamp()));
     return rng.random().int(u128);
 }
 
@@ -421,12 +423,10 @@ fn compressData(data: []const u8, compression: CompressionType, allocator: std.m
     if (compression == .none) return allocator.dupe(u8, data);
 
     if (compression == .zstd) {
-        var out = std.ArrayList(u8).init(allocator);
-        errdefer out.deinit(allocator);
-        var compressor = try std.compress.zstd.compressor(out.writer(), .{});
-        try compressor.writeAll(data);
-        try compressor.finish();
-        return out.toOwnedSlice();
+        // Zig 0.15 std.compress.zstd doesn't have compression support yet
+        // Fall back to uncompressed data
+        log.warn("zstd compression not available in Zig 0.15, using uncompressed", &.{});
+        return allocator.dupe(u8, data);
     }
 
     return error.UnsupportedCompression;
@@ -436,17 +436,13 @@ fn decompressData(data: []const u8, compression: CompressionType, allocator: std
     if (compression == .none) return allocator.dupe(u8, data);
 
     if (compression == .zstd) {
-        var fbs = std.io.fixedBufferStream(data);
-        var decompressor = try std.compress.zstd.decompressor(fbs.reader());
-        var out = std.ArrayList(u8).init(allocator);
-        defer out.deinit(allocator);
-        var buf: [4096]u8 = undefined;
-        while (true) {
-            const n = try decompressor.read(&buf);
-            if (n == 0) break;
-            try out.appendSlice(allocator, buf[0..n]);
-        }
-        return out.toOwnedSlice();
+        // Zig 0.15 zstd API
+        var out: std.Io.Writer.Allocating = .init(allocator);
+        defer out.deinit();
+        var in: std.Io.Reader = .fixed(data);
+        var zstd_stream: std.compress.zstd.Decompress = .init(&in, &.{}, .{});
+        _ = zstd_stream.reader.streamRemaining(&out.writer) catch |err| return err;
+        return try out.toOwnedSlice();
     }
 
     return error.UnsupportedCompression;

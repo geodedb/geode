@@ -35,7 +35,6 @@ pub fn TestCANARY_REQ_GQL_081_MetricsRegistry() !void {
     const monitoring = @import("monitoring/registry.zig");
     var g = monitoring.global();
     g.active_transactions.set(3);
-    g.wal_bytes_written.inc(1024);
     g.pathcache_hits.inc(7);
     g.pathcache_misses.inc(2);
     g.query_latency_ms.observe(5);
@@ -56,7 +55,6 @@ pub fn TestCANARY_REQ_GQL_081_PrometheusEndpoint() !void {
     var g = monitoring.global();
     // simulate activity
     g.active_transactions.set(5);
-    g.wal_bytes_written.inc(2048);
     g.pathcache_hits.inc(11);
     g.pathcache_misses.inc(3);
     g.query_latency_ms.observe(2);
@@ -70,7 +68,6 @@ pub fn TestCANARY_REQ_GQL_081_PrometheusEndpoint() !void {
     if (std.mem.indexOf(u8, out, "geode_query_latency_ms_bucket") == null) return error.TestExpectedFound;
     if (std.mem.indexOf(u8, out, "geode_query_latency_ms_count") == null) return error.TestExpectedFound;
     if (std.mem.indexOf(u8, out, "geode_active_transactions 5") == null) return error.TestExpectedFound;
-    if (std.mem.indexOf(u8, out, "geode_wal_bytes_written 2048") == null) return error.TestExpectedFound;
     if (std.mem.indexOf(u8, out, "geode_pathcache_hits 11") == null) return error.TestExpectedFound;
     if (std.mem.indexOf(u8, out, "geode_pathcache_misses 3") == null) return error.TestExpectedFound;
 }

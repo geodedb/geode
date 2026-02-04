@@ -140,7 +140,7 @@ fn printBackupUsage() void {
 fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var output: ?[]const u8 = null;
     var backup_type: []const u8 = "full";
-    var parent_id: ?[]const u8 = null;
+    const parent_id: ?[]const u8 = null;
     var server: []const u8 = "127.0.0.1:3141";
     var compress: bool = false;
     // GAP-0137: TLS configuration options
@@ -1690,17 +1690,13 @@ fn decryptData(data: []const u8, key: [32]u8, allocator: std.mem.Allocator) ![]u
 fn decompressData(data: []const u8, compression: backup_types.CompressionType, allocator: std.mem.Allocator) ![]u8 {
     if (compression == .none) return allocator.dupe(u8, data);
     if (compression == .zstd) {
-        var fbs = std.io.fixedBufferStream(data);
-        var decompressor = try std.compress.zstd.decompressor(fbs.reader());
-        var out = std.ArrayList(u8).init(allocator);
-        defer out.deinit(allocator);
-        var buf: [4096]u8 = undefined;
-        while (true) {
-            const n = try decompressor.read(&buf);
-            if (n == 0) break;
-            try out.appendSlice(allocator, buf[0..n]);
-        }
-        return out.toOwnedSlice();
+        // Zig 0.15 zstd API - use Decompress struct with Io.Reader/Writer
+        var out: std.Io.Writer.Allocating = .init(allocator);
+        defer out.deinit();
+        var in: std.Io.Reader = .fixed(data);
+        var zstd_stream: std.compress.zstd.Decompress = .init(&in, &.{}, .{});
+        _ = zstd_stream.reader.streamRemaining(&out.writer) catch |err| return err;
+        return try out.toOwnedSlice();
     }
     return error.UnsupportedCompression;
 }

@@ -4,6 +4,7 @@ const auth = @import("auth");
 const rls = @import("rls");
 const user_manager = @import("user_manager");
 const user_storage = @import("user_storage");
+const graph_store = @import("geode").graph_store;
 
 test "User creation and authentication" {
     const allocator = testing.allocator;
@@ -421,29 +422,11 @@ test "User Manager integration" {
     var rls_engine = try rls.RLSEngine.init(allocator);
     defer rls_engine.deinit();
 
-    // Create a mock page manager for user storage (test)
-    var mock_page_mgr = struct {
-        const MockPageManager = @This();
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
 
-        pub fn allocatePage(self: *MockPageManager) !u32 {
-            _ = self;
-            return 1;
-        }
-
-        pub fn getPage(self: *MockPageManager, page_id: u32) ![]u8 {
-            _ = self;
-            _ = page_id;
-            return &[_]u8{};
-        }
-
-        pub fn flushPage(self: *MockPageManager, page_id: u32) !void {
-            _ = self;
-            _ = page_id;
-        }
-    }{};
-
-    // Create user storage backend
-    var user_storage_backend = try user_storage.UserStorageBackend.init(allocator, @ptrCast(@alignCast(&mock_page_mgr)));
+    // Create user storage backend using GraphStore
+    var user_storage_backend = try user_storage.UserStorageBackend.init(allocator, &store);
     defer user_storage_backend.deinit();
 
     var mgr = try user_manager.UserManager.init(

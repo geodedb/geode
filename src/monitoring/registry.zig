@@ -51,7 +51,6 @@ pub const Histogram = struct {
 pub const Registry = struct {
     query_latency_ms: Histogram = .{},
     active_transactions: Gauge = .{},
-    wal_bytes_written: Counter = .{},
     pathcache_hits: Counter = .{},
     pathcache_misses: Counter = .{},
 
@@ -79,7 +78,6 @@ pub const Registry = struct {
         const sum_placeholder: u64 = 0; // not tracking sum yet
         try w.print("geode_query_latency_ms_sum {d}\n", .{sum_placeholder});
         try w.print("# TYPE geode_active_transactions gauge\ngeode_active_transactions {d}\n", .{self.active_transactions.get()});
-        try w.print("# TYPE geode_wal_bytes_written counter\ngeode_wal_bytes_written {d}\n", .{self.wal_bytes_written.get()});
         const hits = self.pathcache_hits.get();
         const misses = self.pathcache_misses.get();
         try w.print("# TYPE geode_pathcache_requests counter\ngeode_pathcache_hits {d}\ngeode_pathcache_misses {d}\n", .{ hits, misses });
