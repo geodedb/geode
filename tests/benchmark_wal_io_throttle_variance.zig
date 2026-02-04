@@ -1,10 +1,10 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-028; FEATURE="WAL I/O Throttle"; ASPECT=WALIOThrottleVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_WALIOThrottleVarianceEnvelope; OWNER=storage; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot I/O Throttle"; ASPECT=SnapshotIOThrottleVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotIOThrottleVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
 
 fn simulateThrottle(iterations: usize, target_iops: u32) u64 {
-    // Simulate a feedback loop controlling WAL write IOPS by introducing sleep/jitter when rate exceeds target.
-    var prng = std.rand.DefaultPrng.init(0x57414C5448524F54); // 'WALTHROT'
+    // Simulate a feedback loop controlling snapshot write IOPS by introducing sleep/jitter when rate exceeds target.
+    var prng = std.rand.DefaultPrng.init(0x534E41505448524F); // 'SNAPTHRO'
     const rand = prng.random();
     var issued: u64 = 0;
     var now_ns: u64 = 0;
@@ -33,7 +33,7 @@ fn simulateThrottle(iterations: usize, target_iops: u32) u64 {
     return now_ns;
 }
 
-test "BenchmarkCANARY_REQ_GQL_028_WALIOThrottleVarianceEnvelope" {
+test "BenchmarkCANARY_REQ_GQL_028_SnapshotIOThrottleVarianceEnvelope" {
     const Runs = 28;
     var samples: [Runs]u64 = undefined;
     var r: usize = 0;
@@ -61,5 +61,5 @@ test "BenchmarkCANARY_REQ_GQL_028_WALIOThrottleVarianceEnvelope" {
     try std.testing.expect(cv < 0.21);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.45);
     const stderr = std.io.getStdErr().writer();
-    try stderr.print("{\"benchmark\":\"wal_io_throttle_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
+    try stderr.print("{\"benchmark\":\"snapshot_io_throttle_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

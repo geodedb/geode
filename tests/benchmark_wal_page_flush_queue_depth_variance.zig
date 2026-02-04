@@ -1,8 +1,8 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-028; FEATURE="WAL Page Flush Queue Depth"; ASPECT=WALPageFlushQueueDepthVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_WALPageFlushQueueDepthVarianceEnvelope; OWNER=storage; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Flush Queue Depth"; ASPECT=SnapshotFlushQueueDepthVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotFlushQueueDepthVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
 
-// Simulate queue depth dynamics for WAL page flush scheduling.
+// Simulate queue depth dynamics for snapshot flush scheduling.
 // Model components:
 //  - Incoming dirty pages per tick (Poisson-like via simple LCG modulation)
 //  - Flush dispatcher draining at near-constant rate with small jitter
@@ -42,7 +42,7 @@ fn simulateQueueWindow(ticks: usize) u64 {
     return processed + @as(u64, max_depth * max_depth); // simple proxy
 }
 
-test "BenchmarkCANARY_REQ_GQL_028_WALPageFlushQueueDepthVarianceEnvelope" {
+test "BenchmarkCANARY_REQ_GQL_028_SnapshotFlushQueueDepthVarianceEnvelope" {
     const Runs = 30;
     var samples: [Runs]u64 = undefined;
     var i: usize = 0;
@@ -69,7 +69,7 @@ test "BenchmarkCANARY_REQ_GQL_028_WALPageFlushQueueDepthVarianceEnvelope" {
     const p95 = sorted[@min(sorted.len - 1, (sorted.len * 95) / 100)];
 
     // Thresholds (per NEXT.md S-001): CV<=0.20 p95/mean<=2.45
-    std.debug.print("benchmark=wal_page_flush_queue_depth_variance mean_ns={} cv={:.4} p95_ns={} p95_mean_ratio={:.3}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95, (@as(f128, @floatFromInt(p95)) / mean) });
+    std.debug.print("benchmark=snapshot_flush_queue_depth_variance mean_ns={} cv={:.4} p95_ns={} p95_mean_ratio={:.3}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95, (@as(f128, @floatFromInt(p95)) / mean) });
     try std.testing.expect(cv <= 0.20);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) <= mean * 2.45);
 }

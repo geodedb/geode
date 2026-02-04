@@ -1,9 +1,9 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-028; FEATURE="WAL Segment Recycle"; ASPECT=WALSegmentRecycleLatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_WALSegmentRecycleLatencyVarianceEnvelope; OWNER=storage; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Segment Recycle"; ASPECT=SnapshotSegmentRecycleLatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotSegmentRecycleLatencyVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
 
 fn simulateSegmentRecycle(iteration: usize) u64 {
-    // Simulate operations required to recycle a WAL segment:
+    // Simulate operations required to recycle a snapshot segment:
     // 1. Header sanitize (fixed cost + minor jitter)
     // 2. Free list splice / allocation table rebuild (iteration-dependent variability)
     // 3. Optional encryption re-key pass (every Nth segment)
@@ -21,7 +21,7 @@ fn simulateSegmentRecycle(iteration: usize) u64 {
     return header_cost + splice_cost + encrypt_cost + publish_cost;
 }
 
-test "BenchmarkCANARY_REQ_GQL_028_WALSegmentRecycleLatencyVarianceEnvelope" {
+test "BenchmarkCANARY_REQ_GQL_028_SnapshotSegmentRecycleLatencyVarianceEnvelope" {
     const Runs = 28;
     var samples: [Runs]u64 = undefined;
     var i: usize = 0;
@@ -53,7 +53,7 @@ test "BenchmarkCANARY_REQ_GQL_028_WALSegmentRecycleLatencyVarianceEnvelope" {
     std.sort.heap(u64, &sorted, {}, comptime std.sort.asc(u64));
     const p95 = sorted[@min(sorted.len - 1, (sorted.len * 95) / 100)];
     // Emit a simple metrics line (plain text) to stderr first for diagnostics.
-    std.debug.print("benchmark=wal_segment_recycle_latency_variance mean_ns={} cv={:.6} p95_ns={} threshold_cv=0.21 threshold_p95_ratio=2.55\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
+    std.debug.print("benchmark=snapshot_segment_recycle_latency_variance mean_ns={} cv={:.6} p95_ns={} threshold_cv=0.21 threshold_p95_ratio=2.55\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
     // Envelope thresholds: allow moderate variability due to periodic encryption cost and splice branching.
     try std.testing.expect(cv < 0.21);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.55);
