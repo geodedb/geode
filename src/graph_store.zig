@@ -137,13 +137,16 @@ pub fn getPersistenceFilePath(allocator: std.mem.Allocator) ![]u8 {
     return try std.fmt.allocPrint(allocator, "{s}{s}graph_store.dat", .{ data_dir, sep });
 }
 
+/// Default graph name used when no graph is selected
+pub const DEFAULT_GRAPH_NAME = "default";
+
 pub const Node = struct {
     id: u64,
     labels: [][]const u8,
     properties: std.StringHashMap(PropertyValue),
     // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphTag; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Graph name this node belongs to - enables per-graph data isolation
-    graph_name: []const u8 = "default",
+    graph_name: []const u8 = DEFAULT_GRAPH_NAME,
 };
 
 pub const Edge = struct {
@@ -154,7 +157,7 @@ pub const Edge = struct {
     properties: std.StringHashMap(PropertyValue),
     // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphTag; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Graph name this edge belongs to - enables per-graph data isolation
-    graph_name: []const u8 = "default",
+    graph_name: []const u8 = DEFAULT_GRAPH_NAME,
 };
 
 pub const PropertyValue = union(enum) {

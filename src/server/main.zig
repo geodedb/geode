@@ -39,8 +39,6 @@ const SimplifiedBackupManager = backup_manager.SimplifiedBackupManager;
 const index_catalog = @import("index_catalog.zig");
 // Import server flags (M3.1 Phase 3 modularization)
 const server_flags = geode.server_flags;
-// Import graph storage manager (M3.1 Phase 3 modularization)
-const graph_storage_mgr = geode.graph_storage_manager;
 // Import CLI argument parsing (M3.2 Phase 3 CLI extraction)
 const cli_args = @import("cli_args.zig");
 // Import server initialization (M3.2 Phase 3 initialization extraction)
@@ -144,7 +142,6 @@ const computeFlagsExtended = server_flags.computeFlagsExtended;
 // Import graph storage management (M3.1 Phase 3 graph persistence extraction)
 // CANARY: REQ=REQ-BINARY-PERSIST-003; FEATURE="BinaryPersistence"; ASPECT=MainImports; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
 // Note: JSON Lines persistence (tryLoadGraphFromDir, saveGraphToDir) removed - using binary persistence via graph_store
-const getOrCreateGraphStorage = graph_storage_mgr.getOrCreateGraphStorage;
 const graph_store = geode.graph_store;
 // Import protocol handler functions (M3.2 Phase 3 backup protocol extraction)
 // Import query executor utility functions (M3.3 Phase 3 query utilities extraction)
@@ -171,8 +168,8 @@ const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 // Includes: IndexStats struct, global catalog state, initIndexCatalog(), chooseIndexForPredicate(),
 // indexStatsOnInsert(), indexStatsOnDelete() - all imported above via const aliasing
 
-// Removed: Graph storage singleton and data directory now in graph_storage_manager module (M3.1 Phase 3 graph persistence extraction)
-// Original: g_graph_storage, g_data_dir variables (~2 lines) - now in graph_storage_manager.zig
+// Removed: Graph storage singleton and data directory now in graph_store module (M3.1 Phase 3 graph persistence extraction)
+// Original: g_graph_storage, g_data_dir variables (~2 lines) - now in graph_store.zig
 
 // Removed: g_mvcc_manager global variable (~1 line) now in server_utilities module (M3.3 Phase 3 server utilities extraction)
 
@@ -184,13 +181,13 @@ const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 
 // Removed: server_utilities.getOrCreateMVCCManager() function (~10 lines) now in server_utilities module (M3.3 Phase 3 server utilities extraction)
 
-// Removed: Graph storage management functions now in graph_storage_manager module (M3.1 Phase 3 graph persistence extraction)
+// Removed: Graph storage management functions now in graph_store module (M3.1 Phase 3 graph persistence extraction)
 // Original: getOrCreateGraphStorage() function (~28 lines)
 // Original: getNextNodeId() function (~10 lines)
 // Original: tryLoadGraphFromDir() function (~98 lines)
 // Original: saveGraphToDir() function (~86 lines)
 // Original: initializeSampleGraph() function (~24 lines)
-// Total extracted: ~246 lines to graph_storage_manager.zig module
+// Total extracted: ~246 lines to graph_store.zig module
 
 // Removed: server_utilities.execInsertValue() function (~25 lines) now in server_utilities module (M3.3 Phase 3 server utilities extraction)
 
@@ -355,9 +352,6 @@ pub fn main() !void {
         audit_logger.deinit();
         gpa.destroy(audit_logger);
     }
-
-    // Inject audit logger into graph storage manager
-    graph_storage_mgr.setAuditLogger(audit_logger);
 
     // Initialize server components using modularized server_init (M3.2 Phase 3 initialization extraction)
     var init_ctx = try server_init.initialize(

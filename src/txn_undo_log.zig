@@ -2,8 +2,6 @@ const std = @import("std");
 const graph_store = @import("graph_store.zig");
 // CANARY: REQ=REQ-TXN-UNDO-SERVER-014; FEATURE="TransactionUndoLog"; ASPECT=GraphCommonImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const graph_common = @import("types/graph_common.zig");
-// CANARY: REQ=REQ-TXN-UNDO-SERVER-017; FEATURE="TransactionUndoLog"; ASPECT=MultiGraphRollback; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
-const graph_storage_mgr = @import("server/graph_storage_manager.zig");
 
 // CANARY: REQ=REQ-TXN-UNDO-001; FEATURE="TransactionUndoLog"; ASPECT=UndoLogCore; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 // Transaction undo log for proper ROLLBACK support in CLI mode

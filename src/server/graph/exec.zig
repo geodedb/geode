@@ -1,6 +1,6 @@
 const std = @import("std");
 // CANARY: REQ=REQ-GQL-017; FEATURE="Property Access"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_PropertyAccess; OWNER=engine; UPDATED=2025-09-20
-// Use relative imports to avoid circular dependency when execution.zig imports graph_storage_manager.zig
+// Use relative imports to avoid circular dependency when execution.zig imports graph_store.zig
 const eval = @import("../../eval.zig");
 const ast = @import("../../gql/ast.zig");
 const diagnostics = @import("../../diagnostics.zig");

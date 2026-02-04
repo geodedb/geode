@@ -6,8 +6,6 @@ const wal_manager = geode.wal_manager;
 // CANARY: REQ=REQ-TXN-UNDO-SERVER-001; FEATURE="TransactionUndoLog"; ASPECT=ServerIntegration; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = geode.txn_undo_log;
 const graph_store = geode.graph_store;
-// CANARY: REQ=REQ-TXN-UNDO-SERVER-016; FEATURE="TransactionUndoLog"; ASPECT=GraphStorageImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
-const graph_storage_mgr = geode.graph_storage_manager;
 const graph_exec = geode.graph_exec;
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-016; FEATURE="Structured Logging"; ASPECT=TransactionHandlers; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
@@ -71,12 +69,11 @@ const TxnSuccessResponse = struct {
 
 /// Get graph storage for the current session, falling back to default if no graph selected
 fn getSessionGraphStorage(allocator: std.mem.Allocator, state: *ServerState) *graph_exec.GraphStorage {
-    // Try to get graph by session's current_graph name
-    if (graph_storage_mgr.getGraphStorageByName(state.current_graph)) |storage| {
-        return storage;
+    const store = graph_store.getGlobalStore(allocator);
+    if (state.current_graph) |name| {
+        if (store.graphExists(name)) return store;
     }
-    // Fall back to default graph
-    return graph_storage_mgr.getOrCreateGraphStorage(allocator);
+    return store;
 }
 
 /// Get or create MVCC manager (helper function)

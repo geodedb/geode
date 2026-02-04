@@ -14,8 +14,72 @@
 const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
-const graph_storage_mgr = geode.graph_storage_manager;
 const graph_store = geode.graph_store;
+
+const graph_storage_mgr = struct {
+    pub const DEFAULT_GRAPH_NAME = graph_store.DEFAULT_GRAPH_NAME;
+
+    pub fn setDataDir(dir: ?[]const u8) void {
+        graph_store.setDataDirOverride(std.heap.page_allocator, dir);
+    }
+
+    pub fn getDataDir() ?[]const u8 {
+        return graph_store.getDataDirOverride();
+    }
+
+    pub fn clearGraphStorage() void {
+        if (graph_store.getCurrentGlobalStore()) |store| {
+            store.clearNodes();
+            store.clearGraphRegistry();
+            store.dirty = true;
+        }
+    }
+
+    pub fn clearMultiGraphStorage() void {
+        clearGraphStorage();
+    }
+
+    pub fn getOrCreateGraphStorage(allocator: std.mem.Allocator) *geode.graph_common.GraphStorage {
+        return graph_store.getGlobalStore(allocator);
+    }
+
+    pub fn createGraphStorage(allocator: std.mem.Allocator, name: []const u8) !*geode.graph_common.GraphStorage {
+        const store = graph_store.getGlobalStore(allocator);
+        try store.createGraph(name);
+        return store;
+    }
+
+    pub fn graphExists(name: []const u8) bool {
+        return graph_store.getGlobalStore(std.heap.page_allocator).graphExists(name);
+    }
+
+    pub fn listGraphNames(allocator: std.mem.Allocator) ![]const []const u8 {
+        const store = graph_store.getGlobalStore(allocator);
+        return store.listGraphNames(allocator);
+    }
+
+    pub fn saveNamedGraph(allocator: std.mem.Allocator, graph_name: []const u8) !void {
+        const store = graph_store.getGlobalStore(allocator);
+        if (!store.graphExists(graph_name)) return error.GraphNotFound;
+        store.saveIfDirty();
+    }
+
+    pub fn loadNamedGraph(allocator: std.mem.Allocator, graph_name: []const u8) !*geode.graph_common.GraphStorage {
+        const store = graph_store.getGlobalStore(allocator);
+        if (!store.graphExists(graph_name)) return error.GraphNotFound;
+        return store;
+    }
+
+    pub fn dropGraphStorage(name: []const u8) !void {
+        const store = graph_store.getGlobalStore(std.heap.page_allocator);
+        try store.dropGraph(name);
+    }
+
+    pub fn getGraphDataDir(allocator: std.mem.Allocator, graph_name: []const u8) ![]const u8 {
+        _ = graph_name;
+        return graph_store.getPersistenceFilePath(allocator);
+    }
+};
 
 // ============================================================================
 // Test Utilities
@@ -164,10 +228,7 @@ test "createGraphStorage allows multiple unique graphs" {
 
     // Verify list contains at least our 3 graphs
     const names = try graph_storage_mgr.listGraphNames(allocator);
-    defer {
-        for (names) |name| allocator.free(name);
-        allocator.free(names);
-    }
+    defer allocator.free(names);
     // We created 3 graphs, so count should be at least 3
     try testing.expect(names.len >= 3);
 

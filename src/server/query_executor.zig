@@ -9,7 +9,7 @@ const graph_exec = geode.graph_exec;
 const eval_extended = geode.eval_ext;
 const server_state = geode.server_state;
 const server_flags = geode.server_flags;
-const graph_storage_mgr = geode.graph_storage_manager;
+const graph_store = geode.graph_store;
 const union_advanced = geode.union_advanced;
 const ServerState = server_state.ServerState;
 const SessionConfiguration = server_state.SessionConfiguration;
@@ -120,18 +120,17 @@ fn encodeStatusResponse(allocator: std.mem.Allocator, status_class: []const u8, 
 
 // Import types from other modules
 const UnionMetrics = server_state.UnionMetrics;
-const getOrCreateGraphStorage = graph_storage_mgr.getOrCreateGraphStorage;
-const getGraphStorageByName = graph_storage_mgr.getGraphStorageByName;
+const DEFAULT_GRAPH_NAME = graph_store.DEFAULT_GRAPH_NAME;
 
 // CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphSupport"; ASPECT=QueryRouting; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-20
 /// Get graph storage for the current session, falling back to default if no graph selected
 fn getSessionGraphStorage(allocator: std.mem.Allocator, state: *server_state.ServerState) *graph_exec.GraphStorage {
-    // Try to get graph by session's current_graph name
-    if (getGraphStorageByName(state.current_graph)) |storage| {
-        return storage;
+    const store = graph_store.getGlobalStore(allocator);
+    if (state.current_graph) |name| {
+        if (store.graphExists(name)) return store;
     }
-    // Fall back to default graph
-    return getOrCreateGraphStorage(allocator);
+    // Fall back to default graph when current graph is unset or missing
+    return store;
 }
 
 // Global configuration for MATCH query execution guards (set by server initialization)
@@ -1281,7 +1280,7 @@ fn executeCreateStatement(allocator: std.mem.Allocator, state: *ServerState, stm
     defer created_nodes.deinit(allocator);
     var created_edges = try std.ArrayList(graph_exec.EdgeId).initCapacity(allocator, 0);
     defer created_edges.deinit(allocator);
-    const graph_name = state.current_graph orelse graph_storage_mgr.DEFAULT_GRAPH_NAME;
+    const graph_name = state.current_graph orelse DEFAULT_GRAPH_NAME;
 
     // Create nodes from the pattern
     for (stmt.pattern.chains) |chain| {
@@ -1514,7 +1513,7 @@ fn executeMergeStatement(allocator: std.mem.Allocator, state: *ServerState, stmt
         var created_nodes = try std.ArrayList(graph_exec.NodeId).initCapacity(allocator, 0);
         defer created_nodes.deinit(allocator);
 
-        const graph_name = state.current_graph orelse graph_storage_mgr.DEFAULT_GRAPH_NAME;
+        const graph_name = state.current_graph orelse DEFAULT_GRAPH_NAME;
         for (stmt.pattern.chains) |chain| {
             for (chain.hops) |hop| {
                 if (hop.left.name) |name| {
@@ -2248,13 +2247,13 @@ fn loadRestoredDataIntoState(allocator: std.mem.Allocator, state: *ServerState, 
 
     // Temporarily repoint GraphStore persistence path to the restore directory
     var prev_dir_copy: ?[]u8 = null;
-    if (graph_storage_mgr.getDataDir()) |dir| {
+    if (graph_store.getDataDirOverride()) |dir| {
         prev_dir_copy = try allocator.dupe(u8, dir);
     }
     defer if (prev_dir_copy) |dir| allocator.free(dir);
 
-    graph_storage_mgr.setDataDir(restore_dir);
-    defer graph_storage_mgr.setDataDir(prev_dir_copy);
+    graph_store.setDataDirOverride(allocator, restore_dir);
+    defer graph_store.setDataDirOverride(allocator, prev_dir_copy);
 
     // Load from restored file using GraphStore persistence
     graph_storage.loadFromFile() catch |err| {
@@ -2488,7 +2487,7 @@ fn executeCreateGraphStatement(allocator: std.mem.Allocator, state: *ServerState
 
     // CRITICAL: Also create graph storage so graphExists() returns true
     // and queries can be executed against this graph
-    _ = graph_storage_mgr.createGraphStorage(allocator, stmt.name) catch |err| {
+    _ = graph_store.getGlobalStore(allocator).createGraph(stmt.name) catch |err| {
         // If storage creation fails (e.g., already exists), remove from catalog
         _ = state.catalog_graphs.fetchRemove(stmt.name);
         if (err == error.GraphAlreadyExists) {
@@ -2527,7 +2526,7 @@ fn executeDropGraphStatement(allocator: std.mem.Allocator, state: *ServerState, 
         allocator.free(entry.key);
 
         // Also remove from graph storage manager
-        graph_storage_mgr.dropGraphStorage(stmt.name) catch |err| {
+        graph_store.getGlobalStore(allocator).dropGraph(stmt.name) catch |err| {
             log.warn("Failed to drop graph storage", &.{ Attr.string("graph", stmt.name), Attr.string("error", @errorName(err)) });
         };
 
@@ -2536,7 +2535,7 @@ fn executeDropGraphStatement(allocator: std.mem.Allocator, state: *ServerState, 
         return encodeStatusResponse(allocator, "00000", msg);
     } else {
         // Also try to drop from graph storage (might exist there but not in catalog)
-        graph_storage_mgr.dropGraphStorage(stmt.name) catch {};
+        graph_store.getGlobalStore(allocator).dropGraph(stmt.name) catch {};
 
         if (stmt.if_exists) {
             const msg = try std.fmt.allocPrint(allocator, "{s} {s} does not exist", .{ graph_type, stmt.name });

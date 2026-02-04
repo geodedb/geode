@@ -45,7 +45,6 @@ const return_and_sorting = @import("execution/return_and_sorting.zig");
 const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 const query_execution = @import("execution/query_execution.zig");
 const value_utilities = @import("execution/value_utilities.zig");
-const graph_storage_manager = @import("server/graph_storage_manager.zig");
 // CANARY: REQ=REQ-TXN-UNDO-004; FEATURE="TransactionUndoLog"; ASPECT=ExecutionImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("txn_undo_log.zig");
 
@@ -1184,7 +1183,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             // CRITICAL: Also create graph storage so DROP GRAPH can find it
             // and queries can be executed against this graph
-            _ = graph_storage_manager.createGraphStorage(allocator, graph_name) catch |err| {
+            _ = graph_store.getGlobalStore(allocator).createGraph(graph_name) catch |err| {
                 // If storage creation fails (e.g., already exists), that's OK - log and continue
                 log.debug("Graph storage creation failed", &.{
                     Attr.string("graph_name", graph_name),
@@ -1218,7 +1217,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             // Check if graph exists in catalog or storage (unless IF EXISTS is used)
             const in_catalog = catalog.graphs.contains(graph_name);
-            const in_storage = graph_storage_manager.graphExists(graph_name);
+            const in_storage = graph_store.getGlobalStore(allocator).graphExists(graph_name);
 
             if (!dg.if_exists and !in_catalog and !in_storage) {
                 return error.GraphNotFound;
@@ -1229,7 +1228,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             // CRITICAL: Also remove from graph storage manager
             // This ensures SHOW GRAPHS no longer lists this graph
-            graph_storage_manager.dropGraphStorage(graph_name) catch |err| {
+            graph_store.getGlobalStore(allocator).dropGraph(graph_name) catch |err| {
                 // Log but don't fail - graph might only exist in one place
                 log.warn("dropGraphStorage failed", &.{
                     Attr.string("graph_name", graph_name),
@@ -1314,7 +1313,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const in_catalog = cat.graphs.contains(graph_name);
             cat.rwlock.unlockShared();
 
-            const in_storage = graph_storage_manager.graphExists(graph_name);
+            const in_storage = graph_store.getGlobalStore(allocator).graphExists(graph_name);
 
             if (!in_catalog and !in_storage) {
                 return error.GraphNotFound;

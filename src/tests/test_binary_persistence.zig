@@ -16,7 +16,24 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 const graph_store = geode.graph_store;
-const graph_storage_mgr = geode.graph_storage_manager;
+
+const graph_storage_mgr = struct {
+    pub fn setDataDir(dir: ?[]const u8) void {
+        graph_store.setDataDirOverride(std.heap.page_allocator, dir);
+    }
+
+    pub fn clearGraphStorage() void {
+        if (graph_store.getCurrentGlobalStore()) |store| {
+            store.clearNodes();
+            store.clearGraphRegistry();
+            store.dirty = true;
+        }
+    }
+
+    pub fn clearMultiGraphStorage() void {
+        clearGraphStorage();
+    }
+};
 
 // ============================================================================
 // Test Utilities

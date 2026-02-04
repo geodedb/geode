@@ -9,9 +9,6 @@ const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
 
-// Import graph storage manager for SHOW GRAPHS
-const graph_storage_manager = @import("../server/graph_storage_manager.zig");
-
 // Import helper functions used by statement handlers
 const getCatalog = execution.getCatalog;
 const executeMatchQueryWithParams = execution.executeMatchQueryWithParams;
@@ -20,6 +17,34 @@ const executeStatementWithContext = execution.executeStatementWithContext;
 // Local type aliases
 const Value = value_types.Value;
 const Env = value_types.Env;
+
+fn listNodeLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore) ![][]const u8 {
+    var label_set = std.StringHashMap(void).init(allocator);
+    defer label_set.deinit();
+
+    var node_it = store.nodes.iterator();
+    while (node_it.next()) |entry| {
+        const node = entry.value_ptr.*;
+        for (node.labels) |label| {
+            const label_copy = try allocator.dupe(u8, label);
+            errdefer allocator.free(label_copy);
+            const result = try label_set.getOrPut(label_copy);
+            if (result.found_existing) {
+                allocator.free(label_copy);
+            }
+        }
+    }
+
+    var labels = try std.ArrayList([]const u8).initCapacity(allocator, label_set.count());
+    errdefer labels.deinit(allocator);
+
+    var key_it = label_set.keyIterator();
+    while (key_it.next()) |key| {
+        try labels.append(allocator, key.*);
+    }
+
+    return labels.toOwnedSlice(allocator);
+}
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-007; FEATURE="ExecutionRefactoring"; ASPECT=STATEMENT_HANDLERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
 // Extracted statement handlers (SHOW, FOR, VALUES, EXPLAIN, PROFILE) from execution.zig for better modularity (M1 Phase 7)
@@ -89,7 +114,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             }
 
             // Get storage graphs - only free if we got allocated memory
-            if (graph_storage_manager.listGraphNames(allocator)) |storage_graphs| {
+            if (graph_store.getGlobalStore(allocator).listGraphNames(allocator)) |storage_graphs| {
                 defer {
                     for (storage_graphs) |name| {
                         allocator.free(name);
@@ -145,7 +170,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             // CANARY: REQ=REQ-SHOW-TABLES-001; FEATURE="SHOW TABLES"; ASPECT=StatementHandler; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=execution; UPDATED=2026-01-13
             // In a graph database, node labels act as "tables"
             // Return unique node labels from the graph storage
-            const labels = graph_storage_manager.listNodeLabels(allocator) catch &.{};
+            const labels = listNodeLabels(allocator, graph_store.getGlobalStore(allocator)) catch &.{};
             defer {
                 for (labels) |label| {
                     allocator.free(label);

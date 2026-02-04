@@ -19,8 +19,6 @@ const IndexInfo = execution.IndexInfo;
 const fle_catalog = @import("../schema/catalog.zig");
 const fle_annotations = @import("../schema/annotations.zig");
 
-// Import graph storage manager for multi-graph support
-const graph_storage_manager = @import("../server/graph_storage_manager.zig");
 
 // Import helper functions used by statement dispatcher
 const checkPermission = execution.checkPermission;
@@ -764,7 +762,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     cat.allocator.free(entry.key);
                 }
                 // Also drop the storage
-                graph_storage_manager.dropGraphStorage(graph_name) catch {};
+                graph_store.getGlobalStore(allocator).dropGraph(graph_name) catch {};
             } else {
                 // Check if graph already exists
                 const graph_exists = cat.graphs.contains(graph_name);
@@ -791,7 +789,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             try cat.graphs.put(try cat.allocator.dupe(u8, graph_name), {});
 
             // Create actual graph storage for this graph
-            _ = graph_storage_manager.createGraphStorage(allocator, graph_name) catch |err| {
+            _ = graph_store.getGlobalStore(allocator).createGraph(graph_name) catch |err| {
                 log.err("Failed to create graph storage", &.{
                     Attr.string("graph_name", graph_name),
                     Attr.err("error", err),
@@ -895,7 +893,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             // Check if graph exists in either catalog or storage (unless IF EXISTS is used)
             const in_catalog = cat.graphs.contains(graph_name);
-            const in_storage = graph_storage_manager.graphExists(graph_name);
+            const in_storage = graph_store.getGlobalStore(allocator).graphExists(graph_name);
 
             if (!dg.if_exists and !in_catalog and !in_storage) {
                 return error.GraphNotFound;
@@ -906,7 +904,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             // CRITICAL: Also remove from graph storage manager
             // This ensures SHOW GRAPHS no longer lists this graph
-            graph_storage_manager.dropGraphStorage(graph_name) catch |err| {
+            graph_store.getGlobalStore(allocator).dropGraph(graph_name) catch |err| {
                 // Log but don't fail - graph might only exist in one place
                 log.warn("dropGraphStorage failed", &.{
                     Attr.string("graph_name", graph_name),

@@ -1,5 +1,5 @@
 const std = @import("std");
-const graph_storage_manager = @import("../server/graph_storage_manager.zig");
+const graph_store = @import("../graph_store.zig");
 const tde = @import("../storage/tde_file_encryption.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Schema; STATUS=EXEMPT; OWNER=schema; UPDATED=2026-01-24
@@ -900,9 +900,18 @@ pub fn loadCatalog() !void {
         try graph_names.append(allocator, name);
     }
 
-    // GAP-384 FIX: Load all named graph data from their respective directories
-    // This ensures graphs persist across server restarts
-    graph_storage_manager.loadAllNamedGraphs(allocator, graph_names.items);
+    // Ensure all catalog graphs exist in the global GraphStore.
+    const store = graph_store.getGlobalStore(allocator);
+    for (graph_names.items) |name| {
+        if (!store.graphExists(name)) {
+            _ = store.createGraph(name) catch |err| {
+                log.err("Failed to ensure graph in store", &.{
+                    Attr.string("name", name),
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+        }
+    }
 
     // Read indexes
     i = 0;

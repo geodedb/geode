@@ -3,7 +3,6 @@ const geode = @import("geode");
 const storage_pm = @import("storage_page_manager");
 const storage_catalog = @import("storage_catalog");
 const server_flags = geode.server_flags;
-const graph_storage_mgr = geode.graph_storage_manager;
 // CANARY: REQ=REQ-BINARY-PERSIST-001; FEATURE="BinaryPersistence"; ASPECT=ServerInit; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
 const graph_store = geode.graph_store;
 const index_catalog = @import("index_catalog.zig");
@@ -236,9 +235,9 @@ pub fn initialize(
 
     // CANARY: REQ=REQ-QUIC-CATALOG-003; FEATURE="CatalogDataDirIsolation"; ASPECT=ServerInit; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
     // Note: GEODE_DATA_DIR environment variable is read at startup if needed;
-    // direct configuration via graph_storage_mgr.setDataDir() is preferred
-    // Set data directory for graph storage manager (this is the canonical way to configure isolation)
-    graph_storage_mgr.setDataDir(data_dir);
+    // direct configuration via graph_store.setDataDirOverride() is preferred
+    // Set data directory for GraphStore persistence (canonical configuration for isolation)
+    graph_store.setDataDirOverride(allocator, data_dir);
 
     // Initialize persistent storage and catalog
     const storage = try initializeStorage(allocator, data_dir, catalog_create_name);
