@@ -1,9 +1,6 @@
 const std = @import("std");
 const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
-
-fn getServerAddr(allocator: std.mem.Allocator) ![]u8 {
-    return std.process.getEnvVarOwned(allocator, "GEODE_TEST_SERVER") catch return error.SkipZigTest;
-}
+const proto_util = @import("proto_test_util.zig");
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
@@ -45,10 +42,9 @@ fn assertSimpleQueryOk(out: []const u8) !void {
 
 test "distributed: single-node raft enabled simple query" {
     const exe = "./zig-out/bin/geode";
-    const allocator = std.testing.allocator;
-    const server = try getServerAddr(allocator);
-    defer allocator.free(server);
-    const res = try run(&.{ exe, "RETURN 1 AS x ORDER BY x LIMIT 1", "--server", server, "--insecure", "--dist-enable-raft" });
+    var server = try proto_util.spawnServerRandom(std.testing.allocator, proto_util.TestEnv.standard());
+    defer server.deinit();
+    const res = try run(&.{ exe, "RETURN 1 AS x ORDER BY x LIMIT 1", "--server", server.getAddr(), "--insecure", "--dist-enable-raft" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
@@ -57,10 +53,9 @@ test "distributed: single-node raft enabled simple query" {
 
 test "distributed: 2pc enabled simple query" {
     const exe = "./zig-out/bin/geode";
-    const allocator = std.testing.allocator;
-    const server = try getServerAddr(allocator);
-    defer allocator.free(server);
-    const res = try run(&.{ exe, "RETURN 1 AS x ORDER BY x LIMIT 1", "--server", server, "--insecure", "--dist-enable-2pc" });
+    var server = try proto_util.spawnServerRandom(std.testing.allocator, proto_util.TestEnv.standard());
+    defer server.deinit();
+    const res = try run(&.{ exe, "RETURN 1 AS x ORDER BY x LIMIT 1", "--server", server.getAddr(), "--insecure", "--dist-enable-2pc" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);
@@ -69,10 +64,9 @@ test "distributed: 2pc enabled simple query" {
 
 test "distributed: sharding flag no-op simple query" {
     const exe = "./zig-out/bin/geode";
-    const allocator = std.testing.allocator;
-    const server = try getServerAddr(allocator);
-    defer allocator.free(server);
-    const res = try run(&.{ exe, "RETURN 1 AS x ORDER BY x LIMIT 1", "--server", server, "--insecure", "--dist-enable-sharding" });
+    var server = try proto_util.spawnServerRandom(std.testing.allocator, proto_util.TestEnv.standard());
+    defer server.deinit();
+    const res = try run(&.{ exe, "RETURN 1 AS x ORDER BY x LIMIT 1", "--server", server.getAddr(), "--insecure", "--dist-enable-sharding" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);

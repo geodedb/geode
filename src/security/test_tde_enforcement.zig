@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const testing = std.testing;
-const tde_file = @import("../storage/tde_file_encryption.zig");
+const tde_file = @import("tde_file");
 
 // ============================================================================
 // TDE ENFORCEMENT UNIT TESTS

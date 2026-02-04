@@ -1699,10 +1699,18 @@ pub fn build(b: *std.Build) void {
 
     // CANARY: REQ=REQ-TDE-ENFORCE-015; FEATURE="TDEEnforcement"; ASPECT=BuildIntegration; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
     // CRITICAL SECURITY: TDE enforcement tests - verify all disk writes are encrypted when TDE is enabled
+    const tde_file_mod = b.createModule(.{
+        .root_source_file = b.path("src/storage/tde_file_encryption.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const tde_enforcement_test_mod = b.createModule(.{
         .root_source_file = b.path("src/security/test_tde_enforcement.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "tde_file", .module = tde_file_mod },
+        },
     });
     const tde_enforcement_tests = b.addTest(.{ .root_module = tde_enforcement_test_mod });
     test_step.dependOn(&tde_enforcement_tests.step);
