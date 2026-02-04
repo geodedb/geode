@@ -31,8 +31,8 @@ fn stats(samples: []const u64) struct { mean: f128, cv: f128, p95_mean: f128 } {
     return .{ .mean = mean, .cv = cv, .p95_mean = p95 / mean };
 }
 
-// Placeholder: simulate baseline vs optimized physiological redo by iterating over synthetic log records with different stride / cache effects.
-// CANARY: REQ=REQ-GQL-022; FEATURE="Storage/Recovery"; ASPECT=RedoOptimizationDeltaVariance; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_022_RedoOptimizationDeltaSmoke; BENCH=BenchmarkCANARY_REQ_GQL_022_RedoOptimizationDeltaVarianceEnvelope; OWNER=storage; UPDATED=2025-09-21
+// Placeholder: simulate baseline vs optimized snapshot load by iterating over synthetic records with different stride / cache effects.
+// CANARY: REQ=REQ-GQL-022; FEATURE="Storage/Recovery"; ASPECT=SnapshotLoadOptimizationDeltaVariance; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_022_RedoOptimizationDeltaSmoke; BENCH=BenchmarkCANARY_REQ_GQL_022_RedoOptimizationDeltaVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
 
 fn simulateRedo(records: []u64, optimized: bool) u64 {
     var acc: u64 = 0;

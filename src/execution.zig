@@ -204,17 +204,21 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
         return instance;
     }
 
-    // Get data directory from environment or use default
+    // Prefer GraphStore data dir override; fall back to GEODE_DATA_DIR or /tmp
     var data_dir_owned: ?[]u8 = null;
-    const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
-        if (err == error.EnvironmentVariableNotFound) {
-            break :blk "/tmp";
-        }
-        return err;
+    const data_dir = if (graph_store.getDataDirOverride()) |override| blk: {
+        data_dir_owned = try allocator.dupe(u8, override);
+        break :blk data_dir_owned.?;
+    } else blk: {
+        const env = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| {
+            if (err == error.EnvironmentVariableNotFound) {
+                break :blk "/tmp";
+            }
+            return err;
+        };
+        data_dir_owned = env;
+        break :blk env;
     };
-    if (!std.mem.eql(u8, data_dir, "/tmp")) {
-        data_dir_owned = @constCast(data_dir);
-    }
     defer if (data_dir_owned) |owned| allocator.free(owned);
 
     // Create the catalog instance with provided allocator
@@ -1304,9 +1308,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             // Check if graph exists in catalog or storage
             const cat = getCatalog(allocator, context);
-            cat.rwlock.lockShared();
-            const in_catalog = cat.graphs.contains(graph_name);
-            cat.rwlock.unlockShared();
+            const in_catalog = cat.hasGraph(graph_name);
 
             const in_storage = graph_store.getGlobalStore(allocator).graphExists(graph_name);
 

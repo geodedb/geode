@@ -1,40 +1,45 @@
 const std = @import("std");
-const catalog = @import("../src/storage/catalog.zig");
-const page_manager = @import("../src/storage/page_manager.zig");
+const catalog = @import("../src/schema/catalog.zig");
 
-test "storage catalog persistence" {
-    var pm = page_manager.PageManager.initInMemory(std.testing.allocator, 4096);
-    defer pm.deinit();
+test "catalog persistence with GraphStore backing" {
+    const allocator = std.testing.allocator;
 
-    var cat = catalog.StorageCatalog.init(std.testing.allocator, &pm);
-    defer cat.deinit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
 
-    // Load empty catalog
-    try cat.load();
-    try std.testing.expect(cat.tables.count() == 0);
+    const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(data_dir);
 
-    // Create a table
-    const columns = [_]catalog.StorageCatalog.TableMetadata.ColumnMetadata{
-        .{ .name = "id", .type_name = "INTEGER", .nullable = false, .default_value = null, .ordinal_position = 1 },
-        .{ .name = "name", .type_name = "TEXT", .nullable = true, .default_value = null, .ordinal_position = 2 },
-    };
+    {
+        const cat = try catalog.Catalog.init(allocator, data_dir);
+        defer {
+            cat.deinit();
+            allocator.destroy(cat);
+        }
 
-    try cat.createTable("users", &columns);
-    try std.testing.expect(cat.tables.count() == 1);
+        try std.testing.expectEqual(@as(usize, 0), cat.schemas.count());
 
-    // Verify table exists
-    const table_meta = cat.getTable("users");
-    try std.testing.expect(table_meta != null);
-    try std.testing.expect(std.mem.eql(u8, table_meta.?.name, "users"));
-    try std.testing.expect(table_meta.?.columns.len == 2);
+        try cat.addSchema("public");
 
-    // Create an index
-    const index_columns = [_][]const u8{"id"};
-    try cat.createIndex("users_pk", "users", &index_columns, true);
+        const index_columns = [_][]const u8{ "id" };
+        const index_info = catalog.IndexInfo{
+            .name = "users_pk",
+            .index_type = "btree",
+            .table_name = "users",
+            .columns = @as([][]const u8, @constCast(index_columns[0..])),
+        };
+        try cat.addIndex(index_info);
+    }
 
-    // Verify index exists
-    const index_meta = cat.getIndex("users_pk");
+    const cat2 = try catalog.Catalog.init(allocator, data_dir);
+    defer {
+        cat2.deinit();
+        allocator.destroy(cat2);
+    }
+
+    try std.testing.expect(cat2.hasSchema("public"));
+    const index_meta = try cat2.getIndex("users", "users_pk");
     try std.testing.expect(index_meta != null);
-    try std.testing.expect(std.mem.eql(u8, index_meta.?.name, "users_pk"));
-    try std.testing.expect(index_meta.?.unique == true);
+    try std.testing.expectEqualStrings("users_pk", index_meta.?.name);
+    try std.testing.expectEqualStrings("users", index_meta.?.table_name);
 }

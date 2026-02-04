@@ -1,27 +1,32 @@
 const std = @import("std");
+const catalog = @import("../src/schema/catalog.zig");
 
-// E2E: persistent catalog on disk without server; verifies PageManager + StorageCatalog wiring
-
-test "catalog persists to disk via PageManager.initPersistent" {
+// E2E: persistent catalog on disk without server; verifies Catalog persistence
+test "catalog persists to disk via Catalog.init" {
     const allocator = std.testing.allocator;
-    var tmp_dir = try std.testing.tmpDir(.{});
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
+
     const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(path);
 
-    var pm1 = @import("storage_page_manager").PageManager.initPersistent(allocator, 4096, path);
-    defer pm1.deinit();
-    var cat1 = @import("storage_catalog").StorageCatalog.init(allocator, &pm1);
-    defer cat1.deinit();
-    try cat1.load();
-    try cat1.createTable("tbl1", &.{});
-    try cat1.save();
+    {
+        const cat1 = try catalog.Catalog.init(allocator, path);
+        defer {
+            cat1.deinit();
+            allocator.destroy(cat1);
+        }
 
-    var pm2 = @import("storage_page_manager").PageManager.initPersistent(allocator, 4096, path);
-    defer pm2.deinit();
-    var cat2 = @import("storage_catalog").StorageCatalog.init(allocator, &pm2);
-    defer cat2.deinit();
-    try cat2.load();
-    const t = cat2.getTable("tbl1") orelse return error.TableMissing;
-    try std.testing.expect(std.mem.eql(u8, t.name, "tbl1"));
+        try cat1.addSchema("s1");
+        try cat1.addGraph("g1");
+    }
+
+    const cat2 = try catalog.Catalog.init(allocator, path);
+    defer {
+        cat2.deinit();
+        allocator.destroy(cat2);
+    }
+
+    try std.testing.expect(cat2.hasSchema("s1"));
+    try std.testing.expect(cat2.hasGraph("g1"));
 }

@@ -1,24 +1,44 @@
 const std = @import("std");
+const catalog = @import("../src/schema/catalog.zig");
 
-// E2E: basic catalog persistence smoke (create table -> restart -> verify)
-// This uses the StorageCatalog API directly to avoid missing DDL front-end.
-
-test "storage catalog persistence across save/load" {
+// E2E: basic catalog persistence smoke (create schema/index -> restart -> verify)
+test "catalog persistence across save/load" {
     const allocator = std.testing.allocator;
-    var pm = @import("../src/storage/page_manager.zig").PageManager.initInMemory(allocator, 4096);
-    defer pm.deinit();
 
-    var cat = @import("../src/storage/catalog.zig").StorageCatalog.init(allocator, &pm);
-    defer cat.deinit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
 
-    try cat.load();
-    try cat.createTable("t", &.{});
-    try cat.save();
+    const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(data_dir);
 
-    var cat2 = @import("../src/storage/catalog.zig").StorageCatalog.init(allocator, &pm);
-    defer cat2.deinit();
-    try cat2.load();
+    {
+        const cat = try catalog.Catalog.init(allocator, data_dir);
+        defer {
+            cat.deinit();
+            allocator.destroy(cat);
+        }
 
-    const t = cat2.getTable("t") orelse return error.TableMissing;
-    try std.testing.expect(std.mem.eql(u8, t.name, "t"));
+        try cat.addSchema("public");
+        try cat.addGraph("g1");
+
+        const cols = [_][]const u8{ "id" };
+        const info = catalog.IndexInfo{
+            .name = "t_idx",
+            .index_type = "btree",
+            .table_name = "t",
+            .columns = @as([][]const u8, @constCast(cols[0..])),
+        };
+        try cat.addIndex(info);
+    }
+
+    const cat2 = try catalog.Catalog.init(allocator, data_dir);
+    defer {
+        cat2.deinit();
+        allocator.destroy(cat2);
+    }
+
+    try std.testing.expect(cat2.hasSchema("public"));
+    try std.testing.expect(cat2.hasGraph("g1"));
+    const idx = try cat2.getIndex("t", "t_idx");
+    try std.testing.expect(idx != null);
 }

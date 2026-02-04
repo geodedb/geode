@@ -1,23 +1,31 @@
 const std = @import("std");
-const disk = @import("storage/disk.zig");
+const tde = @import("../src/storage/tde_file_encryption.zig");
 
-fn set_env(k: []const u8, v: []const u8) void {
-    std.process.setEnvVarOwned(std.testing.allocator, k, v) catch {};
-}
+test "tde encrypt/decrypt roundtrip with deterministic key" {
+    const allocator = std.testing.allocator;
 
-test "disk xts: ciphertext differs by page id and roundtrip ok" {
-    set_env("GEODE_DISK_ENCRYPTION", "on");
-    set_env("GEODE_DISK_KEY_HEX", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff");
-    var d = try disk.Disk.init(std.testing.allocator, ":mem:");
-    defer d.deinit();
+    var key: [tde.KEY_BYTES]u8 = undefined;
+    for (key, 0..) |*b, i| {
+        b.* = @intCast(i & 0xFF);
+    }
 
-    var p: [4096]u8 = undefined;
-    std.crypto.random.bytes(&p);
-    var c1 = p;
-    var c2 = p;
-    d.encryptPage(1, c1[0..]);
-    d.encryptPage(2, c2[0..]);
-    try std.testing.expect(!std.mem.eql(u8, &c1, &c2));
-    d.decryptPage(1, c1[0..]);
-    try std.testing.expect(std.mem.eql(u8, &p, &c1));
+    const plaintext1 = "payload-one";
+    const plaintext2 = "payload-two";
+
+    const enc1 = try tde.encryptWithKey(allocator, plaintext1, key);
+    defer allocator.free(enc1);
+    const enc2 = try tde.encryptWithKey(allocator, plaintext2, key);
+    defer allocator.free(enc2);
+
+    try std.testing.expect(tde.isEncrypted(enc1));
+    try std.testing.expect(tde.isEncrypted(enc2));
+    try std.testing.expect(!std.mem.eql(u8, enc1, enc2));
+
+    const dec1 = try tde.decryptWithKey(allocator, enc1, key);
+    defer allocator.free(dec1);
+    const dec2 = try tde.decryptWithKey(allocator, enc2, key);
+    defer allocator.free(dec2);
+
+    try std.testing.expectEqualStrings(plaintext1, dec1);
+    try std.testing.expectEqualStrings(plaintext2, dec2);
 }

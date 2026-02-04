@@ -1,7 +1,8 @@
 const std = @import("std");
 const memory_governor = @import("../src/util/memory_governor.zig");
 const txn_manager = @import("../src/transactions/manager.zig");
-const wal = @import("../src/wal/wal.zig");
+const graph_store = @import("geode").graph_store;
+const snapshot_pipeline = @import("../src/storage/snapshot_pipeline.zig");
 const selectivity = @import("../src/index/selectivity.zig");
 const text_formatter = @import("../src/util/text_formatter.zig");
 const protocol = @import("../src/protocol.zig");
@@ -33,13 +34,28 @@ test "priority implementations integration" {
     mgr.commit(&t1);
     mgr.commit(&t2);
 
-    // Test 3: WAL Compaction Cadence
-    var wal_instance = wal.Wal.init(ally);
-    defer wal_instance.deinit();
+    // Test 3: GraphStore Snapshot Compaction Cadence
+    var store = graph_store.GraphStore.init(ally);
+    defer store.deinit();
+    var pipeline = snapshot_pipeline.Pipeline.init(ally, &store, .{
+        .checkpoint_interval_override = 5,
+        .compaction_interval = 3,
+    });
 
-    wal_instance.setCompactionCadence(5, 3); // checkpoint every 5 commits, compact every 3 checkpoints
-    const stats = wal_instance.getCompactionStats();
-    try std.testing.expect(stats.commits_since_checkpoint == 0);
+    pipeline.recordCommit(5);
+    var res = try pipeline.tick();
+    try std.testing.expect(res.checkpoint);
+    try std.testing.expect(!res.compacted);
+
+    pipeline.recordCommit(5);
+    res = try pipeline.tick();
+    try std.testing.expect(res.checkpoint);
+    try std.testing.expect(!res.compacted);
+
+    pipeline.recordCommit(5);
+    res = try pipeline.tick();
+    try std.testing.expect(res.checkpoint);
+    try std.testing.expect(res.compacted);
 
     // Test 4: Selectivity Estimator
     var estimator = selectivity.SelectivityEstimator.init(ally);

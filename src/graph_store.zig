@@ -671,8 +671,7 @@ pub const GraphStore = struct {
         // Mark store as dirty - persistence happens at query completion, not per-node
         // This avoids O(n²) serialization overhead during batch operations
         self.dirty = true;
-        std.debug.print("[NODE] Created node id={}, dirty=true, total={}\n", .{ id, self.nodes.count() });
-        log.info("Node created, dirty=true", &.{
+        log.debug("Node created, dirty=true", &.{
             Attr.int("node_id", @intCast(id)),
             Attr.int("total_nodes", @intCast(self.nodes.count())),
         });
