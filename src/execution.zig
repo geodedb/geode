@@ -13,6 +13,7 @@ const Attr = logging.Attr;
 // Schema Catalog Registration During Execution
 // CANARY: REQ=REQ-FLE-CATALOG-001; FEATURE="FieldLevelEncryption"; ASPECT=CATALOG; STATUS=TESTED; TEST=geodetestlab/specs/fle_comprehensive_security.yml; OWNER=security; UPDATED=2025-10-15
 const ast = @import("gql/ast.zig");
+const diagnostics = @import("diagnostics.zig");
 
 // CANARY: REQ=REQ-M5.2-EXECUTION-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypesImport; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-11-13
 // Phase 5 M5.2: Import shared value types from value_types.zig module
@@ -354,6 +355,9 @@ pub const ExecutionContext = struct {
     role: ?@import("security/user_management.zig").Role = null, // User role for permission checking
     token: ?[]const u8 = null,
     strict_offset_validation: bool = false, // If true, reject OFFSET without ORDER BY
+    // Match guard overrides (when null, env-based defaults apply)
+    match_max_results: ?usize = null,
+    match_max_frontier: ?usize = null,
     // Node/edge bindings from MATCH clauses (variable name -> node/edge ID)
     bindings: ?*std.StringHashMap(Binding) = null,
     // Session state for SESSION SET/RESET/CLOSE commands
@@ -514,6 +518,120 @@ pub const ExecutionResult = struct {
     }
 };
 
+const GuardLimits = struct {
+    max_results: ?usize,
+    max_frontier: ?usize,
+};
+
+fn parseGuardLimit(allocator: std.mem.Allocator, name: []const u8) !?usize {
+    const raw = std.process.getEnvVarOwned(allocator, name) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return null,
+        else => return err,
+    };
+    defer allocator.free(raw);
+
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return ExecutionError.InvalidGuardrailConfiguration;
+    const value = std.fmt.parseInt(usize, trimmed, 10) catch return ExecutionError.InvalidGuardrailConfiguration;
+    if (value == 0) return ExecutionError.InvalidGuardrailConfiguration;
+    return value;
+}
+
+fn resolveMatchGuardLimits(allocator: std.mem.Allocator, context: ExecutionContext) !GuardLimits {
+    var max_results = context.match_max_results;
+    var max_frontier = context.match_max_frontier;
+
+    if (max_results) |v| {
+        if (v == 0) return ExecutionError.InvalidGuardrailConfiguration;
+    } else {
+        max_results = try parseGuardLimit(allocator, "GEODE_MATCH_MAX_RESULTS");
+    }
+
+    if (max_frontier) |v| {
+        if (v == 0) return ExecutionError.InvalidGuardrailConfiguration;
+    } else {
+        max_frontier = try parseGuardLimit(allocator, "GEODE_MATCH_MAX_FRONTIER");
+    }
+
+    return .{ .max_results = max_results, .max_frontier = max_frontier };
+}
+
+fn appendFlagIfMissing(allocator: std.mem.Allocator, result: *ExecutionResult, flag: []const u8) !void {
+    for (result.flags.items) |existing| {
+        if (std.mem.eql(u8, existing, flag)) return;
+    }
+    if (result.owns_value_memory) {
+        const copy = try allocator.dupe(u8, flag);
+        try result.flags.append(allocator, copy);
+    } else {
+        try result.flags.append(allocator, flag);
+    }
+}
+
+fn freeRowValues(allocator: std.mem.Allocator, result: *ExecutionResult, row: []Value) void {
+    if (result.owns_value_memory) {
+        for (row) |val| {
+            freeValue(allocator, val);
+        }
+    }
+    allocator.free(row);
+}
+
+pub fn applyRowWindow(allocator: std.mem.Allocator, result: *ExecutionResult, start: usize, end: usize) !void {
+    const total = result.rows.len;
+    if (total == 0) return;
+
+    const start_idx = @min(start, total);
+    const end_idx = @min(end, total);
+
+    if (start_idx == 0 and end_idx == total) return;
+
+    if (start_idx >= end_idx) {
+        for (result.rows) |row| {
+            freeRowValues(allocator, result, row);
+        }
+        allocator.free(result.rows);
+        result.rows = try allocator.alloc([]Value, 0);
+        return;
+    }
+
+    for (result.rows[0..start_idx]) |row| {
+        freeRowValues(allocator, result, row);
+    }
+    for (result.rows[end_idx..total]) |row| {
+        freeRowValues(allocator, result, row);
+    }
+
+    const new_len = end_idx - start_idx;
+    const new_rows = try allocator.alloc([]Value, new_len);
+    for (result.rows[start_idx..end_idx], 0..) |row, i| {
+        new_rows[i] = row;
+    }
+
+    allocator.free(result.rows);
+    result.rows = new_rows;
+}
+
+fn applyMatchGuard(allocator: std.mem.Allocator, result: *ExecutionResult, context: ExecutionContext, has_match: bool) !void {
+    if (!has_match) return;
+    const limits = try resolveMatchGuardLimits(allocator, context);
+    const guard_limit: ?usize = blk: {
+        if (limits.max_results != null and limits.max_frontier != null) {
+            break :blk @min(limits.max_results.?, limits.max_frontier.?);
+        }
+        if (limits.max_results) |v| break :blk v;
+        if (limits.max_frontier) |v| break :blk v;
+        break :blk null;
+    };
+
+    if (guard_limit) |limit| {
+        if (result.rows.len > limit) {
+            try applyRowWindow(allocator, result, 0, limit);
+            try appendFlagIfMissing(allocator, result, diagnostics.codeName(.ExecutionGuardTrip));
+        }
+    }
+}
+
 /// Check if user has required permission for operation
 pub fn checkPermission(context: ExecutionContext, permission: @import("security/user_management.zig").Permission) !void {
     const user_mgmt = @import("security/user_management.zig");
@@ -648,35 +766,16 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // Check if query has SKIP or LIMIT
             var result = try executeQueryWithContext(allocator, q, context);
 
-            // Apply SKIP if present
-            if (q.offset) |skip_count| {
-                if (skip_count < result.rows.len) {
-                    // Create new rows array without the skipped rows
-                    const new_rows = try allocator.alloc([]Value, result.rows.len - skip_count);
-                    for (result.rows[skip_count..], 0..) |row, i| {
-                        new_rows[i] = row;
-                    }
-                    // Free old rows array but not the row data
-                    allocator.free(result.rows);
-                    result.rows = new_rows;
-                } else {
-                    // Skip all rows
-                    allocator.free(result.rows);
-                    result.rows = try allocator.alloc([]Value, 0);
-                }
-            }
+            try applyMatchGuard(allocator, &result, context, q.match.chains.len > 0);
 
-            // Apply LIMIT if present
+            const start = q.offset orelse 0;
+            var end = result.rows.len;
             if (q.limit) |limit_count| {
-                if (limit_count < result.rows.len) {
-                    // Truncate to limit
-                    const new_rows = try allocator.alloc([]Value, limit_count);
-                    for (result.rows[0..limit_count], 0..) |row, i| {
-                        new_rows[i] = row;
-                    }
-                    allocator.free(result.rows);
-                    result.rows = new_rows;
-                }
+                const end_limit = std.math.add(usize, start, limit_count) catch std.math.maxInt(usize);
+                end = @min(end, end_limit);
+            }
+            if (start != 0 or end != result.rows.len) {
+                try applyRowWindow(allocator, &result, start, end);
             }
 
             return result;

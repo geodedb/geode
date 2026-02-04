@@ -735,29 +735,14 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
 
     // CANARY: REQ=REQ-GQL-CHAIN-LIMIT-001; FEATURE="ChainLimit"; ASPECT=FinalPagination; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
     // Apply SKIP and LIMIT from the final query in the chain after ORDER BY
-    if (final_query.offset) |skip_count| {
-        if (skip_count < result.rows.len) {
-            const new_rows = try allocator.alloc([]Value, result.rows.len - skip_count);
-            for (result.rows[skip_count..], 0..) |row, i| {
-                new_rows[i] = row;
-            }
-            allocator.free(result.rows);
-            result.rows = new_rows;
-        } else {
-            allocator.free(result.rows);
-            result.rows = try allocator.alloc([]Value, 0);
-        }
-    }
-
+    const start = final_query.offset orelse 0;
+    var end = result.rows.len;
     if (final_query.limit) |limit_count| {
-        if (limit_count < result.rows.len) {
-            const new_rows = try allocator.alloc([]Value, limit_count);
-            for (result.rows[0..limit_count], 0..) |row, i| {
-                new_rows[i] = row;
-            }
-            allocator.free(result.rows);
-            result.rows = new_rows;
-        }
+        const end_limit = std.math.add(usize, start, limit_count) catch std.math.maxInt(usize);
+        end = @min(end, end_limit);
+    }
+    if (start != 0 or end != result.rows.len) {
+        try execution.applyRowWindow(allocator, &result, start, end);
     }
 
     return result;
@@ -1545,8 +1530,9 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
             // Apply LIMIT if present
             if (q.limit) |lim| {
-                if (result.rows.len > lim) {
-                    result.rows = result.rows[0..lim];
+                const end = @min(result.rows.len, lim);
+                if (end != result.rows.len) {
+                    try execution.applyRowWindow(allocator, &result, 0, end);
                 }
             }
 
@@ -1636,8 +1622,9 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
             // Apply LIMIT if present
             if (q.limit) |lim| {
-                if (result.rows.len > lim) {
-                    result.rows = result.rows[0..lim];
+                const end = @min(result.rows.len, lim);
+                if (end != result.rows.len) {
+                    try execution.applyRowWindow(allocator, &result, 0, end);
                 }
             }
 
@@ -1802,8 +1789,9 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
         // Apply LIMIT if present
         if (q.limit) |lim| {
-            if (result.rows.len > lim) {
-                result.rows = result.rows[0..lim];
+            const end = @min(result.rows.len, lim);
+            if (end != result.rows.len) {
+                try execution.applyRowWindow(allocator, &result, 0, end);
             }
         }
 

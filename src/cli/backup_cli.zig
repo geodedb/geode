@@ -107,9 +107,6 @@ pub fn cmdBackup(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         try cmdBackupInfo(allocator, argv, start_idx + 1);
     } else if (std.mem.eql(u8, subcommand, "cleanup")) {
         try cmdBackupCleanup(allocator, argv, start_idx + 1);
-    } else if (std.mem.eql(u8, subcommand, "--dest") or std.mem.eql(u8, subcommand, "--mode")) {
-        // Legacy support for the old interface
-        try cmdBackupCreateLegacy(allocator, argv, start_idx);
     } else {
         std.debug.print("Error: Unknown backup subcommand '{s}'\n", .{subcommand});
         printBackupUsage();
@@ -601,91 +598,6 @@ fn cmdBackupCleanup(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         std.debug.print("Cleaned 0 backup files\n", .{});
     }
     std.debug.print("Backup cleanup completed\n", .{});
-    std.process.exit(@intFromEnum(ExitCode.success));
-}
-
-// GAP-0137: Updated legacy backup to support TLS options
-fn cmdBackupCreateLegacy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    var dest: ?[]const u8 = null;
-    var mode: []const u8 = "full";
-    var server: []const u8 = "127.0.0.1:3141";
-    // GAP-0137: TLS configuration options
-    var tls_config = TlsConfig{};
-
-    // Parse arguments
-    var i: usize = start_idx;
-    while (i < argv.len) : (i += 1) {
-        if (std.mem.eql(u8, argv[i], "--dest")) {
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --dest requires a value\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
-            i += 1;
-            dest = argv[i];
-        } else if (std.mem.eql(u8, argv[i], "--mode")) {
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --mode requires a value\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
-            i += 1;
-            mode = argv[i];
-        } else if (std.mem.eql(u8, argv[i], "--parent")) {
-            std.debug.print("Error: --parent is not supported with GraphStore backups\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        } else if (std.mem.eql(u8, argv[i], "--server")) {
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --server requires a value\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
-            i += 1;
-            server = argv[i];
-        } else if (std.mem.eql(u8, argv[i], "--insecure")) {
-            tls_config.insecure = true;
-        } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
-            i += 1;
-            tls_config.ca_cert_path = argv[i];
-        } else if (std.mem.eql(u8, argv[i], "--client-cert")) {
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --client-cert requires a certificate path\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
-            i += 1;
-            tls_config.client_cert_path = argv[i];
-        } else if (std.mem.eql(u8, argv[i], "--client-key")) {
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --client-key requires a key path\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
-            i += 1;
-            tls_config.client_key_path = argv[i];
-        }
-    }
-
-    if (dest == null) {
-        std.debug.print("Error: --dest is required\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    }
-
-    // GAP-0137: Validate TLS configuration
-    if (!tls_config.validate()) {
-        std.debug.print("Error: Both --client-cert and --client-key must be provided for mutual TLS\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.usage_error));
-    }
-
-    // Validate mode
-    if (!std.mem.eql(u8, mode, "full")) {
-        std.debug.print("Error: --mode must be 'full' (GraphStore does not support incremental backups)\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    }
-
-    // Execute backup (legacy call without compression)
-    try executeBackup(allocator, dest.?, mode, server, false, tls_config);
-
-    std.debug.print("Backup completed successfully\n", .{});
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
