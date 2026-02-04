@@ -1,74 +1,72 @@
 const std = @import("std");
-const pm_mod = @import("storage_page_manager");
-const tde = @import("tde");
+const graph_store = @import("../src/graph_store.zig");
+const tde_file = @import("../src/storage/tde_file_encryption.zig");
 
-// Basic integration tests for AES-GCM page encryption using the page_encryption strategy layer.
+// Basic integration tests for file-level TDE with GraphStore snapshots.
 // Scenarios:
-// 1) TDE disabled: file length == page_size, plaintext present.
-// 2) TDE enabled (flag + key): file length == page_size + overhead (nonce+tag), plaintext absent.
-// Deterministic nonce derivation in tde.zig ensures reproducibility.
-// CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE baseline"; ASPECT=TEST; STATUS=TESTED; TEST=tests/test_tde_integration.zig:1; OWNER=security; UPDATED=2025-09-26
+// 1) TDE disabled: file not encrypted (no TDE magic header).
+// 2) TDE enabled (GEODE_TDE_KEY set): file encrypted, load succeeds.
+// CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE baseline"; ASPECT=TEST; STATUS=TESTED; TEST=tests/test_tde_integration.zig:1; OWNER=security; UPDATED=2026-02-04
 
 pub fn main() !void {}
 
-test "tde: persistent page plaintext when disabled" {
-    // Ensure feature disabled
-    std.os.setenv("GEODE_ENABLE_TDE", "off") catch {};
-    std.os.unsetenv("GEODE_TDE_KEY") catch {};
-    tde.disableForTests();
+test "tde: graphstore plaintext when disabled" {
+    std.process.unsetEnvVar("GEODE_TDE_KEY") catch {};
 
-    var tmp_dir = std.testing.tmpDir(.{}); // auto cleanup
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    var gpa = std.testing.allocator;
-    var pm = pm_mod.PageManager.initPersistent(gpa, 512, tmp_dir.path);
-    defer pm.deinit();
+    const allocator = std.testing.allocator;
+    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+    graph_store.setDataDirOverride(allocator, tmp_path);
+    defer graph_store.setDataDirOverride(allocator, null);
 
-    const payload = "HelloEncryptedWorld";
-    const rid = try pm.insert(payload);
-    try std.testing.expectEqualStrings(payload, try pm.read(rid));
-    try pm.flushPage(rid.page);
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.createNode(&.{"Person"});
+    try store.saveToFile();
 
-    const filename = try std.fmt.allocPrint(gpa, "{s}/page_{d}.bin", .{ tmp_dir.path, rid.page });
-    defer gpa.free(filename);
-    var raw_file = try std.fs.cwd().openFile(filename, .{});
-    defer raw_file.close();
-    const raw = try raw_file.readToEndAlloc(gpa, 10_000);
-    defer gpa.free(raw);
-    try std.testing.expect(raw.len == pm.page_size); // no overhead
-    try std.testing.expect(std.mem.indexOf(u8, raw, payload) != null);
+    const path = try graph_store.getPersistenceFilePath(allocator);
+    defer allocator.free(path);
+    const raw = try std.fs.cwd().readFileAlloc(allocator, path, 2 * 1024 * 1024);
+    defer allocator.free(raw);
+
+    try std.testing.expect(!tde_file.isEncrypted(raw));
+    try std.testing.expect(raw.len >= 8);
+    try std.testing.expect(std.mem.eql(u8, raw[0..8], "GEODGST1"));
 }
 
-test "tde: persistent page encrypt/decrypt round trip" {
-    // Set env vars for test (GEODE_TDE_KEY 32 bytes hex) - using fixed pattern
-    const key_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"; // 64 hex chars
-    std.os.setenv("GEODE_ENABLE_TDE", "on") catch {};
-    std.os.setenv("GEODE_TDE_KEY", key_hex) catch {};
-    tde.enableForTests();
+test "tde: graphstore encrypt/decrypt round trip" {
+    const key_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    try std.process.setEnvVar("GEODE_TDE_KEY", key_hex);
+    defer std.process.unsetEnvVar("GEODE_TDE_KEY") catch {};
 
-    var tmp_dir = std.testing.tmpDir(.{}); // auto cleanup
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    var gpa = std.testing.allocator;
-    var pm = pm_mod.PageManager.initPersistent(gpa, 512, tmp_dir.path);
-    defer pm.deinit();
+    const allocator = std.testing.allocator;
+    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+    graph_store.setDataDirOverride(allocator, tmp_path);
+    defer graph_store.setDataDirOverride(allocator, null);
 
-    const payload = "HelloEncryptedWorld";
-    const rid = try pm.insert(payload);
-    try std.testing.expectEqualStrings(payload, try pm.read(rid));
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.createNode(&.{"Encrypted"});
+    try store.saveToFile();
 
-    // Flush page to ensure encryption executed
-    try pm.flushPage(rid.page);
+    const path = try graph_store.getPersistenceFilePath(allocator);
+    defer allocator.free(path);
+    const raw = try std.fs.cwd().readFileAlloc(allocator, path, 2 * 1024 * 1024);
+    defer allocator.free(raw);
 
-    // Read raw file and ensure plaintext does not appear (very naive check)
-    const filename = try std.fmt.allocPrint(gpa, "{s}/page_{d}.bin", .{ tmp_dir.path, rid.page });
-    defer gpa.free(filename);
-    var raw_file = try std.fs.cwd().openFile(filename, .{});
-    defer raw_file.close();
-    const raw = try raw_file.readToEndAlloc(gpa, 10_000);
-    defer gpa.free(raw);
+    try std.testing.expect(tde_file.isEncrypted(raw));
+    try std.testing.expect(raw.len >= tde_file.MAGIC.len);
+    try std.testing.expect(std.mem.eql(u8, raw[0..tde_file.MAGIC.len], &tde_file.MAGIC));
 
-    // If AES-GCM path used, ciphertext file length == page_size + overhead (nonce+tag)
-    try std.testing.expect(raw.len == (tde.NonceBytes + tde.TagBytes + pm.page_size));
-    try std.testing.expect(std.mem.indexOf(u8, raw, payload) == null);
+    var store2 = graph_store.GraphStore.init(allocator);
+    defer store2.deinit();
+    try store2.loadFromFile();
+    try std.testing.expect(store2.getNodeCount() == 1);
 }

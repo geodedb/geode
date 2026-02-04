@@ -18,5 +18,5 @@ test "TestCANARY_REQ_GQL_042_CDC_Telemetry" {
     try std.testing.expect(status.peak_buffer > 0);
     try std.testing.expect(status.batch_adjustments >= 1);
     // Newly exposed diagnostics counter should be >= 0 (no malformed ingested here)
-    try std.testing.expect(status.malformed_wal_records == 0);
+    try std.testing.expect(status.malformed_change_records == 0);
 }

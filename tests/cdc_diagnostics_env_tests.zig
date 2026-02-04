@@ -7,8 +7,8 @@ const schema = @import("schema");
 
 test "TestCANARY_REQ_GQL_042_CDC_MalformedSnapshotIntervalEnv" {
     // Set env overrides
-    try posix.setenv("GEODE_MALFORMED_WAL_SNAPSHOT_INTERVAL", "2", 1);
-    defer posix.unsetenv("GEODE_MALFORMED_WAL_SNAPSHOT_INTERVAL") catch {};
+    try posix.setenv("GEODE_CDC_MALFORMED_SNAPSHOT_INTERVAL", "2", 1);
+    defer posix.unsetenv("GEODE_CDC_MALFORMED_SNAPSHOT_INTERVAL") catch {};
     var engine = try cdc.CDCEngine.init(testing.allocator, .{ .enabled = true, .sinks = &.{.memory} });
     defer engine.deinit();
     try testing.expectEqual(@as(u64, 2), engine.config.malformed_snapshot_interval);
@@ -50,10 +50,10 @@ test "TestCANARY_REQ_GQL_042_CDC_MalformedPayloadHash" {
 
 test "TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv" {
     // Set thresholds via env; warn=0.10 abort=0.20
-    try posix.setenv("GEODE_MALFORMED_WAL_WARN_PCT", "0.10", 1);
-    try posix.setenv("GEODE_MALFORMED_WAL_ABORT_PCT", "0.20", 1);
-    defer posix.unsetenv("GEODE_MALFORMED_WAL_WARN_PCT") catch {};
-    defer posix.unsetenv("GEODE_MALFORMED_WAL_ABORT_PCT") catch {};
+    try posix.setenv("GEODE_CDC_MALFORMED_WARN_PCT", "0.10", 1);
+    try posix.setenv("GEODE_CDC_MALFORMED_ABORT_PCT", "0.20", 1);
+    defer posix.unsetenv("GEODE_CDC_MALFORMED_WARN_PCT") catch {};
+    defer posix.unsetenv("GEODE_CDC_MALFORMED_ABORT_PCT") catch {};
     var engine = try cdc.CDCEngine.init(testing.allocator, .{ .enabled = true, .sinks = &.{.memory} });
     defer engine.deinit();
     try testing.expectApproxEqAbs(@as(f64, 0.10), engine.config.malformed_warn_pct, 0.0001);

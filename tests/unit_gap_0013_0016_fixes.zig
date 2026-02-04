@@ -284,27 +284,27 @@ test "GAP-0014: Point-in-time recovery timestamp parsing" {
     }
 }
 
-test "GAP-0014: WAL record application order" {
-    const WalRecord = struct {
-        lsn: u64,
+test "GAP-0014: Snapshot record application order" {
+    const SnapshotRecord = struct {
+        sequence: u64,
         timestamp: i64,
         operation: enum { insert, update, delete },
         data: []const u8,
     };
 
-    // Simulate WAL records that must be applied in LSN order
-    const records = [_]WalRecord{
-        .{ .lsn = 100, .timestamp = 1000, .operation = .insert, .data = "record1" },
-        .{ .lsn = 101, .timestamp = 1001, .operation = .update, .data = "record2" },
-        .{ .lsn = 102, .timestamp = 1002, .operation = .delete, .data = "record3" },
-        .{ .lsn = 103, .timestamp = 1003, .operation = .insert, .data = "record4" },
+    // Simulate snapshot records that must be applied in sequence order
+    const records = [_]SnapshotRecord{
+        .{ .sequence = 100, .timestamp = 1000, .operation = .insert, .data = "record1" },
+        .{ .sequence = 101, .timestamp = 1001, .operation = .update, .data = "record2" },
+        .{ .sequence = 102, .timestamp = 1002, .operation = .delete, .data = "record3" },
+        .{ .sequence = 103, .timestamp = 1003, .operation = .insert, .data = "record4" },
     };
 
     // Verify ordering
-    var prev_lsn: u64 = 0;
+    var prev_seq: u64 = 0;
     for (records) |record| {
-        try testing.expect(record.lsn > prev_lsn);
-        prev_lsn = record.lsn;
+        try testing.expect(record.sequence > prev_seq);
+        prev_seq = record.sequence;
     }
 }
 

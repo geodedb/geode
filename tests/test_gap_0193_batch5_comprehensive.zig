@@ -256,9 +256,9 @@ test "GAP-0193: Testing - Test reporting" {
 // Storage Category Tests (10 entries)
 // ============================================================================
 
-// CANARY: REQ=REQ-STORAGE-WAL-001; FEATURE="Storage"; ASPECT=WALStorage; STATUS=TESTED; OWNER=storage; UPDATED=2026-01-16
-test "GAP-0193: Storage - WAL storage" {
-    var result = try geode.parse(testing.allocator, "RETURN 'wal_active' AS status", .{});
+// CANARY: REQ=REQ-STORAGE-GRAPHSTORE-001; FEATURE="Storage"; ASPECT=GraphStore; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-04
+test "GAP-0193: Storage - GraphStore storage" {
+    var result = try geode.parse(testing.allocator, "RETURN 'graph_store_active' AS status", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }

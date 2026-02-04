@@ -99,18 +99,18 @@ test_backup "Full backup with encryption" \
     "BACKUP.*ENCRYPTION\|success\|NotImplemented"
 
 echo
-echo -e "${BLUE}=== Phase 3: Incremental Backup Testing ===${NC}"
+echo -e "${BLUE}=== Phase 3: Snapshot Backup Testing ===${NC}"
 
 # Add more data for incremental backup
 ./zig-out/bin/geode query "CREATE (u:User {id: 3, name: 'Charlie', email: 'charlie@example.com'})" --insecure 2>/dev/null
 
-test_backup "Incremental backup after changes" \
-    "./zig-out/bin/geode query 'BACKUP DATABASE INCREMENTAL FROM '\''$BACKUP_DIR/full-backup-1'\'' TO '\''$BACKUP_DIR/incremental-1'\''' --insecure" \
-    "INCREMENTAL.*BACKUP\|success\|NotImplemented"
+test_backup "Second full backup after changes" \
+    "./zig-out/bin/geode query 'BACKUP DATABASE TO '\''$BACKUP_DIR/full-backup-2'\''' --insecure" \
+    "BACKUP.*success\|backup_completed\|NotImplemented"
 
-test_backup "Differential backup" \
-    "./zig-out/bin/geode query 'BACKUP DATABASE DIFFERENTIAL FROM '\''$BACKUP_DIR/full-backup-1'\'' TO '\''$BACKUP_DIR/differential-1'\''' --insecure" \
-    "DIFFERENTIAL.*BACKUP\|success\|NotImplemented"
+test_backup "Restore from snapshot" \
+    "./zig-out/bin/geode query 'RESTORE DATABASE FROM '\''$BACKUP_DIR/full-backup-1'\''' --insecure" \
+    "RESTORE.*success\|NotImplemented"
 
 echo
 echo -e "${BLUE}=== Phase 4: S3 Backup Testing ===${NC}"
@@ -218,9 +218,9 @@ test_backup "Detect corruption" \
     "./zig-out/bin/geode query 'CHECK DATABASE INTEGRITY' --insecure" \
     "INTEGRITY.*CHECK\|corruption\|clean\|NotImplemented"
 
-test_backup "Automatic recovery from WAL" \
-    "./zig-out/bin/geode query 'RECOVER DATABASE FROM WAL' --insecure" \
-    "RECOVER.*WAL\|success\|NotImplemented"
+test_backup "Automatic recovery from snapshot" \
+    "./zig-out/bin/geode query 'RESTORE DATABASE FROM '\''$BACKUP_DIR/full-backup-1'\''' --insecure" \
+    "RESTORE.*success\|NotImplemented"
 
 echo
 echo -e "${BLUE}=== Phase 10: Backup Performance Analysis ===${NC}"

@@ -1,55 +1,43 @@
 const std = @import("std");
-const wal_mod = @import("wal");
+const graph_store = @import("../src/graph_store.zig");
 
-// CANARY: REQ=REQ-GQL-028; FEATURE="WAL/Recovery"; ASPECT=CorruptPageRecovery; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_CorruptPageRecovery; OWNER=storage; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotRecovery"; ASPECT=CorruptPageRecovery; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_CorruptPageRecovery; OWNER=storage; UPDATED=2026-02-04
 
-// This test simulates a simple WAL lifecycle then corrupts a byte in the persisted buffer and replays.
-// Expected behavior for placeholder: recovery should skip malformed header and continue (does not panic).
-// If recovery function returns error, we treat as failure unless error is a defined CorruptRecord we can tolerate.
+// This test writes a GraphStore snapshot, corrupts a byte in the payload, and verifies
+// checksum mismatch is detected on load (no panic).
 
 test "TestCANARY_REQ_GQL_028_CorruptPageRecovery" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Initialize in-memory WAL (assuming wal_mod.Wal supports init without filesystem; else skip)
-    var w = try wal_mod.Wal.init(allocator, .{ .in_memory = true });
-    defer w.deinit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+    graph_store.setDataDirOverride(allocator, tmp_path);
+    defer graph_store.setDataDirOverride(allocator, null);
 
-    // Append a few records
-    _ = try w.append(1, .Insert, "abc", 0);
-    _ = try w.append(1, .Commit, &.{}, 0);
-    _ = try w.append(2, .Insert, "xyz", 0);
-    _ = try w.append(2, .Abort, &.{}, 0);
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.createNode(&.{"Person"});
+    try store.saveToFile();
 
-    // Corrupt an internal buffer if accessible
-    if (w.buf.items.len > 0) {
-        // Flip one payload byte of first record if payload length > 0
-        if (w.buf.items[0].payload.len > 0) {
-            var first_payload = @constCast(w.buf.items[0].payload);
-            first_payload[0] = first_payload[0] ^ 0xFF; // invert byte
-        }
+    const path = try graph_store.getPersistenceFilePath(allocator);
+    defer allocator.free(path);
+
+    var data = try std.fs.cwd().readFileAlloc(allocator, path, 2 * 1024 * 1024);
+    defer allocator.free(data);
+
+    const header_len: usize = 60;
+    if (data.len > header_len + 1) {
+        data[header_len] ^= 0xFF;
+        try std.fs.cwd().writeFile(path, data);
     }
 
-    // Trigger recovery path (simulate restart). We serialize and re-load using replayFromBytes if available.
-    if (@hasDecl(wal_mod.Wal, "replayFromBytes")) {
-        var tmp_bytes = std.ArrayList(u8).init(allocator);
-        defer tmp_bytes.deinit();
-        // serialize simple linear format (header + records) if provided else skip
-        if (@hasDecl(wal_mod.Wal, "serialize")) {
-            try w.serialize(tmp_bytes.writer());
-            var w2 = try wal_mod.Wal.init(allocator, .{ .in_memory = true });
-            defer w2.deinit();
-            const res = wal_mod.Wal.replayFromBytes(allocator, tmp_bytes.items);
-            switch (res) {
-                error.CorruptRecord => {}, // acceptable tolerance
-                else => |maybe| {
-                    // if successful, ensure committedTxnTotal still returns >=1
-                    if (@TypeOf(maybe) == wal_mod.Wal) {
-                        try std.testing.expect(maybe.committedTxnTotal() >= 1);
-                    } else |_| {}
-                },
-            }
-        }
-    }
+    var store2 = graph_store.GraphStore.init(allocator);
+    defer store2.deinit();
+    const res = store2.loadFromFile();
+    try std.testing.expect(res == error.ChecksumMismatch or res == error.InvalidMagic or res == error.InvalidHeader);
+    try std.testing.expect(graph_store.lastLoadHadChecksumError());
 }

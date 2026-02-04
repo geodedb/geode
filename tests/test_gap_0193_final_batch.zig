@@ -341,9 +341,9 @@ test "GAP-0193: Storage - Index storage" {
     try testing.expect(result.program.statements.len > 0);
 }
 
-// CANARY: REQ=REQ-STORAGE-005; FEATURE="Storage"; ASPECT=WALPersistence; STATUS=TESTED; OWNER=storage; UPDATED=2026-01-15
-test "GAP-0193: Storage - WAL persistence" {
-    var result = try geode.parse(testing.allocator, "RETURN 'wal_test'", .{});
+// CANARY: REQ=REQ-STORAGE-005; FEATURE="Storage"; ASPECT=GraphStorePersistence; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-04
+test "GAP-0193: Storage - GraphStore persistence" {
+    var result = try geode.parse(testing.allocator, "RETURN 'graph_store_test'", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }

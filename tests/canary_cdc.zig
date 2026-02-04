@@ -1,7 +1,7 @@
 const std = @import("std");
 const cdc = @import("../src/streaming/cdc_enhanced.zig");
 
-// Simple start/stop smoke test for CDC engine - placeholder until real WAL tail integration.
+// Simple start/stop smoke test for CDC engine - placeholder until change stream integration.
 // TestCANARY_REQ_GQL_042_CDC_StartStop
 
 test "TestCANARY_REQ_GQL_042_CDC_StartStop" {

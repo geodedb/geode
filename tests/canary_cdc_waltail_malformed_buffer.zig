@@ -1,9 +1,9 @@
 const std = @import("std");
 const cdc = @import("../src/streaming/cdc_enhanced.zig");
 
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedLogBuffer; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_WalTailMalformedLogBuffer; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedLogBuffer; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformedLogBuffer; OWNER=streaming; UPDATED=2026-02-04
 
-// This test feeds 100 malformed WAL records and validates that the ring buffer captured
+// This test feeds 100 malformed change records and validates that the ring buffer captured
 // snapshots for count=1 and count=100 (they will be the only two entries).
 // We then parse the JSON produced by malformedLogSnapshots and assert ordering.
 
@@ -15,7 +15,7 @@ fn feedMalformed(engine: *cdc.CDCEngine, n: usize) void {
     }
 }
 
-test "TestCANARY_REQ_GQL_042_CDC_WalTailMalformedLogBuffer" {
+test "TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformedLogBuffer" {
     const allocator = std.testing.allocator;
     var engine = try cdc.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc.CDCSink{.memory} });
     defer engine.deinit();
@@ -38,5 +38,5 @@ test "TestCANARY_REQ_GQL_042_CDC_WalTailMalformedLogBuffer" {
 
     // Also assert malformed counter == 100
     const status = engine.getStatus();
-    try std.testing.expect(status.malformed_wal_records == 100);
+    try std.testing.expect(status.malformed_change_records == 100);
 }

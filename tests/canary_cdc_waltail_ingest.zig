@@ -1,10 +1,10 @@
 const std = @import("std");
 const cdc_mod = @import("../src/streaming/cdc_enhanced.zig");
 
-// TestCANARY_REQ_GQL_042_CDC_WalTailPromote
-// Promotes WALTail aspect by simulating WAL record ingestion and asserting sequence & txn attribution.
+// TestCANARY_REQ_GQL_042_CDC_ChangeStreamPromote
+// Promotes change stream aspect by simulating change record ingestion and asserting txn attribution.
 
-test "TestCANARY_REQ_GQL_042_CDC_WalTailPromote" {
+test "TestCANARY_REQ_GQL_042_CDC_ChangeStreamPromote" {
     const allocator = std.testing.allocator;
     var engine = try cdc_mod.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc_mod.CDCSink{.memory}, .batch_size = 10 });
     defer engine.deinit();

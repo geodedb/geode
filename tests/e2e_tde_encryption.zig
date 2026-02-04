@@ -77,20 +77,20 @@ const KeyRotationTool = struct {
     }
 };
 
-const WALCrypto = struct {
+const BackupCrypto = struct {
     allocator: std.mem.Allocator,
     key: EncryptionKey,
 
-    pub fn init(allocator: std.mem.Allocator, key: EncryptionKey) WALCrypto {
-        return WALCrypto{
+    pub fn init(allocator: std.mem.Allocator, key: EncryptionKey) BackupCrypto {
+        return BackupCrypto{
             .allocator = allocator,
             .key = key,
         };
     }
 
-    pub fn encryptRecord(self: *WALCrypto, plaintext: []const u8, ciphertext: []u8, lsn: u64) !void {
+    pub fn encryptPayload(self: *BackupCrypto, plaintext: []const u8, ciphertext: []u8, snapshot_id: u64) !void {
         _ = self;
-        _ = lsn;
+        _ = snapshot_id;
         // Mock encryption
         for (plaintext, 0..) |byte, i| {
             ciphertext[i] = byte ^ 0xBB;
@@ -98,7 +98,7 @@ const WALCrypto = struct {
         @memset(ciphertext[plaintext.len .. plaintext.len + 28], 0xEE);
     }
 
-    pub fn decryptRecord(self: *WALCrypto, ciphertext: []const u8, plaintext: []u8) !void {
+    pub fn decryptPayload(self: *BackupCrypto, ciphertext: []const u8, plaintext: []u8) !void {
         _ = self;
         // Mock decryption
         for (ciphertext[0..plaintext.len], 0..) |byte, i| {
@@ -199,31 +199,31 @@ test "E2E: Key rotation without data exposure" {
     try testing.expectEqualStrings(sensitive_data, final_decrypted[0..sensitive_data.len]);
 }
 
-test "E2E: WAL encryption and recovery" {
+test "E2E: Backup encryption and recovery" {
     const allocator = testing.allocator;
 
-    const wal_key = EncryptionKey{
+    const backup_key = EncryptionKey{
         .data = [_]u8{0xCC} ** 32,
         .algorithm = .aes_256_gcm,
         .provenance = .{
             .source = .local_file,
-            .key_id = "wal-key",
+            .key_id = "backup-key",
             .created_at = std.time.milliTimestamp(),
             .rotated_at = null,
             .version = 1,
         },
     };
 
-    var wal_crypto = WALCrypto.init(allocator, wal_key);
+    var backup_crypto = BackupCrypto.init(allocator, backup_key);
 
-    // Test WAL record encryption
-    const wal_record = "INSERT NODE {id: 1, label: 'Person'}";
+    // Test backup payload encryption
+    const backup_payload = "SNAPSHOT {node: 1, label: 'Person'}";
     var encrypted_record: [100]u8 = undefined;
     var decrypted_record: [100]u8 = undefined;
 
-    const lsn: u64 = 12345;
-    try wal_crypto.encryptRecord(wal_record, &encrypted_record, lsn);
-    try wal_crypto.decryptRecord(encrypted_record[0 .. wal_record.len + 28], decrypted_record[0..wal_record.len]);
+    const snapshot_id: u64 = 12345;
+    try backup_crypto.encryptPayload(backup_payload, &encrypted_record, snapshot_id);
+    try backup_crypto.decryptPayload(encrypted_record[0 .. backup_payload.len + 28], decrypted_record[0..backup_payload.len]);
 
-    try testing.expectEqualStrings(wal_record, decrypted_record[0..wal_record.len]);
+    try testing.expectEqualStrings(backup_payload, decrypted_record[0..backup_payload.len]);
 }

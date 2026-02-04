@@ -1,14 +1,14 @@
 const std = @import("std");
 const cdc = @import("../src/streaming/cdc_enhanced.zig");
 
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=WALTailMalformedLogBufferWrap; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_WalTailMalformedLogBufferWrap; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedLogBufferWrap; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformedLogBufferWrap; OWNER=streaming; UPDATED=2026-02-04
 
 fn feedMalformed(engine: *cdc.CDCEngine, n: usize) void {
     var i: usize = 0;
     while (i < n) : (i += 1) engine.ingestChangeRecord(1, .node, @as(u64, i), "{bad") catch unreachable;
 }
 
-test "TestCANARY_REQ_GQL_042_CDC_WalTailMalformedLogBufferWrap" {
+test "TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformedLogBufferWrap" {
     const allocator = std.testing.allocator;
     var engine = try cdc.CDCEngine.init(allocator, .{ .enabled = true, .sinks = &[_]cdc.CDCSink{.memory} });
     defer engine.deinit();

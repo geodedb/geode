@@ -1,8 +1,8 @@
 const std = @import("std");
 const cdc_mod = @import("../src/streaming/cdc_enhanced.zig");
 
-// TestCANARY_REQ_GQL_042_CDC_WalTailMalformed
-// Ensures malformed WAL records (missing braces) are ignored.
+// TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformed
+// Ensures malformed change records (missing braces) are ignored.
 
 test "TestCANARY_REQ_GQL_042_CDC_WalTailMalformed" {
     const allocator = std.testing.allocator;
@@ -24,5 +24,5 @@ test "TestCANARY_REQ_GQL_042_CDC_WalTailMalformed" {
     try engine.flushNow();
     try std.testing.expect(engine.total_events == 1);
     const status = engine.getStatus();
-    try std.testing.expect(status.malformed_wal_records == 101);
+    try std.testing.expect(status.malformed_change_records == 101);
 }

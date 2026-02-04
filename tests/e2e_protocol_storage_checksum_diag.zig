@@ -1,59 +1,62 @@
 const std = @import("std");
+const proto = @import("proto_test_util.zig");
+const schema = @import("schema");
+const graph_store = @import("../src/graph_store.zig");
 
-// E2E: simulate checksum mismatch by creating a page file then corrupting checksum before server load.
-// Server started with GEODE_CHECKSUM_TEST_PATH env so it attempts load and emits StoragePageChecksum diagnostic on first RUN_GQL.
+// E2E: simulate checksum mismatch by corrupting GraphStore snapshot before server load.
+// Expect StoragePageChecksum to appear in additional_statuses on first query.
 
 test "protocol StoragePageChecksum diagnostic" {
-    const gpa = std.testing.allocator;
-    // Prepare temp dir
+    const allocator = std.testing.allocator;
+    const exe_path = "./zig-out/bin/geode";
+    const addr = "127.0.0.1:17681";
+
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    // Create minimal page_0.bin with invalid checksum (all zeros) so verifyChecksum fails.
-    const page_path = try std.fmt.allocPrint(gpa, "{s}/page_0.bin", .{tmp.path});
-    defer gpa.free(page_path);
-    var f = try std.fs.cwd().createFile(page_path, .{ .truncate = true });
+    const base_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(base_path);
+
+    graph_store.setDataDirOverride(allocator, base_path);
+    defer graph_store.setDataDirOverride(allocator, null);
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.createNode(&.{"Diag"});
+    try store.saveToFile();
+
+    const path = try graph_store.getPersistenceFilePath(allocator);
+    defer allocator.free(path);
+    var f = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
     defer f.close();
-    var buf: [4096]u8 = .{0} ** 4096; // zeroed page -> checksum mismatch (expected adler32 over zeroed with zeroed field is not prewritten stored value pattern)
-    // Write without computing valid checksum so verification fails.
-    try f.writeAll(&buf);
-    try f.sync();
-
-    const exe_dir = try std.fs.cwd().realpathAlloc(gpa, ".");
-    defer gpa.free(exe_dir);
-    const exe_path = try std.fmt.allocPrint(gpa, "{s}/zig-out/bin/geode", .{exe_dir});
-    defer gpa.free(exe_path);
-
-    var child = std.process.Child.init(&[_][]const u8{exe_path}, gpa);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    // Inject env to trigger load attempt
-    var env_map = try std.process.getEnvMap(gpa);
-    defer env_map.deinit();
-    try env_map.put("GEODE_CHECKSUM_TEST_PATH", tmp.path);
-    child.env_map = &env_map;
-    try child.spawn();
-
-    if (child.stdin) |stdin| {
-        try stdin.writer().writeAll("{\"type\":\"RUN_GQL\",\"text\":\"RETURN 1 AS x\"}\n");
-        try stdin.writer().writeAll("{\"type\":\"PULL\"}\n");
-        try stdin.close();
+    const end = try f.getEndPos();
+    if (end > 4) {
+        try f.seekTo(end - 4);
+        var zeros: [4]u8 = .{ 0, 0, 0, 0 };
+        _ = try f.write(&zeros);
+        try f.sync();
     }
 
-    var out_buf = std.ArrayList(u8).init(gpa);
-    defer out_buf.deinit();
-    if (child.stdout) |so| {
-        var tmpb: [4096]u8 = undefined;
-        while (true) {
-            const n = so.read(&tmpb) catch 0;
-            if (n == 0) break;
-            try out_buf.appendSlice(tmpb[0..n]);
+    var handle = try proto.spawnServer(allocator, &.{ exe_path, "serve", "--listen", addr, "--data_dir", base_path }, null);
+    defer handle.deinit();
+    std.Thread.sleep(200 * std.time.ns_per_ms);
+
+    var client = try proto.QuicProtoClient.connect(allocator, addr);
+    defer client.deinit();
+    var hello = try client.hello(allocator, proto.defaultUsername(), proto.defaultPassword());
+    defer hello.deinit(allocator);
+
+    var params = std.ArrayList(schema.Param).init(allocator);
+    const exec = try client.executeAndCollect(allocator, "RETURN 1 AS x", params, 100);
+    defer exec.deinit(allocator);
+
+    var found = false;
+    for (exec.additional_statuses) |s| {
+        if (std.mem.indexOf(u8, s, "StoragePageChecksum") != null) {
+            found = true;
+            break;
         }
     }
-    _ = child.wait() catch {};
-    const out = out_buf.items;
-    if (std.mem.indexOf(u8, out, "StoragePageChecksum") == null) {
-        std.debug.print("OUTPUT=\n{s}\n", .{out});
+    if (!found) {
+        std.debug.print("additional_statuses={any}\n", .{exec.additional_statuses});
         return error.MissingChecksumDiagnostic;
     }
 }

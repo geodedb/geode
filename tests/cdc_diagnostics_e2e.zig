@@ -5,9 +5,7 @@ const testing = std.testing;
 // and exercises exportDiagnostics as the server handler would.
 // A full network round trip test can be added later once QUIC test harness is stabilized.
 
-extern fn getenv(name: [*:0]const u8) ?[*:0]u8; // to show how one might gate, not used.
-
-const cdc = @import("cdc_enhanced");
+const cdc = @import("../src/streaming/cdc_enhanced.zig");
 
 fn dummyAllocator() std.mem.Allocator {
     return std.testing.allocator;
@@ -32,7 +30,7 @@ test "CDC diagnostics export contains core, adaptive & ratio fields" {
     try engine.start();
     defer engine.stop();
 
-    // Simulate events + multiple malformed WAL records to produce ratio > 0
+    // Simulate events + multiple malformed change records to produce ratio > 0
     try engine.captureChange(.insert, .node, 1, null, "{\"id\":1}");
     try engine.captureChange(.update, .node, 1, "{\"id\":1}", "{\"id\":1,\"v\":2}");
     try engine.ingestChangeRecord(2, .node, 5, "BAD_PAYLOAD");

@@ -5,6 +5,14 @@ const kms = @import("../src/security/kms.zig");
 
 // CANARY: REQ=REQ-GQL-TDE-KMS-001; FEATURE="TDEKMSIntegration"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_KMS_001_ComprehensiveTDEKMS; OWNER=security; UPDATED=2025-10-05
 
+fn enableTde() !void {
+    try std.process.setEnvVar("GEODE_ENABLE_TDE", "1");
+}
+
+fn disableTde() void {
+    std.process.unsetEnvVar("GEODE_ENABLE_TDE") catch {};
+}
+
 test "TestCANARY_REQ_GQL_TDE_KMS_001_ComprehensiveTDEKMS" {
     const allocator = testing.allocator;
 
@@ -14,9 +22,8 @@ test "TestCANARY_REQ_GQL_TDE_KMS_001_ComprehensiveTDEKMS" {
         defer manager.deinit();
 
         // Enable TDE for testing
-        const flags_mod = @import("../src/util/feature_flags.zig");
-        flags_mod.global().tde.enableForTests();
-        defer flags_mod.global().tde.disableForTests();
+        try enableTde();
+        defer disableTde();
 
         // Initialize with local dev KMS
         try manager.initializeWithKMS(kms.KMSConfig{ .provider_type = .local_dev });
@@ -29,10 +36,10 @@ test "TestCANARY_REQ_GQL_TDE_KMS_001_ComprehensiveTDEKMS" {
 
         // Test key retrieval
         const data_key = try manager.getDataKey();
-        const wal_key = try manager.getWALKey();
+        const backup_key = try manager.getBackupKey();
 
         // Keys should be different
-        try testing.expect(!std.mem.eql(u8, &data_key, &wal_key));
+        try testing.expect(!std.mem.eql(u8, &data_key, &backup_key));
     }
 
     // Test TDE with external KMS provider
@@ -40,9 +47,8 @@ test "TestCANARY_REQ_GQL_TDE_KMS_001_ComprehensiveTDEKMS" {
         var manager = tde_kms.TDEKeyManager.init(allocator);
         defer manager.deinit();
 
-        const flags_mod = @import("../src/util/feature_flags.zig");
-        flags_mod.global().tde.enableForTests();
-        defer flags_mod.global().tde.disableForTests();
+        try enableTde();
+        defer disableTde();
 
         const seed = 0xDEADBEEFCAFEBABE;
         try manager.initializeWithKMS(kms.KMSConfig{ .provider_type = .external_kms, .seed = seed });
@@ -73,16 +79,15 @@ test "TDE KMS key rotation" {
     var manager = tde_kms.TDEKeyManager.init(allocator);
     defer manager.deinit();
 
-    const flags_mod = @import("../src/util/feature_flags.zig");
-    flags_mod.global().tde.enableForTests();
-    defer flags_mod.global().tde.disableForTests();
+    try enableTde();
+    defer disableTde();
 
     // Initialize with external KMS
     try manager.initializeWithKMS(kms.KMSConfig{ .provider_type = .external_kms, .seed = 0x1234567890ABCDEF });
 
     // Get initial keys
     const initial_data_key = try manager.getDataKey();
-    const initial_wal_key = try manager.getWALKey();
+    const initial_backup_key = try manager.getBackupKey();
     const initial_status = manager.getStatus();
 
     // Wait a moment to ensure timestamp difference
@@ -93,26 +98,25 @@ test "TDE KMS key rotation" {
 
     // Get new keys
     const new_data_key = try manager.getDataKey();
-    const new_wal_key = try manager.getWALKey();
+    const new_backup_key = try manager.getBackupKey();
     const new_status = manager.getStatus();
 
     // Keys should be different after rotation
     try testing.expect(!std.mem.eql(u8, &initial_data_key, &new_data_key));
-    try testing.expect(!std.mem.eql(u8, &initial_wal_key, &new_wal_key));
+    try testing.expect(!std.mem.eql(u8, &initial_backup_key, &new_backup_key));
 
     // Status should reflect rotation
     try testing.expect(new_status.last_rotation.? > initial_status.last_rotation.?);
 }
 
-test "TDE operations data vs WAL encryption" {
+test "TDE operations data vs backup encryption" {
     const allocator = testing.allocator;
 
     var manager = tde_kms.TDEKeyManager.init(allocator);
     defer manager.deinit();
 
-    const flags_mod = @import("../src/util/feature_flags.zig");
-    flags_mod.global().tde.enableForTests();
-    defer flags_mod.global().tde.disableForTests();
+    try enableTde();
+    defer disableTde();
 
     try manager.initializeWithKMS(kms.KMSConfig{ .provider_type = .local_dev });
 
@@ -121,25 +125,25 @@ test "TDE operations data vs WAL encryption" {
     const plaintext = "sensitive database page content";
     const aad = "page_metadata";
 
-    // Encrypt same data with both data and WAL keys
+    // Encrypt same data with both data and backup keys
     var data_encrypted = try ops.encryptData(allocator, plaintext, aad);
     defer data_encrypted.deinit(allocator);
 
-    var wal_encrypted = try ops.encryptWAL(allocator, plaintext, aad);
-    defer wal_encrypted.deinit(allocator);
+    var backup_encrypted = try ops.encryptBackup(allocator, plaintext, aad);
+    defer backup_encrypted.deinit(allocator);
 
     // Ciphertexts should be different (different keys)
-    try testing.expect(!std.mem.eql(u8, data_encrypted.ciphertext, wal_encrypted.ciphertext));
+    try testing.expect(!std.mem.eql(u8, data_encrypted.ciphertext, backup_encrypted.ciphertext));
 
     // Both should decrypt correctly with their respective methods
     const data_decrypted = try ops.decryptData(allocator, data_encrypted, aad);
     defer allocator.free(data_decrypted);
 
-    const wal_decrypted = try ops.decryptWAL(allocator, wal_encrypted, aad);
-    defer allocator.free(wal_decrypted);
+    const backup_decrypted = try ops.decryptBackup(allocator, backup_encrypted, aad);
+    defer allocator.free(backup_decrypted);
 
     try testing.expectEqualSlices(u8, plaintext, data_decrypted);
-    try testing.expectEqualSlices(u8, plaintext, wal_decrypted);
+    try testing.expectEqualSlices(u8, plaintext, backup_decrypted);
 }
 
 test "TDE environment variable fallback" {
@@ -152,9 +156,8 @@ test "TDE environment variable fallback" {
     var manager = tde_kms.TDEKeyManager.init(allocator);
     defer manager.deinit();
 
-    const flags_mod = @import("../src/util/feature_flags.zig");
-    flags_mod.global().tde.enableForTests();
-    defer flags_mod.global().tde.disableForTests();
+    try enableTde();
+    defer disableTde();
 
     // Initialize with environment variable
     try manager.initializeWithEnv();
@@ -182,9 +185,8 @@ test "TDE environment variable fallback" {
 test "TDE factory functions" {
     const allocator = testing.allocator;
 
-    const flags_mod = @import("../src/util/feature_flags.zig");
-    flags_mod.global().tde.enableForTests();
-    defer flags_mod.global().tde.disableForTests();
+    try enableTde();
+    defer disableTde();
 
     // Test local dev TDE factory
     {
@@ -241,9 +243,8 @@ test "TDE error handling" {
         var manager = tde_kms.TDEKeyManager.init(allocator);
         defer manager.deinit();
 
-        const flags_mod = @import("../src/util/feature_flags.zig");
-        flags_mod.global().tde.enableForTests();
-        defer flags_mod.global().tde.disableForTests();
+        try enableTde();
+        defer disableTde();
 
         const result = manager.initializeWithEnv();
         try testing.expectError(error.InvalidTDEKey, result);
@@ -257,17 +258,16 @@ test "TDE error handling" {
         const data_key_result = manager.getDataKey();
         try testing.expectError(error.TDENotInitialized, data_key_result);
 
-        const wal_key_result = manager.getWALKey();
-        try testing.expectError(error.TDENotInitialized, wal_key_result);
+        const backup_key_result = manager.getBackupKey();
+        try testing.expectError(error.TDENotInitialized, backup_key_result);
     }
 }
 
 test "TDE cross-provider determinism" {
     const allocator = testing.allocator;
 
-    const flags_mod = @import("../src/util/feature_flags.zig");
-    flags_mod.global().tde.enableForTests();
-    defer flags_mod.global().tde.disableForTests();
+    try enableTde();
+    defer disableTde();
 
     const seed = 0xDEADBEEFCAFEBABE;
 
@@ -288,10 +288,10 @@ test "TDE cross-provider determinism" {
 
     try testing.expectEqualSlices(u8, &data_key1, &data_key2);
 
-    const wal_key1 = try manager1.getWALKey();
-    const wal_key2 = try manager2.getWALKey();
+    const backup_key1 = try manager1.getBackupKey();
+    const backup_key2 = try manager2.getBackupKey();
 
-    try testing.expectEqualSlices(u8, &wal_key1, &wal_key2);
+    try testing.expectEqualSlices(u8, &backup_key1, &backup_key2);
 }
 
 test "TDE large scale encryption performance" {
@@ -300,9 +300,8 @@ test "TDE large scale encryption performance" {
     var manager = tde_kms.TDEKeyManager.init(allocator);
     defer manager.deinit();
 
-    const flags_mod = @import("../src/util/feature_flags.zig");
-    flags_mod.global().tde.enableForTests();
-    defer flags_mod.global().tde.disableForTests();
+    try enableTde();
+    defer disableTde();
 
     try manager.initializeWithKMS(kms.KMSConfig{ .provider_type = .local_dev });
 

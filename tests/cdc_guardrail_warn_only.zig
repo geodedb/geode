@@ -1,8 +1,8 @@
 const std = @import("std");
-const cdc = @import("cdc_enhanced");
+const cdc = @import("../src/streaming/cdc_enhanced.zig");
 
 // This test configures low malformed warn threshold and higher abort threshold.
-// It then feeds malformed WAL payloads to cross warn but not abort and validates flag states.
+// It then feeds malformed change payloads to cross warn but not abort and validates flag states.
 // We choose warn=0.3 abort=0.8 and create a sequence of attempts where malformed ratio ~0.5 would exceed abort if we pushed further.
 // Here we stop right after hitting warn (>=0.3) but before reaching 0.8.
 // Attempt plan:

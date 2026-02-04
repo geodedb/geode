@@ -1,6 +1,4 @@
 const std = @import("std");
-const streaming = @import("streaming");
-
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC"; ASPECT=AdaptiveStressHarness; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveStressHarness; OWNER=streaming; UPDATED=2025-09-21
 
 test "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveStressHarness" {
@@ -8,10 +6,16 @@ test "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveStressHarness" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    if (!@hasDecl(streaming, "cdc_enhanced")) return; // guard if module name differs
-    const cdc = @import("streaming/cdc_enhanced.zig");
+    const cdc = @import("../src/streaming/cdc_enhanced.zig");
 
-    var engine = try cdc.CdcEngine.init(allocator, .{ .adaptive_backpressure = true, .pending_backpressure_watermark = 8_000 });
+    var engine = try cdc.CDCEngine.init(allocator, .{
+        .enabled = true,
+        .adaptive_backpressure = true,
+        .pending_backpressure_watermark = 8_000,
+        .batch_size = 512,
+        .flush_interval_ms = 10_000,
+        .sinks = &[_]cdc.CDCSink{},
+    });
     defer engine.deinit();
 
     // Simulate bursts of events to trigger watermark shrink/grow
@@ -21,17 +25,10 @@ test "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveStressHarness" {
         const size = if (burst % 3 == 0) 10_000 else 1_000; // high load every 3rd cycle
         var i: usize = 0;
         while (i < size) : (i += 1) {
-            // ingest dummy WAL record (using helper if exists else skip)
-            if (@hasDecl(cdc.CdcEngine, "notePendingEvent")) {
-                engine.notePendingEvent() catch {};
-            }
+            try engine.captureChange(.insert, .node, @as(u64, @intCast(i)), null, "{\"id\":1}");
         }
-        // perform adaptive adjustment pass (internal function not public; rely on exposed tick if present)
-        if (@hasDecl(cdc.CdcEngine, "adaptiveAdjust")) {
-            engine.adaptiveAdjust();
-        } else if (@hasDecl(cdc.CdcEngine, "tick")) {
-            engine.tick() catch {};
-        }
+        // perform adaptive adjustment pass
+        engine.adaptiveTick();
     }
 
     // Collect metrics: watermark adjustments counter vs cycles

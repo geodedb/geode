@@ -1,39 +1,48 @@
 const std = @import("std");
-const pm_mod = @import("storage/page_manager.zig");
+const graph_store = @import("../src/graph_store.zig");
+const tde_file = @import("../src/storage/tde_file_encryption.zig");
 
 fn set_env() void {
-    std.process.setEnvVarOwned(std.testing.allocator, "GEODE_DISK_ENCRYPTION", "on") catch {};
-    std.process.setEnvVarOwned(std.testing.allocator, "GEODE_DISK_KEY_HEX", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff") catch {};
+    std.process.setEnvVar("GEODE_TDE_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff") catch {};
 }
 
-test "page_manager encryption: write/read persists encrypted and decrypts on load" {
+test "graph_store encryption: persist encrypted and decrypts on load" {
     set_env();
+    defer std.process.unsetEnvVar("GEODE_TDE_KEY") catch {};
+
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const base = try tmp.dir.realpathAlloc(allocator, ".");
     defer allocator.free(base);
 
-    var pm = pm_mod.PageManager.initPersistent(allocator, 512, base);
-    defer pm.deinit();
-    const r = try pm.insert("secret");
-    try pm.flushPage(r.page);
+    graph_store.setDataDirOverride(allocator, base);
+    defer graph_store.setDataDirOverride(allocator, null);
 
-    // Raw on disk should not equal plaintext "secret" sequence
-    const dir = std.fs.cwd();
-    const path = try std.fmt.allocPrint(allocator, "{s}/page_{d}.bin", .{ base, r.page });
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    const node_id = try store.createNode(&.{"Secret"});
+    try store.setNodeProperty(node_id, "payload", .{ .String = "secret" });
+    try store.saveToFile();
+
+    // Raw on disk should be encrypted (TDE magic prefix)
+    const path = try graph_store.getPersistenceFilePath(allocator);
     defer allocator.free(path);
-    var f = try dir.openFile(path, .{ .mode = .read_only });
-    defer f.close();
-    var buf: [512]u8 = undefined;
-    _ = try f.readAll(&buf);
-    try std.testing.expect(!std.mem.indexOf(u8, &buf, "secret").?);
+    const raw = try std.fs.cwd().readFileAlloc(allocator, path, 2 * 1024 * 1024);
+    defer allocator.free(raw);
+    try std.testing.expect(tde_file.isEncrypted(raw));
+    try std.testing.expect(std.mem.indexOf(u8, raw, "GEODGST1") == null);
 
     // Load via API (which decrypts) and verify content
-    var pm2 = pm_mod.PageManager.initPersistent(allocator, 512, base);
-    defer pm2.deinit();
-    try pm2.loadPage(base, 0);
-    try std.testing.expectEqualStrings("secret", try pm2.read(r));
+    var store2 = graph_store.GraphStore.init(allocator);
+    defer store2.deinit();
+    try store2.loadFromFile();
+    const prop = store2.getNodeProperty(node_id, "payload") orelse return error.MissingProperty;
+    switch (prop) {
+        .String => |val| try std.testing.expectEqualStrings("secret", val),
+        else => return error.UnexpectedPropertyType,
+    }
 }
