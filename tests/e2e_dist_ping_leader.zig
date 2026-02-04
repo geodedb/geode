@@ -6,7 +6,7 @@ test "PING ok in single-node raft mode" {
     const allocator = testing.allocator;
     const addr = "127.0.0.1:17686";
 
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen-quic", addr, "--dist-enable-raft", "--disable-auth" }, null);
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--dist-enable-raft", "--disable-auth" }, null);
     defer server.deinit();
 
     var client = try util.QuicProtoClient.connect(allocator, addr);

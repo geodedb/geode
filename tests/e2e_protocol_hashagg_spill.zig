@@ -8,7 +8,7 @@ test "protocol hashagg spill threshold does not break execution" {
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen-quic", addr, "--disable-auth" },
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--disable-auth" },
         &.{ "GEODE_SPILL_THRESHOLD_BYTES=1" },
     );
     defer server.deinit();

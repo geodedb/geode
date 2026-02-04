@@ -2,13 +2,13 @@
 set -e
 
 echo "Starting QUIC server..."
-./zig-out/bin/geode serve --listen-quic 127.0.0.1:8443 --test-exit-after-first > server.log 2>&1 &
+./zig-out/bin/geode serve --listen 127.0.0.1:8443 --disable-auth > server.log 2>&1 &
 SERVER_PID=$!
 
 sleep 2
 
 echo "Sending QUIC query..."
-timeout 10s ./zig-out/bin/geode query --quic 127.0.0.1:8443 "RETURN 1 AS test" || true
+timeout 10s ./zig-out/bin/geode query "RETURN 1 AS test" --server 127.0.0.1:8443 --insecure || true
 
 echo ""
 echo "Server log:"

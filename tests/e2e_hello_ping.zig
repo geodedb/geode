@@ -6,7 +6,7 @@ test "HELLO returns capabilities and PING returns ok" {
     const allocator = testing.allocator;
     const addr = "127.0.0.1:17685";
 
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen-quic", addr, "--disable-auth" }, null);
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--disable-auth" }, null);
     defer server.deinit();
 
     var client = try util.QuicProtoClient.connect(allocator, addr);

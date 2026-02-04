@@ -25,7 +25,7 @@ mkdir -p /tmp/test-certs
 openssl req -x509 -newkey rsa:2048 -keyout /tmp/test-certs/server.key -out /tmp/test-certs/server.crt -days 1 -nodes -subj "/CN=localhost" 2>/dev/null
 
 # Start server with test certificates
-./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443 --cert /tmp/test-certs/server.crt --key /tmp/test-certs/server.key > /tmp/server.log 2>&1 &
+./zig-out/bin/geode serve --listen 0.0.0.0:8443 --cert /tmp/test-certs/server.crt --key /tmp/test-certs/server.key > /tmp/server.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 

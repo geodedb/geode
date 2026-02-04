@@ -65,11 +65,6 @@ pub const GeodeMcpServer = struct {
         self.allocator.destroy(self);
     }
 
-    /// Start MCP server on stdio transport (for CLI integration)
-    pub fn serveStdio(self: *GeodeMcpServer) !void {
-        try self.server.serveStdio();
-    }
-
     /// Start MCP server on HTTP transport
     /// Returns the port number the server is listening on
     pub fn serveHttp(self: *GeodeMcpServer) !u16 {

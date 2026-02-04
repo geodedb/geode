@@ -77,7 +77,7 @@ test "protocol: transport parity nulls-last ordering (gated)" {
     try std.testing.expectEqual(@as(i32, 0), sres.code);
     const srows = try extract_rows(sres.out);
 
-    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:17668", "--result-format", "json" });
+    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17668", "--result-format", "json" });
     defer {
         _ = server.child.kill() catch {};
     }

@@ -10,7 +10,7 @@ echo ""
 # Test 1: Basic QUIC query execution
 echo "Test 1: Basic QUIC query execution"
 echo "Starting server..."
-./zig-out/bin/geode serve --listen-quic 127.0.0.1:8443 --test-exit-after-first > test_server.log 2>&1 &
+./zig-out/bin/geode serve --listen 127.0.0.1:8443 --test-exit-after-first > test_server.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -75,7 +75,7 @@ echo ""
 # Test 3: Multiple queries to same server (tests readStream fix)
 echo "Test 3: Multiple sequential queries"
 echo "Starting server..."
-./zig-out/bin/geode serve --listen-quic 127.0.0.1:8444 > test_server2.log 2>&1 &
+./zig-out/bin/geode serve --listen 127.0.0.1:8444 > test_server2.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 

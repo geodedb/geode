@@ -73,7 +73,7 @@ cp /tmp/geode_test_certs/ca-cert.pem certs/ca.crt
 echo "Starting Geode server with debug logging..."
 
 # Start Geode server in background
-./zig-out/bin/geode serve --listen-quic 127.0.0.1:8443 --data-dir /tmp/geode_debug_test_data &
+./zig-out/bin/geode serve --listen 127.0.0.1:8443 --data-dir /tmp/geode_debug_test_data --disable-auth &
 SERVER_PID=$!
 
 # Give server time to start
@@ -82,7 +82,7 @@ sleep 2
 echo "Attempting to connect with Geode client..."
 
 # Try to connect with the client - this should show our debug logging
-timeout 15s ./zig-out/bin/geode query "RETURN 1 AS test" --format json --host 127.0.0.1:8443 || {
+timeout 15s ./zig-out/bin/geode query "RETURN 1 AS test" --format json --server 127.0.0.1:8443 --insecure || {
     echo "Client connection attempt completed (may have timed out as expected)"
 }
 

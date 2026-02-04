@@ -234,8 +234,7 @@ const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 // Removed: AllocTracker struct (~1 line) now in query_executor module (M3.3 Phase 3 sixth increment)
 // Removed: trackerGet() function (~5 lines) now in query_executor module (M3.3 Phase 3 sixth increment)
 
-// Centralized CDC_CONTROL handler to eliminate duplicated logic between processMessage
-// (network path) and stdio loop. Returns a newly allocated response line or null slice on OOM.
+// Centralized CDC_CONTROL handler to eliminate duplicated logic between network paths.
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC_CONTROL"; ASPECT=Refactor; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ControlReset; OWNER=server; UPDATED=2025-09-20
 // Removed: handleCdcControl() function (~12 lines) now in message_handlers module (M3.2 Phase 3 message handlers extraction)
 
@@ -582,6 +581,6 @@ pub fn main() !void {
         return;
     }
 
-    log.err("No QUIC listener configured. Stdio server is disabled; use --listen-quic.", &.{});
+    log.err("No QUIC listener configured. Use --listen.", &.{});
     return error.MissingListenAddress;
 }

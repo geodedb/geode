@@ -11,15 +11,28 @@ const log = logging.scoped("storage");
 const Attr = logging.Attr;
 
 /// Generate a time-based unique 64-bit ID (UUIDv7-compatible lower 64 bits)
-/// Structure: 48-bit timestamp (ms) | 16-bit random
+/// Structure: 48-bit timestamp (ms) | 16-bit counter/random
 /// This provides time-sortable, unique IDs without changing the NodeId type
 fn generateTimeBasedId() u64 {
+    // Use atomic counter to ensure uniqueness even when called within same millisecond
+    const State = struct {
+        var counter: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+        var prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0);
+        var initialized: bool = false;
+    };
+
+    // Initialize PRNG once with nanoTimestamp seed
+    if (!State.initialized) {
+        const seed: u64 = @intCast(std.time.nanoTimestamp());
+        State.prng = std.Random.DefaultPrng.init(seed);
+        State.initialized = true;
+    }
+
     const timestamp_ms: u64 = @intCast(std.time.milliTimestamp());
-    // Use nanosecond timestamp as seed for randomness
-    const seed: u64 = @intCast(std.time.nanoTimestamp());
-    var prng = std.Random.DefaultPrng.init(seed);
-    const random_bits: u16 = prng.random().int(u16);
-    // Combine: 48-bit timestamp | 16-bit random
+    // Combine counter increment with random bits for uniqueness
+    const counter_val = State.counter.fetchAdd(1, .monotonic);
+    const random_bits: u16 = @truncate(counter_val ^ State.prng.random().int(u64));
+    // Combine: 48-bit timestamp | 16-bit unique
     return (timestamp_ms << 16) | @as(u64, random_bits);
 }
 

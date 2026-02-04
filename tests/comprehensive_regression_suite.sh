@@ -76,7 +76,7 @@ echo -e "${BLUE}=== Section 2: QUIC TLS Handshake ===${NC}"
 echo "Regression tests for TLS connection issues"
 
 # Start server for TLS tests
-./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443 > /tmp/tls_test.log 2>&1 &
+./zig-out/bin/geode serve --listen 0.0.0.0:8443 > /tmp/tls_test.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 

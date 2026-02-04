@@ -251,7 +251,7 @@ test "Process argument building" {
     try server_args.append(allocator, "./zig-out/bin/geode");
     try server_args.append(allocator, "--data-dir");
     try server_args.append(allocator, "./test_data");
-    try server_args.append(allocator, "--listen-quic");
+    try server_args.append(allocator, "--listen");
     try server_args.append(allocator, "127.0.0.1:3141");
 
     const server_argv = try server_args.toOwnedSlice(allocator);

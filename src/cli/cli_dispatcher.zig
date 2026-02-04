@@ -698,7 +698,7 @@ fn printBashCompletions() void {
         \\            return 0
         \\            ;;
         \\        mcp)
-        \\            COMPREPLY=( $(compgen -W "serve --http --port --endpoint --help" -- "${cur}") )
+        \\            COMPREPLY=( $(compgen -W "serve --port --endpoint --help" -- "${cur}") )
         \\            return 0
         \\            ;;
         \\        --shell|-s)
@@ -817,7 +817,6 @@ fn printFishCompletions() void {
         \\complete -c geode -n "__fish_seen_subcommand_from shell" -s s -l server -d 'Server address' -r
         \\complete -c geode -n "__fish_seen_subcommand_from shell" -l insecure -d 'Skip TLS verification'
         \\complete -c geode -n "__fish_seen_subcommand_from completion" -s s -l shell -d 'Shell type' -ra 'bash zsh fish powershell'
-        \\complete -c geode -n "__fish_seen_subcommand_from mcp" -l http -d 'Use HTTP transport'
         \\complete -c geode -n "__fish_seen_subcommand_from mcp" -l port -d 'HTTP port' -r
         \\complete -c geode -n "__fish_seen_subcommand_from mcp" -s e -l endpoint -d 'Geode server endpoint' -r
         \\
@@ -869,15 +868,12 @@ fn printPowershellCompletions() void {
 /// Handle the mcp subcommand - starts an MCP server for AI/LLM integration
 /// CANARY: REQ=REQ-LIB-MIGRATION-MCP-007; FEATURE="External Library Migration"; ASPECT=MCPCommandHandler; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    var use_http = false;
     var http_port: u16 = 8080;
     var endpoint: ?[]const u8 = "localhost:3141";
     var ai: usize = start_idx + 1;
 
     while (ai < argv.len) : (ai += 1) {
-        if (std.mem.eql(u8, argv[ai], "--http")) {
-            use_http = true;
-        } else if (std.mem.eql(u8, argv[ai], "--port")) {
+        if (std.mem.eql(u8, argv[ai], "--port")) {
             if (ai + 1 < argv.len) {
                 http_port = std.fmt.parseInt(u16, argv[ai + 1], 10) catch 8080;
                 ai += 1;
@@ -903,27 +899,18 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     });
     defer server.deinit();
 
-    if (use_http) {
-        std.debug.print("Starting MCP server on HTTP port {d}...\n", .{http_port});
-        if (endpoint) |ep| {
-            std.debug.print("Connected to Geode at {s}\n", .{ep});
-        }
-        const actual_port = try server.serveHttp();
-        std.debug.print("MCP server listening on port {d}\n", .{actual_port});
-    } else {
-        std.debug.print("Starting MCP server on stdio...\n", .{});
-        if (endpoint) |ep| {
-            std.debug.print("Connected to Geode at {s}\n", .{ep});
-        }
-        try server.serveStdio();
+    std.debug.print("Starting MCP server on HTTP port {d}...\n", .{http_port});
+    if (endpoint) |ep| {
+        std.debug.print("Connected to Geode at {s}\n", .{ep});
     }
+    const actual_port = try server.serveHttp();
+    std.debug.print("MCP server listening on port {d}\n", .{actual_port});
 }
 
 fn printMcpHelp() void {
     std.debug.print("Model Context Protocol (MCP) server for AI/LLM integration\n\n", .{});
     std.debug.print("Usage: geode mcp [serve] [options]\n\n", .{});
     std.debug.print("Options:\n", .{});
-    std.debug.print("  --http              Use HTTP transport instead of stdio (default)\n", .{});
     std.debug.print("  --port <port>       HTTP port (default: 8080)\n", .{});
     std.debug.print("  -e, --endpoint      Geode server endpoint (default: localhost:3141)\n", .{});
     std.debug.print("  -h, --help          Show this help message\n\n", .{});
@@ -935,9 +922,8 @@ fn printMcpHelp() void {
     std.debug.print("    - Access query explain plans\n", .{});
     std.debug.print("    - Use GQL query templates\n\n", .{});
     std.debug.print("Examples:\n", .{});
-    std.debug.print("  geode mcp serve                    # Start on stdio\n", .{});
-    std.debug.print("  geode mcp serve --http             # Start on HTTP port 8080\n", .{});
-    std.debug.print("  geode mcp serve --http --port 9000 # Start on HTTP port 9000\n", .{});
+    std.debug.print("  geode mcp serve                    # Start on HTTP port 8080\n", .{});
+    std.debug.print("  geode mcp serve --port 9000        # Start on HTTP port 9000\n", .{});
     std.debug.print("  geode mcp serve -e host:3141       # Connect to specific endpoint\n", .{});
 }
 

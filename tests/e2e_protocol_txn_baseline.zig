@@ -9,7 +9,7 @@ fn startServerAndClient(allocator: std.mem.Allocator, port: u16) !struct {
     const addr = try std.fmt.allocPrint(allocator, "127.0.0.1:{d}", .{port});
     defer allocator.free(addr);
 
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen-quic", addr, "--disable-auth" }, null);
+    const server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--disable-auth" }, null);
     var client = try util.QuicProtoClient.connect(allocator, addr);
     var hello = try client.hello(allocator, "", "");
     hello.deinit(allocator);

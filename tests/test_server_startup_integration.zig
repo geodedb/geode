@@ -12,7 +12,7 @@ test "TestCANARY_REQ_SERVER_STARTUP_INTEGRATION_001_EndToEndServerTesting" {
     const allocator = testing.allocator;
 
     // Test that server starts and can be terminated gracefully
-    var child = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", "./test_integration_data", "--listen-quic", "127.0.0.1:7567" }, allocator);
+    var child = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", "./test_integration_data", "--listen", "127.0.0.1:7567" }, allocator);
 
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -47,7 +47,7 @@ test "server_startup_with_query_test" {
     const allocator = testing.allocator;
 
     // Start server in background
-    var server_child = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", "./test_query_integration", "--listen-quic", "127.0.0.1:7568" }, allocator);
+    var server_child = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", "./test_query_integration", "--listen", "127.0.0.1:7568" }, allocator);
 
     server_child.stdout_behavior = .Pipe;
     server_child.stderr_behavior = .Pipe;
@@ -93,13 +93,13 @@ test "server_startup_concurrent_instances" {
     const allocator = testing.allocator;
 
     // Start first server instance
-    var server1 = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", "./test_concurrent1", "--listen-quic", "127.0.0.1:7569" }, allocator);
+    var server1 = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", "./test_concurrent1", "--listen", "127.0.0.1:7569" }, allocator);
 
     server1.stdout_behavior = .Pipe;
     try server1.spawn();
 
     // Start second server instance
-    var server2 = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", "./test_concurrent2", "--listen-quic", "127.0.0.1:7570" }, allocator);
+    var server2 = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", "./test_concurrent2", "--listen", "127.0.0.1:7570" }, allocator);
 
     server2.stdout_behavior = .Pipe;
     try server2.spawn();
@@ -148,7 +148,7 @@ test "server_startup_data_directory_persistence" {
     std.fs.cwd().deleteTree(test_data_dir) catch {};
 
     // Start server with non-existent data directory
-    var server = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", test_data_dir", "--listen-quic", "127.0.0.1:7571" }, allocator);
+    var server = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", test_data_dir", "--listen", "127.0.0.1:7571" }, allocator);
 
     server.stdout_behavior = .Pipe;
     try server.spawn();
@@ -187,7 +187,7 @@ test "server_startup_configuration_override" {
     const allocator = testing.allocator;
 
     // Test with multiple configuration options
-    var server = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", "./test_config_override", "--listen-quic", "0.0.0.0:7572", "--log-level", "debug" }, allocator);
+    var server = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", "./test_config_override", "--listen", "0.0.0.0:7572", "--log-level", "debug" }, allocator);
 
     server.stdout_behavior = .Pipe;
     server.stderr_behavior = .Pipe;
@@ -230,7 +230,7 @@ test "server_startup_resource_cleanup" {
     const allocator = testing.allocator;
 
     // Start server
-    var server = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", "./test_cleanup", "--listen-quic", "127.0.0.1:7573" }, allocator);
+    var server = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/geode", "serve", "--data-dir", "./test_cleanup", "--listen", "127.0.0.1:7573" }, allocator);
 
     try server.spawn();
 

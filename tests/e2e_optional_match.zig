@@ -7,7 +7,7 @@ test "OPTIONAL MATCH returns NULL for unmatched patterns" {
     // Start server
     var server = try std.process.Child.init(&.{
         "./zig-out/bin/geode",
-        "--listen-quic",
+        "--listen",
         "127.0.0.1:17567",
     }, allocator);
     try server.spawn();
@@ -52,7 +52,7 @@ test "Variable-length path expansion" {
     // Start server
     var server = try std.process.Child.init(&.{
         "./zig-out/bin/geode",
-        "--listen-quic",
+        "--listen",
         "127.0.0.1:17568",
     }, allocator);
     try server.spawn();
@@ -105,7 +105,7 @@ test "MVCC conflict detection - write-write conflict" {
     // Start server
     var server = try std.process.Child.init(&.{
         "./zig-out/bin/geode",
-        "--listen-quic",
+        "--listen",
         "127.0.0.1:17569",
     }, allocator);
     try server.spawn();
@@ -160,7 +160,7 @@ test "Storage catalog persistence" {
     // Start server with data_dir
     var server = try std.process.Child.init(&.{
         "./zig-out/bin/geode",
-        "--listen-quic",
+        "--listen",
         "127.0.0.1:17570",
         "--data_dir",
         tmp_dir,
@@ -188,7 +188,7 @@ test "Storage catalog persistence" {
     // Restart server with same data_dir
     var server2 = try std.process.Child.init(&.{
         "./zig-out/bin/geode",
-        "--listen-quic",
+        "--listen",
         "127.0.0.1:17570",
         "--data_dir",
         tmp_dir,

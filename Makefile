@@ -613,8 +613,7 @@ cross-linux-x86_64:
 cross-windows:
 	@echo "Cross-compiling for Windows x86_64..."
 	$(ZIG) build -Dtarget=x86_64-windows -p zig-out/windows-x86_64 $(ZIG_FLAGS)
-	@test -f zig-out/windows-x86_64/bin/geoded.exe || (echo "Failed to build geoded.exe" && exit 1)
-	@test -f zig-out/windows-x86_64/bin/geodec.exe || (echo "Failed to build geodec.exe" && exit 1)
+	@test -f zig-out/windows-x86_64/bin/geode.exe || (echo "Failed to build geode.exe" && exit 1)
 	@test -f zig-out/windows-x86_64/bin/gql.exe || (echo "Failed to build gql.exe" && exit 1)
 	@echo "✓ Windows x86_64 build successful"
 
@@ -700,7 +699,7 @@ cross-test:
 
 # Server targets
 server: build
-	./zig-out/bin/geoded --listen-quic 0.0.0.0:8443
+	./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443
 
 # Status generation from CANARY markers
 status-generate:
@@ -809,7 +808,7 @@ docker-test-singleton:
 		./scripts/docker/test.sh singleton || ($(MAKE) docker-down && exit 1); \
 	else \
 		echo "Test script not found, running basic test..."; \
-		docker exec geode-singleton geodec "RETURN 1 AS x" --server 127.0.0.1:8443 || \
+		docker exec geode-singleton geode query "RETURN 1 AS x" --server 127.0.0.1:8443 --insecure || \
 			(echo "Basic test failed" && $(MAKE) docker-down && exit 1); \
 	fi
 	@echo "Singleton tests passed"
@@ -826,7 +825,7 @@ docker-test-distributed:
 		./scripts/docker/test.sh distributed || ($(MAKE) docker-down && exit 1); \
 	else \
 		echo "Test script not found, running basic test..."; \
-		docker exec geode-leader geodec "RETURN 1 AS x" --server 127.0.0.1:8443 || \
+		docker exec geode-leader geode query "RETURN 1 AS x" --server 127.0.0.1:8443 --insecure || \
 			(echo "Basic test failed" && $(MAKE) docker-down && exit 1); \
 	fi
 	@echo "Distributed tests passed"
@@ -859,7 +858,7 @@ docker-quick-test:
 	@echo "Running quick Docker test..."
 	@docker-compose -f docker-compose.test.yml up -d --build
 	@sleep 5
-	@docker exec geode-test geodec "RETURN 1 AS x" --server 127.0.0.1:7567 || \
+	@docker exec geode-test geode query "RETURN 1 AS x" --server 127.0.0.1:7567 --insecure || \
 		(docker-compose -f docker-compose.test.yml down && exit 1)
 	@echo "Quick test passed!"
 	@docker-compose -f docker-compose.test.yml down

@@ -8,7 +8,7 @@ set -e
 HOST="127.0.0.1"
 PORT="8443"
 DATA_DIR="./data"
-GEODEC="./zig-out/bin/geodec"
+GEODE="./zig-out/bin/geode"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -51,9 +51,9 @@ echo "Server: quic://${HOST}:${PORT}"
 echo "Data directory: ${DATA_DIR}"
 echo ""
 
-# Check if geodec exists
-if [ ! -f "$GEODEC" ]; then
-    echo -e "${RED}Error: geodec not found at ${GEODEC}${NC}"
+# Check if geode binary exists
+if [ ! -x "$GEODE" ]; then
+    echo -e "${RED}Error: geode binary not found at ${GEODE}${NC}"
     echo "Please build Geode first: zig build -Drelease-safe"
     exit 1
 fi
@@ -67,10 +67,10 @@ fi
 
 # Test connection
 echo -e "${YELLOW}Testing connection to Geode server...${NC}"
-if ! $GEODEC --host "$HOST" --port "$PORT" "RETURN 1 AS test" > /dev/null 2>&1; then
+if ! $GEODE query "RETURN 1 AS test" --server "${HOST}:${PORT}" --insecure > /dev/null 2>&1; then
     echo -e "${RED}Error: Cannot connect to Geode server${NC}"
     echo "Is the server running? Start it with:"
-    echo "  ./zig-out/bin/geoded --data_dir ${DATA_DIR} --log_json"
+    echo "  ./zig-out/bin/geode serve --listen-quic ${HOST}:${PORT} --data-dir ${DATA_DIR} --disable-auth"
     exit 1
 fi
 echo -e "${GREEN}✓ Connection successful${NC}"
@@ -82,7 +82,7 @@ run_migration() {
 
     echo -e "${YELLOW}Loading ${name}...${NC}"
 
-    if $GEODEC --host "$HOST" --port "$PORT" < "$file" > /dev/null 2>&1; then
+    if $GEODE query "-" --server "${HOST}:${PORT}" --insecure < "$file" > /dev/null 2>&1; then
         echo -e "${GREEN}✓ ${name} loaded successfully${NC}"
         return 0
     else
@@ -117,17 +117,17 @@ echo ""
 echo -e "${GREEN}Verifying dataset:${NC}"
 
 # Count nodes
-NODE_COUNT=$($GEODEC --host "$HOST" --port "$PORT" "MATCH (n) RETURN count(n) AS count" 2>/dev/null | grep -o '"count":[0-9]*' | cut -d: -f2)
+NODE_COUNT=$($GEODE query "MATCH (n) RETURN count(n) AS count" --server "${HOST}:${PORT}" --insecure 2>/dev/null | grep -o '"count":[0-9]*' | cut -d: -f2)
 echo "  Nodes created: ${NODE_COUNT:-0}"
 
 # Count edges
-EDGE_COUNT=$($GEODEC --host "$HOST" --port "$PORT" "MATCH ()-[r]->() RETURN count(r) AS count" 2>/dev/null | grep -o '"count":[0-9]*' | cut -d: -f2)
+EDGE_COUNT=$($GEODE query "MATCH ()-[r]->() RETURN count(r) AS count" --server "${HOST}:${PORT}" --insecure 2>/dev/null | grep -o '"count":[0-9]*' | cut -d: -f2)
 echo "  Edges created: ${EDGE_COUNT:-0}"
 
 # Count by type
 echo ""
 echo -e "${GREEN}Node distribution:${NC}"
-$GEODEC --host "$HOST" --port "$PORT" "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS count ORDER BY count DESC" 2>/dev/null | \
+$GEODE query "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS count ORDER BY count DESC" --server "${HOST}:${PORT}" --insecure 2>/dev/null | \
     grep -o '"label":"[^"]*","count":[0-9]*' | \
     sed 's/"label":"\([^"]*\)","count":\([0-9]*\)/  \1: \2/' || echo "  Unable to get node distribution"
 
@@ -136,12 +136,12 @@ echo -e "${GREEN}=== Dataset loaded successfully! ===${NC}"
 echo ""
 echo "Try these example queries:"
 echo "  # Find top influencers:"
-echo "  $GEODEC \"MATCH (u:User) WHERE u.follower_count > 1000 RETURN u.username, u.follower_count ORDER BY u.follower_count DESC LIMIT 5\""
+echo "  $GEODE query \"MATCH (u:User) WHERE u.follower_count > 1000 RETURN u.username, u.follower_count ORDER BY u.follower_count DESC LIMIT 5\" --server ${HOST}:${PORT} --insecure"
 echo ""
 echo "  # Network security analysis:"
-echo "  $GEODEC \"MATCH (d:Device)-[:CONNECTED_FROM]->(u:User) WHERE ip_is_private(d.ip_address) RETURN u.username, d.ip_address, d.trust_score\""
+echo "  $GEODE query \"MATCH (d:Device)-[:CONNECTED_FROM]->(u:User) WHERE ip_is_private(d.ip_address) RETURN u.username, d.ip_address, d.trust_score\" --server ${HOST}:${PORT} --insecure"
 echo ""
 echo "  # Geographic search (events near SF):"
-echo "  $GEODEC \"MATCH (e:Event) WHERE distance_haversine(e.location, LatLon(37.7749, -122.4194)) < 100000 RETURN e.title, e.venue\""
+echo "  $GEODE query \"MATCH (e:Event) WHERE distance_haversine(e.location, LatLon(37.7749, -122.4194)) < 100000 RETURN e.title, e.venue\" --server ${HOST}:${PORT} --insecure"
 echo ""
 echo "For more examples, see migrations/README.md"

@@ -22,7 +22,7 @@ MATCH (n) RETURN n ORDER BY n.id;
 EOF
 
 echo "Starting QUIC server for property persistence test..."
-./zig-out/bin/geode serve --listen-quic 127.0.0.1:9443 --data_dir /tmp/geode_property_test &
+./zig-out/bin/geode serve --listen 127.0.0.1:9443 --data_dir /tmp/geode_property_test &
 SERVER_PID=$!
 
 # Give server time to start

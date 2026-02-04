@@ -130,7 +130,7 @@ test "protocol: transport parity stdio vs QUIC (CASE 3VL)" {
     const snorm = try normalize_rows(std.testing.allocator, srows);
     defer std.testing.allocator.free(snorm);
 
-    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:17670", "--result-format", "json" });
+    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17670", "--result-format", "json" });
     defer {
         _ = server.child.kill() catch {};
     }

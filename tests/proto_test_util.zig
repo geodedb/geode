@@ -1,7 +1,7 @@
 const std = @import("std");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
-const quic = @import("../src/transport/quic.zig");
+const quic = @import("transport/quic");
 
 pub const ServerHandle = struct {
     allocator: std.mem.Allocator,

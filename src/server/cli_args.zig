@@ -122,8 +122,7 @@ pub fn printHelp() void {
     std.debug.print("Usage: geode serve [OPTIONS]\n\n", .{});
     std.debug.print("Options:\n", .{});
     std.debug.print("  -c, --config <path>          Path to config file (YAML, TOML, or JSON)\n", .{});
-    std.debug.print("  --listen-quic <addr:port>    Listen on QUIC/TLS (e.g., 0.0.0.0:3141)\n", .{});
-    std.debug.print("  --listen <addr:port>         Alias for --listen-quic\n", .{});
+    std.debug.print("  --listen <addr:port>         Listen on QUIC/TLS (e.g., 0.0.0.0:3141)\n", .{});
     std.debug.print("  --listen-grpc <addr:port>    Listen on gRPC (e.g., 0.0.0.0:3142)\n", .{});
     std.debug.print("  --cert <path>                Path to TLS certificate (default: auto-generate)\n", .{});
     std.debug.print("  --key <path>                 Path to TLS private key (default: auto-generate)\n", .{});

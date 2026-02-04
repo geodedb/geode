@@ -41,7 +41,7 @@ test "server_startup_argument_parsing" {
         try allocator.dupeZ(u8, "geode-server"),
         try allocator.dupeZ(u8, "--data_dir"),
         try allocator.dupeZ(u8, "./test_data"),
-        try allocator.dupeZ(u8, "--listen-quic"),
+        try allocator.dupeZ(u8, "--listen"),
         try allocator.dupeZ(u8, "127.0.0.1:9999"),
         try allocator.dupeZ(u8, "--log-level"),
         try allocator.dupeZ(u8, "debug"),
@@ -58,7 +58,7 @@ test "server_startup_argument_parsing" {
         if (std.mem.eql(u8, test_args[ai], "--data_dir") and ai + 1 < test_args.len) {
             data_dir = test_args[ai + 1];
             ai += 1;
-        } else if (std.mem.eql(u8, test_args[ai], "--listen-quic") and ai + 1 < test_args.len) {
+        } else if (std.mem.eql(u8, test_args[ai], "--listen") and ai + 1 < test_args.len) {
             listen_quic = test_args[ai + 1];
             ai += 1;
         } else if (std.mem.eql(u8, test_args[ai], "--log-level") and ai + 1 < test_args.len) {
@@ -183,7 +183,7 @@ test "server_argument_array_building" {
 
     // Test building argument array
     try server_args.append(allocator, "geode-server");
-    try server_args.append(allocator, "--listen-quic");
+    try server_args.append(allocator, "--listen");
     try server_args.append(allocator, "0.0.0.0:3141");
     try server_args.append(allocator, "--data_dir");
     try server_args.append(allocator, "./test_data");
@@ -193,7 +193,7 @@ test "server_argument_array_building" {
     // Verify argument array
     try expectEqual(@as(usize, 7), server_args.items.len);
     try expectEqualStrings("geode-server", server_args.items[0]);
-    try expectEqualStrings("--listen-quic", server_args.items[1]);
+    try expectEqualStrings("--listen", server_args.items[1]);
     try expectEqualStrings("0.0.0.0:3141", server_args.items[2]);
     try expectEqualStrings("--data_dir", server_args.items[3]);
     try expectEqualStrings("./test_data", server_args.items[4]);

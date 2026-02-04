@@ -46,7 +46,7 @@ fn run_server(args: []const []const u8) !struct { child: Child } {
 test "protocol QUIC: MATCH ORDER/LIMIT ordered metadata" {
     const allocator = std.testing.allocator;
     // Start server on a random-ish port 17657
-    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:17657", "--result-format", "json" });
+    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17657", "--result-format", "json" });
     defer {
         _ = server.child.kill() catch {};
     }
@@ -67,7 +67,7 @@ test "protocol QUIC: MATCH ORDER/LIMIT ordered metadata" {
 // CANARY: REQ=REQ-GQL-010; FEATURE="Pagination Legality (US001)"; ASPECT=Execution_QUIC; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_MatchUnorderedPaginationReject_QUIC; OWNER=planner; UPDATED=2025-09-24
 test "protocol QUIC: MATCH LIMIT+OFFSET without ORDER (US001)" {
     const allocator = std.testing.allocator;
-    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:17658", "--result-format", "json" });
+    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17658", "--result-format", "json" });
     defer {
         _ = server.child.kill() catch {};
     }
@@ -85,7 +85,7 @@ test "protocol QUIC: MATCH LIMIT+OFFSET without ORDER (US001)" {
 // CANARY: REQ=REQ-GQL-017; FEATURE="OPTIONAL MATCH null-preserve"; ASPECT=ProtocolE2E_QUIC; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_OptionalMatchNullPreserve_QUIC; OWNER=engine; UPDATED=2025-09-24
 test "protocol QUIC: OPTIONAL MATCH null-preserving semantics" {
     const allocator = std.testing.allocator;
-    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:17659", "--result-format", "json" });
+    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17659", "--result-format", "json" });
     defer {
         _ = server.child.kill() catch {};
     }

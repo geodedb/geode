@@ -8,7 +8,7 @@ fn run_quic() !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
 
     // Start server in QUIC mode
-    var srv = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:7567" }, allocator);
+    var srv = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:7567" }, allocator);
     srv.stdin_behavior = .Inherit;
     srv.stdout_behavior = .Inherit;
     srv.stderr_behavior = .Inherit;

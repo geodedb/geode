@@ -62,7 +62,7 @@ wait $SERVER_PID 2>/dev/null || true
 sleep 2
 
 echo "5. Restarting server with same data directory..."
-./zig-out/bin/geode serve --listen-quic 127.0.0.1:9443 --data_dir "$GEODE_TEST_DIR" &
+./zig-out/bin/geode serve --listen 127.0.0.1:9443 --data_dir "$GEODE_TEST_DIR" &
 SERVER_PID=$!
 
 # Wait for server to restart

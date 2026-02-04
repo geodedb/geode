@@ -44,7 +44,7 @@ fn run_server(args: []const []const u8) !struct { child: Child } {
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Path Determinism UA005/UA006"; ASPECT=ProtocolE2E_QUIC; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_VarLenDeterminism_QUIC; OWNER=engine; UPDATED=2025-09-24
 test "protocol QUIC: MATCH varlen 1..2 determinism" {
-    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:17660", "--result-format", "json" });
+    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17660", "--result-format", "json" });
     defer {
         _ = server.child.kill() catch {};
     }

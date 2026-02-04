@@ -61,7 +61,7 @@ fn run_server(args: []const []const u8) !struct { child: Child } {
 // QUIC variant
 // CANARY: REQ=REQ-GQL-017; FEATURE="OPTIONAL MATCH + VarLen NullPreserve"; ASPECT=ProtocolE2E_QUIC; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_OptionalVarLenNull_QUIC; OWNER=engine; UPDATED=2025-09-24
 test "protocol QUIC: OPTIONAL MATCH varlen null-preserving" {
-    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:17661", "--result-format", "json" });
+    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17661", "--result-format", "json" });
     defer {
         _ = server.child.kill() catch {};
     }

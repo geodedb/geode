@@ -86,7 +86,7 @@ make release > /dev/null 2>&1 || make build > /dev/null 2>&1
 
 # Start server
 echo "Starting server..."
-./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443 > /tmp/perf_server.log 2>&1 &
+./zig-out/bin/geode serve --listen 0.0.0.0:8443 > /tmp/perf_server.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 

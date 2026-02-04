@@ -66,7 +66,7 @@ test "protocol: transport parity diagnostics (US001) stdio vs QUIC (gated)" {
     try std.testing.expect(contains(sres.err, "US001"));
     try std.testing.expect(contains(sres.err, "16.18"));
 
-    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:17667", "--result-format", "json" });
+    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17667", "--result-format", "json" });
     defer {
         _ = server.child.kill() catch {};
     }

@@ -31,7 +31,7 @@ run_query() {
 # Test 1: Sequential clients
 echo "Test 1: Sequential clients to single server"
 echo "Starting server..."
-./zig-out/bin/geode serve --listen-quic 127.0.0.1:8443 > test_server.log 2>&1 &
+./zig-out/bin/geode serve --listen 127.0.0.1:8443 > test_server.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -47,7 +47,7 @@ echo ""
 # Test 2: Concurrent clients
 echo "Test 2: Concurrent clients to single server"
 echo "Starting server..."
-./zig-out/bin/geode serve --listen-quic 127.0.0.1:8444 > test_server2.log 2>&1 &
+./zig-out/bin/geode serve --listen 127.0.0.1:8444 > test_server2.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -128,7 +128,7 @@ echo ""
 # Test 3: Rapid fire from single client
 echo "Test 3: Rapid sequential queries from single client"
 echo "Starting server..."
-./zig-out/bin/geode serve --listen-quic 127.0.0.1:8445 > test_server3.log 2>&1 &
+./zig-out/bin/geode serve --listen 127.0.0.1:8445 > test_server3.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -152,7 +152,7 @@ echo ""
 # Test 4: Stress test with 10 concurrent clients
 echo "Test 4: Stress test with 10 concurrent clients"
 echo "Starting server..."
-./zig-out/bin/geode serve --listen-quic 127.0.0.1:8446 > test_server4.log 2>&1 &
+./zig-out/bin/geode serve --listen 127.0.0.1:8446 > test_server4.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -195,7 +195,7 @@ echo ""
 # Test 5: Connection reuse (multiple queries per client)
 echo "Test 5: Connection reuse test"
 echo "Starting server..."
-./zig-out/bin/geode serve --listen-quic 127.0.0.1:8447 > test_server5.log 2>&1 &
+./zig-out/bin/geode serve --listen 127.0.0.1:8447 > test_server5.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 

@@ -648,6 +648,7 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addImport("json", json_mod);
     custom_tests.root_module.addImport("protobuf", protobuf_mod);
     custom_tests.root_module.addImport("schema", schema_mod);
+    custom_tests.root_module.addImport("transport/quic", transport_quic_mod);
 
     // New unit tests for recent implementations
     // NOTE: These tests stay in src/ due to relative @import dependencies on src/types/* and src/storage/*

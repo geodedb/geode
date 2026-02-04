@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# telemetry-smoke.sh — start geoded with paging telemetry, run a small query via geodec,
+# telemetry-smoke.sh — start geode server with paging telemetry, run a small query via geode,
 # print captured telemetry lines, and clean up.
 # Usage: scripts/telemetry-smoke.sh [page_size]
-# Requires: zig build has produced ./zig-out/bin/geoded and ./zig-out/bin/geodec
+# Requires: zig build has produced ./zig-out/bin/geode
 
 ROOT_DIR="$(cd "$(dirname "$0")"/.. && pwd)"
 BIN_DIR="$ROOT_DIR/zig-out/bin"
-SERVER_BIN="$BIN_DIR/geoded"
-CLIENT_BIN="$BIN_DIR/geodec"
+SERVER_BIN="$BIN_DIR/geode"
+CLIENT_BIN="$BIN_DIR/geode"
 PAGE_SIZE="${1:-1}"
 LOG_FILE="$(mktemp -t geode_telemetry.XXXXXX.log)"
 PID_FILE="$(mktemp -t geode_telemetry.XXXXXX.pid)"
@@ -34,7 +34,7 @@ fi
 
 # Start server with telemetry enabled; capture stderr to log file
 GEODE_TELEMETRY_PAGING=1 \
-"$SERVER_BIN" --data_dir "$ROOT_DIR/data" --log_json --result-format json \
+"$SERVER_BIN" serve --listen 127.0.0.1:3141 --data-dir "$ROOT_DIR/data" --disable-auth \
   1>/dev/null 2>"$LOG_FILE" &
 SERVER_PID=$!
 echo "$SERVER_PID" >"$PID_FILE"
@@ -43,7 +43,7 @@ echo "$SERVER_PID" >"$PID_FILE"
 sleep 0.5
 
 # Run a tiny ordered+limited query to ensure a single page flows
-"$CLIENT_BIN" "RETURN 1 AS x ORDER BY x LIMIT $PAGE_SIZE" --format json || true
+"$CLIENT_BIN" query "RETURN 1 AS x ORDER BY x LIMIT $PAGE_SIZE" --format json --server 127.0.0.1:3141 --insecure || true
 
 # Print telemetry lines
 if grep -q '"event":"PULL_PAGE"' "$LOG_FILE"; then

@@ -60,7 +60,7 @@ echo -e "${BLUE}=== Phase 1: Server TLS Configuration ===${NC}"
 
 # Start server in background with debug logging
 echo "Starting server with TLS..."
-GEODE_LOG_JSON=true ./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443 > server.log 2>&1 &
+GEODE_LOG_JSON=true ./zig-out/bin/geode serve --listen 0.0.0.0:8443 > server.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -145,7 +145,7 @@ fi
 
 # Start server again - should auto-generate certificates
 echo "Starting server without certificates (should auto-generate)..."
-./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443 > server2.log 2>&1 &
+./zig-out/bin/geode serve --listen 0.0.0.0:8443 > server2.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 

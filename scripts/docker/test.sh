@@ -44,9 +44,9 @@ run_query() {
     local container="${3:-geode}"
 
     if [[ "$VERBOSE" == "true" ]]; then
-        docker exec "$container" geodec "$query" --server "$server" 2>&1
+        docker exec "$container" geode query "$query" --server "$server" 2>&1
     else
-        docker exec "$container" geodec "$query" --server "$server" 2>&1 | grep -v debug
+        docker exec "$container" geode query "$query" --server "$server" 2>&1 | grep -v debug
     fi
 }
 
@@ -129,7 +129,7 @@ EOF
 
     docker cp /tmp/txn_test.gql "$container":/tmp/txn_test.gql
 
-    if docker exec "$container" sh -c "geodec < /tmp/txn_test.gql --server 127.0.0.1:7567" 2>&1 | grep -q '"x":1'; then
+    if docker exec "$container" sh -c "geode query < /tmp/txn_test.gql --server 127.0.0.1:7567" 2>&1 | grep -q '"x":1'; then
         log_pass "Transaction execution"
     else
         log_fail "Transaction execution"

@@ -63,7 +63,7 @@ test "protocol: transport parity MATCH varlen rows stdio vs QUIC (gated)" {
     defer env.deinit();
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
 
-    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:17671", "--result-format", "json" }, std.testing.allocator);
+    var server = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17671", "--result-format", "json" }, std.testing.allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Pipe;
     server.stderr_behavior = .Pipe;

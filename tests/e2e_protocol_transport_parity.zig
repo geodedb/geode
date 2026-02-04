@@ -87,7 +87,7 @@ test "protocol: transport parity stdio vs QUIC (ordered rows equal)" {
     const sline = extract_bindings_line(sres.out) orelse return error.InvalidTestState;
 
     // QUIC path
-    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:17662", "--result-format", "json" });
+    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17662", "--result-format", "json" });
     defer {
         _ = server.child.kill() catch {};
     }

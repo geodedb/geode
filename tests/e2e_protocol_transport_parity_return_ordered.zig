@@ -80,7 +80,7 @@ test "protocol: transport parity stdio vs QUIC (RETURN ORDER/LIMIT)" {
     const srows = try extract_rows(sres.out);
 
     // QUIC path
-    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:17664", "--result-format", "json" });
+    var server = try run_server(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:17664", "--result-format", "json" });
     defer {
         _ = server.child.kill() catch {};
     }

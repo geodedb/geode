@@ -5,7 +5,7 @@ fn run_cdc() !struct { code: i32, out: []u8, err: []u8 } {
     const allocator = std.testing.allocator;
 
     // Start server with CDC enabled; exit after first request so test doesn't hang.
-    var srv = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen-quic", "127.0.0.1:8567 }, allocator);
+    var srv = Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", "127.0.0.1:8567 }, allocator);
     // Inherit stdout/stderr to help debug if needed (could redirect to Pipe if assertions need it later)
     srv.stdin_behavior = .Pipe;
     srv.stdout_behavior = .Inherit;

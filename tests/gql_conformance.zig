@@ -72,6 +72,13 @@ fn expectedFromProto(allocator: std.mem.Allocator, value: schema.Value) !Expecte
         .int_val => |i| .{ .Int = i.value },
         .double_val => |d| .{ .Float = d.value },
         .string_val => |s| .{ .String = try allocator.dupe(u8, s.value) },
+        .decimal_val => |d| blk: {
+            // Convert decimal coefficient/scale to float for test comparison
+            if (d.coeff.len == 0) break :blk .{ .Null = {} };
+            const coeff = std.fmt.parseInt(i64, d.coeff, 10) catch break :blk .{ .Float = 0.0 };
+            const scale_factor = std.math.pow(f64, 10.0, @as(f64, @floatFromInt(d.scale)));
+            break :blk .{ .Float = @as(f64, @floatFromInt(coeff)) / scale_factor };
+        },
         else => return error.UnsupportedValueKind,
     };
 }

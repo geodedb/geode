@@ -61,7 +61,7 @@ mkdir -p "$BACKUP_DIR" "$DATA_DIR"
 
 # Start server with data directory
 echo "Starting server with persistent storage..."
-./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443 --data_dir "$DATA_DIR" > /tmp/backup_server.log 2>&1 &
+./zig-out/bin/geode serve --listen 0.0.0.0:8443 --data_dir "$DATA_DIR" > /tmp/backup_server.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
@@ -134,7 +134,7 @@ wait $SERVER_PID 2>/dev/null
 rm -rf "$DATA_DIR"/*
 
 # Restart server
-./zig-out/bin/geode serve --listen-quic 0.0.0.0:8443 --data_dir "$DATA_DIR" > /tmp/backup_server.log 2>&1 &
+./zig-out/bin/geode serve --listen 0.0.0.0:8443 --data_dir "$DATA_DIR" > /tmp/backup_server.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 

@@ -242,13 +242,13 @@ test "Memory management in unified binary configuration" {
     var server_args = std.ArrayList([]const u8).init(allocator);
     defer server_args.deinit();
 
-    try server_args.append("--listen-quic");
+    try server_args.append("--listen");
     try server_args.append("0.0.0.0:3141");
     try server_args.append("--data-dir");
     try server_args.append("/tmp/geode");
 
     try testing.expect(server_args.items.len == 4);
-    try testing.expect(std.mem.eql(u8, server_args.items[0], "--listen-quic"));
+    try testing.expect(std.mem.eql(u8, server_args.items[0], "--listen"));
     try testing.expect(std.mem.eql(u8, server_args.items[1], "0.0.0.0:3141"));
     try testing.expect(std.mem.eql(u8, server_args.items[2], "--data-dir"));
     try testing.expect(std.mem.eql(u8, server_args.items[3], "/tmp/geode"));

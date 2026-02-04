@@ -14,7 +14,7 @@ test "e2e: GROUP BY execution with aggregation" {
     const allocator = testing.allocator;
     const addr = "127.0.0.1:17687";
 
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen-quic", addr, "--disable-auth" }, null);
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--disable-auth" }, null);
     defer server.deinit();
 
     var client = try util.QuicProtoClient.connect(allocator, addr);
@@ -46,7 +46,7 @@ test "e2e: HashAgg with memory pressure" {
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen-quic", addr, "--disable-auth" },
+        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--disable-auth" },
         &.{ "GEODE_QUERY_MEM_LIMIT_BYTES=1024" },
     );
     defer server.deinit();
