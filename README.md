@@ -35,7 +35,21 @@ Geode is a production-ready graph database implementing the **ISO/IEC 39075:2024
 
 ### **Installation**
 
-#### Using Nix (Recommended)
+#### APT (Debian/Ubuntu) - Recommended
+
+```bash
+# Import the GeodeDB APT signing key
+curl -fsSL https://apt.geodedb.com/geodedb-keyring.gpg | sudo tee /usr/share/keyrings/geodedb-archive-keyring.gpg > /dev/null
+
+# Add the GeodeDB APT repository
+echo "deb [signed-by=/usr/share/keyrings/geodedb-archive-keyring.gpg] https://apt.geodedb.com/ stable main" | sudo tee /etc/apt/sources.list.d/geodedb.list
+
+# Update and install
+sudo apt update
+sudo apt install geode
+```
+
+#### Using Nix
 
 ```bash
 # Run Geode directly
@@ -45,7 +59,7 @@ nix run github:codeprosorg/geode
 nix develop github:codeprosorg/geode
 ```
 
-#### Traditional Build
+#### Build from Source
 
 ```bash
 # Prerequisites: Zig 0.15.1+

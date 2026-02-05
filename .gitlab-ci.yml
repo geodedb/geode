@@ -13,7 +13,7 @@ include:
       allow_failure: true
 
   # APT repository publishing (apt.geodedb.com)
-  - component: gitlab.com/devnw/ci-catalog/apt-publish@v1.12.0
+  - component: gitlab.com/devnw/ci-catalog/apt-publish@v1.14.0
     inputs:
       apt_domain: apt.geodedb.com
       job_suffix: apt-geodedb-com
