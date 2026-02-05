@@ -24,7 +24,7 @@ var flags_buf_ext: [7][]const u8 = undefined; // room for adaptive + union phase
 
 /// Global flag state variables
 var g_nulls_last: bool = false; // default NullsFirstPolicy unless overridden by env
-var g_order_keys_expr: bool = false; // default ident-only unless env overrides
+var g_order_keys_expr: bool = true; // default allows property paths per ISO/GQL standard
 var g_adapt_estimates: bool = false; // env or future CLI toggled
 var g_estimate_adjust_factor: f64 = 1.0; // groundwork; stays 1.0 until adaptive algorithm enabled
 

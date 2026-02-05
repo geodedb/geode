@@ -25,7 +25,7 @@ pub const EnvironmentConfig = struct {
     memcurve_profile: bool = false,
     compact_profile: bool = false,
     disable_estimates: bool = false,
-    order_keys_expr: bool = false,
+    order_keys_expr: bool = true,  // ISO/GQL standard allows property paths in ORDER BY
     // CANARY: REQ=REQ-ABAC-WIRE-005; FEATURE="ABAC Enforcement"; ASPECT=EnvConfig; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
     // GAP-0165: Environment flag to enable ABAC enforcement
     abac_enabled: bool = false,

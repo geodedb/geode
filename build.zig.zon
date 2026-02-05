@@ -77,10 +77,10 @@
 
         // QUIC v1/v2 protocol implementation
         // GAP-0200: Updated to v0.1.7 with mutex-based thread-safety for Recovery struct
-        // Updated 2026-02-05: Fix ArrayListUnmanaged initialization for Zig 0.15
+        // Updated 2026-02-05: Fix HashMap initialization safety for Zig 0.15
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#8b0c330ce4ded6d3c0a138582e5268070b2795f9",
-            .hash = "quic-0.1.6-gBIqUarEOgAurVvy7YDVQnVtBKhmRwdYE8rWt_A1eAR6",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#47c37dd234fc81fdccccfc6647918eee92ee321d",
+            .hash = "quic-0.1.6-gBIqUfDFOgD-GPr_WkHMIgwtS8StiACVgfPz73j6BDWN",
         },
 
         // =======================================================================
