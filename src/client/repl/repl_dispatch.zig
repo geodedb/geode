@@ -1019,9 +1019,20 @@ pub const ClientSession = struct {
             result: ?[]u8 = null,
             err: ?anyerror = null,
             done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+            // Flag to indicate the main thread has abandoned us (interrupt/timeout)
+            // Worker must check this and clean up if set
+            abandoned: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
         };
 
-        var ctx = ReadContext{
+        // Heap-allocate the context so it survives if we detach the worker thread
+        const ctx = self.allocator.create(ReadContext) catch {
+            // Allocation failed, fall back to blocking read
+            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |read_err| {
+                return read_err;
+            };
+            return ResponseHandler.handle(self, response);
+        };
+        ctx.* = ReadContext{
             .connection = self.connection.?,
             .allocator = self.allocator,
         };
@@ -1029,15 +1040,32 @@ pub const ClientSession = struct {
         // Spawn worker thread to do the blocking read
         const worker = std.Thread.spawn(.{}, struct {
             fn run(c: *ReadContext) void {
-                c.result = c.connection.readLine(c.allocator, 1 << 16) catch |err| {
+                const result = c.connection.readLine(c.allocator, 1 << 16) catch |err| {
+                    // Check if we were abandoned before storing error
+                    if (c.abandoned.load(.acquire)) {
+                        // Main thread abandoned us, clean up and exit
+                        c.allocator.destroy(c);
+                        return;
+                    }
                     c.err = err;
                     c.done.store(true, .release);
                     return;
                 };
+
+                // Check if we were abandoned before storing result
+                if (c.abandoned.load(.acquire)) {
+                    // Main thread abandoned us, free the result and context
+                    c.allocator.free(result);
+                    c.allocator.destroy(c);
+                    return;
+                }
+
+                c.result = result;
                 c.done.store(true, .release);
             }
-        }.run, .{&ctx}) catch {
-            // Thread spawn failed, fall back to blocking read
+        }.run, .{ctx}) catch {
+            // Thread spawn failed, free context and fall back to blocking read
+            self.allocator.destroy(ctx);
             const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |read_err| {
                 return read_err;
             };
@@ -1053,17 +1081,21 @@ pub const ClientSession = struct {
             // Check if worker is done
             if (ctx.done.load(.acquire)) {
                 worker.join();
-                if (ctx.err) |err| {
+                const err_val = ctx.err;
+                const result_val = ctx.result;
+                // Worker completed normally, we own the context now
+                self.allocator.destroy(ctx);
+                if (err_val) |err| {
                     return err;
                 }
-                const raw = ctx.result orelse return error.InvalidResponse;
+                const raw = result_val orelse return error.InvalidResponse;
                 return ResponseHandler.handle(self, raw);
             }
 
             // Check for interrupt
             if (checkForInterrupt()) {
-                // Interrupt detected - we need to cancel the read
-                // Detach the worker thread (it will complete eventually or error out)
+                // Interrupt detected - signal worker to clean up and detach
+                ctx.abandoned.store(true, .release);
                 worker.detach();
                 return error.Interrupted;
             }
@@ -1073,7 +1105,8 @@ pub const ClientSession = struct {
             waited_ms += check_interval_ms;
         }
 
-        // Timeout - detach worker and return error
+        // Timeout - signal worker to clean up and detach
+        ctx.abandoned.store(true, .release);
         worker.detach();
         return error.WouldBlock;
     }
