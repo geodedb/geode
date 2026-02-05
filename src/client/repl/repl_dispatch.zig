@@ -514,6 +514,9 @@ pub const ClientSession = struct {
     session_id: ?[]const u8 = null,
     last_columns: ?[]const ColumnInfo = null,
     last_payload_kind: LastPayloadKind = .none,
+    /// CANARY: REQ=REQ-INLINE-RESULTS-001; FEATURE="InlineResultsHandling"; ASPECT=SchemaResponseFlag; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
+    /// Tracks if last response was a schema (meaning inline page may follow)
+    received_schema_response: bool = false,
     /// CANARY: REQ=REQ-SHELL-RECONNECT-003; FEATURE="ShellAutoReconnect"; ASPECT=SessionState; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
     reconnect_config: ReconnectionConfig = .{},
     pending_txn_state: PendingTransactionState = .{},
@@ -611,6 +614,95 @@ pub const ClientSession = struct {
             self.allocator.free(cols);
             self.last_columns = null;
         }
+    }
+
+    /// CANARY: REQ=REQ-INLINE-RESULTS-003; FEATURE="InlineResultsHandling"; ASPECT=ConsumeInlinePage; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
+    /// Consume inline page response if the server sent one after a schema response.
+    /// The server's inline_results_enabled feature sends both schema and page in sequence.
+    /// This must be called after receiving a schema response to prevent protocol mismatch
+    /// on subsequent queries (where the client would read the stale inline page instead
+    /// of the new query's response).
+    ///
+    /// When a final inline page is consumed:
+    /// - last_payload_kind is set to .none to prevent subsequent PULL calls
+    /// - last_response is updated with the page data for display
+    fn consumeInlinePageIfNeeded(self: *ClientSession) void {
+        if (!self.received_schema_response) return;
+        if (!self.connected or self.connection == null) return;
+
+        // Reset the flag
+        self.received_schema_response = false;
+
+        // Try a non-blocking read to consume the inline page
+        // Use a short retry loop since the inline page should arrive very quickly
+        var retry_count: usize = 0;
+        const max_retries: usize = 100; // 100ms max wait
+        while (retry_count < max_retries) : (retry_count += 1) {
+            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+                if (err == error.WouldBlock) {
+                    std.Thread.sleep(1 * std.time.ns_per_ms);
+                    continue;
+                }
+                // Any other error - just return, no inline page
+                return;
+            };
+
+            // Got a response - decode it
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+
+            const packet = decodeServerPacket(arena.allocator(), response) catch {
+                // Decode error - free response and return
+                self.allocator.free(response);
+                return;
+            };
+            const msg_union = packet.quic orelse {
+                self.allocator.free(response);
+                return;
+            };
+
+            switch (msg_union) {
+                .execute => |exec_resp| {
+                    // Check if this is a page payload (inline results)
+                    if (exec_resp.payload) |payload| {
+                        switch (payload) {
+                            .page => |page| {
+                                // Successfully consumed inline page
+                                // Update last_response with page data for display
+                                if (self.last_response) |old| {
+                                    self.allocator.free(old);
+                                }
+                                // Store the page response as last_response
+                                self.last_response = executionResponseToJson(self.allocator, exec_resp, self.last_columns) catch null;
+                                self.allocator.free(response);
+
+                                // CANARY: REQ=REQ-INLINE-RESULTS-007; FEATURE="InlineResultsHandling"; ASPECT=FinalPageDetection; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
+                                // If the inline page is final (all data delivered), set last_payload_kind
+                                // to prevent subsequent PULL calls which would fail with "no active result set"
+                                if (page.final) {
+                                    self.last_payload_kind = .none;
+                                }
+                                return;
+                            },
+                            else => {
+                                // Unexpected payload type - don't consume, might be next query's response
+                                // This shouldn't happen in normal operation
+                                self.allocator.free(response);
+                                return;
+                            },
+                        }
+                    }
+                },
+                else => {
+                    // Not an execute response - shouldn't happen for inline results
+                    self.allocator.free(response);
+                    return;
+                },
+            }
+            self.allocator.free(response);
+            return;
+        }
+        // Timeout waiting for inline page - that's OK, server might not have sent one
     }
 
     /// CANARY: REQ=REQ-SHELL-RECONNECT-004; FEATURE="ShellAutoReconnect"; ASPECT=ErrorDetection; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
@@ -971,6 +1063,9 @@ pub const ClientSession = struct {
                 switch (msg_union) {
                     .execute => |exec_resp| {
                     session.last_payload_kind = .none;
+                    // CANARY: REQ=REQ-INLINE-RESULTS-002; FEATURE="InlineResultsHandling"; ASPECT=SchemaDetection; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
+                    // Reset schema response flag - will be set true only for schema payloads
+                    session.received_schema_response = false;
                     if (exec_resp.payload) |payload| {
                         switch (payload) {
                             .schema => |schema_def| {
@@ -987,6 +1082,8 @@ pub const ClientSession = struct {
                                 }
                                 session.last_columns = cols;
                                 session.last_payload_kind = .rows;
+                                // Mark that we received a schema response - inline page may follow
+                                session.received_schema_response = true;
                             },
                             .page => {
                                 session.last_payload_kind = .rows;
@@ -1030,7 +1127,10 @@ pub const ClientSession = struct {
             const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |read_err| {
                 return read_err;
             };
-            return ResponseHandler.handle(self, response);
+            try ResponseHandler.handle(self, response);
+            // CANARY: REQ=REQ-INLINE-RESULTS-004; FEATURE="InlineResultsHandling"; ASPECT=ConsumeAfterSchema; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
+            self.consumeInlinePageIfNeeded();
+            return;
         };
         ctx.* = ReadContext{
             .connection = self.connection.?,
@@ -1069,7 +1169,10 @@ pub const ClientSession = struct {
             const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |read_err| {
                 return read_err;
             };
-            return ResponseHandler.handle(self, response);
+            try ResponseHandler.handle(self, response);
+            // CANARY: REQ=REQ-INLINE-RESULTS-005; FEATURE="InlineResultsHandling"; ASPECT=ConsumeAfterSchema; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
+            self.consumeInlinePageIfNeeded();
+            return;
         };
 
         // Main thread: wait for completion while checking for interrupts
@@ -1089,7 +1192,10 @@ pub const ClientSession = struct {
                     return err;
                 }
                 const raw = result_val orelse return error.InvalidResponse;
-                return ResponseHandler.handle(self, raw);
+                try ResponseHandler.handle(self, raw);
+                // CANARY: REQ=REQ-INLINE-RESULTS-006; FEATURE="InlineResultsHandling"; ASPECT=ConsumeAfterSchema; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
+                self.consumeInlinePageIfNeeded();
+                return;
             }
 
             // Check for interrupt
