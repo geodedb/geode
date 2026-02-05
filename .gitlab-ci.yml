@@ -13,17 +13,17 @@ include:
       allow_failure: true
 
   # APT repository publishing (apt.geodedb.com)
-  # Note: Vault auth may fail on unprotected refs - allow_failure ensures releases still work
-  - component: gitlab.com/devnw/ci-catalog/apt-publish@v1.10.2
+  - component: gitlab.com/devnw/ci-catalog/apt-publish@v1.12.0
     inputs:
       apt_domain: apt.geodedb.com
       job_suffix: apt-geodedb-com
       vault_auth_role: codepros-ci
+      vault_mount: devnw
       vault_secret_path: geode/apt
       package_path: dist/*.deb
       gpg_key_name: geode.gpg
       sign_needs: build-release
-      allow_failure: true
+      allow_failure: false
 
 stages:
   - lint
