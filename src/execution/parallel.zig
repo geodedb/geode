@@ -86,7 +86,7 @@ pub const Pool = struct {
             .spice_pool = SpicePool.init(allocator, count),
             .enabled = true,
             .worker_count = count,
-            .queued_jobs = std.ArrayList(Job).init(allocator),
+            .queued_jobs = std.ArrayList(Job).empty,
             .chunk_size_estimator = AdaptiveChunkEstimator.init(),
         };
         pool.spice_pool.start();
@@ -149,7 +149,7 @@ pub const Pool = struct {
                 self.mutex.unlock();
                 break;
             };
-            std.mem.copy(Job, jobs, self.queued_jobs.items);
+            std.mem.copyForwards(Job, jobs, self.queued_jobs.items);
             self.queued_jobs.items.len = 0;
             self.mutex.unlock();
 

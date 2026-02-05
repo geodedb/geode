@@ -1709,6 +1709,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    tde_file_mod.addImport("logging", logging_mod);
     const tde_enforcement_test_mod = b.createModule(.{
         .root_source_file = b.path("src/security/test_tde_enforcement.zig"),
         .target = target,

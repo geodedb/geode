@@ -2187,9 +2187,18 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
                 return err;
             }
             // For other errors, print and return error so caller can track
-            try stderr.writeAll("Error executing query: ");
-            try stderr.writeAll(@errorName(err));
-            try stderr.writeAll("\r\n");
+            // Provide user-friendly error messages for common errors
+            if (err == error.InvalidResponse) {
+                try stderr.writeAll("Error: Server returned an invalid response (protocol mismatch or server error)\r\n");
+            } else if (err == error.ConnectionReset or err == error.BrokenPipe) {
+                try stderr.writeAll("Error: Connection to server was lost\r\n");
+            } else if (err == error.Timeout) {
+                try stderr.writeAll("Error: Query timed out\r\n");
+            } else {
+                try stderr.writeAll("Error executing query: ");
+                try stderr.writeAll(@errorName(err));
+                try stderr.writeAll("\r\n");
+            }
             return error.QueryExecutionFailed;
         };
 
@@ -2254,9 +2263,18 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
                 return error.QueryExecutionFailed;
             }
 
-            try stderr.writeAll("Error fetching results: ");
-            try stderr.writeAll(@errorName(err));
-            try stderr.writeAll("\r\n");
+            // Provide user-friendly error messages for common errors
+            if (err == error.InvalidResponse) {
+                try stderr.writeAll("Error: Failed to fetch results (invalid server response)\r\n");
+            } else if (err == error.ConnectionReset or err == error.BrokenPipe) {
+                try stderr.writeAll("Error: Connection lost while fetching results\r\n");
+            } else if (err == error.Timeout) {
+                try stderr.writeAll("Error: Timed out while fetching results\r\n");
+            } else {
+                try stderr.writeAll("Error fetching results: ");
+                try stderr.writeAll(@errorName(err));
+                try stderr.writeAll("\r\n");
+            }
             return error.QueryExecutionFailed;
         };
     }
@@ -2269,9 +2287,17 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     if (state.session.last_response) |schema_response| {
         const should_display = has_error or state.session.last_payload_kind != .rows;
         if (should_display) {
-            if (try extractAndDisplayResult(state.allocator, schema_response, stdout, stderr, state.format)) {
-                // Return QueryExecutionFailed error so callers can track error counts
-                return error.QueryExecutionFailed;
+            // When suppressing output (batch mode), only signal errors without verbose output
+            if (suppress) {
+                if (has_error) {
+                    return error.QueryExecutionFailed;
+                }
+                // Non-error, non-row payloads during batch execution - silently skip
+            } else {
+                if (try extractAndDisplayResult(state.allocator, schema_response, stdout, stderr, state.format)) {
+                    // Return QueryExecutionFailed error so callers can track error counts
+                    return error.QueryExecutionFailed;
+                }
             }
         }
     }
