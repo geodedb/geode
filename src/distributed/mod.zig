@@ -170,7 +170,7 @@ pub const DistributedCoordinator = struct {
             coordinator.raft_node.?.enableFeatures(true, true);
         }
         if (config.enable_2pc) {
-            coordinator.twophase_coordinator = twophase.TwoPCCoordinator.init(allocator, config.coordinator_config);
+            coordinator.twophase_coordinator = try twophase.TwoPCCoordinator.init(allocator, config.coordinator_config);
             coordinator.twophase_coordinator.?.enableFeatures(true, true);
         }
         return coordinator;

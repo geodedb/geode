@@ -2,8 +2,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const raft_consensus = @import("raft_consensus.zig");
 const RaftNode = raft_consensus.RaftNode;
-const txn_coordinator = @import("txn_coordinator.zig");
 const graph_store = @import("../graph_store.zig");
+const dist_schema = @import("distributed_schema");
 const protobuf = @import("protobuf");
 const fd = protobuf.fd;
 const quic = @import("transport/quic");
@@ -348,7 +348,23 @@ pub const ClusterCoordinator = struct {
     pub fn deinit(self: *ClusterCoordinator) void {
         self.raft.deinit();
         self.allocator.destroy(self.raft);
+        for (self.cluster_state.nodes.items) |*node| {
+            if (node.endpoint.len > 0) {
+                self.allocator.free(node.endpoint);
+            }
+            var meta_it = node.metadata.iterator();
+            while (meta_it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+            }
+            node.metadata.deinit();
+        }
         self.cluster_state.nodes.deinit();
+        for (self.cluster_state.shards.items) |shard| {
+            if (shard.replica_nodes.len > 0) {
+                self.allocator.free(shard.replica_nodes);
+            }
+        }
         self.cluster_state.shards.deinit();
         self.cluster_state.replication_map.deinit();
         self.network_transport.connections.deinit();
@@ -972,9 +988,12 @@ pub const ClusterCoordinator = struct {
         var prepare_votes = std.ArrayList(bool).init(self.allocator);
         defer prepare_votes.deinit();
 
+        const write_set = try self.serializeWriteSet(msg);
+        defer self.allocator.free(write_set);
+        const metadata = try self.serializeMetadata(msg);
+        defer self.allocator.free(metadata);
+
         for (affected_shards) |shard_id| {
-            const write_set = try self.serializeWriteSet(msg);
-            const metadata = try self.serializeMetadata(msg);
             const prepare_msg = raft_consensus.TxnPrepare{
                 .xid = xid,
                 .shard_id = shard_id,
@@ -984,8 +1003,6 @@ pub const ClusterCoordinator = struct {
 
             // Send prepare through Raft consensus
             const vote = try self.sendPrepareToShard(shard_id, prepare_msg);
-            self.allocator.free(write_set);
-            self.allocator.free(metadata);
             try prepare_votes.append(vote);
         }
 
@@ -1009,7 +1026,7 @@ pub const ClusterCoordinator = struct {
         }
 
         return Response{
-            .status = if (can_commit) .ok else .aborted,
+            .status = if (can_commit) .OK else .ABORTED,
             .data = try std.fmt.allocPrint(self.allocator, "Transaction {} {s}", .{ xid, if (can_commit) "committed" else "aborted" }),
         };
     }
@@ -1048,7 +1065,7 @@ pub const ClusterCoordinator = struct {
 
     fn generateTransactionId(self: *ClusterCoordinator) !u64 {
         // Generate unique transaction ID
-        const timestamp = @intCast(u64, std.time.milliTimestamp());
+        const timestamp: u64 = @intCast(std.time.milliTimestamp());
         const node_part = self.node_id << 48;
         const counter = self.incrementTxCounter();
         return node_part | (timestamp << 16) | counter;
@@ -1064,11 +1081,14 @@ pub const ClusterCoordinator = struct {
     }
 
     fn serializeWriteSet(self: *ClusterCoordinator, msg: Message) ![]const u8 {
-        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
-        defer aw.deinit();
-        try protobuf.encode(&aw.writer, self.allocator, msg);
-        const body = aw.writer.buffer[0..aw.writer.end];
-        return self.allocator.dupe(u8, body);
+        const write_set = msg.data orelse return error.MissingWriteSet;
+        var reader: std.Io.Reader = .fixed(write_set);
+        var decoded = protobuf.decode(dist_schema.TwoPhaseMessage, &reader, self.allocator) catch |err| {
+            log.err("Invalid 2PC write set payload", &.{Attr.string("error", @errorName(err))});
+            return error.InvalidWriteSet;
+        };
+        defer decoded.deinit(self.allocator);
+        return self.allocator.dupe(u8, write_set);
     }
 
     fn serializeMetadata(self: *ClusterCoordinator, msg: Message) ![]const u8 {
@@ -1085,9 +1105,10 @@ pub const ClusterCoordinator = struct {
     }
 
     fn sendPrepareToShard(self: *ClusterCoordinator, shard_id: u64, prepare: raft_consensus.TxnPrepare) !bool {
+        _ = shard_id;
         // Send prepare message through Raft
         const command = raft_consensus.Command{ .txn_prepare = prepare };
-        const result = try self.raft.proposeCommand(command);
+        _ = try self.raft.proposeCommand(command);
 
         // Wait for response (simplified - in production would be async)
         if (self.raft.pending_responses.get(prepare.xid)) |response| {

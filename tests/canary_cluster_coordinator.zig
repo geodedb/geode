@@ -15,7 +15,7 @@ pub fn TestCANARY_REQ_GQL_078_LeaderStub() !void {
         .{ .id = 3, .address = "127.0.0.1", .port = 8570 },
     };
 
-    var coord = try cluster.ClusterCoordinator.init(allocator, 1, .{ .peers = peers, .election_timeout_ms = 10, .replication_factor = 3, .storage_config = undefined });
+    var coord = try cluster.ClusterCoordinator.init(allocator, 1, .{ .peers = peers, .election_timeout_ms = 10, .replication_factor = 3 });
     defer coord.deinit();
 
     // Initial state follower
@@ -35,14 +35,14 @@ pub fn TestCANARY_REQ_GQL_078_ShardMapStub() !void {
         .{ .id = 4, .address = "127.0.0.1", .port = 8671 },
     };
 
-    var coord = try cluster.ClusterCoordinator.init(allocator, 2, .{ .peers = peers, .replication_factor = 3, .storage_config = undefined });
+    var coord = try cluster.ClusterCoordinator.init(allocator, 2, .{ .peers = peers, .replication_factor = 3 });
     defer coord.deinit();
 
     // Seed cluster_state.nodes with active nodes
     for (peers) |p| {
         try coord.cluster_state.nodes.append(.{
             .id = p.id,
-            .endpoint = p.address,
+            .endpoint = try allocator.dupe(u8, p.address),
             .state = .active,
             .role = if (p.id == 2) .leader else .follower,
             .capacity = .{ .cpu_cores = 8, .memory_gb = 16, .storage_gb = 100, .network_mbps = 1000, .current_load = 0.1 },
@@ -85,15 +85,7 @@ pub fn TestCANARY_REQ_GQL_078_RaftInterfaceValidation() !void {
     const frame = try raft.encodeRaftFrame(allocator, 7, 5, msg);
     defer allocator.free(frame);
 
-    // Basic shape assertions
-    try testing.expect(std.mem.indexOf(u8, frame, "\"term\":5") != null);
-    try testing.expect(std.mem.indexOf(u8, frame, "\"from\":7") != null);
-
-    var stream = std.io.fixedBufferStream(frame);
-    const line = try stream.reader().readUntilDelimiterAlloc(allocator, '\n', 4096);
-    defer allocator.free(line);
-
-    const decoded = try raft.decodeRaftFrame(allocator, line);
+    const decoded = try raft.decodeRaftFrame(allocator, frame);
     defer decoded.deinit(allocator);
     try testing.expectEqual(@as(u64, 5), decoded.term);
     try testing.expectEqual(@as(u64, 7), decoded.from);

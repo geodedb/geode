@@ -32,14 +32,13 @@ test "distributed cluster - automatic failover on node failure" {
             .auto_failover = true,
             .failover_timeout_ms = 500,
         },
-        .storage_config = undefined,
     });
     defer coordinator.deinit();
 
     // Add nodes to cluster
     try coordinator.cluster_state.nodes.append(.{
         .id = 1,
-        .address = undefined,
+        .endpoint = try allocator.dupe(u8, "127.0.0.1:7567"),
         .state = .active,
         .role = .leader,
         .capacity = .{
@@ -50,12 +49,12 @@ test "distributed cluster - automatic failover on node failure" {
             .current_load = 0.2,
         },
         .last_heartbeat = std.time.milliTimestamp(),
-        .metadata = undefined,
+        .metadata = std.StringHashMap([]const u8).init(allocator),
     });
 
     try coordinator.cluster_state.nodes.append(.{
         .id = 2,
-        .address = undefined,
+        .endpoint = try allocator.dupe(u8, "127.0.0.1:7569"),
         .state = .active,
         .role = .follower,
         .capacity = .{
@@ -66,7 +65,7 @@ test "distributed cluster - automatic failover on node failure" {
             .current_load = 0.1,
         },
         .last_heartbeat = std.time.milliTimestamp(),
-        .metadata = undefined,
+        .metadata = std.StringHashMap([]const u8).init(allocator),
     });
 
     // Create a shard with primary on node 2
@@ -102,7 +101,6 @@ test "distributed cluster - data sharding and replication" {
         },
         .replication_factor = 2,
         .sharding_strategy = .hash_based,
-        .storage_config = undefined,
     });
     defer coordinator.deinit();
 
@@ -127,14 +125,13 @@ test "distributed cluster - health monitoring and detection" {
         },
         .health_check_interval_ms = 100,
         .unhealthy_threshold = 3,
-        .storage_config = undefined,
     });
     defer coordinator.deinit();
 
     // Add a node
     var node = cluster.ClusterCoordinator.NodeInfo{
         .id = 2,
-        .address = undefined,
+        .endpoint = try allocator.dupe(u8, "127.0.0.1:7567"),
         .state = .active,
         .role = .follower,
         .capacity = .{
@@ -145,7 +142,7 @@ test "distributed cluster - health monitoring and detection" {
             .current_load = 0.5,
         },
         .last_heartbeat = std.time.milliTimestamp(),
-        .metadata = undefined,
+        .metadata = std.StringHashMap([]const u8).init(allocator),
     };
 
     // Test health status based on heartbeat

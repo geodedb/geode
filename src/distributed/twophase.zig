@@ -84,6 +84,26 @@ pub const TwoPhaseMessage = dist_schema.TwoPhaseMessage;
 /// Response to a 2PC message
 pub const TwoPhaseResponse = dist_schema.TwoPhaseResponse;
 
+/// 2PC coordinator/participant runtime configuration.
+pub const CoordinatorConfig = struct {
+    coordinator_id: []const u8,
+    participant_id: ?[]const u8 = null,
+    store: ?*graph_store.GraphStore = null,
+    default_timeout_ms: u64 = 30_000,
+};
+
+/// Transport hook for sending 2PC messages (allows callback-based dispatch)
+pub const SendFn = *const fn (
+    ctx: ?*anyopaque,
+    endpoint: []const u8,
+    msg: TwoPhaseMessage,
+    timeout_ms: u64,
+) anyerror!TwoPhaseResponse;
+
+fn defaultSendMessage(_: ?*anyopaque, endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !TwoPhaseResponse {
+    return sendMessage(endpoint, msg, timeout_ms);
+}
+
 /// Connection pool for 2PC participant connections
 pub const TwoPhaseTransport = struct {
     allocator: Allocator,
@@ -377,78 +397,94 @@ fn applyUndoOperation(entry: UndoEntry) !void {
 
 /// 2PC transaction context
 pub const Transaction = struct {
+    allocator: Allocator,
     id: []const u8,
     coordinator_id: []const u8,
     participants: std.ArrayList(Participant),
     state: TransactionState,
     start_time: i64,
     timeout_ms: u64,
+    send_fn: SendFn,
+    send_ctx: ?*anyopaque,
     operations: std.ArrayList(Operation),
     isolation_level: IsolationLevel,
     savepoints: std.ArrayList(Savepoint),
 
-    pub fn init(allocator: Allocator, id: []const u8, coordinator_id: []const u8) !Transaction {
+    pub fn init(
+        allocator: Allocator,
+        id: []const u8,
+        coordinator_id: []const u8,
+        send_fn: SendFn,
+        send_ctx: ?*anyopaque,
+        timeout_ms: u64,
+    ) !Transaction {
         return .{
+            .allocator = allocator,
             .id = try allocator.dupe(u8, id),
             .coordinator_id = try allocator.dupe(u8, coordinator_id),
-            .participants = std.ArrayList(Participant){},
+            .participants = std.ArrayList(Participant).init(allocator),
             .state = .active,
             .start_time = std.time.timestamp(),
-            .timeout_ms = 30000, // 30 seconds default
-            .operations = std.ArrayList(Operation){},
+            .timeout_ms = timeout_ms,
+            .send_fn = send_fn,
+            .send_ctx = send_ctx,
+            .operations = std.ArrayList(Operation).init(allocator),
             .isolation_level = .read_committed,
-            .savepoints = std.ArrayList(Savepoint){},
+            .savepoints = std.ArrayList(Savepoint).init(allocator),
         };
     }
 
-    pub fn deinit(self: *Transaction, allocator: Allocator) void {
+    pub fn deinit(self: *Transaction) void {
         for (self.participants.items) |*participant| {
-            allocator.free(participant.id);
-            allocator.free(participant.endpoint);
-            for (participant.undo_log.items) |*entry| entry.deinit(allocator);
-            participant.undo_log.deinit(allocator);
-            for (participant.redo_log.items) |*entry| entry.deinit(allocator);
-            participant.redo_log.deinit(allocator);
+            self.allocator.free(participant.id);
+            self.allocator.free(participant.endpoint);
+            for (participant.undo_log.items) |*entry| entry.deinit(self.allocator);
+            participant.undo_log.deinit(self.allocator);
+            for (participant.redo_log.items) |*entry| entry.deinit(self.allocator);
+            participant.redo_log.deinit(self.allocator);
         }
-        self.participants.deinit(allocator);
-        for (self.operations.items) |*op| op.deinit(allocator);
-        self.operations.deinit(allocator);
-        for (self.savepoints.items) |sp| allocator.free(sp.name);
-        self.savepoints.deinit(allocator);
-        allocator.free(self.id);
-        allocator.free(self.coordinator_id);
+        self.participants.deinit(self.allocator);
+        for (self.operations.items) |*op| op.deinit(self.allocator);
+        self.operations.deinit(self.allocator);
+        for (self.savepoints.items) |sp| self.allocator.free(sp.name);
+        self.savepoints.deinit(self.allocator);
+        self.allocator.free(self.id);
+        self.allocator.free(self.coordinator_id);
     }
 
-    pub fn addParticipant(self: *Transaction, allocator: Allocator, id: []const u8, endpoint: []const u8) !void {
+    pub fn addParticipant(self: *Transaction, id: []const u8, endpoint: []const u8) !void {
         const participant = Participant{
-            .id = try allocator.dupe(u8, id),
-            .endpoint = try allocator.dupe(u8, endpoint),
+            .id = try self.allocator.dupe(u8, id),
+            .endpoint = try self.allocator.dupe(u8, endpoint),
             .state = .active,
             .last_message_time = std.time.timestamp(),
             .prepare_response = null,
-            .undo_log = std.ArrayList(UndoEntry){},
-            .redo_log = std.ArrayList(RedoEntry){},
+            .undo_log = std.ArrayList(UndoEntry).init(self.allocator),
+            .redo_log = std.ArrayList(RedoEntry).init(self.allocator),
         };
-        try self.participants.append(participant);
+        try self.participants.append(self.allocator, participant);
     }
 
     pub fn addOperation(self: *Transaction, operation: Operation) !void {
-        try self.operations.append(operation);
+        try self.operations.append(self.allocator, operation);
     }
 
-    pub fn createSavepoint(self: *Transaction, allocator: Allocator, name: []const u8) !void {
+    pub fn createSavepoint(self: *Transaction, name: []const u8) !void {
         const savepoint = Savepoint{
-            .name = try allocator.dupe(u8, name),
+            .name = try self.allocator.dupe(u8, name),
             .operation_index = self.operations.items.len,
             .timestamp = std.time.timestamp(),
         };
-        try self.savepoints.append(savepoint);
+        try self.savepoints.append(self.allocator, savepoint);
     }
 
     pub fn rollbackToSavepoint(self: *Transaction, name: []const u8) !void {
         for (self.savepoints.items) |savepoint| {
             if (std.mem.eql(u8, savepoint.name, name)) {
                 // Remove operations after savepoint
+                for (self.operations.items[savepoint.operation_index..]) |*op| {
+                    op.deinit(self.allocator);
+                }
                 self.operations.shrinkRetainingCapacity(savepoint.operation_index);
                 return;
             }
@@ -475,7 +511,7 @@ pub const Transaction = struct {
             };
 
             // Send message to participant (async with timeout)
-            const response = sendMessage(participant.endpoint, msg, self.timeout_ms) catch |err| {
+            const response = self.send_fn(self.send_ctx, participant.endpoint, msg, self.timeout_ms) catch |err| {
                 // Network error - treat as abort vote
                 participant.prepare_response = .VOTE_TIMEOUT;
                 all_voted_commit = false;
@@ -529,7 +565,7 @@ pub const Transaction = struct {
             var retries: u32 = 0;
             const max_retries: u32 = 3;
             while (retries < max_retries) : (retries += 1) {
-                if (sendMessage(participant.endpoint, msg, self.timeout_ms)) |resp| {
+                if (self.send_fn(self.send_ctx, participant.endpoint, msg, self.timeout_ms)) |resp| {
                     resp.deinit(self.allocator);
                 } else |_| {
                     // Retry after exponential backoff
@@ -566,7 +602,7 @@ pub const Transaction = struct {
             };
 
             // Send abort message (best effort - proceed even if some fail)
-            if (sendMessage(participant.endpoint, msg, self.timeout_ms)) |resp| {
+            if (self.send_fn(self.send_ctx, participant.endpoint, msg, self.timeout_ms)) |resp| {
                 resp.deinit(self.allocator);
             } else |_| {
                 // Log failure but continue aborting other participants
@@ -598,6 +634,9 @@ pub const Coordinator = struct {
     node_id: []const u8,
     transactions: std.StringHashMap(Transaction),
     log_writer: ?*LogWriter,
+    default_timeout_ms: u64 = 30_000,
+    send_fn: SendFn = defaultSendMessage,
+    send_ctx: ?*anyopaque = null,
 
     pub const LogWriter = struct {
         allocator: Allocator,
@@ -643,32 +682,47 @@ pub const Coordinator = struct {
             .node_id = node_id,
             .transactions = std.StringHashMap(Transaction).init(allocator),
             .log_writer = null,
+            .default_timeout_ms = 30_000,
+            .send_fn = defaultSendMessage,
+            .send_ctx = null,
         };
     }
 
     pub fn deinit(self: *Coordinator) void {
         var it = self.transactions.iterator();
         while (it.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
+            entry.value_ptr.deinit();
         }
         self.transactions.deinit();
     }
 
+    pub fn setSendFn(self: *Coordinator, send_fn: SendFn, send_ctx: ?*anyopaque) void {
+        self.send_fn = send_fn;
+        self.send_ctx = send_ctx;
+    }
+
     pub fn beginTransaction(self: *Coordinator, transaction_id: []const u8) !*Transaction {
-        const txn = try Transaction.init(self.allocator, transaction_id, self.node_id);
-        try self.transactions.put(transaction_id, txn);
+        const txn = try Transaction.init(
+            self.allocator,
+            transaction_id,
+            self.node_id,
+            self.send_fn,
+            self.send_ctx,
+            self.default_timeout_ms,
+        );
+        try self.transactions.put(txn.id, txn);
 
         // Log transaction start
         if (self.log_writer) |writer| {
             try writer.writeEntry(.{
                 .timestamp = std.time.timestamp(),
-                .transaction_id = transaction_id,
+                .transaction_id = txn.id,
                 .event_type = .transaction_start,
                 .data = "",
             });
         }
 
-        return self.transactions.getPtr(transaction_id).?;
+        return self.transactions.getPtr(txn.id).?;
     }
 
     pub fn executeTransaction(self: *Coordinator, transaction_id: []const u8) !bool {
@@ -700,6 +754,11 @@ pub const Coordinator = struct {
                 .event_type = .transaction_complete,
                 .data = "",
             });
+        }
+
+        // Remove completed transaction to avoid unbounded growth
+        if (self.transactions.fetchRemove(transaction_id)) |entry| {
+            entry.value.deinit();
         }
 
         return can_commit;
@@ -768,10 +827,15 @@ pub const ParticipantNode = struct {
         id: []const u8,
         coordinator_id: []const u8,
         state: TransactionState,
-        operations: std.ArrayList(Operation),
-        undo_log: std.ArrayList(UndoEntry),
-        redo_log: std.ArrayList(RedoEntry),
+        write_set: []u8,
         locks: std.ArrayList(Lock),
+
+        pub fn deinit(self: *LocalTransaction, allocator: Allocator) void {
+            allocator.free(self.id);
+            allocator.free(self.coordinator_id);
+            allocator.free(self.write_set);
+            self.locks.deinit(allocator);
+        }
     };
 
     pub const Lock = struct {
@@ -791,8 +855,15 @@ pub const ParticipantNode = struct {
         pub const LockInfo = struct {
             holder: ?[]const u8,
             lock_type: LockType,
-            waiters: std.ArrayList([]const u8),
         };
+
+        pub fn init(allocator: Allocator) ResourceManager {
+            return .{ .locks = std.AutoHashMap(u64, LockInfo).init(allocator) };
+        }
+
+        pub fn deinit(self: *ResourceManager) void {
+            self.locks.deinit();
+        }
 
         pub fn acquireLock(self: *ResourceManager, resource_id: u64, transaction_id: []const u8, lock_type: LockType) !bool {
             const result = try self.locks.getOrPut(resource_id);
@@ -800,7 +871,6 @@ pub const ParticipantNode = struct {
                 result.value_ptr.* = .{
                     .holder = transaction_id,
                     .lock_type = lock_type,
-                    .waiters = std.ArrayList([]const u8){},
                 };
                 return true;
             }
@@ -811,9 +881,12 @@ pub const ParticipantNode = struct {
                 result.value_ptr.lock_type = lock_type;
                 return true;
             }
+            if (result.value_ptr.holder) |holder| {
+                if (std.mem.eql(u8, holder, transaction_id)) {
+                    return true;
+                }
+            }
 
-            // Add to waiters
-            try result.value_ptr.waiters.append(transaction_id);
             return false;
         }
 
@@ -821,12 +894,7 @@ pub const ParticipantNode = struct {
             if (self.locks.getPtr(resource_id)) |lock_info| {
                 if (lock_info.holder) |holder| {
                     if (std.mem.eql(u8, holder, transaction_id)) {
-                        // Release lock and give to next waiter
-                        if (lock_info.waiters.items.len > 0) {
-                            lock_info.holder = lock_info.waiters.orderedRemove(0);
-                        } else {
-                            lock_info.holder = null;
-                        }
+                        lock_info.holder = null;
                     }
                 }
             }
@@ -839,105 +907,112 @@ pub const ParticipantNode = struct {
             .node_id = node_id,
             .transactions = std.StringHashMap(LocalTransaction).init(allocator),
             .resource_manager = resource_manager,
-            .storage = null,
+            .store = null,
         };
     }
 
-    /// Initialize with storage interface for actual data persistence
-    pub fn initWithStorage(allocator: Allocator, node_id: []const u8, resource_manager: *ResourceManager, storage: StorageInterface) ParticipantNode {
+    /// Initialize with GraphStore for actual data persistence
+    pub fn initWithStore(allocator: Allocator, node_id: []const u8, resource_manager: *ResourceManager, store: *graph_store.GraphStore) ParticipantNode {
         return .{
             .allocator = allocator,
             .node_id = node_id,
             .transactions = std.StringHashMap(LocalTransaction).init(allocator),
             .resource_manager = resource_manager,
-            .storage = storage,
+            .store = store,
         };
     }
 
-    /// Set the storage interface after initialization
-    pub fn setStorage(self: *ParticipantNode, storage: StorageInterface) void {
-        self.storage = storage;
+    /// Set the GraphStore after initialization
+    pub fn setStore(self: *ParticipantNode, store: *graph_store.GraphStore) void {
+        self.store = store;
     }
 
     pub fn deinit(self: *ParticipantNode) void {
         var it = self.transactions.iterator();
         while (it.next()) |entry| {
-            entry.value_ptr.operations.deinit();
-            entry.value_ptr.undo_log.deinit();
-            entry.value_ptr.redo_log.deinit();
-            entry.value_ptr.locks.deinit();
+            entry.value_ptr.deinit(self.allocator);
         }
         self.transactions.deinit();
     }
 
-    pub fn handlePrepare(self: *ParticipantNode, transaction_id: []const u8, operations: []Operation) !PrepareResponse {
+    pub fn handlePrepare(self: *ParticipantNode, msg: *const TwoPhaseMessage, payload: []const u8) !PrepareResponse {
+        if (self.transactions.getPtr(msg.transaction_id)) |existing| {
+            return if (existing.state == .prepared) .VOTE_COMMIT else .VOTE_ABORT;
+        }
+
         // Create local transaction
         var local_txn = LocalTransaction{
-            .id = transaction_id,
-            .coordinator_id = "", // Will be set by coordinator
+            .id = try self.allocator.dupe(u8, msg.transaction_id),
+            .coordinator_id = try self.allocator.dupe(u8, msg.coordinator_id),
             .state = .preparing,
-            .operations = std.ArrayList(Operation){},
-            .undo_log = std.ArrayList(UndoEntry){},
-            .redo_log = std.ArrayList(RedoEntry){},
-            .locks = std.ArrayList(Lock){},
+            .write_set = try self.allocator.dupe(u8, payload),
+            .locks = std.ArrayList(Lock).init(self.allocator),
         };
+        errdefer local_txn.deinit(self.allocator);
 
         // Try to acquire locks for all operations
-        for (operations) |op| {
+        for (msg.operations.items) |op| {
             const resource_id = switch (op) {
-                .create_node, .update_node, .delete_node => |node_op| node_op.node_id,
-                .create_edge, .update_edge, .delete_edge => |edge_op| edge_op.edge_id,
+                .node_op => |node_op| node_op.node_id,
+                .edge_op => |edge_op| edge_op.edge_id,
             };
 
             const lock_acquired = try self.resource_manager.acquireLock(
                 resource_id,
-                transaction_id,
+                local_txn.id,
                 .exclusive,
             );
 
             if (!lock_acquired) {
                 // Cannot acquire lock, vote abort
-                local_txn.state = .aborting;
-                try self.transactions.put(transaction_id, local_txn);
-                return .vote_abort;
+                for (local_txn.locks.items) |lock| {
+                    self.resource_manager.releaseLock(lock.resource_id, local_txn.id) catch {};
+                }
+                return .VOTE_ABORT;
             }
 
-            try local_txn.locks.append(.{
+            try local_txn.locks.append(self.allocator, .{
                 .resource_id = resource_id,
                 .lock_type = .exclusive,
                 .acquired_at = std.time.timestamp(),
             });
-
-            try local_txn.operations.append(op);
         }
 
         // All locks acquired, prepare transaction
         local_txn.state = .prepared;
-        try self.transactions.put(transaction_id, local_txn);
+        try self.transactions.put(local_txn.id, local_txn);
 
-        return .vote_commit;
+        return .VOTE_COMMIT;
     }
 
     // CANARY: REQ=REQ-2PC-COMMIT-001; FEATURE="2PC Commit Handler"; ASPECT=StorageApplication; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-10
     pub fn handleCommit(self: *ParticipantNode, transaction_id: []const u8) !void {
-        const local_txn = self.transactions.getPtr(transaction_id) orelse return error.TransactionNotFound;
+        var removed = self.transactions.fetchRemove(transaction_id) orelse return error.TransactionNotFound;
+        var local_txn = removed.value;
+        defer local_txn.deinit(self.allocator);
 
         if (local_txn.state != .prepared) {
             return error.InvalidState;
         }
 
         local_txn.state = .committing;
-
-        // Apply operations to storage
-        if (self.storage) |storage| {
-            for (local_txn.operations.items) |op| {
-                try self.applyOperation(storage, op);
+        defer {
+            for (local_txn.locks.items) |lock| {
+                self.resource_manager.releaseLock(lock.resource_id, local_txn.id) catch {};
             }
         }
 
-        // Release locks
-        for (local_txn.locks.items) |lock| {
-            try self.resource_manager.releaseLock(lock.resource_id, transaction_id);
+        // Apply operations to GraphStore
+        const store = self.store orelse return error.NoStorage;
+        var reader: std.Io.Reader = .fixed(local_txn.write_set);
+        var msg = protobuf.decode(TwoPhaseMessage, &reader, self.allocator) catch |err| {
+            log.err("2PC participant failed to decode write set", &.{Attr.string("error", @errorName(err))});
+            return err;
+        };
+        defer msg.deinit(self.allocator);
+
+        for (msg.operations.items) |op| {
+            try self.applyOperation(store, op);
         }
 
         local_txn.state = .committed;
@@ -945,79 +1020,262 @@ pub const ParticipantNode = struct {
 
     // CANARY: REQ=REQ-2PC-ABORT-001; FEATURE="2PC Abort Handler"; ASPECT=UndoApplication; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-10
     pub fn handleAbort(self: *ParticipantNode, transaction_id: []const u8) !void {
-        const local_txn = self.transactions.getPtr(transaction_id) orelse return error.TransactionNotFound;
+        var removed = self.transactions.fetchRemove(transaction_id) orelse return error.TransactionNotFound;
+        var local_txn = removed.value;
+        defer local_txn.deinit(self.allocator);
 
         local_txn.state = .aborting;
-
-        // Apply undo log to reverse any partially applied operations
-        if (self.storage) |storage| {
-            while (local_txn.undo_log.popOrNull()) |undo_entry| {
-                try self.applyUndoOperation(storage, undo_entry);
-            }
-        }
-
-        // Release locks
         for (local_txn.locks.items) |lock| {
-            try self.resource_manager.releaseLock(lock.resource_id, transaction_id);
+            self.resource_manager.releaseLock(lock.resource_id, local_txn.id) catch {};
         }
-
         local_txn.state = .aborted;
     }
 
     /// Apply a single operation to storage
-    fn applyOperation(self: *ParticipantNode, storage: StorageInterface, op: Operation) !void {
-        _ = self;
+    fn applyOperation(self: *ParticipantNode, store: *graph_store.GraphStore, op: Operation) !void {
         switch (op) {
-            .create_node => |node_op| {
-                try storage.createNode(node_op.node_id, node_op.label, node_op.properties);
+            .node_op => |node_op| {
+                const graph_name = if (node_op.graph_name.len > 0) node_op.graph_name else graph_store.DEFAULT_GRAPH_NAME;
+                const labels = if (node_op.label.len > 0) &[_][]const u8{node_op.label} else &[_][]const u8{};
+                switch (node_op.op_type) {
+                    .CREATE => {
+                        if (store.getNodePtr(node_op.node_id) == null) {
+                            store.createNodeWithId(node_op.node_id, labels, graph_name) catch |err| switch (err) {
+                                error.NodeAlreadyExists => {},
+                                else => return err,
+                            };
+                        } else if (node_op.label.len > 0) {
+                            store.addNodeLabel(node_op.node_id, node_op.label) catch {};
+                        }
+                        try value_convert.applyMapEntriesToNode(store, self.allocator, node_op.node_id, node_op.properties.items);
+                    },
+                    .UPDATE => {
+                        if (store.getNodePtr(node_op.node_id) != null) {
+                            try value_convert.applyMapEntriesToNode(store, self.allocator, node_op.node_id, node_op.properties.items);
+                        }
+                    },
+                    .DELETE => {
+                        store.deleteNode(node_op.node_id);
+                    },
+                    else => {},
+                }
             },
-            .update_node => |node_op| {
-                try storage.updateNode(node_op.node_id, node_op.properties);
-            },
-            .delete_node => |node_op| {
-                try storage.deleteNode(node_op.node_id);
-            },
-            .create_edge => |edge_op| {
-                try storage.createEdge(edge_op.edge_id, edge_op.source_id, edge_op.target_id, edge_op.edge_type, edge_op.properties);
-            },
-            .update_edge => |edge_op| {
-                try storage.updateEdge(edge_op.edge_id, edge_op.properties);
-            },
-            .delete_edge => |edge_op| {
-                try storage.deleteEdge(edge_op.edge_id);
+            .edge_op => |edge_op| {
+                const graph_name = if (edge_op.graph_name.len > 0) edge_op.graph_name else graph_store.DEFAULT_GRAPH_NAME;
+                switch (edge_op.op_type) {
+                    .CREATE => {
+                        if (store.getEdgePtr(edge_op.edge_id) == null) {
+                            store.createEdgeWithId(edge_op.edge_id, edge_op.source_id, edge_op.target_id, edge_op.edge_type, graph_name) catch |err| switch (err) {
+                                error.EdgeAlreadyExists => {},
+                                else => return err,
+                            };
+                        }
+                        try value_convert.applyMapEntriesToEdge(store, self.allocator, edge_op.edge_id, edge_op.properties.items);
+                    },
+                    .UPDATE => {
+                        if (store.getEdgePtr(edge_op.edge_id) != null) {
+                            try value_convert.applyMapEntriesToEdge(store, self.allocator, edge_op.edge_id, edge_op.properties.items);
+                        }
+                    },
+                    .DELETE => {
+                        store.deleteEdge(edge_op.edge_id);
+                    },
+                    else => {},
+                }
             },
         }
     }
+};
 
-    /// Apply an undo operation to reverse a previously applied operation
-    fn applyUndoOperation(self: *ParticipantNode, storage: StorageInterface, undo_entry: UndoEntry) !void {
-        _ = self;
-        // Undo operations are the inverse of the original operation
-        switch (undo_entry.operation) {
-            .create_node => |node_op| {
-                // Undo create = delete
-                try storage.deleteNode(node_op.node_id);
-            },
-            .update_node => |node_op| {
-                // Undo update = restore old value
-                try storage.updateNode(node_op.node_id, undo_entry.old_value);
-            },
-            .delete_node => |node_op| {
-                // Undo delete = recreate with old properties
-                try storage.createNode(node_op.node_id, node_op.label, undo_entry.old_value);
-            },
-            .create_edge => |edge_op| {
-                // Undo create = delete
-                try storage.deleteEdge(edge_op.edge_id);
-            },
-            .update_edge => |edge_op| {
-                // Undo update = restore old value
-                try storage.updateEdge(edge_op.edge_id, undo_entry.old_value);
-            },
-            .delete_edge => |edge_op| {
-                // Undo delete = recreate with old properties
-                try storage.createEdge(edge_op.edge_id, edge_op.source_id, edge_op.target_id, edge_op.edge_type, undo_entry.old_value);
-            },
+/// High-level 2PC coordinator wrapper used by DistributedCoordinator.
+pub const TwoPCCoordinator = struct {
+    allocator: Allocator,
+    coordinator_id: []const u8,
+    participant_id: []const u8,
+    coordinator: Coordinator,
+    participant: ParticipantNode,
+    resource_manager: ParticipantNode.ResourceManager,
+    default_timeout_ms: u64,
+    send_message_callback: ?*const fn ([]const u8, MessageType, []const u8) void = null,
+    enable_coordinator: bool = true,
+    enable_participant: bool = true,
+
+    pub const Stats = struct {
+        active_transactions: usize = 0,
+        total_transactions: usize = 0,
+        committed_transactions: usize = 0,
+        aborted_transactions: usize = 0,
+    };
+
+    stats: Stats = .{},
+
+    pub fn init(allocator: Allocator, config: CoordinatorConfig) !TwoPCCoordinator {
+        const coord_id = try allocator.dupe(u8, config.coordinator_id);
+        const participant_id = try allocator.dupe(u8, config.participant_id orelse config.coordinator_id);
+        var coordinator = Coordinator.init(allocator, coord_id);
+        coordinator.default_timeout_ms = config.default_timeout_ms;
+
+        var result = TwoPCCoordinator{
+            .allocator = allocator,
+            .coordinator_id = coord_id,
+            .participant_id = participant_id,
+            .coordinator = coordinator,
+            .participant = undefined,
+            .resource_manager = ParticipantNode.ResourceManager.init(allocator),
+            .default_timeout_ms = config.default_timeout_ms,
+            .send_message_callback = null,
+            .enable_coordinator = true,
+            .enable_participant = true,
+            .stats = .{},
+        };
+        result.participant = if (config.store) |store|
+            ParticipantNode.initWithStore(allocator, participant_id, &result.resource_manager, store)
+        else
+            ParticipantNode.init(allocator, participant_id, &result.resource_manager);
+        return result;
+    }
+
+    pub fn deinit(self: *TwoPCCoordinator) void {
+        self.coordinator.deinit();
+        self.participant.deinit();
+        self.resource_manager.deinit();
+        self.allocator.free(self.coordinator_id);
+        self.allocator.free(self.participant_id);
+    }
+
+    /// Enable/disable coordinator and participant features independently.
+    pub fn enableFeatures(self: *TwoPCCoordinator, coordinator_enabled: bool, participant_enabled: bool) void {
+        self.enable_coordinator = coordinator_enabled;
+        self.enable_participant = participant_enabled;
+    }
+
+    /// Set callback for sending outbound 2PC messages (used by higher-level coordinators).
+    pub fn setSendMessageCallback(self: *TwoPCCoordinator, callback: *const fn ([]const u8, MessageType, []const u8) void) void {
+        self.send_message_callback = callback;
+    }
+
+    /// Periodic maintenance (timeouts).
+    pub fn tick(self: *TwoPCCoordinator) !void {
+        if (!self.enable_coordinator) return;
+
+        var to_abort = std.ArrayList([]const u8).init(self.allocator);
+        defer to_abort.deinit(self.allocator);
+
+        var it = self.coordinator.transactions.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.isTimedOut()) {
+                try to_abort.append(self.allocator, entry.key_ptr.*);
+            }
         }
+
+        for (to_abort.items) |transaction_id| {
+            _ = try self.abortTransaction(transaction_id);
+        }
+    }
+
+    /// Handle inbound 2PC messages (participant side).
+    pub fn handleMessage(self: *TwoPCCoordinator, from: []const u8, message_type: MessageType, payload: []const u8) !void {
+        if (!self.enable_participant) return;
+
+        var reader: std.Io.Reader = .fixed(payload);
+        var msg = protobuf.decode(TwoPhaseMessage, &reader, self.allocator) catch |err| {
+            log.err("2PC handleMessage decode failed", &.{Attr.string("error", @errorName(err))});
+            return err;
+        };
+        defer msg.deinit(self.allocator);
+
+        const response: ?TwoPhaseResponse = switch (message_type) {
+            .PREPARE => blk: {
+                const vote = try self.participant.handlePrepare(&msg, payload);
+                break :blk TwoPhaseResponse{
+                    .msg_type = .PREPARE_RESPONSE,
+                    .transaction_id = msg.transaction_id,
+                    .participant_id = self.participant_id,
+                    .vote = vote,
+                    .timestamp = std.time.timestamp(),
+                };
+            },
+            .COMMIT => blk: {
+                try self.participant.handleCommit(msg.transaction_id);
+                break :blk TwoPhaseResponse{
+                    .msg_type = .COMMIT_RESPONSE,
+                    .transaction_id = msg.transaction_id,
+                    .participant_id = self.participant_id,
+                    .vote = .VOTE_COMMIT,
+                    .timestamp = std.time.timestamp(),
+                };
+            },
+            .ABORT => blk: {
+                try self.participant.handleAbort(msg.transaction_id);
+                break :blk TwoPhaseResponse{
+                    .msg_type = .ABORT_RESPONSE,
+                    .transaction_id = msg.transaction_id,
+                    .participant_id = self.participant_id,
+                    .vote = .VOTE_ABORT,
+                    .timestamp = std.time.timestamp(),
+                };
+            },
+            else => return error.UnsupportedMessage,
+        };
+
+        if (response) |resp| {
+            if (self.send_message_callback) |callback| {
+                var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 128);
+                defer aw.deinit();
+                try protobuf.encode(&aw.writer, self.allocator, resp);
+                const payload_bytes = try self.allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
+                defer self.allocator.free(payload_bytes);
+                callback(from, resp.msg_type, payload_bytes);
+            }
+        }
+    }
+
+    /// Begin a distributed transaction with a set of participants.
+    pub fn beginTransaction(self: *TwoPCCoordinator, transaction_id: []const u8, participants: []const []const u8) !bool {
+        if (!self.enable_coordinator) return false;
+
+        const txn = try self.coordinator.beginTransaction(transaction_id);
+        for (participants) |endpoint| {
+            try txn.addParticipant(endpoint, endpoint);
+        }
+        self.stats.total_transactions += 1;
+        self.stats.active_transactions = self.coordinator.transactions.count();
+        return true;
+    }
+
+    /// Commit a distributed transaction.
+    pub fn commitTransaction(self: *TwoPCCoordinator, transaction_id: []const u8) !bool {
+        if (!self.enable_coordinator) return false;
+
+        const committed = try self.coordinator.executeTransaction(transaction_id);
+        if (committed) {
+            self.stats.committed_transactions += 1;
+        } else {
+            self.stats.aborted_transactions += 1;
+        }
+        self.stats.active_transactions = self.coordinator.transactions.count();
+        return committed;
+    }
+
+    /// Abort a distributed transaction.
+    pub fn abortTransaction(self: *TwoPCCoordinator, transaction_id: []const u8) !bool {
+        if (!self.enable_coordinator) return false;
+
+        if (self.coordinator.transactions.getPtr(transaction_id)) |txn| {
+            try txn.abort();
+            if (self.coordinator.transactions.fetchRemove(transaction_id)) |entry| {
+                entry.value.deinit();
+            }
+            self.stats.aborted_transactions += 1;
+            self.stats.active_transactions = self.coordinator.transactions.count();
+            return true;
+        }
+        return false;
+    }
+
+    pub fn getStats(self: *TwoPCCoordinator) Stats {
+        var stats = self.stats;
+        stats.active_transactions = self.coordinator.transactions.count();
+        return stats;
     }
 };

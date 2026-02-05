@@ -1158,7 +1158,7 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Fix:** Wired SecurityManager into server initialization and all execution paths
 - **Evidence:**
   - `src/server/server_init.zig` - SecurityManager initialization with GEODE_ENABLE_ABAC env var
-  - `src/server/main.zig` - SecurityManager wired into ServerState for stdio mode
+  - `src/server/main.zig` - SecurityManager wired into ServerState for QUIC/gRPC handlers
   - `src/server/quic_connection_handler.zig` - SecurityManager passed to QUIC connections
   - `src/server/test_abac_enforcement.zig` - 9 unit tests for ABAC enforcement
   - `geodetestlab/specs/gap_0165_abac_enforcement.yml` - 8 integration tests

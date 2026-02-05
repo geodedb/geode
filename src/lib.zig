@@ -231,7 +231,7 @@ pub const protocol = @import("protocol.zig");
 pub const distributed = struct {
     pub const raft_consensus = @import("distributed/raft_consensus.zig");
     pub const txn_coordinator = @import("distributed/txn_coordinator.zig");
-    pub const cluster = @import("distributed/cluster_simple.zig");
+    pub const cluster = @import("distributed/cluster.zig");
     pub const raft = @import("distributed/raft.zig");
     pub const query_planner = @import("distributed/query_planner.zig");
 };

@@ -96,7 +96,7 @@ A CANARY e2e test validates the presence and shape of this telemetry:
 
 ### Smoke Tests
 
-`test_telemetry_smoke.zig` (env-gated): spawns a server with `--test-exit-after-first-request` and ensures the `"event":"PULL_PAGE"` substring appears in stderr logs when enabled.
+`test_telemetry_smoke.zig` (env-gated): spawns a server, runs a single query over QUIC, then terminates the process; ensures the `"event":"PULL_PAGE"` substring appears in stderr logs when enabled.
 
 ```bash
 # Basic smoke test

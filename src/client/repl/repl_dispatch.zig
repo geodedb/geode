@@ -2227,7 +2227,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
             // Check if we at least got a schema response with an error
             if (state.session.last_response) |schema_response| {
                 if (try extractAndDisplayResult(state.allocator, schema_response, stdout, stderr, state.format)) {
-                    return; // Error was displayed
+                    return error.QueryExecutionFailed; // Error was displayed
                 }
             }
             // CANARY: REQ=REQ-SHELL-WOULDBLOCK-003; FEATURE="SuppressWouldBlock"; ASPECT=PullAllError; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
@@ -2270,14 +2270,17 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
         const should_display = has_error or state.session.last_payload_kind != .rows;
         if (should_display) {
             if (try extractAndDisplayResult(state.allocator, schema_response, stdout, stderr, state.format)) {
-                return;
+                // Return QueryExecutionFailed error so callers can track error counts
+                return error.QueryExecutionFailed;
             }
         }
     }
 
     // Format and output the response data (rows payload)
     if (response_data.items.len > 0 and !suppress) {
-        _ = try extractAndDisplayResult(state.allocator, response_data.items, stdout, stderr, state.format);
+        if (try extractAndDisplayResult(state.allocator, response_data.items, stdout, stderr, state.format)) {
+            return error.QueryExecutionFailed;
+        }
     }
 
     // Display timing information
@@ -2774,11 +2777,19 @@ pub fn extractServerErrorMessage(allocator: std.mem.Allocator, response: []const
     }
 
     // Try to build a message from status_class if nothing else available
+    // Only return an error message for actual error status codes (4xxxx, 5xxxx)
+    // Status codes starting with 00, 01, 02, 03 are success/info codes
     if (obj.get("status_class")) |status_val| {
         if (status_val == .string) {
             const status = status_val.string;
             if (status.len >= 2) {
                 const prefix = status[0..2];
+                // Only treat 4x and 5x status codes as errors
+                const first_char = status[0];
+                if (first_char != '4' and first_char != '5') {
+                    // Not an error status code (00xxx, 01xxx, 02xxx, 03xxx are success/info)
+                    return null;
+                }
                 const category: []const u8 = if (std.mem.eql(u8, prefix, "42"))
                     "Syntax error in GQL statement"
                 else if (std.mem.eql(u8, prefix, "22"))

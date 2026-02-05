@@ -195,7 +195,8 @@ This checklist provides step-by-step verification procedures for the Geode modul
 
 - [ ] Measure server startup time
   ```bash
-  time ./zig-out/bin/geode serve --test-exit-after-first-request &
+  time ./zig-out/bin/geode serve &
+  # After measurement, stop the server (e.g., kill %1)
   ```
   **Expected**: <1 second
 

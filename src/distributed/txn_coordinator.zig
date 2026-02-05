@@ -8,6 +8,7 @@ const dist_schema = @import("distributed_schema");
 const schema = @import("schema");
 const graph_store = @import("../graph_store.zig");
 const value_convert = @import("value_convert.zig");
+const spice_wrapper = @import("parallel/spice");
 
 const logging = @import("logging");
 const log = logging.scoped("txn_coordinator");
@@ -175,14 +176,38 @@ pub const TxnCoordinator = struct {
     }
 
     fn extractResourceIds(self: *TxnCoordinator, operations: []const dist_schema.TwoPhaseOperation) ![]u64 {
-        var ids = try std.ArrayList(u64).initCapacity(self.allocator, operations.len);
-        for (operations) |op| {
-            switch (op) {
-                .node_op => |node_op| try ids.append(self.allocator, node_op.node_id),
-                .edge_op => |edge_op| try ids.append(self.allocator, edge_op.edge_id),
+        const ids = try self.allocator.alloc(u64, operations.len);
+        if (operations.len == 0) return ids;
+
+        if (spice_wrapper.shouldUseParallelism(operations.len, spice_wrapper.Thresholds.forEach)) {
+            var pool = spice_wrapper.SpicePool.init(self.allocator, null);
+            defer pool.deinit();
+
+            const Context = struct {
+                ops: []const dist_schema.TwoPhaseOperation,
+                out: []u64,
+            };
+            const ctx = Context{ .ops = operations, .out = ids };
+
+            spice_wrapper.parallelForEach(&pool, 0, operations.len, ctx, struct {
+                fn work(_: *spice_wrapper.Task, idx: usize, c: Context) void {
+                    const op = c.ops[idx];
+                    c.out[idx] = switch (op) {
+                        .node_op => |node_op| node_op.node_id,
+                        .edge_op => |edge_op| edge_op.edge_id,
+                    };
+                }
+            }.work, spice_wrapper.Thresholds.forEach);
+        } else {
+            for (operations, 0..) |op, idx| {
+                ids[idx] = switch (op) {
+                    .node_op => |node_op| node_op.node_id,
+                    .edge_op => |edge_op| edge_op.edge_id,
+                };
             }
         }
-        return ids.toOwnedSlice(self.allocator);
+
+        return ids;
     }
 
     /// Parse and apply write set operations to GraphStore.

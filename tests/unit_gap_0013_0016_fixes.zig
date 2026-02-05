@@ -1,5 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
+const protobuf = @import("protobuf");
+const dist_schema = @import("distributed_schema");
 
 // CANARY: REQ=REQ-GAP-0013-0016-TESTS-001; FEATURE="GapAnalysisJan2026Fixes"; ASPECT=UnitTests; STATUS=EXEMPT; OWNER=testing; UPDATED=2026-01-09
 // Comprehensive unit tests for GAP-0013 through GAP-0016 fixes (January 9, 2026)
@@ -14,110 +16,137 @@ const testing = std.testing;
 // =============================================================================
 
 test "GAP-0013: TwoPhaseMessage serialization - prepare message" {
-    // Test that prepare messages can be serialized to JSON
     const allocator = testing.allocator;
 
-    // Simulate prepare message structure
-    const TwoPhaseMessageType = enum {
-        prepare,
-        prepare_response,
-        commit,
-        abort,
+    const txn_id = try allocator.dupe(u8, "txn-12345");
+    const coord_id = try allocator.dupe(u8, "coord-1");
+    var msg = dist_schema.TwoPhaseMessage{
+        .msg_type = .PREPARE,
+        .transaction_id = txn_id,
+        .coordinator_id = coord_id,
+        .timestamp = std.time.timestamp(),
+        .operations = std.ArrayList(dist_schema.TwoPhaseOperation).init(allocator),
     };
+    defer msg.deinit(allocator);
 
-    const PrepareMessage = struct {
-        msg_type: TwoPhaseMessageType,
-        transaction_id: u64,
-        participant_id: []const u8,
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
+    defer aw.deinit();
+    try protobuf.encode(&aw.writer, allocator, msg);
+    const encoded = aw.writer.buffer[0..aw.writer.end];
 
-        pub fn toJson(self: @This(), alloc: std.mem.Allocator) ![]u8 {
-            var buf = try std.ArrayList(u8).initCapacity(alloc, 256);
-            const writer = buf.writer(alloc);
+    var reader: std.Io.Reader = .fixed(encoded);
+    var decoded = try protobuf.decode(dist_schema.TwoPhaseMessage, &reader, allocator);
+    defer decoded.deinit(allocator);
 
-            try writer.writeAll("{\"msg_type\":\"");
-            try writer.writeAll(@tagName(self.msg_type));
-            try writer.writeAll("\",\"transaction_id\":");
-            try writer.print("{d}", .{self.transaction_id});
-            try writer.writeAll(",\"participant_id\":\"");
-            try writer.writeAll(self.participant_id);
-            try writer.writeAll("\"}\n");
-
-            return buf.toOwnedSlice(alloc);
-        }
-    };
-
-    const msg = PrepareMessage{
-        .msg_type = .prepare,
-        .transaction_id = 12345,
-        .participant_id = "node-1",
-    };
-
-    const json = try msg.toJson(allocator);
-    defer allocator.free(json);
-
-    try testing.expect(std.mem.indexOf(u8, json, "\"msg_type\":\"prepare\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json, "\"transaction_id\":12345") != null);
-    try testing.expect(std.mem.indexOf(u8, json, "\"participant_id\":\"node-1\"") != null);
+    try testing.expect(decoded.msg_type == .PREPARE);
+    try testing.expectEqualStrings("txn-12345", decoded.transaction_id);
+    try testing.expectEqualStrings("coord-1", decoded.coordinator_id);
 }
 
 test "GAP-0013: TwoPhaseMessage serialization - commit message" {
     const allocator = testing.allocator;
 
-    var buf = try std.ArrayList(u8).initCapacity(allocator, 128);
-    defer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    const txn_id = try allocator.dupe(u8, "txn-98765");
+    const coord_id = try allocator.dupe(u8, "coord-1");
+    var msg = dist_schema.TwoPhaseMessage{
+        .msg_type = .COMMIT,
+        .transaction_id = txn_id,
+        .coordinator_id = coord_id,
+        .timestamp = std.time.timestamp(),
+        .operations = std.ArrayList(dist_schema.TwoPhaseOperation).init(allocator),
+    };
+    defer msg.deinit(allocator);
 
-    const txn_id: u64 = 98765;
-    try writer.print("{{\"msg_type\":\"commit\",\"transaction_id\":{d}}}\n", .{txn_id});
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
+    defer aw.deinit();
+    try protobuf.encode(&aw.writer, allocator, msg);
+    const encoded = aw.writer.buffer[0..aw.writer.end];
 
-    const json = buf.items;
-    try testing.expect(std.mem.indexOf(u8, json, "\"msg_type\":\"commit\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json, "\"transaction_id\":98765") != null);
+    var reader: std.Io.Reader = .fixed(encoded);
+    var decoded = try protobuf.decode(dist_schema.TwoPhaseMessage, &reader, allocator);
+    defer decoded.deinit(allocator);
+
+    try testing.expect(decoded.msg_type == .COMMIT);
+    try testing.expectEqualStrings("txn-98765", decoded.transaction_id);
 }
 
 test "GAP-0013: TwoPhaseMessage serialization - abort message" {
     const allocator = testing.allocator;
 
-    var buf = try std.ArrayList(u8).initCapacity(allocator, 128);
-    defer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    const txn_id = try allocator.dupe(u8, "txn-11111");
+    const coord_id = try allocator.dupe(u8, "coord-1");
+    var msg = dist_schema.TwoPhaseMessage{
+        .msg_type = .ABORT,
+        .transaction_id = txn_id,
+        .coordinator_id = coord_id,
+        .timestamp = std.time.timestamp(),
+        .operations = std.ArrayList(dist_schema.TwoPhaseOperation).init(allocator),
+    };
+    defer msg.deinit(allocator);
 
-    const txn_id: u64 = 11111;
-    const reason = "timeout";
-    try writer.print("{{\"msg_type\":\"abort\",\"transaction_id\":{d},\"reason\":\"{s}\"}}\n", .{ txn_id, reason });
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
+    defer aw.deinit();
+    try protobuf.encode(&aw.writer, allocator, msg);
+    const encoded = aw.writer.buffer[0..aw.writer.end];
 
-    const json = buf.items;
-    try testing.expect(std.mem.indexOf(u8, json, "\"msg_type\":\"abort\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json, "\"reason\":\"timeout\"") != null);
+    var reader: std.Io.Reader = .fixed(encoded);
+    var decoded = try protobuf.decode(dist_schema.TwoPhaseMessage, &reader, allocator);
+    defer decoded.deinit(allocator);
+
+    try testing.expect(decoded.msg_type == .ABORT);
+    try testing.expectEqualStrings("txn-11111", decoded.transaction_id);
 }
 
 test "GAP-0013: TwoPhaseResponse parsing - vote commit" {
-    const json = "{\"status\":\"OK\",\"vote\":\"vote_commit\",\"transaction_id\":12345}\n";
+    const allocator = testing.allocator;
+    const txn_id = try allocator.dupe(u8, "txn-12345");
+    const participant_id = try allocator.dupe(u8, "node-1");
+    var resp = dist_schema.TwoPhaseResponse{
+        .msg_type = .PREPARE_RESPONSE,
+        .transaction_id = txn_id,
+        .participant_id = participant_id,
+        .vote = .VOTE_COMMIT,
+        .timestamp = std.time.timestamp(),
+    };
+    defer resp.deinit(allocator);
 
-    // Parse vote from response
-    const vote_start = std.mem.indexOf(u8, json, "\"vote\":\"");
-    try testing.expect(vote_start != null);
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
+    defer aw.deinit();
+    try protobuf.encode(&aw.writer, allocator, resp);
+    const encoded = aw.writer.buffer[0..aw.writer.end];
 
-    const vote_value_start = vote_start.? + 8;
-    const vote_end = std.mem.indexOfPos(u8, json, vote_value_start, "\"");
-    try testing.expect(vote_end != null);
+    var reader: std.Io.Reader = .fixed(encoded);
+    var decoded = try protobuf.decode(dist_schema.TwoPhaseResponse, &reader, allocator);
+    defer decoded.deinit(allocator);
 
-    const vote = json[vote_value_start..vote_end.?];
-    try testing.expectEqualStrings("vote_commit", vote);
+    try testing.expect(decoded.vote == .VOTE_COMMIT);
+    try testing.expectEqualStrings("txn-12345", decoded.transaction_id);
 }
 
 test "GAP-0013: TwoPhaseResponse parsing - vote abort" {
-    const json = "{\"status\":\"OK\",\"vote\":\"vote_abort\",\"transaction_id\":12345,\"reason\":\"conflict\"}\n";
+    const allocator = testing.allocator;
+    const txn_id = try allocator.dupe(u8, "txn-12345");
+    const participant_id = try allocator.dupe(u8, "node-2");
+    var resp = dist_schema.TwoPhaseResponse{
+        .msg_type = .PREPARE_RESPONSE,
+        .transaction_id = txn_id,
+        .participant_id = participant_id,
+        .vote = .VOTE_ABORT,
+        .timestamp = std.time.timestamp(),
+    };
+    defer resp.deinit(allocator);
 
-    const vote_start = std.mem.indexOf(u8, json, "\"vote\":\"");
-    try testing.expect(vote_start != null);
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
+    defer aw.deinit();
+    try protobuf.encode(&aw.writer, allocator, resp);
+    const encoded = aw.writer.buffer[0..aw.writer.end];
 
-    const vote_value_start = vote_start.? + 8;
-    const vote_end = std.mem.indexOfPos(u8, json, vote_value_start, "\"");
-    try testing.expect(vote_end != null);
+    var reader: std.Io.Reader = .fixed(encoded);
+    var decoded = try protobuf.decode(dist_schema.TwoPhaseResponse, &reader, allocator);
+    defer decoded.deinit(allocator);
 
-    const vote = json[vote_value_start..vote_end.?];
-    try testing.expectEqualStrings("vote_abort", vote);
+    try testing.expect(decoded.vote == .VOTE_ABORT);
+    try testing.expectEqualStrings("txn-12345", decoded.transaction_id);
 }
 
 test "GAP-0013: Connection endpoint parsing" {
@@ -170,30 +199,39 @@ test "GAP-0013: Transaction ID generation uniqueness" {
 // =============================================================================
 
 test "GAP-0014: Backup header structure" {
+    const BACKUP_MAGIC: u32 = 0x47454F42; // "GEOB"
+    const BACKUP_VERSION: u16 = 4;
     const BackupHeader = struct {
-        magic: [8]u8,
-        version: u32,
+        magic: u32,
+        version: u16,
+        backup_type: u32,
         timestamp: i64,
-        page_count: u64,
-        checksum: u32,
+        compression: u32,
+        encrypted: bool,
+        _padding: [2]u8 = .{0} ** 2,
+        payload_len: u64,
+        checksum: u64,
 
         pub fn isValid(self: @This()) bool {
-            return std.mem.eql(u8, &self.magic, "GEODEBAK");
+            return self.magic == BACKUP_MAGIC and self.version == BACKUP_VERSION;
         }
     };
 
     var header = BackupHeader{
-        .magic = "GEODEBAK".*,
-        .version = 1,
+        .magic = BACKUP_MAGIC,
+        .version = BACKUP_VERSION,
+        .backup_type = 0,
         .timestamp = std.time.timestamp(),
-        .page_count = 100,
+        .compression = 0,
+        .encrypted = false,
+        .payload_len = 100,
         .checksum = 0,
     };
 
     try testing.expect(header.isValid());
 
     // Invalid magic
-    header.magic = "INVALID!".*;
+    header.magic = 0;
     try testing.expect(!header.isValid());
 }
 
