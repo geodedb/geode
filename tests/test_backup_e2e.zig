@@ -2,166 +2,111 @@ const std = @import("std");
 const testing = std.testing;
 
 // End-to-end test for backup system integration
-// CANARY: REQ=REQ-GQL-201; FEATURE="BackupE2E"; ASPECT=EndToEndIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_201_BackupE2E; OWNER=storage; UPDATED=2025-10-03
+// CANARY: REQ=REQ-GQL-201; FEATURE="BackupE2E"; ASPECT=EndToEndIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_201_BackupE2E; OWNER=storage; UPDATED=2026-02-05
+
+const backup = @import("storage/backup");
+const graph_store = @import("geode").graph_store;
+
+fn makeTempDir(allocator: std.mem.Allocator, suffix: []const u8) ![]u8 {
+    const base = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(base);
+    const path = try std.fmt.allocPrint(allocator, "{s}/tmp_backup_e2e_{s}_{d}", .{ base, suffix, std.time.nanoTimestamp() });
+    try std.fs.cwd().makePath(path);
+    return path;
+}
+
+fn cleanupTempDir(allocator: std.mem.Allocator, dir: []const u8) void {
+    std.fs.cwd().deleteTree(dir) catch {};
+    allocator.free(dir);
+}
+
+fn readBackupHeader(path: []const u8) !backup.BackupHeader {
+    var file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+    defer file.close();
+
+    var header_buf: [@sizeOf(backup.BackupHeader)]u8 = undefined;
+    if ((try file.readAll(&header_buf)) != header_buf.len) return error.UnexpectedEof;
+    return @bitCast(header_buf);
+}
 
 test "TestCANARY_REQ_GQL_201_BackupE2E" {
-    // This test demonstrates that the backup system can be created and used
-    // It simulates the basic workflow without requiring a full server environment
-
     const allocator = testing.allocator;
 
-    // Test backup directory setup
-    const backup_dir = "test_backup_e2e";
+    const data_dir = try makeTempDir(allocator, "data");
+    defer cleanupTempDir(allocator, data_dir);
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
 
-    // Create backup directory (would be done by backup manager)
-    std.fs.cwd().makePath(backup_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-    defer std.fs.cwd().deleteTree(backup_dir) catch {};
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.createNode(&.{ "E2E" });
 
-    // Test backup file creation
-    const backup_file_path = try std.fmt.allocPrint(allocator, "{s}/test_backup.dat", .{backup_dir});
-    defer allocator.free(backup_file_path);
+    const backup_dir = try makeTempDir(allocator, "backups");
+    defer cleanupTempDir(allocator, backup_dir);
 
-    const backup_file = try std.fs.cwd().createFile(backup_file_path, .{});
-    defer backup_file.close();
+    var mgr = try backup.BackupManager.init(allocator, backup_dir, .{}, &store);
+    defer mgr.deinit();
 
-    // Write simulated backup content
-    const backup_content =
-        \\GEODE_BACKUP_V2
-        \\BACKUP_ID: 123456789abcdef0
-        \\TIMESTAMP: 1640995200000
-        \\TYPE: full
-        \\LSN_START: 1000
-        \\LSN_END: 1100
-        \\COMPRESSION: zstd
-        \\ENCRYPTED: false
-        \\DATA_SECTION
-        \\Simulated backup data content
-        \\END_BACKUP
-    ;
+    const meta = try mgr.createFullBackup();
+    try testing.expect(meta.size_bytes > 0);
 
-    try backup_file.writeAll(backup_content);
+    const backup_path = try std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ backup_dir, meta.backup_id });
+    defer allocator.free(backup_path);
 
-    // Test restore directory setup
-    const restore_dir = "test_restore_e2e";
+    const header = try readBackupHeader(backup_path);
+    try testing.expectEqual(backup.BACKUP_MAGIC, header.magic);
+    try testing.expectEqual(backup.BACKUP_VERSION, header.version);
+    try testing.expectEqual(backup.BackupType.full, header.backup_type);
 
-    std.fs.cwd().makePath(restore_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-    defer std.fs.cwd().deleteTree(restore_dir) catch {};
+    const restore_dir = try makeTempDir(allocator, "restore");
+    defer cleanupTempDir(allocator, restore_dir);
+    try mgr.restoreToPointInTime(restore_dir, meta.timestamp + 1);
 
-    // Create restore marker (simulating successful restore)
-    const restore_marker_path = try std.fmt.allocPrint(allocator, "{s}/restore_complete.marker", .{restore_dir});
-    defer allocator.free(restore_marker_path);
-
-    const marker_file = try std.fs.cwd().createFile(restore_marker_path, .{});
-    defer marker_file.close();
-
-    try marker_file.writeAll("Restore completed successfully\n");
-
-    // Verify backup file was created
-    const backup_stat = try std.fs.cwd().statFile(backup_file_path);
-    try testing.expect(backup_stat.size > 0);
-
-    // Verify restore marker was created
-    const marker_stat = try std.fs.cwd().statFile(restore_marker_path);
-    try testing.expect(marker_stat.size > 0);
-
-    // Read and verify backup content
-    const backup_file_content = try std.fs.cwd().readFileAlloc(allocator, backup_file_path, 1024 * 1024);
-    defer allocator.free(backup_file_content);
-
-    try testing.expect(std.mem.indexOf(u8, backup_file_content, "GEODE_BACKUP_V2") != null);
-    try testing.expect(std.mem.indexOf(u8, backup_file_content, "TYPE: full") != null);
-    try testing.expect(std.mem.indexOf(u8, backup_file_content, "DATA_SECTION") != null);
-
-    std.debug.print("\nBackup E2E test completed successfully\n", .{});
-    std.debug.print("  - Backup file: {} bytes\n", .{backup_stat.size});
-    std.debug.print("  - Restore marker: {} bytes\n", .{marker_stat.size});
+    const restore_path = try std.fmt.allocPrint(allocator, "{s}/graph_store.dat", .{restore_dir});
+    defer allocator.free(restore_path);
+    try std.fs.cwd().access(restore_path, .{});
 }
 
-test "backup workflow simulation" {
+test "backup workflow metadata log" {
     const allocator = testing.allocator;
 
-    // Simulate the backup workflow that would happen in the server
+    const data_dir = try makeTempDir(allocator, "meta_data");
+    defer cleanupTempDir(allocator, data_dir);
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
 
-    // 1. Backup configuration
-    const config = struct {
-        max_incremental_size: u64 = 1024 * 1024 * 1024,
-        max_incremental_count: u32 = 10,
-        compression: []const u8 = "zstd",
-        encryption: bool = false,
-        retention_days: u32 = 30,
-    }{};
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.createNode(&.{ "Meta" });
 
-    // 2. Backup metadata simulation
-    const metadata = struct {
-        backup_id: u128 = 0x123456789ABCDEF0,
-        timestamp: i64 = 1640995200000,
-        backup_type: []const u8 = "full",
-        start_lsn: u64 = 1000,
-        end_lsn: u64 = 1100,
-        size_bytes: u64 = 1024 * 1024,
-        compression: []const u8 = "zstd",
-        encrypted: bool = false,
-        checksum: u64 = 0xDEADBEEF,
-    }{};
+    const backup_dir = try makeTempDir(allocator, "meta_backups");
+    defer cleanupTempDir(allocator, backup_dir);
 
-    // 3. Simulate JSON response formatting
-    const response = try std.fmt.allocPrint(allocator, "{{\"status_class\":\"00000\",\"message\":\"Backup completed successfully\",\"backup_id\":\"{x}\",\"type\":\"{s}\",\"size_mb\":{d:.2},\"compression\":\"{s}\",\"encryption\":\"{s}\",\"lsn_range\":\"{d}-{d}\"}}", .{ metadata.backup_id, metadata.backup_type, @as(f64, @floatFromInt(metadata.size_bytes)) / (1024.0 * 1024.0), metadata.compression, if (metadata.encrypted) "encrypted" else "unencrypted", metadata.start_lsn, metadata.end_lsn });
-    defer allocator.free(response);
+    var mgr = try backup.BackupManager.init(allocator, backup_dir, .{}, &store);
+    defer mgr.deinit();
 
-    // Verify response format
-    try testing.expect(std.mem.indexOf(u8, response, "\"status_class\":\"00000\"") != null);
-    try testing.expect(std.mem.indexOf(u8, response, "\"backup_id\":\"123456789abcdef0\"") != null);
-    try testing.expect(std.mem.indexOf(u8, response, "\"type\":\"full\"") != null);
-    try testing.expect(std.mem.indexOf(u8, response, "\"compression\":\"zstd\"") != null);
-    try testing.expect(std.mem.indexOf(u8, response, "\"lsn_range\":\"1000-1100\"") != null);
-
-    std.debug.print("\nBackup workflow simulation test passed\n", .{});
-    std.debug.print("  - Configuration: compression={s}, retention={d} days\n", .{ config.compression, config.retention_days });
-    std.debug.print("  - Response: {s}\n", .{response});
+    _ = try mgr.createFullBackup();
+    _ = try mgr.createFullBackup();
+    try testing.expect(mgr.metadata_log.items.len >= 2);
 }
 
-test "backup error handling simulation" {
+test "backup restore without backups returns error" {
     const allocator = testing.allocator;
 
-    // Test various error scenarios that the backup system handles
+    const data_dir = try makeTempDir(allocator, "empty_data");
+    defer cleanupTempDir(allocator, data_dir);
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
 
-    // 1. Invalid backup path
-    const invalid_paths = [_][]const u8{ "", "/invalid\x00path", "  \n  " };
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
 
-    for (invalid_paths) |path| {
-        const is_invalid = (path.len == 0) or
-            (std.mem.indexOfScalar(u8, path, 0) != null) or
-            (std.mem.trim(u8, path, " \n\t").len == 0);
+    const backup_dir = try makeTempDir(allocator, "empty_backups");
+    defer cleanupTempDir(allocator, backup_dir);
 
-        try testing.expect(is_invalid);
+    var mgr = try backup.BackupManager.init(allocator, backup_dir, .{}, &store);
+    defer mgr.deinit();
 
-        if (is_invalid) {
-            const error_response = try std.fmt.allocPrint(allocator, "{{\"status_class\":\"22023\",\"message\":\"Invalid backup path\"}}", .{});
-            defer allocator.free(error_response);
-
-            try testing.expect(std.mem.indexOf(u8, error_response, "22023") != null);
-        }
-    }
-
-    // 2. Directory access error simulation
-    const inaccessible_dir = "/root/restricted";
-    const dir_error_response = try std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Backup directory not accessible: {s}\"}}", .{inaccessible_dir});
-    defer allocator.free(dir_error_response);
-
-    try testing.expect(std.mem.indexOf(u8, dir_error_response, "58030") != null);
-    try testing.expect(std.mem.indexOf(u8, dir_error_response, "not accessible") != null);
-
-    // 3. Backup failure simulation
-    const backup_failure_response = try std.fmt.allocPrint(allocator, "{{\"status_class\":\"58030\",\"message\":\"Backup failed: {s}\"}}", .{"OutOfMemory"});
-    defer allocator.free(backup_failure_response);
-
-    try testing.expect(std.mem.indexOf(u8, backup_failure_response, "Backup failed") != null);
-
-    std.debug.print("\nBackup error handling simulation test passed\n", .{});
+    const result = mgr.restoreToPointInTime(backup_dir, std.time.milliTimestamp());
+    try testing.expectError(error.NoBackupFound, result);
 }

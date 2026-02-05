@@ -2448,7 +2448,7 @@ REQ-LIB-MIGRATION-MCP-008,External Library Migration,MCPClient,EXEMPT,,,core,202
 REQ-LIB-MIGRATION-MCP-010,External Library Migration,MCPLSPTools,TESTED,,,core,2026-01-24,src/mcp/lsp.zig
 REQ-LIB-MIGRATION-PROTO-001,ProtoMigration,HelloMessage,TESTED,,,cli,2026-02-02,src/cli/main.zig
 REQ-LIB-MIGRATION-PROTOBUF-001,Protobuf Wire Protocol,WireProtocolCompatibility,TESTED,,,protocol,2026-02-03,tests/gql_conformance.zig
-REQ-LIB-MIGRATION-PROTOBUF-001,Protobuf Wire Protocol,WireProtocolCompatibility,TESTED,,,protocol,2026-02-03,tests/json_wire_protocol_compatibility.zig
+REQ-LIB-MIGRATION-PROTOBUF-001,Protobuf Wire Protocol,WireProtocolCompatibility,TESTED,,,protocol,2026-02-03,tests/protobuf_wire_protocol_compatibility.zig
 REQ-LIB-MIGRATION-SLOG-001,External Library Migration,StructuredLogging,EXEMPT,,,core,2026-01-24,src/audit/logger.zig
 REQ-LIB-MIGRATION-SLOG-002,Centralized Structured Logging,Infrastructure,EXEMPT,,,core,2026-01-24,src/logging/logger.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Analytics,EXEMPT,,,analytics,2026-01-24,src/analytics/real_time.zig

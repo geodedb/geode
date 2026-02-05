@@ -2,484 +2,168 @@ const std = @import("std");
 const testing = std.testing;
 const expect = testing.expect;
 const expectEqual = testing.expectEqual;
+const expectEqualStrings = testing.expectEqualStrings;
 const expectError = testing.expectError;
+const protobuf = @import("protobuf");
+const schema = @import("schema");
 
-// CANARY: REQ=REQ-SERVER-BACKUP-001; FEATURE="Server Backup API"; ASPECT=UnitTests; STATUS=TESTED; TEST=TestServer_BackupAPIUnit; OWNER=server; UPDATED=2025-10-05
+// CANARY: REQ=REQ-SERVER-BACKUP-001; FEATURE="Server Backup API"; ASPECT=UnitTests; STATUS=TESTED; TEST=TestServer_BackupAPIUnit; OWNER=server; UPDATED=2026-02-05
 
-// Mock server state for testing
-const MockServerState = struct {
-    allocator: std.mem.Allocator,
+const backup = @import("storage/backup");
+const graph_store = @import("geode").graph_store;
 
-    pub fn init(allocator: std.mem.Allocator) MockServerState {
-        return .{ .allocator = allocator };
-    }
-};
-
-// Mock protocol structures for testing
-const MockBackup = struct {
-    backup_type: []const u8,
-    parent_id: ?[]const u8 = null,
-    compress: bool = false,
-};
-
-const MockRestore = struct {
-    target_time: ?[]const u8 = null,
-    confirm: bool = false,
-};
-
-const MockUploadBackup = struct {
-    size_bytes: u64,
-    checksum: []const u8,
-};
-
-// Mock backup manager and helper functions for testing
-const MockBackupConfig = struct {
-    compression: CompressionType = .none,
-    encryption: bool = false,
-    retention_days: u32 = 30,
-};
-
-const CompressionType = enum {
-    none,
-    zstd,
-    lz4,
-    gzip,
-};
-
-const BackupType = enum {
-    full,
-    incremental,
-    differential,
-};
-
-const MockBackupMetadata = struct {
-    backup_id: u128,
-    timestamp: i64,
-    backup_type: BackupType,
-    start_lsn: u64,
-    end_lsn: u64,
-    size_bytes: u64,
-    compression: CompressionType,
-    encrypted: bool,
-    checksum: u64,
-    parent_backup_id: ?u128,
-};
-
-const MockSimplifiedBackupManager = struct {
-    allocator: std.mem.Allocator,
-    config: MockBackupConfig,
-    backup_dir: []const u8,
-    last_backup_id: u128 = 0,
-
-    pub fn init(allocator: std.mem.Allocator, backup_dir: []const u8, config: MockBackupConfig) !MockSimplifiedBackupManager {
-        // Create backup directory for testing
-        std.fs.cwd().makePath(backup_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => return err,
-        };
-
-        return .{
-            .allocator = allocator,
-            .config = config,
-            .backup_dir = try allocator.dupe(u8, backup_dir),
-        };
-    }
-
-    pub fn deinit(self: *MockSimplifiedBackupManager) void {
-        self.allocator.free(self.backup_dir);
-    }
-
-    pub fn createFullBackup(self: *MockSimplifiedBackupManager) !MockBackupMetadata {
-        self.last_backup_id += 1;
-        const backup_id = self.last_backup_id;
-        const timestamp = std.time.milliTimestamp();
-
-        // Create mock backup file
-        const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, backup_id });
-        defer self.allocator.free(backup_path);
-
-        const file = try std.fs.cwd().createFile(backup_path, .{});
-        defer file.close();
-
-        const mock_content = "MOCK_BACKUP_CONTENT\nFull backup test data\n";
-        try file.writeAll(mock_content);
-
-        return MockBackupMetadata{
-            .backup_id = backup_id,
-            .timestamp = timestamp,
-            .backup_type = .full,
-            .start_lsn = 1000,
-            .end_lsn = 1100,
-            .size_bytes = mock_content.len,
-            .compression = self.config.compression,
-            .encrypted = self.config.encryption,
-            .checksum = 0xDEADBEEF,
-            .parent_backup_id = null,
-        };
-    }
-
-    pub fn createIncrementalBackup(self: *MockSimplifiedBackupManager, _: u64) !MockBackupMetadata {
-        self.last_backup_id += 1;
-        const backup_id = self.last_backup_id;
-        const timestamp = std.time.milliTimestamp();
-
-        // Create mock incremental backup file
-        const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/incremental_{x}.backup", .{ self.backup_dir, backup_id });
-        defer self.allocator.free(backup_path);
-
-        const file = try std.fs.cwd().createFile(backup_path, .{});
-        defer file.close();
-
-        const mock_content = "MOCK_INCREMENTAL_BACKUP\nIncremental changes\n";
-        try file.writeAll(mock_content);
-
-        return MockBackupMetadata{
-            .backup_id = backup_id,
-            .timestamp = timestamp,
-            .backup_type = .incremental,
-            .start_lsn = 1100,
-            .end_lsn = 1200,
-            .size_bytes = mock_content.len,
-            .compression = self.config.compression,
-            .encrypted = self.config.encryption,
-            .checksum = 0xBEEFDEAD,
-            .parent_backup_id = backup_id - 1,
-        };
-    }
-};
-
-// Mock handler functions for testing
-fn mockHandleBackupRequest(gpa: std.mem.Allocator, state: *MockServerState, backup_req: MockBackup) ![]u8 {
-    _ = state; // For testing, we don't use server state
-
-    const backup_config = MockBackupConfig{
-        .compression = if (backup_req.compress) .zstd else .none,
-        .encryption = false,
-        .retention_days = 30,
-    };
-
-    var simplified_backup_manager = MockSimplifiedBackupManager.init(gpa, "./test_server_backups", backup_config) catch {
-        return std.fmt.allocPrint(gpa, "BACKUP_ERROR: Failed to initialize backup manager\n", .{});
-    };
-    defer simplified_backup_manager.deinit();
-
-    const backup_metadata = if (std.mem.eql(u8, backup_req.backup_type, "full"))
-        simplified_backup_manager.createFullBackup()
-    else blk: {
-        const parent_lsn = if (backup_req.parent_id) |_|
-            1000
-        else {
-            return std.fmt.allocPrint(gpa, "BACKUP_ERROR: Incremental backup requires parent ID\n", .{});
-        };
-
-        break :blk simplified_backup_manager.createIncrementalBackup(parent_lsn);
-    };
-
-    const metadata = backup_metadata catch |err| {
-        return std.fmt.allocPrint(gpa, "BACKUP_ERROR: {s}\n", .{@errorName(err)});
-    };
-
-    return std.fmt.allocPrint(gpa,
-        \\BACKUP_SUCCESS
-        \\backup_id: {x}
-        \\type: {s}
-        \\size_bytes: {d}
-        \\compression: {s}
-        \\checksum: {x}
-        \\
-    , .{ metadata.backup_id, backup_req.backup_type, metadata.size_bytes, @tagName(metadata.compression), metadata.checksum });
+fn makeTempDir(allocator: std.mem.Allocator, suffix: []const u8) ![]u8 {
+    const base = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(base);
+    const path = try std.fmt.allocPrint(allocator, "{s}/tmp_server_backup_{s}_{d}", .{ base, suffix, std.time.nanoTimestamp() });
+    try std.fs.cwd().makePath(path);
+    return path;
 }
 
-fn mockHandleRestoreRequest(gpa: std.mem.Allocator, state: *MockServerState, restore_req: MockRestore) ![]u8 {
-    _ = state;
-
-    if (!restore_req.confirm) {
-        return std.fmt.allocPrint(gpa, "RESTORE_ERROR: Restore requires confirmation\n", .{});
-    }
-
-    const restore_timestamp = std.time.milliTimestamp();
-
-    return std.fmt.allocPrint(gpa,
-        \\RESTORE_SUCCESS
-        \\restore_timestamp: {d}
-        \\target_time: {s}
-        \\message: Restore operation completed successfully
-        \\
-    , .{ restore_timestamp, restore_req.target_time orelse "latest" });
+fn cleanupTempDir(allocator: std.mem.Allocator, dir: []const u8) void {
+    std.fs.cwd().deleteTree(dir) catch {};
+    allocator.free(dir);
 }
 
-fn mockHandleUploadBackupRequest(gpa: std.mem.Allocator, state: *MockServerState, upload_req: MockUploadBackup) ![]u8 {
-    _ = state;
-
-    if (upload_req.size_bytes == 0) {
-        return std.fmt.allocPrint(gpa, "UPLOAD_ERROR: Invalid backup size\n", .{});
-    }
-
-    if (upload_req.checksum.len == 0) {
-        return std.fmt.allocPrint(gpa, "UPLOAD_ERROR: Missing checksum\n", .{});
-    }
-
-    // Create directory for testing
-    std.fs.cwd().makePath("./test_uploaded_backups") catch {};
-
-    const timestamp = std.time.milliTimestamp();
-    const upload_filename = try std.fmt.allocPrint(gpa, "./test_uploaded_backups/uploaded_{d}.gql", .{timestamp});
-    defer gpa.free(upload_filename);
-
-    return std.fmt.allocPrint(gpa,
-        \\READY
-        \\expected_size: {d}
-        \\expected_checksum: {s}
-        \\upload_path: {s}
-        \\
-    , .{ upload_req.size_bytes, upload_req.checksum, upload_filename });
+fn encodeToBytes(allocator: std.mem.Allocator, msg: anytype) ![]u8 {
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
+    defer aw.deinit();
+    try protobuf.encode(&aw.writer, allocator, msg);
+    return allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
 }
 
-// Unit Tests
+fn readBackupHeader(path: []const u8) !backup.BackupHeader {
+    var file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+    defer file.close();
 
-test "MockBackupConfig default values" {
-    const config = MockBackupConfig{};
-    try expectEqual(CompressionType.none, config.compression);
-    try expectEqual(false, config.encryption);
-    try expectEqual(@as(u32, 30), config.retention_days);
+    var header_buf: [@sizeOf(backup.BackupHeader)]u8 = undefined;
+    if ((try file.readAll(&header_buf)) != header_buf.len) return error.UnexpectedEof;
+    return @bitCast(header_buf);
 }
 
-test "MockBackupConfig custom values" {
-    const config = MockBackupConfig{
-        .compression = .zstd,
-        .encryption = true,
-        .retention_days = 90,
-    };
-    try expectEqual(CompressionType.zstd, config.compression);
-    try expectEqual(true, config.encryption);
-    try expectEqual(@as(u32, 90), config.retention_days);
-}
-
-test "MockSimplifiedBackupManager initialization" {
+test "BackupManager creates backup metadata and header" {
     const allocator = testing.allocator;
-    const config = MockBackupConfig{};
 
-    var backup_manager = try MockSimplifiedBackupManager.init(allocator, "./test_backup_init", config);
-    defer backup_manager.deinit();
+    const data_dir = try makeTempDir(allocator, "data");
+    defer cleanupTempDir(allocator, data_dir);
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
 
-    try expectEqual(@as(u128, 0), backup_manager.last_backup_id);
-    try expect(std.mem.eql(u8, backup_manager.backup_dir, "./test_backup_init"));
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.createNode(&.{ "ServerUnit" });
 
-    // Cleanup
-    std.fs.cwd().deleteDir("./test_backup_init") catch {};
-}
+    const backup_dir = try makeTempDir(allocator, "backups");
+    defer cleanupTempDir(allocator, backup_dir);
 
-test "MockSimplifiedBackupManager full backup creation" {
-    const allocator = testing.allocator;
-    const config = MockBackupConfig{};
+    var mgr = try backup.BackupManager.init(allocator, backup_dir, .{}, &store);
+    defer mgr.deinit();
 
-    var backup_manager = try MockSimplifiedBackupManager.init(allocator, "./test_full_backup", config);
-    defer backup_manager.deinit();
+    const meta = try mgr.createFullBackup();
+    try expectEqual(backup.BackupType.full, meta.backup_type);
+    try expect(meta.size_bytes > 0);
+    try expect(meta.checksum != 0);
 
-    const metadata = try backup_manager.createFullBackup();
-
-    try expectEqual(BackupType.full, metadata.backup_type);
-    try expectEqual(CompressionType.none, metadata.compression);
-    try expectEqual(false, metadata.encrypted);
-    try expect(metadata.backup_id == 1);
-    try expect(metadata.size_bytes > 0);
-    try expectEqual(@as(u64, 0xDEADBEEF), metadata.checksum);
-    try expectEqual(@as(?u128, null), metadata.parent_backup_id);
-
-    // Verify backup file exists
-    const backup_path = try std.fmt.allocPrint(allocator, "./test_full_backup/full_{x}.backup", .{metadata.backup_id});
+    const backup_path = try std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ backup_dir, meta.backup_id });
     defer allocator.free(backup_path);
-
-    const file = std.fs.cwd().openFile(backup_path, .{}) catch |err| {
-        // Cleanup on error
-        std.fs.cwd().deleteFile(backup_path) catch {};
-        std.fs.cwd().deleteDir("./test_full_backup") catch {};
-        return err;
-    };
-    file.close();
-
-    // Cleanup
-    std.fs.cwd().deleteFile(backup_path) catch {};
-    std.fs.cwd().deleteDir("./test_full_backup") catch {};
+    const header = try readBackupHeader(backup_path);
+    try expectEqual(backup.BACKUP_MAGIC, header.magic);
+    try expectEqual(backup.BACKUP_VERSION, header.version);
 }
 
-test "MockSimplifiedBackupManager incremental backup creation" {
+test "BackupResponse protobuf roundtrip" {
     const allocator = testing.allocator;
-    const config = MockBackupConfig{};
 
-    var backup_manager = try MockSimplifiedBackupManager.init(allocator, "./test_incremental_backup", config);
-    defer backup_manager.deinit();
-
-    const metadata = try backup_manager.createIncrementalBackup(1000);
-
-    try expectEqual(BackupType.incremental, metadata.backup_type);
-    try expectEqual(CompressionType.none, metadata.compression);
-    try expectEqual(false, metadata.encrypted);
-    try expect(metadata.backup_id == 1);
-    try expect(metadata.size_bytes > 0);
-    try expectEqual(@as(u64, 0xBEEFDEAD), metadata.checksum);
-    try expect(metadata.parent_backup_id != null);
-
-    // Verify backup file exists
-    const backup_path = try std.fmt.allocPrint(allocator, "./test_incremental_backup/incremental_{x}.backup", .{metadata.backup_id});
-    defer allocator.free(backup_path);
-
-    const file = std.fs.cwd().openFile(backup_path, .{}) catch |err| {
-        // Cleanup on error
-        std.fs.cwd().deleteFile(backup_path) catch {};
-        std.fs.cwd().deleteDir("./test_incremental_backup") catch {};
-        return err;
+    var resp = schema.BackupResponse{
+        .success = true,
+        .message = try allocator.dupe(u8, "Backup completed"),
+        .backup_id = try allocator.dupe(u8, "deadbeef"),
+        .backup_type = try allocator.dupe(u8, "full"),
+        .size_bytes = 1234,
+        .compression = try allocator.dupe(u8, "none"),
+        .checksum = try allocator.dupe(u8, "abcd"),
     };
-    file.close();
+    defer resp.deinit(allocator);
 
-    // Cleanup
-    std.fs.cwd().deleteFile(backup_path) catch {};
-    std.fs.cwd().deleteDir("./test_incremental_backup") catch {};
+    const encoded = try encodeToBytes(allocator, resp);
+    defer allocator.free(encoded);
+
+    var reader: std.Io.Reader = .fixed(encoded);
+    var decoded = try protobuf.decode(schema.BackupResponse, &reader, allocator);
+    defer decoded.deinit(allocator);
+
+    try expect(decoded.success);
+    try expectEqualStrings("Backup completed", decoded.message);
+    try expectEqualStrings("deadbeef", decoded.backup_id);
+    try expectEqualStrings("full", decoded.backup_type);
+    try expectEqual(@as(u64, 1234), decoded.size_bytes);
 }
 
-test "mockHandleBackupRequest full backup success" {
+test "RestoreResponse protobuf roundtrip" {
     const allocator = testing.allocator;
-    var state = MockServerState.init(allocator);
 
-    const backup_req = MockBackup{
-        .backup_type = "full",
-        .compress = false,
+    var resp = schema.RestoreResponse{
+        .success = true,
+        .message = try allocator.dupe(u8, "Restore completed"),
+        .restore_dir = try allocator.dupe(u8, "/tmp/restore"),
+        .target_time = try allocator.dupe(u8, "latest"),
+        .restore_timestamp = 4242,
     };
+    defer resp.deinit(allocator);
 
-    const response = try mockHandleBackupRequest(allocator, &state, backup_req);
-    defer allocator.free(response);
+    const encoded = try encodeToBytes(allocator, resp);
+    defer allocator.free(encoded);
 
-    try expect(std.mem.startsWith(u8, response, "BACKUP_SUCCESS"));
-    try expect(std.mem.indexOf(u8, response, "type: full") != null);
-    try expect(std.mem.indexOf(u8, response, "compression: none") != null);
-    try expect(std.mem.indexOf(u8, response, "backup_id: 1") != null);
+    var reader: std.Io.Reader = .fixed(encoded);
+    var decoded = try protobuf.decode(schema.RestoreResponse, &reader, allocator);
+    defer decoded.deinit(allocator);
 
-    // Cleanup
-    std.fs.cwd().deleteFile("./test_server_backups/full_1.backup") catch {};
-    std.fs.cwd().deleteDir("./test_server_backups") catch {};
+    try expect(decoded.success);
+    try expectEqualStrings("Restore completed", decoded.message);
+    try expectEqualStrings("/tmp/restore", decoded.restore_dir);
+    try expectEqualStrings("latest", decoded.target_time);
+    try expectEqual(@as(u64, 4242), decoded.restore_timestamp);
 }
 
-test "mockHandleBackupRequest incremental backup success" {
+test "UploadBackupResponse protobuf roundtrip" {
     const allocator = testing.allocator;
-    var state = MockServerState.init(allocator);
 
-    const backup_req = MockBackup{
-        .backup_type = "incremental",
-        .parent_id = "abc123",
-        .compress = true,
+    var resp = schema.UploadBackupResponse{
+        .success = true,
+        .message = try allocator.dupe(u8, "Upload slot ready"),
+        .upload_path = try allocator.dupe(u8, "/tmp/upload.bin"),
     };
+    defer resp.deinit(allocator);
 
-    const response = try mockHandleBackupRequest(allocator, &state, backup_req);
-    defer allocator.free(response);
+    const encoded = try encodeToBytes(allocator, resp);
+    defer allocator.free(encoded);
 
-    try expect(std.mem.startsWith(u8, response, "BACKUP_SUCCESS"));
-    try expect(std.mem.indexOf(u8, response, "type: incremental") != null);
-    try expect(std.mem.indexOf(u8, response, "compression: zstd") != null);
+    var reader: std.Io.Reader = .fixed(encoded);
+    var decoded = try protobuf.decode(schema.UploadBackupResponse, &reader, allocator);
+    defer decoded.deinit(allocator);
 
-    // Cleanup
-    std.fs.cwd().deleteFile("./test_server_backups/incremental_1.backup") catch {};
-    std.fs.cwd().deleteDir("./test_server_backups") catch {};
+    try expect(decoded.success);
+    try expectEqualStrings("Upload slot ready", decoded.message);
+    try expectEqualStrings("/tmp/upload.bin", decoded.upload_path);
 }
 
-test "mockHandleBackupRequest incremental without parent" {
+test "Restore without backups returns NoBackupFound" {
     const allocator = testing.allocator;
-    var state = MockServerState.init(allocator);
 
-    const backup_req = MockBackup{
-        .backup_type = "incremental",
-        .parent_id = null,
-        .compress = false,
-    };
+    const data_dir = try makeTempDir(allocator, "empty_data");
+    defer cleanupTempDir(allocator, data_dir);
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
 
-    const response = try mockHandleBackupRequest(allocator, &state, backup_req);
-    defer allocator.free(response);
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
 
-    try expect(std.mem.startsWith(u8, response, "BACKUP_ERROR"));
-    try expect(std.mem.indexOf(u8, response, "requires parent ID") != null);
-}
+    const backup_dir = try makeTempDir(allocator, "empty_backups");
+    defer cleanupTempDir(allocator, backup_dir);
 
-test "mockHandleRestoreRequest success" {
-    const allocator = testing.allocator;
-    var state = MockServerState.init(allocator);
+    var mgr = try backup.BackupManager.init(allocator, backup_dir, .{}, &store);
+    defer mgr.deinit();
 
-    const restore_req = MockRestore{
-        .confirm = true,
-        .target_time = "1640995200000",
-    };
-
-    const response = try mockHandleRestoreRequest(allocator, &state, restore_req);
-    defer allocator.free(response);
-
-    try expect(std.mem.startsWith(u8, response, "RESTORE_SUCCESS"));
-    try expect(std.mem.indexOf(u8, response, "target_time: 1640995200000") != null);
-    try expect(std.mem.indexOf(u8, response, "completed successfully") != null);
-}
-
-test "mockHandleRestoreRequest missing confirmation" {
-    const allocator = testing.allocator;
-    var state = MockServerState.init(allocator);
-
-    const restore_req = MockRestore{
-        .confirm = false,
-        .target_time = null,
-    };
-
-    const response = try mockHandleRestoreRequest(allocator, &state, restore_req);
-    defer allocator.free(response);
-
-    try expect(std.mem.startsWith(u8, response, "RESTORE_ERROR"));
-    try expect(std.mem.indexOf(u8, response, "requires confirmation") != null);
-}
-
-test "mockHandleUploadBackupRequest success" {
-    const allocator = testing.allocator;
-    var state = MockServerState.init(allocator);
-
-    const upload_req = MockUploadBackup{
-        .size_bytes = 1024,
-        .checksum = "abcd1234",
-    };
-
-    const response = try mockHandleUploadBackupRequest(allocator, &state, upload_req);
-    defer allocator.free(response);
-
-    try expect(std.mem.startsWith(u8, response, "READY"));
-    try expect(std.mem.indexOf(u8, response, "expected_size: 1024") != null);
-    try expect(std.mem.indexOf(u8, response, "expected_checksum: abcd1234") != null);
-    try expect(std.mem.indexOf(u8, response, "upload_path: ./test_uploaded_backups/") != null);
-
-    // Cleanup
-    std.fs.cwd().deleteDir("./test_uploaded_backups") catch {};
-}
-
-test "mockHandleUploadBackupRequest invalid size" {
-    const allocator = testing.allocator;
-    var state = MockServerState.init(allocator);
-
-    const upload_req = MockUploadBackup{
-        .size_bytes = 0,
-        .checksum = "abcd1234",
-    };
-
-    const response = try mockHandleUploadBackupRequest(allocator, &state, upload_req);
-    defer allocator.free(response);
-
-    try expect(std.mem.startsWith(u8, response, "UPLOAD_ERROR"));
-    try expect(std.mem.indexOf(u8, response, "Invalid backup size") != null);
-}
-
-test "mockHandleUploadBackupRequest missing checksum" {
-    const allocator = testing.allocator;
-    var state = MockServerState.init(allocator);
-
-    const upload_req = MockUploadBackup{
-        .size_bytes = 1024,
-        .checksum = ",
-    };
-
-    const response = try mockHandleUploadBackupRequest(allocator, &state, upload_req);
-    defer allocator.free(response);
-
-    try expect(std.mem.startsWith(u8, response, "UPLOAD_ERROR"));
-    try expect(std.mem.indexOf(u8, response, "Missing checksum") != null);
+    const result = mgr.restoreToPointInTime(backup_dir, std.time.milliTimestamp());
+    try expectError(error.NoBackupFound, result);
 }

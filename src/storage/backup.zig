@@ -95,11 +95,11 @@ pub const RecoveryPoint = struct {
     backup_chain: []const u128, // Backup IDs needed for recovery
 };
 
-const BACKUP_MAGIC: u32 = 0x47454F42; // "GEOB"
-const BACKUP_VERSION: u16 = 4;
+pub const BACKUP_MAGIC: u32 = 0x47454F42; // "GEOB"
+pub const BACKUP_VERSION: u16 = 4;
 
 /// Backup header with payload length for GraphStore snapshots.
-const BackupHeader = extern struct {
+pub const BackupHeader = extern struct {
     magic: u32,
     version: u16,
     backup_type: BackupType,

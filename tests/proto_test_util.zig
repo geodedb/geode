@@ -345,6 +345,49 @@ pub const BeginResult = struct {
     }
 };
 
+pub const BackupResult = struct {
+    success: bool,
+    message: []const u8,
+    backup_id: []const u8,
+    backup_type: []const u8,
+    size_bytes: u64,
+    compression: []const u8,
+    checksum: []const u8,
+
+    pub fn deinit(self: *BackupResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.message);
+        allocator.free(self.backup_id);
+        allocator.free(self.backup_type);
+        allocator.free(self.compression);
+        allocator.free(self.checksum);
+    }
+};
+
+pub const RestoreResult = struct {
+    success: bool,
+    message: []const u8,
+    restore_dir: []const u8,
+    target_time: []const u8,
+    restore_timestamp: u64,
+
+    pub fn deinit(self: *RestoreResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.message);
+        allocator.free(self.restore_dir);
+        allocator.free(self.target_time);
+    }
+};
+
+pub const UploadBackupResult = struct {
+    success: bool,
+    message: []const u8,
+    upload_path: []const u8,
+
+    pub fn deinit(self: *UploadBackupResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.message);
+        allocator.free(self.upload_path);
+    }
+};
+
 pub const QuicProtoClient = struct {
     allocator: std.mem.Allocator,
     client: quic.QuicClient,
@@ -441,6 +484,29 @@ pub const QuicProtoClient = struct {
         return try protobuf.decode(schema.ServerPacket, &reader, allocator);
     }
 
+    fn drainBytes(self: *QuicProtoClient, len: u64, timeout_ms: u32) !void {
+        var remaining: u64 = len;
+        var attempts: usize = 0;
+        const max_attempts = @max(@as(usize, 1), timeout_ms / 10);
+        var buf: [4096]u8 = undefined;
+
+        while (remaining > 0) {
+            const chunk: usize = @intCast(@min(remaining, @as(u64, buf.len)));
+            const n = self.stream.read(buf[0..chunk]) catch |err| {
+                if (err == error.WouldBlock) {
+                    attempts += 1;
+                    if (attempts > max_attempts) return error.Timeout;
+                    try self.client.poll(1);
+                    std.Thread.sleep(10 * std.time.ns_per_ms);
+                    continue;
+                }
+                return err;
+            };
+            if (n == 0) return error.EndOfStream;
+            remaining -= n;
+        }
+    }
+
     pub fn hello(self: *QuicProtoClient, allocator: std.mem.Allocator, username: []const u8, password: []const u8) !HelloResult {
         const req = schema.HelloRequest{
             .username = username,
@@ -507,6 +573,63 @@ pub const QuicProtoClient = struct {
             .success = resp.success,
             .status = try allocator.dupe(u8, resp.status),
             .guardrail_epoch = resp.guardrail_epoch,
+        };
+    }
+
+    pub fn backup(self: *QuicProtoClient, allocator: std.mem.Allocator, backup_type: []const u8, compress: bool) !BackupResult {
+        try self.ensureHello(allocator);
+        const req = schema.BackupRequest{ .backup_type = backup_type, .compress = compress };
+        try self.writeMessage(.{ .backup = req });
+        var packet = try self.readPacket(allocator, 10000);
+        defer packet.deinit(allocator);
+        const msg = packet.quic orelse return error.InvalidMessage;
+        if (msg != .backup) return error.InvalidMessage;
+        const resp = msg.backup;
+        if (resp.success and resp.size_bytes > 0) {
+            try self.drainBytes(resp.size_bytes, 10000);
+        }
+        return .{
+            .success = resp.success,
+            .message = try allocator.dupe(u8, resp.message),
+            .backup_id = try allocator.dupe(u8, resp.backup_id),
+            .backup_type = try allocator.dupe(u8, resp.backup_type),
+            .size_bytes = resp.size_bytes,
+            .compression = try allocator.dupe(u8, resp.compression),
+            .checksum = try allocator.dupe(u8, resp.checksum),
+        };
+    }
+
+    pub fn restore(self: *QuicProtoClient, allocator: std.mem.Allocator, target_time: ?[]const u8, confirm: bool) !RestoreResult {
+        try self.ensureHello(allocator);
+        const req = schema.RestoreRequest{ .target_time = target_time orelse "", .confirm = confirm };
+        try self.writeMessage(.{ .restore = req });
+        var packet = try self.readPacket(allocator, 10000);
+        defer packet.deinit(allocator);
+        const msg = packet.quic orelse return error.InvalidMessage;
+        if (msg != .restore) return error.InvalidMessage;
+        const resp = msg.restore;
+        return .{
+            .success = resp.success,
+            .message = try allocator.dupe(u8, resp.message),
+            .restore_dir = try allocator.dupe(u8, resp.restore_dir),
+            .target_time = try allocator.dupe(u8, resp.target_time),
+            .restore_timestamp = resp.restore_timestamp,
+        };
+    }
+
+    pub fn uploadBackup(self: *QuicProtoClient, allocator: std.mem.Allocator, size_bytes: u64, checksum: []const u8) !UploadBackupResult {
+        try self.ensureHello(allocator);
+        const req = schema.UploadBackupRequest{ .size_bytes = size_bytes, .checksum = checksum };
+        try self.writeMessage(.{ .upload_backup = req });
+        var packet = try self.readPacket(allocator, 5000);
+        defer packet.deinit(allocator);
+        const msg = packet.quic orelse return error.InvalidMessage;
+        if (msg != .upload_backup) return error.InvalidMessage;
+        const resp = msg.upload_backup;
+        return .{
+            .success = resp.success,
+            .message = try allocator.dupe(u8, resp.message),
+            .upload_path = try allocator.dupe(u8, resp.upload_path),
         };
     }
 

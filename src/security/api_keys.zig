@@ -204,16 +204,16 @@ pub const ApiKeyManager = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        var list = std.ArrayList(ApiKey).init(allocator);
-        errdefer list.deinit();
+        var list: std.ArrayListUnmanaged(ApiKey) = .empty;
+        errdefer list.deinit(allocator);
 
         var it = self.keys.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.user_id == user_id) {
-                try list.append(entry.value_ptr.*);
+                try list.append(allocator, entry.value_ptr.*);
             }
         }
-        return list.toOwnedSlice();
+        return list.toOwnedSlice(allocator);
     }
 
     /// Delete expired keys (cleanup)
@@ -221,15 +221,15 @@ pub const ApiKeyManager = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        var to_remove = std.ArrayList([TOKEN_ID_SIZE]u8).init(self.allocator);
-        defer to_remove.deinit();
+        var to_remove: std.ArrayListUnmanaged([TOKEN_ID_SIZE]u8) = .empty;
+        defer to_remove.deinit(self.allocator);
 
         const now = std.time.timestamp();
         var it = self.keys.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.expires_at) |exp| {
                 if (now >= exp) {
-                    to_remove.append(entry.key_ptr.*) catch continue;
+                    to_remove.append(self.allocator, entry.key_ptr.*) catch continue;
                 }
             }
         }

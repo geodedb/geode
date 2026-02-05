@@ -2,372 +2,165 @@ const std = @import("std");
 const testing = std.testing;
 const expect = testing.expect;
 const expectEqual = testing.expectEqual;
-const expectError = testing.expectError;
 
-// CANARY: REQ=REQ-CLI-BACKUP-001; FEATURE="CLI Backup System"; ASPECT=UnitTests; STATUS=TESTED; TEST=TestCLI_BackupUnit; OWNER=cli; UPDATED=2025-10-05
+// CANARY: REQ=REQ-CLI-BACKUP-001; FEATURE="CLI Backup System"; ASPECT=UnitTests; STATUS=TESTED; TEST=TestCLI_BackupUnit; OWNER=cli; UPDATED=2026-02-05
 
-const backup_types = struct {
-    pub const BackupConfig = struct {
-        max_incremental_size: u64 = 1024 * 1024 * 1024,
-        max_incremental_count: u32 = 10,
-        compression: CompressionType = .none,
-        encryption: bool = false,
-        retention_days: u32 = 30,
-    };
+const backup = @import("storage/backup");
+const graph_store = @import("geode").graph_store;
 
-    pub const CompressionType = enum(u32) {
-        none = 0,
-        zstd = 1,
-        lz4 = 2,
-        gzip = 3,
-    };
-
-    pub const BackupType = enum(u32) {
-        full = 0,
-        incremental = 1,
-        differential = 2,
-    };
-
-    pub const BackupMetadata = struct {
-        backup_id: u128,
-        timestamp: i64,
-        backup_type: BackupType,
-        start_lsn: u64,
-        end_lsn: u64,
-        size_bytes: u64,
-        compression: CompressionType,
-        encrypted: bool,
-        checksum: u32,
-        parent_backup_id: ?u128,
-    };
-};
-
-const BackupHeader = extern struct {
-    magic: u32,
-    version: u16,
-    backup_type: backup_types.BackupType,
-    timestamp: i64,
-    compression: backup_types.CompressionType,
-    _padding: [6]u8 = [_]u8{0} ** 6,
-};
-
-const SimplifiedBackupManager = struct {
-    allocator: std.mem.Allocator,
-    config: backup_types.BackupConfig,
-    backup_dir: []const u8,
-
-    pub fn createFullBackup(self: SimplifiedBackupManager, backup_path: []const u8) !backup_types.BackupMetadata {
-        const backup_id = generateBackupId();
-        const timestamp = std.time.milliTimestamp();
-
-        // Create backup directory if it doesn't exist
-        std.fs.cwd().makePath(self.backup_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => return err,
-        };
-
-        // Create backup file
-        const file = try std.fs.cwd().createFile(backup_path, .{});
-
-        var size_bytes: u64 = 0;
-
-        // Write backup header
-        const header = BackupHeader{
-            .magic = BACKUP_MAGIC,
-            .version = BACKUP_VERSION,
-            .backup_type = .full,
-            .timestamp = timestamp,
-            .compression = self.config.compression,
-        };
-        const header_bytes = @as([*]const u8, @ptrCast(&header))[0..@sizeOf(BackupHeader)];
-        try file.writeAll(header_bytes);
-        size_bytes += @sizeOf(BackupHeader);
-
-        // Write placeholder catalog data
-        const catalog_data = "-- Geode Database Catalog Placeholder\n-- CLI backup version\n";
-        const catalog_size_bytes = std.mem.toBytes(@as(u64, catalog_data.len));
-        try file.writeAll(catalog_size_bytes[0..]);
-        try file.writeAll(catalog_data);
-        size_bytes += @sizeOf(u64) + catalog_data.len;
-
-        // Calculate checksum (close file first, then reopen for reading)
-        file.close();
-        const checksum_file = try std.fs.cwd().openFile(backup_path, .{});
-        defer checksum_file.close();
-        const file_data = try checksum_file.readToEndAlloc(self.allocator, 1024 * 1024);
-        defer self.allocator.free(file_data);
-        const checksum = std.hash.crc.Crc32.hash(file_data);
-
-        return backup_types.BackupMetadata{
-            .backup_id = backup_id,
-            .timestamp = timestamp,
-            .backup_type = .full,
-            .start_lsn = 0, // Placeholder
-            .end_lsn = 0, // Placeholder
-            .size_bytes = size_bytes,
-            .compression = self.config.compression,
-            .encrypted = self.config.encryption,
-            .checksum = checksum,
-            .parent_backup_id = null,
-        };
-    }
-
-    pub fn createIncrementalBackup(self: SimplifiedBackupManager, backup_path: []const u8, parent_backup_id: u128) !backup_types.BackupMetadata {
-        const backup_id = generateBackupId();
-        const timestamp = std.time.milliTimestamp();
-
-        // Create backup directory if it doesn't exist
-        std.fs.cwd().makePath(self.backup_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => return err,
-        };
-
-        // Create backup file
-        const file = try std.fs.cwd().createFile(backup_path, .{});
-
-        var size_bytes: u64 = 0;
-
-        // Write backup header
-        const header = BackupHeader{
-            .magic = BACKUP_MAGIC,
-            .version = BACKUP_VERSION,
-            .backup_type = .incremental,
-            .timestamp = timestamp,
-            .compression = self.config.compression,
-        };
-        const header_bytes = @as([*]const u8, @ptrCast(&header))[0..@sizeOf(BackupHeader)];
-        try file.writeAll(header_bytes);
-        size_bytes += @sizeOf(BackupHeader);
-
-        // Write parent backup ID
-        const parent_id_bytes = std.mem.toBytes(parent_backup_id);
-        try file.writeAll(parent_id_bytes[0..]);
-        size_bytes += @sizeOf(u128);
-
-        // Write placeholder incremental data
-        const incremental_data = try std.fmt.allocPrint(self.allocator, "-- Incremental backup data\n-- Parent: {x}\n-- Changes since last backup\n", .{parent_backup_id});
-        defer self.allocator.free(incremental_data);
-
-        const data_size_bytes = std.mem.toBytes(@as(u64, incremental_data.len));
-        try file.writeAll(data_size_bytes[0..]);
-        try file.writeAll(incremental_data);
-        size_bytes += @sizeOf(u64) + incremental_data.len;
-
-        // Calculate checksum (close file first, then reopen for reading)
-        file.close();
-        const checksum_file = try std.fs.cwd().openFile(backup_path, .{});
-        defer checksum_file.close();
-        const file_data = try checksum_file.readToEndAlloc(self.allocator, 1024 * 1024);
-        defer self.allocator.free(file_data);
-        const checksum = std.hash.crc.Crc32.hash(file_data);
-
-        return backup_types.BackupMetadata{
-            .backup_id = backup_id,
-            .timestamp = timestamp,
-            .backup_type = .incremental,
-            .start_lsn = 0, // Placeholder
-            .end_lsn = 0, // Placeholder
-            .size_bytes = size_bytes,
-            .compression = self.config.compression,
-            .encrypted = self.config.encryption,
-            .checksum = checksum,
-            .parent_backup_id = parent_backup_id,
-        };
-    }
-};
-
-// Constants and helper functions for backup
-const BACKUP_MAGIC: u32 = 0x47454F42; // "GEOB"
-const BACKUP_VERSION: u16 = 1;
-
-fn generateBackupId() u128 {
-    const timestamp = @as(u128, @intCast(@as(u64, @bitCast(std.time.milliTimestamp()))));
-    const random = std.crypto.random.int(u64);
-    return (timestamp << 64) | random;
+fn makeTempDir(allocator: std.mem.Allocator, suffix: []const u8) ![]u8 {
+    const base = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(base);
+    const path = try std.fmt.allocPrint(allocator, "{s}/tmp_cli_backup_{s}_{d}", .{ base, suffix, std.time.nanoTimestamp() });
+    try std.fs.cwd().makePath(path);
+    return path;
 }
 
-// Unit Tests
+fn cleanupTempDir(allocator: std.mem.Allocator, dir: []const u8) void {
+    std.fs.cwd().deleteTree(dir) catch {};
+    allocator.free(dir);
+}
+
+fn readBackupHeader(path: []const u8) !backup.BackupHeader {
+    var file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+    defer file.close();
+
+    var header_buf: [@sizeOf(backup.BackupHeader)]u8 = undefined;
+    if ((try file.readAll(&header_buf)) != header_buf.len) return error.UnexpectedEof;
+    return @bitCast(header_buf);
+}
 
 test "BackupConfig default values" {
-    const config = backup_types.BackupConfig{};
-    try expectEqual(@as(u64, 1024 * 1024 * 1024), config.max_incremental_size);
-    try expectEqual(@as(u32, 10), config.max_incremental_count);
-    try expectEqual(backup_types.CompressionType.none, config.compression);
-    try expectEqual(false, config.encryption);
+    const config = backup.BackupConfig{};
+    try expectEqual(backup.CompressionType.zstd, config.compression);
+    try expect(!config.encryption);
     try expectEqual(@as(u32, 30), config.retention_days);
 }
 
 test "BackupConfig custom values" {
-    const config = backup_types.BackupConfig{
-        .max_incremental_size = 512 * 1024 * 1024,
-        .compression = .zstd,
+    const config = backup.BackupConfig{
+        .compression = .none,
         .encryption = true,
         .retention_days = 90,
     };
-    try expectEqual(@as(u64, 512 * 1024 * 1024), config.max_incremental_size);
-    try expectEqual(backup_types.CompressionType.zstd, config.compression);
-    try expectEqual(true, config.encryption);
+    try expectEqual(backup.CompressionType.none, config.compression);
+    try expect(config.encryption);
     try expectEqual(@as(u32, 90), config.retention_days);
 }
 
 test "BackupHeader structure and magic number" {
-    const header = BackupHeader{
-        .magic = BACKUP_MAGIC,
-        .version = BACKUP_VERSION,
+    try expect(@sizeOf(backup.BackupHeader) >= 32);
+    try expect(@alignOf(backup.BackupHeader) >= 1);
+
+    const header = backup.BackupHeader{
+        .magic = backup.BACKUP_MAGIC,
+        .version = backup.BACKUP_VERSION,
         .backup_type = .full,
         .timestamp = 1234567890,
         .compression = .none,
+        .encrypted = false,
+        .payload_len = 42,
+        .checksum = 0xDEADBEEF,
     };
 
-    try expectEqual(@as(u32, 0x47454F42), header.magic);
-    try expectEqual(@as(u16, 1), header.version);
-    try expectEqual(backup_types.BackupType.full, header.backup_type);
+    try expectEqual(backup.BACKUP_MAGIC, header.magic);
+    try expectEqual(backup.BACKUP_VERSION, header.version);
+    try expectEqual(backup.BackupType.full, header.backup_type);
     try expectEqual(@as(i64, 1234567890), header.timestamp);
-    try expectEqual(backup_types.CompressionType.none, header.compression);
+    try expectEqual(backup.CompressionType.none, header.compression);
+    try expectEqual(@as(u64, 42), header.payload_len);
 }
 
-test "BackupId generation uniqueness" {
-    const id1 = generateBackupId();
-    const id2 = generateBackupId();
-    try expect(id1 != id2);
-}
-
-test "SimplifiedBackupManager full backup creation" {
+test "BackupManager full backup creation" {
     const allocator = testing.allocator;
-    const backup_manager = SimplifiedBackupManager{
-        .allocator = allocator,
-        .config = backup_types.BackupConfig{},
-        .backup_dir = "./test_backups",
-    };
 
-    const backup_path = "./test_backups/test_full_backup.gql";
-    const metadata = try backup_manager.createFullBackup(backup_path);
+    const data_dir = try makeTempDir(allocator, "data");
+    defer cleanupTempDir(allocator, data_dir);
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
 
-    // Verify metadata
-    try expectEqual(backup_types.BackupType.full, metadata.backup_type);
-    try expectEqual(backup_types.CompressionType.none, metadata.compression);
-    try expectEqual(false, metadata.encrypted);
-    try expect(metadata.backup_id != 0);
-    try expect(metadata.size_bytes > 0);
-    try expect(metadata.checksum != 0);
-    try expectEqual(@as(?u128, null), metadata.parent_backup_id);
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.createNode(&.{ "Person" });
 
-    // Verify file exists and has correct magic number
-    const file = try std.fs.cwd().openFile(backup_path, .{});
-    defer file.close();
-    var magic_bytes: [4]u8 = undefined;
-    _ = try file.readAll(&magic_bytes);
-    const magic = std.mem.readInt(u32, &magic_bytes, .little);
-    try expectEqual(BACKUP_MAGIC, magic);
+    const backup_dir = try makeTempDir(allocator, "backups");
+    defer cleanupTempDir(allocator, backup_dir);
 
-    // Cleanup
-    std.fs.cwd().deleteFile(backup_path) catch {};
-    std.fs.cwd().deleteDir("./test_backups") catch {};
+    var mgr = try backup.BackupManager.init(allocator, backup_dir, .{}, &store);
+    defer mgr.deinit();
+
+    const meta = try mgr.createFullBackup();
+    try expectEqual(backup.BackupType.full, meta.backup_type);
+    try expect(meta.size_bytes > 0);
+    try expect(meta.checksum != 0);
+
+    const backup_path = try std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ backup_dir, meta.backup_id });
+    defer allocator.free(backup_path);
+
+    const header = try readBackupHeader(backup_path);
+    try expectEqual(backup.BACKUP_MAGIC, header.magic);
+    try expectEqual(backup.BACKUP_VERSION, header.version);
+    try expectEqual(backup.BackupType.full, header.backup_type);
+    try expectEqual(meta.checksum, header.checksum);
+
+    const stat = try std.fs.cwd().statFile(backup_path);
+    try expectEqual(@as(u64, @intCast(stat.size)), meta.size_bytes);
+    const header_size: u64 = @intCast(@sizeOf(backup.BackupHeader));
+    try expectEqual(@as(u64, @intCast(stat.size - header_size)), header.payload_len);
 }
 
-test "SimplifiedBackupManager incremental backup creation" {
+test "BackupManager compression reflected in header" {
     const allocator = testing.allocator;
-    const backup_manager = SimplifiedBackupManager{
-        .allocator = allocator,
-        .config = backup_types.BackupConfig{},
-        .backup_dir = "./test_backups",
-    };
 
-    const parent_id: u128 = 0x123456789abcdef0fedcba9876543210;
-    const backup_path = "./test_backups/test_incremental_backup.gql";
-    const metadata = try backup_manager.createIncrementalBackup(backup_path, parent_id);
+    const data_dir = try makeTempDir(allocator, "data_compress");
+    defer cleanupTempDir(allocator, data_dir);
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
 
-    // Verify metadata
-    try expectEqual(backup_types.BackupType.incremental, metadata.backup_type);
-    try expectEqual(backup_types.CompressionType.none, metadata.compression);
-    try expectEqual(false, metadata.encrypted);
-    try expect(metadata.backup_id != 0);
-    try expect(metadata.size_bytes > 0);
-    try expect(metadata.checksum != 0);
-    try expectEqual(parent_id, metadata.parent_backup_id.?);
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.createNode(&.{ "Doc" });
 
-    // Verify file exists and has correct magic number
-    const file = try std.fs.cwd().openFile(backup_path, .{});
-    defer file.close();
-    var magic_bytes: [4]u8 = undefined;
-    _ = try file.readAll(&magic_bytes);
-    const magic = std.mem.readInt(u32, &magic_bytes, .little);
-    try expectEqual(BACKUP_MAGIC, magic);
+    const backup_dir = try makeTempDir(allocator, "backups_compress");
+    defer cleanupTempDir(allocator, backup_dir);
 
-    // Cleanup
-    std.fs.cwd().deleteFile(backup_path) catch {};
-    std.fs.cwd().deleteDir("./test_backups") catch {};
-}
+    var mgr = try backup.BackupManager.init(allocator, backup_dir, .{ .compression = .zstd }, &store);
+    defer mgr.deinit();
 
-test "SimplifiedBackupManager with compression" {
-    const allocator = testing.allocator;
-    const backup_manager = SimplifiedBackupManager{
-        .allocator = allocator,
-        .config = backup_types.BackupConfig{
-            .compression = .zstd,
-        },
-        .backup_dir = "./test_backups",
-    };
+    const meta = try mgr.createFullBackup();
+    try expectEqual(backup.CompressionType.zstd, meta.compression);
 
-    const backup_path = "./test_backups/test_compressed_backup.gql";
-    const metadata = try backup_manager.createFullBackup(backup_path);
-
-    // Verify compression setting is reflected in metadata
-    try expectEqual(backup_types.CompressionType.zstd, metadata.compression);
-    try expectEqual(backup_types.BackupType.full, metadata.backup_type);
-
-    // Cleanup
-    std.fs.cwd().deleteFile(backup_path) catch {};
-    std.fs.cwd().deleteDir("./test_backups") catch {};
-}
-
-test "BackupHeader extern struct size and alignment" {
-    // Verify the extern struct has expected size and alignment
-    try expect(@sizeOf(BackupHeader) >= 32); // At least header + timestamp + padding
-    try expect(@alignOf(BackupHeader) >= 1);
-
-    // Verify that we can safely cast to bytes
-    const header = BackupHeader{
-        .magic = BACKUP_MAGIC,
-        .version = BACKUP_VERSION,
-        .backup_type = .full,
-        .timestamp = 1234567890,
-        .compression = .none,
-    };
-
-    const header_bytes = @as([*]const u8, @ptrCast(&header))[0..@sizeOf(BackupHeader)];
-    try expect(header_bytes.len == @sizeOf(BackupHeader));
+    const backup_path = try std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ backup_dir, meta.backup_id });
+    defer allocator.free(backup_path);
+    const header = try readBackupHeader(backup_path);
+    try expectEqual(backup.CompressionType.zstd, header.compression);
 }
 
 test "Backup directory creation and cleanup" {
     const allocator = testing.allocator;
-    const backup_manager = SimplifiedBackupManager{
-        .allocator = allocator,
-        .config = backup_types.BackupConfig{},
-        .backup_dir = "./test_nested/deep/backup_dir",
-    };
 
-    const backup_path = "./test_nested/deep/backup_dir/test_nested_backup.gql";
-    const metadata = try backup_manager.createFullBackup(backup_path);
+    const data_dir = try makeTempDir(allocator, "data_nested");
+    defer cleanupTempDir(allocator, data_dir);
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
 
-    // Verify backup was created successfully
-    try expect(metadata.backup_id != 0);
-    try expect(metadata.size_bytes > 0);
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+    _ = try store.createNode(&.{ "Nested" });
 
-    // Verify file exists
-    const file = std.fs.cwd().openFile(backup_path, .{}) catch |err| {
-        // Cleanup and re-throw
-        std.fs.cwd().deleteFile(backup_path) catch {};
-        std.fs.cwd().deleteDir("./test_nested/deep/backup_dir") catch {};
-        std.fs.cwd().deleteDir("./test_nested/deep") catch {};
-        std.fs.cwd().deleteDir("./test_nested") catch {};
-        return err;
-    };
+    const base_dir = try makeTempDir(allocator, "nested_base");
+    defer cleanupTempDir(allocator, base_dir);
+    const backup_dir = try std.fmt.allocPrint(allocator, "{s}/deep/nested/backup_dir", .{base_dir});
+    defer allocator.free(backup_dir);
+
+    var mgr = try backup.BackupManager.init(allocator, backup_dir, .{}, &store);
+    defer mgr.deinit();
+
+    const meta = try mgr.createFullBackup();
+    try expect(meta.size_bytes > 0);
+
+    const backup_path = try std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ backup_dir, meta.backup_id });
+    defer allocator.free(backup_path);
+    const file = try std.fs.cwd().openFile(backup_path, .{});
     file.close();
-
-    // Cleanup
-    std.fs.cwd().deleteFile(backup_path) catch {};
-    std.fs.cwd().deleteDir("./test_nested/deep/backup_dir") catch {};
-    std.fs.cwd().deleteDir("./test_nested/deep") catch {};
-    std.fs.cwd().deleteDir("./test_nested") catch {};
 }

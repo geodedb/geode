@@ -4,6 +4,9 @@ const geode = @import("geode");
 const graph_store = geode.graph_store;
 // Import backup types directly from storage/backup module
 const backup_types = @import("storage/backup");
+const BackupHeader = backup_types.BackupHeader;
+const BACKUP_MAGIC = backup_types.BACKUP_MAGIC;
+const BACKUP_VERSION = backup_types.BACKUP_VERSION;
 // QUIC transport for remote backup operations
 const quic = @import("transport/quic");
 // Import migration module for actual migration operations
@@ -140,6 +143,7 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
     var compress: bool = false;
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
+    var backup_type: backup_types.BackupType = .full;
     // GAP-0137: TLS configuration options
     var tls_config = TlsConfig{};
 
@@ -153,6 +157,7 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "\n" ++
                 "Options:\n" ++
                 "  --output <path>        Backup output file (required)\n" ++
+                "  --type <type>          Backup type: full (default: full)\n" ++
                 "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
                 "  --user <username>      Username for authentication\n" ++
                 "  --password <password>  Password for authentication\n" ++
@@ -169,6 +174,7 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "\n" ++
                 "Examples:\n" ++
                 "  geode backup create --output ./backup.gz --compress\n" ++
+                "  geode backup create --output ./backup.gz --type full\n" ++
                 "  geode backup create --output ./backup.gz --insecure\n" ++
                 "  geode backup create --output ./backup.gz --ca-cert /etc/ssl/ca.crt\n" ++
                 "\n", .{});
@@ -203,6 +209,18 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
             password = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--compress")) {
             compress = true;
+        } else if (std.mem.eql(u8, argv[i], "--type")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --type requires a value\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            i += 1;
+            if (std.mem.eql(u8, argv[i], "full")) {
+                backup_type = .full;
+            } else {
+                std.debug.print("Error: Unknown backup type '{s}'. Valid types: full\n", .{argv[i]});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             tls_config.insecure = true;
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
@@ -240,10 +258,10 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    const backup_type: []const u8 = "full";
+    const backup_type_str: []const u8 = @tagName(backup_type);
 
     // Execute backup
-    try executeBackup(allocator, output.?, backup_type, server, compress, tls_config, username, password);
+    try executeBackup(allocator, output.?, backup_type_str, server, compress, tls_config, username, password);
 
     std.debug.print("Backup created successfully: {s}\n", .{output.?});
     if (compress) {
@@ -308,7 +326,7 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     const dirs_to_scan = if (custom_dir) |cd| &[_][]const u8{cd} else &[_][]const u8{ "./backups", "/tmp" };
 
     // Collect backup files
-    var backup_files = std.ArrayList(BackupFileInfo){};
+    var backup_files: std.ArrayListUnmanaged(BackupFileInfo) = .empty;
     defer {
         for (backup_files.items) |*info| {
             allocator.free(info.name);
@@ -359,7 +377,7 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                     if (info.compression == .none) {
                         if (dir.openFile(entry.name, .{})) |file| {
                             defer file.close();
-                            var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
+                            var header_buf: [@sizeOf(BackupHeader)]u8 align(@alignOf(BackupHeader)) = undefined;
                             // GAP-0221 FIX: Log read errors instead of silent catch 0
                             const bytes_read = file.readAll(&header_buf) catch |err| blk: {
                                 log.debug("Failed to read backup header", &.{
@@ -1567,22 +1585,6 @@ fn executeLocalDirectoryBackup(allocator: std.mem.Allocator, dest: []const u8, m
 
     std.debug.print("Local backup completed: {s}\n", .{dest});
 }
-
-// Constants and helper functions for backup
-const BACKUP_MAGIC: u32 = 0x47454F42; // "GEOB"
-const BACKUP_VERSION: u16 = 4;
-
-const BackupHeader = extern struct {
-    magic: u32,
-    version: u16,
-    backup_type: backup_types.BackupType,
-    timestamp: i64,
-    compression: backup_types.CompressionType,
-    encrypted: bool = false,
-    _padding: [2]u8 = .{0} ** 2,
-    payload_len: u64 = 0,
-    checksum: u64 = 0,
-};
 
 fn parseHexKey(hex_str: []const u8) ![32]u8 {
     if (hex_str.len != 64) return error.InvalidTdeKeyLength;

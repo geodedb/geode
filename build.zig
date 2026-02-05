@@ -829,12 +829,12 @@ pub fn build(b: *std.Build) void {
     const run_cli_tests = b.addRunArtifact(cli_tests);
     test_step.dependOn(&run_cli_tests.step);
 
-    // JSON wire protocol compatibility tests (Phase 6 validation)
-    const json_wire_protocol_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/json_wire_protocol_compatibility.zig"), .target = target, .optimize = optimize }) });
-    json_wire_protocol_tests.root_module.addImport("protobuf", protobuf_mod);
-    json_wire_protocol_tests.root_module.addImport("schema", schema_mod);
-    const run_json_wire_protocol_tests = b.addRunArtifact(json_wire_protocol_tests);
-    test_step.dependOn(&run_json_wire_protocol_tests.step);
+    // Protobuf wire protocol compatibility tests (Phase 6 validation)
+    const protobuf_wire_protocol_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/protobuf_wire_protocol_compatibility.zig"), .target = target, .optimize = optimize }) });
+    protobuf_wire_protocol_tests.root_module.addImport("protobuf", protobuf_mod);
+    protobuf_wire_protocol_tests.root_module.addImport("schema", schema_mod);
+    const run_protobuf_wire_protocol_tests = b.addRunArtifact(protobuf_wire_protocol_tests);
+    test_step.dependOn(&run_protobuf_wire_protocol_tests.step);
 
     // Config integration tests (YAML, TOML, JSON format support)
     const config_integration_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_config_integration.zig"), .target = target, .optimize = optimize }) });

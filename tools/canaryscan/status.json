@@ -37201,7 +37201,7 @@
           "aspect": "WireProtocolCompatibility",
           "status": "TESTED",
           "files": [
-            "../../tests/json_wire_protocol_compatibility.zig"
+            "../../tests/protobuf_wire_protocol_compatibility.zig"
           ],
           "tests": [],
           "benches": [],

@@ -28,6 +28,9 @@ const user_mgmt_cli = @import("user_mgmt_cli.zig");
 const auth_cli_mod = @import("auth_cli.zig");
 const backup_cli = @import("backup_cli.zig");
 const storage_cli = @import("storage_cli.zig");
+const session_cli = @import("session_cli.zig");
+const authn_cli = @import("authn_cli.zig");
+const apikey_cli = @import("apikey_cli.zig");
 
 // Re-export command handlers for main to use
 pub const cmdUser = user_mgmt_cli.cmdUser;
@@ -39,6 +42,7 @@ pub const cmdBackup = backup_cli.cmdBackup;
 pub const cmdRestore = backup_cli.cmdRestore;
 pub const cmdMigrate = backup_cli.cmdMigrate;
 pub const cmdStorage = storage_cli.cmdStorage;
+pub const cmdApiKey = apikey_cli.cmdApiKey;
 
 // Forward declare command handlers that remain in main.zig
 // These will be passed in when calling dispatch()
@@ -132,6 +136,7 @@ pub fn dispatch(
         .{ .name = "auth", .handler = cmdAuth, .description = "Authentication commands" },
         .{ .name = "fle", .handler = cmdFLE, .description = "Field-Level Encryption management" },
         .{ .name = "storage", .handler = cmdStorage, .description = "Storage engine management and verification" },
+        .{ .name = "apikey", .handler = cmdApiKey, .description = "API key management" },
     };
 
     // Parse audit configuration from environment variables
@@ -295,7 +300,15 @@ pub fn dispatch(
         const auth_start_idx = if (subcommand_start > 0) subcommand_start - 1 else 0;
         try cmdAuth(allocator, argv, auth_start_idx);
         std.process.exit(@intFromEnum(ExitCode.success));
-    } else if (std.mem.eql(u8, subcommand, "apikey") or std.mem.eql(u8, subcommand, "session") or std.mem.eql(u8, subcommand, "authn") or std.mem.eql(u8, subcommand, "mtls")) {
+    } else if (std.mem.eql(u8, subcommand, "session")) {
+        // Session management command
+        try session_cli.cmdSession(allocator, argv, subcommand_start + 1);
+        std.process.exit(@intFromEnum(ExitCode.success));
+    } else if (std.mem.eql(u8, subcommand, "authn")) {
+        // Authentication provider configuration command
+        try authn_cli.cmdAuthn(allocator, argv, subcommand_start + 1);
+        std.process.exit(@intFromEnum(ExitCode.success));
+    } else if (std.mem.eql(u8, subcommand, "mtls")) {
         std.debug.print("Error: '{s}' CLI command is not available in the protobuf/QUIC-only client.\n", .{subcommand});
         std.debug.print("Use server-side administration APIs instead.\n", .{});
         std.process.exit(@intFromEnum(ExitCode.usage_error));
