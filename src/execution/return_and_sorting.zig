@@ -151,7 +151,9 @@ pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order:
         }
     }
     if (uses_ordinal) {
-        try result.flags.append(allocator, "E:OrdinalSortKey");
+        // Duplicate flag if result owns memory, otherwise string literal is fine
+        const flag = if (result.owns_value_memory) try allocator.dupe(u8, "E:OrdinalSortKey") else "E:OrdinalSortKey";
+        try result.flags.append(allocator, flag);
     }
 
     if (result.rows.len <= 1) return;

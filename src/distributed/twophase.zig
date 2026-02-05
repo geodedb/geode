@@ -1,40 +1,16 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const quic = @import("transport/quic");
+const protobuf = @import("protobuf");
+const dist_schema = @import("distributed_schema");
+const graph_store = @import("../graph_store.zig");
+const value_convert = @import("value_convert.zig");
 
 const logging = @import("logging");
 const log = logging.scoped("twophase");
 const Attr = logging.Attr;
 
-// CANARY: REQ=REQ-LIB-MIGRATION-JSON-005; FEATURE="External Library Migration"; ASPECT=TwoPhaseCommit; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
-// External JSON library for RFC 8259 compliant encoding in distributed transaction messages
-const json_lib = @import("json");
-
-/// JSON structure for two-phase commit message (without operations for streaming)
-const TwoPhaseMessageHeader = struct {
-    msg_type: []const u8,
-    txn_id: []const u8,
-    coord_id: []const u8,
-    ts: i64,
-};
-
-/// JSON structure for node operations
-const NodeOpJson = struct {
-    type: []const u8,
-    node_id: u64,
-    label: []const u8,
-    props: []const u8,
-};
-
-/// JSON structure for edge operations
-const EdgeOpJson = struct {
-    type: []const u8,
-    edge_id: u64,
-    src: u64,
-    tgt: u64,
-    edge_type: []const u8,
-    props: []const u8,
-};
+const fd = protobuf.fd;
 
 /// Two-Phase Commit transaction states
 pub const TransactionState = enum {
@@ -47,61 +23,34 @@ pub const TransactionState = enum {
     aborted,
 };
 
-/// 2PC message types
-pub const MessageType = enum {
-    prepare,
-    prepare_response,
-    commit,
-    commit_response,
-    abort,
-    abort_response,
-    recovery_request,
-    recovery_response,
-};
-
-/// Participant response to prepare
-pub const PrepareResponse = enum {
-    vote_commit,
-    vote_abort,
-    timeout,
-};
-
-/// Operation types
-pub const Operation = union(enum) {
-    create_node: NodeOp,
-    update_node: NodeOp,
-    delete_node: NodeOp,
-    create_edge: EdgeOp,
-    update_edge: EdgeOp,
-    delete_edge: EdgeOp,
-};
-
-pub const NodeOp = struct {
-    node_id: u64,
-    label: []const u8,
-    properties: []const u8,
-};
-
-pub const EdgeOp = struct {
-    edge_id: u64,
-    source_id: u64,
-    target_id: u64,
-    edge_type: []const u8,
-    properties: []const u8,
-};
+/// 2PC message types (protobuf)
+pub const MessageType = dist_schema.TwoPhaseMessageType;
+/// Participant response to prepare (protobuf)
+pub const PrepareResponse = dist_schema.TwoPhaseVote;
+/// Operation types (protobuf)
+pub const OperationType = dist_schema.OperationType;
+pub const Operation = dist_schema.TwoPhaseOperation;
+pub const NodeOperation = dist_schema.NodeOperation;
+pub const EdgeOperation = dist_schema.EdgeOperation;
 
 /// Undo log entry for rollback
 pub const UndoEntry = struct {
     operation: Operation,
-    old_value: []const u8,
     timestamp: i64,
+
+    pub fn deinit(self: *UndoEntry, allocator: Allocator) void {
+        self.operation.deinit(allocator);
+    }
 };
 
 /// Redo log entry for recovery
 pub const RedoEntry = struct {
     operation: Operation,
-    new_value: []const u8,
     timestamp: i64,
+
+    pub fn deinit(self: *RedoEntry, allocator: Allocator) void {
+        self.operation.deinit(allocator);
+    }
 };
 
 /// Transaction participant information
@@ -130,22 +79,10 @@ pub const Savepoint = struct {
 
 // CANARY: REQ=REQ-DIST-2PC-MSG-001; FEATURE="Two-Phase Commit Message Format"; ASPECT=Protocol; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
 /// 2PC protocol message for network communication
-pub const TwoPhaseMessage = struct {
-    msg_type: MessageType,
-    transaction_id: []const u8,
-    coordinator_id: []const u8,
-    timestamp: i64,
-    operations: []const Operation,
-};
+pub const TwoPhaseMessage = dist_schema.TwoPhaseMessage;
 
 /// Response to a 2PC message
-pub const TwoPhaseResponse = struct {
-    msg_type: MessageType,
-    transaction_id: []const u8,
-    participant_id: []const u8,
-    vote: PrepareResponse,
-    timestamp: i64,
-};
+pub const TwoPhaseResponse = dist_schema.TwoPhaseResponse;
 
 /// Connection pool for 2PC participant connections
 pub const TwoPhaseTransport = struct {
@@ -257,10 +194,6 @@ pub const TwoPhaseTransport = struct {
         }
         const stream = conn.stream.?;
 
-        // Serialize message to JSON
-        const json_msg = try serializeTwoPhaseMessage(self.allocator, msg);
-        defer self.allocator.free(json_msg);
-
         // Check timeout before sending
         const elapsed = std.time.milliTimestamp() - start_time;
         if (elapsed >= @as(i64, @intCast(timeout_ms))) {
@@ -270,41 +203,17 @@ pub const TwoPhaseTransport = struct {
             return error.Timeout;
         }
 
-        // Send message
-        try stream.writeAll(json_msg);
+        // Encode and send message with length-prefixed protobuf framing
+        const frame = try encodeFrame(self.allocator, msg);
+        defer self.allocator.free(frame);
+        try stream.writeAll(frame);
 
-        // Poll for response with timeout
         const remaining_timeout = timeout_ms - @as(u64, @intCast(@max(0, elapsed)));
-        const poll_interval: u64 = @min(100, remaining_timeout);
-        var total_polled: u64 = 0;
+        const response_bytes = try readFrame(self.allocator, &conn.client, stream, remaining_timeout);
+        defer self.allocator.free(response_bytes);
 
-        while (total_polled < remaining_timeout) {
-            try conn.client.poll(@intCast(poll_interval));
-
-            // Try to read response
-            if (stream.readLine(4096)) |response_line| {
-                defer self.allocator.free(response_line);
-                return try parseTwoPhaseResponse(self.allocator, response_line);
-            } else |err| {
-                // Check if it's just waiting for data vs actual error
-                if (err != error.WouldBlock) {
-                    log.err("2PC transport failed to read response", &.{
-                        Attr.string("endpoint", endpoint),
-                        Attr.string("error", @errorName(err)),
-                    });
-                    return error.ReadFailed;
-                }
-            }
-
-            total_polled += poll_interval;
-        }
-
-        // Timeout reached
-        log.warn("2PC transport timeout waiting for response", &.{
-            Attr.string("endpoint", endpoint),
-            Attr.uint("timeout_ms", timeout_ms),
-        });
-        return error.Timeout;
+        var reader: std.Io.Reader = .fixed(response_bytes);
+        return protobuf.decode(TwoPhaseResponse, &reader, self.allocator);
     }
 };
 
@@ -332,207 +241,58 @@ pub fn deinitTransport() void {
     }
 }
 
-/// Serialize TwoPhaseMessage to JSON (newline-terminated) using type-safe encoding
-fn serializeTwoPhaseMessage(allocator: Allocator, msg: TwoPhaseMessage) ![]u8 {
-    var buffer = std.ArrayList(u8).init(allocator);
-    errdefer buffer.deinit();
-
-    const writer = buffer.writer();
-
-    // Use streaming encoder for the message header and operations array
-    var encoder = json_lib.streamingEncoder(allocator, writer, .{});
-    defer encoder.deinit();
-
-    try encoder.beginObject();
-    try encoder.writeKey("msg_type");
-    try encoder.writeString(@tagName(msg.msg_type));
-    try encoder.writeKey("txn_id");
-    try encoder.writeString(msg.transaction_id);
-    try encoder.writeKey("coord_id");
-    try encoder.writeString(msg.coordinator_id);
-    try encoder.writeKey("ts");
-    try encoder.writeInt(msg.timestamp);
-    try encoder.writeKey("ops");
-    try encoder.beginArray();
-
-    // Serialize operations
-    for (msg.operations) |op| {
-        try serializeOperation(&encoder, op);
-    }
-
-    try encoder.endArray();
-    try encoder.endObject();
-    // Note: No finish() needed - streaming encoder writes immediately
-
-    try writer.writeAll("\n");
-    return buffer.toOwnedSlice();
+fn encodeFrame(allocator: Allocator, msg: anytype) ![]u8 {
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 512);
+    defer aw.deinit();
+    try protobuf.encode(&aw.writer, allocator, msg);
+    const body = aw.writer.buffer[0..aw.writer.end];
+    const framed = try allocator.alloc(u8, body.len + 4);
+    std.mem.writeInt(u32, framed[0..4], @intCast(body.len), .big);
+    @memcpy(framed[4..], body);
+    return framed;
 }
 
-/// Serialize a single operation to JSON using streaming encoder
-fn serializeOperation(encoder: anytype, op: Operation) !void {
-    switch (op) {
-        .create_node => |node_op| {
-            try encoder.beginObject();
-            try encoder.writeKey("type");
-            try encoder.writeString("create_node");
-            try encoder.writeKey("node_id");
-            try encoder.writeInt(node_op.node_id);
-            try encoder.writeKey("label");
-            try encoder.writeString(node_op.label);
-            try encoder.writeKey("props");
-            try encoder.writeString(node_op.properties);
-            try encoder.endObject();
-        },
-        .update_node => |node_op| {
-            try encoder.beginObject();
-            try encoder.writeKey("type");
-            try encoder.writeString("update_node");
-            try encoder.writeKey("node_id");
-            try encoder.writeInt(node_op.node_id);
-            try encoder.writeKey("label");
-            try encoder.writeString(node_op.label);
-            try encoder.writeKey("props");
-            try encoder.writeString(node_op.properties);
-            try encoder.endObject();
-        },
-        .delete_node => |node_op| {
-            try encoder.beginObject();
-            try encoder.writeKey("type");
-            try encoder.writeString("delete_node");
-            try encoder.writeKey("node_id");
-            try encoder.writeInt(node_op.node_id);
-            try encoder.writeKey("label");
-            try encoder.writeString(node_op.label);
-            try encoder.writeKey("props");
-            try encoder.writeString(node_op.properties);
-            try encoder.endObject();
-        },
-        .create_edge => |edge_op| {
-            try encoder.beginObject();
-            try encoder.writeKey("type");
-            try encoder.writeString("create_edge");
-            try encoder.writeKey("edge_id");
-            try encoder.writeInt(edge_op.edge_id);
-            try encoder.writeKey("src");
-            try encoder.writeInt(edge_op.source_id);
-            try encoder.writeKey("tgt");
-            try encoder.writeInt(edge_op.target_id);
-            try encoder.writeKey("edge_type");
-            try encoder.writeString(edge_op.edge_type);
-            try encoder.writeKey("props");
-            try encoder.writeString(edge_op.properties);
-            try encoder.endObject();
-        },
-        .update_edge => |edge_op| {
-            try encoder.beginObject();
-            try encoder.writeKey("type");
-            try encoder.writeString("update_edge");
-            try encoder.writeKey("edge_id");
-            try encoder.writeInt(edge_op.edge_id);
-            try encoder.writeKey("src");
-            try encoder.writeInt(edge_op.source_id);
-            try encoder.writeKey("tgt");
-            try encoder.writeInt(edge_op.target_id);
-            try encoder.writeKey("edge_type");
-            try encoder.writeString(edge_op.edge_type);
-            try encoder.writeKey("props");
-            try encoder.writeString(edge_op.properties);
-            try encoder.endObject();
-        },
-        .delete_edge => |edge_op| {
-            try encoder.beginObject();
-            try encoder.writeKey("type");
-            try encoder.writeString("delete_edge");
-            try encoder.writeKey("edge_id");
-            try encoder.writeInt(edge_op.edge_id);
-            try encoder.writeKey("src");
-            try encoder.writeInt(edge_op.source_id);
-            try encoder.writeKey("tgt");
-            try encoder.writeInt(edge_op.target_id);
-            try encoder.writeKey("edge_type");
-            try encoder.writeString(edge_op.edge_type);
-            try encoder.writeKey("props");
-            try encoder.writeString(edge_op.properties);
-            try encoder.endObject();
-        },
+fn readExact(
+    client: *quic.QuicClient,
+    stream: *quic.QuicClientStream,
+    buf: []u8,
+    deadline_ms: i64,
+) !void {
+    var offset: usize = 0;
+    while (offset < buf.len) {
+        if (std.time.milliTimestamp() > deadline_ms) return error.Timeout;
+        const n = stream.read(buf[offset..]) catch |err| {
+            if (err == error.WouldBlock) {
+                client.poll(10) catch {};
+                std.Thread.sleep(5 * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+        if (n == 0) {
+            client.poll(10) catch {};
+            std.Thread.sleep(5 * std.time.ns_per_ms);
+            continue;
+        }
+        offset += n;
     }
 }
 
-/// Parse TwoPhaseResponse from JSON line
-fn parseTwoPhaseResponse(allocator: Allocator, json_line: []const u8) !TwoPhaseResponse {
-    // Trim trailing newline if present
-    const line = std.mem.trimRight(u8, json_line, "\n\r");
-
-    // Simple JSON parsing - extract key fields
-    const msg_type_str = extractJsonString(line, "msg_type") orelse return error.InvalidResponse;
-    const txn_id = extractJsonString(line, "txn_id") orelse return error.InvalidResponse;
-    const participant_id = extractJsonString(line, "participant_id") orelse "unknown";
-    const vote_str = extractJsonString(line, "vote") orelse return error.InvalidResponse;
-    const timestamp = extractJsonInt(line, "ts") orelse std.time.timestamp();
-
-    // Parse message type
-    const msg_type: MessageType = if (std.mem.eql(u8, msg_type_str, "prepare_response"))
-        .prepare_response
-    else if (std.mem.eql(u8, msg_type_str, "commit_response"))
-        .commit_response
-    else if (std.mem.eql(u8, msg_type_str, "abort_response"))
-        .abort_response
-    else
-        return error.InvalidMessageType;
-
-    // Parse vote
-    const vote: PrepareResponse = if (std.mem.eql(u8, vote_str, "vote_commit"))
-        .vote_commit
-    else if (std.mem.eql(u8, vote_str, "vote_abort"))
-        .vote_abort
-    else
-        .timeout;
-
-    // Dupe strings so they outlive the parse
-    const txn_id_copy = try allocator.dupe(u8, txn_id);
-    const participant_id_copy = try allocator.dupe(u8, participant_id);
-
-    return TwoPhaseResponse{
-        .msg_type = msg_type,
-        .transaction_id = txn_id_copy,
-        .participant_id = participant_id_copy,
-        .vote = vote,
-        .timestamp = timestamp,
-    };
-}
-
-/// Extract a string value from JSON by key name
-fn extractJsonString(json: []const u8, key: []const u8) ?[]const u8 {
-    // Find "key":"
-    const search_pattern = std.fmt.allocPrint(std.heap.page_allocator, "\"{s}\":\"", .{key}) catch return null;
-    defer std.heap.page_allocator.free(search_pattern);
-
-    const start_idx = std.mem.indexOf(u8, json, search_pattern) orelse return null;
-    const value_start = start_idx + search_pattern.len;
-
-    // Find closing quote
-    const value_end = std.mem.indexOfPos(u8, json, value_start, "\"") orelse return null;
-
-    return json[value_start..value_end];
-}
-
-/// Extract an integer value from JSON by key name
-fn extractJsonInt(json: []const u8, key: []const u8) ?i64 {
-    // Find "key":
-    const search_pattern = std.fmt.allocPrint(std.heap.page_allocator, "\"{s}\":", .{key}) catch return null;
-    defer std.heap.page_allocator.free(search_pattern);
-
-    const start_idx = std.mem.indexOf(u8, json, search_pattern) orelse return null;
-    const value_start = start_idx + search_pattern.len;
-
-    // Find end of number (comma, }, or whitespace)
-    var value_end = value_start;
-    while (value_end < json.len) : (value_end += 1) {
-        const c = json[value_end];
-        if (c == ',' or c == '}' or c == ' ' or c == '\n') break;
-    }
-
-    return std.fmt.parseInt(i64, json[value_start..value_end], 10) catch null;
+fn readFrame(
+    allocator: Allocator,
+    client: *quic.QuicClient,
+    stream: *quic.QuicClientStream,
+    timeout_ms: u64,
+) ![]u8 {
+    const deadline = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms));
+    var len_buf: [4]u8 = undefined;
+    try readExact(client, stream, len_buf[0..], deadline);
+    const len = std.mem.readInt(u32, &len_buf, .big);
+    if (len == 0) return error.InvalidMessage;
+    const body = try allocator.alloc(u8, len);
+    errdefer allocator.free(body);
+    try readExact(client, stream, body, deadline);
+    return body;
 }
 
 // CANARY: REQ=REQ-DIST-2PC-TRANSPORT-001; FEATURE="Two-Phase Commit Network Transport"; ASPECT=QUICMessaging; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
@@ -594,63 +354,25 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
     const stream = try client.openStream(true);
     defer stream.close();
 
-    // Serialize and send message
-    const json_msg = try serializeTwoPhaseMessage(allocator, msg);
-    defer allocator.free(json_msg);
+    const frame = try encodeFrame(allocator, msg);
+    defer allocator.free(frame);
+    try stream.writeAll(frame);
 
-    try stream.writeAll(json_msg);
-
-    // Poll and read response
-    try client.poll(100);
-
-    const response_line = stream.readLine(4096) catch |err| {
+    const response_bytes = readFrame(allocator, &client, stream, timeout_ms) catch |err| {
         log.err("2PC transport read response failed", &.{
             Attr.string("error", @errorName(err)),
         });
         return error.ReadFailed;
     };
-    defer allocator.free(response_line);
+    defer allocator.free(response_bytes);
 
-    // Parse and return response
-    return try parseTwoPhaseResponse(allocator, response_line);
+    var reader: std.Io.Reader = .fixed(response_bytes);
+    return protobuf.decode(TwoPhaseResponse, &reader, allocator);
 }
 
 /// Apply an undo operation to rollback a change
 fn applyUndoOperation(entry: UndoEntry) !void {
-    // Implementation would reverse the operation
-    // In production, this interacts with the storage layer
-    switch (entry.operation) {
-        .create_node => |op| {
-            // Undo create = delete the node
-            _ = op;
-            // storage.deleteNode(op.node_id);
-        },
-        .update_node => |op| {
-            // Undo update = restore old value
-            _ = op;
-            // storage.updateNode(op.node_id, entry.old_value);
-        },
-        .delete_node => |op| {
-            // Undo delete = recreate the node
-            _ = op;
-            // storage.createNode(op.node_id, entry.old_value);
-        },
-        .create_edge => |op| {
-            // Undo create = delete the edge
-            _ = op;
-            // storage.deleteEdge(op.edge_id);
-        },
-        .update_edge => |op| {
-            // Undo update = restore old value
-            _ = op;
-            // storage.updateEdge(op.edge_id, entry.old_value);
-        },
-        .delete_edge => |op| {
-            // Undo delete = recreate the edge
-            _ = op;
-            // storage.createEdge(op.edge_id, entry.old_value);
-        },
-    }
+    _ = entry;
 }
 
 /// 2PC transaction context
@@ -683,12 +405,16 @@ pub const Transaction = struct {
         for (self.participants.items) |*participant| {
             allocator.free(participant.id);
             allocator.free(participant.endpoint);
-            participant.undo_log.deinit();
-            participant.redo_log.deinit();
+            for (participant.undo_log.items) |*entry| entry.deinit(allocator);
+            participant.undo_log.deinit(allocator);
+            for (participant.redo_log.items) |*entry| entry.deinit(allocator);
+            participant.redo_log.deinit(allocator);
         }
-        self.participants.deinit();
-        self.operations.deinit();
-        self.savepoints.deinit();
+        self.participants.deinit(allocator);
+        for (self.operations.items) |*op| op.deinit(allocator);
+        self.operations.deinit(allocator);
+        for (self.savepoints.items) |sp| allocator.free(sp.name);
+        self.savepoints.deinit(allocator);
         allocator.free(self.id);
         allocator.free(self.coordinator_id);
     }
@@ -741,26 +467,27 @@ pub const Transaction = struct {
 
             // Create and send prepare message
             const msg = TwoPhaseMessage{
-                .msg_type = .prepare,
+                .msg_type = .PREPARE,
                 .transaction_id = self.id,
                 .coordinator_id = self.coordinator_id,
                 .timestamp = std.time.timestamp(),
-                .operations = self.operations.items,
+                .operations = self.operations,
             };
 
             // Send message to participant (async with timeout)
             const response = sendMessage(participant.endpoint, msg, self.timeout_ms) catch |err| {
                 // Network error - treat as abort vote
-                participant.prepare_response = .timeout;
+                participant.prepare_response = .VOTE_TIMEOUT;
                 all_voted_commit = false;
                 _ = err;
                 continue;
             };
+            defer response.deinit(self.allocator);
 
             participant.prepare_response = response.vote;
             participant.last_message_time = std.time.timestamp();
 
-            if (response.vote != .vote_commit) {
+            if (response.vote != .VOTE_COMMIT) {
                 all_voted_commit = false;
             }
         }
@@ -788,23 +515,27 @@ pub const Transaction = struct {
             participant.state = .committing;
 
             // Create and send commit message
+            var ops = std.ArrayList(Operation).init(self.allocator);
+            defer ops.deinit(self.allocator);
             const msg = TwoPhaseMessage{
-                .msg_type = .commit,
+                .msg_type = .COMMIT,
                 .transaction_id = self.id,
                 .coordinator_id = self.coordinator_id,
                 .timestamp = std.time.timestamp(),
-                .operations = &.{},
+                .operations = ops,
             };
 
             // Send commit message (with retry for reliability)
             var retries: u32 = 0;
             const max_retries: u32 = 3;
             while (retries < max_retries) : (retries += 1) {
-                _ = sendMessage(participant.endpoint, msg, self.timeout_ms) catch {
+                if (sendMessage(participant.endpoint, msg, self.timeout_ms)) |resp| {
+                    resp.deinit(self.allocator);
+                } else |_| {
                     // Retry after exponential backoff
                     std.time.sleep(@as(u64, 100) << @intCast(retries) * std.time.ns_per_ms);
                     continue;
-                };
+                }
                 break;
             }
 
@@ -824,18 +555,22 @@ pub const Transaction = struct {
             participant.state = .aborting;
 
             // Create and send abort message
+            var ops = std.ArrayList(Operation).init(self.allocator);
+            defer ops.deinit(self.allocator);
             const msg = TwoPhaseMessage{
-                .msg_type = .abort,
+                .msg_type = .ABORT,
                 .transaction_id = self.id,
                 .coordinator_id = self.coordinator_id,
                 .timestamp = std.time.timestamp(),
-                .operations = &.{},
+                .operations = ops,
             };
 
             // Send abort message (best effort - proceed even if some fail)
-            _ = sendMessage(participant.endpoint, msg, self.timeout_ms) catch {
+            if (sendMessage(participant.endpoint, msg, self.timeout_ms)) |resp| {
+                resp.deinit(self.allocator);
+            } else |_| {
                 // Log failure but continue aborting other participants
-            };
+            }
 
             // Apply undo log to rollback changes
             while (participant.undo_log.popOrNull()) |undo_entry| {
@@ -865,12 +600,13 @@ pub const Coordinator = struct {
     log_writer: ?*LogWriter,
 
     pub const LogWriter = struct {
+        allocator: Allocator,
         file: std.fs.File,
 
         pub fn writeEntry(self: *LogWriter, entry: LogEntry) !void {
-            const json = try std.json.stringify(entry, .{}, self.file.writer());
-            try self.file.writer().writeByte('\n');
-            _ = json;
+            const framed = try encodeFrame(self.allocator, entry);
+            defer self.allocator.free(framed);
+            try self.file.writeAll(framed);
         }
     };
 
@@ -879,9 +615,20 @@ pub const Coordinator = struct {
         transaction_id: []const u8,
         event_type: LogEventType,
         data: []const u8,
+
+        pub const _desc_table = .{
+            .timestamp = fd(1, .{ .scalar = .int64 }),
+            .transaction_id = fd(2, .{ .scalar = .string }),
+            .event_type = fd(3, .{ .scalar = .@"enum" }),
+            .data = fd(4, .{ .scalar = .bytes }),
+        };
+
+        pub fn deinit(self: *LogEntry, allocator: Allocator) void {
+            protobuf.deinit(allocator, self);
+        }
     };
 
-    pub const LogEventType = enum {
+    pub const LogEventType = enum(i32) {
         transaction_start,
         prepare_sent,
         vote_received,
@@ -964,30 +711,40 @@ pub const Coordinator = struct {
 
         var buf_reader = std.io.bufferedReader(file.reader());
         var reader = buf_reader.reader();
+        while (true) {
+            var len_buf: [4]u8 = undefined;
+            const len_read = reader.readAll(&len_buf) catch |err| switch (err) {
+                error.EndOfStream => break,
+                else => return err,
+            };
+            if (len_read == 0) break;
+            if (len_read < 4) return error.UnexpectedEndOfStream;
 
-        var line_buf: [4096]u8 = undefined;
-        while (try reader.readUntilDelimiterOrEof(&line_buf, '\n')) |line| {
-            // Parse log entry
-            const entry = try std.json.parseFromSlice(LogEntry, self.allocator, line, .{});
-            defer entry.deinit();
+            const msg_len = std.mem.readInt(u32, &len_buf, .big);
+            var msg_buf = try self.allocator.alloc(u8, msg_len);
+            defer self.allocator.free(msg_buf);
+            const msg_read = try reader.readAll(msg_buf);
+            if (msg_read < msg_len) return error.UnexpectedEndOfStream;
+
+            var msg_reader: std.Io.Reader = .fixed(msg_buf);
+            var entry = try protobuf.decode(LogEntry, &msg_reader, self.allocator);
+            defer entry.deinit(self.allocator);
 
             // Recover transaction state
-            switch (entry.value.event_type) {
+            switch (entry.event_type) {
                 .transaction_start => {
-                    _ = try self.beginTransaction(entry.value.transaction_id);
+                    _ = try self.beginTransaction(entry.transaction_id);
                 },
                 .commit_decision => {
-                    if (self.transactions.getPtr(entry.value.transaction_id)) |txn| {
+                    if (self.transactions.getPtr(entry.transaction_id)) |txn| {
                         if (txn.state != .committed) {
-                            // Need to complete commit
                             try txn.commit();
                         }
                     }
                 },
                 .abort_decision => {
-                    if (self.transactions.getPtr(entry.value.transaction_id)) |txn| {
+                    if (self.transactions.getPtr(entry.transaction_id)) |txn| {
                         if (txn.state != .aborted) {
-                            // Need to complete abort
                             try txn.abort();
                         }
                     }
@@ -998,56 +755,6 @@ pub const Coordinator = struct {
     }
 };
 
-// CANARY: REQ=REQ-2PC-STORAGE-001; FEATURE="2PC Storage Interface"; ASPECT=Interface; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-10
-/// Storage interface for 2PC operations - abstracts the underlying storage mechanism
-pub const StorageInterface = struct {
-    ptr: *anyopaque,
-    vtable: *const VTable,
-
-    pub const VTable = struct {
-        createNode: *const fn (ptr: *anyopaque, node_id: u64, label: []const u8, properties: []const u8) anyerror!void,
-        updateNode: *const fn (ptr: *anyopaque, node_id: u64, properties: []const u8) anyerror!void,
-        deleteNode: *const fn (ptr: *anyopaque, node_id: u64) anyerror!void,
-        createEdge: *const fn (ptr: *anyopaque, edge_id: u64, source: u64, target: u64, edge_type: []const u8, properties: []const u8) anyerror!void,
-        updateEdge: *const fn (ptr: *anyopaque, edge_id: u64, properties: []const u8) anyerror!void,
-        deleteEdge: *const fn (ptr: *anyopaque, edge_id: u64) anyerror!void,
-        getNodeProperties: *const fn (ptr: *anyopaque, node_id: u64) anyerror![]const u8,
-        getEdgeProperties: *const fn (ptr: *anyopaque, edge_id: u64) anyerror![]const u8,
-    };
-
-    pub fn createNode(self: StorageInterface, node_id: u64, label: []const u8, properties: []const u8) !void {
-        return self.vtable.createNode(self.ptr, node_id, label, properties);
-    }
-
-    pub fn updateNode(self: StorageInterface, node_id: u64, properties: []const u8) !void {
-        return self.vtable.updateNode(self.ptr, node_id, properties);
-    }
-
-    pub fn deleteNode(self: StorageInterface, node_id: u64) !void {
-        return self.vtable.deleteNode(self.ptr, node_id);
-    }
-
-    pub fn createEdge(self: StorageInterface, edge_id: u64, source: u64, target: u64, edge_type: []const u8, properties: []const u8) !void {
-        return self.vtable.createEdge(self.ptr, edge_id, source, target, edge_type, properties);
-    }
-
-    pub fn updateEdge(self: StorageInterface, edge_id: u64, properties: []const u8) !void {
-        return self.vtable.updateEdge(self.ptr, edge_id, properties);
-    }
-
-    pub fn deleteEdge(self: StorageInterface, edge_id: u64) !void {
-        return self.vtable.deleteEdge(self.ptr, edge_id);
-    }
-
-    pub fn getNodeProperties(self: StorageInterface, node_id: u64) ![]const u8 {
-        return self.vtable.getNodeProperties(self.ptr, node_id);
-    }
-
-    pub fn getEdgeProperties(self: StorageInterface, edge_id: u64) ![]const u8 {
-        return self.vtable.getEdgeProperties(self.ptr, edge_id);
-    }
-};
-
 /// Two-Phase Commit Participant
 // CANARY: REQ=REQ-2PC-PARTICIPANT-001; FEATURE="2PC Participant Node"; ASPECT=StorageOps; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-10
 pub const ParticipantNode = struct {
@@ -1055,7 +762,7 @@ pub const ParticipantNode = struct {
     node_id: []const u8,
     transactions: std.StringHashMap(LocalTransaction),
     resource_manager: *ResourceManager,
-    storage: ?StorageInterface,
+    store: ?*graph_store.GraphStore,
 
     pub const LocalTransaction = struct {
         id: []const u8,

@@ -3,6 +3,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const raft_consensus = @import("raft_consensus.zig");
+const protobuf = @import("protobuf");
+const dist_schema = @import("distributed_schema");
+const schema = @import("schema");
+const graph_store = @import("../graph_store.zig");
+const value_convert = @import("value_convert.zig");
 
 const logging = @import("logging");
 const log = logging.scoped("txn_coordinator");
@@ -19,43 +24,27 @@ pub const PreparedTxn = struct {
 
 /// Lock information
 pub const Lock = struct {
-    key: []const u8,
+    resource_id: u64,
     mode: enum { shared, exclusive },
     holder_xid: u64,
-};
-
-/// Write operation type for 2PC write sets
-pub const WriteOp = struct {
-    op_type: enum { put, delete },
-    key: []const u8,
-    value: ?[]const u8, // null for delete operations
 };
 
 /// Distributed Transaction Coordinator with durable storage integration
 /// CANARY: REQ=REQ-GQL-2PC-APPLY-001; FEATURE="2PC Write Set Application"; ASPECT=2PC; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-12
 pub const TxnCoordinator = struct {
     allocator: Allocator,
+    store: *graph_store.GraphStore,
     prepared_txns: std.AutoHashMap(u64, PreparedTxn),
-    lock_table: std.StringHashMap(Lock),
+    lock_table: std.AutoHashMap(u64, Lock),
     timeout_ms: u64 = 10_000, // Default 10 seconds
-    // Key-value store for committed data (in production, this integrates with storage engine)
-    committed_store: std.StringHashMap([]const u8),
-    // Callback for external storage integration (optional)
-    storage_callback: ?*const fn ([]const WriteOp) anyerror!void = null,
 
-    pub fn init(allocator: Allocator) !TxnCoordinator {
+    pub fn init(allocator: Allocator, store: *graph_store.GraphStore) !TxnCoordinator {
         return TxnCoordinator{
             .allocator = allocator,
+            .store = store,
             .prepared_txns = std.AutoHashMap(u64, PreparedTxn).init(allocator),
-            .lock_table = std.StringHashMap(Lock).init(allocator),
-            .committed_store = std.StringHashMap([]const u8).init(allocator),
-            .storage_callback = null,
+            .lock_table = std.AutoHashMap(u64, Lock).init(allocator),
         };
-    }
-
-    /// Set external storage callback for production integration
-    pub fn setStorageCallback(self: *TxnCoordinator, callback: *const fn ([]const WriteOp) anyerror!void) void {
-        self.storage_callback = callback;
     }
 
     pub fn deinit(self: *TxnCoordinator) void {
@@ -67,39 +56,33 @@ pub const TxnCoordinator = struct {
         }
         self.prepared_txns.deinit();
 
-        var lock_it = self.lock_table.iterator();
-        while (lock_it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-        }
         self.lock_table.deinit();
-
-        // Clean up committed store
-        var store_it = self.committed_store.iterator();
-        while (store_it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
-        }
-        self.committed_store.deinit();
-    }
-
-    /// Get a committed value (for testing/verification)
-    pub fn getCommittedValue(self: *TxnCoordinator, key: []const u8) ?[]const u8 {
-        return self.committed_store.get(key);
     }
 
     /// Handle txn_prepare command from Raft
     pub fn handlePrepare(self: *TxnCoordinator, prepare: raft_consensus.TxnPrepare) !bool {
-        // Check for conflicts
-        const keys = try self.extractKeys(prepare.write_set);
-        defer self.allocator.free(keys);
+        // Decode write set as protobuf TwoPhaseMessage
+        var reader: std.Io.Reader = .fixed(prepare.write_set);
+        var msg = protobuf.decode(dist_schema.TwoPhaseMessage, &reader, self.allocator) catch |err| {
+            log.warn("Invalid write set payload", &.{
+                Attr.uint("xid", prepare.xid),
+                Attr.string("error", @errorName(err)),
+            });
+            return false;
+        };
+        defer msg.deinit(self.allocator);
 
-        for (keys) |key| {
-            if (self.lock_table.get(key)) |existing_lock| {
+        // Check for conflicts
+        const resource_ids = try self.extractResourceIds(msg.operations.items);
+        defer self.allocator.free(resource_ids);
+
+        for (resource_ids) |resource_id| {
+            if (self.lock_table.get(resource_id)) |existing_lock| {
                 if (existing_lock.holder_xid != prepare.xid) {
                     log.debug("Transaction conflicts on key", &.{
                         Attr.uint("xid", prepare.xid),
                         Attr.uint("holder_xid", existing_lock.holder_xid),
-                        Attr.string("key", key),
+                        Attr.uint("resource_id", resource_id),
                     });
                     return false; // Conflict - vote abort
                 }
@@ -108,14 +91,14 @@ pub const TxnCoordinator = struct {
 
         // No conflicts, acquire locks and prepare
         var locks = try std.ArrayList(Lock).initCapacity(self.allocator, 0);
-        for (keys) |key| {
+        for (resource_ids) |resource_id| {
             const lock = Lock{
-                .key = try self.allocator.dupe(u8, key),
+                .resource_id = resource_id,
                 .mode = .exclusive,
                 .holder_xid = prepare.xid,
             };
             try locks.append(self.allocator, lock);
-            try self.lock_table.put(lock.key, lock);
+            try self.lock_table.put(resource_id, lock);
         }
 
         const prepared = PreparedTxn{
@@ -145,8 +128,7 @@ pub const TxnCoordinator = struct {
         defer {
             // Release locks
             for (prepared.locks.items) |lock| {
-                _ = self.lock_table.remove(lock.key);
-                self.allocator.free(lock.key);
+                _ = self.lock_table.remove(lock.resource_id);
             }
             prepared.locks.deinit();
 
@@ -192,235 +174,344 @@ pub const TxnCoordinator = struct {
         }
     }
 
-    fn extractKeys(self: *TxnCoordinator, write_set: []const u8) ![][]const u8 {
-        // Simple extraction - in production would parse the write_set format
-        var keys = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
-
-        // For now, assume write_set contains newline-separated keys
-        var iter = std.mem.tokenizeScalar(u8, write_set, '\n');
-        while (iter.next()) |key| {
-            try keys.append(self.allocator, key);
+    fn extractResourceIds(self: *TxnCoordinator, operations: []const dist_schema.TwoPhaseOperation) ![]u64 {
+        var ids = try std.ArrayList(u64).initCapacity(self.allocator, operations.len);
+        for (operations) |op| {
+            switch (op) {
+                .node_op => |node_op| try ids.append(self.allocator, node_op.node_id),
+                .edge_op => |edge_op| try ids.append(self.allocator, edge_op.edge_id),
+            }
         }
-
-        return keys.toOwnedSlice(self.allocator);
+        return ids.toOwnedSlice(self.allocator);
     }
 
-    /// Parse and apply write set operations to storage
-    /// Write set format: "OP:key=value\n" where OP is PUT or DEL
-    /// Example: "PUT:user:1=Alice\nPUT:user:2=Bob\nDEL:user:3=\n"
-    /// For backward compatibility, plain "key" lines are treated as PUT:key=key
+    /// Parse and apply write set operations to GraphStore.
+    /// Write set payload is a protobuf-encoded TwoPhaseMessage.
     /// CANARY: REQ=REQ-GQL-2PC-APPLY-002; FEATURE="Write Set Parser and Applicator"; ASPECT=2PC; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-12
     fn applyWriteSet(self: *TxnCoordinator, write_set: []const u8) !void {
-        // Parse write set into operations
-        var ops = std.ArrayList(WriteOp).init(self.allocator);
-        defer ops.deinit();
+        var reader: std.Io.Reader = .fixed(write_set);
+        var msg = protobuf.decode(dist_schema.TwoPhaseMessage, &reader, self.allocator) catch |err| {
+            log.err("Failed to decode write set", &.{
+                Attr.string("error", @errorName(err)),
+            });
+            return err;
+        };
+        defer msg.deinit(self.allocator);
 
-        var lines = std.mem.tokenizeScalar(u8, write_set, '\n');
-        while (lines.next()) |line| {
-            if (line.len == 0) continue;
-
-            // Parse operation format: "OP:key=value" or legacy "key" format
-            if (std.mem.startsWith(u8, line, "PUT:")) {
-                const rest = line[4..];
-                if (std.mem.indexOf(u8, rest, "=")) |eq_pos| {
-                    try ops.append(self.allocator, WriteOp{
-                        .op_type = .put,
-                        .key = rest[0..eq_pos],
-                        .value = rest[eq_pos + 1 ..],
-                    });
-                }
-            } else if (std.mem.startsWith(u8, line, "DEL:")) {
-                const rest = line[4..];
-                const key = if (std.mem.indexOf(u8, rest, "=")) |eq_pos| rest[0..eq_pos] else rest;
-                try ops.append(self.allocator, WriteOp{
-                    .op_type = .delete,
-                    .key = key,
-                    .value = null,
-                });
-            } else {
-                // Legacy format: treat plain key as PUT:key=key (for backward compatibility)
-                try ops.append(self.allocator, WriteOp{
-                    .op_type = .put,
-                    .key = line,
-                    .value = line, // Use key as value for legacy format
-                });
-            }
-        }
-
-        // Call external storage callback if configured
-        if (self.storage_callback) |callback| {
-            try callback(ops.items);
-        }
-
-        // Apply to internal committed store
-        for (ops.items) |op| {
-            switch (op.op_type) {
-                .put => {
-                    // Remove old value if exists
-                    if (self.committed_store.fetchRemove(op.key)) |old| {
-                        self.allocator.free(old.key);
-                        self.allocator.free(old.value);
-                    }
-                    // Insert new value
-                    const key_copy = try self.allocator.dupe(u8, op.key);
-                    const val_copy = try self.allocator.dupe(u8, op.value orelse "");
-                    try self.committed_store.put(key_copy, val_copy);
-                    log.debug("2PC applied PUT", &.{
-                        Attr.string("key", op.key),
-                        Attr.string("value", op.value orelse ""),
-                    });
-                },
-                .delete => {
-                    if (self.committed_store.fetchRemove(op.key)) |old| {
-                        self.allocator.free(old.key);
-                        self.allocator.free(old.value);
-                        log.debug("2PC applied DEL", &.{
-                            Attr.string("key", op.key),
-                        });
-                    }
-                },
-            }
+        for (msg.operations.items) |op| {
+            try self.applyOperation(op);
         }
 
         log.info("2PC applied operations from write set", &.{
-            Attr.uint("operation_count", ops.items.len),
+            Attr.uint("operation_count", msg.operations.items.len),
         });
+    }
+
+    fn applyOperation(self: *TxnCoordinator, op: dist_schema.TwoPhaseOperation) !void {
+        switch (op) {
+            .node_op => |node_op| {
+                const graph_name = if (node_op.graph_name.len > 0) node_op.graph_name else graph_store.DEFAULT_GRAPH_NAME;
+                const labels = [_][]const u8{node_op.label};
+                switch (node_op.op_type) {
+                    .CREATE => {
+                        if (self.store.getNodePtr(node_op.node_id) == null) {
+                            self.store.createNodeWithId(node_op.node_id, &labels, graph_name) catch |err| switch (err) {
+                                error.NodeAlreadyExists => {},
+                                else => return err,
+                            };
+                        } else if (node_op.label.len > 0) {
+                            self.store.addNodeLabel(node_op.node_id, node_op.label) catch {};
+                        }
+                        try value_convert.applyMapEntriesToNode(self.store, self.allocator, node_op.node_id, node_op.properties.items);
+                    },
+                    .UPDATE => {
+                        if (self.store.getNodePtr(node_op.node_id) != null) {
+                            try value_convert.applyMapEntriesToNode(self.store, self.allocator, node_op.node_id, node_op.properties.items);
+                        }
+                    },
+                    .DELETE => {
+                        self.store.deleteNode(node_op.node_id);
+                    },
+                    else => {},
+                }
+            },
+            .edge_op => |edge_op| {
+                const graph_name = if (edge_op.graph_name.len > 0) edge_op.graph_name else graph_store.DEFAULT_GRAPH_NAME;
+                switch (edge_op.op_type) {
+                    .CREATE => {
+                        if (self.store.getEdgePtr(edge_op.edge_id) == null) {
+                            self.store.createEdgeWithId(edge_op.edge_id, edge_op.source_id, edge_op.target_id, edge_op.edge_type, graph_name) catch |err| switch (err) {
+                                error.EdgeAlreadyExists => {},
+                                else => return err,
+                            };
+                        }
+                        try value_convert.applyMapEntriesToEdge(self.store, self.allocator, edge_op.edge_id, edge_op.properties.items);
+                    },
+                    .UPDATE => {
+                        if (self.store.getEdgePtr(edge_op.edge_id) != null) {
+                            try value_convert.applyMapEntriesToEdge(self.store, self.allocator, edge_op.edge_id, edge_op.properties.items);
+                        }
+                    },
+                    .DELETE => {
+                        self.store.deleteEdge(edge_op.edge_id);
+                    },
+                    else => {},
+                }
+            },
+        }
     }
 };
 
 // CANARY: REQ=REQ-GQL-2PC-003; FEATURE="2PC Idempotence"; ASPECT=2PC; STATUS=TESTED; TEST=TestCANARY_2PC_Idempotent; OWNER=distributed; UPDATED=2025-09-29
 
+fn makeStringValue(allocator: Allocator, text: []const u8) !schema.Value {
+    return .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, text), .kind = .STRING } } };
+}
+
+fn encodeWriteSet(allocator: Allocator, msg: *dist_schema.TwoPhaseMessage) ![]u8 {
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 512);
+    defer aw.deinit();
+    try protobuf.encode(&aw.writer, allocator, msg.*);
+    const body = aw.writer.buffer[0..aw.writer.end];
+    return allocator.dupe(u8, body);
+}
+
 test "TestCANARY_2PC_Coordinator basic prepare and commit" {
     const allocator = std.testing.allocator;
 
-    var coordinator = try TxnCoordinator.init(allocator);
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+
+    var coordinator = try TxnCoordinator.init(allocator, &store);
     defer coordinator.deinit();
 
-    // Prepare transaction
+    var props = std.ArrayList(schema.MapEntry).init(allocator);
+    try props.append(allocator, .{
+        .key = try allocator.dupe(u8, "name"),
+        .value = try makeStringValue(allocator, "Alice"),
+    });
+
+    const op = dist_schema.TwoPhaseOperation{
+        .node_op = .{
+            .op_type = .CREATE,
+            .node_id = 1,
+            .label = try allocator.dupe(u8, "User"),
+            .graph_name = try allocator.dupe(u8, graph_store.DEFAULT_GRAPH_NAME),
+            .properties = props,
+        },
+    };
+
+    var ops = std.ArrayList(dist_schema.TwoPhaseOperation).init(allocator);
+    try ops.append(allocator, op);
+
+    var msg = dist_schema.TwoPhaseMessage{
+        .msg_type = .PREPARE,
+        .transaction_id = try allocator.dupe(u8, "txn-1"),
+        .coordinator_id = try allocator.dupe(u8, "coord"),
+        .timestamp = std.time.milliTimestamp(),
+        .operations = ops,
+    };
+
+    const write_set = try encodeWriteSet(allocator, &msg);
+    defer allocator.free(write_set);
+    msg.deinit(allocator);
+
     const prepare = raft_consensus.TxnPrepare{
         .xid = 1,
         .shard_id = 0,
-        .write_set = "key1\nkey2\nkey3",
+        .write_set = write_set,
         .metadata = "test",
     };
 
     const can_commit = try coordinator.handlePrepare(prepare);
     try std.testing.expect(can_commit);
 
-    // Verify prepared state
-    try std.testing.expect(coordinator.prepared_txns.contains(1));
+    try coordinator.handleDecide(.{ .xid = 1, .commit = true });
 
-    // Commit transaction
-    const decide = raft_consensus.TxnDecide{
-        .xid = 1,
-        .commit = true,
-    };
-
-    try coordinator.handleDecide(decide);
-
-    // Verify cleaned up
-    try std.testing.expect(!coordinator.prepared_txns.contains(1));
+    const node = store.getNodePtr(1);
+    try std.testing.expect(node != null);
+    const name_prop = store.getNodeProperty(1, "name");
+    try std.testing.expect(name_prop != null);
+    try std.testing.expectEqualStrings("Alice", name_prop.?.String);
 }
 
 test "TestCANARY_2PC_Idempotent repeated prepare" {
     const allocator = std.testing.allocator;
 
-    var coordinator = try TxnCoordinator.init(allocator);
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+
+    var coordinator = try TxnCoordinator.init(allocator, &store);
     defer coordinator.deinit();
 
-    const prepare = raft_consensus.TxnPrepare{
+    var ops = std.ArrayList(dist_schema.TwoPhaseOperation).init(allocator);
+    try ops.append(allocator, .{
+        .node_op = .{
+            .op_type = .CREATE,
+            .node_id = 42,
+            .label = try allocator.dupe(u8, "LockNode"),
+            .graph_name = try allocator.dupe(u8, graph_store.DEFAULT_GRAPH_NAME),
+            .properties = std.ArrayList(schema.MapEntry).init(allocator),
+        },
+    });
+
+    var msg = dist_schema.TwoPhaseMessage{
+        .msg_type = .PREPARE,
+        .transaction_id = try allocator.dupe(u8, "txn-1"),
+        .coordinator_id = try allocator.dupe(u8, "coord"),
+        .timestamp = std.time.milliTimestamp(),
+        .operations = ops,
+    };
+    const write_set = try encodeWriteSet(allocator, &msg);
+    defer allocator.free(write_set);
+    msg.deinit(allocator);
+
+    const prepare1 = raft_consensus.TxnPrepare{
         .xid = 1,
         .shard_id = 0,
-        .write_set = "key1",
+        .write_set = write_set,
         .metadata = "test",
     };
+    try std.testing.expect(try coordinator.handlePrepare(prepare1));
 
-    // First prepare
-    const result1 = try coordinator.handlePrepare(prepare);
-    try std.testing.expect(result1);
-
-    // Repeated prepare should handle gracefully
-    // In production, this would return "already prepared"
-    // For now, it will conflict on locks
     const prepare2 = raft_consensus.TxnPrepare{
         .xid = 2,
         .shard_id = 0,
-        .write_set = "key1", // Same key - should conflict
+        .write_set = write_set,
         .metadata = "test",
     };
-
-    const result2 = try coordinator.handlePrepare(prepare2);
-    try std.testing.expect(!result2); // Should fail due to lock conflict
+    try std.testing.expect(!try coordinator.handlePrepare(prepare2));
 }
 
-// CANARY: REQ=REQ-GQL-2PC-APPLY-003; FEATURE="2PC Write Set Persistence Test"; ASPECT=2PC; STATUS=TESTED; OWNER=distributed; UPDATED=2026-01-12
 test "TestCANARY_2PC_WriteSetApplied verifies data is persisted" {
     const allocator = std.testing.allocator;
 
-    var coordinator = try TxnCoordinator.init(allocator);
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+
+    var coordinator = try TxnCoordinator.init(allocator, &store);
     defer coordinator.deinit();
 
-    // Prepare transaction with structured write set
+    var props1 = std.ArrayList(schema.MapEntry).init(allocator);
+    try props1.append(allocator, .{
+        .key = try allocator.dupe(u8, "name"),
+        .value = try makeStringValue(allocator, "Alice Smith"),
+    });
+    var props2 = std.ArrayList(schema.MapEntry).init(allocator);
+    try props2.append(allocator, .{
+        .key = try allocator.dupe(u8, "name"),
+        .value = try makeStringValue(allocator, "Bob Jones"),
+    });
+
+    var ops = std.ArrayList(dist_schema.TwoPhaseOperation).init(allocator);
+    try ops.append(allocator, .{
+        .node_op = .{
+            .op_type = .CREATE,
+            .node_id = 10,
+            .label = try allocator.dupe(u8, "User"),
+            .graph_name = try allocator.dupe(u8, graph_store.DEFAULT_GRAPH_NAME),
+            .properties = props1,
+        },
+    });
+    try ops.append(allocator, .{
+        .node_op = .{
+            .op_type = .CREATE,
+            .node_id = 11,
+            .label = try allocator.dupe(u8, "User"),
+            .graph_name = try allocator.dupe(u8, graph_store.DEFAULT_GRAPH_NAME),
+            .properties = props2,
+        },
+    });
+
+    var msg = dist_schema.TwoPhaseMessage{
+        .msg_type = .PREPARE,
+        .transaction_id = try allocator.dupe(u8, "txn-100"),
+        .coordinator_id = try allocator.dupe(u8, "coord"),
+        .timestamp = std.time.milliTimestamp(),
+        .operations = ops,
+    };
+    const write_set = try encodeWriteSet(allocator, &msg);
+    defer allocator.free(write_set);
+    msg.deinit(allocator);
+
     const prepare = raft_consensus.TxnPrepare{
         .xid = 100,
         .shard_id = 0,
-        .write_set = "PUT:user:alice=Alice Smith\nPUT:user:bob=Bob Jones\nPUT:counter=42",
+        .write_set = write_set,
         .metadata = "test_persistence",
     };
-
-    const can_commit = try coordinator.handlePrepare(prepare);
-    try std.testing.expect(can_commit);
-
-    // Commit transaction
+    try std.testing.expect(try coordinator.handlePrepare(prepare));
     try coordinator.handleDecide(.{ .xid = 100, .commit = true });
 
-    // Verify data was actually persisted
-    const alice = coordinator.getCommittedValue("user:alice");
+    const alice = store.getNodeProperty(10, "name");
     try std.testing.expect(alice != null);
-    try std.testing.expectEqualStrings("Alice Smith", alice.?);
+    try std.testing.expectEqualStrings("Alice Smith", alice.?.String);
 
-    const bob = coordinator.getCommittedValue("user:bob");
+    const bob = store.getNodeProperty(11, "name");
     try std.testing.expect(bob != null);
-    try std.testing.expectEqualStrings("Bob Jones", bob.?);
-
-    const counter = coordinator.getCommittedValue("counter");
-    try std.testing.expect(counter != null);
-    try std.testing.expectEqualStrings("42", counter.?);
-
-    // Verify non-existent key returns null
-    const missing = coordinator.getCommittedValue("nonexistent");
-    try std.testing.expect(missing == null);
+    try std.testing.expectEqualStrings("Bob Jones", bob.?.String);
 }
 
 test "TestCANARY_2PC_WriteSetDelete verifies delete operations" {
     const allocator = std.testing.allocator;
 
-    var coordinator = try TxnCoordinator.init(allocator);
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+
+    var coordinator = try TxnCoordinator.init(allocator, &store);
     defer coordinator.deinit();
 
-    // First transaction: insert data
-    const prepare1 = raft_consensus.TxnPrepare{
-        .xid = 200,
-        .shard_id = 0,
-        .write_set = "PUT:temp:data=temporary",
-        .metadata = "insert",
+    const props = std.ArrayList(schema.MapEntry).init(allocator);
+
+    var ops1 = std.ArrayList(dist_schema.TwoPhaseOperation).init(allocator);
+    try ops1.append(allocator, .{
+        .node_op = .{
+            .op_type = .CREATE,
+            .node_id = 55,
+            .label = try allocator.dupe(u8, "Temp"),
+            .graph_name = try allocator.dupe(u8, graph_store.DEFAULT_GRAPH_NAME),
+            .properties = props,
+        },
+    });
+
+    var msg1 = dist_schema.TwoPhaseMessage{
+        .msg_type = .PREPARE,
+        .transaction_id = try allocator.dupe(u8, "txn-200"),
+        .coordinator_id = try allocator.dupe(u8, "coord"),
+        .timestamp = std.time.milliTimestamp(),
+        .operations = ops1,
     };
-    _ = try coordinator.handlePrepare(prepare1);
+    const write_set1 = try encodeWriteSet(allocator, &msg1);
+    defer allocator.free(write_set1);
+    msg1.deinit(allocator);
+
+    _ = try coordinator.handlePrepare(.{ .xid = 200, .shard_id = 0, .write_set = write_set1, .metadata = "insert" });
     try coordinator.handleDecide(.{ .xid = 200, .commit = true });
+    try std.testing.expect(store.getNodePtr(55) != null);
 
-    // Verify data exists
-    try std.testing.expect(coordinator.getCommittedValue("temp:data") != null);
+    var ops2 = std.ArrayList(dist_schema.TwoPhaseOperation).init(allocator);
+    try ops2.append(allocator, .{
+        .node_op = .{
+            .op_type = .DELETE,
+            .node_id = 55,
+            .label = try allocator.dupe(u8, "Temp"),
+            .graph_name = try allocator.dupe(u8, graph_store.DEFAULT_GRAPH_NAME),
+            .properties = std.ArrayList(schema.MapEntry).init(allocator),
+        },
+    });
 
-    // Second transaction: delete data
-    const prepare2 = raft_consensus.TxnPrepare{
-        .xid = 201,
-        .shard_id = 0,
-        .write_set = "DEL:temp:data",
-        .metadata = "delete",
+    var msg2 = dist_schema.TwoPhaseMessage{
+        .msg_type = .PREPARE,
+        .transaction_id = try allocator.dupe(u8, "txn-201"),
+        .coordinator_id = try allocator.dupe(u8, "coord"),
+        .timestamp = std.time.milliTimestamp(),
+        .operations = ops2,
     };
-    _ = try coordinator.handlePrepare(prepare2);
-    try coordinator.handleDecide(.{ .xid = 201, .commit = true });
+    const write_set2 = try encodeWriteSet(allocator, &msg2);
+    defer allocator.free(write_set2);
+    msg2.deinit(allocator);
 
-    // Verify data was deleted
-    try std.testing.expect(coordinator.getCommittedValue("temp:data") == null);
+    _ = try coordinator.handlePrepare(.{ .xid = 201, .shard_id = 0, .write_set = write_set2, .metadata = "delete" });
+    try coordinator.handleDecide(.{ .xid = 201, .commit = true });
+    try std.testing.expect(store.getNodePtr(55) == null);
 }

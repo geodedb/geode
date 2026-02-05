@@ -229,6 +229,16 @@ fn appendFlagIfMissing(allocator: std.mem.Allocator, flags: *std.ArrayList([]con
     try flags.append(allocator, flag);
 }
 
+// Append a flag to an ExecutionResult, duplicating if the result owns memory
+fn appendFlagToResult(allocator: std.mem.Allocator, result: *execution.ExecutionResult, flag: []const u8) !void {
+    for (result.flags.items) |existing| {
+        if (std.mem.eql(u8, existing, flag)) return;
+    }
+    // Duplicate flag if result owns memory, otherwise string literal is fine
+    const flag_to_add = if (result.owns_value_memory) try allocator.dupe(u8, flag) else flag;
+    try result.flags.append(allocator, flag_to_add);
+}
+
 fn findOrderBy(program: *const gql_ast.Program) ?*const gql_ast.OrderBy {
     var idx: usize = program.statements.len;
     while (idx > 0) : (idx -= 1) {
@@ -659,7 +669,7 @@ fn handleClientMessage(
                             defer exec_result.deinit(gpa);
 
                             for (flags.items) |flag| {
-                                try appendFlagIfMissing(gpa, &exec_result.flags, flag);
+                                try appendFlagToResult(gpa, &exec_result, flag);
                             }
 
                             const store = graph_store.getGlobalStore(gpa);
@@ -698,7 +708,7 @@ fn handleClientMessage(
                             defer if (!store_result) exec_result.deinit(gpa);
 
                             for (flags.items) |flag| {
-                                try appendFlagIfMissing(gpa, &exec_result.flags, flag);
+                                try appendFlagToResult(gpa, &exec_result, flag);
                             }
 
                             var order_keys: []const []const u8 = &.{};

@@ -236,7 +236,7 @@ pub const ParallelPipeline = struct {
     }
 
     pub fn execute(self: *ParallelPipeline, input: []const *anyopaque) !void {
-        var current_batch = input;
+        const current_batch = input;
 
         for (self.stages) |stage| {
             const chunk_size = self.pool.chunk_size_estimator.estimateChunkSize(current_batch.len, stage.parallelism);

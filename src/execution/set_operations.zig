@@ -550,7 +550,9 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                 }
             }
             if (!has_flag) {
-                try result.flags.append(allocator, "U:OrderTiebreak=LexJSON");
+                // Duplicate flag if result owns memory, otherwise string literal is fine
+                const flag = if (result.owns_value_memory) try allocator.dupe(u8, "U:OrderTiebreak=LexJSON") else "U:OrderTiebreak=LexJSON";
+                try result.flags.append(allocator, flag);
             }
 
             // Sort rows lexicographically when using LexJSON tie-breaker

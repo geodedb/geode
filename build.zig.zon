@@ -76,10 +76,10 @@
         },
 
         // QUIC v1/v2 protocol implementation
-        // GAP-0200: Updated to v0.1.6 with thread-safety fixes for high-throughput scenarios
+        // GAP-0200: Updated to v0.1.7 with mutex-based thread-safety for Recovery struct
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#b6aeedba8fe1f5ea69be7c149b6cf31e53100ddd",
-            .hash = "quic-0.1.6-gBIqUSb9OQAfY07dHIRbbzYeCl5EV1Try2jut3Q8i1BN",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#2a6b3ffb1554532ac3fc3d1ceb0d97b4b89f3be4",
+            .hash = "quic-0.1.6-gBIqUU3DOgA-vEDAJtsC60oJa4FiuziR00SG0qlGNu9P",
         },
 
         // =======================================================================

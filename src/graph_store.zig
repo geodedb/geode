@@ -679,6 +679,49 @@ pub const GraphStore = struct {
         return id;
     }
 
+    fn createNodeWithIdInternal(self: *GraphStore, node_id: u64, labels: [][]const u8, graph_name: []const u8, mark_dirty: bool) !void {
+        try self.ensureGraph(graph_name);
+        if (self.nodes.contains(node_id)) return error.NodeAlreadyExists;
+
+        const labels_copy = try self.allocator.alloc([]const u8, labels.len);
+        for (labels, 0..) |label, i| {
+            labels_copy[i] = try self.allocator.dupe(u8, label);
+        }
+
+        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+
+        const node = Node{
+            .id = node_id,
+            .labels = labels_copy,
+            .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+            .graph_name = graph_name_copy,
+        };
+
+        try self.nodes.put(node_id, node);
+
+        for (labels) |label| {
+            try self.addToLabelIndex(graph_name, label, node_id);
+        }
+
+        if (node_id >= self.next_node_id) {
+            self.next_node_id = node_id + 1;
+        }
+
+        if (mark_dirty) {
+            self.dirty = true;
+        }
+    }
+
+    /// Create a node with a specified ID (used for replication/2PC).
+    pub fn createNodeWithId(self: *GraphStore, node_id: u64, labels: [][]const u8, graph_name: []const u8) !void {
+        return self.createNodeWithIdInternal(node_id, labels, graph_name, true);
+    }
+
+    /// Create a node with a specified ID without marking dirty (used for rollback).
+    pub fn createNodeWithIdNoSave(self: *GraphStore, node_id: u64, labels: [][]const u8, graph_name: []const u8) !void {
+        return self.createNodeWithIdInternal(node_id, labels, graph_name, false);
+    }
+
     // Issue #391: Helper to add node to label index
     fn addToLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) !void {
         // Create composite key "graph_name:label"
@@ -1491,6 +1534,66 @@ pub const GraphStore = struct {
         self.dirty = true;
 
         return id;
+    }
+
+    fn createEdgeWithIdInternal(
+        self: *GraphStore,
+        edge_id: u64,
+        from_id: u64,
+        to_id: u64,
+        edge_type: []const u8,
+        graph_name: []const u8,
+        mark_dirty: bool,
+    ) !void {
+        try self.ensureGraph(graph_name);
+        if (self.edges.contains(edge_id)) return error.EdgeAlreadyExists;
+
+        const edge_type_copy = try self.allocator.dupe(u8, edge_type);
+        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+
+        const edge = Edge{
+            .id = edge_id,
+            .from_id = from_id,
+            .to_id = to_id,
+            .label = edge_type_copy,
+            .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+            .graph_name = graph_name_copy,
+        };
+
+        try self.edges.put(edge_id, edge);
+        try self.addToAdjacencyIndex(from_id, to_id, edge_id);
+
+        if (edge_id >= self.next_edge_id) {
+            self.next_edge_id = edge_id + 1;
+        }
+
+        if (mark_dirty) {
+            self.dirty = true;
+        }
+    }
+
+    /// Create an edge with a specified ID (used for replication/2PC).
+    pub fn createEdgeWithId(
+        self: *GraphStore,
+        edge_id: u64,
+        from_id: u64,
+        to_id: u64,
+        edge_type: []const u8,
+        graph_name: []const u8,
+    ) !void {
+        return self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, true);
+    }
+
+    /// Create an edge with a specified ID without marking dirty (used for rollback).
+    pub fn createEdgeWithIdNoSave(
+        self: *GraphStore,
+        edge_id: u64,
+        from_id: u64,
+        to_id: u64,
+        edge_type: []const u8,
+        graph_name: []const u8,
+    ) !void {
+        return self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, false);
     }
 
     // Issue #392: Helper to maintain adjacency indexes
