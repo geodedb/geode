@@ -1,6 +1,6 @@
 # Gap Analysis
 
-**Last Updated**: January 31, 2026
+**Last Updated**: February 5, 2026
 **Verified By**: Requirements-to-Unit-Test Gap Analysis Audit
 **GitLab Source of Truth**: <https://gitlab.com/devnw/codepros/geode/geode/-/issues?label_name=gap>
 
@@ -8,12 +8,55 @@
 
 | Category | Open Gaps | Severity |
 |----------|-----------|----------|
+| CLI | 1 | Low |
+| GQL Conformance | 1 | Medium |
 | Test | 0 | - |
 | CI-CD | 0 | - |
 | Documentation | 0 | - |
-| **Total Open Gaps** | **0** | |
+| **Total Open Gaps** | **2** | |
 
-**All gaps closed as of January 31, 2026.**
+---
+
+## Open Gaps
+
+### GAP-0256: CLI `--insecure` flag should be renamed to `--insecure-tls-skip-verify`
+
+- **Status:** 🔴 **OPEN**
+- **Category:** CLI
+- **Severity:** Low
+- **Description:** The CLI flag `--insecure` is ambiguous. It should be renamed to `--insecure-tls-skip-verify` to clearly indicate that it skips TLS certificate verification. This aligns with the unified DSN specification in `geode/docs/DSN.md` which uses `insecure_tls_skip_verify` as the primary parameter name.
+- **Affected files:**
+  - `src/cli/main.zig` - Update flag definition
+  - `src/cli/cli_dispatcher.zig` - Update flag handling
+  - `docs/CLI_REFERENCE.md` - Update documentation
+  - Client libraries - Already migrated to `insecure_tls_skip_verify`
+- **Acceptance criteria:**
+  - [ ] CLI accepts `--insecure-tls-skip-verify` as the primary flag
+  - [ ] CLI accepts `--insecure` as a deprecated alias with warning
+  - [ ] Documentation updated to reflect new flag name
+  - [ ] All client DSN parsers use `insecure_tls_skip_verify` as primary parameter
+- **Related:** DSN specification (`geode/docs/DSN.md`)
+
+---
+
+### GAP-0257: Missing ISO/IEC 39075:2024 full conformance evidence (beyond MATCH subset)
+
+- **Status:** 🔴 **OPEN**
+- **Category:** GQL Conformance
+- **Severity:** Medium
+- **Description:** Conformance evidence for full ISO/IEC 39075:2024 compliance is incomplete. Current profile and test coverage emphasize MATCH ordering/pagination and related diagnostics, while additional standard sections (DML/DDL, transactions, path semantics, functions, type system behaviors) need verified coverage. This gap tracks the missing evidence and any required implementation work to bring conformance proof in line with full compliance claims.
+- **Affected areas:**
+  - `docs/gql/GQL_CONFORMANCE_PROFILE.md` - Expand profile scope beyond MATCH subset
+  - `tests/` and `geodetestlab/specs/` - Add/expand ISO conformance coverage for non-MATCH features
+  - CI gating - Enforce expanded conformance suite
+  - Documentation - Ensure published claims remain aligned with full compliance while evidence catches up
+- **Acceptance criteria:**
+  - [ ] Conformance profile expanded to cover all mandatory ISO/IEC 39075:2024 features
+  - [ ] Conformance tests added for non-MATCH features (DML/DDL, transactions, functions, types)
+  - [ ] CI enforces expanded conformance test suite with blocking failures
+  - [ ] Evidence published to substantiate full ISO conformance claims in public docs
+
+---
 
 ---
 
