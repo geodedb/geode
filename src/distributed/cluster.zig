@@ -367,7 +367,28 @@ pub const ClusterCoordinator = struct {
         }
         self.cluster_state.shards.deinit();
         self.cluster_state.replication_map.deinit();
+
+        var conn_it = self.network_transport.connections.iterator();
+        while (conn_it.next()) |entry| {
+            entry.value_ptr.pending_requests.deinit(self.allocator);
+        }
         self.network_transport.connections.deinit();
+        for (self.network_transport.message_queue.incoming.items) |msg| {
+            if (msg.data.len > 0) {
+                self.allocator.free(msg.data);
+            }
+        }
+        for (self.network_transport.message_queue.outgoing.items) |msg| {
+            if (msg.data.len > 0) {
+                self.allocator.free(msg.data);
+            }
+        }
+        self.network_transport.message_queue.incoming.deinit(self.allocator);
+        self.network_transport.message_queue.outgoing.deinit(self.allocator);
+        if (self.network_transport.quic_server) |*server| {
+            server.deinit();
+        }
+
         self.health_monitor.health_checks.deinit();
     }
 

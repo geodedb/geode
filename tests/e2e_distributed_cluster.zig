@@ -1,7 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
 const cluster = @import("../src/distributed/cluster.zig");
-const raft = @import("../src/distributed/raft_consensus.zig");
 
 test "distributed cluster - 3 node setup with leader election" {
     // Simulate multi-process cluster behavior

@@ -569,7 +569,8 @@ pub const Transaction = struct {
                     resp.deinit(self.allocator);
                 } else |_| {
                     // Retry after exponential backoff
-                    std.time.sleep(@as(u64, 100) << @intCast(retries) * std.time.ns_per_ms);
+                    const backoff_ms: u64 = @as(u64, 100) << @as(u6, @intCast(retries));
+                    std.time.sleep(backoff_ms * std.time.ns_per_ms);
                     continue;
                 }
                 break;
@@ -780,7 +781,7 @@ pub const Coordinator = struct {
             if (len_read < 4) return error.UnexpectedEndOfStream;
 
             const msg_len = std.mem.readInt(u32, &len_buf, .big);
-            var msg_buf = try self.allocator.alloc(u8, msg_len);
+            const msg_buf = try self.allocator.alloc(u8, msg_len);
             defer self.allocator.free(msg_buf);
             const msg_read = try reader.readAll(msg_buf);
             if (msg_read < msg_len) return error.UnexpectedEndOfStream;
@@ -987,7 +988,7 @@ pub const ParticipantNode = struct {
 
     // CANARY: REQ=REQ-2PC-COMMIT-001; FEATURE="2PC Commit Handler"; ASPECT=StorageApplication; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-10
     pub fn handleCommit(self: *ParticipantNode, transaction_id: []const u8) !void {
-        var removed = self.transactions.fetchRemove(transaction_id) orelse return error.TransactionNotFound;
+        const removed = self.transactions.fetchRemove(transaction_id) orelse return error.TransactionNotFound;
         var local_txn = removed.value;
         defer local_txn.deinit(self.allocator);
 
@@ -1020,7 +1021,7 @@ pub const ParticipantNode = struct {
 
     // CANARY: REQ=REQ-2PC-ABORT-001; FEATURE="2PC Abort Handler"; ASPECT=UndoApplication; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-10
     pub fn handleAbort(self: *ParticipantNode, transaction_id: []const u8) !void {
-        var removed = self.transactions.fetchRemove(transaction_id) orelse return error.TransactionNotFound;
+        const removed = self.transactions.fetchRemove(transaction_id) orelse return error.TransactionNotFound;
         var local_txn = removed.value;
         defer local_txn.deinit(self.allocator);
 
@@ -1089,6 +1090,13 @@ pub const ParticipantNode = struct {
 
 /// High-level 2PC coordinator wrapper used by DistributedCoordinator.
 pub const TwoPCCoordinator = struct {
+    pub const Stats = struct {
+        active_transactions: usize = 0,
+        total_transactions: usize = 0,
+        committed_transactions: usize = 0,
+        aborted_transactions: usize = 0,
+    };
+
     allocator: Allocator,
     coordinator_id: []const u8,
     participant_id: []const u8,
@@ -1099,14 +1107,6 @@ pub const TwoPCCoordinator = struct {
     send_message_callback: ?*const fn ([]const u8, MessageType, []const u8) void = null,
     enable_coordinator: bool = true,
     enable_participant: bool = true,
-
-    pub const Stats = struct {
-        active_transactions: usize = 0,
-        total_transactions: usize = 0,
-        committed_transactions: usize = 0,
-        aborted_transactions: usize = 0,
-    };
-
     stats: Stats = .{},
 
     pub fn init(allocator: Allocator, config: CoordinatorConfig) !TwoPCCoordinator {

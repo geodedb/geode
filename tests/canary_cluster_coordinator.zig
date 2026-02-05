@@ -40,9 +40,10 @@ pub fn TestCANARY_REQ_GQL_078_ShardMapStub() !void {
 
     // Seed cluster_state.nodes with active nodes
     for (peers) |p| {
+        const endpoint = try std.fmt.allocPrint(allocator, "{s}:{d}", .{ p.address, p.port });
         try coord.cluster_state.nodes.append(.{
             .id = p.id,
-            .endpoint = try allocator.dupe(u8, p.address),
+            .endpoint = endpoint,
             .state = .active,
             .role = if (p.id == 2) .leader else .follower,
             .capacity = .{ .cpu_cores = 8, .memory_gb = 16, .storage_gb = 100, .network_mbps = 1000, .current_load = 0.1 },

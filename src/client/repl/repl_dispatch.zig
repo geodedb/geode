@@ -2170,12 +2170,12 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
                     var buf: [256]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "Error during reconnection handling: {s}\r\n", .{@errorName(handle_err)}) catch "";
                     stderr.writeAll(msg) catch {};
-                    return;
+                    return error.QueryExecutionFailed;
                 };
 
                 if (should_retry) {
                     // Reset timer for retry
-                    timer = std.time.Timer.start() catch return;
+                    timer = std.time.Timer.start() catch return error.QueryExecutionFailed;
                     continue; // Retry the query
                 }
             }
@@ -2186,11 +2186,11 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
             if (err == error.Interrupted) {
                 return err;
             }
-            // For other errors, print and return
+            // For other errors, print and return error so caller can track
             try stderr.writeAll("Error executing query: ");
             try stderr.writeAll(@errorName(err));
             try stderr.writeAll("\r\n");
-            return;
+            return error.QueryExecutionFailed;
         };
 
         // Query succeeded, break out of retry loop
@@ -2243,7 +2243,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
                     var buf: [256]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "Error during reconnection handling: {s}\r\n", .{@errorName(handle_err)}) catch "";
                     stderr.writeAll(msg) catch {};
-                    return;
+                    return error.QueryExecutionFailed;
                 };
 
                 if (should_retry) {
@@ -2251,13 +2251,13 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
                     // Inform the user they need to re-run the query
                     try stderr.writeAll("Connection lost while fetching results. Please re-run your query.\r\n");
                 }
-                return;
+                return error.QueryExecutionFailed;
             }
 
             try stderr.writeAll("Error fetching results: ");
             try stderr.writeAll(@errorName(err));
             try stderr.writeAll("\r\n");
-            return;
+            return error.QueryExecutionFailed;
         };
     }
 
