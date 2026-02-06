@@ -1240,15 +1240,15 @@ pub fn build(b: *std.Build) void {
     });
 
     // Create separate modules for security components
-    const feature_flags_mod = b.createModule(.{ .root_source_file = b.path("src/util/feature_flags.zig"), .target = target, .optimize = optimize });
+    const runtime_flags_mod = b.createModule(.{ .root_source_file = b.path("src/util/feature_flags.zig"), .target = target, .optimize = optimize });
     const mfa_mod = b.createModule(.{ .root_source_file = b.path("src/security/mfa.zig"), .target = target, .optimize = optimize });
-    mfa_mod.addImport("feature_flags", feature_flags_mod);
+    mfa_mod.addImport("feature_flags", runtime_flags_mod);
     const auth_mod = b.createModule(.{ .root_source_file = b.path("src/security/geode_auth_lib.zig"), .target = target, .optimize = optimize });
     auth_mod.addImport("mfa", mfa_mod);
     auth_mod.addImport("logging", logging_mod);
     root_mod.addImport("geode_auth", auth_mod);
     root_mod.addImport("mfa", mfa_mod);
-    root_mod.addImport("feature_flags", feature_flags_mod);
+    root_mod.addImport("feature_flags", runtime_flags_mod);
     // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-003; FEATURE="CLI Subprocess Elimination"; ASPECT=AuthModule; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
     // Add auth module to unified binary for server authentication
     geode_exe.root_module.addImport("geode_auth", auth_mod);
