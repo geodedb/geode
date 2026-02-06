@@ -1,6 +1,20 @@
 syntax = "proto3";
 package geode;
 
+option go_package = "geodedb.com/geode/proto";
+
+// GeodeService provides gRPC access to the Geode database.
+service GeodeService {
+  rpc Handshake(HelloRequest) returns (HelloResponse);
+  rpc Execute(ExecuteRequest) returns (stream ExecutionResponse);
+  rpc Ping(PingRequest) returns (PingResponse);
+  rpc Begin(BeginRequest) returns (BeginResponse);
+  rpc Commit(CommitRequest) returns (CommitResponse);
+  rpc Rollback(RollbackRequest) returns (RollbackResponse);
+  rpc GetCdcDiagnostics(CdcDiagnosticsRequest) returns (CdcDiagnosticsResponse);
+  rpc ControlCdc(CdcControlRequest) returns (CdcControlResponse);
+}
+
 // ============================================================================
 // Transport Wrappers (QUIC framing)
 // ============================================================================
@@ -151,7 +165,7 @@ message Value {
     NullValue null_val = 1;
     IntValue int_val = 2;
     DoubleValue double_val = 3;
-    BoolValue bool_val = 4;
+    bool bool_val = 4;
     StringValue string_val = 5;
     DecimalValue decimal_val = 6;
     BytesValue bytes_val = 7;
