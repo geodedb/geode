@@ -497,8 +497,8 @@ test-gql-compliance:
     - source /opt/venv/bin/activate
     - pip install --no-cache-dir pyyaml pytest
     # Clone test harness specs into sibling directory (matches local monorepo layout)
-    - git config --global --remove-section credential 2>/dev/null || true
-    - GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= GIT_CONFIG_NOSYSTEM=1 git -c credential.helper= -c http.extraHeader= clone --depth 1 "https://gitlab.com/devnw/codepros/geode/geode-test-harness.git" ../geode-test-harness
+    # Clone test harness repo — strip runner-injected job token header to allow cross-project access
+    - git -c "http.https://gitlab.com/.extraHeader=" clone --depth 1 "https://gitlab.com/devnw/codepros/geode/geode-test-harness.git" ../geode-test-harness
   script:
     - |
       echo "=== Building Geode ==="
@@ -538,8 +538,8 @@ test-geodetestlab-comprehensive:
     - source /opt/venv/bin/activate
     - pip install --no-cache-dir pyyaml pytest
     # Clone test harness specs into sibling directory (matches local monorepo layout)
-    - git config --global --remove-section credential 2>/dev/null || true
-    - GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= GIT_CONFIG_NOSYSTEM=1 git -c credential.helper= -c http.extraHeader= clone --depth 1 "https://gitlab.com/devnw/codepros/geode/geode-test-harness.git" ../geode-test-harness
+    # Clone test harness repo — strip runner-injected job token header to allow cross-project access
+    - git -c "http.https://gitlab.com/.extraHeader=" clone --depth 1 "https://gitlab.com/devnw/codepros/geode/geode-test-harness.git" ../geode-test-harness
   script:
     - |
       echo "=== Building Geode ==="
