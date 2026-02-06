@@ -4546,10 +4546,14 @@ pub const Parser = struct {
             }
         }
 
-        // Index name (required in GQL)
-        if (self.cur.kind != .identifier) return error.UnexpectedToken;
-        const name = self.cur.lexeme;
-        self.advance();
+        // Index name (optional - may be omitted when ON or FOR follows directly)
+        var name: ?[]const u8 = null;
+        if (self.cur.kind == .identifier) {
+            name = self.cur.lexeme;
+            self.advance();
+        } else if (self.cur.kind != .ON and self.cur.kind != .FOR) {
+            return error.UnexpectedToken;
+        }
 
         var label: []const u8 = undefined;
         var pattern_variable: ?[]const u8 = null;

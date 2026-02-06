@@ -481,7 +481,7 @@ pub const StartTransactionStatement = struct {
 
 // Index operation statements
 pub const CreateIndexStatement = struct {
-    name: []const u8, // Required in GQL
+    name: ?[]const u8 = null, // Optional - auto-generated from label+properties if omitted
     unique: bool = false,
     index_type: IndexType = .btree,
     label: []const u8,

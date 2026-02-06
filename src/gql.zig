@@ -154,6 +154,64 @@ test "CREATE INDEX parsing" {
     }
 }
 
+test "CREATE INDEX without name (optional index name)" {
+    // Nameless CREATE INDEX variants - common in Neo4j/Cypher syntax
+    const test_queries = [_][]const u8{
+        "CREATE INDEX ON :Person(name)",
+        "CREATE INDEX IF NOT EXISTS ON :Person(name)",
+        "CREATE INDEX ON :AuthMethod(name)",
+        "CREATE INDEX IF NOT EXISTS ON :RFC(id)",
+        "CREATE INDEX ON :CVE(id)",
+        "CREATE INDEX IF NOT EXISTS ON :AuthType(name)",
+        // Multi-property
+        "CREATE INDEX ON :Label(a, b)",
+        "CREATE INDEX IF NOT EXISTS ON :Label(x, y, z)",
+        // Nameless with FOR syntax
+        "CREATE INDEX FOR (n:Person) ON (n.name)",
+        "CREATE INDEX IF NOT EXISTS FOR (n:Test) ON (n.value)",
+    };
+
+    for (test_queries) |query| {
+        var result = lib.parse(std.testing.allocator, query, .{}) catch |err| {
+            std.debug.print("\nFailed to parse: {s}\nError: {}\n", .{ query, err });
+            return err;
+        };
+        defer result.deinit();
+        try std.testing.expect(result.program.statements.len == 1);
+        const stmt = result.program.statements[0];
+        const ci = stmt.CreateIndex;
+        // Nameless indexes should have null name
+        if (std.mem.startsWith(u8, query, "CREATE INDEX ON") or
+            std.mem.startsWith(u8, query, "CREATE INDEX IF NOT EXISTS ON") or
+            std.mem.startsWith(u8, query, "CREATE INDEX FOR") or
+            std.mem.startsWith(u8, query, "CREATE INDEX IF NOT EXISTS FOR"))
+        {
+            try std.testing.expect(ci.name == null);
+        }
+    }
+}
+
+test "CREATE INDEX with name still works" {
+    // Named CREATE INDEX must still parse and preserve the name
+    const named_queries = [_]struct { query: []const u8, expected_name: []const u8 }{
+        .{ .query = "CREATE INDEX my_idx ON :Person(name)", .expected_name = "my_idx" },
+        .{ .query = "CREATE INDEX IF NOT EXISTS idx1 ON :Test(value)", .expected_name = "idx1" },
+        .{ .query = "CREATE INDEX test_idx FOR (n:Label) ON (n.prop)", .expected_name = "test_idx" },
+    };
+
+    for (named_queries) |tc| {
+        var result = lib.parse(std.testing.allocator, tc.query, .{}) catch |err| {
+            std.debug.print("\nFailed to parse: {s}\nError: {}\n", .{ tc.query, err });
+            return err;
+        };
+        defer result.deinit();
+        try std.testing.expect(result.program.statements.len == 1);
+        const ci = result.program.statements[0].CreateIndex;
+        try std.testing.expect(ci.name != null);
+        try std.testing.expectEqualStrings(tc.expected_name, ci.name.?);
+    }
+}
+
 test "Parenthesized UNION with INTERSECT" {
     const query = "(MATCH (a:MixedA) RETURN a.id AS id UNION MATCH (b:MixedB) RETURN b.id AS id) INTERSECT MATCH (c:MixedC) RETURN c.id AS id";
     var result = lib.parse(std.testing.allocator, query, .{}) catch |err| {

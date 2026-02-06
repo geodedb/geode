@@ -393,7 +393,17 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // P2-3: Pass allocator to ensureCatalogInstance
             const cat = getCatalog(allocator, context);
 
-            const index_name = ci.name;
+            // Auto-generate index name from label+properties if not provided
+            const index_name = ci.name orelse blk: {
+                var parts = try std.ArrayList(u8).initCapacity(allocator, 64);
+                try parts.appendSlice(allocator, "idx_");
+                try parts.appendSlice(allocator, ci.label);
+                for (ci.properties) |prop| {
+                    try parts.append(allocator, '_');
+                    try parts.appendSlice(allocator, prop);
+                }
+                break :blk try parts.toOwnedSlice(allocator);
+            };
             const label = ci.label;
 
             // Phase 3: Write lock for CREATE INDEX
