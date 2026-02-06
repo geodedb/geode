@@ -479,6 +479,12 @@ pub fn main() !void {
         // Production mode: accept connections in a loop and dispatch to thread pool
         // The accept() function polls internally to receive packets and complete handshakes
         while (true) {
+            // GAP-0203: Process deferred connection cleanups on the main thread.
+            // Handler threads queue finished connections for destruction here because
+            // only the main thread can safely modify endpoint bookkeeping (connection
+            // tables, timers) without racing with poll().
+            transport.drainPendingDestroy();
+
             const conn = transport.accept() catch |err| {
                 // WouldBlock is expected when no connections are pending
                 if (err != quic_transport.QuicError.WouldBlock) {

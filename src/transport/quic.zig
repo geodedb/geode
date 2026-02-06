@@ -39,6 +39,12 @@ pub const QuicTransport = struct {
     connections: std.ArrayList(*QuicConnection),
     // GAP-0202: Mutex for thread-safe connection list access in async mode
     connections_mutex: std.Thread.Mutex = .{},
+    // GAP-0203: Deferred connection destruction to prevent use-after-free.
+    // Handler threads add inner connections here after sending CONNECTION_CLOSE;
+    // the main accept loop thread processes them via drainPendingDestroy()
+    // where endpoint bookkeeping can be safely updated without racing with poll().
+    pending_destroy: std.ArrayList(*Connection) = .empty,
+    pending_destroy_mutex: std.Thread.Mutex = .{},
     cert_der: ?[]u8 = null,
     key_der: ?[]u8 = null,
 
@@ -67,11 +73,16 @@ pub const QuicTransport = struct {
     }
 
     pub fn deinit(self: *QuicTransport) void {
+        // GAP-0203: Process any deferred connection cleanups first.
+        // These are inner connections queued by handler threads via destroyConnection().
+        self.drainPendingDestroy();
+
         for (self.connections.items) |conn| {
             conn.close();
             self.allocator.destroy(conn);
         }
         self.connections.deinit(self.allocator);
+        self.pending_destroy.deinit(self.allocator);
 
         if (self.endpoint) |*ep| {
             ep.deinit();
@@ -84,6 +95,31 @@ pub const QuicTransport = struct {
         if (self.key_der) |key| {
             self.allocator.free(key);
         }
+    }
+
+    /// Process deferred connection destructions queued by handler threads.
+    /// MUST be called from the main accept loop thread (the same thread that
+    /// calls poll()/accept()) to avoid racing with endpoint packet processing.
+    /// GAP-0203: Fix use-after-free race condition between handler threads
+    /// calling deinit() and the main thread's poll() accessing freed memory.
+    pub fn drainPendingDestroy(self: *QuicTransport) void {
+        self.pending_destroy_mutex.lock();
+        defer self.pending_destroy_mutex.unlock();
+        if (self.pending_destroy.items.len == 0) return;
+
+        for (self.pending_destroy.items) |inner_conn| {
+            if (self.endpoint) |*ep| {
+                // Use vendor API to properly remove from all endpoint tracking
+                // tables (conns, accepted, retired, timers) before freeing.
+                api.destroy(ep, inner_conn);
+            } else {
+                // No endpoint (already shut down) - just deinit internal state.
+                // The Connection struct was allocated by the endpoint so we
+                // cannot free it here without the endpoint's allocator.
+                inner_conn.deinit();
+            }
+        }
+        self.pending_destroy.clearRetainingCapacity();
     }
 
     pub fn listen(self: *QuicTransport) !void {
@@ -265,6 +301,7 @@ pub const QuicTransport = struct {
     /// GAP-0201: Use swapRemove for O(1) removal instead of O(n) orderedRemove
     /// CANARY: REQ=REQ-PERF-CONN-REMOVE-001; FEATURE="ConnectionRemovalOptimization"; ASPECT=O1Removal; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=transport; UPDATED=2026-01-30
     /// GAP-0202: Thread-safe connection removal for async connection handling
+    /// GAP-0203: Defer inner connection deinit to main thread to prevent use-after-free
     pub fn destroyConnection(self: *QuicTransport, conn: *QuicConnection) void {
         // GAP-0202: Lock mutex for thread-safe list modification
         self.connections_mutex.lock();
@@ -278,9 +315,31 @@ pub const QuicTransport = struct {
             idx += 1;
         }
         self.connections_mutex.unlock();
-        // Close and cleanup the connection resources (outside lock to avoid blocking)
-        conn.close();
-        // Destroy the wrapper struct
+
+        // Close streams and send CONNECTION_CLOSE frame, but DO NOT call
+        // inner.deinit() here. The inner connection is still referenced by
+        // the endpoint's tracking tables and the main thread's poll() loop
+        // may still deliver packets to it. Freeing it here causes a
+        // use-after-free crash (GAP-0203).
+        for (conn.streams.items) |stream| {
+            stream.close();
+            conn.allocator.destroy(stream);
+        }
+        conn.streams.deinit(conn.allocator);
+        api.closeConnection(conn.inner, 0) catch {};
+
+        // Queue the inner connection for deferred destruction on the main thread.
+        // drainPendingDestroy() will use api.destroy() to properly remove it
+        // from all endpoint bookkeeping before freeing.
+        self.pending_destroy_mutex.lock();
+        self.pending_destroy.append(self.allocator, conn.inner) catch {
+            // If append fails (OOM), fall back to direct deinit.
+            // This risks a crash but avoids a resource leak.
+            conn.inner.deinit();
+        };
+        self.pending_destroy_mutex.unlock();
+
+        // Destroy the wrapper struct (safe - no other thread references it)
         self.allocator.destroy(conn);
     }
 
