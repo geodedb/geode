@@ -44,13 +44,13 @@
         // Data structures and graph algorithms
         .ds = .{
             .url = "git+https://gitlab.com/devnw/zig/ds.git#6cf84f64a00c452b983d71fdbc8dbee4b234962a",
-            .hash = "ds-0.1.0-aDfG04NfBgA1YVvVP7RmsobOasrM6uUa1R8EycPfssXq",
+            .hash = "ds-0.1.0-aDfG097GBgAd7LnImoL1mnRAtHxNFOsRvNx-IbQLSptJ",
         },
 
         // Vulkan compute library
         .vulkan = .{
             .url = "git+https://gitlab.com/devnw/zig/vulkan.git#3ddd309568c7b169bc79943d481b0fe6b3461cfb",
-            .hash = "vulkan-0.1.0-zh1htcsSEQAdVTyZAhLTPxbhndNokVOSC4-Ureyd0dJx",
+            .hash = "vulkan-0.1.0-zh1htdhnEQDg-urpMsaEtZ27GkxirTx2--OKTPNaMvlM",
         },
 
         // CUDA compute library
@@ -66,13 +66,13 @@
         // JSON parser/encoder - RFC 8259 compliant with JSON Schema 2020-12
         .json = .{
             .url = "git+https://gitlab.com/devnw/zig/json.git#4c2032be31443f4504427c205419fced275d4263",
-            .hash = "json-0.1.0-tOue4WZ_CwDmY9dvdVfuFN_LcZZs6XcHmnQqkvsqdNCM",
+            .hash = "json-0.1.0-tOue4fSoCwDuFpNLxdd4yUQyL3g9o3su9jiX5W08e3x5",
         },
 
         // TLS 1.3 library for QUIC
         .tls = .{
             .url = "git+https://gitlab.com/devnw/zig/tls.git#d19207aed4e6b92d86c7a8fbbb76e6b7b901e0ae",
-            .hash = "tls-0.1.0-mtEaLEtsEQAcNcPqUq9or5b7zwp9seF_JIhc74uLLvBz",
+            .hash = "tls-0.1.0-mtEaLO9tEgAQ_8zf-HJiAZ8N5JEB3dyHX3MVY9chKww7",
         },
 
         // QUIC v1/v2 protocol implementation
@@ -80,7 +80,7 @@
         // Updated 2026-02-05: Complete HashMap init checks to prevent unreachable code panics
         .quic = .{
             .url = "git+https://gitlab.com/devnw/zig/quic.git#84faf9ee1d291b2ae9cebe25aae4705e84d12bf3",
-            .hash = "quic-0.1.6-gBIqUfDFOgD-GPr_WkHMIgwtS8StiACVgfPz73j6BDWN",
+            .hash = "quic-0.1.6-gBIqUU3OOgA6PAGQi1LipjW3anvb-VbzQUfXkKIelzNg",
         },
 
         // =======================================================================
@@ -90,13 +90,13 @@
         // Structured logging - slog-style logging with multiple handlers
         .slog = .{
             .url = "git+https://gitlab.com/devnw/zig/slog.git#1041b159e59a27882738d095ba0c499a6f3d2ad0",
-            .hash = "slog-0.1.0-SamED67fAwDghixIpZN48hgYrnT4CS8zcn4VcEN5jm67",
+            .hash = "slog-0.1.0-SamED8A4BADXWTRqyf-vLD2qCON2aD7TxW-QQAEK8GeS",
         },
 
         // Configuration management - XDG compliant, multi-format support
         .config = .{
             .url = "git+https://gitlab.com/devnw/zig/config.git#3484accef8aa47dbd80f2721745a8ccdfeec97ab",
-            .hash = "config-0.1.0-TiLumiKJBQDP5bfj9FFnfZB8unOVJZGv6eMQVN5_eUNH",
+            .hash = "config-0.1.0-TiLummYLBwCO5N7adZTmyvWnRyRO9hSunI9JLNz3MgM9",
         },
 
         // =======================================================================
@@ -112,7 +112,7 @@
         // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
         .dns = .{
             .url = "git+https://gitlab.com/devnw/zig/dns.git#9b5c05a5ba3222faa9d44ff7a8312fbbd06691b9",
-            .hash = "dns-0.1.0-x4U-zYgMCwDlLjH2DUzIcVIqEfCj5x_2yGKIWFaiFJLA",
+            .hash = "dns-0.1.0-x4U-zbNRDAD49_qce0R1hK-yyWk3LTfMDZhRCY7gLi7M",
         },
 
         // Spice - Fork/join parallelism for recursive divide-and-conquer algorithms
@@ -129,7 +129,7 @@
         // Model Context Protocol (MCP) - AI/LLM integration
         .mcp = .{
             .url = "git+https://gitlab.com/devnw/zig/mcp.git#91c8c179ee11e99b22e9c902c26c7841000c4752",
-            .hash = "mcp-0.1.0-exAeBHj7BAAYmmNRjZD3HG6hXVJG8-LEtybCLkBu7oj6",
+            .hash = "mcp-0.1.0-exAeBIliBQBVNi0Tl0uhKfzbzeNGK2SEFFqR7shrONyU",
         },
 
         // Protocol Buffers - Zig 0.15.2 compatible

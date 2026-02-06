@@ -107,9 +107,9 @@ fn getCurrentToken(allocator: std.mem.Allocator) ?[]const u8 {
 
     // Simple JSON parsing for session_token field
     if (std.mem.indexOf(u8, content, "\"session_token\"")) |start| {
-        const after_key = content[start + 16..]; // Skip '"session_token"'
+        const after_key = content[start + 16 ..]; // Skip '"session_token"'
         if (std.mem.indexOf(u8, after_key, "\"")) |q1| {
-            const after_q1 = after_key[q1 + 1..];
+            const after_q1 = after_key[q1 + 1 ..];
             if (std.mem.indexOf(u8, after_q1, "\"")) |q2| {
                 return allocator.dupe(u8, after_q1[0..q2]) catch return null;
             }
@@ -248,9 +248,9 @@ fn cmdSessionValidate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: u
                         defer allocator.free(c);
                         // Simple JSON parsing for username
                         if (std.mem.indexOf(u8, c, "\"username\"")) |start| {
-                            const after_key = c[start + 11..];
+                            const after_key = c[start + 11 ..];
                             if (std.mem.indexOf(u8, after_key, "\"")) |q1| {
-                                const after_q1 = after_key[q1 + 1..];
+                                const after_q1 = after_key[q1 + 1 ..];
                                 if (std.mem.indexOf(u8, after_q1, "\"")) |q2| {
                                     username = after_q1[0..q2];
                                 }
@@ -321,9 +321,9 @@ fn cmdSessionInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     var expires_at: i64 = 0;
 
     if (std.mem.indexOf(u8, content, "\"username\"")) |start| {
-        const after_key = content[start + 11..];
+        const after_key = content[start + 11 ..];
         if (std.mem.indexOf(u8, after_key, "\"")) |q1| {
-            const after_q1 = after_key[q1 + 1..];
+            const after_q1 = after_key[q1 + 1 ..];
             if (std.mem.indexOf(u8, after_q1, "\"")) |q2| {
                 username = after_q1[0..q2];
             }
@@ -331,9 +331,9 @@ fn cmdSessionInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     }
 
     if (std.mem.indexOf(u8, content, "\"server\"")) |start| {
-        const after_key = content[start + 9..];
+        const after_key = content[start + 9 ..];
         if (std.mem.indexOf(u8, after_key, "\"")) |q1| {
-            const after_q1 = after_key[q1 + 1..];
+            const after_q1 = after_key[q1 + 1 ..];
             if (std.mem.indexOf(u8, after_q1, "\"")) |q2| {
                 server = after_q1[0..q2];
             }
@@ -341,7 +341,7 @@ fn cmdSessionInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     }
 
     if (std.mem.indexOf(u8, content, "\"expires_at\"")) |start| {
-        const after_key = content[start + 13..];
+        const after_key = content[start + 13 ..];
         // Skip whitespace and colon
         var pos: usize = 0;
         while (pos < after_key.len and (after_key[pos] == ':' or after_key[pos] == ' ')) : (pos += 1) {}

@@ -68,8 +68,7 @@ fn findSubcommandStart(argv: [][:0]u8, start_idx: usize) usize {
     var idx = start_idx + 1;
     while (idx < argv.len) : (idx += 1) {
         const arg = argv[idx];
-        if (std.mem.eql(u8, arg, "--audit"))
-        {
+        if (std.mem.eql(u8, arg, "--audit")) {
             continue;
         }
         if (std.mem.eql(u8, arg, "--server") or

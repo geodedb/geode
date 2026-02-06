@@ -566,7 +566,7 @@ fn buildPeakContributors(
     }
     if (count == 0) return list;
 
-    var indices = [_]usize{0, 1};
+    var indices = [_]usize{ 0, 1 };
     if (ops.len < 2) indices[1] = 0;
     var i: usize = 0;
     while (i < ops.len) : (i += 1) {

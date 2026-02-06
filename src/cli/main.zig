@@ -2159,7 +2159,6 @@ fn executeQueryOnConnection(
         }
     }
 
-
     // Output final result based on format
     if (std.mem.eql(u8, format, "json")) {
         const buildStringArray = struct {
@@ -2301,20 +2300,20 @@ fn executeQueryOnConnection(
                 }
             }
 
-        // Helper function to print a separator line
-        const printSeparator = struct {
-            fn f(out: anytype, widths: []const usize) void {
-                _ = out.writeAll("+") catch {};
-                for (widths) |w| {
-                    for (0..w + 2) |_| _ = out.writeAll("-") catch {};
+            // Helper function to print a separator line
+            const printSeparator = struct {
+                fn f(out: anytype, widths: []const usize) void {
                     _ = out.writeAll("+") catch {};
+                    for (widths) |w| {
+                        for (0..w + 2) |_| _ = out.writeAll("-") catch {};
+                        _ = out.writeAll("+") catch {};
+                    }
+                    _ = out.writeAll("\n") catch {};
                 }
-                _ = out.writeAll("\n") catch {};
-            }
-        }.f;
+            }.f;
 
-        // Print top separator
-        printSeparator(stdout, col_widths.items);
+            // Print top separator
+            printSeparator(stdout, col_widths.items);
 
             // Print header row
             _ = stdout.writeAll("|") catch {};
@@ -2328,8 +2327,8 @@ fn executeQueryOnConnection(
             }
             _ = stdout.writeAll("\n") catch {};
 
-        // Print separator after header
-        printSeparator(stdout, col_widths.items);
+            // Print separator after header
+            printSeparator(stdout, col_widths.items);
 
             // Print data rows
             for (rows.items) |row| {
@@ -2345,10 +2344,10 @@ fn executeQueryOnConnection(
                 _ = stdout.writeAll("\n") catch {};
             }
 
-        // Print bottom separator
-        printSeparator(stdout, col_widths.items);
+            // Print bottom separator
+            printSeparator(stdout, col_widths.items);
 
-        // Print row count
+            // Print row count
             const row_count = rows.items.len;
             if (row_count == 1) {
                 _ = stdout.writeAll("(1 row)\n") catch {};

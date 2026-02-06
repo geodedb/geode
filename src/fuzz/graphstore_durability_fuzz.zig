@@ -13,9 +13,9 @@ test "graphstore durability fuzz recovery invariants" {
     // Build a small graph and persist.
     var store = graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{ "A" });
-    _ = try store.createNode(&.{ "B" });
-    _ = try store.createNode(&.{ "C" });
+    _ = try store.createNode(&.{"A"});
+    _ = try store.createNode(&.{"B"});
+    _ = try store.createNode(&.{"C"});
     try store.saveToFile();
 
     const saved_nodes = store.nodes.count();

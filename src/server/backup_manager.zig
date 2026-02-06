@@ -51,7 +51,7 @@ test "SimplifiedBackupManager creates backup with GraphStore" {
     const allocator = arena.allocator();
 
     const store = graph_store.getGlobalStore(allocator);
-    _ = try store.createNode(&.{ "Person" });
+    _ = try store.createNode(&.{"Person"});
 
     var mgr = try SimplifiedBackupManager.init(allocator, "./test_backups", .{});
     defer mgr.deinit();
@@ -65,7 +65,7 @@ test "SimplifiedBackupManager restore loads GraphStore snapshot" {
     const allocator = arena.allocator();
 
     const store = graph_store.getGlobalStore(allocator);
-    _ = try store.createNode(&.{ "RestoreTest" });
+    _ = try store.createNode(&.{"RestoreTest"});
 
     var mgr = try SimplifiedBackupManager.init(allocator, "./test_backups2", .{});
     defer mgr.deinit();

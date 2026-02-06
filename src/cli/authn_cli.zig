@@ -245,7 +245,7 @@ fn cmdAuthnTestAccess(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: u
     for (config.anonymous_paths.items) |anon_path| {
         if (std.mem.eql(u8, anon_path, test_path.?) or
             (std.mem.endsWith(u8, anon_path, "*") and
-            std.mem.startsWith(u8, test_path.?, anon_path[0 .. anon_path.len - 1])))
+                std.mem.startsWith(u8, test_path.?, anon_path[0 .. anon_path.len - 1])))
         {
             std.debug.print("Access allowed: anonymous path\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
@@ -256,7 +256,7 @@ fn cmdAuthnTestAccess(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: u
     for (config.mfa_required_paths.items) |mfa_path| {
         if (std.mem.eql(u8, mfa_path, test_path.?) or
             (std.mem.endsWith(u8, mfa_path, "*") and
-            std.mem.startsWith(u8, test_path.?, mfa_path[0 .. mfa_path.len - 1])))
+                std.mem.startsWith(u8, test_path.?, mfa_path[0 .. mfa_path.len - 1])))
         {
             if (session_only and !mfa_verified) {
                 std.debug.print("requires_mfa: true\n", .{});

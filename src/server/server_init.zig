@@ -25,7 +25,7 @@ pub const EnvironmentConfig = struct {
     memcurve_profile: bool = false,
     compact_profile: bool = false,
     disable_estimates: bool = false,
-    order_keys_expr: bool = true,  // ISO/GQL standard allows property paths in ORDER BY
+    order_keys_expr: bool = true, // ISO/GQL standard allows property paths in ORDER BY
     // CANARY: REQ=REQ-ABAC-WIRE-005; FEATURE="ABAC Enforcement"; ASPECT=EnvConfig; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
     // GAP-0165: Environment flag to enable ABAC enforcement
     abac_enabled: bool = false,
@@ -110,7 +110,6 @@ pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profil
         if (env.get("GEODE_ENABLE_ABAC")) |val| {
             config.abac_enabled = val.len > 0 and (val[0] == '1' or std.ascii.eqlIgnoreCase(val, "true"));
         }
-
     } else |_| {}
 
     return config;

@@ -19,7 +19,6 @@ const IndexInfo = execution.IndexInfo;
 const fle_catalog = @import("../schema/catalog.zig");
 const fle_annotations = @import("../schema/annotations.zig");
 
-
 // Import helper functions used by statement dispatcher
 const checkPermission = execution.checkPermission;
 const getCatalog = execution.getCatalog;

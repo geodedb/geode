@@ -130,7 +130,6 @@ pub const TransportConnection = struct {
     }
 };
 
-
 fn encodeClientPacket(allocator: std.mem.Allocator, msg: proto_schema.QuicClientMessage) ![]u8 {
     var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 1024);
     defer aw.deinit();
@@ -1062,46 +1061,46 @@ pub const ClientSession = struct {
 
                 switch (msg_union) {
                     .execute => |exec_resp| {
-                    session.last_payload_kind = .none;
-                    // CANARY: REQ=REQ-INLINE-RESULTS-002; FEATURE="InlineResultsHandling"; ASPECT=SchemaDetection; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
-                    // Reset schema response flag - will be set true only for schema payloads
-                    session.received_schema_response = false;
-                    if (exec_resp.payload) |payload| {
-                        switch (payload) {
-                            .schema => |schema_def| {
-                                session.clearLastColumns();
-                                const cols = try session.allocator.alloc(ColumnInfo, schema_def.columns.items.len);
-                                for (schema_def.columns.items, 0..) |col, i| {
-                                    cols[i] = .{
-                                        .name = try session.allocator.dupe(u8, col.name),
-                                        .type = if (col.type.len > 0)
-                                            try session.allocator.dupe(u8, col.type)
-                                        else
-                                            try session.allocator.dupe(u8, "ANY"),
-                                    };
-                                }
-                                session.last_columns = cols;
-                                session.last_payload_kind = .rows;
-                                // Mark that we received a schema response - inline page may follow
-                                session.received_schema_response = true;
-                            },
-                            .page => {
-                                session.last_payload_kind = .rows;
-                            },
-                            .explain => {
-                                session.last_payload_kind = .explain;
-                            },
-                            .profile => {
-                                session.last_payload_kind = .profile;
-                            },
-                            .@"error" => {
-                                session.last_payload_kind = .@"error";
-                            },
-                            else => {},
+                        session.last_payload_kind = .none;
+                        // CANARY: REQ=REQ-INLINE-RESULTS-002; FEATURE="InlineResultsHandling"; ASPECT=SchemaDetection; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
+                        // Reset schema response flag - will be set true only for schema payloads
+                        session.received_schema_response = false;
+                        if (exec_resp.payload) |payload| {
+                            switch (payload) {
+                                .schema => |schema_def| {
+                                    session.clearLastColumns();
+                                    const cols = try session.allocator.alloc(ColumnInfo, schema_def.columns.items.len);
+                                    for (schema_def.columns.items, 0..) |col, i| {
+                                        cols[i] = .{
+                                            .name = try session.allocator.dupe(u8, col.name),
+                                            .type = if (col.type.len > 0)
+                                                try session.allocator.dupe(u8, col.type)
+                                            else
+                                                try session.allocator.dupe(u8, "ANY"),
+                                        };
+                                    }
+                                    session.last_columns = cols;
+                                    session.last_payload_kind = .rows;
+                                    // Mark that we received a schema response - inline page may follow
+                                    session.received_schema_response = true;
+                                },
+                                .page => {
+                                    session.last_payload_kind = .rows;
+                                },
+                                .explain => {
+                                    session.last_payload_kind = .explain;
+                                },
+                                .profile => {
+                                    session.last_payload_kind = .profile;
+                                },
+                                .@"error" => {
+                                    session.last_payload_kind = .@"error";
+                                },
+                                else => {},
+                            }
                         }
-                    }
-                    session.last_response = try executionResponseToJson(session.allocator, exec_resp, session.last_columns);
-                },
+                        session.last_response = try executionResponseToJson(session.allocator, exec_resp, session.last_columns);
+                    },
                     else => return error.InvalidResponse,
                 }
             }

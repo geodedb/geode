@@ -92,7 +92,6 @@ fn generateKey(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         }
         std.debug.print("\n", .{});
     }
-
 }
 
 fn rotateKeys(allocator: std.mem.Allocator, args: [][:0]u8) !void {

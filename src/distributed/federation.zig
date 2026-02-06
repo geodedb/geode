@@ -1561,7 +1561,7 @@ test "TestCANARY_REQ_GQL_052_FederationOrderedMultiKeyDirMerge" {
 // Additional test: parse order_dirs from JSON line
 test "federation: clone preserves order dirs" {
     const ally = std.testing.allocator;
-    const schema = &[_]protocol.ColumnDef{.{ .name = "a", .data_type = "ANY" }, .{ .name = "b", .data_type = "ANY" }};
+    const schema = &[_]protocol.ColumnDef{ .{ .name = "a", .data_type = "ANY" }, .{ .name = "b", .data_type = "ANY" } };
     var v = [_]protocol.BindingValue{ .{ .Int = 1 }, .{ .Int = 2 } };
     const rows = &[_]protocol.BindingRow{.{ .cols = &v }};
     const order_keys = &[_][]const u8{ "a", "b" };
@@ -1588,8 +1588,8 @@ test "federation: clone preserves nulls_first" {
     const schema = &[_]protocol.ColumnDef{.{ .name = "a", .data_type = "ANY" }};
     var v = [_]protocol.BindingValue{.{ .Int = 1 }};
     const rows = &[_]protocol.BindingRow{.{ .cols = &v }};
-    const order_keys = &[_][]const u8{ "a" };
-    const order_dirs = &[_]bool{ true };
+    const order_keys = &[_][]const u8{"a"};
+    const order_dirs = &[_]bool{true};
     const original = QueryResults{
         .rows = rows,
         .schema = schema,
