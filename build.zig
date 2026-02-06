@@ -749,13 +749,14 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_decimal_tests.step);
     test_step.dependOn(&run_repl_advanced_tests.step);
     test_step.dependOn(&run_integration_tests.step);
-    test_step.dependOn(&run_gap0203_tests.step);
+    // gap0203_tests moved to test-e2e (spawns QUIC servers)
     test_step.dependOn(&run_graph_persist_tests.step);
     test_step.dependOn(&run_binary_persist_tests.step);
 
     // E2E tests (slower, require more setup - not run in pre-push hooks)
     // Run with: zig build test-e2e
     const test_e2e_step = b.step("test-e2e", "Run end-to-end tests (slower)");
+    test_e2e_step.dependOn(&run_gap0203_tests.step);
 
     // Run all tests (unit + e2e): zig build test-all
     const test_all_step = b.step("test-all", "Run all tests (unit + e2e)");
@@ -825,7 +826,7 @@ pub fn build(b: *std.Build) void {
     cpa_accept_step.dependOn(&run_cpa_accept.step);
 
     const run_gql_conformance_tests = b.addRunArtifact(gql_conformance_tests);
-    test_step.dependOn(&run_gql_conformance_tests.step);
+    test_e2e_step.dependOn(&run_gql_conformance_tests.step);
 
     // CLI integration tests
     const cli_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/cli_test.zig"), .target = target, .optimize = optimize }) });
