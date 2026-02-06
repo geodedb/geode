@@ -223,6 +223,10 @@ pub const QuicTransport = struct {
 
             // First, try to get a connection (if we don't have one pending)
             while (poll_count < 300) : (poll_count += 1) {
+                // GAP-0203: Drain deferred connection cleanups before polling.
+                // This ensures connections marked for destruction are removed from
+                // the endpoint's tracking tables before poll() processes packets.
+                self.drainPendingDestroy();
                 try ep.poll(10);
 
                 // Get a connection if we don't have one yet
@@ -327,6 +331,13 @@ pub const QuicTransport = struct {
         }
         conn.streams.deinit(conn.allocator);
         api.closeConnection(conn.inner, 0) catch {};
+
+        // Mark connection as closed so the endpoint's pruneClosed() will
+        // remove it from the connection table during the next poll() call.
+        // closeConnection() sets this on success, but if it fails (e.g.,
+        // keys not ready), we must set it explicitly to prevent the endpoint
+        // from routing packets to a connection we're about to destroy.
+        conn.inner.closed = true;
 
         // Queue the inner connection for deferred destruction on the main thread.
         // drainPendingDestroy() will use api.destroy() to properly remove it
