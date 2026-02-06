@@ -332,13 +332,6 @@ pub const QuicTransport = struct {
         conn.streams.deinit(conn.allocator);
         api.closeConnection(conn.inner, 0) catch {};
 
-        // Mark connection as closed so the endpoint's pruneClosed() will
-        // remove it from the connection table during the next poll() call.
-        // closeConnection() sets this on success, but if it fails (e.g.,
-        // keys not ready), we must set it explicitly to prevent the endpoint
-        // from routing packets to a connection we're about to destroy.
-        conn.inner.closed = true;
-
         // Queue the inner connection for deferred destruction on the main thread.
         // drainPendingDestroy() will use api.destroy() to properly remove it
         // from all endpoint bookkeeping before freeing.

@@ -170,6 +170,7 @@ test "GAP-0203 Fix #7: ExecutionContext defaults preserve backward compatibility
 test "GAP-0203 Fix #7: ExecutionContext with auth fields" {
     const allocator = testing.allocator;
     const catalog = try geode.execution.ensureCatalogInstance(allocator);
+    defer geode.execution.cleanupCatalogInstance();
     const ctx = geode.execution.ExecutionContext{
         .catalog = catalog,
         .user = "admin",
