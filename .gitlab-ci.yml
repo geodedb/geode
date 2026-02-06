@@ -273,7 +273,7 @@ governance-conformance-sync:
 test-zig-unit:
   stage: test
   image: $ZIG_IMAGE
-  timeout: 2h
+  timeout: 3h
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   script:
