@@ -257,7 +257,6 @@ pub const QuicTransport = struct {
             // Timeout waiting for streams - return connection anyway but with warning
             // The handler will wait for streams with its own timeout
             if (pending_conn) |conn| {
-                std.debug.print("DEBUG_TRACE: accept() returning connection without streams after {} polls\n", .{poll_count});
                 const wrapper = try self.allocator.create(QuicConnection);
                 wrapper.* = QuicConnection{
                     .allocator = self.allocator,
