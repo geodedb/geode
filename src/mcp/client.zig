@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-MCP-008; FEATURE="External Library Migration"; ASPECT=MCPClient; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // GeodeClient - QUIC connection management for MCP server integration
@@ -134,7 +135,7 @@ pub const GeodeClient = struct {
             .password = "",
             .tenant_id = null,
             .client_name = "geode-mcp",
-            .client_version = "0.19.0",
+            .client_version = build_options.version,
             .wanted_conformance = "min",
         };
         self.writeProtoMessage(.{ .hello = hello_req }) catch |err| {
@@ -730,9 +731,9 @@ pub const GeodeClient = struct {
     /// Get server configuration
     pub fn getConfig(self: *Self) ![]u8 {
         // Return server info as JSON
-        return try self.allocator.dupe(u8,
-            \\{"version": "0.19.0", "gql_compliance": "ISO/IEC 39075:2024", "transport": "QUIC+TLS"}
-        );
+        return try self.allocator.dupe(u8, std.fmt.comptimePrint(
+            \\{{"version": "{s}", "gql_compliance": "ISO/IEC 39075:2024", "transport": "QUIC+TLS"}}
+        , .{build_options.version}));
     }
 
     /// Check if client is currently connected

@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-MCP-003; FEATURE="External Library Migration"; ASPECT=MCPResources; STATUS=TESTED; OWNER=core; UPDATED=2026-01-24
 // MCP Resources for Geode - expose graph data, schemas, and query results as resources
@@ -133,13 +134,13 @@ const default_stats_resource =
     \\}
 ;
 
-const default_config_resource =
-    \\{
+const default_config_resource = std.fmt.comptimePrint(
+    \\{{
     \\  "uri": "geode://config",
     \\  "mimeType": "application/json",
-    \\  "text": "{\"version\": \"0.19.0\", \"gql_compliance\": \"ISO/IEC 39075:2024\", \"status\": \"disconnected\"}"
-    \\}
-;
+    \\  "text": "{{\\"version\\": \\"{s}\\", \\"gql_compliance\\": \\"ISO/IEC 39075:2024\\", \\"status\\": \\"disconnected\\"}}"
+    \\}}
+, .{build_options.version});
 
 /// Static JSON definition of available resources
 const resources_json =

@@ -164,8 +164,8 @@ GoReleaser automatically updates the formula when you create a release tag:
 
 ```bash
 # Create and push a release tag
-git tag v0.19.0
-git push origin v0.19.0
+git tag v0.1.4
+git push origin v0.1.4
 ```
 
 The CI/CD pipeline will:

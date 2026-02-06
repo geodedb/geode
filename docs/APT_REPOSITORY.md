@@ -178,8 +178,8 @@ This creates three jobs:
 
 ```bash
 # Create and push a semantic version tag
-git tag v0.19.0
-git push origin v0.19.0
+git tag v0.1.4
+git push origin v0.1.4
 ```
 
 The pipeline runs on tags matching: `v?\d+\.\d+\.\d+(-.*)?`

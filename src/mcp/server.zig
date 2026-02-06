@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-MCP-001; FEATURE="External Library Migration"; ASPECT=MCPIntegration; STATUS=TESTED; OWNER=core; UPDATED=2026-01-24
 // Model Context Protocol (MCP) server for Geode - enables AI/LLM integration
@@ -45,7 +46,7 @@ pub const GeodeMcpServer = struct {
 
         self.server = try mcp.Server.init(allocator, .{
             .name = "geode-mcp",
-            .version = "0.19.0",
+            .version = build_options.version,
             .instructions = "Geode Graph Database MCP Server - Execute GQL queries and explore graph data",
             .worker_threads = options.worker_threads,
             .http_bind = options.http_bind,

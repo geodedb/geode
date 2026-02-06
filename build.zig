@@ -289,6 +289,7 @@ pub fn build(b: *std.Build) void {
 
     const build_opts = b.addOptions();
     build_opts.addOption([]const u8, "version", version);
+    const build_options_mod = build_opts.createModule();
 
     const lib = b.addLibrary(.{
         .name = "wire",
@@ -350,7 +351,7 @@ pub fn build(b: *std.Build) void {
         .name = "geode",
         .root_module = b.createModule(.{ .root_source_file = b.path("src/unified_entry.zig"), .target = target, .optimize = optimize }),
     });
-    geode_exe.root_module.addOptions("build_options", build_opts);
+    geode_exe.root_module.addImport("build_options", build_options_mod);
     geode_exe.root_module.addImport("geode", root_mod);
 
     // Phase 1 External Library Imports for CLI
@@ -449,6 +450,7 @@ pub fn build(b: *std.Build) void {
     mcp_cli_mod.addImport("protobuf", protobuf_mod);
     // Parallel processing for row mapping
     mcp_cli_mod.addImport("parallel/spice", spice_wrapper_mod);
+    mcp_cli_mod.addImport("build_options", build_options_mod);
     geode_exe.root_module.addImport("geode_mcp", mcp_cli_mod);
 
     // Legacy storage stress test removed (GraphStore-only storage).
@@ -562,7 +564,7 @@ pub fn build(b: *std.Build) void {
     const lib_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize }) });
     lib_unit_tests.root_module.addImport("geode", root_mod);
     lib_unit_tests.root_module.addImport("json", json_mod);
-    lib_unit_tests.root_module.addOptions("build_options", build_opts);
+    lib_unit_tests.root_module.addImport("build_options", build_options_mod);
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
     const is_windows = target.result.os.tag == .windows;
@@ -574,12 +576,12 @@ pub fn build(b: *std.Build) void {
     const exe_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize }) });
     exe_unit_tests.root_module.addImport("geode", root_mod);
     exe_unit_tests.root_module.addImport("json", json_mod);
-    exe_unit_tests.root_module.addOptions("build_options", build_opts);
+    exe_unit_tests.root_module.addImport("build_options", build_options_mod);
 
     const gql_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/gql.zig"), .target = target, .optimize = optimize }) });
     gql_unit_tests.root_module.addImport("geode", root_mod);
     gql_unit_tests.root_module.addImport("json", json_mod);
-    gql_unit_tests.root_module.addOptions("build_options", build_opts);
+    gql_unit_tests.root_module.addImport("build_options", build_options_mod);
     // Don't add gql module import here to avoid duplicate module ownership
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
@@ -860,7 +862,7 @@ pub fn build(b: *std.Build) void {
     } else {
         const parser_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/parser_fuzz.zig"), .target = target, .optimize = .Debug }) });
         parser_fuzz_tests.root_module.addImport("geode", root_mod);
-        parser_fuzz_tests.root_module.addOptions("build_options", build_opts);
+        parser_fuzz_tests.root_module.addImport("build_options", build_options_mod);
         const run_parser_fuzz = b.addRunArtifact(parser_fuzz_tests);
         test_e2e_step.dependOn(&run_parser_fuzz.step);
 

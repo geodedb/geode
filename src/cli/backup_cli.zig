@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const geode = @import("geode");
 const graph_store = geode.graph_store;
 // Import backup types directly from storage/backup module
@@ -958,7 +959,7 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
         .username = ctx.username orelse "",
         .password = ctx.password orelse "",
         .client_name = "geode-migrate",
-        .client_version = "0.18.0",
+        .client_version = build_options.version,
         .wanted_conformance = "min",
     };
     try writeProtoMessage(ctx.allocator, stream, .{ .hello = hello_req });
@@ -1701,7 +1702,7 @@ fn executeRemoteRestore(
         .username = username orelse "",
         .password = password orelse "",
         .client_name = "geode-restore",
-        .client_version = "0.18.0",
+        .client_version = build_options.version,
         .wanted_conformance = "GQL/1.0",
     };
     writeProtoMessage(allocator, stream, .{ .hello = hello_req }) catch |err| {
