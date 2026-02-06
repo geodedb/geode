@@ -7,6 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH
 
 # Install dependencies
+# hadolint ignore=SC2015
 RUN set -eux; \
         echo "Updating apt metadata..."; \
         for i in 1 2 3; do apt-get update && break || { echo "apt-get update failed (attempt $i), retrying"; sleep 3; }; done; \
@@ -59,7 +60,7 @@ RUN echo "Building with Zig $(zig version)..." && \
             export ZIG_TARGET="x86_64-linux-gnu"; \
         fi && \
         echo "Building with target: $ZIG_TARGET" && \
-        if zig build -Doptimize=ReleaseSafe -Dtarget=$ZIG_TARGET --summary all 2>&1 | tee /tmp/build.log; then \
+        if zig build -Doptimize=ReleaseSafe -Dtarget="$ZIG_TARGET" --summary all 2>&1 | tee /tmp/build.log; then \
             echo "✓ Target build successful!"; \
         else \
             echo "=== BUILD FAILED - Last 100 lines ===" && \
@@ -76,6 +77,7 @@ FROM debian:bookworm-slim AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install runtime dependencies
+# hadolint ignore=SC2015
 RUN set -eux; \
         for i in 1 2 3; do apt-get update && break || { echo "apt-get update failed (attempt $i), retrying"; sleep 3; }; done; \
         apt-get install -y --no-install-recommends \
@@ -99,9 +101,10 @@ ENV LOG_LEVEL=error
 # Expose ports (QUIC-only + metrics)
 EXPOSE 7567/udp 9090/tcp
 
-# Health check
+# Health check - uses GEODE_USERNAME/GEODE_PASSWORD env vars if auth is enabled
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD ["geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:7567"]
+    CMD /usr/local/bin/geode query "RETURN 1 AS health" --server 127.0.0.1:7567 --insecure \
+        ${GEODE_USERNAME:+-U "$GEODE_USERNAME"} ${GEODE_PASSWORD:+-P "$GEODE_PASSWORD"}
 
 # Default entrypoint and command
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]

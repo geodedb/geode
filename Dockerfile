@@ -87,9 +87,10 @@ ENV LOG_LEVEL=error
 # Expose ports (QUIC-only + metrics)
 EXPOSE 3141/udp 9091/tcp
 
-# Health check
+# Health check - uses GEODE_USERNAME/GEODE_PASSWORD env vars if auth is enabled
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:3141", "--insecure"]
+    CMD /usr/local/bin/geode query "RETURN 1 AS health" --server 127.0.0.1:3141 --insecure \
+        ${GEODE_USERNAME:+-U "$GEODE_USERNAME"} ${GEODE_PASSWORD:+-P "$GEODE_PASSWORD"}
 
 # Default entrypoint and command
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]

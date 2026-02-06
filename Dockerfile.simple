@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y \
 ARG ZIG_VERSION=0.15.1
 ENV ZIG_PUBKEY="RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
 
+# hadolint ignore=SC2086
 RUN set -ex && \
     if [ "$TARGETARCH" = "arm64" ]; then \
         ARCH="aarch64"; \
@@ -114,8 +115,8 @@ EXPOSE 3141/udp 9090/tcp
 
 # Health check - uses GEODE_USERNAME/GEODE_PASSWORD env vars if auth is enabled
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD geode query "RETURN 1 AS health" --server 127.0.0.1:3141 --insecure \
-        ${GEODE_USERNAME:+--username "$GEODE_USERNAME"} ${GEODE_PASSWORD:+--password "$GEODE_PASSWORD"}
+    CMD /usr/local/bin/geode query "RETURN 1 AS health" --server 127.0.0.1:3141 --insecure \
+        ${GEODE_USERNAME:+-U "$GEODE_USERNAME"} ${GEODE_PASSWORD:+-P "$GEODE_PASSWORD"}
 
 # Default entrypoint and command
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]
