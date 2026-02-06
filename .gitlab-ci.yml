@@ -496,6 +496,8 @@ test-gql-compliance:
     - python3 -m venv /opt/venv
     - source /opt/venv/bin/activate
     - pip install --no-cache-dir pyyaml pytest
+    # Clone test harness specs into sibling directory (matches local monorepo layout)
+    - git clone --depth 1 "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/devnw/codepros/geode/geode-test-harness.git" ../geode-test-harness
   script:
     - |
       echo "=== Building Geode ==="
@@ -503,19 +505,15 @@ test-gql-compliance:
 
       echo "=== Running GQL Compliance Tests ==="
       source /opt/venv/bin/activate
-      cd geodetestlab
 
       # CANARY: REQ=REQ-GQL-CI-001; FEATURE="GQL Compliance CI"; ASPECT=TestEnforcement; STATUS=TESTED; TEST=geodetestlab/specs/geode_gql_compliance.yml; OWNER=ci; UPDATED=2026-01-14
       # GAP-0167: GQL compliance CI must fail on test failures - removed || true
       # Run GQL compliance spec specifically (exit code propagates for CI failure)
-      python3 ../scripts/test/extended_test_runner.py \
-        --specs specs/geode_gql_compliance.yml \
-        --binary ../zig-out/bin/geode \
-        --timeout 300 \
-        --junit-xml ../compliance-results.xml
+      python3 scripts/test/extended_test_runner.py \
+        geode_gql_compliance.yml
 
       echo "=== Compliance Test Results ==="
-      cat ../compliance-results.xml 2>/dev/null || echo "No results file generated"
+      cat compliance-results.xml 2>/dev/null || echo "No results file generated"
   artifacts:
     when: always
     paths:
@@ -538,6 +536,8 @@ test-geodetestlab-comprehensive:
     - python3 -m venv /opt/venv
     - source /opt/venv/bin/activate
     - pip install --no-cache-dir pyyaml pytest
+    # Clone test harness specs into sibling directory (matches local monorepo layout)
+    - git clone --depth 1 "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/devnw/codepros/geode/geode-test-harness.git" ../geode-test-harness
   script:
     - |
       echo "=== Building Geode ==="
@@ -548,10 +548,7 @@ test-geodetestlab-comprehensive:
 
       # CANARY: REQ=REQ-GQL-CI-002; FEATURE="GQL Comprehensive CI"; ASPECT=TestReporting; STATUS=TESTED; TEST=geodetestlab/specs/geode_gql_compliance.yml; OWNER=ci; UPDATED=2026-01-14
       # GAP-0167: Comprehensive tests report actual status (allow_failure: true permits pipeline to continue)
-      python3 scripts/test/extended_test_runner.py \
-        --binary zig-out/bin/geode \
-        --timeout 600 \
-        --junit-xml geodetestlab-results.xml || TEST_FAILED=1
+      python3 scripts/test/extended_test_runner.py || TEST_FAILED=1
 
       echo "=== Test Summary ==="
       if [ -f geodetestlab-results.xml ]; then

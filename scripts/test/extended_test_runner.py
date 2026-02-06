@@ -913,11 +913,10 @@ def run_test(
                         else:
                             # Column name lookup on row element (supports list-of-values or dict rows)
                             if in_rows_array:
-                                if isinstance(extracted, dict):
-                                    if part in extracted:
-                                        extracted = extracted[part]
-                                        in_rows_array = False
-                                        continue
+                                if isinstance(extracted, dict) and part in extracted:
+                                    extracted = extracted[part]
+                                    in_rows_array = False
+                                    continue
                                 if isinstance(extracted, list) and headers:
                                     try:
                                         col_idx = headers.index(part)
@@ -1015,7 +1014,25 @@ def main():
     # Get project root directory (2 levels up from scripts/test/)
     script_dir = Path(__file__).parent
     project_root = script_dir.parent.parent
-    specs_dir = project_root / "geodetestlab" / "specs"
+
+    # Look for specs in multiple locations:
+    # 1. Sibling test harness repo (standard monorepo layout)
+    # 2. Legacy in-repo location (geodetestlab/specs)
+    specs_candidates = [
+        project_root.parent / "geode-test-harness" / "geodetestlab-cli" / "specs",
+        project_root / "geodetestlab" / "specs",
+    ]
+    specs_dir = None
+    for candidate in specs_candidates:
+        if candidate.is_dir():
+            specs_dir = candidate
+            break
+
+    if specs_dir is None:
+        print("ERROR: Could not find test specs directory. Searched:")
+        for c in specs_candidates:
+            print(f"  - {c}")
+        return 1
 
     # Check for spec filter argument
     spec_filter = None
