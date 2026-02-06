@@ -269,7 +269,6 @@ pub fn build(b: *std.Build) void {
     const logging_mod = b.createModule(.{ .root_source_file = b.path("src/logging/logger.zig"), .target = target, .optimize = optimize });
     logging_mod.addImport("slog", slog_mod);
 
-
     // QUIC Transport Module - Uses external QUIC library (Phase 2 migration complete)
     // The external quic library provides the same API as the vendored version
     const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
@@ -353,7 +352,6 @@ pub fn build(b: *std.Build) void {
     });
     geode_exe.root_module.addOptions("build_options", build_opts);
     geode_exe.root_module.addImport("geode", root_mod);
-
 
     // Phase 1 External Library Imports for CLI
     geode_exe.root_module.addImport("uri", uri_mod);
@@ -1271,7 +1269,6 @@ pub fn build(b: *std.Build) void {
     user_manager_mod.addImport("rls", rls_mod);
     user_manager_mod.addImport("user_storage", user_storage_mod);
     user_manager_mod.addImport("logging", logging_mod);
-
 
     user_auth_exe.root_module.addImport("geode_auth", auth_mod);
     user_auth_exe.root_module.addImport("rls", rls_mod);

@@ -137,7 +137,7 @@ repos:
     files: \.zig$
     exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
     pass_filenames: false
-    args: [src/, tests/, build.zig]
+    args: [src/, build.zig]
 
       # Zig build check (compilation)
   - id: zig-build

@@ -240,7 +240,7 @@ pub const BackupManager = struct {
         if (header.magic != BACKUP_MAGIC or header.version != BACKUP_VERSION) return error.InvalidBackupFile;
         if (header.backup_type != .full) return error.InvalidBackupFile;
 
-        const payload_len = header.payload_len;
+        const payload_len: usize = @intCast(header.payload_len);
         const payload = try self.allocator.alloc(u8, payload_len);
         defer self.allocator.free(payload);
         if ((try file.readAll(payload)) != payload_len) return error.InvalidBackupFile;

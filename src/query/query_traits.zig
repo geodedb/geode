@@ -97,8 +97,8 @@ fn analyzeStatement(stmt: *const ast.Statement, analysis: *ProgramAnalysis) void
     switch (stmt.*) {
         .Query => |q| {
             analysis.traits.ordered = q.order_by != null;
-            analysis.traits.limit = q.limit;
-            analysis.traits.offset = q.offset;
+            analysis.traits.limit = if (q.limit) |l| @as(?usize, @intCast(l)) else null;
+            analysis.traits.offset = if (q.offset) |o| @as(?usize, @intCast(o)) else null;
             analysis.traits.has_group_by = q.group_by != null;
             analysis.traits.distinct = q.ret.distinct;
             analysis.traits.has_where_eq = hasEqExpr(q.where_clause);
@@ -109,8 +109,8 @@ fn analyzeStatement(stmt: *const ast.Statement, analysis: *ProgramAnalysis) void
         .Union => |u| {
             analysis.traits.has_union = true;
             analysis.traits.ordered = u.order_by != null;
-            analysis.traits.limit = u.limit;
-            analysis.traits.offset = u.offset;
+            analysis.traits.limit = if (u.limit) |l| @as(?usize, @intCast(l)) else null;
+            analysis.traits.offset = if (u.offset) |o| @as(?usize, @intCast(o)) else null;
             analysis.union_part_count = u.tails.len + 1;
             analysis.traits.distinct = false;
             var mode: UnionMode = .all;

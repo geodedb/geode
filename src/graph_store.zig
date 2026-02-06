@@ -25,8 +25,9 @@ pub fn lastLoadHadChecksumError() bool {
 /// This provides time-sortable, unique IDs without changing the NodeId type
 fn generateTimeBasedId() u64 {
     // Use atomic counter to ensure uniqueness even when called within same millisecond
+    // Use u32 for the counter to ensure 32-bit ARM compatibility (native atomic support)
     const State = struct {
-        var counter: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+        var counter: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
         var prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0);
         var initialized: bool = false;
     };
@@ -41,7 +42,7 @@ fn generateTimeBasedId() u64 {
     const timestamp_ms: u64 = @intCast(std.time.milliTimestamp());
     // Combine counter increment with random bits for uniqueness
     const counter_val = State.counter.fetchAdd(1, .monotonic);
-    const random_bits: u16 = @truncate(counter_val ^ State.prng.random().int(u64));
+    const random_bits: u16 = @truncate(counter_val ^ State.prng.random().int(u32));
     // Combine: 48-bit timestamp | 16-bit unique
     return (timestamp_ms << 16) | @as(u64, random_bits);
 }
