@@ -837,8 +837,8 @@ publish-release:
 
       **GitLab Container Registry**
       \`\`\`bash
-      docker pull registry.gitlab.com/devnw/codepros/geode/geode:${VERSION}
-      docker run -p 3141:3141/udp registry.gitlab.com/devnw/codepros/geode/geode:${VERSION}
+      docker pull geodedb/geode:${VERSION}
+      docker run -p 3141:3141/udp geodedb/geode:${VERSION}
       \`\`\`
 
       **Linux (Debian/Ubuntu)**
