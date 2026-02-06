@@ -757,6 +757,15 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_graph_persist_tests.step);
     test_step.dependOn(&run_binary_persist_tests.step);
 
+    // E2E tests (slower, require more setup - not run in pre-push hooks)
+    // Run with: zig build test-e2e
+    const test_e2e_step = b.step("test-e2e", "Run end-to-end tests (slower)");
+
+    // Run all tests (unit + e2e): zig build test-all
+    const test_all_step = b.step("test-all", "Run all tests (unit + e2e)");
+    test_all_step.dependOn(test_step);
+    test_all_step.dependOn(test_e2e_step);
+
     // Extended built-ins CANARY adapter + decimal formatter tests
     const canary_extended_builtins_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_extended_builtins.zig"), .target = target, .optimize = optimize }) });
     canary_extended_builtins_tests.root_module.addImport("geode", root_mod);
@@ -1068,7 +1077,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mfa_recovery_contention_bench.step);
     quic_tls_tests.root_module.addImport("geode", root_mod);
     const run_quic_tls_tests = b.addRunArtifact(quic_tls_tests);
-    test_step.dependOn(&run_quic_tls_tests.step);
+    test_e2e_step.dependOn(&run_quic_tls_tests.step);
 
     // Note: geoded server binary was removed to avoid module conflicts.
     // The CLI binary (geode) now handles 'serve' by directly invoking server functions
@@ -1467,7 +1476,7 @@ pub fn build(b: *std.Build) void {
     const tde_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_tde_encryption.zig"), .target = target, .optimize = optimize }),
     });
-    test_step.dependOn(&tde_test.step);
+    test_e2e_step.dependOn(&tde_test.step);
 
     // New AES-GCM page manager integration test (ensures ciphertext on disk)
     // NOTE: Temporarily excluding test_tde_integration until TDE module exposure strategy finalized.
@@ -1476,24 +1485,24 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_multi_graph.zig"), .target = target, .optimize = optimize }),
     });
     multi_graph_test.root_module.addImport("geode", root_mod);
-    test_step.dependOn(&multi_graph_test.step);
+    test_e2e_step.dependOn(&multi_graph_test.step);
 
     // Newly added scaffold acceptance tests (runtime-flag gated components)
     const e2e_security_tde_mfa_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_security_tde_mfa.zig"), .target = target, .optimize = optimize }) });
     e2e_security_tde_mfa_test.root_module.addImport("geode", root_mod);
-    test_step.dependOn(&e2e_security_tde_mfa_test.step);
+    test_e2e_step.dependOn(&e2e_security_tde_mfa_test.step);
     const e2e_fts_advanced_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_fts_advanced.zig"), .target = target, .optimize = optimize }) });
     e2e_fts_advanced_test.root_module.addImport("geode", root_mod);
-    test_step.dependOn(&e2e_fts_advanced_test.step);
+    test_e2e_step.dependOn(&e2e_fts_advanced_test.step);
     const e2e_parallel_execution_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_parallel_execution.zig"), .target = target, .optimize = optimize }) });
     e2e_parallel_execution_test.root_module.addImport("geode", root_mod);
-    test_step.dependOn(&e2e_parallel_execution_test.step);
+    test_e2e_step.dependOn(&e2e_parallel_execution_test.step);
     const e2e_cbo_v0_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_cbo_v0.zig"), .target = target, .optimize = optimize }) });
     e2e_cbo_v0_test.root_module.addImport("geode", root_mod);
-    test_step.dependOn(&e2e_cbo_v0_test.step);
+    test_e2e_step.dependOn(&e2e_cbo_v0_test.step);
     const e2e_graph_algos_new_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_graph_algos_new.zig"), .target = target, .optimize = optimize }) });
     e2e_graph_algos_new_test.root_module.addImport("geode", root_mod);
-    test_step.dependOn(&e2e_graph_algos_new_test.step);
+    test_e2e_step.dependOn(&e2e_graph_algos_new_test.step);
 
     // October 2025 feature integration tests
     const october_2025_integration_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_october_2025_features_integration.zig"), .target = target, .optimize = optimize }) });
@@ -1678,7 +1687,7 @@ pub fn build(b: *std.Build) void {
     });
     fed_mismatch_flag_test.root_module.addImport("geode", root_mod);
     fed_mismatch_flag_test.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
-    test_step.dependOn(&fed_mismatch_flag_test.step);
+    test_e2e_step.dependOn(&fed_mismatch_flag_test.step);
 
     // Security and RLS tests
     const auth_test = b.addTest(.{
@@ -1812,7 +1821,7 @@ pub fn build(b: *std.Build) void {
     e2e_rls_test.root_module.addImport("user_manager", user_manager_mod);
     e2e_rls_test.root_module.addImport("user_storage", user_storage_mod);
     e2e_rls_test.root_module.addImport("geode", root_mod);
-    test_step.dependOn(&e2e_rls_test.step);
+    test_e2e_step.dependOn(&e2e_rls_test.step);
 
     // Client builds
     const client_step = b.step("clients", "Build client libraries");

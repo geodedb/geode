@@ -199,13 +199,25 @@ goreleaser-check:
 	$(GORELEASER) check
 	@echo "✓ GoReleaser configuration is valid"
 
-# Run Zig tests
+# Run Zig unit tests (fast, used by pre-push hooks)
 test:
-	@echo "Running Zig tests..."
+	@echo "Running Zig unit tests..."
 	$(ZIG) build test $(ZIG_FLAGS)
 	@echo "Running QUIC protocol tests..."
 	@$(MAKE) quic-test || echo "⚠ QUIC tests skipped (may require server)"
 	@echo "✓ Core tests completed"
+
+# Run e2e tests (slower)
+test-e2e:
+	@echo "Running e2e tests..."
+	$(ZIG) build test-e2e $(ZIG_FLAGS)
+	@echo "✓ E2E tests completed"
+
+# Run all tests (unit + e2e)
+test-all:
+	@echo "Running all tests..."
+	$(ZIG) build test-all $(ZIG_FLAGS)
+	@echo "✓ All tests completed"
 
 # QUIC test target (uses vendor QUIC implementation)
 quic-test: build
