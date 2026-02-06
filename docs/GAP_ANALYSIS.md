@@ -10,10 +10,11 @@
 |----------|-----------|----------|
 | CLI | 1 | Low |
 | GQL Conformance | 1 | Medium |
+| Security | 1 | Medium |
 | Test | 0 | - |
 | CI-CD | 0 | - |
 | Documentation | 0 | - |
-| **Total Open Gaps** | **2** | |
+| **Total Open Gaps** | **3** | |
 
 ---
 
@@ -55,6 +56,26 @@
   - [ ] Conformance tests added for non-MATCH features (DML/DDL, transactions, functions, types)
   - [ ] CI enforces expanded conformance test suite with blocking failures
   - [ ] Evidence published to substantiate full ISO conformance claims in public docs
+
+---
+
+### GAP-0258: mTLS CLI commands not available over QUIC transport
+
+- **Status:** 🔴 **OPEN**
+- **Category:** Security
+- **Severity:** Medium
+- **Description:** The `mtls` CLI subcommand (certificate-to-user mapping, fingerprint mapping, SAN mapping, subject CN/DN mapping, strict mode) is not available when using the QUIC-only protobuf client. The command returns: `Error: 'mtls' CLI command is not available in the protobuf/QUIC-only client. Use server-side administration APIs instead.` This means mTLS certificate management cannot be performed via the CLI when using QUIC transport, which is the default and only supported transport. The mTLS functionality needs to be implemented for the QUIC transport layer.
+- **Affected files:**
+  - `src/cli/cli_dispatcher.zig` - mTLS command routing
+  - `src/transport/quic.zig` - QUIC transport layer
+  - `src/auth/mtls.zig` - mTLS authentication module
+- **Acceptance criteria:**
+  - [ ] `geode mtls map` commands work over QUIC transport
+  - [ ] Certificate fingerprint, SAN, and subject mapping supported
+  - [ ] mTLS strict mode enable/disable functional
+  - [ ] Integration tests pass (`mtls_auth.yml` spec)
+- **Test coverage:** 22 tests skipped in `geode-test-harness/geodetestlab-cli/specs/mtls_auth.yml` pending this fix
+- **Related:** mTLS authentication documentation, QUIC transport implementation
 
 ---
 
