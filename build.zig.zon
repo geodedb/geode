@@ -20,7 +20,7 @@
         // YAML 1.2.2 parser/emitter
         .yaml = .{
             .url = "git+https://gitlab.com/devnw/zig/yaml.git#5caf68f4fcd40c3655d6196c58f7381168344cb3",
-            .hash = "yaml-0.1.1-lcW-hEyJBABZo0NG6sKHQkL4gciVKTQ4GLwXVeA2kpCe",
+            .hash = "yaml-0.1.1-lcW-hHGjBAB4EJkvPoO1F36yh0qyuRJlvhA2sgmr7Skn",
         },
 
         // TOML v1.1.0 parser
@@ -32,7 +32,7 @@
         // Unicode string library with SIMD acceleration
         .strings = .{
             .url = "git+https://gitlab.com/devnw/zig/strings.git#3e4c78e772231fa439ad22e3fb9fd5113cd14a0b",
-            .hash = "strings-0.1.0-adMOtbd1HABrved9iMt4lKxtonWX5dKNIWrdaWc2B5mo",
+            .hash = "strings-0.1.0-adMOtR2yHADep7OO8qUb-pwjAxf-ID1G6224WgmBJ-Lt",
         },
 
         // REPL library with Emacs/Vi keybindings
