@@ -89,6 +89,9 @@ pub fn parse(allocator: std.mem.Allocator, source: []const u8, options: ParseOpt
     };
 }
 
+// Context-aware GQL recommendation engine for LSP/MCP diagnostics
+pub const recommendations = @import("gql/recommendations.zig");
+
 // Re-export printer module so binaries can import through the geode module
 pub const printer = @import("gql/print.zig");
 // Re-export conformance profile helpers for CLI/tools

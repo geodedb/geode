@@ -4622,12 +4622,13 @@ pub const Parser = struct {
             self.advance();
 
             // Label (e.g., :Person or Person)
+            // Allow keywords as label names (e.g., :SCAN, :MATCH, :NODE)
             if (self.cur.kind == .colon) {
                 self.advance();
-                if (self.cur.kind != .identifier) return error.UnexpectedToken;
+                if (self.cur.kind != .identifier and !self.isKeyword(self.cur.kind)) return error.UnexpectedToken;
                 label = self.cur.lexeme;
                 self.advance();
-            } else if (self.cur.kind == .identifier) {
+            } else if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) {
                 label = self.cur.lexeme;
                 self.advance();
             } else {

@@ -10,6 +10,8 @@ pub const gql_parser = geode.gql.parser;
 pub const gql_lexer = geode.gql.lexer;
 pub const language_metadata = geode.language_metadata;
 
+pub const recommendations = geode.recommendations;
+
 pub const server = @import("server.zig");
 pub const client = @import("client.zig");
 pub const tools = @import("tools.zig");

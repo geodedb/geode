@@ -123,7 +123,7 @@ pub fn validateQuery(allocator: std.mem.Allocator, query: []const u8) ![]const u
     };
 
     // Try to parse the query
-    _ = parser.parseProgram() catch |err| {
+    const program = parser.parseProgram() catch |err| {
         is_valid = false;
 
         // Get error message from parser
@@ -137,7 +137,51 @@ pub fn validateQuery(allocator: std.mem.Allocator, query: []const u8) ![]const u
             .severity = .@"error",
             .message = error_msg,
         });
+
+        // Check for double-dash comments even on error
+        if (lexer.has_double_solidus_comment) {
+            try diagnostics.append(allocator, Diagnostic{
+                .line = 0,
+                .column = 0,
+                .end_line = 0,
+                .end_column = 0,
+                .severity = .information,
+                .message = "Double-dash (--) comments are a Geode extension and may not be supported by other GQL databases.",
+            });
+        }
+
+        return formatValidationResponse(allocator, is_valid, diagnostics.items);
     };
+
+    // Check for double-dash comments (Geode extension - supported but non-standard)
+    if (lexer.has_double_solidus_comment) {
+        try diagnostics.append(allocator, Diagnostic{
+            .line = 0,
+            .column = 0,
+            .end_line = 0,
+            .end_column = 0,
+            .severity = .information,
+            .message = "Double-dash (--) comments are a Geode extension and may not be supported by other GQL databases.",
+        });
+    }
+
+    // Run recommendation engine for context-aware suggestions
+    var rec_engine = mod.recommendations.RecommendationEngine.init(allocator);
+    defer rec_engine.deinit();
+    const suggestions = rec_engine.analyze(program) catch &[_]mod.recommendations.Recommendation{};
+    for (suggestions) |suggestion| {
+        try diagnostics.append(allocator, Diagnostic{
+            .line = suggestion.line,
+            .column = suggestion.column,
+            .end_line = suggestion.line,
+            .end_column = suggestion.column,
+            .severity = switch (suggestion.severity) {
+                .information => .information,
+                .hint => .hint,
+            },
+            .message = suggestion.message,
+        });
+    }
 
     // Format response as JSON
     return formatValidationResponse(allocator, is_valid, diagnostics.items);
@@ -372,10 +416,12 @@ fn isIdentifierChar(c: u8) bool {
 
 fn addClauseKeywords(allocator: std.mem.Allocator, completions: *std.ArrayList(CompletionItem)) !void {
     const clause_keywords = [_][]const u8{
-        "MATCH",   "OPTIONAL", "RETURN", "WITH",   "CREATE",
-        "DELETE",  "MERGE",    "SET",    "REMOVE", "CALL",
-        "UNWIND",  "USE",      "BEGIN",  "COMMIT", "ROLLBACK",
-        "EXPLAIN", "PROFILE",  "INSERT", "DROP",   "SHOW",
+        "MATCH",   "OPTIONAL", "RETURN",  "WITH",   "CREATE",
+        "DELETE",  "MERGE",    "SET",     "REMOVE", "CALL",
+        "UNWIND",  "USE",      "BEGIN",   "COMMIT", "ROLLBACK",
+        "EXPLAIN", "PROFILE",  "INSERT",  "DROP",   "SHOW",
+        // Geode extensions
+        "BACKUP",  "RESTORE",  "SESSION", "VALUES", "FOR",
     };
 
     for (clause_keywords) |kw| {
@@ -640,6 +686,18 @@ test "formatValidationResponse with diagnostics" {
     try std.testing.expect(std.mem.indexOf(u8, result, "\"isValid\":false") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"line\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"message\":\"Syntax error\"") != null);
+}
+
+test "validateQuery includes recommendations" {
+    const allocator = std.testing.allocator;
+
+    const result = try validateQuery(allocator, "CREATE (u:User {password: 'secret123'})");
+    defer allocator.free(result);
+
+    // Should be valid (no parse errors)
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"isValid\":true") != null);
+    // Should contain a recommendation about encrypted annotation
+    try std.testing.expect(std.mem.indexOf(u8, result, "encrypted") != null or std.mem.indexOf(u8, result, "sensitive") != null);
 }
 
 test "JSON library handles special characters in LSP responses" {

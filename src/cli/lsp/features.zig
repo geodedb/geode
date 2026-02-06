@@ -38,18 +38,18 @@ pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protoco
 
     switch (outcome) {
         .Err => |err_info| {
-            // Check for double-dash comments first (GB02 warning)
+            // Check for double-dash comments (Geode extension - supported but non-standard)
             if (err_info.has_double_dash_comment) {
-                const warning = protocol.Diagnostic{
+                const info_diag = protocol.Diagnostic{
                     .range = .{
                         .start = .{ .line = 0, .character = 0 },
                         .end = .{ .line = 0, .character = 0 },
                     },
-                    .severity = .Warning,
+                    .severity = .Information,
                     .source = "geode",
-                    .message = try allocator.dupe(u8, "Double-dash (--) comments are disabled per GQL spec (GB02). Use // comments instead."),
+                    .message = try allocator.dupe(u8, "Double-dash (--) comments are a Geode extension and may not be supported by other GQL databases."),
                 };
-                try diagnostics.append(allocator, warning);
+                try diagnostics.append(allocator, info_diag);
             }
 
             // Then show the parse error at the actual location
@@ -70,16 +70,16 @@ pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protoco
                 res.deinit();
             }
 
-            // Check for double-dash comments (GB02 - show as warning)
+            // Check for double-dash comments (Geode extension - supported but non-standard)
             if (result.has_double_dash_comment) {
                 const diag = protocol.Diagnostic{
                     .range = .{
                         .start = .{ .line = 0, .character = 0 },
                         .end = .{ .line = 0, .character = 0 },
                     },
-                    .severity = .Warning,
+                    .severity = .Information,
                     .source = "geode",
-                    .message = try allocator.dupe(u8, "Double-dash (--) comments are disabled per GQL spec (GB02). Use // comments instead."),
+                    .message = try allocator.dupe(u8, "Double-dash (--) comments are a Geode extension and may not be supported by other GQL databases."),
                 };
                 try diagnostics.append(allocator, diag);
             }
@@ -134,6 +134,26 @@ pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protoco
                     .message = try allocator.dupe(u8, sem_err.message),
                 };
                 try diagnostics.append(allocator, diag);
+            }
+
+            // Run recommendation engine for context-aware suggestions
+            var rec_engine = geode.recommendations.RecommendationEngine.init(allocator);
+            defer rec_engine.deinit();
+            const suggestions = rec_engine.analyze(result.program) catch &[_]geode.recommendations.Recommendation{};
+            for (suggestions) |suggestion| {
+                const rec_diag = protocol.Diagnostic{
+                    .range = .{
+                        .start = .{ .line = suggestion.line, .character = suggestion.column },
+                        .end = .{ .line = suggestion.line, .character = suggestion.column },
+                    },
+                    .severity = switch (suggestion.severity) {
+                        .information => .Information,
+                        .hint => .Hint,
+                    },
+                    .source = "geode",
+                    .message = try allocator.dupe(u8, suggestion.message),
+                };
+                try diagnostics.append(allocator, rec_diag);
             }
         },
     }

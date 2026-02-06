@@ -357,7 +357,7 @@ const tools_json =
     \\  },
     \\  {
     \\    "name": "validate",
-    \\    "description": "Validate GQL syntax and return diagnostics. Does not require a running Geode server.",
+    \\    "description": "Validate GQL syntax and return diagnostics including Geode extensions (FLE, BACKUP/RESTORE, SESSION, double-dash comments). Does not require a running Geode server.",
     \\    "inputSchema": {
     \\      "type": "object",
     \\      "properties": {
@@ -371,7 +371,7 @@ const tools_json =
     \\  },
     \\  {
     \\    "name": "complete",
-    \\    "description": "Get GQL completions at a cursor position. Returns keywords, functions, types, and procedures.",
+    \\    "description": "Get GQL completions at a cursor position. Returns keywords, functions, types, and procedures including Geode extensions (BACKUP, RESTORE, SESSION, FLE annotations).",
     \\    "inputSchema": {
     \\      "type": "object",
     \\      "properties": {
@@ -415,7 +415,7 @@ const tools_json =
     \\  },
     \\  {
     \\    "name": "diagnostics",
-    \\    "description": "Get all diagnostics (errors, warnings) for a GQL document. Alias for validate.",
+    \\    "description": "Get all diagnostics (errors, warnings, information) for a GQL document including Geode extension notices. Alias for validate.",
     \\    "inputSchema": {
     \\      "type": "object",
     \\      "properties": {
