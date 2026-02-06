@@ -833,7 +833,7 @@ pub fn build(b: *std.Build) void {
     cli_tests.root_module.addImport("geode", root_mod);
     cli_tests.root_module.addImport("json", json_mod);
     const run_cli_tests = b.addRunArtifact(cli_tests);
-    test_step.dependOn(&run_cli_tests.step);
+    test_e2e_step.dependOn(&run_cli_tests.step);
 
     // Protobuf wire protocol compatibility tests (Phase 6 validation)
     const protobuf_wire_protocol_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/protobuf_wire_protocol_compatibility.zig"), .target = target, .optimize = optimize }) });
@@ -862,7 +862,7 @@ pub fn build(b: *std.Build) void {
         parser_fuzz_tests.root_module.addImport("geode", root_mod);
         parser_fuzz_tests.root_module.addOptions("build_options", build_opts);
         const run_parser_fuzz = b.addRunArtifact(parser_fuzz_tests);
-        test_step.dependOn(&run_parser_fuzz.step);
+        test_e2e_step.dependOn(&run_parser_fuzz.step);
 
         // moved earlier wiring for hnsw fuzz modules above
 
@@ -874,30 +874,30 @@ pub fn build(b: *std.Build) void {
         txn_mod_for_fuzz.addImport("range_tracker", range_tracker_mod_for_fuzz);
         txn_sequence_fuzz_tests.root_module.addImport("txn", txn_mod_for_fuzz);
         const run_txn_sequence_fuzz = b.addRunArtifact(txn_sequence_fuzz_tests);
-        test_step.dependOn(&run_txn_sequence_fuzz.step);
+        test_e2e_step.dependOn(&run_txn_sequence_fuzz.step);
 
         const lfu_cache_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/lfu_cache_fuzz.zig"), .target = target, .optimize = .Debug }) });
         lfu_cache_fuzz_tests.root_module.addImport("geode", root_mod);
         const run_lfu_cache_fuzz = b.addRunArtifact(lfu_cache_fuzz_tests);
-        test_step.dependOn(&run_lfu_cache_fuzz.step);
+        test_e2e_step.dependOn(&run_lfu_cache_fuzz.step);
 
         const protocol_hello_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/protocol_hello_fuzz.zig"), .target = target, .optimize = .Debug }) });
         protocol_hello_fuzz_tests.root_module.addImport("protobuf", protobuf_mod);
         protocol_hello_fuzz_tests.root_module.addImport("schema", schema_mod);
         const run_protocol_hello_fuzz = b.addRunArtifact(protocol_hello_fuzz_tests);
-        test_step.dependOn(&run_protocol_hello_fuzz.step);
+        test_e2e_step.dependOn(&run_protocol_hello_fuzz.step);
 
         const decimal_roundtrip_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/decimal_roundtrip_fuzz.zig"), .target = target, .optimize = .Debug }) });
         const decimal128_mod = b.createModule(.{ .root_source_file = b.path("src/types/decimal128.zig"), .target = target, .optimize = optimize });
         decimal_roundtrip_fuzz_tests.root_module.addImport("decimal128", decimal128_mod);
         const run_decimal_roundtrip_fuzz = b.addRunArtifact(decimal_roundtrip_fuzz_tests);
-        test_step.dependOn(&run_decimal_roundtrip_fuzz.step);
+        test_e2e_step.dependOn(&run_decimal_roundtrip_fuzz.step);
 
         const planner_prune_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/planner_prune_fuzz.zig"), .target = target, .optimize = .Debug }) });
         const planner_enumerator_mod_fuzz = b.createModule(.{ .root_source_file = b.path("src/planner/enumerator.zig"), .target = target, .optimize = optimize });
         planner_prune_fuzz_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod_fuzz);
         const run_planner_prune_fuzz = b.addRunArtifact(planner_prune_fuzz_tests);
-        test_step.dependOn(&run_planner_prune_fuzz.step);
+        test_e2e_step.dependOn(&run_planner_prune_fuzz.step);
 
         const hnsw_snapshot_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/hnsw_snapshot_fuzz.zig"), .target = target, .optimize = .Debug }) });
         const hnsw_persist_mod = b.createModule(.{ .root_source_file = b.path("src/index/hnsw_persist.zig"), .target = target, .optimize = optimize });
@@ -910,7 +910,7 @@ pub fn build(b: *std.Build) void {
         hnsw_snapshot_fuzz_tests.root_module.addImport("hnsw_persist", hnsw_persist_mod);
         hnsw_snapshot_fuzz_tests.root_module.addImport("hnsw", hnsw_mod);
         const run_hnsw_snapshot_fuzz = b.addRunArtifact(hnsw_snapshot_fuzz_tests);
-        test_step.dependOn(&run_hnsw_snapshot_fuzz.step);
+        test_e2e_step.dependOn(&run_hnsw_snapshot_fuzz.step);
 
         // Legacy WAL fuzz target removed (GraphStore-only storage).
 
@@ -920,7 +920,7 @@ pub fn build(b: *std.Build) void {
         transport_perf_fuzz_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
         transport_perf_fuzz_tests.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
         const run_transport_perf_fuzz = b.addRunArtifact(transport_perf_fuzz_tests);
-        test_step.dependOn(&run_transport_perf_fuzz.step);
+        test_e2e_step.dependOn(&run_transport_perf_fuzz.step);
     }
 
     // Attach physiological redo canary tests after test_step defined
@@ -953,7 +953,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&mvcc_adv_integration_tests.step);
     const mvcc_adv_bench_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/benchmark_mvcc_repair_throughput.zig"), .target = target, .optimize = optimize }) });
     mvcc_adv_bench_tests.root_module.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
-    test_step.dependOn(&mvcc_adv_bench_tests.step);
+    test_e2e_step.dependOn(&mvcc_adv_bench_tests.step);
     // MVCC phantom detection tests & bench
     const txn_mod_for_phantom_tests = b.createModule(.{ .root_source_file = b.path("src/transactions/manager.zig"), .target = target, .optimize = optimize });
     txn_mod_for_phantom_tests.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
@@ -1068,10 +1068,10 @@ pub fn build(b: *std.Build) void {
     const mfa_stepup_latency_bench = b.addExecutable(.{ .name = "bench_mfa_stepup_latency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_mfa_stepup_latency.zig"), .target = target, .optimize = optimize }) });
     mfa_stepup_latency_bench.root_module.addImport("security/mfa_risk.zig", mfa_risk_mod);
     const run_mfa_stepup_latency_bench = b.addRunArtifact(mfa_stepup_latency_bench);
-    test_step.dependOn(&run_mfa_stepup_latency_bench.step);
+    test_e2e_step.dependOn(&run_mfa_stepup_latency_bench.step);
     const mfa_recovery_contention_bench = b.addExecutable(.{ .name = "bench_mfa_recovery_code_contention", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_mfa_recovery_code_contention.zig"), .target = target, .optimize = optimize }) });
     const run_mfa_recovery_contention_bench = b.addRunArtifact(mfa_recovery_contention_bench);
-    test_step.dependOn(&run_mfa_recovery_contention_bench.step);
+    test_e2e_step.dependOn(&run_mfa_recovery_contention_bench.step);
     quic_tls_tests.root_module.addImport("geode", root_mod);
     const run_quic_tls_tests = b.addRunArtifact(quic_tls_tests);
     test_e2e_step.dependOn(&run_quic_tls_tests.step);
@@ -1159,7 +1159,7 @@ pub fn build(b: *std.Build) void {
         remote_kms_concurrency_bench.linkLibC();
     }
     const run_remote_kms_concurrency_bench = b.addRunArtifact(remote_kms_concurrency_bench);
-    test_step.dependOn(&run_remote_kms_concurrency_bench.step);
+    test_e2e_step.dependOn(&run_remote_kms_concurrency_bench.step);
 
     // CDC enhanced streaming module (diagnostics, malformed WAL tracking)
     //    const cdc_enhanced_mod = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize });
@@ -1193,35 +1193,35 @@ pub fn build(b: *std.Build) void {
     bias_clamp_variance_bench.root_module.addImport("geode", root_mod);
     bias_clamp_variance_bench.root_module.addImport("cost_seed", b.createModule(.{ .root_source_file = b.path("src/planner/cost_seed.zig"), .target = target, .optimize = optimize }));
     const run_bias_clamp_variance_bench = b.addRunArtifact(bias_clamp_variance_bench);
-    test_step.dependOn(&run_bias_clamp_variance_bench.step);
+    test_e2e_step.dependOn(&run_bias_clamp_variance_bench.step);
 
     // PathCache degree bucket utilization variance benchmark (S-015)
     const pathcache_degree_util_bench = b.addExecutable(.{ .name = "bench_pathcache_degree_util", .root_module = b.createModule(.{ .root_source_file = b.path("tests/benchmark_path_cache_degree_bucket_utilization.zig"), .target = target, .optimize = optimize }) });
     pathcache_degree_util_bench.root_module.addImport("geode", root_mod);
     const run_pathcache_degree_util_bench = b.addRunArtifact(pathcache_degree_util_bench);
-    test_step.dependOn(&run_pathcache_degree_util_bench.step);
+    test_e2e_step.dependOn(&run_pathcache_degree_util_bench.step);
 
     // Federation mismatch false-positive guard benchmark (optional SLO)
     const federation_mismatch_guard_bench = b.addExecutable(.{ .name = "bench_federation_mismatch_guard", .root_module = b.createModule(.{ .root_source_file = b.path("tests/debug/benchmark_federation_mismatch_frequency.zig"), .target = target, .optimize = optimize }) });
     federation_mismatch_guard_bench.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
     const run_federation_mismatch_guard_bench = b.addRunArtifact(federation_mismatch_guard_bench);
-    test_step.dependOn(&run_federation_mismatch_guard_bench.step);
+    test_e2e_step.dependOn(&run_federation_mismatch_guard_bench.step);
 
     // Federation mismatch latency variance envelope benchmark (optional SLO, unpromoted IMPL)
     const federation_mismatch_latency_bench = b.addExecutable(.{ .name = "bench_federation_mismatch_latency", .root_module = b.createModule(.{ .root_source_file = b.path("tests/debug/benchmark_federation_mismatch_latency.zig"), .target = target, .optimize = optimize }) });
     federation_mismatch_latency_bench.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
     const run_federation_mismatch_latency_bench = b.addRunArtifact(federation_mismatch_latency_bench);
-    test_step.dependOn(&run_federation_mismatch_latency_bench.step);
+    test_e2e_step.dependOn(&run_federation_mismatch_latency_bench.step);
     // Also compile its tests explicitly (so the test block runs under the zig test harness aside from executable run)
     const federation_mismatch_latency_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/debug/benchmark_federation_mismatch_latency.zig"), .target = target, .optimize = optimize }) });
     federation_mismatch_latency_test.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
-    test_step.dependOn(&federation_mismatch_latency_test.step);
+    test_e2e_step.dependOn(&federation_mismatch_latency_test.step);
 
     // Redo optimization delta variance benchmark (S-016)
     const redo_opt_delta_bench = b.addExecutable(.{ .name = "bench_redo_optimization_delta", .root_module = b.createModule(.{ .root_source_file = b.path("tests/benchmark_redo_optimization_delta.zig"), .target = target, .optimize = optimize }) });
     redo_opt_delta_bench.root_module.addImport("geode", root_mod);
     const run_redo_opt_delta_bench = b.addRunArtifact(redo_opt_delta_bench);
-    test_step.dependOn(&run_redo_opt_delta_bench.step);
+    test_e2e_step.dependOn(&run_redo_opt_delta_bench.step);
 
     const doccheck_exe = b.addExecutable(.{
         .name = "doccheck",
