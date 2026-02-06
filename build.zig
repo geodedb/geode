@@ -401,8 +401,6 @@ pub fn build(b: *std.Build) void {
     if (is_native and target.result.os.tag != .windows) {
         geode_exe.linkSystemLibrary("ssl");
         geode_exe.linkSystemLibrary("crypto");
-        // Link zlib for gRPC compression support
-        geode_exe.linkSystemLibrary("z");
     }
     if (target.result.os.tag == .linux and is_native) {
         geode_exe.linkSystemLibrary("dl");

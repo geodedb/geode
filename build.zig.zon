@@ -139,9 +139,10 @@
         },
 
         // gRPC for Zig
+        // Updated 2026-02-05: Link zlib to server/client modules for cross-compilation
         .grpc_zig = .{
-            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#366a4964ca713c61d7ba774eba29178f4be60ae1",
-            .hash = "grpc_zig-0.1.0-7FnvpF9cAQBqP23FSBWvs6Ts4iQRwzbWAxGkY6NmUr_i",
+            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#3d34148f0f0c6667a9cb76a00ec3b581dfb7446a",
+            .hash = "grpc_zig-0.1.0-7FnvpKtcAQB0d0NRgit04CC-L9gZRJXfSZ3j9AAU2ErC",
         },
     },
 
