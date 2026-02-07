@@ -1127,10 +1127,14 @@ def main():
                         server_env_overrides[key] = str(value)
 
         # Ensure default credentials are available for test clients
+        # Note: user_management.zig reads GEODE_ADMIN_PASSWORD while
+        # geode_auth_lib.zig reads GEODE_DEFAULT_PASSWORD - set both for compatibility
         if "GEODE_ADMIN_USERNAME" not in server_env_overrides and "GEODE_ADMIN_USERNAME" not in os.environ:
             server_env_overrides["GEODE_ADMIN_USERNAME"] = "geode"
         if "GEODE_DEFAULT_PASSWORD" not in server_env_overrides and "GEODE_DEFAULT_PASSWORD" not in os.environ:
             server_env_overrides["GEODE_DEFAULT_PASSWORD"] = "geode-test-password"
+        if "GEODE_ADMIN_PASSWORD" not in server_env_overrides and "GEODE_ADMIN_PASSWORD" not in os.environ:
+            server_env_overrides["GEODE_ADMIN_PASSWORD"] = "geode-test-password"
 
         # Start server if required
         if spec_server_enabled:
