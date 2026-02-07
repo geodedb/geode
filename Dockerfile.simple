@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     file \
     minisign \
+    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Zig with fallback mirrors
@@ -77,7 +78,7 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
     else \
         export ZIG_TARGET="x86_64-linux-gnu"; \
     fi && \
-    (zig build -Doptimize=ReleaseSafe -Dtarget=$ZIG_TARGET || zig build -Dtarget=$ZIG_TARGET)
+    (zig build -Doptimize=ReleaseSafe -Dtarget=$ZIG_TARGET -Denable-openssl=true || zig build -Dtarget=$ZIG_TARGET -Denable-openssl=true)
 
 # Try to build tools (may fail, that's ok)
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
@@ -85,8 +86,8 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
     else \
         export ZIG_TARGET="x86_64-linux-gnu"; \
     fi && \
-    (zig build tools -Doptimize=ReleaseSafe -Dtarget=$ZIG_TARGET 2>/dev/null || \
-     zig build tools -Dtarget=$ZIG_TARGET 2>/dev/null || \
+    (zig build tools -Doptimize=ReleaseSafe -Dtarget=$ZIG_TARGET -Denable-openssl=true 2>/dev/null || \
+     zig build tools -Dtarget=$ZIG_TARGET -Denable-openssl=true 2>/dev/null || \
      echo "Warning: Some tools may not have built")
 
 # Runtime stage
@@ -95,6 +96,7 @@ FROM debian:bookworm-slim AS runtime
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    libssl3 \
     && rm -rf /var/lib/apt/lists/* && \
     useradd -m -u 1000 geode && \
     mkdir -p /data /certs /var/log/geode && \
@@ -110,8 +112,8 @@ WORKDIR /home/geode
 # Set default log level (can be overridden with -e LOG_LEVEL=debug)
 ENV LOG_LEVEL=error
 
-# Expose ports (QUIC-only + metrics)
-EXPOSE 3141/udp 9090/tcp
+# Expose ports (QUIC + gRPC + metrics)
+EXPOSE 3141/udp 50051/tcp 9090/tcp
 
 # Health check - uses GEODE_USERNAME/GEODE_PASSWORD env vars if auth is enabled
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \

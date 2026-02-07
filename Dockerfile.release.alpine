@@ -23,8 +23,8 @@ RUN chmod +x /usr/local/bin/geode
 USER geode
 WORKDIR /home/geode
 
-# Expose ports (QUIC + metrics)
-EXPOSE 3141/udp 9090/tcp
+# Expose ports (QUIC + gRPC + metrics)
+EXPOSE 3141/udp 50051/tcp 9090/tcp
 
 # Health check - uses GEODE_USERNAME/GEODE_PASSWORD env vars if auth is enabled
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \

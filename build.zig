@@ -393,17 +393,24 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("vendor_quic", quic_ext_mod);
 
     // Link with OpenSSL for QUIC/TLS crypto operations (external library)
-    // Only link system libraries for native builds (not cross-compilation)
-    // Skip on Windows as OpenSSL is not typically available in CI environments
+    // Defaults to true on native non-Windows builds; can be forced on for Docker
+    // builds that cross-compile to the host arch (e.g. -Dtarget=x86_64-linux-gnu).
     geode_exe.linkLibC();
     const is_native = target.query.isNative();
-    if (is_native and target.result.os.tag != .windows) {
+    const enable_openssl = b.option(bool, "enable-openssl", "Link OpenSSL for gRPC TLS (default: auto-detect)") orelse
+        (is_native and target.result.os.tag != .windows);
+    if (enable_openssl) {
         geode_exe.linkSystemLibrary("ssl");
         geode_exe.linkSystemLibrary("crypto");
     }
-    if (target.result.os.tag == .linux and is_native) {
+    if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
         geode_exe.linkSystemLibrary("dl");
     }
+
+    // Pass OpenSSL availability to grpc_tls.zig via build options
+    const openssl_options = b.addOptions();
+    openssl_options.addOption(bool, "enable_openssl", enable_openssl);
+    geode_exe.root_module.addOptions("openssl_config", openssl_options);
 
     // Add essential modules for server and client functionality
     // Note: transport_quic_mod is defined later after vendor_quic_mod is available
@@ -735,6 +742,11 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag == .linux) {
         custom_tests.linkSystemLibrary("dl");
     }
+
+    // Pass OpenSSL availability to grpc_tls.zig via build options (tests always native)
+    const test_openssl_options = b.addOptions();
+    test_openssl_options.addOption(bool, "enable_openssl", target.result.os.tag != .windows);
+    custom_tests.root_module.addOptions("openssl_config", test_openssl_options);
     const run_custom_tests = b.addRunArtifact(custom_tests);
 
     const test_step = b.step("test", "Run unit tests");

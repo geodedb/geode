@@ -84,8 +84,8 @@ ENV LOG_LEVEL=error
 #   sysctl -w net.core.rmem_max=7340032
 #   sysctl -w net.core.wmem_max=7340032
 
-# Expose ports (QUIC-only + metrics)
-EXPOSE 3141/udp 9091/tcp
+# Expose ports (QUIC + gRPC + metrics)
+EXPOSE 3141/udp 50051/tcp 9091/tcp
 
 # Health check - uses GEODE_USERNAME/GEODE_PASSWORD env vars if auth is enabled
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

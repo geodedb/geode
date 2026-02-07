@@ -5,6 +5,7 @@ FROM debian:bookworm-slim
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    libssl3 \
     libvulkan1 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 10000 geode \
@@ -22,8 +23,8 @@ RUN chmod +x /usr/local/bin/*
 USER geode
 WORKDIR /home/geode
 
-# Expose ports (QUIC + metrics)
-EXPOSE 3141/udp 9090/tcp
+# Expose ports (QUIC + gRPC + metrics)
+EXPOSE 3141/udp 50051/tcp 9090/tcp
 
 # Health check - uses GEODE_USERNAME/GEODE_PASSWORD env vars if auth is enabled
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
