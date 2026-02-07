@@ -1,5 +1,4 @@
 REQ,Feature,Aspect,Status,Test,Bench,Owner,Updated,File
-<req-id>,<feature>,<aspect>,STUB,,,<owner>,<date>,tests/unit_gap_0013_0016_fixes.zig
 REQ-0001,Standards & Conformance Requirements,Compliance,TESTED,,,core,2026-01-15,src/gql/parser.zig
 REQ-0002,Language Surface Requirements,Compliance,TESTED,,,core,2026-01-15,src/gql/parser.zig
 REQ-0003,Engine Contract Requirements,Execution,TESTED,,,execution,2026-01-15,src/execution/query_execution.zig
