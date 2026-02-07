@@ -530,6 +530,7 @@ test-gql-compliance:
 test-geodetestlab-comprehensive:
   stage: test
   image: $ZIG_IMAGE
+  timeout: 2h
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
