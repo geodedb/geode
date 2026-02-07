@@ -184,7 +184,9 @@ pub const attr = struct {
     }
 
     pub fn err(key: []const u8, val: anyerror) Attr {
-        return Attr.err(key, val);
+        // Eagerly resolve error name to a static string to avoid segfault
+        // if the error value becomes corrupt before the handler formats it
+        return Attr.string(key, @errorName(val));
     }
 
     pub fn secret(key: []const u8, val: []const u8) Attr {
