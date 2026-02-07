@@ -297,7 +297,7 @@ pub const GeodeGrpcServer = struct {
 
                 grpc_tls.initTlsContext(cert_z, key_z) catch |err| {
                     log.warn("gRPC TLS init failed, falling back to plaintext", &.{
-                        Attr.string("error", @errorName(err)),
+                        Attr.err("error", err),
                     });
                     // Continue without TLS — server will accept plaintext connections
                 };

@@ -936,7 +936,7 @@ fn handleClientMessage(
                         const n = file.read(buf[0..chunk]) catch |err| {
                             log.err("Failed to read backup file", &.{
                                 Attr.string("path", backup_path),
-                                Attr.string("error", @errorName(err)),
+                                Attr.err("error", err),
                             });
                             break;
                         };
@@ -944,7 +944,7 @@ fn handleClientMessage(
                         _ = stream.write(buf[0..n]) catch |err| {
                             log.err("Failed to stream backup bytes", &.{
                                 Attr.string("path", backup_path),
-                                Attr.string("error", @errorName(err)),
+                                Attr.err("error", err),
                             });
                             break;
                         };
@@ -953,7 +953,7 @@ fn handleClientMessage(
                 } else |err| {
                     log.err("Backup file missing for streaming", &.{
                         Attr.string("path", backup_path),
-                        Attr.string("error", @errorName(err)),
+                        Attr.err("error", err),
                     });
                 }
             }
