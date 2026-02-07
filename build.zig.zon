@@ -139,10 +139,9 @@
         },
 
         // gRPC for Zig
-        // Updated 2026-02-05: Link zlib to server/client modules for cross-compilation
+        // Updated 2026-02-06: Use local path for gRPC transport fixes (standard gRPC framing)
         .grpc_zig = .{
-            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#3d34148f0f0c6667a9cb76a00ec3b581dfb7446a",
-            .hash = "grpc_zig-0.1.0-7FnvpKtcAQB0d0NRgit04CC-L9gZRJXfSZ3j9AAU2ErC",
+            .path = "../../../zig/grpc-zig",
         },
     },
 

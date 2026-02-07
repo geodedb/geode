@@ -2,7 +2,9 @@ const std = @import("std");
 const geode = @import("geode");
 const schema = @import("schema");
 const protobuf = @import("protobuf");
-const GrpcServer = @import("grpc_server").GrpcServer;
+const grpc_zig = @import("grpc_server");
+const GrpcServer = grpc_zig.GrpcServer;
+const GrpcTransport = grpc_zig.Transport;
 const proto_util = geode.proto_util;
 const server_flags = geode.server_flags;
 const diagnostics = geode.diagnostics;
@@ -17,6 +19,7 @@ const user_mgmt = geode.user_management;
 const gql_ast = geode.gql.ast;
 const gql_print = geode.printer;
 const geode_auth = @import("geode_auth");
+const grpc_tls = @import("grpc_tls.zig");
 
 const logging = @import("logging");
 const log = logging.scoped("grpc");
@@ -281,10 +284,29 @@ pub const GeodeGrpcServer = struct {
         key_path: ?[]const u8,
         config: GrpcConfig,
     ) !GeodeGrpcServer {
-        _ = cert_path;
-        _ = key_path;
+        var server = try GrpcServer.init(allocator, port, "secret-key");
 
-        const server = try GrpcServer.init(allocator, port, "secret-key");
+        // Initialize TLS if cert and key are provided
+        if (cert_path) |cp| {
+            if (key_path) |kp| {
+                // Create null-terminated strings for OpenSSL
+                const cert_z = try allocator.dupeZ(u8, cp);
+                defer allocator.free(cert_z);
+                const key_z = try allocator.dupeZ(u8, kp);
+                defer allocator.free(key_z);
+
+                grpc_tls.initTlsContext(cert_z, key_z) catch |err| {
+                    log.warn("gRPC TLS init failed, falling back to plaintext", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                    // Continue without TLS — server will accept plaintext connections
+                };
+                if (grpc_tls.hasTlsContext()) {
+                    server.on_tls_accept = grpc_tls.tlsAccept;
+                    log.info("gRPC TLS enabled", &.{});
+                }
+            }
+        }
 
         const store = try allocator.create(SessionStore);
         store.* = SessionStore.init(allocator, config);
@@ -304,6 +326,7 @@ pub const GeodeGrpcServer = struct {
         self.session_store.deinit();
         self.allocator.destroy(self.session_store);
         g_session_store = null;
+        grpc_tls.deinitTlsContext();
         self.server.deinit();
     }
 
@@ -333,7 +356,140 @@ fn buildPacketError(
     return encodeMessage(allocator, packet);
 }
 
-fn handlePacket(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+/// Helper: send a unary gRPC response (HEADERS + DATA + TRAILERS).
+fn sendUnaryResponse(trans: *GrpcTransport, response: []const u8) !void {
+    try trans.writeMessage(response);
+}
+
+/// Helper: send a streaming gRPC response message.
+fn sendStreamResponse(trans: *GrpcTransport, response: []const u8, is_first: bool) !void {
+    try trans.writeStreamMessage(response, is_first);
+}
+
+fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTransport, allocator: std.mem.Allocator) anyerror!void {
+    log.info("gRPC dispatch", &.{
+        Attr.string("method", if (method.len > 0) method else "(empty)"),
+        Attr.uint("payload_len", request_bytes.len),
+    });
+
+    // Standard gRPC: route by method path from HEADERS frame.
+    if (method.len > 0) {
+        if (std.mem.endsWith(u8, method, "/Handshake")) {
+            const resp = try handleHandshake(request_bytes, allocator);
+            defer allocator.free(resp);
+            return sendUnaryResponse(trans, resp);
+        } else if (std.mem.endsWith(u8, method, "/Execute")) {
+            return handleExecuteStreaming(request_bytes, trans, allocator);
+        } else if (std.mem.endsWith(u8, method, "/Ping")) {
+            const resp = try handlePing(request_bytes, allocator);
+            defer allocator.free(resp);
+            return sendUnaryResponse(trans, resp);
+        } else if (std.mem.endsWith(u8, method, "/Begin")) {
+            const resp = try handleBegin(request_bytes, allocator);
+            defer allocator.free(resp);
+            return sendUnaryResponse(trans, resp);
+        } else if (std.mem.endsWith(u8, method, "/Commit")) {
+            const resp = try handleCommit(request_bytes, allocator);
+            defer allocator.free(resp);
+            return sendUnaryResponse(trans, resp);
+        } else if (std.mem.endsWith(u8, method, "/Rollback")) {
+            const resp = try handleRollback(request_bytes, allocator);
+            defer allocator.free(resp);
+            return sendUnaryResponse(trans, resp);
+        } else {
+            log.warn("Unknown gRPC method", &.{});
+            const err_resp = try buildPacketError(allocator, "0A000", "Unknown gRPC method");
+            defer allocator.free(err_resp);
+            return sendUnaryResponse(trans, err_resp);
+        }
+    }
+
+    // Fallback: legacy ClientPacket-wrapped messages (custom gRPC clients)
+    const resp = try handleLegacyPacket(request_bytes, allocator);
+    defer allocator.free(resp);
+    return sendUnaryResponse(trans, resp);
+}
+
+/// Build a data page ExecutionResponse directly (avoids decode+re-encode cycle).
+/// Returns encoded ExecutionResponse bytes and whether this is the final page.
+const PageResult = struct { bytes: []u8, is_final: bool };
+
+fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !PageResult {
+    const store = g_session_store orelse {
+        var resp = try buildErrorResponse(allocator, "58000", "Server not initialized", &.{}, &.{});
+        defer resp.deinit(allocator);
+        return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
+    };
+
+    const entry = store.getEntry(session_id) orelse {
+        var resp = try buildErrorResponse(allocator, "28000", "Unknown session", &.{}, &.{});
+        defer resp.deinit(allocator);
+        return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
+    };
+
+    entry.mutex.lock();
+    defer entry.mutex.unlock();
+    const state = entry.state;
+
+    const result_ptr = if (state.active_result_values) |*res| res else {
+        var resp = try buildErrorResponse(allocator, "02000", "No active result set", &.{}, &.{});
+        defer resp.deinit(allocator);
+        return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
+    };
+
+    const start = state.result_page_index;
+    const page = try proto_util.buildDataPage(allocator, result_ptr, start, 1000, state.result_ordered, state.result_order_keys);
+    state.result_page_index += page.rows.items.len;
+    const is_final = page.final;
+
+    const status = try proto_util.buildStatus(allocator, "00000", result_ptr.flags.items);
+    var resp = schema.ExecutionResponse{
+        .status = status,
+        .payload = .{ .page = page },
+    };
+    defer resp.deinit(allocator);
+
+    const encoded = try encodeMessage(allocator, resp);
+
+    if (is_final) {
+        state.resetResult();
+    }
+
+    return .{ .bytes = encoded, .is_final = is_final };
+}
+
+/// Handle Execute as a server-streaming RPC: send schema, then all data pages.
+fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allocator: std.mem.Allocator) !void {
+    // Get the schema/first response from handleExecute
+    const exec_resp = try handleExecute(request_bytes, allocator);
+    defer allocator.free(exec_resp);
+
+    // Send first streaming message (with HEADERS)
+    try sendStreamResponse(trans, exec_resp, true);
+
+    // Extract session_id from the request for data pages
+    var reader: std.Io.Reader = .fixed(request_bytes);
+    var req = protobuf.decode(schema.ExecuteRequest, &reader, allocator) catch {
+        try trans.endStream();
+        return;
+    };
+    defer req.deinit(allocator);
+
+    // Pull all data pages directly (no decode+re-encode cycle)
+    var page_count: usize = 0;
+    while (page_count < 1000) : (page_count += 1) { // safety limit
+        const result = try buildStreamDataPage(req.session_id, allocator);
+        defer allocator.free(result.bytes);
+
+        try sendStreamResponse(trans, result.bytes, false);
+        if (result.is_final) break;
+    }
+
+    // End the stream
+    try trans.endStream();
+}
+
+fn handleLegacyPacket(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var packet = protobuf.decode(schema.ClientPacket, &reader, allocator) catch |err| {
         log.err("Failed to decode gRPC packet", &.{Attr.err("error", err)});
@@ -440,6 +596,8 @@ fn handlePing(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    log.debug("gRPC Handshake", &.{Attr.uint("request_bytes_len", request_bytes.len)});
+
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.HelloRequest, &reader, allocator) catch |err| {
         log.err("Failed to decode HELLO request", &.{Attr.err("error", err)});
@@ -452,6 +610,11 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
         return encodeMessage(allocator, resp);
     };
     defer req.deinit(allocator);
+
+    log.debug("gRPC Handshake decoded", &.{
+        Attr.uint("username_len", req.username.len),
+        Attr.uint("password_len", req.password.len),
+    });
 
     const store = g_session_store orelse {
         const resp = schema.HelloResponse{
@@ -722,8 +885,12 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                     };
                     defer schema_resp.deinit(allocator);
 
+                    // Deep-copy result to prevent use-after-free when AST is freed
+                    // (gRPC streaming builds data pages after handleExecute returns)
+                    const duped = try execution.duplicateResult(allocator, exec_result);
+                    exec_result.deinit(allocator);
                     store_result = true;
-                    state.active_result_values = exec_result;
+                    state.active_result_values = duped;
                     state.active_result = true;
                     state.result_page_index = 0;
                     state.result_ordered = ordered;

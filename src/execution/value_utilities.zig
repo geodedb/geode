@@ -125,6 +125,17 @@ pub fn duplicateValue(allocator: std.mem.Allocator, value: Value) !Value {
             }
             break :blk .{ .List = new_list };
         },
+        .Map => |map_const| blk: {
+            var map = map_const;
+            var new_map = std.StringHashMap(Value).init(allocator);
+            var it = map.iterator();
+            while (it.next()) |entry| {
+                const key = try allocator.dupe(u8, entry.key_ptr.*);
+                const val = try duplicateValue(allocator, entry.value_ptr.*);
+                try new_map.put(key, val);
+            }
+            break :blk .{ .Map = new_map };
+        },
         .Node, .Edge, .Path => value, // These contain pointers but we'll shallow copy for now
         else => value, // Fallback for any other types
     };
@@ -139,6 +150,15 @@ pub fn freeValue(allocator: std.mem.Allocator, value: Value) void {
                 freeValue(allocator, item);
             }
             allocator.free(list);
+        },
+        .Map => |map_const| {
+            var map = map_const;
+            var it = map.iterator();
+            while (it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                freeValue(allocator, entry.value_ptr.*);
+            }
+            map.deinit();
         },
         else => {}, // Other types don't own memory or are shallow copies
     }

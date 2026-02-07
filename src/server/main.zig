@@ -267,8 +267,8 @@ pub fn main() !void {
     var cert_path = cert_paths.cert_path;
     var key_path = cert_paths.key_path;
 
-    // Try to generate certificates if using QUIC
-    if (listen_quic != null) {
+    // Try to generate certificates if using QUIC or gRPC (TLS needed for both)
+    if (listen_quic != null or listen_grpc != null) {
         cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path) catch |err| {
             log.warn("Could not generate certificates, using fallback paths", &.{
                 Attr.string("error", @errorName(err)),
