@@ -501,8 +501,8 @@ test-gql-compliance:
     - git clone --depth 1 "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/devnw/codepros/geode/geode-test-harness.git" ../geode-test-harness
   script:
     - |
-      echo "=== Building Geode ==="
-      zig build --summary all
+      echo "=== Building Geode (ReleaseSafe for QUIC stability) ==="
+      zig build -Doptimize=ReleaseSafe --summary all
 
       echo "=== Running GQL Compliance Tests ==="
       source /opt/venv/bin/activate
@@ -543,8 +543,8 @@ test-geodetestlab-comprehensive:
     - git clone --depth 1 "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/devnw/codepros/geode/geode-test-harness.git" ../geode-test-harness
   script:
     - |
-      echo "=== Building Geode ==="
-      zig build --summary all
+      echo "=== Building Geode (ReleaseSafe for QUIC stability) ==="
+      zig build -Doptimize=ReleaseSafe --summary all
 
       echo "=== Running Comprehensive geodetestlab Tests ==="
       source /opt/venv/bin/activate
