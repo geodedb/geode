@@ -765,6 +765,12 @@ def run_test(
                 except Exception:
                     pass  # Ignore cleanup errors
 
+    # Debug: print stderr for auth failures (exit code 3) to diagnose auth issues
+    if result.returncode == 3 and result.stderr:
+        stderr_preview = result.stderr.strip()[:200]
+        if stderr_preview:
+            print(f"  [DEBUG] stderr (exit 3): {stderr_preview}")
+
     # Check exit code
     if "exit_code" in expect:
         expected_exit = expect["exit_code"]
@@ -1110,6 +1116,15 @@ def main():
             for key, value in spec_env.items():
                 # Convert all values to strings (env vars must be strings)
                 server_env_overrides[key] = str(value)
+
+        # Also include env vars from cli.server.env (e.g., GEODE_ALLOW_TEST_AUDIT_KEYS)
+        if isinstance(cli_config, dict):
+            server_config_env = cli_config.get("server", {})
+            if isinstance(server_config_env, dict):
+                server_env = server_config_env.get("env", {})
+                if isinstance(server_env, dict):
+                    for key, value in server_env.items():
+                        server_env_overrides[key] = str(value)
 
         # Ensure default credentials are available for test clients
         if "GEODE_ADMIN_USERNAME" not in server_env_overrides and "GEODE_ADMIN_USERNAME" not in os.environ:
