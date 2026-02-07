@@ -141,8 +141,8 @@
         // gRPC for Zig
         // Updated 2026-02-06: TLS I/O abstraction layer for gRPC transport
         .grpc_zig = .{
-            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#a3c8bb2f920084f8080f687d8262ed2066b3d90e",
-            .hash = "grpc_zig-0.1.0-7FnvpEamAQDEUDz4A8cIU7F8q_EKWY6IYQyPvw1AHuku",
+            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#c877881e91f86210ea9cfb4d523c73ed07ed40f7",
+            .hash = "grpc_zig-0.1.0-7FnvpFumAQDp6DtYk78n6pHKUwMj3Nm7GRdpe5L7ec_7",
         },
     },
 
