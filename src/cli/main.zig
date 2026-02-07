@@ -2571,28 +2571,28 @@ fn protoMapEntriesToJson(allocator: std.mem.Allocator, entries: []const schema.M
 
 fn protoNodeToJson(allocator: std.mem.Allocator, node: schema.NodeValue) !std.json.Value {
     var obj = std.json.ObjectMap.init(allocator);
-    try obj.put("id", try jsonNumberFromU64(allocator, node.id));
+    try obj.put(try allocator.dupe(u8, "id"), try jsonNumberFromU64(allocator, node.id));
 
     var labels = std.json.Array.init(allocator);
     for (node.labels.items) |label| {
         try labels.append(.{ .string = try allocator.dupe(u8, label) });
     }
-    try obj.put("labels", .{ .array = labels });
+    try obj.put(try allocator.dupe(u8, "labels"), .{ .array = labels });
 
     const props_obj = try protoMapEntriesToJson(allocator, node.properties.items);
-    try obj.put("properties", .{ .object = props_obj });
+    try obj.put(try allocator.dupe(u8, "properties"), .{ .object = props_obj });
     return .{ .object = obj };
 }
 
 fn protoEdgeToJson(allocator: std.mem.Allocator, edge: schema.EdgeValue) !std.json.Value {
     var obj = std.json.ObjectMap.init(allocator);
-    try obj.put("id", try jsonNumberFromU64(allocator, edge.id));
-    try obj.put("from", try jsonNumberFromU64(allocator, edge.from_id));
-    try obj.put("to", try jsonNumberFromU64(allocator, edge.to_id));
-    try obj.put("label", .{ .string = try allocator.dupe(u8, edge.label) });
+    try obj.put(try allocator.dupe(u8, "id"), try jsonNumberFromU64(allocator, edge.id));
+    try obj.put(try allocator.dupe(u8, "from"), try jsonNumberFromU64(allocator, edge.from_id));
+    try obj.put(try allocator.dupe(u8, "to"), try jsonNumberFromU64(allocator, edge.to_id));
+    try obj.put(try allocator.dupe(u8, "label"), .{ .string = try allocator.dupe(u8, edge.label) });
 
     const props_obj = try protoMapEntriesToJson(allocator, edge.properties.items);
-    try obj.put("properties", .{ .object = props_obj });
+    try obj.put(try allocator.dupe(u8, "properties"), .{ .object = props_obj });
     return .{ .object = obj };
 }
 
@@ -2603,20 +2603,20 @@ fn protoPathToJson(allocator: std.mem.Allocator, path: schema.PathValue) !std.js
     for (path.nodes.items) |node| {
         try nodes.append(try protoNodeToJson(allocator, node));
     }
-    try obj.put("nodes", .{ .array = nodes });
+    try obj.put(try allocator.dupe(u8, "nodes"), .{ .array = nodes });
 
     var edges = std.json.Array.init(allocator);
     for (path.edges.items) |edge| {
         try edges.append(try protoEdgeToJson(allocator, edge));
     }
-    try obj.put("edges", .{ .array = edges });
+    try obj.put(try allocator.dupe(u8, "edges"), .{ .array = edges });
     return .{ .object = obj };
 }
 
 fn protoExtendedToJson(allocator: std.mem.Allocator, ext: schema.ExtendedValue) !std.json.Value {
     var obj = std.json.ObjectMap.init(allocator);
     if (ext.type_name.len > 0) {
-        try obj.put("type", .{ .string = try allocator.dupe(u8, ext.type_name) });
+        try obj.put(try allocator.dupe(u8, "type"), .{ .string = try allocator.dupe(u8, ext.type_name) });
     }
     if (ext.data) |data| {
         const val: std.json.Value = switch (data) {
@@ -2626,7 +2626,7 @@ fn protoExtendedToJson(allocator: std.mem.Allocator, ext: schema.ExtendedValue) 
             .double_val => |f| .{ .float = f },
             .bool_val => |b| .{ .bool = b },
         };
-        try obj.put("value", val);
+        try obj.put(try allocator.dupe(u8, "value"), val);
     }
     return .{ .object = obj };
 }

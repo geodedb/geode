@@ -337,7 +337,7 @@ pub fn valueToProto(allocator: std.mem.Allocator, value: value_types.Value) !sch
         .Text => |t| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, t), .kind = .TEXT } } },
         .Decimal => |d| blk: {
             const coeff_str = try std.fmt.allocPrint(allocator, "{d}", .{d.coeff});
-            const orig_repr = if (d.orig_repr) |repr| try allocator.dupe(u8, repr) else "";
+            const orig_repr = if (d.orig_repr) |repr| try allocator.dupe(u8, repr) else if (d.scale > 0) try reconstructDecimalRepr(allocator, d.coeff, d.scale) else coeff_str;
             break :blk .{ .kind = .{ .decimal_val = .{
                 .coeff = coeff_str,
                 .scale = d.scale,
@@ -441,15 +441,65 @@ fn propertyValueToProto(allocator: std.mem.Allocator, value: graph_store.Propert
         .String => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
         .Decimal => |d| blk: {
             const coeff_str = try std.fmt.allocPrint(allocator, "{d}", .{d.coeff});
+            const repr = if (d.scale > 0) try reconstructDecimalRepr(allocator, d.coeff, d.scale) else coeff_str;
             break :blk .{ .kind = .{ .decimal_val = .{
                 .coeff = coeff_str,
                 .scale = d.scale,
                 .orig_scale = d.scale,
-                .orig_repr = "",
+                .orig_repr = repr,
             } } };
         },
         .ExtValue => |ext| .{ .kind = .{ .ext_val = try extValueToProto(allocator, ext) } },
     };
+}
+
+/// Reconstruct a decimal string from coefficient and scale.
+/// e.g., coeff=1999, scale=2 → "19.99"; coeff=5, scale=2 → "0.05"
+fn reconstructDecimalRepr(allocator: std.mem.Allocator, coeff: i128, scale: u8) ![]const u8 {
+    const is_negative = coeff < 0;
+    const abs_coeff: u128 = if (is_negative) @intCast(-coeff) else @intCast(coeff);
+    const digits = try std.fmt.allocPrint(allocator, "{d}", .{abs_coeff});
+    defer allocator.free(digits);
+
+    if (scale == 0 or digits.len == 0) {
+        if (is_negative) return try std.fmt.allocPrint(allocator, "-{s}", .{digits});
+        return try allocator.dupe(u8, digits);
+    }
+
+    // Pre-compute exact size to avoid ArrayList capacity mismatch on free
+    const neg_len: usize = if (is_negative) 1 else 0;
+    const total_len = if (digits.len <= scale)
+        neg_len + 2 + (scale - digits.len) + digits.len // "-" + "0." + padding zeros + digits
+    else
+        neg_len + digits.len + 1; // "-" + integer part + "." + fractional part
+
+    const buf = try allocator.alloc(u8, total_len);
+    var pos: usize = 0;
+
+    if (is_negative) {
+        buf[pos] = '-';
+        pos += 1;
+    }
+
+    if (digits.len <= scale) {
+        // e.g., coeff=5, scale=2 → "0.05"
+        buf[pos] = '0';
+        buf[pos + 1] = '.';
+        pos += 2;
+        const pad = scale - digits.len;
+        @memset(buf[pos .. pos + pad], '0');
+        pos += pad;
+        @memcpy(buf[pos .. pos + digits.len], digits);
+    } else {
+        // e.g., coeff=1999, scale=2 → "19.99"
+        const int_end = digits.len - scale;
+        @memcpy(buf[pos .. pos + int_end], digits[0..int_end]);
+        pos += int_end;
+        buf[pos] = '.';
+        pos += 1;
+        @memcpy(buf[pos .. pos + scale], digits[int_end..]);
+    }
+    return buf;
 }
 
 fn extValueToProto(allocator: std.mem.Allocator, ext: eval_extended.ExtValue) !schema.ExtendedValue {
@@ -459,7 +509,7 @@ fn extValueToProto(allocator: std.mem.Allocator, ext: eval_extended.ExtValue) !s
         .Int => |i| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .int_val = i } },
         .Bool => |b| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .bool_val = b } },
         .Str => |s| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, s) } },
-        .Decimal => |d| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try std.fmt.allocPrint(allocator, "{d}.{d}", .{ d.coeff, d.scale }) } },
+        .Decimal => |d| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = if (d.scale > 0) try reconstructDecimalRepr(allocator, d.coeff, d.scale) else try std.fmt.allocPrint(allocator, "{d}", .{d.coeff}) } },
         .Bytea => |b| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .bytes = try allocator.dupe(u8, b) } },
         .Json => |j| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, j) } },
         .Jsonb => |jb| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, jb.data) } },

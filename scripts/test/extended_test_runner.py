@@ -917,7 +917,11 @@ def run_test(
                             key = part[: part.index("[")]
                             if key:
                                 if not isinstance(extracted, dict) or key not in extracted:
-                                    return False, f"path '{key}' not found in JSON"
+                                    # Alias: results → rows (server outputs "rows" not "results")
+                                    if key == "results" and isinstance(extracted, dict) and "rows" in extracted:
+                                        key = "rows"
+                                    else:
+                                        return False, f"path '{key}' not found in JSON"
                                 extracted = extracted[key]
                                 in_rows_array = key == "rows"
 
