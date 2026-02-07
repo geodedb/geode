@@ -168,7 +168,7 @@ fn buildOps(allocator: std.mem.Allocator, traits: query_traits.QueryTraits) ![]c
     var list = std.ArrayList(cost_seed.OpDescriptor).initCapacity(allocator, 8) catch return error.OutOfMemory;
     defer list.deinit(allocator);
 
-    try list.append(allocator, .{ .kind = .Scan });
+    try list.append(allocator, .{ .kind = if (traits.has_index_seek) .IndexSeek else .Scan });
     try list.append(allocator, .{ .kind = .Expand });
     if (traits.has_where_eq or traits.has_filter_eq) {
         try list.append(allocator, .{ .kind = .Filter });

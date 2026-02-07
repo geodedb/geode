@@ -53,6 +53,92 @@ const applyDistinct = result_utils.applyDistinct;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
+/// Extract variable name and property name from a property access expression.
+/// Handles both PropertyAccess (object.property) and Member (Ident.field) forms.
+fn extractVarProperty(expr: ast.Expr) ?struct { variable: []const u8, property: []const u8 } {
+    if (expr == .PropertyAccess) {
+        const pa = expr.PropertyAccess;
+        return .{ .variable = pa.object, .property = pa.property };
+    }
+    if (expr == .Member) {
+        const m = expr.Member;
+        if (m.target.* == .Ident) {
+            return .{ .variable = m.target.Ident.orig, .property = m.field };
+        }
+    }
+    return null;
+}
+
+// CANARY: REQ=REQ-AUTO-INDEX-PUSHDOWN-001; FEATURE="AutoIdIndex"; ASPECT=WherePredicatePushdown; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+/// Check simple equality predicates from WHERE clause against a node's properties.
+/// Only pushes down predicates of the form `var.prop = literal` or `literal = var.prop`
+/// connected by AND. This is an early filter - WHERE is still fully evaluated later.
+fn checkPushedPredicates(
+    allocator: std.mem.Allocator,
+    where_expr: ast.Expr,
+    var_name: []const u8,
+    node: *graph_store.Node,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) bool {
+    switch (where_expr) {
+        .Binary => |bin| {
+            if (bin.op == .And) {
+                // Both sides of AND must pass
+                if (!checkPushedPredicates(allocator, bin.left.*, var_name, node, param_names, param_values)) return false;
+                if (!checkPushedPredicates(allocator, bin.right.*, var_name, node, param_names, param_values)) return false;
+                return true;
+            } else if (bin.op == .Eq) {
+                // Check: var.prop = Literal (PropertyAccess or Member form)
+                if (extractVarProperty(bin.left.*)) |vp| {
+                    if (std.mem.eql(u8, vp.variable, var_name) and isLiteralOrParam(bin.right.*)) {
+                        return checkNodeProperty(allocator, node, vp.property, bin.right.*, param_names, param_values);
+                    }
+                }
+                // Check: Literal = var.prop (reversed)
+                if (extractVarProperty(bin.right.*)) |vp| {
+                    if (std.mem.eql(u8, vp.variable, var_name) and isLiteralOrParam(bin.left.*)) {
+                        return checkNodeProperty(allocator, node, vp.property, bin.left.*, param_names, param_values);
+                    }
+                }
+            }
+            // For non-equality or non-pushable predicates, don't filter (return true)
+            return true;
+        },
+        else => return true, // Non-binary expressions can't be pushed down
+    }
+}
+
+/// Check if an expression is a literal value or parameter (safe for pushdown).
+fn isLiteralOrParam(expr: ast.Expr) bool {
+    return switch (expr) {
+        .Int, .String, .Bool, .Null, .Param, .Decimal => true,
+        else => false,
+    };
+}
+
+/// Check if a node's property matches a literal expression value.
+fn checkNodeProperty(
+    allocator: std.mem.Allocator,
+    node: *graph_store.Node,
+    property: []const u8,
+    value_expr: ast.Expr,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) bool {
+    const node_prop_val = node.properties.get(property) orelse return false;
+    const node_val = propertyValueToValue(node_prop_val);
+    const prop_env = Env{
+        .names = &.{},
+        .values = &.{},
+        .param_names = param_names,
+        .param_values = param_values,
+        .allocator = allocator,
+    };
+    const expected_val = eval.evalExpr(allocator, value_expr, prop_env) catch return true;
+    return valuesEqual(node_val, expected_val);
+}
+
 // CANARY: REQ=REQ-REFACTOR-MATCH-003; FEATURE="MatchOperationsRefactor"; ASPECT=ShortestPathHandler; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
 /// Handle path variable assignment for shortestPath patterns
 /// Returns the execution result if this is a shortestPath pattern, null otherwise
@@ -491,76 +577,107 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     var chain_vars = try std.ArrayList(?[]const u8).initCapacity(allocator, q.match.chains.len);
     defer chain_vars.deinit(allocator);
 
-    // For each chain, find all matching nodes
+    // CANARY: REQ=REQ-AUTO-INDEX-SCAN-001; FEATURE="AutoIdIndex"; ASPECT=LabelIndexScan; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+    // For each chain, find all matching nodes using label_index when labels are present
     for (q.match.chains) |chain| {
         const node_pattern = chain.head.?;
         // GAP-0220 FIX: Use try for proper error propagation
         var matches = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
 
-        var node_iter = store.nodes.iterator();
-        while (node_iter.next()) |entry| {
-            const node = entry.value_ptr;
+        if (node_pattern.labels.len > 0) {
+            // Use label_index for O(1) lookup instead of full scan
+            var label_node_ids = try store.getNodesByLabels(filter_graph, node_pattern.labels);
+            defer label_node_ids.deinit(store.allocator);
 
-            // Filter by graph - only include nodes from the current graph
-            if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+            for (label_node_ids.items) |node_id| {
+                const node = store.nodes.getPtr(node_id) orelse continue;
 
-            var matches_pattern = true;
+                var matches_pattern = true;
 
-            // Check labels
-            for (node_pattern.labels) |required_label| {
-                var has_label = false;
-                for (node.labels) |node_label| {
-                    if (std.mem.eql(u8, required_label, node_label)) {
-                        has_label = true;
-                        break;
-                    }
-                }
-                if (!has_label) {
-                    matches_pattern = false;
-                    break;
-                }
-            }
+                // CANARY: REQ=REQ-GQL-MULTINODE-PROPVARREF-001; FEATURE="PropertyPatternVariableReference"; ASPECT=MultiMatch; STATUS=EXEMPT; OWNER=engine; UPDATED=2025-12-26
+                // Check inline properties - but only for literal values in the first chain.
+                if (matches_pattern and node_pattern.props != null) {
+                    const props = node_pattern.props.?;
+                    const prop_env = Env{
+                        .names = &.{},
+                        .values = &.{},
+                        .param_names = param_names,
+                        .param_values = param_values,
+                        .allocator = allocator,
+                    };
 
-            // CANARY: REQ=REQ-GQL-MULTINODE-PROPVARREF-001; FEATURE="PropertyPatternVariableReference"; ASPECT=MultiMatch; STATUS=EXEMPT; OWNER=engine; UPDATED=2025-12-26
-            // Check inline properties - but only for literal values in the first chain.
-            // Property patterns with variable references (e.g., {department: d.name}) need
-            // to be checked later during Cartesian product generation when we have the
-            // environment from previous chains available.
-            if (matches_pattern and node_pattern.props != null) {
-                const props = node_pattern.props.?;
-                const prop_env = Env{
-                    .names = &.{},
-                    .values = &.{},
-                    .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = allocator,
-                };
+                    for (props) |prop| {
+                        const has_var_ref = containsVariableReference(prop.value.*);
+                        if (has_var_ref) continue;
 
-                for (props) |prop| {
-                    // Check if this property value contains a variable reference
-                    // If so, skip checking now - will be checked during combination generation
-                    const has_var_ref = containsVariableReference(prop.value.*);
-                    if (has_var_ref) {
-                        // Skip - will be checked later with proper environment
-                        continue;
-                    }
-
-                    if (node.properties.get(prop.key)) |node_prop_val| {
-                        const node_val = propertyValueToValue(node_prop_val);
-                        const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
-                        if (!valuesEqual(node_val, expected_val)) {
+                        if (node.properties.get(prop.key)) |node_prop_val| {
+                            const node_val = propertyValueToValue(node_prop_val);
+                            const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
+                            if (!valuesEqual(node_val, expected_val)) {
+                                matches_pattern = false;
+                                break;
+                            }
+                        } else {
                             matches_pattern = false;
                             break;
                         }
-                    } else {
-                        matches_pattern = false;
-                        break;
                     }
                 }
-            }
 
-            if (matches_pattern) {
-                try matches.append(allocator, node);
+                // Apply pushed WHERE predicates during scan for early filtering
+                if (matches_pattern) {
+                    if (q.where_clause) |where_expr| {
+                        if (node_pattern.name) |var_name| {
+                            matches_pattern = checkPushedPredicates(allocator, where_expr, var_name, node, param_names, param_values);
+                        }
+                    }
+                }
+
+                if (matches_pattern) {
+                    try matches.append(allocator, node);
+                }
+            }
+        } else {
+            // No labels - fall back to full scan
+            var node_iter = store.nodes.iterator();
+            while (node_iter.next()) |entry| {
+                const node = entry.value_ptr;
+
+                if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+
+                var matches_pattern = true;
+
+                if (matches_pattern and node_pattern.props != null) {
+                    const props = node_pattern.props.?;
+                    const prop_env = Env{
+                        .names = &.{},
+                        .values = &.{},
+                        .param_names = param_names,
+                        .param_values = param_values,
+                        .allocator = allocator,
+                    };
+
+                    for (props) |prop| {
+                        const has_var_ref = containsVariableReference(prop.value.*);
+                        if (has_var_ref) continue;
+
+                        if (node.properties.get(prop.key)) |node_prop_val| {
+                            const node_val = propertyValueToValue(node_prop_val);
+                            const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
+                            if (!valuesEqual(node_val, expected_val)) {
+                                matches_pattern = false;
+                                break;
+                            }
+                        } else {
+                            matches_pattern = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (matches_pattern) {
+                    try matches.append(allocator, node);
+                }
             }
         }
 
@@ -1093,70 +1210,106 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         // Get relationship direction for proper edge traversal
         const rel_dir = hop.rel.dir;
 
-        // Find all matching relationships
-        var node_iter = store.nodes.iterator();
-        while (node_iter.next()) |entry| {
-            const left_node = entry.value_ptr;
-            if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
+        // CANARY: REQ=REQ-AUTO-INDEX-SCAN-002; FEATURE="AutoIdIndex"; ASPECT=RelationshipLabelIndexScan; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+        // Find all matching relationships using label_index when labels are present
+        if (left_labels.len > 0) {
+            var label_node_ids = try store.getNodesByLabels(filter_graph, left_labels);
+            defer label_node_ids.deinit(store.allocator);
 
-            // Check left labels
-            if (!matchesLabels(left_node, left_labels)) continue;
+            for (label_node_ids.items) |node_id| {
+                const left_node = store.nodes.getPtr(node_id) orelse continue;
 
-            // Get edges based on direction: outgoing for right/undirected, incoming for left/undirected
-            const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(left_node.id) else &[_]graph_store.Edge{};
-            const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
+                const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(left_node.id) else &[_]graph_store.Edge{};
+                const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
 
-            // Process outgoing edges (for right-directed or undirected patterns)
-            for (outgoing_edges) |edge| {
-                // Check relationship type
-                if (rel_type) |rt| {
-                    if (!std.mem.eql(u8, edge.label, rt)) continue;
+                for (outgoing_edges) |edge| {
+                    if (rel_type) |rt| {
+                        if (!std.mem.eql(u8, edge.label, rt)) continue;
+                    }
+                    if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                        if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                        if (!matchesLabels(right_node, right_labels)) continue;
+                        var binding = MatchBinding.init(allocator);
+                        if (hop.left.name) |v| try binding.vars.put(v, left_node);
+                        if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        try bindings.append(allocator, binding);
+                    }
                 }
 
-                // Get target node (to_id for outgoing edges)
-                if (store.nodes.getPtr(edge.to_id)) |right_node| {
-                    if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
-                    if (!matchesLabels(right_node, right_labels)) continue;
-
-                    // Create binding with left and right nodes
-                    var binding = MatchBinding.init(allocator);
-                    if (hop.left.name) |v| try binding.vars.put(v, left_node);
-                    if (hop.right.name) |v| try binding.vars.put(v, right_node);
-                    try bindings.append(allocator, binding);
+                for (incoming_edges) |edge| {
+                    if (rel_type) |rt| {
+                        if (!std.mem.eql(u8, edge.label, rt)) continue;
+                    }
+                    if (store.nodes.getPtr(edge.from_id)) |right_node| {
+                        if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                        if (!matchesLabels(right_node, right_labels)) continue;
+                        var binding = MatchBinding.init(allocator);
+                        if (hop.left.name) |v| try binding.vars.put(v, left_node);
+                        if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        try bindings.append(allocator, binding);
+                    }
                 }
             }
+        } else {
+            // No left labels - fall back to full scan
+            var node_iter = store.nodes.iterator();
+            while (node_iter.next()) |entry| {
+                const left_node = entry.value_ptr;
+                if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
 
-            // Process incoming edges (for left-directed or undirected patterns)
-            for (incoming_edges) |edge| {
-                // Check relationship type
-                if (rel_type) |rt| {
-                    if (!std.mem.eql(u8, edge.label, rt)) continue;
+                const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(left_node.id) else &[_]graph_store.Edge{};
+                const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
+
+                for (outgoing_edges) |edge| {
+                    if (rel_type) |rt| {
+                        if (!std.mem.eql(u8, edge.label, rt)) continue;
+                    }
+                    if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                        if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                        if (!matchesLabels(right_node, right_labels)) continue;
+                        var binding = MatchBinding.init(allocator);
+                        if (hop.left.name) |v| try binding.vars.put(v, left_node);
+                        if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        try bindings.append(allocator, binding);
+                    }
                 }
 
-                // Get source node (from_id for incoming edges)
-                if (store.nodes.getPtr(edge.from_id)) |right_node| {
-                    if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
-                    if (!matchesLabels(right_node, right_labels)) continue;
-
-                    // Create binding with left and right nodes
-                    var binding = MatchBinding.init(allocator);
-                    if (hop.left.name) |v| try binding.vars.put(v, left_node);
-                    if (hop.right.name) |v| try binding.vars.put(v, right_node);
-                    try bindings.append(allocator, binding);
+                for (incoming_edges) |edge| {
+                    if (rel_type) |rt| {
+                        if (!std.mem.eql(u8, edge.label, rt)) continue;
+                    }
+                    if (store.nodes.getPtr(edge.from_id)) |right_node| {
+                        if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                        if (!matchesLabels(right_node, right_labels)) continue;
+                        var binding = MatchBinding.init(allocator);
+                        if (hop.left.name) |v| try binding.vars.put(v, left_node);
+                        if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        try bindings.append(allocator, binding);
+                    }
                 }
             }
         }
     } else if (first_chain.head) |node_pattern| {
-        // First chain is just a node pattern
-        var node_iter = store.nodes.iterator();
-        while (node_iter.next()) |entry| {
-            const node = entry.value_ptr;
-            if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
-            if (!matchesLabels(node, node_pattern.labels)) continue;
+        // First chain is just a node pattern - use label_index when labels are present
+        if (node_pattern.labels.len > 0) {
+            var label_node_ids = try store.getNodesByLabels(filter_graph, node_pattern.labels);
+            defer label_node_ids.deinit(store.allocator);
 
-            var binding = MatchBinding.init(allocator);
-            if (node_pattern.name) |v| try binding.vars.put(v, node);
-            try bindings.append(allocator, binding);
+            for (label_node_ids.items) |node_id| {
+                const node = store.nodes.getPtr(node_id) orelse continue;
+                var binding = MatchBinding.init(allocator);
+                if (node_pattern.name) |v| try binding.vars.put(v, node);
+                try bindings.append(allocator, binding);
+            }
+        } else {
+            var node_iter = store.nodes.iterator();
+            while (node_iter.next()) |entry| {
+                const node = entry.value_ptr;
+                if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+                var binding = MatchBinding.init(allocator);
+                if (node_pattern.name) |v| try binding.vars.put(v, node);
+                try bindings.append(allocator, binding);
+            }
         }
     }
 
@@ -2999,74 +3152,59 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         current_bindings_mh.deinit(allocator);
                     }
 
+                    // CANARY: REQ=REQ-AUTO-INDEX-SCAN-003; FEATURE="AutoIdIndex"; ASPECT=MultiHopGroupByLabelIndex; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
                     const first_hop = chain.hops[0];
-                    var init_iter_mh = store.nodes.iterator();
-                    while (init_iter_mh.next()) |entry| {
-                        const node = entry.value_ptr;
 
-                        // Filter by graph
-                        if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
-
-                        // Filter by left node labels
-                        if (first_hop.left.labels.len > 0) {
-                            var has_all_labels = true;
-                            for (first_hop.left.labels) |required_label| {
-                                var found = false;
-                                for (node.labels) |node_label| {
-                                    if (std.mem.eql(u8, required_label, node_label)) {
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                                if (!found) {
-                                    has_all_labels = false;
-                                    break;
+                    // Collect candidate left nodes - use label_index when labels are present
+                    const NodeCollector = struct {
+                        fn addBinding(alloc: std.mem.Allocator, node: *graph_store.Node, hop_left: ast.NodePattern, p_names: []const []const u8, p_values: []const Value, bindings_list: *std.ArrayList(MultiHopBinding)) !void {
+                            // Filter by left node properties
+                            if (hop_left.props) |props| {
+                                for (props) |prop| {
+                                    if (node.properties.get(prop.key)) |node_prop_val| {
+                                        const node_val = propertyValueToValue(node_prop_val);
+                                        const prop_env = eval.Env{
+                                            .names = p_names,
+                                            .values = p_values,
+                                            .allocator = alloc,
+                                        };
+                                        const prop_val = eval.evalExpr(alloc, prop.value.*, prop_env) catch return;
+                                        if (!valuesEqual(node_val, prop_val)) return;
+                                    } else return;
                                 }
                             }
-                            if (!has_all_labels) continue;
-                        }
 
-                        // Filter by left node properties
-                        if (first_hop.left.props) |props| {
-                            var passes_props = true;
-                            for (props) |prop| {
-                                if (node.properties.get(prop.key)) |node_prop_val| {
-                                    const node_val = propertyValueToValue(node_prop_val);
-                                    const prop_env = eval.Env{
-                                        .names = param_names,
-                                        .values = param_values,
-                                        .allocator = allocator,
-                                    };
-                                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
-                                        passes_props = false;
-                                        break;
-                                    };
-                                    if (!valuesEqual(node_val, prop_val)) {
-                                        passes_props = false;
-                                        break;
-                                    }
-                                } else {
-                                    passes_props = false;
-                                    break;
-                                }
+                            var init_env_names_mh = try alloc.alloc([]const u8, 1);
+                            var init_env_values_mh = try alloc.alloc(Value, 1);
+                            if (hop_left.name) |var_name| {
+                                init_env_names_mh[0] = var_name;
+                                init_env_values_mh[0] = Value{ .Node = node };
+                            } else {
+                                init_env_names_mh[0] = "_anon_left_0";
+                                init_env_values_mh[0] = Value{ .Node = node };
                             }
-                            if (!passes_props) continue;
+                            try bindings_list.append(alloc, MultiHopBinding{
+                                .env_names = init_env_names_mh,
+                                .env_values = init_env_values_mh,
+                            });
                         }
+                    };
 
-                        // Create initial binding
-                        var init_env_names_mh = try allocator.alloc([]const u8, 1);
-                        var init_env_values_mh = try allocator.alloc(Value, 1);
-                        if (first_hop.left.name) |var_name| {
-                            init_env_names_mh[0] = var_name;
-                            init_env_values_mh[0] = Value{ .Node = node };
-                        } else {
-                            init_env_names_mh[0] = "_anon_left_0";
-                            init_env_values_mh[0] = Value{ .Node = node };
+                    if (first_hop.left.labels.len > 0) {
+                        var label_node_ids = try store.getNodesByLabels(filter_graph, first_hop.left.labels);
+                        defer label_node_ids.deinit(store.allocator);
+
+                        for (label_node_ids.items) |node_id| {
+                            const node = store.nodes.getPtr(node_id) orelse continue;
+                            try NodeCollector.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh);
                         }
-                        try current_bindings_mh.append(allocator, MultiHopBinding{
-                            .env_names = init_env_names_mh,
-                            .env_values = init_env_values_mh,
-                        });
+                    } else {
+                        var init_iter_mh = store.nodes.iterator();
+                        while (init_iter_mh.next()) |entry| {
+                            const node = entry.value_ptr;
+                            if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+                            try NodeCollector.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh);
+                        }
                     }
 
                     // Process each hop
@@ -4755,75 +4893,58 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     current_bindings.deinit(allocator);
                 }
 
-                // Initialize with first hop's left nodes
+                // CANARY: REQ=REQ-AUTO-INDEX-SCAN-004; FEATURE="AutoIdIndex"; ASPECT=MultiHopLabelIndex; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+                // Initialize with first hop's left nodes - use label_index when labels present
                 const first_hop = chain.hops[0];
-                var init_iter = store.nodes.iterator();
-                while (init_iter.next()) |entry| {
-                    const node = entry.value_ptr;
 
-                    // Filter by graph
-                    if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
-
-                    // Filter by left node labels
-                    if (first_hop.left.labels.len > 0) {
-                        var has_all_labels = true;
-                        for (first_hop.left.labels) |required_label| {
-                            var found = false;
-                            for (node.labels) |node_label| {
-                                if (std.mem.eql(u8, required_label, node_label)) {
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if (!found) {
-                                has_all_labels = false;
-                                break;
+                const NodeCollector2 = struct {
+                    fn addBinding(alloc: std.mem.Allocator, node: *graph_store.Node, hop_left: ast.NodePattern, p_names: []const []const u8, p_values: []const Value, bindings_list: *std.ArrayList(MultiHopBinding)) !void {
+                        if (hop_left.props) |props| {
+                            for (props) |prop| {
+                                if (node.properties.get(prop.key)) |node_prop_val| {
+                                    const node_val = propertyValueToValue(node_prop_val);
+                                    const prop_env = eval.Env{
+                                        .names = p_names,
+                                        .values = p_values,
+                                        .allocator = alloc,
+                                    };
+                                    const prop_val = eval.evalExpr(alloc, prop.value.*, prop_env) catch return;
+                                    if (!valuesEqual(node_val, prop_val)) return;
+                                } else return;
                             }
                         }
-                        if (!has_all_labels) continue;
-                    }
 
-                    // Filter by left node properties
-                    if (first_hop.left.props) |props| {
-                        var passes_props = true;
-                        for (props) |prop| {
-                            if (node.properties.get(prop.key)) |node_prop_val| {
-                                const node_val = propertyValueToValue(node_prop_val);
-                                const prop_env = eval.Env{
-                                    .names = param_names,
-                                    .values = param_values,
-                                    .allocator = allocator,
-                                };
-                                const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
-                                    passes_props = false;
-                                    break;
-                                };
-                                if (!valuesEqual(node_val, prop_val)) {
-                                    passes_props = false;
-                                    break;
-                                }
-                            } else {
-                                passes_props = false;
-                                break;
-                            }
+                        var init_env_names = try alloc.alloc([]const u8, 1);
+                        var init_env_values = try alloc.alloc(Value, 1);
+                        if (hop_left.name) |var_name| {
+                            init_env_names[0] = var_name;
+                            init_env_values[0] = Value{ .Node = node };
+                        } else {
+                            init_env_names[0] = "_anon_left_0";
+                            init_env_values[0] = Value{ .Node = node };
                         }
-                        if (!passes_props) continue;
+                        try bindings_list.append(alloc, MultiHopBinding{
+                            .env_names = init_env_names,
+                            .env_values = init_env_values,
+                        });
                     }
+                };
 
-                    // Create initial binding with left node variable
-                    var init_env_names = try allocator.alloc([]const u8, 1);
-                    var init_env_values = try allocator.alloc(Value, 1);
-                    if (first_hop.left.name) |var_name| {
-                        init_env_names[0] = var_name;
-                        init_env_values[0] = Value{ .Node = node };
-                    } else {
-                        init_env_names[0] = "_anon_left_0";
-                        init_env_values[0] = Value{ .Node = node };
+                if (first_hop.left.labels.len > 0) {
+                    var label_node_ids = try store.getNodesByLabels(filter_graph, first_hop.left.labels);
+                    defer label_node_ids.deinit(store.allocator);
+
+                    for (label_node_ids.items) |node_id| {
+                        const node = store.nodes.getPtr(node_id) orelse continue;
+                        try NodeCollector2.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings);
                     }
-                    try current_bindings.append(allocator, MultiHopBinding{
-                        .env_names = init_env_names,
-                        .env_values = init_env_values,
-                    });
+                } else {
+                    var init_iter = store.nodes.iterator();
+                    while (init_iter.next()) |entry| {
+                        const node = entry.value_ptr;
+                        if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+                        try NodeCollector2.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings);
+                    }
                 }
 
                 // Process each hop

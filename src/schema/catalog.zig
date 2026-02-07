@@ -48,6 +48,12 @@ pub fn getScopedIndexKey(allocator: std.mem.Allocator, label: []const u8, index_
     return std.fmt.allocPrint(allocator, "{s}:{s}", .{ label, index_name });
 }
 
+// CANARY: REQ=REQ-AUTO-INDEX-002; FEATURE="AutoIdIndex"; ASPECT=Detection; STATUS=TESTED; OWNER=schema; UPDATED=2026-02-07
+/// Check if an index name follows the auto-index naming convention (auto_idx_*_id)
+pub fn isAutoIndex(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "auto_idx_") and std.mem.endsWith(u8, name, "_id");
+}
+
 /// Catalog manages database metadata (schemas, graphs, indexes, constraints)
 /// Thread-safe via RwLock for concurrent access
 pub const Catalog = struct {
@@ -660,6 +666,47 @@ pub const Catalog = struct {
         return result.toOwnedSlice(allocator);
     }
 
+    // CANARY: REQ=REQ-AUTO-INDEX-001; FEATURE="AutoIdIndex"; ASPECT=CatalogMethod; STATUS=TESTED; OWNER=schema; UPDATED=2026-02-07
+    /// Auto-create a btree index on the `id` property for a label if one doesn't exist.
+    /// Uses IF NOT EXISTS semantics - safe to call repeatedly.
+    pub fn ensureAutoIdIndex(self: *Catalog, label: []const u8) !void {
+        const index_name = try std.fmt.allocPrint(self.allocator, "auto_idx_{s}_id", .{label});
+        const scoped_key = try getScopedIndexKey(self.allocator, label, index_name);
+
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
+        if (self.indexes.contains(scoped_key)) {
+            self.allocator.free(scoped_key);
+            self.allocator.free(index_name);
+            return; // Already exists
+        }
+
+        // Create owned copies for catalog storage
+        const owned_type = try self.allocator.dupe(u8, "btree");
+        errdefer self.allocator.free(owned_type);
+        const owned_table = try self.allocator.dupe(u8, label);
+        errdefer self.allocator.free(owned_table);
+        const cols = try self.allocator.alloc([]const u8, 1);
+        errdefer self.allocator.free(cols);
+        cols[0] = try self.allocator.dupe(u8, "id");
+
+        const info = IndexInfo{
+            .name = index_name,
+            .index_type = owned_type,
+            .table_name = owned_table,
+            .columns = cols,
+        };
+
+        try self.indexes.put(scoped_key, info);
+        self.save() catch |err| {
+            log.warn("Failed to persist auto-index", &.{
+                Attr.string("index", index_name),
+                Attr.err("error", err),
+            });
+        };
+    }
+
     /// Add an index to the catalog and persist
     pub fn addIndex(self: *Catalog, info: IndexInfo) !void {
         self.rwlock.lock();
@@ -910,4 +957,50 @@ test "GAP384_Catalog_list_graphs_returns_all_graphs" {
 
     try testing.expectEqual(@as(usize, 2), graphs.len);
     // Note: Order may vary due to hash map iteration
+}
+
+// CANARY: REQ=REQ-AUTO-INDEX-001; FEATURE="AutoIdIndex"; ASPECT=CatalogTests; STATUS=TESTED; OWNER=schema; UPDATED=2026-02-07
+
+test "ensureAutoIdIndex creates index" {
+    const allocator = testing.allocator;
+
+    var ctx = try TestCatalog.init(allocator);
+    defer ctx.deinit();
+    const cat = ctx.cat;
+
+    try cat.ensureAutoIdIndex("Person");
+
+    // Verify index was created
+    const idx = try cat.getIndex("Person", "auto_idx_Person_id");
+    try testing.expect(idx != null);
+    try testing.expectEqualStrings("btree", idx.?.index_type);
+    try testing.expectEqualStrings("Person", idx.?.table_name);
+    try testing.expectEqual(@as(usize, 1), idx.?.columns.len);
+    try testing.expectEqualStrings("id", idx.?.columns[0]);
+}
+
+test "ensureAutoIdIndex is idempotent" {
+    const allocator = testing.allocator;
+
+    var ctx = try TestCatalog.init(allocator);
+    defer ctx.deinit();
+    const cat = ctx.cat;
+
+    try cat.ensureAutoIdIndex("Person");
+    try cat.ensureAutoIdIndex("Person"); // Should not error or duplicate
+
+    try testing.expectEqual(@as(usize, 1), cat.indexes.count());
+}
+
+test "isAutoIndex recognizes auto-indexes" {
+    try testing.expect(isAutoIndex("auto_idx_Person_id"));
+    try testing.expect(isAutoIndex("auto_idx_Company_id"));
+    try testing.expect(isAutoIndex("auto_idx_KNOWS_id"));
+}
+
+test "isAutoIndex rejects regular indexes" {
+    try testing.expect(!isAutoIndex("idx_Person_name"));
+    try testing.expect(!isAutoIndex("auto_idx_Person_name"));
+    try testing.expect(!isAutoIndex("my_index"));
+    try testing.expect(!isAutoIndex(""));
 }

@@ -7,7 +7,8 @@ const std = @import("std");
 //
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=EstimatorPrimitives; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates; BENCH=BenchmarkCANARY_REQ_GQL_075_CostModelSeedVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
 
-pub const LogicalOpKind = enum { Scan, Expand, Filter, Project, Aggregate, Sort, Limit, SetOp };
+// CANARY: REQ=REQ-AUTO-INDEX-EXPLAIN-003; FEATURE="AutoIdIndex"; ASPECT=IndexSeekOpKind; STATUS=IMPL; OWNER=planner; UPDATED=2026-02-07
+pub const LogicalOpKind = enum { Scan, Expand, Filter, Project, Aggregate, Sort, Limit, SetOp, IndexSeek };
 
 pub const CardinalityEstimate = struct {
     rows: f64, // Estimated row count (can be fractional pre-rounding)
@@ -47,7 +48,7 @@ pub const EstimatorConfig = struct {
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBias; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasImplementationParity; OWNER=planner; UPDATED=2025-09-26
 pub const AdaptiveBiasRegistry = struct {
     // NOTE: Zig 0.15 reflection: direct .Enum.fields access not available; keep constant in sync with LogicalOpKind.
-    pub const KIND_COUNT: comptime_int = 8; // Scan, Expand, Filter, Project, Aggregate, Sort, Limit, SetOp
+    pub const KIND_COUNT: comptime_int = 9; // Scan, Expand, Filter, Project, Aggregate, Sort, Limit, SetOp, IndexSeek
     biases: [KIND_COUNT]f64 = [_]f64{1.0} ** KIND_COUNT,
     // Dynamic alpha adaptation state per kind:
     dyn_alpha: [KIND_COUNT]f64 = [_]f64{0.2} ** KIND_COUNT,
@@ -316,6 +317,10 @@ pub fn estimate(op: OpDescriptor, children: []const CardinalityEstimate, cfg: Es
             for (children) |c| total += c.rows;
             return .{ .rows = @max(1.0, total * 0.7), .confidence = 0.2 };
         },
+        .IndexSeek => {
+            // Index seek returns much fewer rows than a full scan
+            return .{ .rows = @max(1.0, cfg.scan_default * 0.01), .confidence = 0.7 };
+        },
     }
 }
 
@@ -331,6 +336,7 @@ pub fn cost(op: OpDescriptor, card: CardinalityEstimate, cfg: EstimatorConfig) C
         .Sort => .{ .cpu = rows * cfg.sort_cpu_factor * std.math.log2(rows + 1), .memory = rows * row_width * 0.00003, .io = 0 },
         .Limit => .{ .cpu = @min(rows, 100.0) * 0.00005, .memory = rows * row_width * 0.000002, .io = 0 },
         .SetOp => .{ .cpu = rows * 0.0012, .memory = rows * row_width * 0.000015, .io = 0 },
+        .IndexSeek => .{ .cpu = rows * 0.0002, .memory = rows * row_width * 0.000005, .io = rows * 0.0001 },
     };
 }
 

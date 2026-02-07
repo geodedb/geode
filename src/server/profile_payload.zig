@@ -14,12 +14,15 @@ pub const ProfileOptions = struct {
     graph_store_dirty: bool = false,
     flagger_findings: []const []const u8 = &.{},
     union_part_count: usize = 0,
+    // CANARY: REQ=REQ-AUTO-INDEX-PROFILE-001; FEATURE="AutoIdIndex"; ASPECT=ProfileIndexName; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+    index_name: ?[]const u8 = null,
 };
 
 const OpSpec = struct {
     name: []const u8,
     phase: []const u8,
     has_index_meta: bool = false,
+    index_name: ?[]const u8 = null,
 };
 
 pub fn buildProfilePayload(
@@ -32,7 +35,7 @@ pub fn buildProfilePayload(
     defer ops.deinit(allocator);
 
     if (traits.has_where_eq or traits.has_filter_eq) {
-        try ops.append(allocator, .{ .name = "NodeIndexScan", .phase = "SCAN", .has_index_meta = true });
+        try ops.append(allocator, .{ .name = "NodeIndexScan", .phase = "SCAN", .has_index_meta = true, .index_name = opts.index_name });
     }
     try ops.append(allocator, .{ .name = "NodeScan", .phase = "SCAN" });
     try ops.append(allocator, .{ .name = "Expand", .phase = "EXPAND" });
@@ -187,8 +190,14 @@ pub fn buildProfilePayload(
             .net_after_op = net_after_op[op_idx],
             .error_bytes = 0,
             .error_abs_pct = 0,
-            .index_name = if (spec.has_index_meta) try allocator.dupe(u8, "heuristic_index") else "",
-            .selectivity_est = if (spec.has_index_meta) 0.50 else 0,
+            .index_name = if (spec.has_index_meta)
+                try allocator.dupe(u8, spec.index_name orelse opts.index_name orelse "heuristic_index")
+            else
+                "",
+            .selectivity_est = if (spec.has_index_meta)
+                if (spec.index_name != null or opts.index_name != null) 0.10 else 0.50
+            else
+                0,
         };
         try op_list.append(allocator, op_entry);
     }

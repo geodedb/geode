@@ -239,6 +239,57 @@ fn appendFlagToResult(allocator: std.mem.Allocator, result: *execution.Execution
     try result.flags.append(allocator, flag_to_add);
 }
 
+/// Extract variable name and property name from a property access expression.
+/// Handles both PropertyAccess (object.property) and Member (Ident.field) forms.
+fn extractVarProperty(expr: gql_ast.Expr) ?struct { variable: []const u8, property: []const u8 } {
+    if (expr == .PropertyAccess) {
+        const pa = expr.PropertyAccess;
+        return .{ .variable = pa.object, .property = pa.property };
+    }
+    if (expr == .Member) {
+        const m = expr.Member;
+        if (m.target.* == .Ident) {
+            return .{ .variable = m.target.Ident.orig, .property = m.field };
+        }
+    }
+    return null;
+}
+
+/// Check if a WHERE clause contains an equality predicate on a property
+/// that matches a catalog index for the given label and variable name.
+fn whereHasIndexedEq(where_expr: gql_ast.Expr, var_name: []const u8, label: []const u8, cat: anytype) bool {
+    switch (where_expr) {
+        .Binary => |bin| {
+            if (bin.op == .And) {
+                if (whereHasIndexedEq(bin.left.*, var_name, label, cat)) return true;
+                if (whereHasIndexedEq(bin.right.*, var_name, label, cat)) return true;
+                return false;
+            } else if (bin.op == .Eq) {
+                const prop_name = blk: {
+                    if (extractVarProperty(bin.left.*)) |vp| {
+                        if (std.mem.eql(u8, vp.variable, var_name)) break :blk vp.property;
+                    }
+                    if (extractVarProperty(bin.right.*)) |vp| {
+                        if (std.mem.eql(u8, vp.variable, var_name)) break :blk vp.property;
+                    }
+                    break :blk @as(?[]const u8, null);
+                };
+                if (prop_name) |pn| {
+                    var idx_iter = cat.indexes.valueIterator();
+                    while (idx_iter.next()) |info| {
+                        if (std.mem.eql(u8, info.table_name, label) and
+                            info.columns.len > 0 and
+                            std.mem.eql(u8, info.columns[0], pn)) return true;
+                    }
+                }
+                return false;
+            }
+            return false;
+        },
+        else => return false,
+    }
+}
+
 fn findOrderBy(program: *const gql_ast.Program) ?*const gql_ast.OrderBy {
     var idx: usize = program.statements.len;
     while (idx > 0) : (idx -= 1) {
@@ -600,7 +651,7 @@ fn handleClientMessage(
                     }
 
                     const analysis = query_traits.analyzeProgram(&parse_result.program);
-                    const traits = analysis.traits;
+                    var traits = analysis.traits;
                     const ordered = traits.ordered;
                     const distinct = traits.distinct;
                     const heur_index = traits.has_where_eq or traits.has_filter_eq;
@@ -611,6 +662,52 @@ fn handleClientMessage(
                         null;
 
                     const catalog = try execution.ensureCatalogInstance(gpa);
+
+                    // Detect index-seek for EXPLAIN: check if query's node pattern
+                    // matches a catalog index (label + property equality)
+                    if (analysis.kind == .explain) {
+                        if (analysis.target) |target| {
+                            if (target.* == .Query) {
+                                const q = target.Query;
+                                if (q.match.chains.len > 0) {
+                                    const head_opt = q.match.chains[0].head;
+                                    if (head_opt) |head| {
+                                        if (head.labels.len > 0) {
+                                            const label = head.labels[0];
+                                            // Check inline properties
+                                            if (head.props) |props| {
+                                                if (props.len > 0) {
+                                                    const prop_name = props[0].key;
+                                                    catalog.rwlock.lockShared();
+                                                    defer catalog.rwlock.unlockShared();
+                                                    var idx_iter = catalog.indexes.valueIterator();
+                                                    while (idx_iter.next()) |info| {
+                                                        if (std.mem.eql(u8, info.table_name, label) and
+                                                            info.columns.len > 0 and
+                                                            std.mem.eql(u8, info.columns[0], prop_name))
+                                                        {
+                                                            traits.has_index_seek = true;
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            // Check WHERE clause for equality on indexed property
+                                            if (!traits.has_index_seek) {
+                                                if (q.where_clause) |where_expr| {
+                                                    if (head.name) |vn| {
+                                                        catalog.rwlock.lockShared();
+                                                        defer catalog.rwlock.unlockShared();
+                                                        traits.has_index_seek = whereHasIndexedEq(where_expr, vn, label, catalog);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     const exec_context = execution.ExecutionContext{
                         .catalog = catalog,
                         .user = state.authenticated_user,

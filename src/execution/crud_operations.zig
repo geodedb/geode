@@ -33,6 +33,21 @@ const Value = value_types.Value;
 const Env = value_types.Env;
 const ExtValue = @import("../eval_extended.zig").ExtValue;
 
+// CANARY: REQ=REQ-AUTO-INDEX-003; FEATURE="AutoIdIndex"; ASPECT=CrudAutoIndex; STATUS=TESTED; OWNER=crud_operations; UPDATED=2026-02-07
+/// Ensure auto-indexes exist for the given labels.
+/// Called after node/edge creation to auto-create btree indexes on the `id` property.
+fn ensureAutoIndexes(allocator: std.mem.Allocator, labels: []const []const u8) void {
+    const cat = execution.ensureCatalogInstance(allocator) catch return;
+    for (labels) |label| {
+        cat.ensureAutoIdIndex(label) catch |err| {
+            log.warn("Failed to create auto-index", &.{
+                Attr.string("label", label),
+                Attr.err("error", err),
+            });
+        };
+    }
+}
+
 // CANARY: REQ=REQ-LIST-PROP-002; FEATURE="ListProperties"; ASPECT=Conversion; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=crud_operations; UPDATED=2025-12-27
 /// Convert a Value.List ([]Value) to an ExtValue.List ([]ExtValue)
 fn valueListToExtValueList(allocator: std.mem.Allocator, values: []Value) ![]ExtValue {
@@ -425,6 +440,9 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                     try store.setNodeProperty(node_id, prop.key, prop_value);
                 }
             }
+
+            // Auto-create indexes for node labels
+            ensureAutoIndexes(allocator, node_pattern.labels);
         }
 
         // Handle relationship creation
@@ -444,11 +462,14 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                     const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                     const var_name_copy = try allocator.dupe(u8, var_name);
                     try created_nodes.put(var_name_copy, new_id);
+                    ensureAutoIndexes(allocator, hop.left.labels);
                     break :blk new_id;
                 }
             } else blk: {
                 // Anonymous node - always create new in target graph
-                break :blk try store.createNodeWithGraph(hop.left.labels, target_graph);
+                const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
+                ensureAutoIndexes(allocator, hop.left.labels);
+                break :blk new_id;
             };
 
             const right_id = if (hop.right.name) |var_name| blk: {
@@ -464,11 +485,14 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                     const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                     const var_name_copy = try allocator.dupe(u8, var_name);
                     try created_nodes.put(var_name_copy, new_id);
+                    ensureAutoIndexes(allocator, hop.right.labels);
                     break :blk new_id;
                 }
             } else blk: {
                 // Anonymous node - always create new in target graph
-                break :blk try store.createNodeWithGraph(hop.right.labels, target_graph);
+                const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
+                ensureAutoIndexes(allocator, hop.right.labels);
+                break :blk new_id;
             };
 
             // Create the relationship in target graph
@@ -478,6 +502,9 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
             const undo_log_edge = txn_undo_log.getGlobalUndoLog(allocator);
             undo_log_edge.logCreateEdge(edge_id, current_graph) catch {};
             created_relationships += 1;
+
+            // Auto-create index for edge type
+            ensureAutoIndexes(allocator, &.{edge_label});
 
             // Set relationship properties if present
             if (hop.rel.props) |props| {
@@ -610,6 +637,9 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                     try store.setNodeProperty(node_id, prop.key, prop_value);
                 }
             }
+
+            // Auto-create indexes for node labels
+            ensureAutoIndexes(allocator, node_pattern.labels);
         }
 
         // Handle relationship creation
@@ -623,10 +653,13 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                 } else {
                     const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
+                    ensureAutoIndexes(allocator, hop.left.labels);
                     break :blk new_id;
                 }
             } else blk: {
-                break :blk try store.createNodeWithGraph(hop.left.labels, target_graph);
+                const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
+                ensureAutoIndexes(allocator, hop.left.labels);
+                break :blk new_id;
             };
 
             const right_id = if (hop.right.name) |var_name| blk: {
@@ -637,10 +670,13 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                 } else {
                     const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
+                    ensureAutoIndexes(allocator, hop.right.labels);
                     break :blk new_id;
                 }
             } else blk: {
-                break :blk try store.createNodeWithGraph(hop.right.labels, target_graph);
+                const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
+                ensureAutoIndexes(allocator, hop.right.labels);
+                break :blk new_id;
             };
 
             // Create the relationship in target graph
@@ -650,6 +686,9 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
             const undo_log2 = txn_undo_log.getGlobalUndoLog(allocator);
             undo_log2.logCreateEdge(edge_id, current_graph) catch {};
             created_relationships_count += 1;
+
+            // Auto-create index for edge type
+            ensureAutoIndexes(allocator, &.{edge_label});
 
             // Set relationship properties if present
             if (hop.rel.props) |props| {
@@ -782,6 +821,9 @@ pub fn executeCreateQuery(
                     try store.setNodeProperty(node_id, prop.key, prop_value);
                 }
             }
+
+            // Auto-create indexes for node labels
+            ensureAutoIndexes(allocator, node_pattern.labels);
         }
 
         // Handle relationship creation
@@ -795,6 +837,7 @@ pub fn executeCreateQuery(
                 }
                 // Variable not bound - create new node in target graph
                 const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
+                ensureAutoIndexes(allocator, hop.left.labels);
                 if (hop.left.name) |var_name| {
                     try created_nodes.put(var_name, new_id);
                 }
@@ -810,6 +853,7 @@ pub fn executeCreateQuery(
                 }
                 // Variable not bound - create new node in target graph
                 const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
+                ensureAutoIndexes(allocator, hop.right.labels);
                 if (hop.right.name) |var_name| {
                     try created_nodes.put(var_name, new_id);
                 }
@@ -890,6 +934,9 @@ pub fn executeCreateQuery(
             // Log edge creation for rollback support
             const undo_log3 = txn_undo_log.getGlobalUndoLog(allocator);
             undo_log3.logCreateEdge(edge_id, current_graph) catch {};
+
+            // Auto-create index for edge type
+            ensureAutoIndexes(allocator, &.{rel_type});
 
             // Set relationship properties
             if (hop.rel.props) |props| {
@@ -1362,6 +1409,9 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             if (node_pattern.name) |name| {
                 try created_nodes.put(name, node_id);
             }
+
+            // Auto-create indexes for node labels
+            ensureAutoIndexes(allocator, node_pattern.labels);
         }
 
         // Handle chains with relationships
@@ -1377,12 +1427,14 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                     const undo_log_left = txn_undo_log.getGlobalUndoLog(allocator);
                     undo_log_left.logCreateNode(left_node_id, current_graph) catch {};
                     try created_nodes.put(left_name, left_node_id);
+                    ensureAutoIndexes(allocator, hop.left.labels);
                 }
             } else {
                 left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 // Log left node creation for rollback support (unnamed node)
                 const undo_log_left2 = txn_undo_log.getGlobalUndoLog(allocator);
                 undo_log_left2.logCreateNode(left_node_id, current_graph) catch {};
+                ensureAutoIndexes(allocator, hop.left.labels);
             }
 
             // Set properties on left node if present and not already set
@@ -1429,12 +1481,14 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                     const undo_log_right = txn_undo_log.getGlobalUndoLog(allocator);
                     undo_log_right.logCreateNode(right_node_id, current_graph) catch {};
                     try created_nodes.put(right_name, right_node_id);
+                    ensureAutoIndexes(allocator, hop.right.labels);
                 }
             } else {
                 right_node_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                 // Log right node creation for rollback support (unnamed node)
                 const undo_log_right2 = txn_undo_log.getGlobalUndoLog(allocator);
                 undo_log_right2.logCreateNode(right_node_id, current_graph) catch {};
+                ensureAutoIndexes(allocator, hop.right.labels);
             }
 
             // Set properties on right node if present and not already set
@@ -1480,6 +1534,9 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             // Log edge creation for rollback support
             const undo_log_merge = txn_undo_log.getGlobalUndoLog(allocator);
             undo_log_merge.logCreateEdge(edge_id, current_graph) catch {};
+
+            // Auto-create index for edge type
+            ensureAutoIndexes(allocator, &.{edge_type});
 
             // Set edge properties if present
             if (hop.rel.props) |props| {
@@ -1639,6 +1696,9 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             if (node_pattern.name) |name| {
                 try created_nodes.put(name, node_id);
             }
+
+            // Auto-create indexes for node labels
+            ensureAutoIndexes(allocator, node_pattern.labels);
         }
 
         // Handle chains with relationships
@@ -1654,12 +1714,14 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                     const undo_log_left = txn_undo_log.getGlobalUndoLog(allocator);
                     undo_log_left.logCreateNode(left_node_id, current_graph) catch {};
                     try created_nodes.put(left_name, left_node_id);
+                    ensureAutoIndexes(allocator, hop.left.labels);
                 }
             } else {
                 left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 // Log left node creation for rollback support (unnamed node)
                 const undo_log_left2 = txn_undo_log.getGlobalUndoLog(allocator);
                 undo_log_left2.logCreateNode(left_node_id, current_graph) catch {};
+                ensureAutoIndexes(allocator, hop.left.labels);
             }
 
             // Set properties on left node if present and not already set
@@ -1706,12 +1768,14 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                     const undo_log_right = txn_undo_log.getGlobalUndoLog(allocator);
                     undo_log_right.logCreateNode(right_node_id, current_graph) catch {};
                     try created_nodes.put(right_name, right_node_id);
+                    ensureAutoIndexes(allocator, hop.right.labels);
                 }
             } else {
                 right_node_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                 // Log right node creation for rollback support (unnamed node)
                 const undo_log_right2 = txn_undo_log.getGlobalUndoLog(allocator);
                 undo_log_right2.logCreateNode(right_node_id, current_graph) catch {};
+                ensureAutoIndexes(allocator, hop.right.labels);
             }
 
             // Set properties on right node if present and not already set
@@ -1757,6 +1821,9 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             // Log edge creation for rollback support
             const undo_log_merge = txn_undo_log.getGlobalUndoLog(allocator);
             undo_log_merge.logCreateEdge(edge_id, current_graph) catch {};
+
+            // Auto-create index for edge type
+            ensureAutoIndexes(allocator, &.{edge_type});
 
             // Set edge properties if present
             if (hop.rel.props) |props| {
@@ -2042,6 +2109,9 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
             // Node doesn't exist - create it in target graph and apply ON CREATE clauses
             created = true;
             node_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
+
+            // Auto-create indexes for node labels
+            ensureAutoIndexes(allocator, node_pattern.labels);
 
             // Set properties from pattern
             if (node_pattern.props) |props| {

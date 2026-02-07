@@ -14,6 +14,7 @@ pub const QueryTraits = struct {
     offset: ?usize = null,
     has_where_eq: bool = false,
     has_filter_eq: bool = false,
+    has_index_seek: bool = false,
 };
 
 pub const ProgramAnalysis = struct {
