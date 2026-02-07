@@ -478,7 +478,7 @@ def run_test(
                                 spec_server_enabled_for_setup = server_config.get("enabled", False)
                                 if server_config.get("port"):
                                     server_port_for_setup = str(server_config.get("port"))
-                    # If spec has server enabled, inject --server and --insecure for setup commands
+                    # If spec has server enabled, inject --server, --insecure, and auth for setup commands
                     if spec_server_enabled_for_setup and not has_server:
                         server_address = f"127.0.0.1:{server_port_for_setup}"
                         # Insert --server with actual address after the command
@@ -486,6 +486,13 @@ def run_test(
                         setup_processed.insert(2, server_address)
                         # Add --insecure flag (test servers use self-signed certs)
                         setup_processed.insert(3, "--insecure")
+                        # Inject auth credentials if not already present
+                        has_user = any("-U" in str(arg) for arg in setup_processed)
+                        if not has_user:
+                            setup_processed.insert(4, "-U")
+                            setup_processed.insert(5, "geode")
+                            setup_processed.insert(6, "-P")
+                            setup_processed.insert(7, "geode-test-password")
 
                 # Add --non-interactive for shell commands when stdin is used
                 if len(setup_processed) > 0 and setup_processed[0] == "shell" and setup_stdin:
@@ -559,7 +566,7 @@ def run_test(
         has_server = any("--server" in arg for arg in args)
 
         # If spec enables server mode and test doesn't already have --server,
-        # inject --server and --insecure flags to connect to the running server
+        # inject --server, --insecure, and auth flags to connect to the running server
         if spec_server_enabled and not has_server:
             # Get server port from spec_config
             server_port = "8443"  # Default port
@@ -576,6 +583,13 @@ def run_test(
             modified_args.insert(2, server_address)
             # Add --insecure flag (test servers use self-signed certs)
             modified_args.insert(3, "--insecure")
+            # Inject auth credentials if not already present
+            has_user = any("-U" in str(arg) for arg in modified_args)
+            if not has_user:
+                modified_args.insert(4, "-U")
+                modified_args.insert(5, "geode")
+                modified_args.insert(6, "-P")
+                modified_args.insert(7, "geode-test-password")
             has_server = True
 
     # Get stdin content if present
@@ -1184,8 +1198,16 @@ def main():
                         # Build command for setup
                         setup_cmd = [binary] + setup_args
 
-                        # Inject server connection for query commands
+                        # Inject server connection and auth for query commands
                         if len(setup_args) > 0 and setup_args[0] == "query":
+                            # Get credentials from server env
+                            username = server_env_overrides.get(
+                                "GEODE_ADMIN_USERNAME", os.environ.get("GEODE_ADMIN_USERNAME", "geode")
+                            )
+                            password = server_env_overrides.get(
+                                "GEODE_DEFAULT_PASSWORD",
+                                os.environ.get("GEODE_DEFAULT_PASSWORD", "geode-test-password"),
+                            )
                             # Insert server connection after the command
                             setup_cmd = [
                                 binary,
@@ -1193,6 +1215,10 @@ def main():
                                 "--server",
                                 f"127.0.0.1:{server_port}",
                                 "--insecure",
+                                "-U",
+                                username,
+                                "-P",
+                                password,
                             ] + setup_args[1:]
 
                         # Execute setup command
