@@ -518,22 +518,43 @@ fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allo
     // Send first streaming message (with HEADERS)
     try sendStreamResponse(trans, exec_resp, true);
 
-    // Extract session_id from the request for data pages
-    var reader: std.Io.Reader = .fixed(request_bytes);
-    var req = protobuf.decode(schema.ExecuteRequest, &reader, allocator) catch {
-        try trans.endStream();
-        return;
-    };
-    defer req.deinit(allocator);
+    // Check if the response is EXPLAIN, PROFILE, or error — these have no data pages to pull
+    var skip_pages = false;
+    blk: {
+        var resp_reader: std.Io.Reader = .fixed(exec_resp);
+        var resp = protobuf.decode(schema.ExecutionResponse, &resp_reader, allocator) catch {
+            skip_pages = true;
+            break :blk;
+        };
+        defer resp.deinit(allocator);
+        if (resp.payload) |payload| {
+            switch (payload) {
+                .explain, .profile, .@"error" => {
+                    skip_pages = true;
+                },
+                else => {},
+            }
+        }
+    }
 
-    // Pull all data pages directly (no decode+re-encode cycle)
-    var page_count: usize = 0;
-    while (page_count < 1000) : (page_count += 1) { // safety limit
-        const result = try buildStreamDataPage(req.session_id, allocator);
-        defer allocator.free(result.bytes);
+    if (!skip_pages) {
+        // Extract session_id from the request for data pages
+        var reader: std.Io.Reader = .fixed(request_bytes);
+        var req = protobuf.decode(schema.ExecuteRequest, &reader, allocator) catch {
+            try trans.endStream();
+            return;
+        };
+        defer req.deinit(allocator);
 
-        try sendStreamResponse(trans, result.bytes, false);
-        if (result.is_final) break;
+        // Pull all data pages directly (no decode+re-encode cycle)
+        var page_count: usize = 0;
+        while (page_count < 1000) : (page_count += 1) { // safety limit
+            const result = try buildStreamDataPage(req.session_id, allocator);
+            defer allocator.free(result.bytes);
+
+            try sendStreamResponse(trans, result.bytes, false);
+            if (result.is_final) break;
+        }
     }
 
     // End the stream
