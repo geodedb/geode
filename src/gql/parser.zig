@@ -24,6 +24,8 @@ pub const Parser = struct {
     forbid_orderby_paths: bool = false,
     // Track if ordinal sort keys are used
     has_ordinal_sort_key: bool = false,
+    // Track if UNWIND (non-standard GQL) syntax is used
+    has_unwind: bool = false,
     // TS extensions (SERIES UDFs) allowed when true
     ts_extensions: bool = false,
     // Last error context message (static or source-backed slice).
@@ -1527,6 +1529,11 @@ pub const Parser = struct {
         var initial_where_expr: ?ast.Expr = null; // WHERE clause after initial WITH
         if (self.cur.kind == .WITH) {
             self.advance();
+            // Support WITH DISTINCT for initial WITH clause
+            const with_distinct = if (self.cur.kind == .DISTINCT) blk: {
+                self.advance();
+                break :blk true;
+            } else false;
             var witems = std.ArrayList(ast.ReturnItem).empty;
             try self.parseProjectionItems(&witems);
 
@@ -1565,6 +1572,7 @@ pub const Parser = struct {
 
             initial_with_clause = .{
                 .items = try witems.toOwnedSlice(self.arena.allocator()),
+                .distinct = with_distinct,
                 .order_by = with_order_by,
                 .limit = with_limit,
                 .offset = with_offset,
@@ -1666,6 +1674,7 @@ pub const Parser = struct {
         // UNWIND list_expr AS variable
         var unwind_clause: ?ast.UnwindClause = null;
         if (self.cur.kind == .UNWIND) {
+            self.has_unwind = true;
             self.advance();
             const list_expr = try self.parseOrExpr();
             _ = try self.expect(.AS);
@@ -2014,6 +2023,11 @@ pub const Parser = struct {
         var next_query_ptr: ?*ast.Query = null;
         if (self.cur.kind == .WITH) {
             self.advance();
+            // Support WITH DISTINCT for post-MATCH WITH clause
+            const post_match_with_distinct = if (self.cur.kind == .DISTINCT) blk: {
+                self.advance();
+                break :blk true;
+            } else false;
             var witems = std.ArrayList(ast.ReturnItem).empty;
             try self.parseProjectionItems(&witems);
 
@@ -2052,6 +2066,7 @@ pub const Parser = struct {
 
             with_clause = .{
                 .items = try witems.toOwnedSlice(self.arena.allocator()),
+                .distinct = post_match_with_distinct,
                 .order_by = with_order_by,
                 .limit = with_limit,
                 .offset = with_offset,
@@ -2328,6 +2343,7 @@ pub const Parser = struct {
             .where_clause = where_expr,
             .filter_clause = filter_expr,
             .with_clause = if (with_clause) |wc| wc else initial_with_clause,
+            .is_initial_with = with_clause == null and initial_with_clause != null,
             .set_clauses = set_clauses,
             .remove_clauses = remove_clauses,
             .delete_items = delete_items,
@@ -4656,7 +4672,7 @@ pub const Parser = struct {
                     index_type = .vector_f32;
                 } else if (std.ascii.eqlIgnoreCase(type_str, "spatial_geographic")) {
                     index_type = .spatial_geographic;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "network_cidr") or std.ascii.eqlIgnoreCase(type_str, "PatriciaTrie")) {
+                } else if (std.ascii.eqlIgnoreCase(type_str, "network_cidr") or std.ascii.eqlIgnoreCase(type_str, "PatriciaTrie") or std.ascii.eqlIgnoreCase(type_str, "trie")) {
                     index_type = .network_cidr;
                 } else if (std.ascii.eqlIgnoreCase(type_str, "signature_crypto")) {
                     index_type = .signature_crypto;
@@ -4743,7 +4759,7 @@ pub const Parser = struct {
                     index_type = .vector_f32;
                 } else if (std.ascii.eqlIgnoreCase(type_str, "spatial_geographic")) {
                     index_type = .spatial_geographic;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "network_cidr") or std.ascii.eqlIgnoreCase(type_str, "PatriciaTrie")) {
+                } else if (std.ascii.eqlIgnoreCase(type_str, "network_cidr") or std.ascii.eqlIgnoreCase(type_str, "PatriciaTrie") or std.ascii.eqlIgnoreCase(type_str, "trie")) {
                     index_type = .network_cidr;
                 } else if (std.ascii.eqlIgnoreCase(type_str, "signature_crypto")) {
                     index_type = .signature_crypto;

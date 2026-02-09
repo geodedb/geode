@@ -487,14 +487,24 @@ pub const SemanticAnalyzer = struct {
                 try self.analyzeExpr(item.expr);
             }
 
-            // Now create new scope with WITH bindings
-            // Clear old bindings and add new ones from WITH
-            self.scope.clear();
+            if (query.is_initial_with) {
+                // Initial WITH (before MATCH): additive scope - keep MATCH bindings
+                // and add WITH aliases on top of existing scope
+                for (with.items) |item| {
+                    const name = item.alias orelse self.exprToName(item.expr);
+                    if (name) |n| {
+                        try self.scope.define(n, .variable);
+                    }
+                }
+            } else {
+                // Post-MATCH WITH: narrowing scope - clear old bindings
+                self.scope.clear();
 
-            for (with.items) |item| {
-                const name = item.alias orelse self.exprToName(item.expr);
-                if (name) |n| {
-                    try self.scope.define(n, .variable);
+                for (with.items) |item| {
+                    const name = item.alias orelse self.exprToName(item.expr);
+                    if (name) |n| {
+                        try self.scope.define(n, .variable);
+                    }
                 }
             }
 
@@ -518,10 +528,11 @@ pub const SemanticAnalyzer = struct {
         }
 
         // 12. Analyze RETURN clause
-        // Note: When a WITH clause is present, the RETURN items are projections of the WITH aliases.
+        // Note: When a post-MATCH WITH clause is present, the RETURN items are projections of the WITH aliases.
         // The expressions were already analyzed when processing the WITH clause, and the scope
         // now only contains the WITH aliases. Skip re-analyzing to avoid false "undefined variable" errors.
-        if (query.with_clause == null) {
+        // However, for initial WITH (before MATCH), scope is additive so RETURN items should be analyzed.
+        if (query.with_clause == null or query.is_initial_with) {
             for (query.ret.items) |item| {
                 try self.analyzeExpr(item.expr);
             }

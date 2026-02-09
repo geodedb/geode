@@ -87,6 +87,9 @@ pub const Query = struct {
     // Indicates this query is part of a WITH RECURSIVE CTE block (parser recognition only for now)
     // CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=ParserRecognition; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_079_ParserRecognitionNegativeCycle|TestCANARY_REQ_GQL_079_ParserRecognition; OWNER=engine; UPDATED=2025-09-26
     has_recursive_cte: bool = false,
+    // True when the WITH clause originated from an initial WITH (before MATCH),
+    // signaling the semantic analyzer to use additive scope instead of clearing.
+    is_initial_with: bool = false,
     // CALL clause for MATCH ... CALL pattern (e.g., MATCH (n) CALL algo.bfs.stream(n) YIELD ...)
     call_clause: ?CallClause = null,
     // Query chaining: supports CREATE ... WITH ... MATCH ... pattern
@@ -185,6 +188,7 @@ pub const ReturnClause = struct { items: []ReturnItem, distinct: bool };
 
 pub const WithClause = struct {
     items: []ReturnItem,
+    distinct: bool = false,
     order_by: ?*OrderBy = null,
     limit: ?u64 = null,
     offset: ?u64 = null,

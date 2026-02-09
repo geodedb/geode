@@ -52,6 +52,26 @@ pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protoco
                 try diagnostics.append(allocator, info_diag);
             }
 
+            // Check for UNWIND (not standard GQL - Cypher/openCypher syntax)
+            if (err_info.has_unwind) {
+                var uw_line: u32 = 0;
+                var uw_col: u32 = 0;
+                if (doc.findIdentifierPosition("UNWIND")) |pos| {
+                    uw_line = pos.line;
+                    uw_col = pos.character;
+                }
+                const uw_diag = protocol.Diagnostic{
+                    .range = .{
+                        .start = .{ .line = uw_line, .character = uw_col },
+                        .end = .{ .line = uw_line, .character = uw_col + 6 },
+                    },
+                    .severity = .Error,
+                    .source = "geode",
+                    .message = try allocator.dupe(u8, "UNWIND is not standard GQL (ISO/IEC 39075:2024). Use FOR ... IN ... instead."),
+                };
+                try diagnostics.append(allocator, uw_diag);
+            }
+
             // Then show the parse error at the actual location
             const diag = protocol.Diagnostic{
                 .range = .{
@@ -82,6 +102,26 @@ pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protoco
                     .message = try allocator.dupe(u8, "Double-dash (--) comments are a Geode extension and may not be supported by other GQL databases."),
                 };
                 try diagnostics.append(allocator, diag);
+            }
+
+            // Check for UNWIND (not standard GQL - Cypher/openCypher syntax)
+            if (result.has_unwind) {
+                var uw_line: u32 = 0;
+                var uw_col: u32 = 0;
+                if (doc.findIdentifierPosition("UNWIND")) |pos| {
+                    uw_line = pos.line;
+                    uw_col = pos.character;
+                }
+                const uw_diag = protocol.Diagnostic{
+                    .range = .{
+                        .start = .{ .line = uw_line, .character = uw_col },
+                        .end = .{ .line = uw_line, .character = uw_col + 6 },
+                    },
+                    .severity = .Error,
+                    .source = "geode",
+                    .message = try allocator.dupe(u8, "UNWIND is not standard GQL (ISO/IEC 39075:2024). Use FOR ... IN ... instead."),
+                };
+                try diagnostics.append(allocator, uw_diag);
             }
 
             // Check for parser errors

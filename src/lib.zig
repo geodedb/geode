@@ -57,6 +57,7 @@ pub const ParseResult = struct {
     last_error: ?[]const u8 = null,
     has_double_solidus_comment: bool = false,
     has_double_dash_comment: bool = false,
+    has_unwind: bool = false,
 
     pub fn deinit(self: *ParseResult) void {
         self.arena.deinit();
@@ -86,6 +87,7 @@ pub fn parse(allocator: std.mem.Allocator, source: []const u8, options: ParseOpt
         .arena = arena,
         .has_double_solidus_comment = lexer.has_double_solidus_comment,
         .has_double_dash_comment = lexer.has_double_dash_comment,
+        .has_unwind = parser.has_unwind,
     };
 }
 
@@ -499,12 +501,12 @@ pub fn parseGqlOptions(src: []const u8, allocator: std.mem.Allocator, opts: Pars
     var lx = Lexer{ .src = src };
     var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next(), .strict_order_keys = opts.strict_order_keys, .ident_order_only = opts.ident_order_only, .forbid_orderby_calls = opts.forbid_orderby_calls, .forbid_orderby_paths = opts.forbid_orderby_paths, .ts_extensions = opts.ts_extensions };
     const program = try p.parseProgram();
-    return .{ .program = program, .arena = arena, .last_error = p.last_error, .has_double_solidus_comment = lx.has_double_solidus_comment, .has_double_dash_comment = lx.has_double_dash_comment };
+    return .{ .program = program, .arena = arena, .last_error = p.last_error, .has_double_solidus_comment = lx.has_double_solidus_comment, .has_double_dash_comment = lx.has_double_dash_comment, .has_unwind = p.has_unwind };
 }
 
 pub const ParseOutcome = union(enum) {
     Ok: ParseResult,
-    Err: struct { msg: []const u8, line: u32, column: u32, token: @import("gql/token.zig").TokenKind, has_double_dash_comment: bool },
+    Err: struct { msg: []const u8, line: u32, column: u32, token: @import("gql/token.zig").TokenKind, has_double_dash_comment: bool, has_unwind: bool = false },
 };
 
 // Parse but capture parser error details instead of throwing; allocation errors still throw.
@@ -518,10 +520,11 @@ pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: Pars
         const loc = p.cur.loc;
         const kind = p.cur.kind;
         const has_dd = lx.has_double_dash_comment;
+        const has_uw = p.has_unwind;
         arena.deinit();
-        return .{ .Err = .{ .msg = msg, .line = loc.line, .column = loc.column, .token = kind, .has_double_dash_comment = has_dd } };
+        return .{ .Err = .{ .msg = msg, .line = loc.line, .column = loc.column, .token = kind, .has_double_dash_comment = has_dd, .has_unwind = has_uw } };
     };
-    return .{ .Ok = .{ .program = program, .arena = arena, .last_error = p.last_error, .has_double_solidus_comment = lx.has_double_solidus_comment, .has_double_dash_comment = lx.has_double_dash_comment } };
+    return .{ .Ok = .{ .program = program, .arena = arena, .last_error = p.last_error, .has_double_solidus_comment = lx.has_double_solidus_comment, .has_double_dash_comment = lx.has_double_dash_comment, .has_unwind = p.has_unwind } };
 }
 
 // Re-export execution and graph_store for integration tests
