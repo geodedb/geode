@@ -1,5 +1,8 @@
 const std = @import("std");
 const fle_integration = @import("../fle_integration.zig");
+const logging = @import("logging");
+const fle_log = logging.scoped("fle");
+const Attr = logging.Attr;
 
 // Field-Level Encryption Execution Hooks
 // CANARY: REQ=REQ-FLE-EXECUTION-001; FEATURE="FieldLevelEncryption"; ASPECT=EXECUTION; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-28
@@ -147,7 +150,11 @@ pub fn decryptPropertyIfNeeded(
         true, // check_rbac = true
     ) catch |err| {
         // If decryption fails, return "[REDACTED]" for safety
-        std.debug.print("Warning: Failed to decrypt field {s}.{s}: {}\n", .{ node_type, field_name, err });
+        fle_log.warn("failed to decrypt field", &.{
+            Attr.string("node_type", node_type),
+            Attr.string("field", field_name),
+            Attr.err("error", err),
+        });
         return try allocator.dupe(u8, "[REDACTED]");
     };
 

@@ -31,6 +31,7 @@ const storage_cli = @import("storage_cli.zig");
 const session_cli = @import("session_cli.zig");
 const authn_cli = @import("authn_cli.zig");
 const apikey_cli = @import("apikey_cli.zig");
+const mtls_cli = @import("mtls_cli.zig");
 
 // Re-export command handlers for main to use
 pub const cmdUser = user_mgmt_cli.cmdUser;
@@ -309,9 +310,8 @@ pub fn dispatch(
         try authn_cli.cmdAuthn(allocator, argv, subcommand_start + 1);
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcommand, "mtls")) {
-        std.debug.print("Error: '{s}' CLI command is not available in the protobuf/QUIC-only client.\n", .{subcommand});
-        std.debug.print("Use server-side administration APIs instead.\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.usage_error));
+        try mtls_cli.cmdMtls(allocator, argv, subcommand_start + 1);
+        std.process.exit(@intFromEnum(ExitCode.success));
     } else {
         // Check if this is an option that should be handled by query command
         if (std.mem.startsWith(u8, subcommand, "--format") or
@@ -499,7 +499,7 @@ fn printBashCompletions() void {
         \\            return 0
         \\            ;;
         \\        shell)
-        \\            COMPREPLY=( $(compgen -W "--server --insecure --help" -- "${cur}") )
+        \\            COMPREPLY=( $(compgen -W "--server --insecure-tls-skip-verify --insecure --help" -- "${cur}") )
         \\            return 0
         \\            ;;
         \\        completion)
@@ -616,6 +616,7 @@ fn printFishCompletions() void {
         \\complete -c geode -n "__fish_use_subcommand" -a storage -d 'Storage engine management'
         \\complete -c geode -n "__fish_use_subcommand" -a audit -d 'Audit log management'
         \\complete -c geode -n "__fish_use_subcommand" -a completion -d 'Generate shell completion scripts'
+        \\complete -c geode -n "__fish_use_subcommand" -a mtls -d 'Mutual TLS certificate mapping management'
         \\complete -c geode -n "__fish_use_subcommand" -a mcp -d 'Model Context Protocol server (AI/LLM integration)'
         \\
         \\# Subcommand options
@@ -624,7 +625,8 @@ fn printFishCompletions() void {
         \\complete -c geode -n "__fish_seen_subcommand_from query" -s s -l server -d 'Server address' -r
         \\complete -c geode -n "__fish_seen_subcommand_from query" -s f -l format -d 'Output format' -ra 'json table csv'
         \\complete -c geode -n "__fish_seen_subcommand_from shell" -s s -l server -d 'Server address' -r
-        \\complete -c geode -n "__fish_seen_subcommand_from shell" -l insecure -d 'Skip TLS verification'
+        \\complete -c geode -n "__fish_seen_subcommand_from shell" -l insecure-tls-skip-verify -d 'Skip TLS verification'
+        \\complete -c geode -n "__fish_seen_subcommand_from shell" -l insecure -d 'Skip TLS verification (deprecated)'
         \\complete -c geode -n "__fish_seen_subcommand_from completion" -s s -l shell -d 'Shell type' -ra 'bash zsh fish powershell'
         \\complete -c geode -n "__fish_seen_subcommand_from mcp" -l port -d 'HTTP port' -r
         \\complete -c geode -n "__fish_seen_subcommand_from mcp" -s e -l endpoint -d 'Geode server endpoint' -r

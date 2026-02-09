@@ -789,10 +789,7 @@ fn handleClientMessage(
                             };
                             try sendQuicMessage(gpa, stream, .{ .execute = resp });
 
-                            if (!state.in_txn) {
-                                const global_store = graph_store.getGlobalStore(gpa);
-                                global_store.saveIfDirty();
-                            }
+                            // GAP-0260: Non-txn saves deferred to background persistence thread
                         },
                         .rows => {
                             var exec_result = execution.executeProgramWithContext(gpa, &parse_result.program, exec_context) catch |err| {
@@ -852,10 +849,7 @@ fn handleClientMessage(
 
                             updateTxnStateFromProgram(state, &parse_result.program);
 
-                            if (!state.in_txn) {
-                                const global_store = graph_store.getGlobalStore(gpa);
-                                global_store.saveIfDirty();
-                            }
+                            // GAP-0260: Non-txn saves deferred to background persistence thread
                         },
                     }
                 },

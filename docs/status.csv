@@ -872,6 +872,9 @@ REQ-GAP-0238,RuntimeUnitTests,PollerInterface,TESTED,,,runtime,2026-01-25,src/ru
 REQ-GAP-0239,ContainerUnitTests,CursorContainer,TESTED,,,containers,2026-01-25,src/containers/cursor_container.zig
 REQ-GAP-0239,ContainerUnitTests,SignaledQueue,TESTED,,,containers,2026-01-25,src/containers/signaled_queue.zig
 REQ-GAP-0240,TypePromotionUnitTests,ScaleConversion,TESTED,,,eval,2026-01-25,src/eval/type_promotion.zig
+REQ-GAP-0257-ISO-001,ISO Conformance Evidence,Docs,IMPL,,,docs,2026-02-09,docs/gql/GQL_CONFORMANCE_PROFILE.md
+REQ-GAP-0258-MTLS-CLI-001,mTLS CLI,CertificateMapping,IMPL,,,cli,2026-02-09,src/cli/mtls_cli.zig
+REQ-GAP-0260-PERSIST-001,DeferredPersistence,WriteCoalescing,IMPL,,,storage,2026-02-09,src/graph_store.zig
 REQ-GAP-ANALYSIS-JANUARY-2026,Gap Analysis Verification Tests,UnitTests,TESTED,,,compliance,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapAnalysisFixes,UnitTests,EXEMPT,,,testing,2026-01-09,tests/test_gap_analysis_fixes.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapTests,AnalysisFixes,TESTED,,,testing,2026-01-16,tests/test_gap_0193_batch2_testing.zig
@@ -1048,11 +1051,8 @@ REQ-GQL-017,Match Label+Property Predicate,Execution,TESTED,,,engine,2025-09-21,
 REQ-GQL-017,Match Label+Property Predicate,MatchLabelPropertyVarianceEnvelope,BENCHED,,,engine,2025-09-21,tests/benchmark_match_label_property_variance.zig
 REQ-GQL-017,Match Label+Property Predicate,OptionalMatchNullPreserve,TESTED,,,engine,2025-09-21,tests/test_match_label_property.zig
 REQ-GQL-017,MatchEmptyGraph,Unit,TESTED,,,engine,2025-09-24,tests/unit_match_executor.zig
-REQ-GQL-017,MatchFrontierGuard,Docs,TESTED,,,engine,2025-09-25,docs/gql/GQL_CONFORMANCE_PROFILE.md
-REQ-GQL-017,MatchGuardStatusWireMapping,Docs,TESTED,,,engine,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GQL-017,MatchGuardStatusWireMapping,Wire,TESTED,,,engine,2025-09-25,tests/e2e_protocol_match_guard_status.zig
 REQ-GQL-017,MatchGuardStatusWireMapping,Wire,TESTED,,,engine,2025-09-25,tests/e2e_protocol_match_guard_status_threshold2.zig
-REQ-GQL-017,MatchResultGuard,Docs,TESTED,,,engine,2025-09-25,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GQL-017,MatchSafetyGuards,EngineGuardInit,TESTED,,,engine,2025-09-24,src/server/graph/exec.zig
 REQ-GQL-017,MatchSafetyGuards,FrontierAndResultGuardTrips,TESTED,,,engine,2025-09-24,tests/unit_match_executor_guards.zig
 REQ-GQL-017,MatchSafetyGuards,Unit,TESTED,,,engine,2025-09-24,tests/unit_match_executor.zig
@@ -1070,11 +1070,8 @@ REQ-GQL-017,Property Access,PropertyAccessHotPathVarianceEnvelope,BENCHED,,,engi
 REQ-GQL-017,Property Access Hot Path,Engine,BENCHED,,,engine,2025-09-20,tests/benchmark_property_access_hotpath.zig
 REQ-GQL-017,PropertyAccess,Basic,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch2_engine.zig
 REQ-GQL-017,QueryPlanCaching,CacheOperations,TESTED,,,engine,2025-10-03,tests/query_plan_cache_test.zig
-REQ-GQL-017,Transport Parity CASE 3VL,Docs,TESTED,,,engine,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GQL-017,Transport Parity CASE 3VL,ProtocolE2E,TESTED,,,engine,2025-09-24,tests/e2e_protocol_transport_parity_case.zig
-REQ-GQL-017,Transport Parity Diagnostics IllegalOrderKey,Docs,TESTED,,,engine,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GQL-017,Transport Parity Diagnostics IllegalOrderKey,ProtocolE2E,TESTED,,,engine,2025-09-24,tests/e2e_protocol_transport_parity_illegal_order_key.zig
-REQ-GQL-017,Transport Parity Diagnostics US001,Docs,TESTED,,,engine,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GQL-017,Transport Parity Diagnostics US001,ProtocolE2E,TESTED,,,engine,2025-09-24,tests/e2e_protocol_transport_parity_us001.zig
 REQ-GQL-017,Transport Parity Full Rows,ProtocolE2E,TESTED,,,engine,2025-09-24,tests/e2e_protocol_transport_parity_fullrows.zig
 REQ-GQL-017,Transport Parity MATCH VarLen Rows,Docs,TESTED,,,engine,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
@@ -1103,7 +1100,6 @@ REQ-GQL-017-TUTORIAL,Docs,Tutorial,TESTED,,,docs,2026-01-16,tests/test_gap_0193_
 REQ-GQL-018,QueryPlanCaching,CacheEviction,TESTED,,,engine,2025-10-03,tests/query_plan_cache_test.zig
 REQ-GQL-018,Transport Parity Summary Diff Guard,GovernanceTest,TESTED,,,tooling,2025-09-24,tests/e2e_parity_summary_diff_guard.zig
 REQ-GQL-018,Transport Parity Summary Guard,GovernanceTest,TESTED,,,tooling,2025-09-24,tests/e2e_parity_summary_guard.zig
-REQ-GQL-018,Transport Parity VarLen Dataset Rows,Docs,TESTED,,,engine,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GQL-018,Transport Parity VarLen Dataset Rows,ProtocolE2E,TESTED,,,engine,2025-09-24,tests/e2e_protocol_transport_parity_varlen_dataset_rows.zig
 REQ-GQL-019,QueryOptimization,CostBasedOptimization,TESTED,,,engine,2025-10-03,tests/query_plan_cache_test.zig
 REQ-GQL-020,Cluster QUIC Messaging,SendToNode,TESTED,,,distributed,2025-09-25,src/distributed/cluster.zig
@@ -1180,7 +1176,7 @@ REQ-GQL-024,Conformance Flagger,ImplDefinedFlagsProtocolIntegration,TESTED,,,wir
 REQ-GQL-024,Conformance Flagger,ImplDefinedZeroLengthPathPolicy,TESTED,,,engine,2025-09-21,src/flagger_impl_defined.zig
 REQ-GQL-024,Conformance Flagger,ImplDefinedZeroLengthPathPolicy,TESTED,,,engine,2025-09-21,src/server/flagger_impl_defined.zig
 REQ-GQL-024,Conformance Flagger,ImplDefinedZeroLengthPathPolicyOutput,TESTED,,,engine,2025-09-21,tests/test_flagger_zero_length_path.zig
-REQ-GQL-024,Conformance Profile Ledger,Docs,TESTED,,,docs,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
+REQ-GQL-024,Conformance Profile Ledger,Docs,TESTED,,,docs,2026-02-09,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GQL-024,Cost Based Optimizer,PlanCandidateRescoringIntegration,TESTED,,,planner,2025-09-26,src/planner/rescore.zig
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibration,TESTED,,,planner,2025-09-22,src/planner/cost_calibration.zig
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibrationRanking,TESTED,,,planner,2025-09-22,src/planner/pipeline.zig
@@ -1230,7 +1226,6 @@ REQ-GQL-024,FederationMismatchFlag,LatencyAggregateSchemaValidation,TESTED,,,fed
 REQ-GQL-024,FederationMismatchFlag,LatencyAggregateStreak,TESTED,,,federation,2025-09-26,src/tools/fed_latency_streak.zig
 REQ-GQL-024,FederationMismatchFlag,LatencyVarianceEnvelope,BENCHED,,,federation,2025-09-26,tests/debug/benchmark_federation_mismatch_latency.zig
 REQ-GQL-024,FederationMismatchFlag,MismatchFalsePositiveGuard,BENCHED,,,federation,2025-09-23,tests/debug/benchmark_federation_mismatch_frequency.zig
-REQ-GQL-024,Nulls-Last Ordering Parity,Docs,TESTED,,,engine,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GQL-024,Nulls-Last Ordering Parity,ProtocolE2E,TESTED,,,engine,2025-09-24,tests/e2e_protocol_transport_parity_nulls_order.zig
 REQ-GQL-025,DistributedQueryPlanning,CoordinatorOperations,TESTED,,,distributed,2025-10-05,tests/distributed_query_planner_test.zig
 REQ-GQL-025,Transactions/MVCC,WriteSkewDetection,TESTED,,,txn,2025-09-26,src/transactions/manager.zig
@@ -1639,7 +1634,6 @@ REQ-GQL-089,ListComprehension,Printing,TESTED,,,print,2025-10-14,src/gql/print.z
 REQ-GQL-090,ChainedComparisons,Parser,TESTED,,,parser,2025-10-14,src/gql/parser.zig
 REQ-GQL-090,JSON Types,JsonbCanonical,TESTED,,,types,2025-09-27,src/canary.zig
 REQ-GQL-090,StreamingTelemetry,PagingEvents,TESTED,,,wire,2025-09-23,tests/e2e_protocol_more.zig
-REQ-GQL-091,Client Server Arg Passthrough,Docs,TESTED,,,client,2025-09-24,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GQL-091,PathAssignmentAfterWITH,Parser,TESTED,,,parser,2025-10-14,src/gql/parser.zig
 REQ-GQL-091,ServerDataDirFlag,CliErgonomics,TESTED,,,client,2025-09-24,tests/e2e_client_server_arg_passthrough.zig
 REQ-GQL-091,XML Types,WellFormed,TESTED,,,types,2025-09-27,src/canary.zig

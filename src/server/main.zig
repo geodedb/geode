@@ -424,6 +424,7 @@ pub fn main() !void {
             .port = port,
             .cert_path = cert_path,
             .key_path = key_path,
+            .idle_timeout_ms = config.idle_timeout_ms,
         });
         // In short-lived test runs we avoid tearing down the QUIC endpoint to sidestep
         // vendor teardown crashes; enable passive teardown when
@@ -444,6 +445,10 @@ pub fn main() !void {
             Attr.int("port", port),
             Attr.string("tls", "1.3"),
         });
+
+        // GAP-0260: Start background persistence thread for write coalescing
+        graph_store.startPersistenceThread(config.persist_interval_ms);
+        defer graph_store.stopPersistenceThread(gpa);
 
         // CANARY: REQ=REQ-PERF-ASYNC-CONN-002; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPoolInit; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
         // GAP-0202: Initialize thread pool for async connection handling

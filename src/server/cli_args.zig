@@ -26,6 +26,12 @@ pub const ServerConfig = struct {
     // Query behavior
     order_keys_mode_expr: bool = false, // ident-only by default; env/flag can enable
 
+    // GAP-0259: Configurable QUIC idle timeout (default 300s / 5 minutes)
+    idle_timeout_ms: u64 = 300000,
+
+    // GAP-0260: Deferred persistence interval (default 100ms)
+    persist_interval_ms: u64 = 100,
+
     // Track which fields were allocated (vs static strings)
     _allocated_listen_quic: bool = false,
     _allocated_listen_grpc: bool = false,
@@ -119,6 +125,12 @@ pub fn mergeFileConfig(config: *ServerConfig, file_result: config_lib.Value) voi
     if (file_result.getString("log_level")) |v| {
         if (config.log_level_arg == null) config.log_level_arg = v;
     }
+    if (file_result.getString("idle_timeout")) |v| {
+        config.idle_timeout_ms = std.fmt.parseUnsigned(u64, v, 10) catch config.idle_timeout_ms;
+    }
+    if (file_result.getString("persist_interval")) |v| {
+        config.persist_interval_ms = std.fmt.parseUnsigned(u64, v, 10) catch config.persist_interval_ms;
+    }
 }
 
 /// Print help message to stdout
@@ -135,6 +147,8 @@ pub fn printHelp() void {
     std.debug.print("  --data-dir <path>            Alias for --data_dir\n", .{});
     std.debug.print("  --order-keys expr            Allow expressions in ORDER BY\n", .{});
     std.debug.print("  --log-level <lvl>            Set log level trace|debug|info|warn|error|critical (default info)\n", .{});
+    std.debug.print("  --idle-timeout <ms>          QUIC idle timeout in milliseconds (default: 300000)\n", .{});
+    std.debug.print("  --persist-interval <ms>      Background persistence interval in milliseconds (default: 100)\n", .{});
     std.debug.print("  --help                       Show this help message\n", .{});
     std.debug.print("\nConfig File Locations (searched in order):\n", .{});
     std.debug.print("  1. .geode/config.{{yaml|toml|json}}    (project config)\n", .{});
@@ -230,6 +244,12 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
         } else if (std.mem.eql(u8, arg, "--log-level") and ai + 1 < args.len) {
             config.log_level_arg = try allocator.dupe(u8, args[ai + 1]);
             config._allocated_log_level_arg = true;
+            ai += 1;
+        } else if (std.mem.eql(u8, arg, "--idle-timeout") and ai + 1 < args.len) {
+            config.idle_timeout_ms = std.fmt.parseUnsigned(u64, args[ai + 1], 10) catch 300000;
+            ai += 1;
+        } else if (std.mem.eql(u8, arg, "--persist-interval") and ai + 1 < args.len) {
+            config.persist_interval_ms = std.fmt.parseUnsigned(u64, args[ai + 1], 10) catch 100;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--config") or std.mem.eql(u8, arg, "-c")) {
             // Already processed in first pass, skip value

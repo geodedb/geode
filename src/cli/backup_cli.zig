@@ -163,20 +163,21 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "  --user <username>      Username for authentication\n" ++
                 "  --password <password>  Password for authentication\n" ++
                 "  --compress             Compress backup file\n" ++
-                "  --insecure             Skip TLS certificate verification\n" ++
+                "  --insecure-tls-skip-verify  Skip TLS certificate verification\n" ++
+                "  --insecure             (deprecated) Alias for --insecure-tls-skip-verify\n" ++
                 "  --ca-cert <path>       CA certificate path for server verification\n" ++
                 "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
                 "  --client-key <path>    Client private key path for mutual TLS\n" ++
                 "  -h, --help             Show this help\n" ++
                 "\n" ++
                 "TLS Certificate Options:\n" ++
-                "  Certificate verification is enabled by default. Use --insecure to disable.\n" ++
+                "  Certificate verification is enabled by default. Use --insecure-tls-skip-verify to disable.\n" ++
                 "  For enterprise PKI/mutual TLS, provide --ca-cert, --client-cert, --client-key.\n" ++
                 "\n" ++
                 "Examples:\n" ++
                 "  geode backup create --output ./backup.gz --compress\n" ++
                 "  geode backup create --output ./backup.gz --type full\n" ++
-                "  geode backup create --output ./backup.gz --insecure\n" ++
+                "  geode backup create --output ./backup.gz --insecure-tls-skip-verify\n" ++
                 "  geode backup create --output ./backup.gz --ca-cert /etc/ssl/ca.crt\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
@@ -222,8 +223,11 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 std.debug.print("Error: Unknown backup type '{s}'. Valid types: full\n", .{argv[i]});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
+        } else if (std.mem.eql(u8, argv[i], "--insecure-tls-skip-verify")) {
+            tls_config.insecure = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             tls_config.insecure = true;
+            std.debug.print("Warning: --insecure is deprecated. Use --insecure-tls-skip-verify instead.\n", .{});
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
@@ -655,20 +659,21 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
                 "  --password <password>  Password for authentication\n" ++
                 "  --yes                  Skip confirmation prompts\n" ++
                 "  --confirm              Skip confirmation prompts (alias for --yes)\n" ++
-                "  --insecure             Skip TLS certificate verification\n" ++
+                "  --insecure-tls-skip-verify  Skip TLS certificate verification\n" ++
+                "  --insecure             (deprecated) Alias for --insecure-tls-skip-verify\n" ++
                 "  --ca-cert <path>       CA certificate path for server verification\n" ++
                 "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
                 "  --client-key <path>    Client private key path for mutual TLS\n" ++
                 "  -h, --help             Show this help\n" ++
                 "\n" ++
                 "TLS Certificate Options:\n" ++
-                "  Certificate verification is enabled by default. Use --insecure to disable.\n" ++
+                "  Certificate verification is enabled by default. Use --insecure-tls-skip-verify to disable.\n" ++
                 "  For enterprise PKI/mutual TLS, provide --ca-cert, --client-cert, --client-key.\n" ++
                 "\n" ++
                 "Examples:\n" ++
                 "  geode restore ./backup.gql --confirm\n" ++
                 "  geode restore --source s3://bucket/backup.gql --yes\n" ++
-                "  geode restore ./backup.gql --yes --insecure\n" ++
+                "  geode restore ./backup.gql --yes --insecure-tls-skip-verify\n" ++
                 "  geode restore ./backup.gql --yes --ca-cert /etc/ssl/ca.crt\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
@@ -709,8 +714,11 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
             password = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--yes") or std.mem.eql(u8, argv[i], "--confirm")) {
             skip_confirmation = true;
+        } else if (std.mem.eql(u8, argv[i], "--insecure-tls-skip-verify")) {
+            tls_config.insecure = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             tls_config.insecure = true;
+            std.debug.print("Warning: --insecure is deprecated. Use --insecure-tls-skip-verify instead.\n", .{});
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
@@ -870,7 +878,7 @@ fn connectMigrationClient(allocator: std.mem.Allocator, server_addr: []const u8,
         try client.connectEx(host, port, tls_config.ca_cert_path, tls_config.client_cert_path, tls_config.client_key_path);
     } else if (tls_config.insecure) {
         // Use insecure connect only when explicitly requested
-        std.debug.print("Warning: TLS verification disabled (--insecure flag)\n", .{});
+        std.debug.print("Warning: TLS verification disabled (--insecure-tls-skip-verify flag)\n", .{});
         try client.connectInsecure(host, port, true);
     } else {
         // Default: secure connection with system CA store
@@ -1107,7 +1115,8 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                 "  --user <username>      Username for authentication\n" ++
                 "  --password <password>  Password for authentication\n" ++
                 "  --dry-run              Show what would be applied without applying\n" ++
-                "  --insecure             Skip TLS certificate verification\n" ++
+                "  --insecure-tls-skip-verify  Skip TLS certificate verification\n" ++
+                "  --insecure             (deprecated) Alias for --insecure-tls-skip-verify\n" ++
                 "  --ca-cert <path>       CA certificate path for server verification\n" ++
                 "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
                 "  --client-key <path>    Client private key path for mutual TLS\n" ++
@@ -1119,8 +1128,11 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             migrations_dir = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--dry-run")) {
             dry_run = true;
+        } else if (std.mem.eql(u8, argv[i], "--insecure-tls-skip-verify")) {
+            tls_config.insecure = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             tls_config.insecure = true;
+            std.debug.print("Warning: --insecure is deprecated. Use --insecure-tls-skip-verify instead.\n", .{});
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
@@ -1397,7 +1409,7 @@ fn executeRemoteBackup(
             return err;
         };
     } else if (tls_config.insecure) {
-        std.debug.print("Warning: TLS verification disabled (--insecure flag)\n", .{});
+        std.debug.print("Warning: TLS verification disabled (--insecure-tls-skip-verify flag)\n", .{});
         _ = client.connectInsecure(host, port, true) catch |err| {
             std.debug.print("Error: Failed to connect to {s}:{}: {}\n", .{ host, port, err });
             return err;
@@ -1675,7 +1687,7 @@ fn executeRemoteRestore(
             return error.ConnectionFailed;
         };
     } else if (tls_config.insecure) {
-        std.debug.print("Warning: TLS verification disabled (--insecure flag)\n", .{});
+        std.debug.print("Warning: TLS verification disabled (--insecure-tls-skip-verify flag)\n", .{});
         client.connectInsecure(host, port, true) catch |err| {
             std.debug.print("RESTORE: Failed to connect to server: {}\n", .{err});
             return error.ConnectionFailed;

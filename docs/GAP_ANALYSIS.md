@@ -1,6 +1,6 @@
 # Gap Analysis
 
-**Last Updated**: February 5, 2026
+**Last Updated**: February 8, 2026
 **Verified By**: Requirements-to-Unit-Test Gap Analysis Audit
 **GitLab Source of Truth**: <https://gitlab.com/devnw/codepros/geode/geode/-/issues?label_name=gap>
 
@@ -11,10 +11,12 @@
 | CLI | 1 | Low |
 | GQL Conformance | 1 | Medium |
 | Security | 1 | Medium |
+| Transport | 1 | High |
+| Storage/Persistence | 1 | High |
 | Test | 0 | - |
 | CI-CD | 0 | - |
 | Documentation | 0 | - |
-| **Total Open Gaps** | **3** | |
+| **Total Open Gaps** | **5** | |
 
 ---
 
@@ -76,6 +78,68 @@
   - [ ] Integration tests pass (`mtls_auth.yml` spec)
 - **Test coverage:** 22 tests skipped in `geode-test-harness/geodetestlab-cli/specs/mtls_auth.yml` pending this fix
 - **Related:** mTLS authentication documentation, QUIC transport implementation
+
+---
+
+### GAP-0259: Synchronous persistence blocks QUIC event loop, causing idle timeout disconnects
+
+- **Status:** 🔴 **OPEN**
+- **Category:** Transport
+- **Severity:** High
+- **Description:** When the GeodeDB server receives INSERT (or other write) statements, it persists data synchronously before returning the response. During this synchronous persistence, the QUIC event loop is blocked — the server cannot process QUIC keep-alive frames or respond to idle timeout probes. If the persistence operation takes longer than the server's 30-second QUIC idle timeout (`quicMaxIdleTimeout = 30 * time.Second`), the server closes the connection with `NO_ERROR (remote)`, even though the client is actively waiting for a response.
+
+  **Observed behavior:** Bulk INSERT operations (e.g., migrating 35,000+ MAC OUI records) consistently fail after ~30 seconds with `transport read_length to 127.0.0.1:3141: NO_ERROR (remote)`. The client receives a clean QUIC close frame because the server's own idle timer fires while the persistence goroutine is blocking the connection's event loop.
+
+  **Workaround:** Clients must batch multiple statements into a single combined query (e.g., 25 INSERTs joined with `;`) and open a fresh connection per batch. This ensures each request completes within the 30-second window, but adds significant client-side complexity and prevents use of standard connection pooling patterns.
+
+  **Root cause:** The persistence path is synchronous and runs on the same goroutine (or blocks the same context) as the QUIC stream handler, preventing the QUIC connection from servicing its idle timeout and keep-alive mechanisms.
+
+- **Affected files:**
+  - `src/transport/quic.zig` - QUIC connection handler / stream processing
+  - `src/server/query_executor.zig` - Write execution path that triggers persistence
+  - `src/storage/` - Synchronous persistence implementation
+- **Acceptance criteria:**
+  - [ ] Server can process bulk INSERT workloads (35,000+ statements) without QUIC idle timeout disconnects
+  - [ ] QUIC keep-alive frames are processed even while persistence is in progress
+  - [ ] Persistence does not block the QUIC event loop / stream handler goroutine
+  - [ ] Client can use a single long-lived connection for bulk write operations
+  - [ ] Add integration test: 1,000+ sequential INSERTs over a single QUIC connection without timeout
+- **Reproduction:**
+
+  ```bash
+  # Start GeodeDB server
+  # Send >30s worth of INSERT statements over a single QUIC connection
+  # Connection closes with NO_ERROR after ~30s regardless of client keep-alive settings
+  ```
+
+- **Related:** GAP-0260 (synchronous per-statement persistence)
+
+---
+
+### GAP-0260: Per-statement synchronous persistence causes excessive I/O for bulk operations
+
+- **Status:** 🔴 **OPEN**
+- **Category:** Storage/Persistence
+- **Severity:** High
+- **Description:** The GeodeDB server appears to perform a full synchronous persistence (fsync/flush to disk) after every individual INSERT statement. For bulk data loading scenarios (thousands of INSERTs), this results in excessive disk I/O and dramatically reduced throughput. Combined with the QUIC idle timeout issue (GAP-0259), this makes bulk loading impractical without client-side batching workarounds.
+
+  **Observed behavior:** When sending individual INSERT statements sequentially, throughput degrades severely as the server blocks on disk I/O for each statement. The time to persist a single batch of 25 INSERTs (sent as one combined query) is roughly proportional to 25x individual persist operations, suggesting no write coalescing or WAL-based batching is in effect.
+
+  **Expected behavior:** The server should support one or more of the following for bulk operations:
+  1. **Write-ahead log (WAL) with group commit** — Buffer writes in a WAL and flush periodically or on transaction commit, not per-statement.
+  2. **Batch/bulk INSERT optimization** — Detect multi-statement queries and defer persistence until the entire batch completes.
+  3. **Configurable durability** — Allow clients to opt into relaxed durability for bulk loads (e.g., `SET sync_mode = 'batch'`), similar to PostgreSQL's `synchronous_commit = off`.
+
+- **Affected files:**
+  - `src/storage/` - Persistence layer, fsync strategy
+  - `src/server/query_executor.zig` - Per-statement commit/persist triggers
+  - `src/server/transaction_handlers.zig` - Transaction commit persistence
+- **Acceptance criteria:**
+  - [ ] Bulk INSERT of 35,000 records completes in under 60 seconds (currently requires ~10 minutes with workarounds)
+  - [ ] Write-ahead log or group commit mechanism batches persistence across multiple statements
+  - [ ] Single-statement durability guarantee preserved for non-bulk workloads (default behavior unchanged)
+  - [ ] Benchmark added: bulk INSERT throughput (statements/second) for 1K, 10K, 50K records
+- **Related:** GAP-0259 (QUIC idle timeout during persistence)
 
 ---
 

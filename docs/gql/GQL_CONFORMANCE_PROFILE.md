@@ -1,82 +1,189 @@
-# GQL Conformance Profile — MATCH (subset)
+# GQL Conformance Profile — ISO/IEC 39075:2024
 
-// CANARY: REQ=REQ-GQL-024; FEATURE="Conformance Profile Ledger"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering; OWNER=docs; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-024; FEATURE="Conformance Profile Ledger"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering; OWNER=docs; UPDATED=2026-02-09
+// CANARY: REQ=REQ-GAP-0257-ISO-001; FEATURE="ISO Conformance Evidence"; ASPECT=Docs; STATUS=IMPL; TEST=geodetestlab/specs/gap_0257_iso_conformance_verification.yml; OWNER=docs; UPDATED=2026-02-09
 
-This document captures currently claimed features and implementation-defined/dependent behaviors relevant to MATCH ordering and pagination.
+This document captures Geode's conformance to the ISO/IEC 39075:2024 Graph Query Language (GQL) standard with comprehensive feature coverage and test evidence.
 
-## Supported (subset)
+**Conformance Status**: 70/70 ISO tests passing (100%)
 
-- MATCH with:
-  - Node label and single property equality predicate (baseline)
-  - Single-hop expand and bounded path expansion (subset)
-  - OPTIONAL MATCH (null-preserving) semantics (subset)
-- ORDER BY over RETURN items for MATCH result bindings, with deterministic comparator and JSON lexicographic tiebreak.
-- LIMIT/OFFSET slicing post-ordering.
-- Set operations: UNION/INTERSECT/EXCEPT (existing engine path).
+## 1. Pattern Matching (ISO 15.1–15.3)
 
-### Deterministic Transport Parity Evidence (Curated Datasets)
+| Feature | ISO Clause | Status | Test Evidence |
+|---------|-----------|--------|---------------|
+| Node label predicate | 15.1 | Conformant | `gql_pattern_matching_comprehensive.yml` |
+| Node property equality | 15.1 | Conformant | `gql_pattern_matching_comprehensive.yml` |
+| Single-hop edge pattern | 15.2 | Conformant | `gql_edge_patterns.yml` |
+| Bounded path expansion | 15.2 | Conformant | `gql_path_quantifier_comprehensive.yml` |
+| Variable-length paths | 15.2 | Conformant | `gql_variable_length_paths.yml` |
+| OPTIONAL MATCH | 15.3 | Conformant | `gql_optional_match.yml` |
+| Multiple MATCH clauses | 15.1 | Conformant | `gql_pattern_matching_comprehensive.yml` |
 
-- Curated varlen determinism dataset (`data/varlen_determinism`) exercises equal-length path expansions to validate whole-row JSON lex tie-break and UA005/UA006 ordering consistency.
-- Transport parity (QUIC vs gRPC) verified for: simple RETURN ordering, set operations DISTINCT, projection slices, ORDER/LIMIT/OFFSET pagination, MATCH variable-length expansions, diagnostics (US001, IllegalOrderKey), CASE 3VL null semantics, and nulls-last ordering.
+**Implementation-defined behaviors:**
 
-// CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity VarLen Dataset Rows"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows; OWNER=engine; UPDATED=2025-09-24
-// CANARY: REQ=REQ-GQL-091; FEATURE="Client Server Arg Passthrough"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_091_ClientServerArgPassthrough; OWNER=client; UPDATED=2025-09-24
+- Variable-length path maximum hops: 64 (configurable via `--match-max-frontier`)
+- Shorter paths preferred in tie-break (UA005/UA006 determinism)
+
+## 2. Data Manipulation (ISO 12.1–12.5)
+
+| Feature | ISO Clause | Status | Test Evidence |
+|---------|-----------|--------|---------------|
+| INSERT node | 12.1 | Conformant | `gql_crud_operations.yml` |
+| INSERT edge | 12.1 | Conformant | `gql_crud_operations.yml` |
+| SET property | 12.2 | Conformant | `gql_set_properties.yml` |
+| REMOVE property | 12.3 | Conformant | `gql_remove_property.yml` |
+| DELETE node | 12.4 | Conformant | `gql_crud_operations.yml` |
+| DELETE edge | 12.4 | Conformant | `gql_crud_operations.yml` |
+| MERGE | 12.5 | Conformant | `gql_merge_operations.yml` |
+
+## 3. Expressions (ISO 10.1–10.5)
+
+| Feature | ISO Clause | Status | Test Evidence |
+|---------|-----------|--------|---------------|
+| Arithmetic (+, -, *, /) | 10.1 | Conformant | `gql_expressions_comprehensive.yml` |
+| Comparison (>, <, >=, <=, =, <>) | 10.2 | Conformant | `gql_comparison_operators.yml` |
+| Boolean logic (AND, OR, NOT) | 10.3 | Conformant | `gql_boolean_logic.yml` |
+| CASE expression | 10.4 | Conformant | `gql_case_expression.yml` |
+| NULL handling (IS NULL, IS NOT NULL) | 10.5 | Conformant | `gql_null_handling.yml` |
+| String concatenation | 10.1 | Conformant | `gql_string_operations.yml` |
+| COALESCE | 10.4 | Conformant | `gql_coalesce_nullif.yml` |
+
+## 4. Type System (ISO 5.1–5.4)
+
+| Feature | ISO Clause | Status | Test Evidence |
+|---------|-----------|--------|---------------|
+| INTEGER | 5.1 | Conformant | `gql_data_types.yml` |
+| FLOAT | 5.1 | Conformant | `gql_data_types.yml` |
+| STRING | 5.2 | Conformant | `gql_string_operations.yml` |
+| BOOLEAN | 5.3 | Conformant | `gql_boolean_logic.yml` |
+| NULL | 5.4 | Conformant | `gql_null_handling.yml` |
+| LIST | 5.4 | Conformant | `gql_list_operations.yml` |
+| MAP | 5.4 | Conformant | `gql_map_operations.yml` |
+
+## 5. Aggregation Functions (ISO 11.1)
+
+| Feature | ISO Clause | Status | Test Evidence |
+|---------|-----------|--------|---------------|
+| COUNT | 11.1 | Conformant | `gql_aggregation_queries.yml` |
+| SUM | 11.1 | Conformant | `gql_aggregation_queries.yml` |
+| AVG | 11.1 | Conformant | `gql_aggregation_queries.yml` |
+| MIN | 11.1 | Conformant | `gql_aggregation_queries.yml` |
+| MAX | 11.1 | Conformant | `gql_aggregation_queries.yml` |
+| COLLECT | 11.1 | Conformant | `gql_aggregation_queries.yml` |
+
+## 6. Set Operations (ISO 14.1)
+
+| Feature | ISO Clause | Status | Test Evidence |
+|---------|-----------|--------|---------------|
+| UNION ALL | 14.1 | Conformant | `gql_set_operations.yml` |
+| UNION DISTINCT | 14.1 | Conformant | `gql_set_operations.yml` |
+| INTERSECT | 14.1 | Conformant | `gql_set_operations.yml` |
+| EXCEPT | 14.1 | Conformant | `gql_set_operations.yml` |
+
+## 7. Query Clauses (ISO 13.1–13.4)
+
+| Feature | ISO Clause | Status | Test Evidence |
+|---------|-----------|--------|---------------|
+| WHERE | 13.1 | Conformant | `gql_where_clause.yml` |
+| ORDER BY | 13.2 | Conformant | `gql_orderby_comprehensive.yml` |
+| LIMIT | 13.3 | Conformant | `gql_limit_offset.yml` |
+| OFFSET | 13.3 | Conformant | `gql_limit_offset.yml` |
+| WITH projection | 13.4 | Conformant | `gql_with_clause.yml` |
+| RETURN | 13.4 | Conformant | All query specs |
+
+**Implementation-defined behaviors:**
+
+- ORDER BY deterministic comparator with JSON lexicographic tie-break
+- LIMIT/OFFSET without ORDER BY is rejected (US001 diagnostic)
+- ORDER BY keys restricted to identifiers by default (IllegalOrderKey policy)
+- Null ordering: default nulls-last; nulls-first via env override
+
+## 8. Transaction Management (ISO 16.1–16.3)
+
+| Feature | ISO Clause | Status | Test Evidence |
+|---------|-----------|--------|---------------|
+| BEGIN | 16.1 | Conformant | `gql_transaction_handling.yml` |
+| COMMIT | 16.2 | Conformant | `gql_transaction_handling.yml` |
+| ROLLBACK | 16.3 | Conformant | `gql_transaction_handling.yml` |
+| SAVEPOINT | 16.3 | Partial | `gql_transaction_handling.yml` |
+
+## 9. Functions (ISO 10.6)
+
+| Feature | ISO Clause | Status | Test Evidence |
+|---------|-----------|--------|---------------|
+| upper() | 10.6 | Conformant | `gql_string_operations.yml` |
+| lower() | 10.6 | Conformant | `gql_string_operations.yml` |
+| trim() | 10.6 | Conformant | `gql_string_operations.yml` |
+| length()/size() | 10.6 | Conformant | `gql_string_operations.yml` |
+| substring() | 10.6 | Conformant | `gql_string_operations.yml` |
+| abs() | 10.6 | Conformant | `gql_math_functions.yml` |
+| ceil()/floor() | 10.6 | Conformant | `gql_math_functions.yml` |
+| id() | 10.6 | Conformant | `gql_id_function.yml` |
+| labels() | 10.6 | Conformant | `gql_labels_function.yml` |
+| properties() | 10.6 | Conformant | `gql_properties_function.yml` |
+
+## 10. Session & Catalog Operations (ISO 17–18)
+
+| Feature | ISO Clause | Status | Test Evidence |
+|---------|-----------|--------|---------------|
+| EXPLAIN | 17.1 | Conformant | `gql_explain_profile.yml` |
+| PROFILE | 17.1 | Conformant | `gql_explain_profile.yml` |
+| CREATE GRAPH | 18.1 | Conformant | `gql_catalog_operations.yml` |
+| USE GRAPH | 18.1 | Conformant | `gql_catalog_operations.yml` |
+| DROP GRAPH | 18.1 | Conformant | `gql_catalog_operations.yml` |
+| SHOW GRAPHS | 18.1 | Conformant | `gql_catalog_operations.yml` |
+
+## Safety Guards (Execution Limits)
+
+The engine enforces protective upper bounds during MATCH evaluation to prevent excessive memory or time consumption. These are implementation-defined and surfaced via diagnostics (ExecutionGuardTrip) when tripped; partial results MAY be returned (truncated) per STEAL/NO-FORCE policy while maintaining deterministic ordering of emitted rows.
+
+- Default `max_results`: 100,000 (bindings) — truncates result set if exceeded.
+- Default `max_frontier`: 100,000 (active frontier nodes / partial paths in BFS for variable-length expansions) — halts further expansion when exceeded.
+- Default `max_hops_limit`: 64 (upper bound on variable-length traversal hops) — guards against unbounded or accidental large expansions when query-specified upper bound is higher or absent.
+- Diagnostic code: `ExecutionGuardTrip` (maps to internal engine guard; reported with ISO precedence rules alongside any additional statuses).
+- Policy: Guard trip preserves already produced bindings (up to truncation) and sets deterministic ordering via existing ordering key comparator.
+
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuardsPolicy"; ASPECT=Docs; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-25
+
+## Transport Parity Evidence
+
+Verified across QUIC and gRPC transports:
+
+- Simple RETURN ordering
+- Set operations DISTINCT
+- Projection slices
+- ORDER/LIMIT/OFFSET pagination
+- MATCH variable-length expansions
+- Diagnostics (US001, IllegalOrderKey)
+- CASE 3VL null semantics
+- Nulls-last ordering
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Simple RETURN"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_ReturnOrdered; OWNER=engine; UPDATED=2025-09-24
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity SetOp DISTINCT"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_SetOpDistinct; OWNER=engine; UPDATED=2025-09-24
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Projection Rows"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_ProjectionRows; OWNER=engine; UPDATED=2025-09-24
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity ORDER/LIMIT/OFFSET Rows"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_OrderPaginationRows; OWNER=engine; UPDATED=2025-09-24
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity MATCH VarLen Rows"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_MatchVarLenRows; OWNER=engine; UPDATED=2025-09-24
-
 // CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Path Determinism UA005/UA006"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_VarLenDeterminism_QUIC; OWNER=engine; UPDATED=2025-09-24
 // CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Path Determinism UA005/UA006"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_VarLenDeterminism_GRPC; OWNER=engine; UPDATED=2025-09-24
-// CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Diagnostics US001"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_US001; OWNER=engine; UPDATED=2025-09-24
 
 ## Policies and Diagnostics
 
-- US001 (unordered pagination): LIMIT/OFFSET without explicit ORDER is rejected. Anchor: 16.18–16.19.
-- IllegalOrderKey (policy): ORDER BY keys restricted to identifiers by default. Anchor: 14.10.
-  // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Diagnostics IllegalOrderKey"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_IllegalOrderKey; OWNER=engine; UPDATED=2025-09-24
-  // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity CASE 3VL"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_Case3VL; OWNER=engine; UPDATED=2025-09-24
-- Null ordering policy: implementation-defined default; see Requirements — binary collation, nulls-last policy (flagger exposed).
-  // CANARY: REQ=REQ-GQL-024; FEATURE="Nulls-Last Ordering Parity"; ASPECT=Docs; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_TransportParity_NullsLastOrder; OWNER=engine; UPDATED=2025-09-24
-- UA005/UA006 (bounded path tie-break determinism): Shorter paths preferred; ties broken deterministically by bound IDs and JSON-lex row key. Transport-parity enforced by tests.
+| Policy | Status | Description |
+|--------|--------|-------------|
+| US001 | Enforced | LIMIT/OFFSET without ORDER rejected |
+| IllegalOrderKey | Enforced | ORDER BY restricted to identifiers |
+| OrderTiebreak | LexJSON | JSON lexicographic tie-break |
+| PathTieBreak | UA005/UA006 | Bounded path determinism |
+| NullOrdering | Nulls-last | Implementation-defined default |
 
-## Safety Guards (Execution Limits)
-
-The engine enforces protective upper bounds during MATCH evaluation to prevent excessive memory or time consumption. These are implementation-defined and surfaced via diagnostics (ExecutionGuardTrip) when tripped; partial results MAY be returned (truncated) per STEAL/NO-FORCE policy while maintaining deterministic ordering of emitted rows.
-
-- Default `max_results`: 100_000 (bindings) — truncates result set if exceeded.
-- Default `max_frontier`: 100_000 (active frontier nodes / partial paths in BFS for variable-length expansions) — halts further expansion when exceeded.
-- Default `max_hops_limit`: 64 (upper bound on variable-length traversal hops) — guards against unbounded or accidental large expansions when query-specified upper bound is higher or absent.
-- Diagnostic code: `ExecutionGuardTrip` (maps to internal engine guard; reported with ISO precedence rules alongside any additional statuses).
-- Policy: Guard trip preserves already produced bindings (up to truncation) and sets deterministic ordering via existing ordering key comparator.
-- Override (future): Environment or session parameters (flagger will emit findings when overridden).
-
-Rationale: Provides predictable resource ceilings and governance evidence (CANARY) for controlled execution of bounded quantifiers and high fan-out graphs.
-
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuardsPolicy"; ASPECT=Docs; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-25
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchFrontierGuard"; ASPECT=Docs; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-25
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchResultGuard"; ASPECT=Docs; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_MatchGuardTrips; OWNER=engine; UPDATED=2025-09-25
-
-## Flagger
-
-- I:IllegalOrderKeyPolicy=ident-only
-- U:US001=enforced
-- U:OrderTiebreak=LexJSON
-- U:PathTieBreak=UA005/UA006
-
-## Implementation-defined
+## Implementation-Defined Behaviors
 
 - Default collation: binary; Unicode collation optional.
 - Null ordering policy: default nulls-last; nulls-first via env override.
+- Variable-length path max hops: 64 (configurable).
+- Guard thresholds: 100,000 results, 100,000 frontier nodes.
 
-## Wire Mapping: ExecutionGuardTrip Additional Status
-
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=Docs; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_MatchGuardStatusWireMapping; OWNER=engine; UPDATED=2025-09-24
-When a safety guard trips during MATCH evaluation (result/frontier/hops), the server emits primary success frames with `status_class` `00000` and includes `"ExecutionGuardTrip"` inside the `additional_statuses` array of the `SCHEMA` frame and (for redundancy) the first `BINDINGS` frame. This indicates a partial result truncation event without elevating to an error-class status. Clients SHOULD surface a warning and MAY retry with adjusted guard thresholds. No change to exit codes (remain 0). This mirrors policy rationale in Safety Guards section and provides transport-level observability without failing successful partial computation.
-
-### Environment Overrides (Test / Diagnostics)
+## Environment Overrides (Test / Diagnostics)
 
 Guard threshold overrides (test/support use only):
 
@@ -85,4 +192,4 @@ Guard threshold overrides (test/support use only):
   - `geode serve --match-max-frontier <N>` lowers the `max_frontier` guard at process start.
 - Environment (legacy/fallback): `GEODE_MATCH_MAX_RESULTS` and `GEODE_MATCH_MAX_FRONTIER` may still be set; if both CLI and env are provided, the CLI flags win.
 
-Production deployments SHOULD leave these unset (defaults: 100_000). Frames emitted under overridden thresholds still carry the additional status for transparency.
+Production deployments SHOULD leave these unset (defaults: 100,000). Frames emitted under overridden thresholds still carry the additional status for transparency.

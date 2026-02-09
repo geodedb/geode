@@ -23,7 +23,7 @@ repos:
     exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/|.*\.bin$|.*\.der$|.*\.pem$)
   - id: mixed-line-ending
     args: [--fix=lf]
-    exclude: ^(vendor/|dist/|zig-out/)
+    exclude: ^(vendor/|dist/|zig-out/|docs/status\.csv$)
 
       # Syntax validation
   - id: check-yaml

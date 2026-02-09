@@ -152,6 +152,8 @@ fn printServeUsage() void {
         "  --cert <path>          TLS certificate path (auto-generated if missing)\n" ++
         "  --key <path>           TLS private key path (auto-generated if missing)\n" ++
         "  --log-level <level>    Log level: debug|info|warn|error (default: info)\n" ++
+        "  --idle-timeout <ms>    QUIC idle timeout in milliseconds (default: 300000)\n" ++
+        "  --persist-interval <ms> Background persistence interval in ms (default: 100)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Examples:\n" ++
@@ -171,7 +173,8 @@ fn printQueryUsage() void {
         "  --grpc                 Use gRPC transport instead of QUIC\n" ++
         "  -g, --graph <name>     Graph to query against (auto-prepends USE GRAPH)\n" ++
         "  -f, --file <path>      Execute GQL statements from a file (supports ~)\n" ++
-        "  --insecure             Skip TLS certificate verification\n" ++
+        "  --insecure-tls-skip-verify  Skip TLS certificate verification\n" ++
+        "  --insecure             (deprecated) Alias for --insecure-tls-skip-verify\n" ++
         "  --ca-cert <path>       CA certificate path for server verification\n" ++
         "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
         "  --client-key <path>    Client private key path for mutual TLS\n" ++
@@ -189,7 +192,7 @@ fn printQueryUsage() void {
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "TLS Certificate Options:\n" ++
-        "  Certificate verification is enabled by default. Use --insecure to disable.\n" ++
+        "  Certificate verification is enabled by default. Use --insecure-tls-skip-verify to disable.\n" ++
         "  For enterprise PKI/mutual TLS, provide --ca-cert, --client-cert, --client-key.\n" ++
         "\n" ++
         "Authentication:\n" ++
@@ -219,7 +222,7 @@ fn printQueryUsage() void {
         "  geode query -g firewall \"MATCH (r:Rule) RETURN r.name\"\n" ++
         "\n" ++
         "  # Connection options\n" ++
-        "  geode query --server localhost:3141 --insecure \"RETURN 1 AS x\"\n" ++
+        "  geode query --server localhost:3141 --insecure-tls-skip-verify \"RETURN 1 AS x\"\n" ++
         "  geode query --ca-cert /etc/ssl/ca.crt --server secure.example.com:3141 \"RETURN 1\"\n" ++
         "  geode query --ca-cert /etc/ssl/ca.crt --client-cert /etc/ssl/client.crt --client-key /etc/ssl/client.key --server secure.example.com:3141 \"RETURN 1\"\n" ++
         "  geode query --format table \"MATCH (u:User) RETURN u.name, u.email\"\n" ++
@@ -230,7 +233,7 @@ fn printQueryUsage() void {
         "\n" ++
         "  # Execute from file\n" ++
         "  geode query --file ~/my_queries.gql\n" ++
-        "  geode query -f ./schema.gql --insecure\n" ++
+        "  geode query -f ./schema.gql --insecure-tls-skip-verify\n" ++
         "\n", .{});
 }
 
@@ -306,7 +309,8 @@ fn printShellUsage() void {
         "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  -U, --username <user>  Username for authentication\n" ++
         "  -P, --password <pass>  Password for authentication\n" ++
-        "  --insecure             Skip TLS certificate verification\n" ++
+        "  --insecure-tls-skip-verify  Skip TLS certificate verification\n" ++
+        "  --insecure             (deprecated) Alias for --insecure-tls-skip-verify\n" ++
         "  --ca-cert <path>       CA certificate path for server verification\n" ++
         "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
         "  --client-key <path>    Client private key path for mutual TLS\n" ++
@@ -320,13 +324,13 @@ fn printShellUsage() void {
         "  Both username and password must be provided together.\n" ++
         "\n" ++
         "TLS Certificate Options:\n" ++
-        "  Certificate verification is enabled by default. Use --insecure to disable.\n" ++
+        "  Certificate verification is enabled by default. Use --insecure-tls-skip-verify to disable.\n" ++
         "  For enterprise PKI/mutual TLS, provide --ca-cert, --client-cert, --client-key.\n" ++
         "\n" ++
         "Examples:\n" ++
         "  geode shell\n" ++
         "  geode shell --server localhost:3141 -U admin -P secret\n" ++
-        "  geode shell --server localhost:3141 --insecure\n" ++
+        "  geode shell --server localhost:3141 --insecure-tls-skip-verify\n" ++
         "  geode shell --ca-cert /etc/ssl/ca.crt --server secure.example.com:3141\n" ++
         "  geode shell --no-history --format json\n" ++
         "\n", .{});
@@ -757,8 +761,11 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
             format = argv[i + 1];
             i += 1;
+        } else if (std.mem.eql(u8, arg, "--insecure-tls-skip-verify")) {
+            insecure = true;
         } else if (std.mem.eql(u8, arg, "--insecure")) {
             insecure = true;
+            std.debug.print("Warning: --insecure is deprecated. Use --insecure-tls-skip-verify instead.\n", .{});
         } else if (std.mem.eql(u8, arg, "--grpc")) {
             use_grpc = true;
         } else if (std.mem.eql(u8, arg, "--ca-cert")) {
@@ -3620,8 +3627,11 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             i += 1;
         } else if (std.mem.eql(u8, argv[i], "--no-history")) {
             history_enabled = false;
+        } else if (std.mem.eql(u8, argv[i], "--insecure-tls-skip-verify")) {
+            insecure = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             insecure = true;
+            std.debug.print("Warning: --insecure is deprecated. Use --insecure-tls-skip-verify instead.\n", .{});
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             // GAP-0113: CA certificate path for server verification
             if (i + 1 >= argv.len) {

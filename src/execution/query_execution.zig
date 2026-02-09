@@ -4,6 +4,10 @@ const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
 
+const logging = @import("logging");
+const qe_log = logging.scoped("execution");
+const Attr = logging.Attr;
+
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
@@ -50,7 +54,9 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
     // Prevent corrupted column length from causing OutOfMemory errors
     if (current_result.columns.len > 1000000) {
         // Suspiciously large column count - likely corrupted memory
-        std.debug.print("ERROR: Corrupted columns.len = {d}\n", .{current_result.columns.len});
+        qe_log.err("corrupted columns length", &.{
+            Attr.int("columns_len", @intCast(current_result.columns.len)),
+        });
         return error.CorruptedExecutionResult;
     }
 
@@ -651,7 +657,10 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         // Build parameter arrays from current result
         // Validate that current_row length matches columns length
         if (current_row.len != current_result.columns.len) {
-            std.debug.print("ERROR: Row length {d} != columns length {d}\n", .{ current_row.len, current_result.columns.len });
+            qe_log.err("row/column length mismatch", &.{
+                Attr.int("row_len", @intCast(current_row.len)),
+                Attr.int("columns_len", @intCast(current_result.columns.len)),
+            });
             return error.MismatchedRowColumnLength;
         }
 
@@ -757,20 +766,20 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
         var current_query_standalone = q;
         current_query_standalone.next_query = null;
 
-        std.debug.print("[CHAIN] Executing current query (standalone)...\n", .{});
+        qe_log.debug("executing chained query standalone", &.{});
         const current_result = try executeQueryWithBindingsImpl(allocator, current_query_standalone, context, binding_names, binding_values);
-        std.debug.print("[CHAIN] Current result: cols={d}, rows={d}\n", .{ current_result.columns.len, current_result.rows.len });
-        for (current_result.columns, 0..) |col, i| {
-            if (current_result.rows.len > 0) {
-                std.debug.print("[CHAIN]   col[{d}] {s} = {any}\n", .{ i, col, current_result.rows[0][i] });
-            }
-        }
+        qe_log.debug("chained query result", &.{
+            Attr.int("columns", @intCast(current_result.columns.len)),
+            Attr.int("rows", @intCast(current_result.rows.len)),
+        });
 
         // CANARY(memory-safety): Validate current_result structure before accessing
         // Prevent corrupted column length from causing OutOfMemory errors
         if (current_result.columns.len > 1000000) {
             // Suspiciously large column count - likely corrupted memory
-            std.debug.print("ERROR: Corrupted columns.len = {d} in executeQueryChainWithBindings\n", .{current_result.columns.len});
+            qe_log.err("corrupted columns length in chained query", &.{
+                Attr.int("columns_len", @intCast(current_result.columns.len)),
+            });
             return error.CorruptedExecutionResult;
         }
 
@@ -928,7 +937,10 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
         for (current_result.rows) |current_row| {
             // Validate that current_row length matches columns length
             if (current_row.len != current_result.columns.len) {
-                std.debug.print("ERROR: Row length {d} != columns length {d} in executeQueryChainWithBindings\n", .{ current_row.len, current_result.columns.len });
+                qe_log.err("row/column length mismatch in chained query", &.{
+                    Attr.int("row_len", @intCast(current_row.len)),
+                    Attr.int("columns_len", @intCast(current_result.columns.len)),
+                });
                 return error.MismatchedRowColumnLength;
             }
 

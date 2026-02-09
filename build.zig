@@ -273,6 +273,7 @@ pub fn build(b: *std.Build) void {
     // The external quic library provides the same API as the vendored version
     const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize });
     transport_quic_mod.addImport("vendor_quic", quic_ext_mod); // External library replaces vendored QUIC
+    transport_quic_mod.addImport("logging", logging_mod);
 
     // Thread Pool Module - High-performance worker threads for query execution (GAP-0201)
     // CANARY: REQ=REQ-PERF-THREAD-POOL-BUILD-001; FEATURE="ThreadPool"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26

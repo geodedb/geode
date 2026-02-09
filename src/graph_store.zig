@@ -2633,21 +2633,24 @@ pub const GraphStore = struct {
     pub fn saveIfDirty(self: *GraphStore) void {
         const file_path = getPersistenceFilePath(self.allocator) catch "/tmp/geode_graph_store.dat";
         defer if (file_path.len > 0 and file_path.ptr != "/tmp/geode_graph_store.dat".ptr) self.allocator.free(file_path);
-        std.debug.print("[PERSIST] saveIfDirty: dirty={}, nodes={}, path={s}\n", .{ self.dirty, self.nodes.count(), file_path });
-        log.info("saveIfDirty called", &.{
+        log.debug("saveIfDirty called", &.{
             Attr.string("dirty", if (self.dirty) "true" else "false"),
             Attr.int("node_count", @intCast(self.nodes.count())),
+            Attr.string("path", file_path),
         });
         if (self.dirty) {
-            std.debug.print("[PERSIST] Saving to {s}...\n", .{file_path});
-            log.info("Saving graph store (dirty=true)", &.{});
+            log.debug("saving graph store", &.{
+                Attr.string("path", file_path),
+            });
             self.saveToFile() catch |err| {
-                std.debug.print("[PERSIST] ERROR: {any}\n", .{err});
-                log.err("CRITICAL: Failed to persist graph store", &.{
+                log.err("failed to persist graph store", &.{
                     Attr.err("error", err),
+                    Attr.string("path", file_path),
                 });
             };
-            std.debug.print("[PERSIST] Save completed, dirty now={}\n", .{self.dirty});
+            log.debug("save completed", &.{
+                Attr.string("dirty", if (self.dirty) "true" else "false"),
+            });
         }
     }
 
@@ -3224,6 +3227,54 @@ var last_data_dir: ?[]u8 = null;
 /// P2-3: Global allocator for persistent graph store data (better than page_allocator)
 var global_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
 var global_allocator_init = false;
+
+// GAP-0260: Background persistence thread for write coalescing
+// CANARY: REQ=REQ-GAP-0260-PERSIST-001; FEATURE="DeferredPersistence"; ASPECT=WriteCoalescing; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-09
+var g_persist_thread: ?std.Thread = null;
+var g_persist_shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var g_persist_interval_ms: u64 = 100;
+
+/// Start the background persistence thread that periodically flushes dirty data
+pub fn startPersistenceThread(interval_ms: u64) void {
+    g_persist_interval_ms = interval_ms;
+    g_persist_shutdown.store(false, .release);
+    g_persist_thread = std.Thread.spawn(.{}, persistenceLoop, .{}) catch |err| {
+        log.warn("failed to start persistence thread", &.{
+            Attr.err("error", err),
+        });
+        return;
+    };
+}
+
+/// Stop the background persistence thread and perform a final flush
+pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
+    g_persist_shutdown.store(true, .release);
+    if (g_persist_thread) |thread| {
+        thread.join();
+        g_persist_thread = null;
+    }
+    // Final flush on shutdown to ensure no data loss
+    if (global_store) |*store| {
+        _ = allocator;
+        store.saveIfDirty();
+    }
+}
+
+fn persistenceLoop() void {
+    const sleep_ns: u64 = g_persist_interval_ms * std.time.ns_per_ms;
+    while (!g_persist_shutdown.load(.acquire)) {
+        std.Thread.sleep(sleep_ns);
+        if (global_store) |*store| {
+            if (store.dirty) {
+                store.saveToFile() catch |err| {
+                    log.err("background save failed", &.{
+                        Attr.err("error", err),
+                    });
+                };
+            }
+        }
+    }
+}
 
 pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
     // P2-3: Initialize global allocator on first use
