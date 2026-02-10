@@ -1982,7 +1982,7 @@ const SimplifiedRestoreManager = struct {
             const base = std.fs.path.basename(backup_path);
             if (std.mem.startsWith(u8, base, "full_") and std.mem.endsWith(u8, base, ".backup")) {
                 const hex = base["full_".len .. base.len - ".backup".len];
-                break :blk std.fmt.parseInt(u128, hex, 16) catch 0;
+                break :blk std.fmt.parseInt(u64, hex, 16) catch 0;
             }
             break :blk 0;
         };
@@ -2041,7 +2041,7 @@ const SimplifiedRestoreManager = struct {
 };
 
 const RestoreMetadata = struct {
-    source_backup_id: u128,
+    source_backup_id: u64,
     restore_timestamp: i64,
     backup_type: backup_types.BackupType,
     data_size_bytes: usize,

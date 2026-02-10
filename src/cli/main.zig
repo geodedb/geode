@@ -675,6 +675,25 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     try server_main.main();
 }
 
+/// Issue #424: Process-level deadline watchdog for the query command.
+/// Spawned as a background thread, sleeps for `timeout_secs` then terminates
+/// the process with an error message and exit code 1. This ensures the CLI
+/// never hangs indefinitely on aarch64 Docker or any other environment where
+/// QUIC handshakes, TLS negotiation, or TCP connects block forever.
+fn deadlineWatchdog(timeout_secs: u32) void {
+    std.Thread.sleep(@as(u64, timeout_secs) * std.time.ns_per_s);
+    const stderr = std.fs.File{ .handle = getStderrHandle() catch {
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    } };
+    _ = stderr.writeAll("Error: query timed out after ") catch {};
+    // Write the timeout value
+    var buf: [20]u8 = undefined;
+    const timeout_str = std.fmt.bufPrint(&buf, "{d}", .{timeout_secs}) catch "?";
+    _ = stderr.writeAll(timeout_str) catch {};
+    _ = stderr.writeAll(" seconds\n") catch {};
+    std.process.exit(@intFromEnum(ExitCode.general_error));
+}
+
 fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Check for help first
     var i: usize = start_idx + 1; // start_idx points to "query", so check args after it
@@ -1118,6 +1137,12 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // Default to connecting to localhost:3141 if no --server specified
     const server_addr = server orelse "127.0.0.1:3141";
 
+    // Issue #424: Start a process-level deadline watchdog thread.
+    // On aarch64 Docker (and other environments), QUIC handshakes and TCP connects
+    // can block indefinitely. This watchdog guarantees the process exits after
+    // timeout_secs, regardless of what is blocking.
+    _ = std.Thread.spawn(.{}, deadlineWatchdog, .{timeout_secs}) catch {};
+
     // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-004; FEATURE="ChunkedExecution"; ASPECT=BatchExecution; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
     // Handle chunked execution for large files
     if (file_statements) |statements| {
@@ -1310,6 +1335,21 @@ const GrpcQueryOptions = struct {
     params: std.ArrayList(schema.Param),
 };
 
+/// Issue #424: Set SO_RCVTIMEO and SO_SNDTIMEO on a TCP socket so that
+/// blocking reads and writes will fail with a timeout error instead of
+/// hanging forever. This is critical on aarch64 Docker where the gRPC
+/// TCP connection and HTTP/2 handshake can block indefinitely.
+fn setTcpSocketTimeouts(stream: std.net.Stream, timeout_secs: u32) void {
+    if (builtin.os.tag == .windows) return; // Windows uses different API
+    const tv = std.posix.timeval{
+        .sec = @intCast(timeout_secs),
+        .usec = 0,
+    };
+    const tv_bytes = std.mem.asBytes(&tv);
+    std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, tv_bytes) catch {};
+    std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, tv_bytes) catch {};
+}
+
 /// Execute a query over gRPC transport (TCP + HTTP/2).
 /// Uses the grpc_client.GrpcClient Transport for HTTP/2 framing.
 fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void {
@@ -1351,6 +1391,10 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
             continue;
         };
         defer tcp_stream.close();
+
+        // Issue #424: Set socket-level read/write timeouts so blocking I/O
+        // operations will fail instead of hanging forever on aarch64 Docker.
+        setTcpSocketTimeouts(tcp_stream, timeout_secs);
 
         // Send HTTP/2 connection preface
         _ = tcp_stream.write("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n") catch |err| {
@@ -1605,6 +1649,9 @@ fn executeQueryOnGrpc(
     timeout_secs: u32,
 ) !void {
     _ = page_size;
+    // Issue #424: timeout_secs is now enforced at two levels:
+    // 1. TCP socket SO_RCVTIMEO/SO_SNDTIMEO set by the caller (executeGrpcQuery)
+    // 2. Process-level deadline watchdog thread started in cmdQuery
     _ = timeout_secs;
     const stdout = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable };
     const stderr_handle = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };

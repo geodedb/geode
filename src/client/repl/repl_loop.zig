@@ -90,12 +90,12 @@ pub const ReplLoop = struct {
             if (!auth_result.success) {
                 const stderr_file = platform.getStderrHandle();
                 if (auth_result.error_message) |msg| {
-                    try stderr_file.writeAll("Error [GEODE-E0021]: Authentication failed: ");
+                    try stderr_file.writeAll("\r\nError [GEODE-E0021]: Authentication failed: ");
                     try stderr_file.writeAll(msg);
-                    try stderr_file.writeAll("\n");
+                    try stderr_file.writeAll("\r\n");
                     opts.allocator.free(msg);
                 } else {
-                    try stderr_file.writeAll("Error [GEODE-E0021]: Authentication failed\n");
+                    try stderr_file.writeAll("\r\nError [GEODE-E0021]: Authentication failed\r\n");
                 }
                 std.process.exit(21);
             }
@@ -109,9 +109,9 @@ pub const ReplLoop = struct {
             session.hello() catch |err| {
                 if (err == error.AuthenticationRequired) {
                     const stderr_file = platform.getStderrHandle();
-                    try stderr_file.writeAll("Error [GEODE-E0022]: Server requires authentication.\n");
-                    try stderr_file.writeAll("Use --username/-U and --password/-P options to provide credentials.\n");
-                    try stderr_file.writeAll("Example: geode shell --server localhost:3141 -U myuser -P mypassword\n");
+                    try stderr_file.writeAll("\r\nError [GEODE-E0022]: Server requires authentication.\r\n");
+                    try stderr_file.writeAll("Use --username/-U and --password/-P options to provide credentials.\r\n");
+                    try stderr_file.writeAll("Example: geode shell --server localhost:3141 -U myuser -P mypassword\r\n");
                     std.process.exit(22);
                 }
                 return err;

@@ -19,18 +19,30 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy pre-downloaded Zig archive (avoids entropy issues in Docker build)
-COPY docker/zig/zig-x86_64-linux-0.15.1.tar.xz /tmp/zig.tar.xz
-ARG ZIG_VERSION=0.15.1
+# Copy pre-downloaded Zig archives for both architectures (avoids entropy issues in Docker build)
+# Only the archive matching TARGETARCH needs to exist; the other COPY is allowed to fail via
+# the glob pattern which gracefully handles missing files.
+ARG ZIG_VERSION=0.15.2
+COPY docker/zig/zig-x86_64-linux-${ZIG_VERSION}.tar.xz* /tmp/
+COPY docker/zig/zig-aarch64-linux-${ZIG_VERSION}.tar.xz* /tmp/
+
+# Select the correct archive based on target architecture and install Zig
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
-        ARCH="aarch64"; \
+        ZIG_ARCH="aarch64"; \
     else \
-        ARCH="x86_64"; \
+        ZIG_ARCH="x86_64"; \
     fi && \
-    echo "Installing Zig ${ZIG_VERSION} for ${ARCH}-linux..." && \
-    tar -xf /tmp/zig.tar.xz -C /opt && \
-    ln -s /opt/zig-${ARCH}-linux-${ZIG_VERSION}/zig /usr/local/bin/zig && \
-    rm /tmp/zig.tar.xz && \
+    ZIG_ARCHIVE="/tmp/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}.tar.xz" && \
+    if [ ! -f "$ZIG_ARCHIVE" ]; then \
+        echo "ERROR: Zig archive not found: $ZIG_ARCHIVE" && \
+        echo "Please download it to docker/zig/ first:" && \
+        echo "  curl -LO https://ziglang.org/download/${ZIG_VERSION}/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}.tar.xz" && \
+        exit 1; \
+    fi && \
+    echo "Installing Zig ${ZIG_VERSION} for ${ZIG_ARCH}-linux..." && \
+    tar -xf "$ZIG_ARCHIVE" -C /opt && \
+    ln -s /opt/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}/zig /usr/local/bin/zig && \
+    rm -f /tmp/zig-*-linux-*.tar.xz && \
     zig version && \
     echo "Zig installed successfully!"
 

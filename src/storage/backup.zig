@@ -62,7 +62,7 @@ pub const CompressionType = enum(u32) {
 
 /// Backup metadata
 pub const BackupMetadata = struct {
-    backup_id: u128,
+    backup_id: u64,
     timestamp: i64,
     backup_type: BackupType,
     size_bytes: u64,
@@ -92,7 +92,7 @@ pub const BackupType = enum(u32) {
 /// Point-in-time recovery information
 pub const RecoveryPoint = struct {
     timestamp: i64,
-    backup_chain: []const u128, // Backup IDs needed for recovery
+    backup_chain: []const u64, // Backup IDs needed for recovery
 };
 
 pub const BACKUP_MAGIC: u32 = 0x47454F42; // "GEOB"
@@ -367,7 +367,7 @@ pub const BackupManager = struct {
         }
         if (chosen == null) return error.NoBackupFound;
 
-        var chain: std.ArrayList(u128) = .{};
+        var chain: std.ArrayList(u64) = .{};
         try chain.append(self.allocator, chosen.?.backup_id);
         const chain_slice = try chain.toOwnedSlice(self.allocator);
         return .{
@@ -377,9 +377,9 @@ pub const BackupManager = struct {
     }
 };
 
-fn generateBackupId() u128 {
+fn generateBackupId() u64 {
     var rng = std.Random.DefaultPrng.init(@bitCast(std.time.milliTimestamp()));
-    return rng.random().int(u128);
+    return rng.random().int(u64);
 }
 
 fn readGraphStorePayload(allocator: std.mem.Allocator) ![]u8 {

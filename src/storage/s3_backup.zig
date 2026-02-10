@@ -94,7 +94,7 @@ pub const S3BackupManager = struct {
     /// Restore from S3 backup (GraphStore snapshots only).
     pub fn restore(
         self: *Self,
-        backup_id: u128,
+        backup_id: u64,
         target_dir: []const u8,
         store: *graph_store.GraphStore,
     ) !void {
@@ -241,7 +241,7 @@ pub const S3BackupManager = struct {
         try self.putObject(s3_key, buffer.items, 0);
     }
 
-    fn downloadMetadata(self: *Self, backup_id: u128) !backup.BackupMetadata {
+    fn downloadMetadata(self: *Self, backup_id: u64) !backup.BackupMetadata {
         const metadata_key = try std.fmt.allocPrint(
             self.allocator,
             "{s}/metadata/{x}.json",

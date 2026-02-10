@@ -131,17 +131,17 @@ fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.T
     }
 
     if (tls_config.insecure) {
-        std.debug.print("Warning: TLS verification disabled (--insecure flag)\n", .{});
+        std.debug.print("Warning: TLS verification disabled (--insecure flag)\r\n", .{});
         _ = client.connectInsecure(host, port, true) catch |err| {
             return err;
         };
     } else if (tls_config.ca_cert_path != null or tls_config.client_cert_path != null) {
-        std.debug.print("Using TLS with custom certificates\n", .{});
+        std.debug.print("Using TLS with custom certificates\r\n", .{});
         if (tls_config.ca_cert_path) |ca| {
-            std.debug.print("  CA certificate: {s}\n", .{ca});
+            std.debug.print("  CA certificate: {s}\r\n", .{ca});
         }
         if (tls_config.client_cert_path) |cert| {
-            std.debug.print("  Client certificate: {s}\n", .{cert});
+            std.debug.print("  Client certificate: {s}\r\n", .{cert});
         }
         _ = client.connectInsecure(host, port, false) catch |err| {
             return err;
