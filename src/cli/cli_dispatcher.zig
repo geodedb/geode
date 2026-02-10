@@ -507,7 +507,7 @@ fn printBashCompletions() void {
         \\            return 0
         \\            ;;
         \\        mcp)
-        \\            COMPREPLY=( $(compgen -W "serve --port --endpoint --help" -- "${cur}") )
+        \\            COMPREPLY=( $(compgen -W "serve --stdio --port --endpoint --help" -- "${cur}") )
         \\            return 0
         \\            ;;
         \\        --shell|-s)
@@ -628,6 +628,7 @@ fn printFishCompletions() void {
         \\complete -c geode -n "__fish_seen_subcommand_from shell" -l insecure-tls-skip-verify -d 'Skip TLS verification'
         \\complete -c geode -n "__fish_seen_subcommand_from shell" -l insecure -d 'Skip TLS verification (deprecated)'
         \\complete -c geode -n "__fish_seen_subcommand_from completion" -s s -l shell -d 'Shell type' -ra 'bash zsh fish powershell'
+        \\complete -c geode -n "__fish_seen_subcommand_from mcp" -l stdio -d 'Use stdio transport (stdin/stdout JSONRPC)'
         \\complete -c geode -n "__fish_seen_subcommand_from mcp" -l port -d 'HTTP port' -r
         \\complete -c geode -n "__fish_seen_subcommand_from mcp" -s e -l endpoint -d 'Geode server endpoint' -r
         \\
@@ -681,6 +682,7 @@ fn printPowershellCompletions() void {
 fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var http_port: u16 = 8080;
     var endpoint: ?[]const u8 = "localhost:3141";
+    var use_stdio: bool = false;
     var ai: usize = start_idx + 1;
 
     while (ai < argv.len) : (ai += 1) {
@@ -694,6 +696,8 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
                 endpoint = argv[ai + 1];
                 ai += 1;
             }
+        } else if (std.mem.eql(u8, argv[ai], "--stdio")) {
+            use_stdio = true;
         } else if (std.mem.eql(u8, argv[ai], "-h") or std.mem.eql(u8, argv[ai], "--help")) {
             printMcpHelp();
             return;
@@ -710,19 +714,31 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     });
     defer server.deinit();
 
-    std.debug.print("Starting MCP server on HTTP port {d}...\n", .{http_port});
-    if (endpoint) |ep| {
-        std.debug.print("Connected to Geode at {s}\n", .{ep});
+    if (use_stdio) {
+        // stdio transport: stdin/stdout are reserved exclusively for JSONRPC messages.
+        // Do NOT write anything to stdout except JSONRPC responses.
+        // Log to stderr only for critical errors (std.debug.print uses stderr in Zig).
+        try server.serveStdio();
+    } else {
+        // HTTP transport: status messages go to stderr via std.debug.print
+        std.debug.print("Starting MCP server on HTTP port {d}...\n", .{http_port});
+        if (endpoint) |ep| {
+            std.debug.print("Connected to Geode at {s}\n", .{ep});
+        }
+        const actual_port = try server.serveHttp();
+        std.debug.print("MCP server listening on port {d}\n", .{actual_port});
     }
-    const actual_port = try server.serveHttp();
-    std.debug.print("MCP server listening on port {d}\n", .{actual_port});
 }
 
 fn printMcpHelp() void {
     std.debug.print("Model Context Protocol (MCP) server for AI/LLM integration\n\n", .{});
     std.debug.print("Usage: geode mcp [serve] [options]\n\n", .{});
+    std.debug.print("Transports:\n", .{});
+    std.debug.print("  --stdio             Use stdio transport (stdin/stdout JSONRPC)\n", .{});
+    std.debug.print("                      Default transport if no --port is specified\n", .{});
+    std.debug.print("                      Required for Claude Desktop, Claude Code, etc.\n", .{});
+    std.debug.print("  --port <port>       Use HTTP transport on given port (default: 8080)\n\n", .{});
     std.debug.print("Options:\n", .{});
-    std.debug.print("  --port <port>       HTTP port (default: 8080)\n", .{});
     std.debug.print("  -e, --endpoint      Geode server endpoint (default: localhost:3141)\n", .{});
     std.debug.print("  -h, --help          Show this help message\n\n", .{});
     std.debug.print("Description:\n", .{});
@@ -732,9 +748,11 @@ fn printMcpHelp() void {
     std.debug.print("    - Explore graph schemas\n", .{});
     std.debug.print("    - Access query explain plans\n", .{});
     std.debug.print("    - Use GQL query templates\n\n", .{});
+    std.debug.print("  When using --stdio, stdout is reserved exclusively for JSONRPC\n", .{});
+    std.debug.print("  messages. All log output goes to stderr.\n\n", .{});
     std.debug.print("Examples:\n", .{});
-    std.debug.print("  geode mcp serve                    # Start on HTTP port 8080\n", .{});
-    std.debug.print("  geode mcp serve --port 9000        # Start on HTTP port 9000\n", .{});
+    std.debug.print("  geode mcp --stdio                  # stdio transport (for AI clients)\n", .{});
+    std.debug.print("  geode mcp serve --port 9000        # HTTP transport on port 9000\n", .{});
     std.debug.print("  geode mcp serve -e host:3141       # Connect to specific endpoint\n", .{});
 }
 

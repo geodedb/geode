@@ -72,6 +72,14 @@ pub const GeodeMcpServer = struct {
         return try self.server.serveHttp();
     }
 
+    /// Start MCP server on stdio transport (stdin/stdout for JSONRPC)
+    /// This is the standard transport for MCP clients like Claude Desktop.
+    /// IMPORTANT: stdout is reserved exclusively for JSONRPC messages.
+    /// All logging MUST go to stderr (std.debug.print is safe - it uses stderr).
+    pub fn serveStdio(self: *GeodeMcpServer) !void {
+        return try self.server.serveStdio();
+    }
+
     /// Stop the server
     pub fn stop(self: *GeodeMcpServer) void {
         self.server.stop();
