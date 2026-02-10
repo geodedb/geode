@@ -516,13 +516,15 @@ nfpms:
     file_info:
       mode: 0755
 
-  # Issue #379: Ensure compatibility with newer Ubuntu versions (25.04+)
-  # Using gzip compression for maximum compatibility
+  # Issue #379: Use zstd compression for .deb packages (supported by dpkg 1.21.18+,
+  # i.e., Ubuntu 22.04+, Debian 12+). This is the modern default that newer
+  # dpkg/apt toolchains expect. For older systems, users should use the .tar.gz
+  # binary archives instead.
   deb:
-    compression: gzip
+    compression: zstd
 
   rpm:
-    compression: gzip
+    compression: zstd
 
   overrides:
     deb:
@@ -578,14 +580,14 @@ release:
 
     **Linux (Debian/Ubuntu)**
     ```bash
-    # Download and install
-    wget https://gitlab.com/devnw/codepros/geode/geode/-/releases/v{{ .Version }}/downloads/geode_{{ .Version }}_Linux_x86_64.deb
+    # Download and install (requires dpkg 1.21.18+ / Ubuntu 22.04+ / Debian 12+)
+    curl -fLO https://gitlab.com/devnw/codepros/geode/geode/-/releases/v{{ .Version }}/downloads/geode_{{ .Version }}_Linux_x86_64.deb
     sudo dpkg -i geode_{{ .Version }}_Linux_x86_64.deb
     ```
 
     **Linux (RHEL/Fedora)**
     ```bash
-    wget https://gitlab.com/devnw/codepros/geode/geode/-/releases/v{{ .Version }}/downloads/geode_{{ .Version }}_Linux_x86_64.rpm
+    curl -fLO https://gitlab.com/devnw/codepros/geode/geode/-/releases/v{{ .Version }}/downloads/geode_{{ .Version }}_Linux_x86_64.rpm
     sudo rpm -i geode_{{ .Version }}_Linux_x86_64.rpm
     ```
 

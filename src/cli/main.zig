@@ -169,6 +169,7 @@ fn printQueryUsage() void {
         "Usage: geode query [options] <query|-|--file path> \n" ++
         "\n" ++
         "Options:\n" ++
+        "  --dsn <dsn>            Connection DSN (e.g. quic://host:port, grpc://host:port)\n" ++
         "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  --grpc                 Use gRPC transport instead of QUIC\n" ++
         "  -g, --graph <name>     Graph to query against (auto-prepends USE GRAPH)\n" ++
@@ -190,6 +191,12 @@ fn printQueryUsage() void {
         "  -P, --password [pass]  Authentication password (prompted if not provided)\n" ++
         "  --no-saved-session     Don't auto-load saved session token\n" ++
         "  -h, --help             Show this help\n" ++
+        "\n" ++
+        "DSN (Data Source Name):\n" ++
+        "  The --dsn flag accepts a connection string: <scheme>://[user:pass@]host[:port]\n" ++
+        "  Supported schemes: quic:// (default, port 3141), grpc:// (port 50051)\n" ++
+        "  DSN takes precedence over --server and --grpc if both are specified.\n" ++
+        "  Credentials in DSN override -U/-P flags.\n" ++
         "\n" ++
         "TLS Certificate Options:\n" ++
         "  Certificate verification is enabled by default. Use --insecure-tls-skip-verify to disable.\n" ++
@@ -216,6 +223,11 @@ fn printQueryUsage() void {
         "  # Authenticated query (use 'geode' as default admin user)\n" ++
         "  geode query --user geode --password \"$GEODE_DEFAULT_PASSWORD\" \"RETURN 1 AS x\"\n" ++
         "  geode query -U geode -P \"RETURN 1 AS x\"  # prompts for password\n" ++
+        "\n" ++
+        "  # Using DSN connection string\n" ++
+        "  geode query --dsn quic://localhost:3141 \"RETURN 1 AS x\"\n" ++
+        "  geode query --dsn grpc://localhost:50051 \"RETURN 1 AS x\"\n" ++
+        "  geode query --dsn quic://admin:secret@localhost:3141 \"RETURN 1 AS x\"\n" ++
         "\n" ++
         "  # Query a specific graph\n" ++
         "  geode query --graph mydb \"MATCH (n) RETURN count(n)\"\n" ++
@@ -306,6 +318,7 @@ fn printShellUsage() void {
         "Usage: geode shell [options]\n" ++
         "\n" ++
         "Options:\n" ++
+        "  --dsn <dsn>            Connection DSN (e.g. quic://host:port, grpc://host:port)\n" ++
         "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  -U, --username <user>  Username for authentication\n" ++
         "  -P, --password <pass>  Password for authentication\n" ++
@@ -319,6 +332,12 @@ fn printShellUsage() void {
         "  --keymap <mode>        Keymap mode: emacs|vi (default: emacs)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
+        "DSN (Data Source Name):\n" ++
+        "  The --dsn flag accepts a connection string: <scheme>://[user:pass@]host[:port]\n" ++
+        "  Supported schemes: quic:// (default, port 3141), grpc:// (port 50051)\n" ++
+        "  DSN takes precedence over --server if both are specified.\n" ++
+        "  Credentials in DSN override -U/-P flags.\n" ++
+        "\n" ++
         "Authentication:\n" ++
         "  If the server requires authentication, use -U and -P to provide credentials.\n" ++
         "  Both username and password must be provided together.\n" ++
@@ -329,6 +348,8 @@ fn printShellUsage() void {
         "\n" ++
         "Examples:\n" ++
         "  geode shell\n" ++
+        "  geode shell --dsn quic://localhost:3141\n" ++
+        "  geode shell --dsn grpc://admin:secret@localhost:50051\n" ++
         "  geode shell --server localhost:3141 -U admin -P secret\n" ++
         "  geode shell --server localhost:3141 --insecure-tls-skip-verify\n" ++
         "  geode shell --ca-cert /etc/ssl/ca.crt --server secure.example.com:3141\n" ++
@@ -694,6 +715,75 @@ fn deadlineWatchdog(timeout_secs: u32) void {
     std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
+// Issue #417: DSN (Data Source Name) parsing for --dsn flag
+// Supports: quic://host:port, grpc://host:port, host:port (defaults to QUIC)
+// See docs/DSN.md for the full specification
+const DsnParseResult = struct {
+    host_port: []const u8, // "host:port" string
+    use_grpc: bool, // true if grpc:// scheme
+    username: ?[]const u8, // embedded credentials
+    password: ?[]const u8, // embedded credentials
+};
+
+fn parseDsnArg(dsn: []const u8) ?DsnParseResult {
+    // Parse scheme
+    var use_grpc = false;
+    var rest: []const u8 = dsn;
+
+    if (std.mem.startsWith(u8, dsn, "quic://")) {
+        rest = dsn["quic://".len..];
+        use_grpc = false;
+    } else if (std.mem.startsWith(u8, dsn, "grpc://")) {
+        rest = dsn["grpc://".len..];
+        use_grpc = true;
+    } else if (std.mem.startsWith(u8, dsn, "http://") or
+        std.mem.startsWith(u8, dsn, "https://") or
+        std.mem.startsWith(u8, dsn, "tcp://"))
+    {
+        std.debug.print("Error: unsupported DSN scheme. Use quic:// or grpc://\n", .{});
+        return null;
+    }
+    // else: no scheme, treat as host:port with QUIC default
+
+    if (rest.len == 0) {
+        std.debug.print("Error: DSN missing host\n", .{});
+        return null;
+    }
+
+    // Strip query parameters (everything after '?')
+    if (std.mem.indexOf(u8, rest, "?")) |qpos| {
+        rest = rest[0..qpos];
+    }
+
+    // Check for embedded credentials: user:pass@host:port
+    var username: ?[]const u8 = null;
+    var password: ?[]const u8 = null;
+    if (std.mem.indexOf(u8, rest, "@")) |at_pos| {
+        const creds = rest[0..at_pos];
+        rest = rest[at_pos + 1 ..];
+        if (std.mem.indexOf(u8, creds, ":")) |colon_pos| {
+            username = creds[0..colon_pos];
+            password = creds[colon_pos + 1 ..];
+        } else {
+            username = creds;
+        }
+    }
+
+    if (rest.len == 0) {
+        std.debug.print("Error: DSN missing host after credentials\n", .{});
+        return null;
+    }
+
+    // Validate host:port - at minimum there should be content
+    // The host_port is passed directly to --server logic which expects "host:port"
+    return DsnParseResult{
+        .host_port = rest,
+        .use_grpc = use_grpc,
+        .username = username,
+        .password = password,
+    };
+}
+
 fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Check for help first
     var i: usize = start_idx + 1; // start_idx points to "query", so check args after it
@@ -725,6 +815,8 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var retry_count: u32 = 0; // Default no retries
     var page_size: u32 = 1000; // Default page size for PULL requests
     var use_saved_session = true; // Auto-load saved session by default
+    // Issue #417: DSN connection string
+    var dsn: ?[]const u8 = null;
     // CANARY: REQ=REQ-CLI-GRAPH-FLAG-001; FEATURE="GraphFlag"; ASPECT=QueryCommand; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
     // Issue #393: Add --graph flag to specify which graph to query against
     var graph: ?[]const u8 = null;
@@ -765,6 +857,14 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             source_file = argv[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--dsn")) {
+            // Issue #417: DSN connection string (e.g. quic://host:port, grpc://host:port)
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --dsn requires a connection string\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            dsn = argv[i + 1];
             i += 1;
         } else if (std.mem.eql(u8, arg, "--server")) {
             if (i + 1 >= argv.len) {
@@ -1131,6 +1231,18 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         const stderr_fd = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
         _ = try stderr_fd.writeAll("unauthorized access denied\n");
         std.process.exit(3);
+    }
+
+    // Issue #417: Apply DSN if provided (takes precedence over --server and --grpc)
+    if (dsn) |dsn_str| {
+        const parsed = parseDsnArg(dsn_str) orelse {
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        };
+        server = parsed.host_port;
+        use_grpc = parsed.use_grpc;
+        // DSN credentials override -U/-P flags
+        if (parsed.username) |u| user = u;
+        if (parsed.password) |p| password = p;
     }
 
     // Determine execution mode based on --server flag
@@ -3611,6 +3723,8 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // Issue #387: Authentication credentials for shell command
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
+    // Issue #417: DSN connection string
+    var dsn: ?[]const u8 = null;
 
     const stdin_handle = getStdinHandle() catch |err| {
         std.debug.print("Error: Cannot get stdin handle: {}\n", .{err});
@@ -3630,6 +3744,14 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
             printShellUsage();
             std.process.exit(0);
+        } else if (std.mem.eql(u8, argv[i], "--dsn")) {
+            // Issue #417: DSN connection string (e.g. quic://host:port, grpc://host:port)
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --dsn requires a connection string\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            dsn = argv[i + 1];
+            i += 1;
         } else if (std.mem.eql(u8, argv[i], "--server")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --server requires a server address\n", .{});
@@ -3736,6 +3858,20 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             std.debug.print("Run 'geode shell --help' to see available options\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
+    }
+
+    // Issue #417: Apply DSN if provided (takes precedence over --server)
+    if (dsn) |dsn_str| {
+        const parsed = parseDsnArg(dsn_str) orelse {
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        };
+        server = parsed.host_port;
+        if (parsed.use_grpc) {
+            std.debug.print("Warning: gRPC transport is not supported for the shell. Using QUIC transport to {s}\n", .{parsed.host_port});
+        }
+        // DSN credentials override -U/-P flags
+        if (parsed.username) |u| username = u;
+        if (parsed.password) |p| password = p;
     }
 
     // Issue #387: Validate that if one of username/password is provided, both must be

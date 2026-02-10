@@ -842,15 +842,15 @@ publish-release:
       docker run -p 3141:3141/udp geodedb/geode:${VERSION}
       \`\`\`
 
-      **Linux (Debian/Ubuntu)**
+      **Linux (Debian/Ubuntu)** (requires dpkg 1.21.18+ / Ubuntu 22.04+ / Debian 12+)
       \`\`\`bash
-      wget ${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.deb?job=build-release -O geode.deb
+      curl -fLo geode.deb "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.deb?job=build-release"
       sudo dpkg -i geode.deb
       \`\`\`
 
       **Linux (RHEL/Fedora)**
       \`\`\`bash
-      wget ${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.rpm?job=build-release -O geode.rpm
+      curl -fLo geode.rpm "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.rpm?job=build-release"
       sudo rpm -i geode.rpm
       \`\`\`
 

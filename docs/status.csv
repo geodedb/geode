@@ -326,7 +326,7 @@ REQ-BM25-INTEGRATION-002,BM25 Integration Testing,PerformanceValidation,TESTED,,
 REQ-BM25-INTEGRATION-003,BM25 Integration Testing,QueryOptimization,TESTED,,,fts,2025-10-05,tests/integration_bm25_optimizer.zig
 REQ-BUILD-001,BuildTarget,BuildConfiguration,TESTED,,,build,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-BUILD-001,BuildTarget,BuildSystem,TESTED,,,build,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
-REQ-BUILD-DEPS-001,DepsFallback,UbuntuVersionFallback,IMPL,,,build,2026-01-28,scripts/install-deps.sh
+REQ-BUILD-DEPS-001,DepsFallback,UbuntuVersionFallback,IMPL,,,build,2026-02-10,scripts/install-deps.sh
 REQ-BUILD-SYSTEM-MODULE-DEPS-001,Build System Module Dependencies,ModuleStructure,TESTED,,,build,2025-10-05,tests/test_build_system_module_dependencies.zig
 REQ-BUILD-SYSTEM-MODULE-DEPS-002,Build System Module Dependencies,CircularDependencyPrevention,TESTED,,,build,2025-10-05,tests/test_build_system_module_dependencies.zig
 REQ-BUILD-SYSTEM-MODULE-DEPS-003,Build System Module Dependencies,SharedTypeAccessibility,TESTED,,,build,2025-10-05,tests/test_build_system_module_dependencies.zig
