@@ -74,10 +74,10 @@ fn writeServerPacket(allocator: std.mem.Allocator, stream: *quic_transport.QuicS
     // Write 4-byte big-endian length prefix
     var len_buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &len_buf, msg_len, .big);
-    _ = try stream.write(&len_buf);
+    try stream.writeAll(&len_buf);
 
     // Write the protobuf bytes
-    _ = try stream.write(msg_bytes);
+    try stream.writeAll(msg_bytes);
 }
 
 // CANARY: REQ=REQ-PERF-QUIC-READLINE-001; FEATURE="BufferedProtoReader"; ASPECT=TransportHotPath; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
