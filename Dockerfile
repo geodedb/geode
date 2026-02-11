@@ -49,6 +49,9 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
 # Set working directory
 WORKDIR /build
 
+# Pre-populate Zig package cache (Zig's git fetcher fails inside Docker)
+COPY docker/zig-packages/ /root/.cache/zig/p/
+
 # Copy all source code (includes vendored quic and ztls)
 COPY . .
 
