@@ -141,7 +141,7 @@
         // gRPC for Zig
         // Updated 2026-02-11: concurrent connections, HPACK Huffman, TLS errdefer
         .grpc_zig = .{
-            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#8d019736b41ff41ef9a1bb45c0e5d19ac6a66478",
+            .url = "https://gitlab.com/devnw/zig/grpc-zig/-/archive/8d01973/grpc-zig-8d01973.tar.gz",
             .hash = "grpc_zig-0.1.0-7FnvpLe5AQB55BMGuoZVuPYg3JGT8Gj1tSRfhmDqQGQe",
         },
     },
