@@ -139,10 +139,10 @@
         },
 
         // gRPC for Zig
-        // Updated 2026-02-06: TLS I/O abstraction layer for gRPC transport
+        // Updated 2026-02-11: RFC 7541 HPACK Huffman decoder, TLS errdefer cleanup
         .grpc_zig = .{
-            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#c877881e91f86210ea9cfb4d523c73ed07ed40f7",
-            .hash = "grpc_zig-0.1.0-7FnvpFumAQDp6DtYk78n6pHKUwMj3Nm7GRdpe5L7ec_7",
+            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#275a17fe6e3a01da479e4ce078cd47ba762098ed",
+            .hash = "grpc_zig-0.1.0-7FnvpIC0AQAM_U_hsPcXXRN49lFDAofyEXbD5ph5O-CS",
         },
     },
 
