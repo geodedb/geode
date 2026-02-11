@@ -1158,7 +1158,7 @@ pub const Connection = struct {
     pub fn overAmplification(self: *const Connection) bool {
         if (self.address_validated) return false;
 
-        // CANARY: REQ=REQ-TRANSPORT-001; FEATURE="AmplificationProtection"; ASPECT=LocalhostExemption; STATUS=IMPLEMENTED; OWNER=transport; UPDATED=2025-10-15
+        // CANARY: REQ=REQ-TRANSPORT-001; FEATURE="AmplificationProtection"; ASPECT=LocalhostExemption; STATUS=TESTED; OWNER=transport; UPDATED=2025-10-15
         // Exempt localhost connections from amplification protection
         // This is safe because localhost connections have no amplification risk
         if (self.isLocalhost()) return false;

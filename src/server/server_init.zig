@@ -42,6 +42,21 @@ pub const InitContext = struct {
     security_manager: ?*geode_auth.SecurityManager = null,
     security_manager_storage: ?geode_auth.SecurityManager = null,
 
+    /// Re-derive self-referential pointers after the struct has been moved.
+    /// MUST be called after `initialize()` returns, because returning the struct
+    /// by value copies it to a new stack location, invalidating any internal
+    /// pointers that were set during initialization (GAP-0426).
+    pub fn fixupSelfPointers(self: *InitContext) void {
+        self.shared_ast_cache = if (self.shared_ast_cache_storage != null)
+            &self.shared_ast_cache_storage.?
+        else
+            null;
+        self.security_manager = if (self.security_manager_storage != null)
+            &self.security_manager_storage.?
+        else
+            null;
+    }
+
     pub fn deinit(self: *InitContext) void {
         if (self.shared_ast_cache_storage) |*cache| {
             cache.deinit();
@@ -172,7 +187,8 @@ pub fn initialize(
 
     if (ast_cache_size > 0) {
         ctx.shared_ast_cache_storage = query_ast_cache.SharedAstCache.init(allocator, ast_cache_size);
-        ctx.shared_ast_cache = &ctx.shared_ast_cache_storage.?;
+        // NOTE: Do NOT set ctx.shared_ast_cache here — the pointer would dangle
+        // after this struct is returned by value. Caller must use fixupSelfPointers().
     }
 
     if (env_config.abac_enabled) {
@@ -180,8 +196,8 @@ pub fn initialize(
             log.err("Failed to initialize SecurityManager", &.{Attr.string("error", @errorName(err))});
             break :blk null;
         };
-        if (ctx.security_manager_storage) |*sm| {
-            ctx.security_manager = sm;
+        if (ctx.security_manager_storage != null) {
+            // NOTE: Do NOT set ctx.security_manager here — same dangling pointer issue.
             log.info("ABAC enforcement enabled - SecurityManager initialized", &.{});
         }
     }

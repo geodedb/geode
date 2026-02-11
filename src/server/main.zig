@@ -326,6 +326,11 @@ pub fn main() !void {
         data_dir,
         &memcurve_profile,
     );
+    // GAP-0426: Fix dangling self-referential pointers after struct return.
+    // initialize() sets shared_ast_cache = &shared_ast_cache_storage.? internally,
+    // but returning the struct by value copies it to this stack frame, making those
+    // pointers point at the callee's dead stack. Re-derive them at the final location.
+    init_ctx.fixupSelfPointers();
     defer init_ctx.deinit();
 
     // Extract initialization values for compatibility with existing code

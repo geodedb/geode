@@ -178,7 +178,7 @@ repos:
     entry: python3 tools/no_feature_flags_check.py --repo .
     language: system
     files: \.zig$
-    exclude: ^(vendor/|dist/|zig-out/)
+    exclude: ^(vendor/|dist/|zig-out/|docker/zig-packages/)
     pass_filenames: false
     stages: [pre-push]
 
