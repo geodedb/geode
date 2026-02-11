@@ -13,7 +13,7 @@
 
         // URI/URL parsing - RFC 3986 compliant
         .uri = .{
-            .url = "git+https://gitlab.com/devnw/zig/uri.git#f4e818165aed79b8cf1dc0a2bc7812df90bb9cfd",
+            .url = "git+https://gitlab.com/devnw/zig/uri.git#61f8afa47b758eeaf9d59971cd9c26f89aa00cd7",
             .hash = "uri-0.1.0-zVvOsXZLAQAfg1wUuvR2yQC3FLtQPAV85R2aS6EFiaZn",
         },
 
@@ -25,7 +25,7 @@
 
         // TOML v1.1.0 parser
         .toml = .{
-            .url = "git+https://gitlab.com/devnw/zig/toml.git#c0e2d31322a821cd9bf10fa1472068debda68f0f",
+            .url = "git+https://gitlab.com/devnw/zig/toml.git#7df07356f0888d1b93f7efdf8b3106349db45ff8",
             .hash = "toml-0.1.0-MHnSh1XcAQBQcxyP1MWysHD43Y4LDb_0klB_hfM_sFRe",
         },
 
@@ -71,7 +71,7 @@
 
         // TLS 1.3 library for QUIC
         .tls = .{
-            .url = "git+https://gitlab.com/devnw/zig/tls.git#d19207aed4e6b92d86c7a8fbbb76e6b7b901e0ae",
+            .url = "git+https://gitlab.com/devnw/zig/tls.git#4ff0b07d6c11cdee6045c5bb129db6a35f251b23",
             .hash = "tls-0.1.0-mtEaLO9tEgAQ_8zf-HJiAZ8N5JEB3dyHX3MVY9chKww7",
         },
 
@@ -95,7 +95,7 @@
 
         // Configuration management - XDG compliant, multi-format support
         .config = .{
-            .url = "git+https://gitlab.com/devnw/zig/config.git#3484accef8aa47dbd80f2721745a8ccdfeec97ab",
+            .url = "git+https://gitlab.com/devnw/zig/config.git#95e9c490cbe375ef2e6761315588ca7a0177ef3f",
             .hash = "config-0.1.0-TiLummYLBwCO5N7adZTmyvWnRyRO9hSunI9JLNz3MgM9",
         },
 
@@ -105,7 +105,7 @@
 
         // CLI framework - Cobra/Viper-class command-line interface
         .cli = .{
-            .url = "git+https://gitlab.com/devnw/zig/cli.git#6b7dc6550afdd93b5c517dc7c5a920c2a67db0e6",
+            .url = "git+https://gitlab.com/devnw/zig/cli.git#abc1c6d6499f3268f10c9195ff109032cb0ada03",
             .hash = "cli-0.1.0-0aso9F-vBAAoH-0L84gQXM4-y2NC_HzjU3KLsGEfBea3",
         },
 
@@ -118,7 +118,7 @@
         // Spice - Fork/join parallelism for recursive divide-and-conquer algorithms
         // CANARY: REQ=REQ-PERF-SPICE-001; FEATURE="SpiceParallelism"; ASPECT=Dependency; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
         .spice = .{
-            .url = "git+https://gitlab.com/devnw/zig/spice.git#4b1d366eacd0ff53a6859f6dabc9558b5aabedbf",
+            .url = "git+https://gitlab.com/devnw/zig/spice.git#bbf106dc8131a514a4d1687cc2173f124f5c8181",
             .hash = "spice-0.0.0-HnDb57y0AABlp7AaQKAkMShWpww-Tl_8QM7T-1Lx3auu",
         },
 
