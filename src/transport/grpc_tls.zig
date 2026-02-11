@@ -120,6 +120,7 @@ const ssl_impl = if (has_openssl) struct {
     const SslConn = struct {
         ssl: *c.SSL,
         fd: c_int,
+        closed: bool = false,
     };
 
     pub fn tlsAccept(stream: std.net.Stream) anyerror!TlsIo {
@@ -175,6 +176,8 @@ const ssl_impl = if (has_openssl) struct {
 
     fn sslClose(ctx_ptr: *anyopaque) void {
         const conn: *SslConn = @ptrCast(@alignCast(ctx_ptr));
+        if (conn.closed) return;
+        conn.closed = true;
         _ = c.SSL_shutdown(conn.ssl);
         c.SSL_free(conn.ssl);
         std.heap.page_allocator.destroy(conn);
