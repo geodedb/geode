@@ -9,7 +9,6 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import List, Tuple
 
 # Patterns that indicate feature flags
 FEATURE_FLAG_PATTERNS = [
@@ -29,10 +28,11 @@ SKIP_PATTERNS = {
     "/node_modules/",
     "/kb/reviews/",  # Skip review documentation
     "/docs/",  # Skip documentation
+    "/docker/zig-packages/",  # Skip vendored Zig dependency cache
 }
 
 
-def check_file_for_feature_flags(file_path: Path) -> List[Tuple[int, str]]:
+def check_file_for_feature_flags(file_path: Path) -> list[tuple[int, str]]:
     """Check a single file for feature flags."""
     violations = []
 
@@ -50,7 +50,7 @@ def check_file_for_feature_flags(file_path: Path) -> List[Tuple[int, str]]:
     return violations
 
 
-def check_repository(repo_path: Path) -> List[Tuple[Path, List[Tuple[int, str]]]]:
+def check_repository(repo_path: Path) -> list[tuple[Path, list[tuple[int, str]]]]:
     """Check entire repository for feature flags."""
     all_violations = []
 
