@@ -141,8 +141,8 @@
         // gRPC for Zig
         // Updated 2026-02-11: RFC 7541 HPACK Huffman decoder, TLS errdefer cleanup
         .grpc_zig = .{
-            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#275a17fe6e3a01da479e4ce078cd47ba762098ed",
-            .hash = "grpc_zig-0.1.0-7FnvpIC0AQAM_U_hsPcXXRN49lFDAofyEXbD5ph5O-CS",
+            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#c61b9f41b60f3e1ee079d103969b8a470170f74b",
+            .hash = "grpc_zig-0.1.0-7FnvpGm4AQBrCBwt1ZoyiO4rp3jPgUpW20vHT4xKqqLr",
         },
     },
 

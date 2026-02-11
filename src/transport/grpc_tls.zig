@@ -178,7 +178,10 @@ const ssl_impl = if (has_openssl) struct {
         const conn: *SslConn = @ptrCast(@alignCast(ctx_ptr));
         if (conn.closed) return;
         conn.closed = true;
-        _ = c.SSL_shutdown(conn.ssl);
+        // Skip SSL_shutdown — on aarch64, calling it when the peer has
+        // disconnected abruptly (e.g. TLS cert probe) causes a segfault
+        // in OpenSSL. SSL_shutdown only sends a courtesy close_notify
+        // alert; SSL_free handles all resource cleanup and is always safe.
         c.SSL_free(conn.ssl);
         std.heap.page_allocator.destroy(conn);
     }
