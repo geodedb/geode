@@ -627,6 +627,12 @@ pub fn build(b: *std.Build) void {
     match_call_tests.root_module.addImport("json", json_mod);
     const run_match_call_tests = b.addRunArtifact(match_call_tests);
 
+    // GAP-0425: Multi-hop regression tests for segfault prevention
+    const multihop_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_multihop_regression.zig"), .target = target, .optimize = optimize }) });
+    multihop_tests.root_module.addImport("geode", root_mod);
+    multihop_tests.root_module.addImport("json", json_mod);
+    const run_multihop_tests = b.addRunArtifact(multihop_tests);
+
     const decimal_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_decimal_handling.zig"), .target = target, .optimize = optimize }) });
     decimal_tests.root_module.addImport("geode", root_mod);
     decimal_tests.root_module.addImport("json", json_mod);
@@ -761,6 +767,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_string_func_tests.step);
     test_step.dependOn(&run_graph_algo_tests.step);
     test_step.dependOn(&run_match_call_tests.step);
+    test_step.dependOn(&run_multihop_tests.step);
     test_step.dependOn(&run_decimal_tests.step);
     test_step.dependOn(&run_repl_advanced_tests.step);
     test_step.dependOn(&run_integration_tests.step);

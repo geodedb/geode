@@ -4947,6 +4947,23 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
                 }
 
+                // GAP-0425: Pre-generate unique anonymous node names for each hop
+                // to prevent naming collisions when multiple hops have anonymous right nodes.
+                var anon_right_names: [32][]const u8 = undefined;
+                for (0..@min(chain.hops.len, 32)) |hi| {
+                    anon_right_names[hi] = switch (hi) {
+                        0 => "_anon_right_0",
+                        1 => "_anon_right_1",
+                        2 => "_anon_right_2",
+                        3 => "_anon_right_3",
+                        4 => "_anon_right_4",
+                        5 => "_anon_right_5",
+                        6 => "_anon_right_6",
+                        7 => "_anon_right_7",
+                        else => "_anon_right",
+                    };
+                }
+
                 // Process each hop
                 for (chain.hops, 0..) |hop, hop_idx| {
                     // GAP-0220 FIX: Use try for proper error propagation
@@ -4955,10 +4972,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     for (current_bindings.items) |binding| {
                         // Find the current node from the binding
                         // For hop 0, it's the left node; for subsequent hops, it's the right node of previous hop
+                        // GAP-0425: Use per-hop unique names for anonymous nodes to prevent naming collisions
                         const current_node_var = if (hop_idx == 0)
                             hop.left.name orelse "_anon_left_0"
                         else
-                            chain.hops[hop_idx - 1].right.name orelse "_anon_right";
+                            chain.hops[hop_idx - 1].right.name orelse anon_right_names[@min(hop_idx - 1, 31)];
 
                         var current_node: ?*const graph_store.Node = null;
                         for (binding.env_names, 0..) |name, i| {
@@ -4980,13 +4998,19 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             .undirected => 'u',
                         };
 
-                        // Get edges based on direction
-                        const edges = if (hop_direction == 'l')
-                            store.getEdgesTo(curr_node.id)
+                        // GAP-0425 FIX: Iterate edges directly from the graph store's edge
+                        // index instead of calling getEdgesFrom/getEdgesTo which allocate
+                        // arena-backed slices that are never freed. This prevents unbounded
+                        // arena growth during multi-hop traversal with many bindings.
+                        const edge_id_list = if (hop_direction == 'l')
+                            store.incoming_edges.get(curr_node.id)
                         else
-                            store.getEdgesFrom(curr_node.id);
+                            store.outgoing_edges.get(curr_node.id);
 
-                        for (edges) |edge| {
+                        const edge_ids = if (edge_id_list) |list| list.items else &[_]u64{};
+
+                        for (edge_ids) |edge_id| {
+                            const edge = store.edges.get(edge_id) orelse continue;
                             // Filter by relationship type
                             if (hop.rel.types.len > 0) {
                                 var matches_type = false;
@@ -5069,12 +5093,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             var new_idx: usize = binding.env_names.len;
                             if (hop.rel.name) |rel_name| {
                                 new_env_names[new_idx] = rel_name;
-                                const edge_ptr = store.edges.getPtr(edge.id);
+                                const edge_ptr = store.edges.getPtr(edge_id);
                                 new_env_values[new_idx] = if (edge_ptr) |ep| Value{ .Edge = ep } else Value{ .Null = {} };
                                 new_idx += 1;
                             }
-                            // Always add right node with its name or "_anon_right" for anonymous nodes
-                            new_env_names[new_idx] = hop.right.name orelse "_anon_right";
+                            // GAP-0425: Always add right node with per-hop unique name for anonymous nodes
+                            new_env_names[new_idx] = hop.right.name orelse anon_right_names[@min(hop_idx, 31)];
                             new_env_values[new_idx] = Value{ .Node = right_node_ptr };
 
                             try next_bindings.append(allocator, MultiHopBinding{
