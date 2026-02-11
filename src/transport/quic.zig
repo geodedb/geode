@@ -139,7 +139,7 @@ pub const QuicTransport = struct {
                     tlog.fatal("TLS certificates not found and generation failed", &.{
                         Attr.string("cert_path", self.config.cert_path),
                         Attr.string("key_path", self.config.key_path),
-                        Attr.err("error", gen_err),
+                        Attr.string("error", @errorName(gen_err)),
                     });
                     std.debug.print("SECURITY: Refusing to start without TLS. Generate certificates manually:\n", .{});
                     std.debug.print("  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout {s} -out {s} -days 365\n", .{ self.config.key_path, self.config.cert_path });
@@ -158,7 +158,7 @@ pub const QuicTransport = struct {
         self.cert_der = api.pem.parseCertificate(self.allocator, cert_pem) catch |err| {
             tlog.err("failed to parse certificate", &.{
                 Attr.string("path", self.config.cert_path),
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
             return QuicError.CertificateError;
         };
@@ -171,7 +171,7 @@ pub const QuicTransport = struct {
         self.key_der = api.pem.parsePrivateKey(self.allocator, key_pem) catch |err| {
             tlog.err("failed to parse private key", &.{
                 Attr.string("path", self.config.key_path),
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
             return QuicError.CertificateError;
         };

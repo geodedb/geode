@@ -348,7 +348,7 @@ pub const GeodeGrpcServer = struct {
 
                 grpc_tls.initTlsContext(cert_z, key_z) catch |err| {
                     log.warn("gRPC TLS init failed, falling back to plaintext", &.{
-                        Attr.err("error", err),
+                        Attr.string("error", @errorName(err)),
                     });
                     // Continue without TLS — server will accept plaintext connections
                 };
@@ -564,7 +564,7 @@ fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allo
 fn handleLegacyPacket(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var packet = protobuf.decode(schema.ClientPacket, &reader, allocator) catch |err| {
-        log.err("Failed to decode gRPC packet", &.{Attr.err("error", err)});
+        log.err("Failed to decode gRPC packet", &.{Attr.string("error", @errorName(err))});
         return buildPacketError(allocator, "22023", "Invalid client packet");
     };
     defer packet.deinit(allocator);
@@ -672,7 +672,7 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
 
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.HelloRequest, &reader, allocator) catch |err| {
-        log.err("Failed to decode HELLO request", &.{Attr.err("error", err)});
+        log.err("Failed to decode HELLO request", &.{Attr.string("error", @errorName(err))});
         const resp = schema.HelloResponse{
             .success = false,
             .session_id = "",
@@ -745,7 +745,7 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
 fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.ExecuteRequest, &reader, allocator) catch |err| {
-        log.err("Failed to decode Execute request", &.{Attr.err("error", err)});
+        log.err("Failed to decode Execute request", &.{Attr.string("error", @errorName(err))});
         var resp = try buildErrorResponse(allocator, "22023", "Invalid execute request", &.{}, &.{});
         defer resp.deinit(allocator);
         return encodeMessage(allocator, resp);
@@ -1025,7 +1025,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
 fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.PullRequest, &reader, allocator) catch |err| {
-        log.err("Failed to decode Pull request", &.{Attr.err("error", err)});
+        log.err("Failed to decode Pull request", &.{Attr.string("error", @errorName(err))});
         var resp = try buildErrorResponse(allocator, "22023", "Invalid pull request", &.{}, &.{});
         defer resp.deinit(allocator);
         const pull_resp = schema.PullResponse{ .response = resp };
@@ -1201,7 +1201,7 @@ fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
     if (state.in_txn) {
         const store_ptr = graph_store.getGlobalStore(allocator);
         txn_undo_log.getGlobalUndoLog(allocator).rollback(store_ptr) catch |err| {
-            log.err("Rollback failed", &.{Attr.err("error", err)});
+            log.err("Rollback failed", &.{Attr.string("error", @errorName(err))});
         };
         state.in_txn = false;
         state.txn_id = 0;

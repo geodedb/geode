@@ -273,23 +273,23 @@ pub fn runGroupedQuery(
                             if (c.args.len == 0) {
                                 aggs_out.append(allocator_inner, .CountStar) catch |err| {
                                     log.err("CRITICAL: Failed to append COUNT(*) aggregate (OOM, query will fail)", &.{
-                                        Attr.err("error", err),
+                                        Attr.string("error", @errorName(err)),
                                     });
                                 };
                                 args_out.append(allocator_inner, null) catch |err| {
                                     log.err("CRITICAL: Failed to append COUNT(*) args (OOM, query will fail)", &.{
-                                        Attr.err("error", err),
+                                        Attr.string("error", @errorName(err)),
                                     });
                                 };
                             } else {
                                 aggs_out.append(allocator_inner, .Count) catch |err| {
                                     log.err("CRITICAL: Failed to append COUNT aggregate (OOM, query will fail)", &.{
-                                        Attr.err("error", err),
+                                        Attr.string("error", @errorName(err)),
                                     });
                                 };
                                 args_out.append(allocator_inner, c.args[0].*) catch |err| {
                                     log.err("CRITICAL: Failed to append COUNT args (OOM, query will fail)", &.{
-                                        Attr.err("error", err),
+                                        Attr.string("error", @errorName(err)),
                                     });
                                 };
                             }
@@ -298,57 +298,57 @@ pub fn runGroupedQuery(
                             if (c.args.len == 1) {
                                 aggs_out.append(allocator_inner, .CountDistinct) catch |err| {
                                     log.err("CRITICAL: Failed to append COUNT DISTINCT aggregate (OOM, query will fail)", &.{
-                                        Attr.err("error", err),
+                                        Attr.string("error", @errorName(err)),
                                     });
                                 };
                                 args_out.append(allocator_inner, c.args[0].*) catch |err| {
                                     log.err("CRITICAL: Failed to append COUNT DISTINCT args (OOM, query will fail)", &.{
-                                        Attr.err("error", err),
+                                        Attr.string("error", @errorName(err)),
                                     });
                                 };
                             }
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "sum")) {
                             aggs_out.append(allocator_inner, .Sum) catch |err| {
                                 log.err("CRITICAL: Failed to append SUM aggregate (OOM, query will fail)", &.{
-                                    Attr.err("error", err),
+                                    Attr.string("error", @errorName(err)),
                                 });
                             };
                             args_out.append(allocator_inner, c.args[0].*) catch |err| {
                                 log.err("CRITICAL: Failed to append SUM args (OOM, query will fail)", &.{
-                                    Attr.err("error", err),
+                                    Attr.string("error", @errorName(err)),
                                 });
                             };
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "min")) {
                             aggs_out.append(allocator_inner, .Min) catch |err| {
                                 log.err("CRITICAL: Failed to append MIN aggregate (OOM, query will fail)", &.{
-                                    Attr.err("error", err),
+                                    Attr.string("error", @errorName(err)),
                                 });
                             };
                             args_out.append(allocator_inner, c.args[0].*) catch |err| {
                                 log.err("CRITICAL: Failed to append MIN args (OOM, query will fail)", &.{
-                                    Attr.err("error", err),
+                                    Attr.string("error", @errorName(err)),
                                 });
                             };
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "max")) {
                             aggs_out.append(allocator_inner, .Max) catch |err| {
                                 log.err("CRITICAL: Failed to append MAX aggregate (OOM, query will fail)", &.{
-                                    Attr.err("error", err),
+                                    Attr.string("error", @errorName(err)),
                                 });
                             };
                             args_out.append(allocator_inner, c.args[0].*) catch |err| {
                                 log.err("CRITICAL: Failed to append MAX args (OOM, query will fail)", &.{
-                                    Attr.err("error", err),
+                                    Attr.string("error", @errorName(err)),
                                 });
                             };
                         } else if (std.ascii.eqlIgnoreCase(id.orig, "avg")) {
                             aggs_out.append(allocator_inner, .Avg) catch |err| {
                                 log.err("CRITICAL: Failed to append AVG aggregate (OOM, query will fail)", &.{
-                                    Attr.err("error", err),
+                                    Attr.string("error", @errorName(err)),
                                 });
                             };
                             args_out.append(allocator_inner, c.args[0].*) catch |err| {
                                 log.err("CRITICAL: Failed to append AVG args (OOM, query will fail)", &.{
-                                    Attr.err("error", err),
+                                    Attr.string("error", @errorName(err)),
                                 });
                             };
                         }
@@ -1172,7 +1172,7 @@ pub const HashAggregator = struct {
             std.fs.cwd().deleteFile(self.spill_segments.items[i]) catch |err| {
                 log.warn("Failed to delete spill segment (disk space leak possible)", &.{
                     Attr.string("segment", self.spill_segments.items[i]),
-                    Attr.err("error", err),
+                    Attr.string("error", @errorName(err)),
                 });
             };
             self.allocator.free(self.spill_segments.items[i]);
@@ -1664,7 +1664,7 @@ pub const HashAggregator = struct {
             std.fs.cwd().deleteFile(filename_list[i]) catch |err| {
                 log.warn("Failed to delete reloaded spill file (disk space leak possible)", &.{
                     Attr.string("file", filename_list[i]),
-                    Attr.err("error", err),
+                    Attr.string("error", @errorName(err)),
                 });
             };
         }

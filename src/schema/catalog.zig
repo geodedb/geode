@@ -84,7 +84,7 @@ pub const Catalog = struct {
         // Load persisted catalog if it exists
         self.load() catch |err| {
             log.warn("Failed to load catalog from disk", &.{
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
         };
 
@@ -342,7 +342,7 @@ pub const Catalog = struct {
                 _ = store.createGraph(graph_name) catch |err| {
                     log.err("Failed to ensure graph in store", &.{
                         Attr.string("name", graph_name),
-                        Attr.err("error", err),
+                        Attr.string("error", @errorName(err)),
                     });
                 };
             }
@@ -702,7 +702,7 @@ pub const Catalog = struct {
         self.save() catch |err| {
             log.warn("Failed to persist auto-index", &.{
                 Attr.string("index", index_name),
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
         };
     }

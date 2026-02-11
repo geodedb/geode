@@ -89,7 +89,7 @@
 
         // Structured logging - slog-style logging with multiple handlers
         .slog = .{
-            .url = "git+https://gitlab.com/devnw/zig/slog.git#1041b159e59a27882738d095ba0c499a6f3d2ad0",
+            .url = "git+https://gitlab.com/devnw/zig/slog.git#f52a1f1cc6f50f5c627666914aad2818019a2711",
             .hash = "slog-0.1.0-SamED8A4BADXWTRqyf-vLD2qCON2aD7TxW-QQAEK8GeS",
         },
 

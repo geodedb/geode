@@ -124,7 +124,7 @@ pub fn getPersistenceFilePath(allocator: std.mem.Allocator) ![]u8 {
     std.fs.cwd().makePath(data_dir) catch |err| {
         log.warn("Failed to create graph store directory, using temp directory instead", &.{
             Attr.string("data_dir", data_dir),
-            Attr.err("error", err),
+            Attr.string("error", @errorName(err)),
         });
         return try getFallbackPath(allocator);
     };
@@ -137,7 +137,7 @@ pub fn getPersistenceFilePath(allocator: std.mem.Allocator) ![]u8 {
     const test_file = std.fs.cwd().createFile(test_path, .{}) catch |err| {
         log.warn("Cannot write to graph store directory, using temp directory instead", &.{
             Attr.string("data_dir", data_dir),
-            Attr.err("error", err),
+            Attr.string("error", @errorName(err)),
         });
         return try getFallbackPath(allocator);
     };
@@ -2644,7 +2644,7 @@ pub const GraphStore = struct {
             });
             self.saveToFile() catch |err| {
                 log.err("failed to persist graph store", &.{
-                    Attr.err("error", err),
+                    Attr.string("error", @errorName(err)),
                     Attr.string("path", file_path),
                 });
             };
@@ -3240,7 +3240,7 @@ pub fn startPersistenceThread(interval_ms: u64) void {
     g_persist_shutdown.store(false, .release);
     g_persist_thread = std.Thread.spawn(.{}, persistenceLoop, .{}) catch |err| {
         log.warn("failed to start persistence thread", &.{
-            Attr.err("error", err),
+            Attr.string("error", @errorName(err)),
         });
         return;
     };
@@ -3268,7 +3268,7 @@ fn persistenceLoop() void {
             if (store.dirty) {
                 store.saveToFile() catch |err| {
                     log.err("background save failed", &.{
-                        Attr.err("error", err),
+                        Attr.string("error", @errorName(err)),
                     });
                 };
             }
@@ -3334,7 +3334,7 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
         // Try to load existing data from the new location
         global_store.?.loadFromFile() catch |err| {
             log.warn("Failed to load graph store from file (starting fresh)", &.{
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
         };
         initialized = true;

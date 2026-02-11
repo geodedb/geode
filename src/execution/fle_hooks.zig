@@ -153,7 +153,7 @@ pub fn decryptPropertyIfNeeded(
         fle_log.warn("failed to decrypt field", &.{
             Attr.string("node_type", node_type),
             Attr.string("field", field_name),
-            Attr.err("error", err),
+            Attr.string("error", @errorName(err)),
         });
         return try allocator.dupe(u8, "[REDACTED]");
     };

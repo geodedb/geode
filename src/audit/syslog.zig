@@ -316,7 +316,7 @@ pub const SyslogSender = struct {
             log.err("TLS handshake failed for syslog connection", &.{
                 Attr.string("host", self.config.host),
                 Attr.int("port", self.config.port),
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
             return error.TlsHandshakeFailed;
         };
@@ -345,7 +345,7 @@ pub const SyslogSender = struct {
             tls_client.close() catch {};
             self.releasePooledConnection(pool_index, true);
             log.err("TLS write failed for syslog", &.{
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
             return error.TlsWriteFailed;
         };
@@ -353,7 +353,7 @@ pub const SyslogSender = struct {
             tls_client.close() catch {};
             self.releasePooledConnection(pool_index, true);
             log.err("TLS write failed for syslog", &.{
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
             return error.TlsWriteFailed;
         };

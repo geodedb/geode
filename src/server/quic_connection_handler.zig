@@ -130,7 +130,7 @@ const BufferedProtoReader = struct {
                     // Decode using schema
                     var reader: std.Io.Reader = .fixed(msg_bytes);
                     const msg = protobuf.decode(schema.ClientPacket, &reader, self.allocator) catch |err| {
-                        log.warn("Failed to decode Protobuf message", &.{Attr.err("error", err)});
+                        log.warn("Failed to decode Protobuf message", &.{Attr.string("error", @errorName(err))});
                         return err;
                     };
 
@@ -481,7 +481,7 @@ pub fn handleQuicConnection(
                 std.Thread.sleep(1 * std.time.ns_per_ms);
                 continue;
             }
-            log.err("Protobuf read error", &.{Attr.err("error", err)});
+            log.err("Protobuf read error", &.{Attr.string("error", @errorName(err))});
             return err;
         };
 
@@ -497,7 +497,7 @@ pub fn handleQuicConnection(
 
         // Process protobuf message and emit responses directly
         handleClientMessage(gpa, &state, stream, msg, disable_estimates, compact_profile, memcurve_profile) catch |err| {
-            log.err("Protobuf process error", &.{Attr.err("error", err)});
+            log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
             try sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{});
             continue;
         };
@@ -927,7 +927,7 @@ fn handleClientMessage(
             if (state.in_txn) {
                 const store = graph_store.getGlobalStore(gpa);
                 txn_undo_log.getGlobalUndoLog(gpa).rollback(store) catch |err| {
-                    log.err("Rollback failed", &.{Attr.err("error", err)});
+                    log.err("Rollback failed", &.{Attr.string("error", @errorName(err))});
                 };
                 state.in_txn = false;
                 state.txn_id = 0;
@@ -1027,7 +1027,7 @@ fn handleClientMessage(
                         const n = file.read(buf[0..chunk]) catch |err| {
                             log.err("Failed to read backup file", &.{
                                 Attr.string("path", backup_path),
-                                Attr.err("error", err),
+                                Attr.string("error", @errorName(err)),
                             });
                             break;
                         };
@@ -1035,7 +1035,7 @@ fn handleClientMessage(
                         _ = stream.write(buf[0..n]) catch |err| {
                             log.err("Failed to stream backup bytes", &.{
                                 Attr.string("path", backup_path),
-                                Attr.err("error", err),
+                                Attr.string("error", @errorName(err)),
                             });
                             break;
                         };
@@ -1044,7 +1044,7 @@ fn handleClientMessage(
                 } else |err| {
                     log.err("Backup file missing for streaming", &.{
                         Attr.string("path", backup_path),
-                        Attr.err("error", err),
+                        Attr.string("error", @errorName(err)),
                     });
                 }
             }

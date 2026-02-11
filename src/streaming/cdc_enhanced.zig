@@ -518,7 +518,7 @@ pub const CDCEngine = struct {
             if (now - self.last_flush >= self.config.flush_interval_ms) {
                 self.flush() catch |err| {
                     log.err("CDC flush failed", &.{
-                        Attr.err("error", err),
+                        Attr.string("error", @errorName(err)),
                     });
                 };
             }
@@ -526,7 +526,7 @@ pub const CDCEngine = struct {
             // Clean up old events
             self.cleanupOldEvents() catch |err| {
                 log.err("CDC cleanup failed", &.{
-                    Attr.err("error", err),
+                    Attr.string("error", @errorName(err)),
                 });
             };
         }
@@ -1093,7 +1093,7 @@ pub const StreamingEngine = struct {
             // Process events from CDC
             self.processEvents() catch |err| {
                 log.err("Stream processing error", &.{
-                    Attr.err("error", err),
+                    Attr.string("error", @errorName(err)),
                 });
             };
 

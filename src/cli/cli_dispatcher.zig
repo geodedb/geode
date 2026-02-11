@@ -901,7 +901,7 @@ pub fn logAuditEvent(category: []const u8, action: []const u8, outcome: []const 
 
         _ = file.writeAll(json_line) catch |err| {
             log.warn("Failed to write audit event", &.{
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
         };
     }

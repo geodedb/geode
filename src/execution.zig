@@ -924,7 +924,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
                 undo_log.rollback(store) catch |err| {
                     log.err("Failed to rollback transaction", &.{
-                        Attr.err("error", err),
+                        Attr.string("error", @errorName(err)),
                     });
                 };
 
@@ -1304,7 +1304,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             _ = store.createGraph(graph_name) catch |err| {
                 log.debug("Graph storage creation failed", &.{
                     Attr.string("graph_name", graph_name),
-                    Attr.err("error", err),
+                    Attr.string("error", @errorName(err)),
                 });
             };
 
@@ -1345,7 +1345,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             store.dropGraph(graph_name) catch |err| {
                 log.warn("dropGraphStore failed", &.{
                     Attr.string("graph_name", graph_name),
-                    Attr.err("error", err),
+                    Attr.string("error", @errorName(err)),
                 });
             };
 

@@ -581,6 +581,12 @@ test-geodetestlab-comprehensive:
 # Snapshot release for main branch (non-tag builds)
 snapshot:
   stage: release
+  # Skip stage-based ordering: don't wait for test-geodetestlab-comprehensive (2h+)
+  needs:
+    - job: test-zig-unit
+      optional: true
+    - job: test-zig-release-safe
+      optional: true
   # Use GitLab hosted runners for Docker-in-Docker support
   tags:
     - saas-linux-medium-amd64
@@ -676,6 +682,13 @@ snapshot:
 # Build release artifacts for tags (alpha, beta, stable)
 build-release:
   stage: release
+  # Skip stage-based ordering: don't wait for test-geodetestlab-comprehensive (2h+)
+  # Only require unit tests and release-safe build to pass before building release
+  needs:
+    - job: test-zig-unit
+      optional: true
+    - job: test-zig-release-safe
+      optional: true
   # Use GitLab hosted runners for Docker-in-Docker support
   tags:
     - saas-linux-medium-amd64

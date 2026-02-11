@@ -386,7 +386,7 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                             // GAP-0221 FIX: Log read errors instead of silent catch 0
                             const bytes_read = file.readAll(&header_buf) catch |err| blk: {
                                 log.debug("Failed to read backup header", &.{
-                                    Attr.err("error", err),
+                                    Attr.string("error", @errorName(err)),
                                 });
                                 break :blk 0;
                             };
@@ -496,7 +496,7 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     // GAP-0221 FIX: Log read errors instead of silent catch 0
     const magic_read = file.readAll(&magic_buf) catch |err| blk: {
         log.debug("Failed to read magic bytes", &.{
-            Attr.err("error", err),
+            Attr.string("error", @errorName(err)),
         });
         break :blk 0;
     };
@@ -536,7 +536,7 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         // GAP-0221 FIX: Log read errors instead of silent catch 0
         const bytes_read = file.readAll(&header_buf) catch |err| blk: {
             log.debug("Failed to read backup header", &.{
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
             break :blk 0;
         };

@@ -42,7 +42,7 @@ fn ensureAutoIndexes(allocator: std.mem.Allocator, labels: []const []const u8) v
         cat.ensureAutoIdIndex(label) catch |err| {
             log.warn("Failed to create auto-index", &.{
                 Attr.string("label", label),
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
         };
     }
@@ -2446,7 +2446,7 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
         // Save changes to persistent storage
         store.saveToFile() catch |err| {
             log.err("CRITICAL: Failed to persist graph store after deletion", &.{
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
         };
     } else if (d.items.len > 0) {

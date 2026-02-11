@@ -140,7 +140,7 @@ pub const BackupManager = struct {
                 enc_key = try parseHexKey(raw);
             } else |err| {
                 log.err("SECURITY: Backup encryption enabled but GEODE_TDE_KEY missing", &.{
-                    Attr.err("error", err),
+                    Attr.string("error", @errorName(err)),
                 });
                 return error.MissingEncryptionKey;
             }
@@ -306,7 +306,7 @@ pub const BackupManager = struct {
             std.fs.cwd().deleteFile(path) catch |err| {
                 log.warn("Failed to delete expired backup", &.{
                     Attr.string("path", path),
-                    Attr.err("error", err),
+                    Attr.string("error", @errorName(err)),
                 });
             };
         }

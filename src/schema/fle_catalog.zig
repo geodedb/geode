@@ -182,7 +182,7 @@ pub const SchemaCatalog = struct {
         // Persist the catalog to disk
         saveCatalog(self) catch |err| {
             log.err("CRITICAL: Failed to persist FLE catalog after field configuration", &.{
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
         };
     }
@@ -228,7 +228,7 @@ pub const SchemaCatalog = struct {
         // Save catalog after grant
         saveCatalog(self) catch |err| {
             log.err("CRITICAL: Failed to persist catalog after plaintext access grant (security config lost on restart)", &.{
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
         };
     }
@@ -288,7 +288,7 @@ pub const SchemaCatalog = struct {
         // Save catalog after revoke
         saveCatalog(self) catch |err| {
             log.err("CRITICAL: Failed to persist catalog after plaintext access revoke (security config lost on restart)", &.{
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
         };
     }
@@ -319,7 +319,7 @@ pub fn globalCatalog(allocator: std.mem.Allocator) !*SchemaCatalog {
         // Load persisted catalog if it exists
         loadCatalog(catalog) catch |err| {
             log.warn("Failed to load persisted catalog (starting with empty catalog)", &.{
-                Attr.err("error", err),
+                Attr.string("error", @errorName(err)),
             });
         };
 
