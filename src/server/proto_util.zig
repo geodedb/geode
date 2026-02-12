@@ -337,7 +337,7 @@ pub fn valueToProto(allocator: std.mem.Allocator, value: value_types.Value) !sch
         .Text => |t| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, t), .kind = .TEXT } } },
         .Decimal => |d| blk: {
             const coeff_str = try std.fmt.allocPrint(allocator, "{d}", .{d.coeff});
-            const orig_repr = if (d.orig_repr) |repr| try allocator.dupe(u8, repr) else if (d.scale > 0) try reconstructDecimalRepr(allocator, d.coeff, d.scale) else coeff_str;
+            const orig_repr = if (d.orig_repr) |repr| try allocator.dupe(u8, repr) else if (d.scale > 0) try reconstructDecimalRepr(allocator, d.coeff, d.scale) else try allocator.dupe(u8, coeff_str);
             break :blk .{ .kind = .{ .decimal_val = .{
                 .coeff = coeff_str,
                 .scale = d.scale,
