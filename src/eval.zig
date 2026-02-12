@@ -2261,8 +2261,19 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         // New type literals
         .SmallIntLit => |i| Value{ .Int = @as(i64, i) },
         .BigIntLit => |i| Value{ .Int = i },
-        .RealLit => |_| Value{ .Null = {} },
-        .DoubleLit => |_| Value{ .Null = {} },
+        .RealLit => |f| blk_real: {
+            const float_val: f64 = @floatCast(f);
+            const scale: u8 = 6;
+            const multiplier: f64 = 1000000.0;
+            const scaled: i128 = @intFromFloat(@round(float_val * multiplier));
+            break :blk_real Value{ .Decimal = .{ .coeff = scaled, .scale = scale, .orig_scale = scale } };
+        },
+        .DoubleLit => |d| blk_dbl: {
+            const scale: u8 = 6;
+            const multiplier: f64 = 1000000.0;
+            const scaled: i128 = @intFromFloat(@round(d * multiplier));
+            break :blk_dbl Value{ .Decimal = .{ .coeff = scaled, .scale = scale, .orig_scale = scale } };
+        },
         .CharLit => |c| Value{ .Str = c.text },
         .VarcharLit => |v| Value{ .Str = v.text },
         .TextLit => |t| Value{ .Str = t },
@@ -3935,8 +3946,14 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch return Value{ .Str = "" };
                 return Value{ .Str = try allocator.dupe(u8, str) };
             },
+            .Decimal => |d| {
+                const float_val = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale));
+                const str = std.fmt.allocPrint(allocator, "{d}", .{float_val}) catch return Value{ .Str = "" };
+                return Value{ .Str = str };
+            },
             .Str => |s| return Value{ .Str = s },
             .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
+            .Null => return Value{ .Str = "null" },
             else => return Value{ .Str = "" },
         }
     } else if (std.mem.eql(u8, function_name, "tofloat") or std.mem.eql(u8, function_name, "toFloat") or std.mem.eql(u8, function_name, "todouble") or std.mem.eql(u8, function_name, "toDouble")) {
@@ -3959,6 +3976,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         switch (first_arg) {
             .Int => |i| return Value{ .Int = i },
             .Decimal => |d| return Value{ .Int = @intCast(@divFloor(d.coeff, std.math.pow(i128, 10, d.scale))) },
+            .Bool => |b| return Value{ .Int = if (b) 1 else 0 },
             .Str => |s| {
                 const i = std.fmt.parseInt(i64, s, 10) catch return Value{ .Null = {} };
                 return Value{ .Int = i };

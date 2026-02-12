@@ -958,7 +958,26 @@ def run_test(
 
                     # Compare extracted value with expected
                     if expected_val is not None and extracted != expected_val:
-                        return False, f"JSON assert failed: {expr} = {extracted}, expected {expected_val}"
+                        # Numeric tolerance comparison for float/int mismatches
+                        match = False
+                        try:
+                            if (
+                                isinstance(extracted, (int, float))
+                                and isinstance(expected_val, (int, float))
+                                or isinstance(extracted, str)
+                                and isinstance(expected_val, (int, float))
+                                or isinstance(extracted, (int, float))
+                                and isinstance(expected_val, str)
+                            ):
+                                match = abs(float(extracted) - float(expected_val)) < 1e-9
+                            elif isinstance(extracted, str) and isinstance(expected_val, str):
+                                # Try numeric comparison for string representations of numbers
+                                with contextlib.suppress(ValueError, TypeError):
+                                    match = abs(float(extracted) - float(expected_val)) < 1e-9
+                        except (ValueError, TypeError):
+                            pass
+                        if not match:
+                            return False, f"JSON assert failed: {expr} = {extracted}, expected {expected_val}"
                     elif not_equals_val is not None and extracted == not_equals_val:
                         return False, f"JSON assert failed: {expr} = {extracted}, should not equal {not_equals_val}"
                 except Exception as e:

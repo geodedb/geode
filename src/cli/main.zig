@@ -1876,7 +1876,6 @@ fn executeQueryOnGrpc(
 
     var all_rows_text: ?std.ArrayList(std.ArrayList([]const u8)) = null;
     var all_rows_json: ?std.ArrayList(std.ArrayList(std.json.Value)) = null;
-    var rows_owned_by_root = false;
 
     if (wants_json) {
         all_rows_json = try std.ArrayList(std.ArrayList(std.json.Value)).initCapacity(allocator, 64);
@@ -1892,13 +1891,9 @@ fn executeQueryOnGrpc(
             rows.deinit(allocator);
         }
         if (all_rows_json) |*rows| {
-            if (!rows_owned_by_root) {
-                for (rows.items) |*row| {
-                    for (row.items) |val| freeJsonValue(allocator, val);
-                    row.deinit(allocator);
-                }
-            } else {
-                for (rows.items) |*row| row.deinit(allocator);
+            for (rows.items) |*row| {
+                for (row.items) |val| freeJsonValue(allocator, val);
+                row.deinit(allocator);
             }
             rows.deinit(allocator);
         }
@@ -1931,6 +1926,12 @@ fn executeQueryOnGrpc(
     var has_error: bool = false;
     var error_message: []const u8 = "";
     var error_status: []const u8 = "58000";
+    var error_message_allocated = false;
+    var error_status_allocated = false;
+    defer {
+        if (error_message_allocated) allocator.free(error_message);
+        if (error_status_allocated) allocator.free(error_status);
+    }
 
     const TextMode = enum { display, dot };
     // Reuse the same RowAppender and captureStatus closures defined in executeQueryOnConnection
@@ -2018,8 +2019,12 @@ fn executeQueryOnGrpc(
                 .@"error" => |e| {
                     has_error = true;
                     error_message = try allocator.dupe(u8, e.message);
+                    error_message_allocated = true;
+                    error_message_allocated = true;
                     if (e.code.len > 0) {
                         error_status = try allocator.dupe(u8, e.code);
+                        error_status_allocated = true;
+                        error_status_allocated = true;
                     }
                 },
                 .explain => |ex| {
@@ -2041,6 +2046,12 @@ fn executeQueryOnGrpc(
 
     // Format and output results — identical to QUIC path
     if (std.mem.eql(u8, format, "json")) {
+        // Use an arena for the JSON tree (ObjectMaps, Arrays, duped strings).
+        // Row json.Values from protoValueToJson are freed by the all_rows_json defer.
+        var json_arena = std.heap.ArenaAllocator.init(allocator);
+        defer json_arena.deinit();
+        const jalloc = json_arena.allocator();
+
         const buildStringArray = struct {
             fn apply(alloc: std.mem.Allocator, items: []const []const u8) !std.json.Array {
                 var arr = std.json.Array.init(alloc);
@@ -2064,20 +2075,20 @@ fn executeQueryOnGrpc(
             }
         }.apply;
 
-        var root = std.json.ObjectMap.init(allocator);
+        var root = std.json.ObjectMap.init(jalloc);
         if (has_error) {
-            try root.put("status_class", .{ .string = try allocator.dupe(u8, error_status) });
+            try root.put("status_class", .{ .string = try jalloc.dupe(u8, error_status) });
             if (error_status.len > 0) {
-                try root.put("error_code", .{ .string = try allocator.dupe(u8, error_status) });
+                try root.put("error_code", .{ .string = try jalloc.dupe(u8, error_status) });
             }
-            try root.put("error", .{ .string = try allocator.dupe(u8, error_message) });
+            try root.put("error", .{ .string = try jalloc.dupe(u8, error_message) });
         } else if (result_kind != .rows) {
-            try root.put("status_class", .{ .string = try allocator.dupe(u8, status_class) });
+            try root.put("status_class", .{ .string = try jalloc.dupe(u8, status_class) });
             if (status_subclass.len > 0) {
-                try root.put("status_subclass", .{ .string = try allocator.dupe(u8, status_subclass) });
+                try root.put("status_subclass", .{ .string = try jalloc.dupe(u8, status_subclass) });
             }
             if (result_payload) |payload| {
-                if (std.json.parseFromSlice(std.json.Value, allocator, payload, .{})) |parsed| {
+                if (std.json.parseFromSlice(std.json.Value, jalloc, payload, .{})) |parsed| {
                     if (result_kind == .explain) {
                         try root.put("explain", parsed.value);
                     } else {
@@ -2085,42 +2096,41 @@ fn executeQueryOnGrpc(
                     }
                 } else |_| {
                     if (result_kind == .explain) {
-                        try root.put("explain", .{ .string = try allocator.dupe(u8, payload) });
+                        try root.put("explain", .{ .string = try jalloc.dupe(u8, payload) });
                     } else {
-                        try root.put("profile", .{ .string = try allocator.dupe(u8, payload) });
+                        try root.put("profile", .{ .string = try jalloc.dupe(u8, payload) });
                     }
                 }
             }
         } else {
-            try root.put("status_class", .{ .string = try allocator.dupe(u8, status_class) });
+            try root.put("status_class", .{ .string = try jalloc.dupe(u8, status_class) });
             if (status_subclass.len > 0) {
-                try root.put("status_subclass", .{ .string = try allocator.dupe(u8, status_subclass) });
+                try root.put("status_subclass", .{ .string = try jalloc.dupe(u8, status_subclass) });
             }
             try root.put("ordered", .{ .bool = ordered });
-            try root.put("order_keys", .{ .array = try buildStringArray(allocator, order_keys.items) });
-            try root.put("columns", .{ .array = try buildColumnsArray(allocator, columns.items) });
+            try root.put("order_keys", .{ .array = try buildStringArray(jalloc, order_keys.items) });
+            try root.put("columns", .{ .array = try buildColumnsArray(jalloc, columns.items) });
 
-            var rows_arr = std.json.Array.init(allocator);
+            var rows_arr = std.json.Array.init(jalloc);
             if (all_rows_json) |*rows| {
                 for (rows.items) |row| {
-                    var row_obj = std.json.ObjectMap.init(allocator);
+                    var row_obj = std.json.ObjectMap.init(jalloc);
                     for (row.items, 0..) |val, col_idx| {
                         const col_name = if (col_idx < columns.items.len) columns.items[col_idx].name else "?";
-                        try row_obj.put(try allocator.dupe(u8, col_name), val);
+                        try row_obj.put(try jalloc.dupe(u8, col_name), val);
                     }
                     try rows_arr.append(.{ .object = row_obj });
                 }
             }
-            rows_owned_by_root = true;
+
             try root.put("rows", .{ .array = rows_arr });
         }
 
-        try root.put("additional_statuses", .{ .array = try buildStringArray(allocator, additional_statuses.items) });
-        try root.put("flagger_findings", .{ .array = try buildStringArray(allocator, flagger_findings.items) });
+        try root.put("additional_statuses", .{ .array = try buildStringArray(jalloc, additional_statuses.items) });
+        try root.put("flagger_findings", .{ .array = try buildStringArray(jalloc, flagger_findings.items) });
 
         const root_value = std.json.Value{ .object = root };
-        const json_out = try std.json.Stringify.valueAlloc(allocator, root_value, .{});
-        defer allocator.free(json_out);
+        const json_out = try std.json.Stringify.valueAlloc(jalloc, root_value, .{});
         try stdout.writeAll(json_out);
         try stdout.writeAll("\n");
     } else if (std.mem.eql(u8, format, "csv")) {
@@ -2223,11 +2233,6 @@ fn executeQueryOnGrpc(
         if (all_rows_text) |rows| {
             try outputDotFormatFromRows(allocator, rows.items, stdout);
         }
-    }
-
-    // Free error strings if allocated
-    if (has_error and error_message.len > 0) {
-        allocator.free(error_message);
     }
 }
 
@@ -2667,7 +2672,6 @@ fn executeQueryOnConnection(
     // Use ArrayLists to store all rows (text or json depending on output format)
     var all_rows_text: ?std.ArrayList(std.ArrayList([]const u8)) = null;
     var all_rows_json: ?std.ArrayList(std.ArrayList(std.json.Value)) = null;
-    var rows_owned_by_root = false;
 
     if (wants_json) {
         all_rows_json = try std.ArrayList(std.ArrayList(std.json.Value)).initCapacity(allocator, 64);
@@ -2685,15 +2689,9 @@ fn executeQueryOnConnection(
             rows.deinit(allocator);
         }
         if (all_rows_json) |*rows| {
-            if (!rows_owned_by_root) {
-                for (rows.items) |*row| {
-                    for (row.items) |val| {
-                        freeJsonValue(allocator, val);
-                    }
-                    row.deinit(allocator);
-                }
-            } else {
-                for (rows.items) |*row| row.deinit(allocator);
+            for (rows.items) |*row| {
+                for (row.items) |val| freeJsonValue(allocator, val);
+                row.deinit(allocator);
             }
             rows.deinit(allocator);
         }
@@ -2725,6 +2723,12 @@ fn executeQueryOnConnection(
     var has_error: bool = false;
     var error_message: []const u8 = "";
     var error_status: []const u8 = "58000";
+    var error_message_allocated = false;
+    var error_status_allocated = false;
+    defer {
+        if (error_message_allocated) allocator.free(error_message);
+        if (error_status_allocated) allocator.free(error_status);
+    }
 
     const TextMode = enum { display, dot };
     const RowAppender = struct {
@@ -3019,8 +3023,10 @@ fn executeQueryOnConnection(
                         .@"error" => |e| {
                             has_error = true;
                             error_message = try allocator.dupe(u8, e.message);
+                            error_message_allocated = true;
                             if (e.code.len > 0) {
                                 error_status = try allocator.dupe(u8, e.code);
+                                error_status_allocated = true;
                             }
                         },
                         .explain => |ex| {
@@ -3043,6 +3049,7 @@ fn executeQueryOnConnection(
                 if (!h.success) {
                     has_error = true;
                     error_message = try allocator.dupe(u8, h.error_message);
+                    error_message_allocated = true;
                     error_status = "28000";
                 }
                 schema_received = true;
@@ -3083,8 +3090,10 @@ fn executeQueryOnConnection(
                         .@"error" => |e| {
                             has_error = true;
                             error_message = try allocator.dupe(u8, e.message);
+                            error_message_allocated = true;
                             if (e.code.len > 0) {
                                 error_status = try allocator.dupe(u8, e.code);
+                                error_status_allocated = true;
                             }
                         },
                         else => {},
@@ -3133,8 +3142,10 @@ fn executeQueryOnConnection(
                         .@"error" => |e| {
                             has_error = true;
                             error_message = try allocator.dupe(u8, e.message);
+                            error_message_allocated = true;
                             if (e.code.len > 0) {
                                 error_status = try allocator.dupe(u8, e.code);
+                                error_status_allocated = true;
                             }
                         },
                         else => {},
@@ -3156,8 +3167,10 @@ fn executeQueryOnConnection(
                         .@"error" => |e| {
                             has_error = true;
                             error_message = try allocator.dupe(u8, e.message);
+                            error_message_allocated = true;
                             if (e.code.len > 0) {
                                 error_status = try allocator.dupe(u8, e.code);
+                                error_status_allocated = true;
                             }
                         },
                         else => {},
@@ -3172,6 +3185,13 @@ fn executeQueryOnConnection(
 
     // Output final result based on format
     if (std.mem.eql(u8, format, "json")) {
+        // Use an arena allocator for the JSON tree structure (ObjectMaps, Arrays,
+        // duped string keys/values). Row json.Values from protoValueToJson are
+        // allocated with the main allocator and freed by the all_rows_json defer.
+        var json_arena = std.heap.ArenaAllocator.init(allocator);
+        defer json_arena.deinit();
+        const jalloc = json_arena.allocator();
+
         const buildStringArray = struct {
             fn apply(alloc: std.mem.Allocator, items: []const []const u8) !std.json.Array {
                 var arr = std.json.Array.init(alloc);
@@ -3195,20 +3215,20 @@ fn executeQueryOnConnection(
             }
         }.apply;
 
-        var root = std.json.ObjectMap.init(allocator);
+        var root = std.json.ObjectMap.init(jalloc);
         if (has_error) {
-            try root.put("status_class", .{ .string = try allocator.dupe(u8, error_status) });
+            try root.put("status_class", .{ .string = try jalloc.dupe(u8, error_status) });
             if (error_status.len > 0) {
-                try root.put("error_code", .{ .string = try allocator.dupe(u8, error_status) });
+                try root.put("error_code", .{ .string = try jalloc.dupe(u8, error_status) });
             }
-            try root.put("error", .{ .string = try allocator.dupe(u8, error_message) });
+            try root.put("error", .{ .string = try jalloc.dupe(u8, error_message) });
         } else if (result_kind != .rows) {
-            try root.put("status_class", .{ .string = try allocator.dupe(u8, status_class) });
+            try root.put("status_class", .{ .string = try jalloc.dupe(u8, status_class) });
             if (status_subclass.len > 0) {
-                try root.put("status_subclass", .{ .string = try allocator.dupe(u8, status_subclass) });
+                try root.put("status_subclass", .{ .string = try jalloc.dupe(u8, status_subclass) });
             }
             if (result_payload) |payload| {
-                if (std.json.parseFromSlice(std.json.Value, allocator, payload, .{})) |parsed| {
+                if (std.json.parseFromSlice(std.json.Value, jalloc, payload, .{})) |parsed| {
                     if (result_kind == .explain) {
                         try root.put("explain", parsed.value);
                     } else {
@@ -3216,48 +3236,44 @@ fn executeQueryOnConnection(
                     }
                 } else |_| {
                     if (result_kind == .explain) {
-                        try root.put("explain", .{ .string = try allocator.dupe(u8, payload) });
+                        try root.put("explain", .{ .string = try jalloc.dupe(u8, payload) });
                     } else {
-                        try root.put("profile", .{ .string = try allocator.dupe(u8, payload) });
+                        try root.put("profile", .{ .string = try jalloc.dupe(u8, payload) });
                     }
                 }
             }
         } else {
-            try root.put("status_class", .{ .string = try allocator.dupe(u8, status_class) });
+            try root.put("status_class", .{ .string = try jalloc.dupe(u8, status_class) });
             if (status_subclass.len > 0) {
-                try root.put("status_subclass", .{ .string = try allocator.dupe(u8, status_subclass) });
+                try root.put("status_subclass", .{ .string = try jalloc.dupe(u8, status_subclass) });
             }
             try root.put("ordered", .{ .bool = ordered });
-            try root.put("order_keys", .{ .array = try buildStringArray(allocator, order_keys.items) });
-            try root.put("columns", .{ .array = try buildColumnsArray(allocator, columns.items) });
+            try root.put("order_keys", .{ .array = try buildStringArray(jalloc, order_keys.items) });
+            try root.put("columns", .{ .array = try buildColumnsArray(jalloc, columns.items) });
 
-            var rows_arr = std.json.Array.init(allocator);
+            var rows_arr = std.json.Array.init(jalloc);
             if (all_rows_json) |*rows| {
                 for (rows.items) |row| {
-                    var row_obj = std.json.ObjectMap.init(allocator);
+                    var row_obj = std.json.ObjectMap.init(jalloc);
                     for (row.items, 0..) |val, col_idx| {
                         const col_name = if (col_idx < columns.items.len) columns.items[col_idx].name else "?";
-                        try row_obj.put(try allocator.dupe(u8, col_name), val);
+                        try row_obj.put(try jalloc.dupe(u8, col_name), val);
                     }
                     try rows_arr.append(.{ .object = row_obj });
                 }
             }
-            rows_owned_by_root = true;
+
             try root.put("rows", .{ .array = rows_arr });
         }
 
-        try root.put("additional_statuses", .{ .array = try buildStringArray(allocator, additional_statuses.items) });
-        try root.put("flagger_findings", .{ .array = try buildStringArray(allocator, flagger_findings.items) });
+        try root.put("additional_statuses", .{ .array = try buildStringArray(jalloc, additional_statuses.items) });
+        try root.put("flagger_findings", .{ .array = try buildStringArray(jalloc, flagger_findings.items) });
 
         const root_value = std.json.Value{ .object = root };
-        const json_out = try std.json.Stringify.valueAlloc(allocator, root_value, .{});
-        defer allocator.free(json_out);
-        // Note: We intentionally don't call freeJsonValue here because:
-        // 1. The root object's keys are string literals (cannot be freed)
-        // 2. The values are properly managed by the arena allocator
-        // 3. Calling freeJsonValue causes a segfault when trying to free literals
+        const json_out = try std.json.Stringify.valueAlloc(jalloc, root_value, .{});
         try stdout.writeAll(json_out);
         try stdout.writeAll("\n");
+        // Arena deinit (via defer above) frees the entire JSON tree.
     } else if (std.mem.eql(u8, format, "csv")) {
         if (all_rows_text) |rows| {
             // CSV header
@@ -3374,11 +3390,6 @@ fn executeQueryOnConnection(
         if (all_rows_text) |rows| {
             try outputDotFormatFromRows(allocator, rows.items, stdout);
         }
-    }
-
-    // Free error strings if allocated
-    if (has_error and error_message.len > 0) {
-        allocator.free(error_message);
     }
 }
 
@@ -3680,12 +3691,19 @@ fn valueToJsonString(allocator: std.mem.Allocator, value: schema.Value) ![]const
 }
 
 fn freeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) void {
+    freeJsonValueImpl(allocator, value, true);
+}
+
+/// Free a JSON value tree. When `free_keys` is true, object keys are freed;
+/// when false, only values are freed (useful for root objects whose keys are
+/// string literals that must not be freed).
+fn freeJsonValueImpl(allocator: std.mem.Allocator, value: std.json.Value, free_keys: bool) void {
     switch (value) {
         .number_string => |ns| allocator.free(ns),
         .string => |s| allocator.free(s),
         .array => |arr| {
             for (arr.items) |item| {
-                freeJsonValue(allocator, item);
+                freeJsonValueImpl(allocator, item, true);
             }
             var mutable_arr = arr;
             mutable_arr.deinit();
@@ -3693,8 +3711,8 @@ fn freeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) void {
         .object => |obj| {
             var iter = obj.iterator();
             while (iter.next()) |entry| {
-                allocator.free(entry.key_ptr.*);
-                freeJsonValue(allocator, entry.value_ptr.*);
+                if (free_keys) allocator.free(entry.key_ptr.*);
+                freeJsonValueImpl(allocator, entry.value_ptr.*, true);
             }
             var mutable_obj = obj;
             mutable_obj.deinit();

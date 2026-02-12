@@ -939,6 +939,7 @@ pub fn evalTypeCastFunction(
         switch (arg) {
             .Int => |i| return Value{ .Int = i },
             .Decimal => |d| return Value{ .Int = @intCast(@divFloor(d.coeff, std.math.pow(i128, 10, d.scale))) },
+            .Bool => |b| return Value{ .Int = if (b) 1 else 0 },
             .Str => |s| {
                 const i = std.fmt.parseInt(i64, s, 10) catch return Value{ .Null = {} };
                 return Value{ .Int = i };
@@ -978,8 +979,14 @@ pub fn evalTypeCastFunction(
                 const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch return Value{ .Str = "" };
                 return Value{ .Str = try allocator.dupe(u8, str) };
             },
+            .Decimal => |d| {
+                const float_val = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale));
+                const str = std.fmt.allocPrint(allocator, "{d}", .{float_val}) catch return Value{ .Str = "" };
+                return Value{ .Str = str };
+            },
             .Str => |s| return Value{ .Str = s },
             .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
+            .Null => return Value{ .Str = "null" },
             else => return Value{ .Str = "" },
         }
     }
