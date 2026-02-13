@@ -3,6 +3,8 @@
 # Avoids Nix/Docker compatibility issues while maintaining identical tooling
 
 FROM ubuntu:24.04 AS base
+# Issue #442: Use bash with pipefail to catch errors in piped commands
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive \

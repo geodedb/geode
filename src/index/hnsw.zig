@@ -260,13 +260,16 @@ pub const Hnsw = struct {
 
             if (layer > level) {
                 const nearest = try self.searchLayer(vector, candidates.items, 1, layer);
+                defer self.allocator.free(nearest);
                 candidates.clearAndFree(self.allocator);
                 for (nearest) |n| try candidates.append(self.allocator, n);
             } else {
                 const nearest = try self.searchLayer(vector, candidates.items, self.ef_construction, layer);
+                defer self.allocator.free(nearest);
 
                 const M = if (layer == 0) self.M * 2 else self.M;
                 const neighbors = try self.selectNeighbors(vector, nearest, M);
+                defer self.allocator.free(neighbors);
 
                 for (neighbors) |neighbor| {
                     try node.neighbors[layer].append(self.allocator, neighbor);
@@ -277,6 +280,7 @@ pub const Hnsw = struct {
                         const max_neighbors = if (layer == 0) self.M * 2 else self.M;
                         if (neighbor_node.neighbors[@min(layer, neighbor_node.level)].items.len > max_neighbors) {
                             const pruned = try self.selectNeighbors(neighbor_node.vector, neighbor_node.neighbors[@min(layer, neighbor_node.level)].items, max_neighbors);
+                            defer self.allocator.free(pruned);
                             neighbor_node.neighbors[@min(layer, neighbor_node.level)].clearAndFree(self.allocator);
                             for (pruned) |p| {
                                 try neighbor_node.neighbors[@min(layer, neighbor_node.level)].append(self.allocator, p);
@@ -328,10 +332,16 @@ pub const Hnsw = struct {
             }
         }
 
+        if (w.count() == 0) {
+            // No valid entry points — return empty result
+            return try self.allocator.alloc(u64, 0);
+        }
+
         while (candidates.count() > 0) {
             const current = candidates.remove();
 
-            if (current.dist > w.peek().?.dist) break;
+            const w_peek = w.peek() orelse break;
+            if (current.dist > w_peek.dist) break;
 
             if (self.nodes.get(current.id)) |current_node| {
                 if (layer <= current_node.level) {
@@ -342,7 +352,8 @@ pub const Hnsw = struct {
                             if (self.nodes.get(neighbor)) |neighbor_node| {
                                 const d = self.distanceSimd(query, neighbor_node.vector, .l2);
 
-                                if (d < w.peek().?.dist or w.count() < ef) {
+                                const w_top = w.peek() orelse unreachable; // w is non-empty here
+                                if (d < w_top.dist or w.count() < ef) {
                                     try candidates.add(.{ .id = neighbor, .dist = d });
                                     try w.add(.{ .id = neighbor, .dist = d });
 
@@ -366,13 +377,101 @@ pub const Hnsw = struct {
         return result;
     }
 
+    /// Like searchLayer but returns (id, dist) pairs to avoid recomputing distances (#455).
+    fn searchLayerWithDist(self: *const Hnsw, query: []const f32, entry_points: []const u64, ef: u16, layer: u8) ![]struct { id: u64, dist: f64 } {
+        var visited = std.AutoHashMap(u64, void).init(self.allocator);
+        defer visited.deinit();
+
+        const DistNode = struct { id: u64, dist: f64 };
+        const CandidatesContext = struct {
+            fn lessThan(_: @This(), a: DistNode, b: DistNode) std.math.Order {
+                return std.math.order(b.dist, a.dist);
+            }
+        };
+        const WContext = struct {
+            fn lessThan(_: @This(), a: DistNode, b: DistNode) std.math.Order {
+                return std.math.order(a.dist, b.dist);
+            }
+        };
+        var candidates = std.PriorityQueue(DistNode, CandidatesContext, CandidatesContext.lessThan).init(self.allocator, CandidatesContext{});
+        defer candidates.deinit();
+
+        var w = std.PriorityQueue(DistNode, WContext, WContext.lessThan).init(self.allocator, WContext{});
+        defer w.deinit();
+
+        for (entry_points) |ep| {
+            if (self.nodes.get(ep)) |ep_node| {
+                const d = self.distanceSimd(query, ep_node.vector, .l2);
+                try candidates.add(.{ .id = ep, .dist = d });
+                try w.add(.{ .id = ep, .dist = d });
+                try visited.put(ep, {});
+            }
+        }
+
+        if (w.count() == 0) {
+            return try self.allocator.alloc(struct { id: u64, dist: f64 }, 0);
+        }
+
+        while (candidates.count() > 0) {
+            const current = candidates.remove();
+
+            const w_peek = w.peek() orelse break;
+            if (current.dist > w_peek.dist) break;
+
+            if (self.nodes.get(current.id)) |current_node| {
+                if (layer <= current_node.level) {
+                    for (current_node.neighbors[@min(layer, current_node.level)].items) |neighbor| {
+                        if (!visited.contains(neighbor)) {
+                            try visited.put(neighbor, {});
+
+                            if (self.nodes.get(neighbor)) |neighbor_node| {
+                                const d = self.distanceSimd(query, neighbor_node.vector, .l2);
+
+                                const w_top = w.peek() orelse unreachable;
+                                if (d < w_top.dist or w.count() < ef) {
+                                    try candidates.add(.{ .id = neighbor, .dist = d });
+                                    try w.add(.{ .id = neighbor, .dist = d });
+
+                                    if (w.count() > ef) {
+                                        _ = w.remove();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        var result = try self.allocator.alloc(struct { id: u64, dist: f64 }, w.count());
+        var i: usize = 0;
+        while (w.count() > 0) : (i += 1) {
+            const node = w.remove();
+            result[i] = .{ .id = node.id, .dist = node.dist };
+        }
+
+        return result;
+    }
+
     fn selectNeighbors(self: *const Hnsw, query: []const f32, candidates: []const u64, M: u16) ![]u64 {
-        var sorted = try self.allocator.alloc(struct { id: u64, dist: f64 }, candidates.len);
+        // Count valid candidates first (nodes that still exist in the index)
+        var valid_count: usize = 0;
+        for (candidates) |c| {
+            if (self.nodes.get(c) != null) valid_count += 1;
+        }
+
+        if (valid_count == 0) {
+            return try self.allocator.alloc(u64, 0);
+        }
+
+        var sorted = try self.allocator.alloc(struct { id: u64, dist: f64 }, valid_count);
         defer self.allocator.free(sorted);
 
-        for (candidates, 0..) |c, i| {
+        var idx: usize = 0;
+        for (candidates) |c| {
             if (self.nodes.get(c)) |node| {
-                sorted[i] = .{ .id = c, .dist = self.distanceSimd(query, node.vector, .l2) };
+                sorted[idx] = .{ .id = c, .dist = self.distanceSimd(query, node.vector, .l2) };
+                idx += 1;
             }
         }
 
@@ -396,6 +495,7 @@ pub const Hnsw = struct {
         return result;
     }
 
+    // Issue #455: Use searchLayerWithDist to avoid recomputing distances
     pub fn knnSearch(self: *const Hnsw, query: []const f32, k: usize, metric: DistanceMetric) ![]struct { id: u64, score: f64 } {
         if (query.len != self.dim) return error.DimensionMismatch;
         if (self.entry_point == null) return &[_]struct { id: u64, score: f64 }{};
@@ -403,16 +503,22 @@ pub const Hnsw = struct {
         const ef = @max(self.ef_construction, @as(u16, @intCast(k)));
 
         var entry_points = [_]u64{self.entry_point.?};
-        const candidates = try self.searchLayer(query, &entry_points, ef, 0);
-        defer self.allocator.free(candidates);
+        const candidates_with_dist = try self.searchLayerWithDist(query, &entry_points, ef, 0);
+        defer self.allocator.free(candidates_with_dist);
 
-        var results = try self.allocator.alloc(struct { id: u64, score: f64 }, @min(k, candidates.len));
+        var results = try self.allocator.alloc(struct { id: u64, score: f64 }, @min(k, candidates_with_dist.len));
 
-        for (candidates[0..results.len], 0..) |c, i| {
-            if (self.nodes.get(c)) |node| {
-                const dist = self.distanceSimd(query, node.vector, metric);
-                results[i] = .{ .id = c, .score = if (metric == .cosine) 1.0 - dist else dist };
-            }
+        for (candidates_with_dist[0..results.len], 0..) |c, i| {
+            // Use precomputed L2 distance; convert to score based on requested metric
+            const score = if (metric == .cosine) blk: {
+                // L2 distance was precomputed; recompute with cosine for correct score
+                if (self.nodes.get(c.id)) |node| {
+                    const d = self.distanceSimd(query, node.vector, metric);
+                    break :blk 1.0 - d;
+                }
+                break :blk 0.0;
+            } else c.dist;
+            results[i] = .{ .id = c.id, .score = score };
         }
 
         std.sort.pdq(

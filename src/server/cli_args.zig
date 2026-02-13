@@ -26,11 +26,15 @@ pub const ServerConfig = struct {
     // Query behavior
     order_keys_mode_expr: bool = false, // ident-only by default; env/flag can enable
 
+    // Authentication
+    enable_auth: bool = false,
+
     // GAP-0259: Configurable QUIC idle timeout (default 300s / 5 minutes)
     idle_timeout_ms: u64 = 300000,
 
-    // GAP-0260: Deferred persistence interval (default 100ms)
-    persist_interval_ms: u64 = 100,
+    // GAP-0260: Deferred persistence interval (default 30s)
+    // Longer interval reduces persistence thread race window with query threads
+    persist_interval_ms: u64 = 30000,
 
     // Track which fields were allocated (vs static strings)
     _allocated_listen_quic: bool = false,
@@ -250,6 +254,13 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--persist-interval") and ai + 1 < args.len) {
             config.persist_interval_ms = std.fmt.parseUnsigned(u64, args[ai + 1], 10) catch 100;
+            ai += 1;
+        } else if (std.mem.eql(u8, arg, "--enable-auth")) {
+            config.enable_auth = true;
+        } else if (std.mem.eql(u8, arg, "--enable-fle") or std.mem.eql(u8, arg, "--enable-tde")) {
+            // FLE/TDE are always available; flags accepted for compatibility
+        } else if (std.mem.eql(u8, arg, "--tde-provider") and ai + 1 < args.len) {
+            // TDE provider selection; accepted for compatibility (default provider used)
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--config") or std.mem.eql(u8, arg, "-c")) {
             // Already processed in first pass, skip value

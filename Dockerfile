@@ -3,6 +3,8 @@
 
 # Stage 1: Build Geode
 FROM debian:bookworm-slim AS builder
+# Issue #442: Use bash with pipefail to catch errors in piped commands
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # ARG needs to be declared at the beginning of the stage
 ARG TARGETARCH

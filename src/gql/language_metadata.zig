@@ -725,6 +725,18 @@ pub const functions = [_]FunctionInfo{
         .doc = "Check if string contains substring",
         .example = "RETURN contains('hello', 'ell')",
     },
+    .{
+        .name = "icontains",
+        .category = .scalar_string,
+        .return_type = "BOOLEAN",
+        .params = &[_]FunctionParam{
+            .{ .name = "str", .type_name = "STRING" },
+            .{ .name = "search", .type_name = "STRING" },
+        },
+        .compliance = .geode_extension,
+        .doc = "Case-insensitive string containment check",
+        .example = "RETURN icontains('Hello World', 'hello')",
+    },
     // List functions
     .{
         .name = "head",

@@ -39,9 +39,10 @@ const SessionEntry = struct {
     mutex: std.Thread.Mutex = .{},
 };
 
+// Issue #453: Use RwLock instead of Mutex to allow concurrent readers
 const SessionStore = struct {
     allocator: std.mem.Allocator,
-    mutex: std.Thread.Mutex = .{},
+    rwlock: std.Thread.RwLock = .{},
     sessions: std.StringHashMap(*SessionEntry),
     config: GrpcConfig,
 
@@ -93,15 +94,15 @@ const SessionStore = struct {
         const entry = try self.allocator.create(SessionEntry);
         entry.* = .{ .state = state };
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
         try self.sessions.put(session_id, entry);
         return session_id;
     }
 
     pub fn getEntry(self: *SessionStore, session_id: []const u8) ?*SessionEntry {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.rwlock.lockShared();
+        defer self.rwlock.unlockShared();
         return self.sessions.get(session_id);
     }
 };

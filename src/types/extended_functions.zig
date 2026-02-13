@@ -92,7 +92,7 @@ fn fn_polygon_area(allocator: std.mem.Allocator, args: []const BuiltinValue) !Bu
 fn fn_vector_cosine(allocator: std.mem.Allocator, args: []const BuiltinValue) !BuiltinValue {
     _ = allocator;
     try expectArgs(2, args);
-    if (args[0] != .VectorF64 or args[1] != .VectorF64) return error.TypeMismatch;
+    if (args[0] != .VectorF64 or args[1] != .VectorF64) return .{ .Null = {} };
     const sim = try ext.vectorCosine(args[0].VectorF64, args[1].VectorF64);
     return .{ .Decimal = .{ .coeff = @intFromFloat(sim * 1_000_000), .scale = 6 } };
 }
@@ -244,6 +244,16 @@ test "vector cosine identical" {
     try std.testing.expect(@abs(v.Decimal.coeff - 1_000_000) <= 1); // ~1.0
 }
 // CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=FUNCTION_VECTOR_COSINE; STATUS=TESTED; TEST=extended_functions.vector cosine identical; OWNER=engine; UPDATED=2025-09-26
+
+test "vector cosine non-vector returns null" {
+    var reg = try initRegistry(std.testing.allocator);
+    defer reg.deinit();
+    const fnp = reg.get("vector_cosine") orelse return error.NotFound;
+    // Pass non-vector args (Int values) — should return Null, not TypeMismatch error
+    const v = try fnp(std.testing.allocator, &[_]BuiltinValue{ .{ .Int = 42 }, .{ .Int = 99 } });
+    defer freeValue(std.testing.allocator, v);
+    try std.testing.expect(v == .Null);
+}
 
 test "geobox contains true" {
     var reg = try initRegistry(std.testing.allocator);

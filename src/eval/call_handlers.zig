@@ -651,8 +651,8 @@ pub fn evalStringFunction(
         return Value{ .Str = str[start..] };
     }
 
-    // upper(str)
-    if (std.mem.eql(u8, function_name, "upper")) {
+    // upper(str) / toupper(str)
+    if (std.mem.eql(u8, function_name, "upper") or std.mem.eql(u8, function_name, "toupper")) {
         if (args.len != 1) return Value{ .Null = {} };
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
 
@@ -668,8 +668,8 @@ pub fn evalStringFunction(
         return Value{ .Str = result };
     }
 
-    // lower(str)
-    if (std.mem.eql(u8, function_name, "lower")) {
+    // lower(str) / tolower(str)
+    if (std.mem.eql(u8, function_name, "lower") or std.mem.eql(u8, function_name, "tolower")) {
         if (args.len != 1) return Value{ .Null = {} };
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
 
@@ -683,6 +683,36 @@ pub fn evalStringFunction(
             result[i] = std.ascii.toLower(c);
         }
         return Value{ .Str = result };
+    }
+
+    // icontains(str, substr) - case-insensitive CONTAINS
+    if (std.mem.eql(u8, function_name, "icontains")) {
+        if (args.len != 2) return Value{ .Null = {} };
+        const str_arg = try eval.evalExpr(allocator, args[0].*, env);
+        const needle_arg = try eval.evalExpr(allocator, args[1].*, env);
+
+        const str_val = switch (str_arg) {
+            .Str => |s| s,
+            else => return Value{ .Null = {} },
+        };
+        const needle_val = switch (needle_arg) {
+            .Str => |s| s,
+            else => return Value{ .Null = {} },
+        };
+
+        if (needle_val.len == 0) return Value{ .Bool = true };
+
+        // Convert both to lowercase for comparison
+        var lower_str = try allocator.alloc(u8, str_val.len);
+        for (str_val, 0..) |c, i| {
+            lower_str[i] = std.ascii.toLower(c);
+        }
+        var lower_needle = try allocator.alloc(u8, needle_val.len);
+        for (needle_val, 0..) |c, i| {
+            lower_needle[i] = std.ascii.toLower(c);
+        }
+
+        return Value{ .Bool = std.mem.indexOf(u8, lower_str, lower_needle) != null };
     }
 
     // Not a string function

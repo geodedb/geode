@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1.4
 # Optimized production Dockerfile with GPU support and BuildKit cache mounts
 FROM ubuntu:24.04 AS builder
+# Issue #442: Use bash with pipefail to catch errors in piped commands
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Prevent apt from prompting for user input
 ENV DEBIAN_FRONTEND=noninteractive

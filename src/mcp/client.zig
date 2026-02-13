@@ -386,7 +386,10 @@ pub const GeodeClient = struct {
         var arr = std.json.Array.init(allocator);
         if (rows.len == 0) return arr;
 
-        if (spice_wrapper.shouldUseParallelism(rows.len, spice_wrapper.Thresholds.map)) {
+        // Use a higher threshold to avoid spice parallelMap memory corruption
+        // on smaller result sets (see proto_util.zig buildDataPage fix)
+        const parallel_threshold: usize = 512;
+        if (spice_wrapper.shouldUseParallelism(rows.len, parallel_threshold)) {
             var pool = spice_wrapper.SpicePool.init(allocator, null);
             pool.start();
             defer pool.deinit();

@@ -36,6 +36,60 @@ inline fn debugLog(comptime fmt: []const u8, args: anytype) void {
     _ = args;
 }
 
+/// Readers-writer synchronization for QUIC endpoint poll() vs handler I/O.
+///
+/// The vendored QUIC library's `ep.poll()` processes frames for ALL connections,
+/// updating their internal HashMaps (`stream_txs`, etc.). Handler threads
+/// concurrently call `readStream()`/`writeStream()` on the same connections.
+/// Without synchronization, concurrent HashMap access causes SIGABRT.
+///
+/// This implements a readers-writer pattern:
+/// - Handler threads are "readers" (can do I/O concurrently with each other)
+/// - The main thread is the "writer" (needs exclusive access for poll())
+///
+/// Uses SeqCst ordering to ensure a total order and eliminate TOCTOU races.
+pub const PollSync = struct {
+    /// Set to true by the main thread when it wants to poll.
+    /// Handler threads check this before starting I/O and back off if set.
+    poll_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Count of handler threads currently performing connection I/O.
+    active_io_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
+    /// Called by handler threads before I/O. Blocks until safe to proceed.
+    pub fn enterIo(self: *PollSync) void {
+        while (true) {
+            // Increment count first, then check flag — this ordering with SeqCst
+            // guarantees that either we see poll_requested=true (and back off),
+            // or the main thread sees our incremented count (and waits for us).
+            _ = self.active_io_count.fetchAdd(1, .seq_cst);
+            if (!self.poll_requested.load(.seq_cst)) return; // Safe to proceed
+            // Poll was requested — back off and wait
+            _ = self.active_io_count.fetchSub(1, .seq_cst);
+            while (self.poll_requested.load(.seq_cst)) {
+                std.Thread.sleep(50 * std.time.ns_per_us);
+            }
+        }
+    }
+
+    /// Called by handler threads after I/O.
+    pub fn leaveIo(self: *PollSync) void {
+        _ = self.active_io_count.fetchSub(1, .seq_cst);
+    }
+
+    /// Called by the main thread before poll(). Blocks until all I/O finishes.
+    pub fn enterPoll(self: *PollSync) void {
+        self.poll_requested.store(true, .seq_cst);
+        while (self.active_io_count.load(.seq_cst) > 0) {
+            std.Thread.sleep(50 * std.time.ns_per_us);
+        }
+    }
+
+    /// Called by the main thread after poll().
+    pub fn leavePoll(self: *PollSync) void {
+        self.poll_requested.store(false, .seq_cst);
+    }
+};
+
 pub const QuicTransport = struct {
     allocator: std.mem.Allocator,
     config: Config,
@@ -49,6 +103,9 @@ pub const QuicTransport = struct {
     // where endpoint bookkeeping can be safely updated without racing with poll().
     pending_destroy: std.ArrayList(*Connection) = .empty,
     pending_destroy_mutex: std.Thread.Mutex = .{},
+    /// Readers-writer sync: handler threads are "readers" (concurrent I/O),
+    /// main thread is the "writer" (exclusive poll). See PollSync docs.
+    poll_sync: PollSync = .{},
     cert_der: ?[]u8 = null,
     key_der: ?[]u8 = null,
 
@@ -110,6 +167,10 @@ pub const QuicTransport = struct {
         self.pending_destroy_mutex.lock();
         defer self.pending_destroy_mutex.unlock();
         if (self.pending_destroy.items.len == 0) return;
+
+        // Wait for handler threads to finish I/O before destroying connections
+        self.poll_sync.enterPoll();
+        defer self.poll_sync.leavePoll();
 
         for (self.pending_destroy.items) |inner_conn| {
             if (self.endpoint) |*ep| {
@@ -249,7 +310,15 @@ pub const QuicTransport = struct {
                 // This ensures connections marked for destruction are removed from
                 // the endpoint's tracking tables before poll() processes packets.
                 self.drainPendingDestroy();
-                try ep.poll(10);
+                // Acquire exclusive poll access — blocks new handler I/O and
+                // waits for in-flight I/O to complete. This prevents concurrent
+                // HashMap access in the QUIC library (stream_txs corruption).
+                self.poll_sync.enterPoll();
+                ep.poll(10) catch |err| {
+                    self.poll_sync.leavePoll();
+                    return err;
+                };
+                self.poll_sync.leavePoll();
 
                 // Get a connection if we don't have one yet
                 if (pending_conn == null) {
@@ -264,6 +333,7 @@ pub const QuicTransport = struct {
                             .allocator = self.allocator,
                             .inner = conn,
                             .streams = try std.ArrayList(*QuicStream).initCapacity(self.allocator, 0),
+                            .poll_sync = &self.poll_sync,
                         };
                         // GAP-0202: Thread-safe connection list append
                         self.connections_mutex.lock();
@@ -284,6 +354,7 @@ pub const QuicTransport = struct {
                     .allocator = self.allocator,
                     .inner = conn,
                     .streams = try std.ArrayList(*QuicStream).initCapacity(self.allocator, 0),
+                    .poll_sync = &self.poll_sync,
                 };
                 self.connections_mutex.lock();
                 defer self.connections_mutex.unlock();
@@ -299,14 +370,20 @@ pub const QuicTransport = struct {
 
     pub fn tryAccept(self: *QuicTransport) ?*QuicConnection {
         if (self.endpoint) |*ep| {
-            // Poll the endpoint to process incoming UDP packets and complete handshakes
-            ep.poll(10) catch return null;
+            // Wait for handler threads then poll
+            self.poll_sync.enterPoll();
+            ep.poll(10) catch {
+                self.poll_sync.leavePoll();
+                return null;
+            };
+            self.poll_sync.leavePoll();
             const conn = api.tryAccept(ep) orelse return null;
             const wrapper = self.allocator.create(QuicConnection) catch return null;
             wrapper.* = QuicConnection{
                 .allocator = self.allocator,
                 .inner = conn,
                 .streams = std.ArrayList(*QuicStream).initCapacity(self.allocator, 0) catch return null,
+                .poll_sync = &self.poll_sync,
             };
             // GAP-0202: Thread-safe connection list append
             self.connections_mutex.lock();
@@ -346,12 +423,15 @@ pub const QuicTransport = struct {
         // the endpoint's tracking tables and the main thread's poll() loop
         // may still deliver packets to it. Freeing it here causes a
         // use-after-free crash (GAP-0203).
+        // Use poll_sync to ensure poll() doesn't race with connection teardown.
+        self.poll_sync.enterIo();
         for (conn.streams.items) |stream| {
-            stream.close();
+            conn.inner.closeStream(stream.stream_id, 0) catch {};
             conn.allocator.destroy(stream);
         }
         conn.streams.deinit(conn.allocator);
         api.closeConnection(conn.inner, 0) catch {};
+        self.poll_sync.leaveIo();
 
         // Queue the inner connection for deferred destruction on the main thread.
         // drainPendingDestroy() will use api.destroy() to properly remove it
@@ -411,8 +491,14 @@ pub const QuicConnection = struct {
     allocator: std.mem.Allocator,
     inner: *Connection,
     streams: std.ArrayList(*QuicStream),
+    /// Shared poll synchronization — see PollSync docs.
+    poll_sync: ?*PollSync = null,
 
     pub fn openStream(self: *QuicConnection, bidirectional: bool) !*QuicStream {
+        if (self.poll_sync) |ps| ps.enterIo();
+        defer {
+            if (self.poll_sync) |ps| ps.leaveIo();
+        }
         const stream_id = try self.inner.openStream(bidirectional);
 
         const stream = try self.allocator.create(QuicStream);
@@ -420,12 +506,17 @@ pub const QuicConnection = struct {
             .allocator = self.allocator,
             .connection = self.inner,
             .stream_id = stream_id,
+            .poll_sync = self.poll_sync,
         };
         try self.streams.append(self.allocator, stream);
         return stream;
     }
 
     pub fn acceptStream(self: *QuicConnection) !*QuicStream {
+        if (self.poll_sync) |ps| ps.enterIo();
+        defer {
+            if (self.poll_sync) |ps| ps.leaveIo();
+        }
         const stream_id = try self.inner.acceptStream();
         // GAP-0200: Debug print removed from hot path for performance
         const stream = try self.allocator.create(QuicStream);
@@ -433,6 +524,7 @@ pub const QuicConnection = struct {
             .allocator = self.allocator,
             .connection = self.inner,
             .stream_id = stream_id,
+            .poll_sync = self.poll_sync,
         };
         try self.streams.append(self.allocator, stream);
         return stream;
@@ -465,8 +557,12 @@ pub const QuicConnection = struct {
     }
 
     pub fn close(self: *QuicConnection) void {
+        if (self.poll_sync) |ps| ps.enterIo();
+        defer {
+            if (self.poll_sync) |ps| ps.leaveIo();
+        }
         for (self.streams.items) |stream| {
-            stream.close();
+            self.inner.closeStream(stream.stream_id, 0) catch {};
             self.allocator.destroy(stream);
         }
         self.streams.deinit(self.allocator);
@@ -481,8 +577,14 @@ pub const QuicStream = struct {
     allocator: std.mem.Allocator,
     connection: *Connection,
     stream_id: u64,
+    /// Shared poll synchronization — see PollSync docs.
+    poll_sync: ?*PollSync = null,
 
     pub fn write(self: *QuicStream, data: []const u8) !usize {
+        if (self.poll_sync) |ps| ps.enterIo();
+        defer {
+            if (self.poll_sync) |ps| ps.leaveIo();
+        }
         return self.connection.writeStream(self.stream_id, data, false);
     }
 
@@ -497,6 +599,10 @@ pub const QuicStream = struct {
 
     pub fn read(self: *QuicStream, buffer: []u8) !usize {
         // GAP-0200: Debug print removed from hot path for performance
+        if (self.poll_sync) |ps| ps.enterIo();
+        defer {
+            if (self.poll_sync) |ps| ps.leaveIo();
+        }
         return self.connection.readStream(self.stream_id, buffer);
     }
 
@@ -553,10 +659,18 @@ pub const QuicStream = struct {
     }
 
     pub fn close(self: *QuicStream) void {
+        if (self.poll_sync) |ps| ps.enterIo();
+        defer {
+            if (self.poll_sync) |ps| ps.leaveIo();
+        }
         self.connection.closeStream(self.stream_id, 0) catch {};
     }
 
     pub fn finish(self: *QuicStream) !void {
+        if (self.poll_sync) |ps| ps.enterIo();
+        defer {
+            if (self.poll_sync) |ps| ps.leaveIo();
+        }
         _ = try self.connection.writeStream(self.stream_id, &.{}, true);
     }
 };
@@ -576,11 +690,15 @@ pub const QuicClient = struct {
 
     pub fn deinit(self: *QuicClient) void {
         if (self.connection) |conn| {
+            // Connection may be in a bad state after handshake failure;
+            // null out first to avoid double-cleanup
+            self.connection = null;
             api.closeConnection(conn, 0) catch {};
         }
         if (self.endpoint) |*ep| {
             ep.deinit();
         }
+        self.endpoint = null;
     }
 
     pub fn connect(self: *QuicClient, host: []const u8, port: u16) !void {

@@ -27,11 +27,11 @@ pub const BFS = struct {
         errdefer queue.deinit();
         try queue.append(start);
 
-        while (queue.items.len > 0) {
-            const v = queue.items[0];
-            // pop front (small queues expected for tests; simple shift acceptable)
-            std.mem.copy(u64, queue.items[0 .. queue.items.len - 1], queue.items[1..]);
-            _ = queue.pop();
+        // Use front index to avoid O(n) mem.copy on each dequeue (#449)
+        var front: usize = 0;
+        while (front < queue.items.len) {
+            const v = queue.items[front];
+            front += 1;
 
             const edges = g.outEdges(v) orelse continue;
             for (edges) |e| {

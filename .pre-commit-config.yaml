@@ -139,7 +139,7 @@ repos:
     pass_filenames: false
     args: [src/, build.zig]
 
-      # Zig build check (compilation)
+      # Zig build check (compilation) - moved to pre-push per #471 to reduce commit friction
   - id: zig-build
     name: zig build (compilation check)
     entry: zig build
@@ -147,7 +147,7 @@ repos:
     files: \.(zig|zon)$
     exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
     pass_filenames: false
-    stages: [pre-commit]
+    stages: [pre-push]
 
       # Cross-compilation check for required targets (fast check)
   - id: cross-compile-check

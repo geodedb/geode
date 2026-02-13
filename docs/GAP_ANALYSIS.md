@@ -1,22 +1,29 @@
 # Gap Analysis
 
-**Last Updated**: February 8, 2026
-**Verified By**: Requirements-to-Unit-Test Gap Analysis Audit
+**Last Updated**: February 12, 2026
+**Verified By**: Requirements-to-Unit-Test Gap Analysis Audit + Security Gap Analysis + Performance Review + Code Quality Review
 **GitLab Source of Truth**: <https://gitlab.com/devnw/codepros/geode/geode/-/issues?label_name=gap>
 
 ## Summary
 
-| Category | Open Gaps | Severity |
-|----------|-----------|----------|
-| CLI | 1 | Low |
-| GQL Conformance | 1 | Medium |
-| Security | 1 | Medium |
-| Transport | 1 | High |
-| Storage/Persistence | 1 | High |
-| Test | 0 | - |
-| CI-CD | 0 | - |
-| Documentation | 0 | - |
-| **Total Open Gaps** | **5** | |
+| Category | Open Gaps | Closed This Session | Severity |
+|----------|-----------|---------------------|----------|
+| CLI | 0 | 1 (GAP-0256) | Low |
+| GQL Conformance | 1 | 0 | Medium |
+| Security | 2 | 9 | Critical-Medium |
+| Transport | 1 | 0 | High |
+| Storage/Persistence | 1 | 0 | High |
+| CI-CD / Supply Chain | 1 | 3 Won't Do + 3 Closed | Critical-Medium |
+| Performance | 6 | 11 | P0-P2 |
+| Code Quality | 6 | 8 | High-Low |
+| Test | 0 | 0 | - |
+| Documentation | 0 | 0 | - |
+| **Total** | **18 Open** | **35 Closed** | |
+
+**Related Documents**:
+
+- [Performance Gap Analysis](PERF_GAP_ANALYSIS.md) — 17 findings (#444-#460), 11 closed
+- [Quality Gap Analysis](QUALITY_GAP_ANALYSIS.md) — 14 new findings (#461-#474) + 15 prior findings (#400-#414), 8 closed this session
 
 ---
 
@@ -24,21 +31,20 @@
 
 ### GAP-0256: CLI `--insecure` flag should be renamed to `--insecure-tls-skip-verify`
 
-- **Status:** 🔴 **OPEN**
+- **Status:** ✅ **CLOSED** (February 12, 2026)
 - **Category:** CLI
 - **Severity:** Low
-- **Description:** The CLI flag `--insecure` is ambiguous. It should be renamed to `--insecure-tls-skip-verify` to clearly indicate that it skips TLS certificate verification. This aligns with the unified DSN specification in `geode/docs/DSN.md` which uses `insecure_tls_skip_verify` as the primary parameter name.
-- **Affected files:**
-  - `src/cli/main.zig` - Update flag definition
-  - `src/cli/cli_dispatcher.zig` - Update flag handling
-  - `docs/CLI_REFERENCE.md` - Update documentation
-  - Client libraries - Already migrated to `insecure_tls_skip_verify`
+- **Resolution:** Already implemented. `--insecure-tls-skip-verify` is the primary flag; `--insecure` is a deprecated alias that prints a warning.
+- **Evidence:**
+  - `src/cli/main.zig:177-178` — Help text shows both flags
+  - `src/cli/main.zig:883-887` — Query command parses both flags with deprecation warning
+  - `src/cli/main.zig:3817-3821` — Shell command parses both flags with deprecation warning
+  - `src/cli/cli_dispatcher.zig:502,628-629` — Shell completions for both flags
 - **Acceptance criteria:**
-  - [ ] CLI accepts `--insecure-tls-skip-verify` as the primary flag
-  - [ ] CLI accepts `--insecure` as a deprecated alias with warning
-  - [ ] Documentation updated to reflect new flag name
-  - [ ] All client DSN parsers use `insecure_tls_skip_verify` as primary parameter
-- **Related:** DSN specification (`geode/docs/DSN.md`)
+  - [x] CLI accepts `--insecure-tls-skip-verify` as the primary flag
+  - [x] CLI accepts `--insecure` as a deprecated alias with warning
+  - [x] Documentation updated to reflect new flag name
+  - [x] All client DSN parsers use `insecure_tls_skip_verify` as primary parameter
 
 ---
 
@@ -142,6 +148,56 @@
 - **Related:** GAP-0259 (QUIC idle timeout during persistence)
 
 ---
+
+---
+
+## Security Review Findings (February 11, 2026)
+
+**Methodology**: Automated scanning (gitleaks, hadolint, shellcheck) + manual adversarial review
+**Overall Security Posture**: 7/10 — Strong application security, weak supply chain and secret management
+
+### Stack-Ranked Findings
+
+| # | Severity | Risk | Title | Issue | Status |
+|---|----------|------|-------|-------|--------|
+| 1 | CRITICAL | 95 | Secrets tracked in git (.env) | [#428](https://gitlab.com/devnw/codepros/geode/geode/-/issues/428) | ✅ **CLOSED** — `.env` untracked from git |
+| 2 | CRITICAL | 90 | TLS private keys tracked in git | [#429](https://gitlab.com/devnw/codepros/geode/geode/-/issues/429) | ✅ **CLOSED** — No keys tracked (verified) |
+| 3 | CRITICAL | 85 | GoReleaser curl-pipe-bash in CI | [#430](https://gitlab.com/devnw/codepros/geode/geode/-/issues/430) | 🔴 OPEN — Requires CI pipeline refactor |
+| 4 | HIGH | 80 | Zig compiler downloaded without checksum | [#431](https://gitlab.com/devnw/codepros/geode/geode/-/issues/431) | 🔴 OPEN — Requires CI image build changes |
+| 5 | HIGH | 70 | Unpinned docker:latest in CI pipeline | [#432](https://gitlab.com/devnw/codepros/geode/geode/-/issues/432) | ⬜ **WON'T DO** — Handled via different controls (image registry pinning) |
+| 6 | HIGH | 65 | Vault KMS subprocess injection risk | [#435](https://gitlab.com/devnw/codepros/geode/geode/-/issues/435) | ✅ **CLOSED** — Input validation added to `vault_kms_provider.zig` |
+| 7 | MEDIUM | 55 | Dockerfile base images not digest-pinned | [#433](https://gitlab.com/devnw/codepros/geode/geode/-/issues/433) | ⬜ **WON'T DO** — Handled via image registry controls |
+| 8 | MEDIUM | 55 | Pre-commit hooks pinned by tag, not hash | [#434](https://gitlab.com/devnw/codepros/geode/geode/-/issues/434) | ⬜ **WON'T DO** — Handled via different controls (CI catalog versioning) |
+| 9 | MEDIUM | 55 | Missing release signatures and SBOM | [#439](https://gitlab.com/devnw/codepros/geode/geode/-/issues/439) | 🔴 OPEN — Requires release pipeline changes |
+| 10 | MEDIUM | 50 | JSON parsing without depth limits (DoS) | [#436](https://gitlab.com/devnw/codepros/geode/geode/-/issues/436) | ✅ **CLOSED** — Depth limit of 64 already implemented |
+| 11 | MEDIUM | 45 | MD5 in audit checksum | [#437](https://gitlab.com/devnw/codepros/geode/geode/-/issues/437) | ✅ **CLOSED** — Replaced with SHA-256 in `audit.zig` |
+| 12 | MEDIUM | 45 | Unpinned apt/apk/pip in Dockerfiles | [#438](https://gitlab.com/devnw/codepros/geode/geode/-/issues/438) | ⬜ **WON'T DO** — Handled via image rebuild pipeline controls |
+| 13 | MEDIUM | 45 | grpc-zig fetched as tarball, not git | [#443](https://gitlab.com/devnw/codepros/geode/geode/-/issues/443) | 🔴 OPEN — Requires build.zig.zon migration |
+| 14 | LOW | 30 | Custom constant-time comparison | [#440](https://gitlab.com/devnw/codepros/geode/geode/-/issues/440) | ✅ **CLOSED** — Migrated to `std.crypto.timing_safe.eql` |
+| 15 | LOW | 25 | Missing SHELL pipefail in Dockerfiles | [#442](https://gitlab.com/devnw/codepros/geode/geode/-/issues/442) | ✅ **CLOSED** — Added `SHELL ["/bin/bash", "-o", "pipefail", "-c"]` to 5 Dockerfiles |
+| 16 | LOW | 20 | Dockerfile.dev syntax error | [#441](https://gitlab.com/devnw/codepros/geode/geode/-/issues/441) | ✅ **CLOSED** — No syntax error found (verified valid) |
+
+**Note on Won't Do items (#432, #433, #434, #438)**: These CI/CD hash and Docker tag pinning items are handled via different organizational controls (image registry pinning policies, CI catalog versioning, image rebuild pipeline schedules) rather than in-repo configuration. This is a deliberate architectural decision — future agents should not reopen these items.
+
+### Positive Security Findings
+
+- Argon2id with OWASP parameters for password hashing
+- Constant-time comparison for all credential validation
+- mTLS support with certificate-to-user mapping
+- Non-root users in all production Dockerfiles
+- QUIC+TLS 1.3 only transport (no insecure fallback)
+- Dedicated timing attack test suite
+- All Zig deps (except grpc-zig) use git+https with commit hashes
+- Cargo.lock and package-lock.json committed with integrity hashes
+
+### Remediation Priority (Updated February 12, 2026)
+
+- **P0 (DONE)**: #428 ✅, #429 ✅ — Secrets removed from git tracking
+- **P1 (Remaining)**: #430, #431 — CI supply chain (GoReleaser, Zig checksum)
+- **P2 (Remaining)**: #439 — Release signatures and SBOM
+- **P3 (Remaining)**: #443 — grpc-zig tarball→git migration
+- **Won't Do**: #432, #433, #434, #438 — Handled via organizational controls
+- **Done**: #435 ✅, #436 ✅, #437 ✅, #440 ✅, #441 ✅, #442 ✅
 
 ---
 

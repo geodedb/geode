@@ -20,7 +20,8 @@ const BackupConfig = @import("storage/backup").BackupConfig;
 const txn_undo_log = geode.txn_undo_log;
 const diagnostics = geode.diagnostics;
 const user_mgmt = geode.user_management;
-// Note: query_ast_cache type is opaque to avoid circular dependency with lib.zig
+// Issue #444: Import AST cache to wire into parse hot path
+const query_ast_cache = @import("query_ast_cache.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager type in QUIC connection handling
 const geode_auth = @import("geode_auth");
@@ -360,14 +361,21 @@ pub fn handleQuicConnection(
     // GAP-0200-FIX: Increased timeout from 50ms to 500ms to handle slower clients
     // and network latency. The accept() function now waits longer for streams before
     // returning, but we still need this as a fallback.
+    // Issue #447: Use exponential backoff instead of fixed 1ms busy-wait polling
     var poll_attempts: usize = 0;
-    while (poll_attempts < 500) : (poll_attempts += 1) {
+    var backoff_us: u64 = 100; // Start at 100μs
+    const max_backoff_us: u64 = 50_000; // Cap at 50ms
+    const max_total_wait_ms: u64 = 500;
+    var total_waited_us: u64 = 0;
+    while (total_waited_us < max_total_wait_ms * 1000) : (poll_attempts += 1) {
         if (conn.inner.hasIncomingStreams()) break;
-        std.Thread.sleep(1 * std.time.ns_per_ms); // Sleep 1ms and check again
-        if (poll_attempts > 0 and poll_attempts % 100 == 0) {
+        std.Thread.sleep(backoff_us * std.time.ns_per_us);
+        total_waited_us += backoff_us;
+        backoff_us = @min(backoff_us * 2, max_backoff_us);
+        if (poll_attempts > 0 and poll_attempts % 10 == 0) {
             log.debug("No streams yet, retrying", &.{
                 Attr.int("attempt", @intCast(poll_attempts + 1)),
-                Attr.int("max_attempts", 500),
+                Attr.int("total_waited_ms", @intCast(total_waited_us / 1000)),
             });
         }
     }
@@ -495,10 +503,17 @@ pub fn handleQuicConnection(
             continue;
         };
 
-        // Process protobuf message and emit responses directly
+        // Process protobuf message and emit responses directly.
+        // Acquire store lock to prevent race with background persistence thread.
+        graph_store.acquireStoreLock();
+        defer graph_store.releaseStoreLock();
         handleClientMessage(gpa, &state, stream, msg, disable_estimates, compact_profile, memcurve_profile) catch |err| {
             log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
-            try sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{});
+            // Best-effort error response — stream may already be closed
+            sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch |send_err| {
+                log.warn("Failed to send error response, closing connection", &.{Attr.string("error", @errorName(send_err))});
+                return;
+            };
             continue;
         };
     }

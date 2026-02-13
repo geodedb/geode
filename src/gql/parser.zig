@@ -190,12 +190,33 @@ pub const Parser = struct {
             .WALK,
             .XOR,
             .ZONED,
+            .ZONE,
             .ORDINALITY,
             // Temporal type keywords - used as function names (e.g., date('2024-01-15'))
             .DATE,
             .TIME,
             .DATETIME,
             .TIMESTAMP,
+            // Type name keywords - commonly used as identifiers
+            .BOOLEAN,
+            .DECIMAL,
+            .FLOAT,
+            .INTEGER,
+            .STRING,
+            // Additional keywords that may appear as identifiers
+            .ASSERT,
+            .BEGIN,
+            .BINDING,
+            .BINDINGS,
+            .EXPLAIN,
+            .LOCAL,
+            .NO,
+            .ONLY,
+            .PROFILE,
+            .READ,
+            .REQUIRE,
+            .SHOW,
+            .WRITE,
             => true,
             else => false,
         };
@@ -3537,9 +3558,9 @@ pub const Parser = struct {
                 if (has_exp) {
                     // Parse scientific notation: parse as f64 and convert to decimal
                     const value = try std.fmt.parseFloat(f64, lex);
-                    // Convert to decimal with reasonable precision (6 decimal places)
-                    const coeff = @as(i128, @intFromFloat(value * 1000000));
-                    break :blk_f .{ .Decimal = .{ .coeff = coeff, .scale = 6 } };
+                    // Use 15 decimal places to preserve precision for small values (e.g. 1.23e-7)
+                    const coeff = @as(i128, @intFromFloat(value * 1_000_000_000_000_000));
+                    break :blk_f .{ .Decimal = .{ .coeff = coeff, .scale = 15 } };
                 } else {
                     // Standard decimal notation
                     var dot_idx: usize = 0;

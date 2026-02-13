@@ -1179,7 +1179,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Str = str[start..] };
             }
 
-            if (std.mem.eql(u8, function_name, "upper")) {
+            if (std.mem.eql(u8, function_name, "upper") or std.mem.eql(u8, function_name, "toupper")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
 
@@ -1195,7 +1195,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Str = result };
             }
 
-            if (std.mem.eql(u8, function_name, "lower")) {
+            if (std.mem.eql(u8, function_name, "lower") or std.mem.eql(u8, function_name, "tolower")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
 
@@ -1209,6 +1209,35 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     result[i] = std.ascii.toLower(c);
                 }
                 break :blk_call .{ .Str = result };
+            }
+
+            // icontains(str, substr) - case-insensitive string containment check
+            if (std.mem.eql(u8, function_name, "icontains")) {
+                if (call.args.len != 2) break :blk_call .{ .Null = {} };
+                const str_arg = try evalExpr(allocator, call.args[0].*, env);
+                const needle_arg = try evalExpr(allocator, call.args[1].*, env);
+
+                const str_val = switch (str_arg) {
+                    .Str => |s| s,
+                    else => break :blk_call .{ .Null = {} },
+                };
+                const needle_val = switch (needle_arg) {
+                    .Str => |s| s,
+                    else => break :blk_call .{ .Null = {} },
+                };
+
+                if (needle_val.len == 0) break :blk_call .{ .Bool = true };
+
+                var lower_str = try allocator.alloc(u8, str_val.len);
+                for (str_val, 0..) |c, i| {
+                    lower_str[i] = std.ascii.toLower(c);
+                }
+                var lower_needle = try allocator.alloc(u8, needle_val.len);
+                for (needle_val, 0..) |c, i| {
+                    lower_needle[i] = std.ascii.toLower(c);
+                }
+
+                break :blk_call .{ .Bool = std.mem.indexOf(u8, lower_str, lower_needle) != null };
             }
 
             // CANARY: REQ=REQ-GQL-CAST-001; FEATURE="TypeCasting"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-25
@@ -3332,6 +3361,35 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
+    // icontains(str, substr) - case-insensitive containment check
+    if (std.mem.eql(u8, function_name, "icontains")) {
+        if (args.len != 2) return null;
+        const str_arg = try evalExpr(allocator, args[0].*, env);
+        const needle_arg = try evalExpr(allocator, args[1].*, env);
+
+        const str_val = switch (str_arg) {
+            .Str => |s| s,
+            else => return Value{ .Null = {} },
+        };
+        const needle_val = switch (needle_arg) {
+            .Str => |s| s,
+            else => return Value{ .Null = {} },
+        };
+
+        if (needle_val.len == 0) return Value{ .Bool = true };
+
+        var lower_str = try allocator.alloc(u8, str_val.len);
+        for (str_val, 0..) |c, i| {
+            lower_str[i] = std.ascii.toLower(c);
+        }
+        var lower_needle = try allocator.alloc(u8, needle_val.len);
+        for (needle_val, 0..) |c, i| {
+            lower_needle[i] = std.ascii.toLower(c);
+        }
+
+        return Value{ .Bool = std.mem.indexOf(u8, lower_str, lower_needle) != null };
+    }
+
     // Handle reverse function
     if (std.mem.eql(u8, function_name, "reverse")) {
         if (args.len != 1) return null;
@@ -4490,4 +4548,60 @@ test "eval: CASE 3VL searched and simple with NULLs" {
     const c2 = ast.Expr{ .Case = .{ .operand = &opn, .whens = whs2[0..], .else_expr = null } };
     const o2 = try evalExpr(allocator, c2, env);
     try std.testing.expect(o2 == .Str and std.mem.eql(u8, o2.Str, "n"));
+}
+
+test "eval: icontains case-insensitive string matching" {
+    const allocator = std.testing.allocator;
+    const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
+
+    // icontains('Hello World', 'hello') -> true
+    var arg1 = ast.Expr{ .String = "Hello World" };
+    var arg2 = ast.Expr{ .String = "hello" };
+    var args1 = [_]*ast.Expr{ &arg1, &arg2 };
+    const call1 = ast.Expr{ .Call = .{ .name = "icontains", .args = &args1, .distinct = false, .namespace = null } };
+    const v1 = try evalExpr(allocator, call1, env);
+    try std.testing.expect(v1 == .Bool and v1.Bool == true);
+
+    // icontains('Hello World', 'WORLD') -> true
+    var arg3 = ast.Expr{ .String = "Hello World" };
+    var arg4 = ast.Expr{ .String = "WORLD" };
+    var args2 = [_]*ast.Expr{ &arg3, &arg4 };
+    const call2 = ast.Expr{ .Call = .{ .name = "icontains", .args = &args2, .distinct = false, .namespace = null } };
+    const v2 = try evalExpr(allocator, call2, env);
+    try std.testing.expect(v2 == .Bool and v2.Bool == true);
+
+    // icontains('Hello World', 'xyz') -> false
+    var arg5 = ast.Expr{ .String = "Hello World" };
+    var arg6 = ast.Expr{ .String = "xyz" };
+    var args3 = [_]*ast.Expr{ &arg5, &arg6 };
+    const call3 = ast.Expr{ .Call = .{ .name = "icontains", .args = &args3, .distinct = false, .namespace = null } };
+    const v3 = try evalExpr(allocator, call3, env);
+    try std.testing.expect(v3 == .Bool and v3.Bool == false);
+
+    // icontains('Hello World', '') -> true (empty needle)
+    var arg7 = ast.Expr{ .String = "Hello World" };
+    var arg8 = ast.Expr{ .String = "" };
+    var args4 = [_]*ast.Expr{ &arg7, &arg8 };
+    const call4 = ast.Expr{ .Call = .{ .name = "icontains", .args = &args4, .distinct = false, .namespace = null } };
+    const v4 = try evalExpr(allocator, call4, env);
+    try std.testing.expect(v4 == .Bool and v4.Bool == true);
+}
+
+test "eval: tolower and toupper aliases" {
+    const allocator = std.testing.allocator;
+    const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
+
+    // tolower('HELLO') -> 'hello'
+    var arg1 = ast.Expr{ .String = "HELLO" };
+    var args1 = [_]*ast.Expr{&arg1};
+    const call1 = ast.Expr{ .Call = .{ .name = "tolower", .args = &args1, .distinct = false, .namespace = null } };
+    const v1 = try evalExpr(allocator, call1, env);
+    try std.testing.expect(v1 == .Str and std.mem.eql(u8, v1.Str, "hello"));
+
+    // toupper('hello') -> 'HELLO'
+    var arg2 = ast.Expr{ .String = "hello" };
+    var args2 = [_]*ast.Expr{&arg2};
+    const call2 = ast.Expr{ .Call = .{ .name = "toupper", .args = &args2, .distinct = false, .namespace = null } };
+    const v2 = try evalExpr(allocator, call2, env);
+    try std.testing.expect(v2 == .Str and std.mem.eql(u8, v2.Str, "HELLO"));
 }

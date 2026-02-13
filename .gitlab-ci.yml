@@ -40,6 +40,14 @@ default:
   before_script:
     - apt-get update -qq && apt-get install -y -qq libssl-dev > /dev/null 2>&1 || true
 
+# Issue #465: Global Zig build cache for CI pipeline efficiency
+cache:
+  key: "zig-cache-${CI_COMMIT_REF_SLUG}"
+  paths:
+    - .zig-cache/
+    - zig-cache/
+  policy: pull-push
+
 variables:
   DOCKER_BUILDKIT: 1
   ZIG_VERSION: "0.15.2"

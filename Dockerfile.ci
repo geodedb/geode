@@ -1,6 +1,8 @@
 # Lightweight CI Dockerfile - uses pre-built binaries from pipeline
 # This avoids slow recompilation and disk space issues in CI
 FROM debian:bookworm-slim
+# Issue #442: Use bash with pipefail to catch errors in piped commands
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y --no-install-recommends \

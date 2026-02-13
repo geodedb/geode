@@ -3056,7 +3056,7 @@ REQ-PERF-DRR-SCHED-001,DRRScheduler,StreamFairness,TESTED,,,transport,2026-01-30
 REQ-PERF-DRR-SCHED-002,DRRScheduler,ConnectionScheduler,TESTED,,,transport,2026-01-30,src/transport/stream_scheduler.zig
 REQ-PERF-EDGE-ADJ-001,EdgeAdjacencyIndex,EdgeLookup,IMPL,,,perf,2026-01-28,src/graph_store.zig
 REQ-PERF-EDGE-ADJ-002,EdgeAdjacencyIndex,IndexMaintenance,IMPL,,,perf,2026-01-28,src/graph_store.zig
-REQ-PERF-EDGE-ADJ-003,EdgeAdjacencyIndex,EdgeLookup,IMPL,,,perf,2026-01-28,src/graph_store.zig
+REQ-PERF-EDGE-ADJ-003,EdgeAdjacencyIndex,EdgeLookup,TESTED,,,perf,2026-02-12,src/graph_store.zig
 REQ-PERF-FLE-SKIP-001,FLESkipOptimization,GlobalDisable,IMPL,,,perf,2026-01-27,src/fle_integration.zig
 REQ-PERF-FLE-SKIP-002,FLESkipOptimization,DecryptFastPath,IMPL,,,perf,2026-01-27,src/fle_integration.zig
 REQ-PERF-FLE-SKIP-003,FLESkipOptimization,NodePropertyWrite,IMPL,,,perf,2026-01-27,src/execution/value_utilities.zig

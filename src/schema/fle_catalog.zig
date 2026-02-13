@@ -160,11 +160,29 @@ pub const SchemaCatalog = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
+        // Deep-copy the field metadata so the catalog owns all strings.
+        // The caller's strings (e.g. AST nodes) may be freed after this call.
+        const owned_name = try self.allocator.dupe(u8, field_meta.field_name);
+        errdefer self.allocator.free(owned_name);
+
+        // Deep-copy visibility roles
+        const owned_roles = if (field_meta.visibility.to_roles.len > 0) blk: {
+            const roles = try self.allocator.alloc([]const u8, field_meta.visibility.to_roles.len);
+            for (field_meta.visibility.to_roles, 0..) |role, i| {
+                roles[i] = try self.allocator.dupe(u8, role);
+            }
+            break :blk roles;
+        } else field_meta.visibility.to_roles;
+
+        var owned_meta = field_meta;
+        owned_meta.field_name = owned_name;
+        owned_meta.visibility = .{ .to_roles = owned_roles };
+
         // Check if type already exists
         if (self.schemas.getPtr(type_name)) |type_meta_ptr_ptr| {
             // Type exists - add/update the field
             const type_meta_ptr = type_meta_ptr_ptr.*;
-            try type_meta_ptr.fields.put(field_meta.field_name, field_meta);
+            try type_meta_ptr.fields.put(owned_name, owned_meta);
         } else {
             // Type doesn't exist - create it and add the field
             const stored_name = try self.allocator.dupe(u8, type_name);
@@ -173,8 +191,8 @@ pub const SchemaCatalog = struct {
             const type_meta_ptr = try self.allocator.create(annotations.TypeMetadata);
             errdefer self.allocator.destroy(type_meta_ptr);
 
-            type_meta_ptr.* = annotations.TypeMetadata.init(self.allocator, type_name);
-            try type_meta_ptr.fields.put(field_meta.field_name, field_meta);
+            type_meta_ptr.* = annotations.TypeMetadata.init(self.allocator, stored_name);
+            try type_meta_ptr.fields.put(owned_name, owned_meta);
 
             try self.schemas.put(stored_name, type_meta_ptr);
         }

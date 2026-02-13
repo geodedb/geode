@@ -1663,9 +1663,9 @@ pub const AuditLogger = struct {
             try writer.print("\n]\n", .{});
         }
 
-        // Calculate checksum
-        var checksum_bytes: [16]u8 = undefined;
-        std.crypto.hash.md5.Md5.hash(&[_]u8{0} ** 16, &checksum_bytes, .{});
+        // Calculate checksum using SHA-256 (replacing MD5 per security audit #437)
+        var checksum_bytes: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(&[_]u8{0} ** 32, &checksum_bytes, .{});
         const checksum_hex = std.fmt.bytesToHex(checksum_bytes, .lower);
         const checksum = try allocator.dupe(u8, &checksum_hex);
 

@@ -2222,7 +2222,7 @@ fn stBuffer(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 fn vectorDot(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
     if (args.len != 2) return error.InvalidArgs;
-    if (args[0] != .VectorF32 or args[1] != .VectorF32) return error.TypeMismatch;
+    if (args[0] != .VectorF32 or args[1] != .VectorF32) return .{ .Null = {} };
 
     const a = args[0].VectorF32;
     const b = args[1].VectorF32;
@@ -2240,7 +2240,7 @@ fn vectorDot(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 fn vectorL2(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
     if (args.len != 2) return error.InvalidArgs;
-    if (args[0] != .VectorF32 or args[1] != .VectorF32) return error.TypeMismatch;
+    if (args[0] != .VectorF32 or args[1] != .VectorF32) return .{ .Null = {} };
 
     const a = args[0].VectorF32;
     const b = args[1].VectorF32;
@@ -2260,7 +2260,7 @@ fn vectorL2(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 fn vectorCosine(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
     if (args.len != 2) return error.InvalidArgs;
-    if (args[0] != .VectorF32 or args[1] != .VectorF32) return error.TypeMismatch;
+    if (args[0] != .VectorF32 or args[1] != .VectorF32) return .{ .Null = {} };
 
     const a = args[0].VectorF32;
     const b = args[1].VectorF32;

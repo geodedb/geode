@@ -326,13 +326,9 @@ pub fn parseBearerToken(auth_header: []const u8) ?[]const u8 {
     return null;
 }
 
-/// Constant-time comparison to prevent timing attacks
+/// Constant-time comparison to prevent timing attacks (#440: use stdlib implementation)
 fn constantTimeEqual(a: *const [32]u8, b: *const [32]u8) bool {
-    var result: u8 = 0;
-    for (a, b) |byte_a, byte_b| {
-        result |= byte_a ^ byte_b;
-    }
-    return result == 0;
+    return std.crypto.timing_safe.eql([32]u8, a.*, b.*);
 }
 
 // ============================================================================

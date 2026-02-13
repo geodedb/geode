@@ -1678,7 +1678,10 @@ pub const VectorKNNOptimizer = struct {
         var candidates = try std.ArrayList(DistanceCandidate).initCapacity(self.allocator, 0);
         defer candidates.deinit(self.allocator);
 
-        if (spice_wrapper.shouldUseParallelism(candidate_nodes.items.len, spice_wrapper.Thresholds.map)) {
+        // Use a higher threshold to avoid spice parallelMap memory corruption
+        // on smaller result sets (see proto_util.zig buildDataPage fix)
+        const parallel_threshold: usize = 512;
+        if (spice_wrapper.shouldUseParallelism(candidate_nodes.items.len, parallel_threshold)) {
             var pool = spice_wrapper.SpicePool.init(self.allocator, null);
             pool.start();
             defer pool.deinit();
@@ -1695,7 +1698,7 @@ pub const VectorKNNOptimizer = struct {
                 }
             }.map;
 
-            const results = try spice_wrapper.parallelMap(Candidate, DistanceCandidate, &pool, candidate_nodes.items, mapFn, spice_wrapper.Thresholds.map);
+            const results = try spice_wrapper.parallelMap(Candidate, DistanceCandidate, &pool, candidate_nodes.items, mapFn, parallel_threshold);
             defer self.allocator.free(results);
             try candidates.appendSlice(self.allocator, results);
         } else {

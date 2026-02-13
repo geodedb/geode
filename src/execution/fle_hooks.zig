@@ -48,6 +48,7 @@ pub fn encryptPropertyIfNeeded(
     };
 
     const record_id = try std.fmt.allocPrint(allocator, "{d}", .{node_id});
+    defer allocator.free(record_id);
 
     // Try to encrypt - if field is not encrypted, returns original value
     const encrypted_value = fle_integration.encryptFieldIfNeeded(
@@ -94,6 +95,7 @@ pub fn encryptEdgePropertyIfNeeded(
     };
 
     const record_id = try std.fmt.allocPrint(allocator, "edge_{d}", .{edge_id});
+    defer allocator.free(record_id);
 
     // Try to encrypt - if field is not encrypted, returns original value
     const encrypted_value = fle_integration.encryptFieldIfNeeded(
@@ -141,12 +143,14 @@ pub fn decryptPropertyIfNeeded(
     };
 
     // Try to decrypt - handles RBAC and returns "[REDACTED]" if unauthorized
+    const decrypt_record_id = try std.fmt.allocPrint(allocator, "{d}", .{node_id});
+    defer allocator.free(decrypt_record_id);
     const decrypted_value = fle_integration.decryptFieldIfNeeded(
         ctx,
         node_type,
         field_name,
         stored_value,
-        try std.fmt.allocPrint(allocator, "{d}", .{node_id}),
+        decrypt_record_id,
         true, // check_rbac = true
     ) catch |err| {
         // If decryption fails, return "[REDACTED]" for safety

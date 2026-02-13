@@ -767,3 +767,29 @@ test "lexer - handles invalid UTF-8 gracefully" {
     const tok3 = lexer.next();
     try std.testing.expectEqual(t.TokenKind.kw_return, tok3.kind);
 }
+
+test "lexer - scientific notation float literals" {
+    // Standard scientific notation
+    var lex1 = Lexer{ .src = "1.23e-7" };
+    const tok1 = lex1.next();
+    try std.testing.expectEqual(t.TokenKind.float_lit, tok1.kind);
+    try std.testing.expectEqualStrings("1.23e-7", tok1.lexeme);
+
+    // Positive exponent
+    var lex2 = Lexer{ .src = "1.5E+2" };
+    const tok2 = lex2.next();
+    try std.testing.expectEqual(t.TokenKind.float_lit, tok2.kind);
+    try std.testing.expectEqualStrings("1.5E+2", tok2.lexeme);
+
+    // Integer with exponent
+    var lex3 = Lexer{ .src = "5e3" };
+    const tok3 = lex3.next();
+    try std.testing.expectEqual(t.TokenKind.float_lit, tok3.kind);
+    try std.testing.expectEqualStrings("5e3", tok3.lexeme);
+
+    // Very small exponent
+    var lex4 = Lexer{ .src = "4.85e-33" };
+    const tok4 = lex4.next();
+    try std.testing.expectEqual(t.TokenKind.float_lit, tok4.kind);
+    try std.testing.expectEqualStrings("4.85e-33", tok4.lexeme);
+}

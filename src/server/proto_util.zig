@@ -229,7 +229,12 @@ pub fn buildDataPage(
     var rows = std.ArrayList(schema.Row).initCapacity(allocator, row_count) catch return error.OutOfMemory;
     try rows.resize(allocator, row_count);
 
-    if (spice_wrapper.shouldUseParallelism(row_count, spice_wrapper.Thresholds.map)) {
+    // Use a higher threshold for data page serialization to avoid fork/join
+    // overhead for typical result sets. The spice thread pool has memory
+    // corruption issues with small workloads (< 512 rows) where fork/join
+    // synchronization overhead exceeds the parallelism benefit anyway.
+    const data_page_parallel_threshold: usize = 512;
+    if (spice_wrapper.shouldUseParallelism(row_count, data_page_parallel_threshold)) {
         var pool = spice_wrapper.SpicePool.init(allocator, null);
         pool.start();
         defer pool.deinit();
@@ -272,7 +277,7 @@ pub fn buildDataPage(
             }
         }.map;
 
-        const results = try spice_wrapper.parallelMap(RowInput, RowResult, &pool, items, mapFn, spice_wrapper.Thresholds.map);
+        const results = try spice_wrapper.parallelMap(RowInput, RowResult, &pool, items, mapFn, data_page_parallel_threshold);
         defer allocator.free(results);
 
         for (results, 0..) |res, i| {
@@ -441,7 +446,7 @@ fn propertyValueToProto(allocator: std.mem.Allocator, value: graph_store.Propert
         .String => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
         .Decimal => |d| blk: {
             const coeff_str = try std.fmt.allocPrint(allocator, "{d}", .{d.coeff});
-            const repr = if (d.scale > 0) try reconstructDecimalRepr(allocator, d.coeff, d.scale) else coeff_str;
+            const repr = if (d.scale > 0) try reconstructDecimalRepr(allocator, d.coeff, d.scale) else try allocator.dupe(u8, coeff_str);
             break :blk .{ .kind = .{ .decimal_val = .{
                 .coeff = coeff_str,
                 .scale = d.scale,
@@ -505,7 +510,7 @@ fn reconstructDecimalRepr(allocator: std.mem.Allocator, coeff: i128, scale: u8) 
 fn extValueToProto(allocator: std.mem.Allocator, ext: eval_extended.ExtValue) !schema.ExtendedValue {
     const type_name = type_helpers.getExtTypeName(ext);
     return switch (ext) {
-        .Null => .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = "null" } },
+        .Null => .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, "null") } },
         .Int => |i| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .int_val = i } },
         .Bool => |b| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .bool_val = b } },
         .Str => |s| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, s) } },

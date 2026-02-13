@@ -724,18 +724,37 @@ pub const GraphStore = struct {
     }
 
     // Issue #391: Helper to add node to label index
+    // Issue #451: Use stack-allocated bufPrint to probe for existing key before heap alloc
     fn addToLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) !void {
-        // Create composite key "graph_name:label"
-        const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
+        // Probe with stack-allocated key first to avoid heap alloc when key exists
+        var buf: [512]u8 = undefined;
+        const probe_key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ graph_name, label }) catch {
+            // Key too long for stack buffer — fall back to heap alloc
+            const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
+            const result = try self.label_index.getOrPut(key);
+            if (!result.found_existing) {
+                result.value_ptr.* = std.ArrayList(u64).empty;
+            } else {
+                self.allocator.free(key);
+            }
+            try result.value_ptr.append(self.allocator, node_id);
+            return;
+        };
 
-        const result = try self.label_index.getOrPut(key);
-        if (!result.found_existing) {
-            result.value_ptr.* = std.ArrayList(u64).empty;
+        if (self.label_index.getPtr(probe_key)) |list| {
+            // Key already exists — no heap allocation needed
+            try list.append(self.allocator, node_id);
         } else {
-            // Key already exists, free the newly allocated one
-            self.allocator.free(key);
+            // New key — heap-allocate for map ownership
+            const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
+            const result = try self.label_index.getOrPut(key);
+            if (!result.found_existing) {
+                result.value_ptr.* = std.ArrayList(u64).empty;
+            } else {
+                self.allocator.free(key);
+            }
+            try result.value_ptr.append(self.allocator, node_id);
         }
-        try result.value_ptr.append(self.allocator, node_id);
     }
 
     fn removeFromLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) void {
@@ -1650,30 +1669,27 @@ pub const GraphStore = struct {
         }
     }
 
-    // CANARY: REQ=REQ-PERF-EDGE-ADJ-003; FEATURE="EdgeAdjacencyIndex"; ASPECT=EdgeLookup; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
+    // CANARY: REQ=REQ-PERF-EDGE-ADJ-003; FEATURE="EdgeAdjacencyIndex"; ASPECT=EdgeLookup; STATUS=TESTED; OWNER=perf; UPDATED=2026-02-12
     // Issue #392: Get all edges connected to a node (O(1) lookup instead of O(edges) scan)
+    // Issue #450: Use HashSet for O(1) deduplication instead of O(m*n) linear scan
     pub fn getEdgesForNode(self: *const GraphStore, node_id: u64) std.ArrayList(u64) {
         var result = std.ArrayList(u64).empty;
+        var seen = std.AutoHashMap(u64, void).init(self.allocator);
+        defer seen.deinit();
 
         // Get outgoing edges
         if (self.outgoing_edges.get(node_id)) |outgoing| {
             for (outgoing.items) |edge_id| {
+                seen.put(edge_id, {}) catch continue;
                 result.append(self.allocator, edge_id) catch continue;
             }
         }
 
-        // Get incoming edges
+        // Get incoming edges — deduplicate self-loops via HashSet (#450)
         if (self.incoming_edges.get(node_id)) |incoming| {
             for (incoming.items) |edge_id| {
-                // Avoid duplicates for self-loops
-                var already_added = false;
-                for (result.items) |existing_id| {
-                    if (existing_id == edge_id) {
-                        already_added = true;
-                        break;
-                    }
-                }
-                if (!already_added) {
+                if (!seen.contains(edge_id)) {
+                    seen.put(edge_id, {}) catch continue;
                     result.append(self.allocator, edge_id) catch continue;
                 }
             }
@@ -3224,6 +3240,22 @@ var global_arena: ?std.heap.ArenaAllocator = null;
 var initialized = false;
 var last_data_dir: ?[]u8 = null;
 
+/// Mutex to prevent persistence thread from reading store while query threads mutate it.
+/// The persistence thread holds this while calling saveToFile().
+/// Query handlers should acquire this via acquireStoreLock()/releaseStoreLock()
+/// before performing mutation operations.
+var g_store_mutex: std.Thread.Mutex = .{};
+
+/// Acquire the global store lock (for use by query handlers during mutations)
+pub fn acquireStoreLock() void {
+    g_store_mutex.lock();
+}
+
+/// Release the global store lock
+pub fn releaseStoreLock() void {
+    g_store_mutex.unlock();
+}
+
 /// P2-3: Global allocator for persistent graph store data (better than page_allocator)
 var global_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
 var global_allocator_init = false;
@@ -3264,6 +3296,9 @@ fn persistenceLoop() void {
     const sleep_ns: u64 = g_persist_interval_ms * std.time.ns_per_ms;
     while (!g_persist_shutdown.load(.acquire)) {
         std.Thread.sleep(sleep_ns);
+        // Acquire store mutex to prevent race with query threads
+        g_store_mutex.lock();
+        defer g_store_mutex.unlock();
         if (global_store) |*store| {
             if (store.dirty) {
                 store.saveToFile() catch |err| {

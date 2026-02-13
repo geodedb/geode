@@ -24,8 +24,22 @@ pub const VaultKMSProvider = struct {
         };
     }
 
+    /// Issue #435: Validate key names to prevent CLI argument injection via vault subprocess.
+    /// Key names must contain only alphanumeric characters, hyphens, underscores, dots, and forward slashes.
+    fn validateKeyName(name: []const u8) !void {
+        if (name.len == 0) return error.InvalidKeyName;
+        // Reject names starting with '-' to prevent argument injection
+        if (name[0] == '-') return error.InvalidKeyName;
+        for (name) |c| {
+            if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_' and c != '.' and c != '/') {
+                return error.InvalidKeyName;
+            }
+        }
+    }
+
     /// Generate a new encryption key and store it in Vault
     pub fn generateAndStoreKey(self: *Self, key_name: []const u8) ![]u8 {
+        try validateKeyName(key_name);
         // Generate a cryptographically secure 32-byte key
         var key_bytes: [32]u8 = undefined;
         crypto.random.bytes(&key_bytes);
@@ -217,6 +231,7 @@ pub const VaultKMSProvider = struct {
     // Private helper methods
 
     fn storeKeyInVault(self: *Self, key_name: []const u8, hex_key: []const u8) !void {
+        try validateKeyName(key_name);
         // Build vault command: vault kv put {path}/{key_name} value={hex_key}
         const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.key_path, key_name });
         defer self.allocator.free(path);
@@ -238,6 +253,7 @@ pub const VaultKMSProvider = struct {
     }
 
     fn getKeyFromVault(self: *Self, key_name: []const u8) ![]u8 {
+        try validateKeyName(key_name);
         // Build vault command: vault kv get -field=value {path}/{key_name}
         const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.key_path, key_name });
         defer self.allocator.free(path);
