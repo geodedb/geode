@@ -590,6 +590,13 @@ def run_test(
                 modified_args.insert(5, "geode")
                 modified_args.insert(6, "-P")
                 modified_args.insert(7, "geode-test-password")
+            # Inject --timeout so the CLI's internal watchdog matches the test runner's
+            # subprocess timeout. Without this, the CLI's default 10s watchdog may kill
+            # the process before the test runner's timeout expires, causing false failures.
+            has_timeout = any("--timeout" in str(arg) for arg in modified_args)
+            if not has_timeout and test_timeout_seconds > 10:
+                modified_args.append("--timeout")
+                modified_args.append(str(test_timeout_seconds))
             has_server = True
 
     # Get stdin content if present

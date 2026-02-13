@@ -182,7 +182,7 @@ fn printQueryUsage() void {
         "  --format <fmt>         Output format: json|table|csv|dot (default: json)\n" ++
         "  --param <name> <value>       Add query parameter (JSON literal)\n" ++
         "  --page-size <n>        Page size for results (default: 1000)\n" ++
-        "  --timeout <secs>       Connection timeout in seconds (default: 10)\n" ++
+        "  --timeout <secs>       Connection timeout in seconds (default: 30)\n" ++
         "  --retry <count>        Number of retry attempts on failure (default: 0)\n" ++
         "  --begin                Start transaction\n" ++
         "  --commit               Commit transaction\n" ++
@@ -811,7 +811,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var password: ?[]const u8 = null;
     var token: ?[]const u8 = null;
     var query_text: ?[]const u8 = null;
-    var timeout_secs: u32 = 10; // Default 10 second timeout
+    var timeout_secs: u32 = 30; // Default 30 second timeout (QUIC handshake can be slow)
     var retry_count: u32 = 0; // Default no retries
     var page_size: u32 = 1000; // Default page size for PULL requests
     var use_saved_session = true; // Auto-load saved session by default
@@ -2471,9 +2471,11 @@ fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic
     var len_buf: [4]u8 = undefined;
     var total_read: usize = 0;
     var attempts: usize = 0;
-    // Calculate max attempts based on timeout_secs (10ms sleep per attempt)
-    // timeout_secs * 1000ms / 10ms = timeout_secs * 100
-    const max_attempts = timeout_secs * 100;
+    // Issue #479: Reduced poll interval from 10ms to 1ms (matching GAP-0200 handshake fix)
+    // to prevent QUIC message reads from consuming most of the watchdog timeout budget.
+    // Calculate max attempts based on timeout_secs (1ms sleep per attempt)
+    // timeout_secs * 1000ms / 1ms = timeout_secs * 1000
+    const max_attempts = timeout_secs * 1000;
 
     while (total_read < 4) {
         const n = stream.read(len_buf[total_read..]) catch |err| {
@@ -2481,7 +2483,7 @@ fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic
                 attempts += 1;
                 if (attempts > max_attempts) return error.Timeout;
                 try client.poll(1);
-                std.Thread.sleep(10 * std.time.ns_per_ms);
+                std.Thread.sleep(1 * std.time.ns_per_ms);
                 continue;
             }
             return err;
@@ -2505,7 +2507,7 @@ fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic
                 attempts += 1;
                 if (attempts > max_attempts) return error.Timeout;
                 try client.poll(1);
-                std.Thread.sleep(10 * std.time.ns_per_ms);
+                std.Thread.sleep(1 * std.time.ns_per_ms);
                 continue;
             }
             return err;
