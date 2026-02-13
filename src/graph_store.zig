@@ -24,27 +24,20 @@ pub fn lastLoadHadChecksumError() bool {
 /// Structure: 48-bit timestamp (ms) | 16-bit counter/random
 /// This provides time-sortable, unique IDs without changing the NodeId type
 fn generateTimeBasedId() u64 {
-    // Use atomic counter to ensure uniqueness even when called within same millisecond
-    // Use u32 for the counter to ensure 32-bit ARM compatibility (native atomic support)
+    // Use atomic counter to ensure uniqueness even when called within same millisecond.
+    // Use u32 for the counter to ensure 32-bit ARM compatibility (native atomic support).
+    // NOTE: The previous implementation XOR'd the counter with a non-thread-safe PRNG
+    // (std.Random.DefaultPrng), which caused data races under concurrent test execution
+    // and could produce duplicate IDs. The counter alone guarantees uniqueness for up to
+    // 65536 IDs per millisecond, which is sufficient for all workloads.
     const State = struct {
         var counter: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
-        var prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0);
-        var initialized: bool = false;
     };
 
-    // Initialize PRNG once with nanoTimestamp seed
-    if (!State.initialized) {
-        const seed: u64 = @intCast(std.time.nanoTimestamp());
-        State.prng = std.Random.DefaultPrng.init(seed);
-        State.initialized = true;
-    }
-
     const timestamp_ms: u64 = @intCast(std.time.milliTimestamp());
-    // Combine counter increment with random bits for uniqueness
     const counter_val = State.counter.fetchAdd(1, .monotonic);
-    const random_bits: u16 = @truncate(counter_val ^ State.prng.random().int(u32));
-    // Combine: 48-bit timestamp | 16-bit unique
-    return (timestamp_ms << 16) | @as(u64, random_bits);
+    // Combine: 48-bit timestamp | 16-bit counter (unique within same millisecond)
+    return (timestamp_ms << 16) | @as(u64, @as(u16, @truncate(counter_val)));
 }
 
 // Field-Level Encryption Storage Hooks
