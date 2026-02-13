@@ -123,6 +123,10 @@ pub const QuicTransport = struct {
         /// SECURITY: Default is false. Only set to true for testing with self-signed certificates.
         /// GAP-0105 FIX: Changed default from true to false for secure-by-default behavior.
         allow_insecure: bool = false,
+        /// Require client certificates for mTLS authentication over QUIC.
+        /// When true, connections without a valid client certificate will be rejected.
+        /// CANARY: REQ=REQ-AUTH-MTLS-QUIC-002; FEATURE="mTLS over QUIC"; ASPECT=Config; STATUS=IMPL; OWNER=transport; UPDATED=2026-02-13
+        require_client_cert: bool = false,
     };
 
     pub fn init(allocator: std.mem.Allocator, config: Config) !QuicTransport {
@@ -538,6 +542,16 @@ pub const QuicConnection = struct {
         return api.isHandshakeConfirmed(self.inner);
     }
 
+    /// Retrieve the peer's leaf certificate in DER format from the TLS handshake.
+    /// Returns null if no client certificate was presented or the TLS context is unavailable.
+    /// CANARY: REQ=REQ-AUTH-MTLS-QUIC-001; FEATURE="mTLS over QUIC"; ASPECT=PeerCertExtraction; STATUS=IMPL; OWNER=transport; UPDATED=2026-02-13
+    pub fn getPeerCertificateDer(self: *QuicConnection) ?[]const u8 {
+        const tls_ctx = self.inner.tls_context orelse return null;
+        const chain = tls_ctx.peer_cert_chain orelse return null;
+        if (chain.len == 0) return null;
+        return chain[0];
+    }
+
     /// Remove a stream from tracking and destroy it
     /// CANARY: REQ=REQ-QUIC-STREAM-CLEANUP-001; FEATURE="StreamMemoryManagement"; ASPECT=DoubleFreePrevention; STATUS=EXEMPT; OWNER=transport; UPDATED=2025-12-27
     /// GAP-0201: Use swapRemove for O(1) removal instead of O(n) orderedRemove
@@ -729,7 +743,8 @@ pub const QuicClient = struct {
             .token_expiry_ms = 60000,
             .enable_pacing = false,
             .max_datagram_size = 1200,
-            .max_idle_timeout_ms = 30000,
+            // GAP-0259: Match server idle timeout (300s) to prevent premature disconnect during bulk writes
+            .max_idle_timeout_ms = 300000,
             .max_udp_payload = 1350,
             .cert_path = null,
             .key_path = null,
@@ -776,7 +791,8 @@ pub const QuicClient = struct {
             .token_expiry_ms = 60000,
             .enable_pacing = false,
             .max_datagram_size = 1200,
-            .max_idle_timeout_ms = 30000,
+            // GAP-0259: Match server idle timeout (300s) to prevent premature disconnect during bulk writes
+            .max_idle_timeout_ms = 300000,
             .max_udp_payload = 1350,
             .cert_path = client_cert_path,
             .key_path = client_key_path,

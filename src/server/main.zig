@@ -295,13 +295,16 @@ pub fn main() !void {
         }
     }
 
-    // Check for audit disable flag (for explicit disable even if enabled elsewhere)
-    const audit_disable_env = std.process.getEnvVarOwned(gpa, "GEODE_DISABLE_AUDIT") catch null;
-    defer if (audit_disable_env) |d| gpa.free(d);
-    if (audit_disable_env) |d| {
-        if (std.mem.eql(u8, d, "1") or std.mem.eql(u8, d, "true")) {
-            audit_config.enabled = false;
-            log.warn("Audit logging disabled via GEODE_DISABLE_AUDIT", &.{});
+    // Check for audit disable flag — only allowed in debug/test builds.
+    // In production builds, audit logging cannot be disabled via environment variable.
+    if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+        const audit_disable_env = std.process.getEnvVarOwned(gpa, "GEODE_DISABLE_AUDIT") catch null;
+        defer if (audit_disable_env) |d| gpa.free(d);
+        if (audit_disable_env) |d| {
+            if (std.mem.eql(u8, d, "1") or std.mem.eql(u8, d, "true")) {
+                audit_config.enabled = false;
+                log.warn("Audit logging disabled via GEODE_DISABLE_AUDIT (non-production build)", &.{});
+            }
         }
     }
 
@@ -441,6 +444,30 @@ pub fn main() !void {
         const passive_teardown = passive_teardown_env;
         defer {
             if (!passive_teardown) transport.deinit();
+        }
+
+        // GAP-0258: Initialize mTLS provider for QUIC client certificate authentication
+        // CANARY: REQ=REQ-AUTH-MTLS-QUIC-005; FEATURE="mTLS over QUIC"; ASPECT=ServerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-02-13
+        const mtls_required_env = std.process.getEnvVarOwned(gpa, "GEODE_MTLS_REQUIRED") catch null;
+        defer if (mtls_required_env) |e| gpa.free(e);
+        const mtls_required = if (mtls_required_env) |v| blk: {
+            if (v.len == 0) break :blk false;
+            if (std.ascii.eqlIgnoreCase(v, "true") or std.ascii.eqlIgnoreCase(v, "1") or std.ascii.eqlIgnoreCase(v, "on"))
+                break :blk true;
+            break :blk false;
+        } else false;
+
+        if (mtls_required) {
+            transport.config.require_client_cert = true;
+        }
+
+        var mtls_prov = geode.mtls_provider.MtlsProvider.init(gpa);
+        defer mtls_prov.deinit();
+        quic_connection_handler.setMtlsProvider(&mtls_prov);
+        defer quic_connection_handler.setMtlsProvider(null);
+
+        if (mtls_required) {
+            log.info("mTLS authentication enabled for QUIC connections", &.{});
         }
 
         try transport.listen();

@@ -218,6 +218,11 @@ REQ-AUTH-MTLS-001,MtlsAuthentication,SECURITY,TESTED,,,security,2026-01-29,src/s
 REQ-AUTH-MTLS-002,CertificateMappingCreation,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
 REQ-AUTH-MTLS-003,CertificateAuthentication,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
 REQ-AUTH-MTLS-004,CertificateIdentityExtraction,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
+REQ-AUTH-MTLS-QUIC-001,mTLS over QUIC,PeerCertExtraction,IMPL,,,transport,2026-02-13,src/transport/quic.zig
+REQ-AUTH-MTLS-QUIC-002,mTLS over QUIC,Config,IMPL,,,transport,2026-02-13,src/transport/quic.zig
+REQ-AUTH-MTLS-QUIC-003,mTLS over QUIC,ConnectionAuth,IMPL,,,security,2026-02-13,src/server/quic_connection_handler.zig
+REQ-AUTH-MTLS-QUIC-004,mTLS over QUIC,GlobalProvider,IMPL,,,security,2026-02-13,src/server/quic_connection_handler.zig
+REQ-AUTH-MTLS-QUIC-005,mTLS over QUIC,ServerInit,IMPL,,,security,2026-02-13,src/server/main.zig
 REQ-AUTH-POLICY-001,AuthPolicy,PasswordReset,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-AUTH-POLICY-001,Password Reset Tracking,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig
 REQ-AUTH-POLICY-001,UserAuthPolicy,ForceReset,TESTED,,,security,2026-01-15,tests/test_gap_analysis_january_2026.zig
@@ -874,7 +879,10 @@ REQ-GAP-0239,ContainerUnitTests,SignaledQueue,TESTED,,,containers,2026-01-25,src
 REQ-GAP-0240,TypePromotionUnitTests,ScaleConversion,TESTED,,,eval,2026-01-25,src/eval/type_promotion.zig
 REQ-GAP-0257-ISO-001,ISO Conformance Evidence,Docs,IMPL,,,docs,2026-02-09,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GAP-0258-MTLS-CLI-001,mTLS CLI,CertificateMapping,IMPL,,,cli,2026-02-09,src/cli/mtls_cli.zig
+REQ-GAP-0259-RWLOCK-001,AsyncPersistence,RwLockMigration,IMPL,,,storage,2026-02-13,src/graph_store.zig
+REQ-GAP-0260-ATOMIC-DIRTY-001,AsyncPersistence,AtomicDirty,IMPL,,,storage,2026-02-13,src/graph_store.zig
 REQ-GAP-0260-PERSIST-001,DeferredPersistence,WriteCoalescing,IMPL,,,storage,2026-02-09,src/graph_store.zig
+REQ-GAP-0260-SIGNAL-001,AsyncPersistence,SignalPersistence,IMPL,,,storage,2026-02-13,src/graph_store.zig
 REQ-GAP-ANALYSIS-JANUARY-2026,Gap Analysis Verification Tests,UnitTests,TESTED,,,compliance,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapAnalysisFixes,UnitTests,EXEMPT,,,testing,2026-01-09,tests/test_gap_analysis_fixes.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapTests,AnalysisFixes,TESTED,,,testing,2026-01-16,tests/test_gap_0193_batch2_testing.zig
@@ -1866,6 +1874,22 @@ REQ-GQL-INDEX-RANGE-001,B-Tree Range Scan,QUERY,TESTED,,,storage,2026-01-15,src/
 REQ-GQL-INTEGRATION-001,October2025Features,Integration,TESTED,,,engine,2025-10-09,tests/test_october_2025_features_integration.zig
 "REQ-GQL-IOT-NETWORK"" {
     // CANARY: REQ=REQ-GQL-IOT-NETWORK",IoTNetwork,Domain,TESTED,,,team,2025-10-02,tests/integration/test_iot_network_dataset.zig
+REQ-GQL-ISO-CATALOG-001,ISOCatalog,SchemaManagement,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
+REQ-GQL-ISO-CONFORM-001,ISOConformanceEvidence,TestSuite,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
+REQ-GQL-ISO-EXPR-001,ISOExpressions,Operators,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
+REQ-GQL-ISO-LET-001,ISOLetBinding,VariableScoping,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
+REQ-GQL-ISO-NEGATIVE-001,ISOSyntaxValidation,ErrorDetection,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
+REQ-GQL-ISO-SEC-10-001,ISODataDefinition,DDL,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
+REQ-GQL-ISO-SEC-11-001,ISOTransactions,Transactions,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
+REQ-GQL-ISO-SEC-12-001,ISOFunctions,BuiltinFunctions,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
+REQ-GQL-ISO-SEC-13-001,ISOTypeSystem,Types,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
+REQ-GQL-ISO-SEC-14-001,ISONullSemantics,ThreeValuedLogic,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
+REQ-GQL-ISO-SEC-15-001,ISOPathPatterns,Paths,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
+REQ-GQL-ISO-SEC-16-001,ISOAggregation,GroupBy,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
+REQ-GQL-ISO-SEC-17-001,ISOOrdering,OrderByLimit,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
+REQ-GQL-ISO-SEC-18-001,ISOSetOperations,Union,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
+REQ-GQL-ISO-SEC-7-001,ISOGraphPatternMatching,MATCH,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
+REQ-GQL-ISO-SEC-9-001,ISODataManipulation,DML,IMPL,,,compliance,2026-02-13,tests/gql_iso_conformance.zig
 REQ-GQL-KATZ-001,Centrality,Katz,TESTED,,,graph,2026-01-16,tests/test_gap_0193_batch2_misc.zig
 REQ-GQL-KATZ-001,KatzCentrality,Centrality,TESTED,,,graph,2026-01-03,src/execution/centrality_algorithms.zig
 REQ-GQL-KCORE-001,KCoreDecomposition,Community,TESTED,,,graph,2026-01-03,src/execution/centrality_algorithms.zig
@@ -2347,6 +2371,8 @@ REQ-GRAPHSAGE-INDUCTIVE-001,GraphSAGE Inductive Learning,GraphStore,TESTED,,,ml,
 REQ-GRAPHSAGE-INDUCTIVE-002,GraphSAGE Inductive Learning,Prediction,TESTED,,,ml,2026-01-10,src/ml/graph_embeddings.zig
 REQ-GRAPHSTORE-QUEUE-001,SnapshotFlushQueueDepth,Metrics,IMPL,,,storage,2026-02-04,src/storage/queue_depth.zig
 REQ-GRAPHSTORE-SNAP-PIPE-001,SnapshotPipeline,Maintenance,IMPL,,,storage,2026-02-04,src/storage/snapshot_pipeline.zig
+REQ-GRPC-ATOMIC-SESSION-001,GrpcSessionSafety,AtomicPointer,IMPL,,,transport,2026-02-13,src/transport/grpc_server.zig
+REQ-GRPC-FULL-ROUTING-001,GrpcFullMessageRouting,HandlerParity,IMPL,,,transport,2026-02-13,src/transport/grpc_server.zig
 REQ-HELPER-001,Helper,Utilities,TESTED,,,core,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-HELPER-COALESCE-001,Helper,Coalesce,TESTED,,,builtins,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-HEX-PARSE-001,Safe Hex Parsing,Security,TESTED,,,security,2026-01-15,src/security/external_kms_client.zig

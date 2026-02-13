@@ -725,6 +725,11 @@ pub fn build(b: *std.Build) void {
     const conformance_patch_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/conformance_tests.zig"), .target = target, .optimize = optimize }) });
     conformance_patch_tests.root_module.addImport("geode", root_mod);
     const run_conformance_patch_tests = b.addRunArtifact(conformance_patch_tests);
+
+    // GAP-0257: Comprehensive ISO 39075:2024 conformance test suite
+    const iso_conformance_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gql_iso_conformance.zig"), .target = target, .optimize = optimize }) });
+    iso_conformance_tests.root_module.addImport("geode", root_mod);
+    const run_iso_conformance_tests = b.addRunArtifact(iso_conformance_tests);
     // Server graph exec module available through geode module
     // Migration engine stub module
     const migration_mod = b.createModule(.{ .root_source_file = b.path("src/migration/mod.zig"), .target = target, .optimize = optimize });
@@ -768,6 +773,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_exe_unit_tests.step);
     test_step.dependOn(&run_gql_unit_tests.step);
     test_step.dependOn(&run_conformance_patch_tests.step);
+    test_step.dependOn(&run_iso_conformance_tests.step);
     test_step.dependOn(&run_custom_tests.step);
     test_step.dependOn(&run_math_func_tests.step);
     test_step.dependOn(&run_string_func_tests.step);

@@ -25,6 +25,8 @@ const query_ast_cache = @import("query_ast_cache.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager type in QUIC connection handling
 const geode_auth = @import("geode_auth");
+// GAP-0258: Import mTLS provider for QUIC client certificate authentication
+const mtls_provider = geode.mtls_provider;
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-012; FEATURE="ServerRefactoring"; ASPECT=QUIC_HANDLERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.3 - QUIC Connection Handlers Module (Eighth Increment)
@@ -38,6 +40,20 @@ const Attr = logging.Attr;
 
 const schema = @import("schema");
 const protobuf = @import("protobuf");
+
+// GAP-0258: Global mTLS provider for QUIC certificate authentication
+// CANARY: REQ=REQ-AUTH-MTLS-QUIC-004; FEATURE="mTLS over QUIC"; ASPECT=GlobalProvider; STATUS=IMPL; OWNER=security; UPDATED=2026-02-13
+var g_mtls_provider: ?*mtls_provider.MtlsProvider = null;
+
+/// Set the global mTLS provider (called from server/main.zig during startup)
+pub fn setMtlsProvider(provider: ?*mtls_provider.MtlsProvider) void {
+    g_mtls_provider = provider;
+}
+
+/// Get the current global mTLS provider
+pub fn getMtlsProvider() ?*mtls_provider.MtlsProvider {
+    return g_mtls_provider;
+}
 
 /// Build a protobuf error response with status and error payload
 fn buildErrorResponse(
@@ -475,6 +491,35 @@ pub fn handleQuicConnection(
     defer dist_planner.deinit();
     state.federation_manager = &federation_manager;
     state.distributed_planner = &dist_planner;
+
+    // GAP-0258: mTLS authentication over QUIC — extract peer certificate and authenticate
+    // CANARY: REQ=REQ-AUTH-MTLS-QUIC-003; FEATURE="mTLS over QUIC"; ASPECT=ConnectionAuth; STATUS=IMPL; OWNER=security; UPDATED=2026-02-13
+    if (conn.getPeerCertificateDer()) |cert_der| {
+        const identity = mtls_provider.extractIdentity(gpa, cert_der) catch |err| {
+            log.warn("mTLS: Failed to extract certificate identity", &.{Attr.string("error", @errorName(err))});
+            return err;
+        };
+        // Look up global mTLS provider (set in server/main.zig startup)
+        if (g_mtls_provider) |provider| {
+            if (provider.authenticate(&identity)) |auth_result_opt| {
+                if (auth_result_opt) |auth_result| {
+                    // Store the authenticated user from the mTLS certificate
+                    state.authenticated_user = std.fmt.allocPrint(gpa, "mtls:{}", .{auth_result.user_id}) catch null;
+                    log.info("mTLS: Authenticated user via certificate", &.{
+                        Attr.int("user_id", @intCast(auth_result.user_id)),
+                    });
+                }
+            } else |err| {
+                log.warn("mTLS: Authentication failed", &.{Attr.string("error", @errorName(err))});
+                if (transport.config.require_client_cert) {
+                    return err;
+                }
+            }
+        }
+    } else if (transport.config.require_client_cert) {
+        log.warn("mTLS: No client certificate presented (required)", &.{});
+        return error.CertificateError;
+    }
 
     // Protobuf protocol only - use protobuf reader
     var line_reader = try BufferedProtoReader.init(gpa, transport, stream);
@@ -931,8 +976,8 @@ fn handleClientMessage(
                 state.global_commit_ts += 1;
                 state.in_txn = false;
                 state.txn_id = 0;
-                const global_store = graph_store.getGlobalStore(gpa);
-                global_store.saveIfDirty();
+                // GAP-0259/0260: Signal async persistence instead of blocking save
+                graph_store.signalPersistence();
                 try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = true } });
             } else {
                 try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false } });
@@ -946,8 +991,8 @@ fn handleClientMessage(
                 };
                 state.in_txn = false;
                 state.txn_id = 0;
-                const global_store = graph_store.getGlobalStore(gpa);
-                global_store.saveIfDirty();
+                // GAP-0259/0260: Signal async persistence instead of blocking save
+                graph_store.signalPersistence();
                 try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = true } });
             } else {
                 try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false } });

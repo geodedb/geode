@@ -3233,20 +3233,48 @@ var global_arena: ?std.heap.ArenaAllocator = null;
 var initialized = false;
 var last_data_dir: ?[]u8 = null;
 
-/// Mutex to prevent persistence thread from reading store while query threads mutate it.
-/// The persistence thread holds this while calling saveToFile().
-/// Query handlers should acquire this via acquireStoreLock()/releaseStoreLock()
-/// before performing mutation operations.
-var g_store_mutex: std.Thread.Mutex = .{};
+/// GAP-0259/0260: RwLock replaces Mutex so query threads (shared readers) don't
+/// block each other — only the persistence thread takes an exclusive write lock.
+/// CANARY: REQ=REQ-GAP-0259-RWLOCK-001; FEATURE="AsyncPersistence"; ASPECT=RwLockMigration; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-13
+var g_store_rwlock: std.Thread.RwLock = .{};
 
-/// Acquire the global store lock (for use by query handlers during mutations)
+/// Condition variable + mutex pair for signalling the persistence thread
+/// instead of sleep-polling.
+var g_persist_cond: std.Thread.Condition = .{};
+var g_persist_cond_mutex: std.Thread.Mutex = .{};
+
+/// Atomic dirty flag so query threads can set it without holding any lock.
+/// CANARY: REQ=REQ-GAP-0260-ATOMIC-DIRTY-001; FEATURE="AsyncPersistence"; ASPECT=AtomicDirty; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-13
+var g_atomic_dirty: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+/// Acquire the global store lock (shared — for use by query handlers during reads/mutations)
 pub fn acquireStoreLock() void {
-    g_store_mutex.lock();
+    g_store_rwlock.lockShared();
 }
 
-/// Release the global store lock
+/// Release the global store lock (shared)
 pub fn releaseStoreLock() void {
-    g_store_mutex.unlock();
+    g_store_rwlock.unlockShared();
+}
+
+/// Acquire exclusive write lock (for use by persistence thread only)
+pub fn acquireStoreWriteLock() void {
+    g_store_rwlock.lock();
+}
+
+/// Release exclusive write lock
+pub fn releaseStoreWriteLock() void {
+    g_store_rwlock.unlock();
+}
+
+/// Signal the background persistence thread to wake up and flush.
+/// Call this instead of saveIfDirty() in hot paths (commit/rollback).
+/// CANARY: REQ=REQ-GAP-0260-SIGNAL-001; FEATURE="AsyncPersistence"; ASPECT=SignalPersistence; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-13
+pub fn signalPersistence() void {
+    g_atomic_dirty.store(true, .release);
+    g_persist_cond_mutex.lock();
+    defer g_persist_cond_mutex.unlock();
+    g_persist_cond.signal();
 }
 
 /// P2-3: Global allocator for persistent graph store data (better than page_allocator)
@@ -3274,6 +3302,11 @@ pub fn startPersistenceThread(interval_ms: u64) void {
 /// Stop the background persistence thread and perform a final flush
 pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
     g_persist_shutdown.store(true, .release);
+    // Wake the persistence thread so it sees the shutdown flag
+    g_persist_cond_mutex.lock();
+    g_persist_cond.signal();
+    g_persist_cond_mutex.unlock();
+
     if (g_persist_thread) |thread| {
         thread.join();
         g_persist_thread = null;
@@ -3285,13 +3318,26 @@ pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
     }
 }
 
+/// GAP-0259/0260: Persistence loop uses condition variable instead of sleep-polling.
+/// Wakes on signalPersistence() or every g_persist_interval_ms (fallback).
+/// Takes exclusive write lock only when actually flushing dirty data.
 fn persistenceLoop() void {
-    const sleep_ns: u64 = g_persist_interval_ms * std.time.ns_per_ms;
     while (!g_persist_shutdown.load(.acquire)) {
-        std.Thread.sleep(sleep_ns);
-        // Acquire store mutex to prevent race with query threads
-        g_store_mutex.lock();
-        defer g_store_mutex.unlock();
+        // Wait for signal or timeout
+        g_persist_cond_mutex.lock();
+        g_persist_cond.timedWait(
+            &g_persist_cond_mutex,
+            g_persist_interval_ms * std.time.ns_per_ms,
+        ) catch {};
+        g_persist_cond_mutex.unlock();
+
+        // Check if dirty (cheap atomic read — no lock needed)
+        if (!g_atomic_dirty.load(.acquire)) continue;
+
+        // Acquire exclusive write lock to flush
+        acquireStoreWriteLock();
+        defer releaseStoreWriteLock();
+
         if (global_store) |*store| {
             if (store.dirty) {
                 store.saveToFile() catch |err| {
@@ -3299,6 +3345,8 @@ fn persistenceLoop() void {
                         Attr.string("error", @errorName(err)),
                     });
                 };
+                // Clear atomic dirty after successful save
+                g_atomic_dirty.store(false, .release);
             }
         }
     }

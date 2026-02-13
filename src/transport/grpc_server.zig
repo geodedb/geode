@@ -20,6 +20,9 @@ const gql_ast = geode.gql.ast;
 const gql_print = geode.printer;
 const geode_auth = @import("geode_auth");
 const grpc_tls = @import("grpc_tls.zig");
+// Issue #515: Backup types for new gRPC handlers
+const backup_mgr = geode.backup_manager;
+const SimplifiedBackupManager = backup_mgr.SimplifiedBackupManager;
 
 const logging = @import("logging");
 const log = logging.scoped("grpc");
@@ -107,7 +110,19 @@ const SessionStore = struct {
     }
 };
 
-var g_session_store: ?*SessionStore = null;
+/// Issue #514: Use atomic for session store pointer to prevent race on initialization.
+/// CANARY: REQ=REQ-GRPC-ATOMIC-SESSION-001; FEATURE="GrpcSessionSafety"; ASPECT=AtomicPointer; STATUS=IMPL; OWNER=transport; UPDATED=2026-02-13
+var g_session_store_atomic: std.atomic.Value(?*SessionStore) = std.atomic.Value(?*SessionStore).init(null);
+
+/// Thread-safe getter for session store.
+fn getSessionStore() ?*SessionStore {
+    return g_session_store_atomic.load(.acquire);
+}
+
+/// Thread-safe setter for session store.
+fn setSessionStore(store: ?*SessionStore) void {
+    g_session_store_atomic.store(store, .release);
+}
 
 fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_state.ServerState {
     const state = try allocator.create(server_state.ServerState);
@@ -127,9 +142,12 @@ fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_st
     state.security_manager = config.security_manager;
     state.query_optimizer_enabled = if (std.process.getEnvVarOwned(allocator, "GEODE_ENABLE_QUERY_OPTIMIZER")) |v| blk: {
         defer allocator.free(v);
+        // Use consistent boolean parsing across transports (matches QUIC handler)
         if (v.len == 0) break :blk false;
-        if (std.mem.eql(u8, v, "1") or std.mem.eql(u8, v, "true")) break :blk true;
-        break :blk false;
+        if (v[0] == '0') break :blk false;
+        if (std.ascii.eqlIgnoreCase(v, "false")) break :blk false;
+        if (std.ascii.eqlIgnoreCase(v, "off")) break :blk false;
+        break :blk true;
     } else |_| false;
     return state;
 }
@@ -372,7 +390,7 @@ pub const GeodeGrpcServer = struct {
 
         const store = try allocator.create(SessionStore);
         store.* = SessionStore.init(allocator, config);
-        g_session_store = store;
+        setSessionStore(store);
 
         var self = GeodeGrpcServer{
             .allocator = allocator,
@@ -387,7 +405,7 @@ pub const GeodeGrpcServer = struct {
     pub fn deinit(self: *GeodeGrpcServer) void {
         self.session_store.deinit();
         self.allocator.destroy(self.session_store);
-        g_session_store = null;
+        setSessionStore(null);
         grpc_tls.deinitTlsContext();
         self.server.deinit();
     }
@@ -458,6 +476,35 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
             const resp = try handleRollback(request_bytes, allocator);
             defer allocator.free(resp);
             return sendUnaryResponse(trans, resp);
+        } else if (std.mem.endsWith(u8, method, "/Savepoint")) {
+            // Issue #515: Savepoint handler (stub — matches QUIC behavior)
+            const resp = try handleSavepoint(request_bytes, allocator);
+            defer allocator.free(resp);
+            return sendUnaryResponse(trans, resp);
+        } else if (std.mem.endsWith(u8, method, "/RollbackTo")) {
+            const resp = try handleRollbackTo(request_bytes, allocator);
+            defer allocator.free(resp);
+            return sendUnaryResponse(trans, resp);
+        } else if (std.mem.endsWith(u8, method, "/CdcDiag")) {
+            const resp = try handleCdcDiag(request_bytes, allocator);
+            defer allocator.free(resp);
+            return sendUnaryResponse(trans, resp);
+        } else if (std.mem.endsWith(u8, method, "/CdcCtrl")) {
+            const resp = try handleCdcCtrl(request_bytes, allocator);
+            defer allocator.free(resp);
+            return sendUnaryResponse(trans, resp);
+        } else if (std.mem.endsWith(u8, method, "/Backup")) {
+            const resp = try handleBackup(request_bytes, allocator);
+            defer allocator.free(resp);
+            return sendUnaryResponse(trans, resp);
+        } else if (std.mem.endsWith(u8, method, "/Restore")) {
+            const resp = try handleRestore(request_bytes, allocator);
+            defer allocator.free(resp);
+            return sendUnaryResponse(trans, resp);
+        } else if (std.mem.endsWith(u8, method, "/UploadBackup")) {
+            const resp = try handleUploadBackup(request_bytes, allocator);
+            defer allocator.free(resp);
+            return sendUnaryResponse(trans, resp);
         } else {
             log.warn("Unknown gRPC method", &.{});
             const err_resp = try buildPacketError(allocator, "0A000", "Unknown gRPC method");
@@ -477,7 +524,7 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
 const PageResult = struct { bytes: []u8, is_final: bool };
 
 fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !PageResult {
-    const store = g_session_store orelse {
+    const store = getSessionStore() orelse {
         var resp = try buildErrorResponse(allocator, "58000", "Server not initialized", &.{}, &.{});
         defer resp.deinit(allocator);
         return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
@@ -493,6 +540,36 @@ fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !Pa
     defer entry.mutex.unlock();
     const state = entry.state;
 
+    const result_ptr = if (state.active_result_values) |*res| res else {
+        var resp = try buildErrorResponse(allocator, "02000", "No active result set", &.{}, &.{});
+        defer resp.deinit(allocator);
+        return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
+    };
+
+    const start = state.result_page_index;
+    const page = try proto_util.buildDataPage(allocator, result_ptr, start, 1000, state.result_ordered, state.result_order_keys);
+    state.result_page_index += page.rows.items.len;
+    const is_final = page.final;
+
+    const status = try proto_util.buildStatus(allocator, "00000", result_ptr.flags.items);
+    var resp = schema.ExecutionResponse{
+        .status = status,
+        .payload = .{ .page = page },
+    };
+    defer resp.deinit(allocator);
+
+    const encoded = try encodeMessage(allocator, resp);
+
+    if (is_final) {
+        state.resetResult();
+    }
+
+    return .{ .bytes = encoded, .is_final = is_final };
+}
+
+/// Issue #514: Lock-free variant that operates on an already-locked state pointer.
+/// Caller MUST hold entry.mutex for the entire streaming loop.
+fn buildStreamDataPageLocked(state: *server_state.ServerState, allocator: std.mem.Allocator) !PageResult {
     const result_ptr = if (state.active_result_values) |*res| res else {
         var resp = try buildErrorResponse(allocator, "02000", "No active result set", &.{}, &.{});
         defer resp.deinit(allocator);
@@ -566,11 +643,25 @@ fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allo
         };
         defer req.deinit(allocator);
 
-        // Pull all data pages directly (no decode+re-encode cycle)
+        // Issue #514: Hold session mutex for the ENTIRE streaming loop to prevent
+        // concurrent Execute from calling resetResult() mid-stream (use-after-free).
+        const store = getSessionStore() orelse {
+            trans.endStream() catch {};
+            return;
+        };
+        const entry = store.getEntry(req.session_id) orelse {
+            trans.endStream() catch {};
+            return;
+        };
+
+        entry.mutex.lock();
+        defer entry.mutex.unlock();
+
+        // Pull all data pages under a single lock scope
         var page_count: usize = 0;
         var stream_error = false;
         while (page_count < 1000) : (page_count += 1) { // safety limit
-            const result = buildStreamDataPage(req.session_id, allocator) catch |err| {
+            const result = buildStreamDataPageLocked(entry.state, allocator) catch |err| {
                 log.err("gRPC streaming: failed to build data page", &.{
                     Attr.string("error", @errorName(err)),
                     Attr.uint("page", page_count),
@@ -705,7 +796,84 @@ fn handleLegacyPacket(request_bytes: []const u8, allocator: std.mem.Allocator) !
             defer out.deinit(allocator);
             break :blk encodeMessage(allocator, out);
         },
-        else => buildPacketError(allocator, "0A000", "Unsupported client message"),
+        // Issue #515: Route 7 previously-unsupported message types through handlers
+        .savepoint => |req| blk: {
+            const req_bytes = try encodeMessage(allocator, req);
+            defer allocator.free(req_bytes);
+            const resp_bytes = try handleSavepoint(req_bytes, allocator);
+            defer allocator.free(resp_bytes);
+            var resp_reader: std.Io.Reader = .fixed(resp_bytes);
+            const resp = try protobuf.decode(schema.SavepointResponse, &resp_reader, allocator);
+            var out = schema.ServerPacket{ .quic = .{ .savepoint = resp } };
+            defer out.deinit(allocator);
+            break :blk encodeMessage(allocator, out);
+        },
+        .rollback_to => |req| blk: {
+            const req_bytes = try encodeMessage(allocator, req);
+            defer allocator.free(req_bytes);
+            const resp_bytes = try handleRollbackTo(req_bytes, allocator);
+            defer allocator.free(resp_bytes);
+            var resp_reader: std.Io.Reader = .fixed(resp_bytes);
+            const resp = try protobuf.decode(schema.RollbackToResponse, &resp_reader, allocator);
+            var out = schema.ServerPacket{ .quic = .{ .rollback_to = resp } };
+            defer out.deinit(allocator);
+            break :blk encodeMessage(allocator, out);
+        },
+        .cdc_diag => |req| blk: {
+            const req_bytes = try encodeMessage(allocator, req);
+            defer allocator.free(req_bytes);
+            const resp_bytes = try handleCdcDiag(req_bytes, allocator);
+            defer allocator.free(resp_bytes);
+            var resp_reader: std.Io.Reader = .fixed(resp_bytes);
+            const resp = try protobuf.decode(schema.CdcDiagnosticsResponse, &resp_reader, allocator);
+            var out = schema.ServerPacket{ .quic = .{ .cdc_diag = resp } };
+            defer out.deinit(allocator);
+            break :blk encodeMessage(allocator, out);
+        },
+        .cdc_ctrl => |req| blk: {
+            const req_bytes = try encodeMessage(allocator, req);
+            defer allocator.free(req_bytes);
+            const resp_bytes = try handleCdcCtrl(req_bytes, allocator);
+            defer allocator.free(resp_bytes);
+            var resp_reader: std.Io.Reader = .fixed(resp_bytes);
+            const resp = try protobuf.decode(schema.CdcControlResponse, &resp_reader, allocator);
+            var out = schema.ServerPacket{ .quic = .{ .cdc_ctrl = resp } };
+            defer out.deinit(allocator);
+            break :blk encodeMessage(allocator, out);
+        },
+        .backup => |req| blk: {
+            const req_bytes = try encodeMessage(allocator, req);
+            defer allocator.free(req_bytes);
+            const resp_bytes = try handleBackup(req_bytes, allocator);
+            defer allocator.free(resp_bytes);
+            var resp_reader: std.Io.Reader = .fixed(resp_bytes);
+            const resp = try protobuf.decode(schema.BackupResponse, &resp_reader, allocator);
+            var out = schema.ServerPacket{ .quic = .{ .backup = resp } };
+            defer out.deinit(allocator);
+            break :blk encodeMessage(allocator, out);
+        },
+        .restore => |req| blk: {
+            const req_bytes = try encodeMessage(allocator, req);
+            defer allocator.free(req_bytes);
+            const resp_bytes = try handleRestore(req_bytes, allocator);
+            defer allocator.free(resp_bytes);
+            var resp_reader: std.Io.Reader = .fixed(resp_bytes);
+            const resp = try protobuf.decode(schema.RestoreResponse, &resp_reader, allocator);
+            var out = schema.ServerPacket{ .quic = .{ .restore = resp } };
+            defer out.deinit(allocator);
+            break :blk encodeMessage(allocator, out);
+        },
+        .upload_backup => |req| blk: {
+            const req_bytes = try encodeMessage(allocator, req);
+            defer allocator.free(req_bytes);
+            const resp_bytes = try handleUploadBackup(req_bytes, allocator);
+            defer allocator.free(resp_bytes);
+            var resp_reader: std.Io.Reader = .fixed(resp_bytes);
+            const resp = try protobuf.decode(schema.UploadBackupResponse, &resp_reader, allocator);
+            var out = schema.ServerPacket{ .quic = .{ .upload_backup = resp } };
+            defer out.deinit(allocator);
+            break :blk encodeMessage(allocator, out);
+        },
     };
 }
 
@@ -735,7 +903,7 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
         Attr.uint("password_len", req.password.len),
     });
 
-    const store = g_session_store orelse {
+    const store = getSessionStore() orelse {
         const resp = schema.HelloResponse{
             .success = false,
             .session_id = "",
@@ -805,7 +973,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
         return encodeMessage(allocator, resp);
     }
 
-    const store = g_session_store orelse {
+    const store = getSessionStore() orelse {
         var resp = try buildErrorResponse(allocator, "58000", "Server not initialized", &.{}, &.{});
         defer resp.deinit(allocator);
         return encodeMessage(allocator, resp);
@@ -1087,7 +1255,7 @@ fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
         return encodeMessage(allocator, pull_resp);
     }
 
-    const store = g_session_store orelse {
+    const store = getSessionStore() orelse {
         var resp = try buildErrorResponse(allocator, "58000", "Server not initialized", &.{}, &.{});
         defer resp.deinit(allocator);
         const pull_resp = schema.PullResponse{ .response = resp };
@@ -1147,7 +1315,7 @@ fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
         return encodeMessage(allocator, resp);
     }
 
-    const store = g_session_store orelse {
+    const store = getSessionStore() orelse {
         const resp = schema.BeginResponse{ .session_id = "", .tx_id = "" };
         return encodeMessage(allocator, resp);
     };
@@ -1192,7 +1360,7 @@ fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
         return encodeMessage(allocator, resp);
     }
 
-    const store = g_session_store orelse {
+    const store = getSessionStore() orelse {
         const resp = schema.CommitResponse{ .success = false };
         return encodeMessage(allocator, resp);
     };
@@ -1210,7 +1378,8 @@ fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
         state.global_commit_ts += 1;
         state.in_txn = false;
         state.txn_id = 0;
-        graph_store.getGlobalStore(allocator).saveIfDirty();
+        // GAP-0259/0260: Signal async persistence instead of blocking save
+        graph_store.signalPersistence();
         const resp = schema.CommitResponse{ .success = true };
         return encodeMessage(allocator, resp);
     }
@@ -1232,7 +1401,7 @@ fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
         return encodeMessage(allocator, resp);
     }
 
-    const store = g_session_store orelse {
+    const store = getSessionStore() orelse {
         const resp = schema.RollbackResponse{ .success = false };
         return encodeMessage(allocator, resp);
     };
@@ -1252,11 +1421,190 @@ fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
         };
         state.in_txn = false;
         state.txn_id = 0;
-        store_ptr.saveIfDirty();
+        // GAP-0259/0260: Signal async persistence instead of blocking save
+        graph_store.signalPersistence();
         const resp = schema.RollbackResponse{ .success = true };
         return encodeMessage(allocator, resp);
     }
 
     const resp = schema.RollbackResponse{ .success = false };
+    return encodeMessage(allocator, resp);
+}
+
+// ============================================================================
+// Issue #515: 7 new gRPC message handlers (matching QUIC handler behavior)
+// CANARY: REQ=REQ-GRPC-FULL-ROUTING-001; FEATURE="GrpcFullMessageRouting"; ASPECT=HandlerParity; STATUS=IMPL; OWNER=transport; UPDATED=2026-02-13
+// ============================================================================
+
+fn handleSavepoint(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    // Savepoints not yet supported (matches QUIC stub at quic_connection_handler.zig:956)
+    const resp = schema.SavepointResponse{ .success = false };
+    return encodeMessage(allocator, resp);
+}
+
+fn handleRollbackTo(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    // Rollback-to-savepoint not yet supported (matches QUIC stub at quic_connection_handler.zig:959)
+    const resp = schema.RollbackToResponse{ .success = false };
+    return encodeMessage(allocator, resp);
+}
+
+fn handleCdcDiag(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    // No CDC engine available via gRPC — return default diagnostics
+    const resp = schema.CdcDiagnosticsResponse{
+        .config = .{ .enabled = false },
+        .engine = .{ .is_running = false },
+        .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot){},
+        .malformed_hashes = std.ArrayList(schema.CdcMalformedHash){},
+        .version = try allocator.dupe(u8, "v0.1.0"),
+        .timestamp_ms = std.time.milliTimestamp(),
+    };
+    return encodeMessage(allocator, resp);
+}
+
+fn handleCdcCtrl(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    // No CDC engine — always return NO_ENGINE
+    const resp = schema.CdcControlResponse{
+        .success = false,
+        .status = try allocator.dupe(u8, "NO_ENGINE"),
+        .guardrail_epoch = 0,
+    };
+    return encodeMessage(allocator, resp);
+}
+
+fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    var reader: std.Io.Reader = .fixed(request_bytes);
+    var req = protobuf.decode(schema.BackupRequest, &reader, allocator) catch {
+        const resp = schema.BackupResponse{
+            .success = false,
+            .message = try allocator.dupe(u8, "Invalid backup request"),
+        };
+        return encodeMessage(allocator, resp);
+    };
+    defer req.deinit(allocator);
+
+    const backup_dir = "./server_backups";
+    var mgr = SimplifiedBackupManager.init(allocator, backup_dir, .{
+        .compression = if (req.compress) .zstd else .none,
+        .encryption = false,
+        .retention_days = 30,
+    }) catch |err| {
+        const msg = try std.fmt.allocPrint(allocator, "Backup init failed: {s}", .{@errorName(err)});
+        const resp = schema.BackupResponse{ .success = false, .message = msg };
+        return encodeMessage(allocator, resp);
+    };
+    defer mgr.deinit();
+
+    if (!std.ascii.eqlIgnoreCase(req.backup_type, "full")) {
+        const msg = try allocator.dupe(u8, "Only full backups are supported with GraphStore");
+        const resp = schema.BackupResponse{ .success = false, .message = msg };
+        return encodeMessage(allocator, resp);
+    }
+
+    const metadata = mgr.createFullBackup() catch |err| {
+        const msg = try std.fmt.allocPrint(allocator, "Backup failed: {s}", .{@errorName(err)});
+        const resp = schema.BackupResponse{ .success = false, .message = msg };
+        return encodeMessage(allocator, resp);
+    };
+
+    const resp = schema.BackupResponse{
+        .success = true,
+        .message = try allocator.dupe(u8, "Backup completed successfully"),
+        .backup_id = try std.fmt.allocPrint(allocator, "{x}", .{metadata.backup_id}),
+        .backup_type = try allocator.dupe(u8, @tagName(metadata.backup_type)),
+        .size_bytes = metadata.size_bytes,
+        .compression = try allocator.dupe(u8, @tagName(metadata.compression)),
+        .checksum = try std.fmt.allocPrint(allocator, "{x}", .{metadata.checksum}),
+    };
+    return encodeMessage(allocator, resp);
+}
+
+fn handleRestore(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    var reader: std.Io.Reader = .fixed(request_bytes);
+    var req = protobuf.decode(schema.RestoreRequest, &reader, allocator) catch {
+        const resp = schema.RestoreResponse{
+            .success = false,
+            .message = try allocator.dupe(u8, "Invalid restore request"),
+        };
+        return encodeMessage(allocator, resp);
+    };
+    defer req.deinit(allocator);
+
+    if (!req.confirm) {
+        const resp = schema.RestoreResponse{
+            .success = false,
+            .message = try allocator.dupe(u8, "Restore requires confirmation"),
+        };
+        return encodeMessage(allocator, resp);
+    }
+
+    var mgr = SimplifiedBackupManager.init(allocator, "./server_backups", .{
+        .compression = .zstd,
+        .encryption = false,
+        .retention_days = 30,
+    }) catch |err| {
+        const msg = try std.fmt.allocPrint(allocator, "Restore init failed: {s}", .{@errorName(err)});
+        const resp = schema.RestoreResponse{ .success = false, .message = msg };
+        return encodeMessage(allocator, resp);
+    };
+    defer mgr.deinit();
+
+    const target_time: i64 = if (req.target_time.len > 0)
+        std.fmt.parseInt(i64, req.target_time, 10) catch std.time.milliTimestamp()
+    else
+        std.time.milliTimestamp();
+
+    const restore_dir = if (std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR")) |dir| blk: {
+        defer allocator.free(dir);
+        break :blk try allocator.dupe(u8, dir);
+    } else |_| try allocator.dupe(u8, "./data");
+
+    mgr.restoreToPointInTime(target_time, restore_dir) catch |err| {
+        const msg = try std.fmt.allocPrint(allocator, "Restore failed: {s}", .{@errorName(err)});
+        const resp = schema.RestoreResponse{ .success = false, .message = msg };
+        allocator.free(restore_dir);
+        return encodeMessage(allocator, resp);
+    };
+
+    const resp = schema.RestoreResponse{
+        .success = true,
+        .message = try allocator.dupe(u8, "Restore completed"),
+        .restore_dir = restore_dir,
+        .target_time = try allocator.dupe(u8, if (req.target_time.len > 0) req.target_time else "latest"),
+        .restore_timestamp = @intCast(std.time.milliTimestamp()),
+    };
+    return encodeMessage(allocator, resp);
+}
+
+fn handleUploadBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    var reader: std.Io.Reader = .fixed(request_bytes);
+    var req = protobuf.decode(schema.UploadBackupRequest, &reader, allocator) catch {
+        const resp = schema.UploadBackupResponse{
+            .success = false,
+            .message = try allocator.dupe(u8, "Invalid upload request"),
+        };
+        return encodeMessage(allocator, resp);
+    };
+    defer req.deinit(allocator);
+
+    if (req.size_bytes == 0 or req.checksum.len == 0) {
+        const resp = schema.UploadBackupResponse{
+            .success = false,
+            .message = try allocator.dupe(u8, "Invalid upload request: missing size or checksum"),
+        };
+        return encodeMessage(allocator, resp);
+    }
+
+    std.fs.cwd().makePath("./uploaded_backups") catch {};
+    const path = try std.fmt.allocPrint(allocator, "./uploaded_backups/backup_{d}.bin", .{std.time.milliTimestamp()});
+    // Create empty placeholder file for upload slot
+    if (std.fs.cwd().createFile(path, .{})) |file| {
+        file.close();
+    } else |_| {}
+
+    const resp = schema.UploadBackupResponse{
+        .success = true,
+        .message = try allocator.dupe(u8, "Upload slot ready"),
+        .upload_path = path,
+    };
     return encodeMessage(allocator, resp);
 }
