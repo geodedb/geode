@@ -360,6 +360,16 @@ pub const GeodeGrpcServer = struct {
             }
         }
 
+        // Issue #479: Always wrap connections with write-all semantics to prevent
+        // partial HTTP/2 frame writes. grpc-zig's writeFrame ignores the return
+        // value of ioWrite, which on aarch64 under load causes partial writes that
+        // corrupt HTTP/2 framing and lead to segfaults. The rawAccept wrapper
+        // ensures all bytes are written before returning.
+        if (server.on_tls_accept == null) {
+            server.on_tls_accept = grpc_tls.rawAccept;
+            log.info("gRPC plaintext with write-all wrapper enabled", &.{});
+        }
+
         const store = try allocator.create(SessionStore);
         store.* = SessionStore.init(allocator, config);
         g_session_store = store;
@@ -511,13 +521,22 @@ fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !Pa
 }
 
 /// Handle Execute as a server-streaming RPC: send schema, then all data pages.
+/// Issue #479: Added error recovery to prevent leaving HTTP/2 streams in an
+/// inconsistent state when writes fail (e.g. client disconnect, partial write).
 fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allocator: std.mem.Allocator) !void {
     // Get the schema/first response from handleExecute
     const exec_resp = try handleExecute(request_bytes, allocator);
     defer allocator.free(exec_resp);
 
-    // Send first streaming message (with HEADERS)
-    try sendStreamResponse(trans, exec_resp, true);
+    // Send first streaming message (with HEADERS).
+    // If this fails, the connection is broken — propagate the error so the
+    // connection loop can detect it and close cleanly.
+    sendStreamResponse(trans, exec_resp, true) catch |err| {
+        log.err("gRPC streaming: failed to send initial response", &.{
+            Attr.string("error", @errorName(err)),
+        });
+        return err;
+    };
 
     // Check if the response is EXPLAIN, PROFILE, or error — these have no data pages to pull
     var skip_pages = false;
@@ -542,24 +561,51 @@ fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allo
         // Extract session_id from the request for data pages
         var reader: std.Io.Reader = .fixed(request_bytes);
         var req = protobuf.decode(schema.ExecuteRequest, &reader, allocator) catch {
-            try trans.endStream();
+            trans.endStream() catch {};
             return;
         };
         defer req.deinit(allocator);
 
         // Pull all data pages directly (no decode+re-encode cycle)
         var page_count: usize = 0;
+        var stream_error = false;
         while (page_count < 1000) : (page_count += 1) { // safety limit
-            const result = try buildStreamDataPage(req.session_id, allocator);
+            const result = buildStreamDataPage(req.session_id, allocator) catch |err| {
+                log.err("gRPC streaming: failed to build data page", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.uint("page", page_count),
+                });
+                stream_error = true;
+                break;
+            };
             defer allocator.free(result.bytes);
 
-            try sendStreamResponse(trans, result.bytes, false);
+            sendStreamResponse(trans, result.bytes, false) catch |err| {
+                log.err("gRPC streaming: write failed mid-stream", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.uint("page", page_count),
+                });
+                stream_error = true;
+                break;
+            };
             if (result.is_final) break;
+        }
+
+        if (stream_error) {
+            // Try to end the stream gracefully so the client gets a clean close.
+            // If this also fails, the connection is broken and the connection
+            // loop will detect it on the next readMessage.
+            trans.endStream() catch {};
+            return;
         }
     }
 
-    // End the stream
-    try trans.endStream();
+    // End the stream normally
+    trans.endStream() catch |err| {
+        log.err("gRPC streaming: failed to send end-of-stream", &.{
+            Attr.string("error", @errorName(err)),
+        });
+    };
 }
 
 fn handleLegacyPacket(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {

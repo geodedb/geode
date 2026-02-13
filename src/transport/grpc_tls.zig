@@ -23,6 +23,49 @@ pub const deinitTlsContext = if (has_openssl) ssl_impl.deinitTlsContext else stu
 /// Accept a TLS connection on the given stream.
 pub const tlsAccept = if (has_openssl) ssl_impl.tlsAccept else stubTlsAccept;
 
+/// Accept a plaintext connection and wrap it with write-all semantics.
+/// Issue #479: grpc-zig's writeFrame ignores partial write return values from
+/// ioWrite, which on aarch64 under load corrupts HTTP/2 framing. This wrapper
+/// ensures all bytes are written before returning, preventing frame corruption.
+pub fn rawAccept(stream: std.net.Stream) anyerror!TlsIo {
+    const conn = std.heap.page_allocator.create(RawConn) catch return error.OutOfMemory;
+    conn.* = .{ .stream = stream };
+    return TlsIo{
+        .ctx = @ptrCast(conn),
+        .read_fn = rawRead,
+        .write_fn = rawWriteAll,
+        .close_fn = rawClose,
+    };
+}
+
+const RawConn = struct {
+    stream: std.net.Stream,
+};
+
+fn rawRead(ctx_ptr: *anyopaque, buf: []u8) anyerror!usize {
+    const conn: *RawConn = @ptrCast(@alignCast(ctx_ptr));
+    return conn.stream.read(buf);
+}
+
+/// Write all bytes to the stream, looping on partial writes.
+fn rawWriteAll(ctx_ptr: *anyopaque, data: []const u8) anyerror!usize {
+    const conn: *RawConn = @ptrCast(@alignCast(ctx_ptr));
+    var total: usize = 0;
+    while (total < data.len) {
+        const n = conn.stream.write(data[total..]) catch |err| return err;
+        if (n == 0) return error.ConnectionClosed;
+        total += n;
+    }
+    return total;
+}
+
+fn rawClose(ctx_ptr: *anyopaque) void {
+    const conn: *RawConn = @ptrCast(@alignCast(ctx_ptr));
+    // Don't close the stream fd here — Transport.ioClose() calls
+    // stream.close() separately after calling our close_fn.
+    std.heap.page_allocator.destroy(conn);
+}
+
 // --- Stub implementations for non-OpenSSL builds ---
 
 fn stubInitTlsContext(_: [:0]const u8, _: [:0]const u8) !void {
@@ -165,13 +208,22 @@ const ssl_impl = if (has_openssl) struct {
         return @intCast(ret);
     }
 
+    /// Write all bytes through TLS, looping on partial writes.
+    /// Issue #479: SSL_write can return fewer bytes than requested on aarch64
+    /// under load. Without looping, writeFrame sends partial HTTP/2 frames,
+    /// corrupting the connection and causing segfaults.
     fn sslWrite(ctx_ptr: *anyopaque, data: []const u8) anyerror!usize {
         const conn: *SslConn = @ptrCast(@alignCast(ctx_ptr));
-        const ret = c.SSL_write(conn.ssl, data.ptr, @intCast(data.len));
-        if (ret <= 0) {
-            return error.TlsWriteFailed;
+        var total: usize = 0;
+        while (total < data.len) {
+            const remaining = data.len - total;
+            const ret = c.SSL_write(conn.ssl, data[total..].ptr, @intCast(remaining));
+            if (ret <= 0) {
+                return error.TlsWriteFailed;
+            }
+            total += @as(usize, @intCast(ret));
         }
-        return @intCast(ret);
+        return total;
     }
 
     fn sslClose(ctx_ptr: *anyopaque) void {
@@ -186,3 +238,162 @@ const ssl_impl = if (has_openssl) struct {
         std.heap.page_allocator.destroy(conn);
     }
 } else struct {};
+
+// =============================================================================
+// Tests for writeAll behavior (#479)
+// =============================================================================
+
+/// Mock stream that simulates partial writes, returning at most `chunk_size`
+/// bytes per write call. Used to verify the writeAll loop logic.
+const MockPartialStream = struct {
+    allocator: std.mem.Allocator,
+    written: std.ArrayList(u8),
+    chunk_size: usize,
+    write_count: usize = 0,
+    fail_after: ?usize = null, // Fail after N writes
+
+    fn init(allocator: std.mem.Allocator, chunk_size: usize) MockPartialStream {
+        return .{
+            .allocator = allocator,
+            .written = .{},
+            .chunk_size = chunk_size,
+        };
+    }
+
+    fn initFailAfter(allocator: std.mem.Allocator, chunk_size: usize, fail_after: usize) MockPartialStream {
+        return .{
+            .allocator = allocator,
+            .written = .{},
+            .chunk_size = chunk_size,
+            .fail_after = fail_after,
+        };
+    }
+
+    fn deinit(self: *MockPartialStream) void {
+        self.written.deinit(self.allocator);
+    }
+
+    fn write(self: *MockPartialStream, data: []const u8) !usize {
+        if (self.fail_after) |limit| {
+            if (self.write_count >= limit) return error.BrokenPipe;
+        }
+        self.write_count += 1;
+        const to_write = @min(data.len, self.chunk_size);
+        try self.written.appendSlice(self.allocator, data[0..to_write]);
+        return to_write;
+    }
+};
+
+/// Standalone writeAll implementation matching rawWriteAll's logic,
+/// operating on a MockPartialStream for testability.
+fn testWriteAll(mock: *MockPartialStream, data: []const u8) !usize {
+    var total: usize = 0;
+    while (total < data.len) {
+        const n = mock.write(data[total..]) catch |err| return err;
+        if (n == 0) return error.ConnectionClosed;
+        total += n;
+    }
+    return total;
+}
+
+test "writeAll: complete write in single call" {
+    var mock = MockPartialStream.init(std.testing.allocator, 1024);
+    defer mock.deinit();
+    const data = "Hello, world!";
+    const n = try testWriteAll(&mock, data);
+    try std.testing.expectEqual(data.len, n);
+    try std.testing.expectEqualStrings(data, mock.written.items);
+    try std.testing.expectEqual(@as(usize, 1), mock.write_count);
+}
+
+test "writeAll: partial writes are retried" {
+    var mock = MockPartialStream.init(std.testing.allocator, 3);
+    defer mock.deinit();
+    const data = "Hello, world!";
+    const n = try testWriteAll(&mock, data);
+    try std.testing.expectEqual(data.len, n);
+    try std.testing.expectEqualStrings(data, mock.written.items);
+    // 13 bytes / 3 bytes per write = 5 writes (3+3+3+3+1)
+    try std.testing.expectEqual(@as(usize, 5), mock.write_count);
+}
+
+test "writeAll: single byte chunks" {
+    var mock = MockPartialStream.init(std.testing.allocator, 1);
+    defer mock.deinit();
+    const data = "ABCDEF";
+    const n = try testWriteAll(&mock, data);
+    try std.testing.expectEqual(data.len, n);
+    try std.testing.expectEqualStrings(data, mock.written.items);
+    try std.testing.expectEqual(@as(usize, 6), mock.write_count);
+}
+
+test "writeAll: empty data is no-op" {
+    var mock = MockPartialStream.init(std.testing.allocator, 1024);
+    defer mock.deinit();
+    const n = try testWriteAll(&mock, "");
+    try std.testing.expectEqual(@as(usize, 0), n);
+    try std.testing.expectEqual(@as(usize, 0), mock.write_count);
+}
+
+test "writeAll: write error propagated" {
+    var mock = MockPartialStream.initFailAfter(std.testing.allocator, 3, 0);
+    defer mock.deinit();
+    const result = testWriteAll(&mock, "Hello");
+    try std.testing.expectError(error.BrokenPipe, result);
+}
+
+test "writeAll: error after partial progress" {
+    var mock = MockPartialStream.initFailAfter(std.testing.allocator, 3, 2);
+    defer mock.deinit();
+    // Writes 3 + 3 = 6 bytes, then fails on the 3rd write
+    const result = testWriteAll(&mock, "Hello, world!");
+    try std.testing.expectError(error.BrokenPipe, result);
+    // First 6 bytes were written before the error
+    try std.testing.expectEqualStrings("Hello,", mock.written.items);
+}
+
+test "writeAll: large buffer with small chunks" {
+    var mock = MockPartialStream.init(std.testing.allocator, 7);
+    defer mock.deinit();
+    // Simulate a 9-byte HTTP/2 frame header being written in partial chunks
+    const frame_header = [_]u8{ 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01 };
+    const n = try testWriteAll(&mock, &frame_header);
+    try std.testing.expectEqual(@as(usize, 9), n);
+    try std.testing.expectEqualSlices(u8, &frame_header, mock.written.items);
+    // 9 bytes / 7 bytes per write = 2 writes (7+2)
+    try std.testing.expectEqual(@as(usize, 2), mock.write_count);
+}
+
+test "writeAll: simulated rapid sequential writes" {
+    // Simulates the #479 scenario: many rapid sequential writes with partial completions
+    var mock = MockPartialStream.init(std.testing.allocator, 5);
+    defer mock.deinit();
+    const messages = [_][]const u8{
+        "MERGE (a:Node {id: 1})",
+        "MERGE (b:Node {id: 2})",
+        "CREATE (a)-[:REL]->(b)",
+        "MERGE (c:Node {id: 3})",
+        "MERGE (d:Node {id: 4})",
+        "CREATE (c)-[:REL]->(d)",
+    };
+    var total_written: usize = 0;
+    for (messages) |msg| {
+        const n = try testWriteAll(&mock, msg);
+        try std.testing.expectEqual(msg.len, n);
+        total_written += n;
+    }
+    try std.testing.expectEqual(total_written, mock.written.items.len);
+}
+
+test "rawAccept: creates valid TlsIo" {
+    // We can't test with a real stream in unit tests, but we can verify the
+    // function constructs a valid TlsIo with non-null function pointers.
+    // Use a dummy fd that won't be used (we'll destroy immediately).
+    const dummy_stream = std.net.Stream{ .handle = -1 };
+    const tls_io = try rawAccept(dummy_stream);
+    try std.testing.expect(tls_io.read_fn == rawRead);
+    try std.testing.expect(tls_io.write_fn == rawWriteAll);
+    try std.testing.expect(tls_io.close_fn == rawClose);
+    // Clean up the allocated RawConn
+    tls_io.close_fn(tls_io.ctx);
+}
