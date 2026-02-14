@@ -442,9 +442,9 @@ REQ-CLI-BACKUP-LIST-001,CLIBackupList,DirectoryScan,TESTED,,,cli,2026-01-11,src/
 REQ-CLI-CHUNKED-EXEC-001,ChunkedExecution,LargeFileSupport,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-CHUNKED-EXEC-002,ChunkedExecution,StatementParsing,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-CHUNKED-EXEC-003,ChunkedExecution,SizeDetection,IMPL,,,cli,2026-02-02,src/cli/main.zig
-REQ-CLI-CHUNKED-EXEC-004,ChunkedExecution,BatchExecution,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-CLI-CHUNKED-EXEC-004,ChunkedExecution,BatchExecution,IMPL,,,cli,2026-02-13,src/cli/main.zig
 REQ-CLI-CHUNKED-EXEC-005,ChunkedExecution,OptionsStruct,IMPL,,,cli,2026-02-02,src/cli/main.zig
-REQ-CLI-CHUNKED-EXEC-006,ChunkedExecution,Execution,IMPL,,,cli,2026-02-02,src/cli/main.zig
+REQ-CLI-CHUNKED-EXEC-006,ChunkedExecution,Execution,IMPL,,,cli,2026-02-13,src/cli/main.zig
 REQ-CLI-CHUNKED-EXEC-007,ChunkedExecution,NullCheck,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-COMPLETE-001,REPL Tab Completion,Testing,TESTED,,,cli,2026-01-30,src/client/repl/repl_complete.zig
 REQ-CLI-DOT-002,DotFormat,GraphvizOutput,IMPL,,,cli,2026-02-02,src/cli/main.zig

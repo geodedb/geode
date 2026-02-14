@@ -1249,19 +1249,19 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // Default to connecting to localhost:3141 if no --server specified
     const server_addr = server orelse "127.0.0.1:3141";
 
-    // Issue #424: Start a process-level deadline watchdog thread.
-    // On aarch64 Docker (and other environments), QUIC handshakes and TCP connects
-    // can block indefinitely. This watchdog guarantees the process exits after
-    // timeout_secs, regardless of what is blocking.
-    _ = std.Thread.spawn(.{}, deadlineWatchdog, .{timeout_secs}) catch {};
-
-    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-004; FEATURE="ChunkedExecution"; ASPECT=BatchExecution; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
+    // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-004; FEATURE="ChunkedExecution"; ASPECT=BatchExecution; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-13
     // Handle chunked execution for large files
     if (file_statements) |statements| {
         if (params.items.len > 0) {
             std.debug.print("Error: --param is not supported with --file\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
+        // Issue #424: Scale deadline watchdog for chunked execution.
+        // Each chunk needs its own timeout, so total deadline = timeout_secs * num_chunks.
+        // Use generous estimate: 1 chunk per ~250 statements minimum, capped at 10 minutes.
+        const estimated_chunks = @max(1, statements.items.len / 250);
+        const chunked_deadline = @min(600, timeout_secs * @as(u32, @intCast(estimated_chunks + 1)));
+        _ = std.Thread.spawn(.{}, deadlineWatchdog, .{chunked_deadline}) catch {};
         try executeChunkedQueries(allocator, .{
             .server_addr = server_addr,
             .statements = statements.items,
@@ -1279,6 +1279,9 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         });
         return;
     }
+
+    // Issue #424: Start a process-level deadline watchdog thread for single queries.
+    _ = std.Thread.spawn(.{}, deadlineWatchdog, .{timeout_secs}) catch {};
 
     // Execute query via QUIC or gRPC connection
     params_owned = false;
@@ -1298,7 +1301,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     } else {
         // GAP-0113: Execute query via QUIC connection with optional certificate verification
         // CANARY: REQ=REQ-CLI-GRAPH-FLAG-003; FEATURE="GraphFlag"; ASPECT=ExecuteWithGraph; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-        try executeQuicQuery(allocator, .{
+        executeQuicQuery(allocator, .{
             .server_addr = server_addr,
             .query_text = query_text.?,
             .format = format,
@@ -1313,7 +1316,11 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .graph = graph,
             .page_size = page_size,
             .params = params,
-        });
+        }) catch |err| {
+            if (err == error.AuthenticationFailed)
+                std.process.exit(@intFromEnum(ExitCode.auth_error));
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
     }
 }
 
@@ -2287,14 +2294,23 @@ const ColumnInfo = struct {
     type: []const u8,
 };
 
-// CANARY: REQ=REQ-CLI-CHUNKED-EXEC-006; FEATURE="ChunkedExecution"; ASPECT=Execution; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-/// Execute statements in chunks, batching multiple statements per request while staying under the size limit
+// CANARY: REQ=REQ-CLI-CHUNKED-EXEC-006; FEATURE="ChunkedExecution"; ASPECT=Execution; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-13
+/// Execute statements in chunks, batching multiple statements per request while staying under the size limit.
+/// Transaction-aware: never splits chunks within BEGIN/COMMIT boundaries.
+/// Context-aware: carries USE GRAPH forward to subsequent chunks on new connections.
 fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions) !void {
     const max_chunk_size: usize = 32 * 1024; // 32KB per chunk
+    // Cap for transaction-aware chunks: if a transaction exceeds this, split it anyway.
+    // Large transactions can't truly span connections, so splitting preserves the same
+    // behavior as non-transaction-aware chunking (auto-commit per statement).
+    const max_txn_chunk_size: usize = 32 * 1024; // Same as regular max — don't grow past 32KB
     const statements = opts.statements;
 
     var executed: usize = 0;
     var error_count: usize = 0;
+
+    // Track USE GRAPH context to prepend to subsequent chunks (each chunk is a new connection)
+    var use_graph_stmt: ?[]const u8 = null;
 
     // Process statements in chunks
     var chunk_start: usize = 0;
@@ -2302,20 +2318,62 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
         // Build a chunk of statements that fits within the size limit
         var chunk_size: usize = 0;
         var chunk_end: usize = chunk_start;
+        var in_transaction: bool = false;
+
+        // Account for USE GRAPH prefix if needed (not the first chunk and we have context)
+        if (chunk_start > 0) {
+            if (use_graph_stmt) |ug| {
+                chunk_size += ug.len + 2; // +2 for "; "
+            }
+        }
 
         while (chunk_end < statements.len) {
             const stmt_len = statements[chunk_end].len + 1; // +1 for separator
-            if (chunk_size + stmt_len > max_chunk_size and chunk_end > chunk_start) {
-                // This statement would exceed the limit, stop here
+            // Transaction-aware: prefer not to break within a transaction, but
+            // if the transaction is too large, split it anyway (each chunk is a
+            // separate connection so large transactions can't truly be atomic).
+            const at_limit = chunk_size + stmt_len > max_chunk_size and chunk_end > chunk_start;
+            if (at_limit and !in_transaction) {
+                break;
+            }
+            if (at_limit and in_transaction and chunk_size + stmt_len > max_txn_chunk_size) {
+                // Transaction too large for a single chunk — split it
                 break;
             }
             chunk_size += stmt_len;
+
+            // Track transaction boundaries
+            const trimmed = std.mem.trim(u8, statements[chunk_end], " \t\r\n");
+            if (isTransactionBegin(trimmed)) {
+                in_transaction = true;
+            } else if (in_transaction and isTransactionEnd(trimmed)) {
+                in_transaction = false;
+            }
+
+            // Track USE GRAPH for subsequent chunks
+            if (isUseGraphStmt(trimmed)) {
+                use_graph_stmt = statements[chunk_end];
+            }
+
             chunk_end += 1;
         }
 
         // Build the chunk query
-        var chunk_query = try std.ArrayList(u8).initCapacity(allocator, 0);
+        var chunk_query = try std.ArrayList(u8).initCapacity(allocator, chunk_size);
         defer chunk_query.deinit(allocator);
+
+        // Prepend USE GRAPH context for chunks after the first (each is a new connection)
+        if (chunk_start > 0) {
+            if (use_graph_stmt) |ug| {
+                const ug_trimmed = std.mem.trim(u8, ug, " \t\r\n");
+                chunk_query.appendSlice(allocator, ug_trimmed) catch {};
+                // Ensure it ends with semicolon
+                if (ug_trimmed.len == 0 or ug_trimmed[ug_trimmed.len - 1] != ';') {
+                    chunk_query.append(allocator, ';') catch {};
+                }
+                chunk_query.append(allocator, ' ') catch {};
+            }
+        }
 
         for (statements[chunk_start..chunk_end]) |stmt| {
             chunk_query.appendSlice(allocator, stmt) catch {};
@@ -2377,6 +2435,37 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
     }
 }
 
+/// Check if a trimmed statement is a transaction begin (START TRANSACTION or BEGIN)
+fn isTransactionBegin(trimmed: []const u8) bool {
+    // Remove trailing semicolons for comparison
+    const stmt = std.mem.trimRight(u8, trimmed, "; \t");
+    if (stmt.len == 0) return false;
+    // Case-insensitive check for BEGIN or START TRANSACTION
+    if (std.ascii.eqlIgnoreCase(stmt, "BEGIN") or
+        std.ascii.eqlIgnoreCase(stmt, "START TRANSACTION"))
+        return true;
+    return false;
+}
+
+/// Check if a trimmed statement is a transaction end (COMMIT or ROLLBACK)
+fn isTransactionEnd(trimmed: []const u8) bool {
+    const stmt = std.mem.trimRight(u8, trimmed, "; \t");
+    if (stmt.len == 0) return false;
+    if (std.ascii.eqlIgnoreCase(stmt, "COMMIT") or
+        std.ascii.eqlIgnoreCase(stmt, "ROLLBACK"))
+        return true;
+    return false;
+}
+
+/// Check if a trimmed statement is a USE GRAPH statement
+fn isUseGraphStmt(trimmed: []const u8) bool {
+    const stmt = std.mem.trimRight(u8, trimmed, "; \t");
+    if (stmt.len < 9) return false; // "USE GRAPH" is 9 chars minimum
+    // Check prefix case-insensitively
+    if (std.ascii.eqlIgnoreCase(stmt[0..9], "USE GRAPH")) return true;
+    return false;
+}
+
 fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void {
     const server_addr = opts.server_addr;
     const query_text = opts.query_text;
@@ -2406,7 +2495,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     const port_str = addr_port.next() orelse "3141";
     const port = std.fmt.parseInt(u16, port_str, 10) catch {
         _ = stderr.writeAll("Error: Invalid port number in server address\n") catch {};
-        std.process.exit(@intFromEnum(ExitCode.general_error));
+        return error.InvalidAddress;
     };
 
     // GAP-0113: Determine connection mode based on certificate options
@@ -2415,7 +2504,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     // Validate mutual TLS: if any client cert/key provided, both must be provided
     if ((client_cert_path != null) != (client_key_path != null)) {
         _ = stderr.writeAll("Error: Both --client-cert and --client-key must be provided for mutual TLS\n") catch {};
-        std.process.exit(@intFromEnum(ExitCode.usage_error));
+        return error.InvalidAddress;
     }
 
     var attempts: u32 = 0;
@@ -2462,7 +2551,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
         _ = stderr.writeAll("\n") catch {};
     }
 
-    std.process.exit(@intFromEnum(ExitCode.general_error));
+    return error.ConnectionFailed;
 }
 
 // Helper to read length-prefixed protobuf message with polling
@@ -2566,7 +2655,7 @@ fn executeQueryOnConnection(
     var stream = quic_client.getStream() catch |err| {
         const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to get stream: {}\n", .{err}) catch "Error: Failed to get stream\n";
         _ = stderr_handle.writeAll(err_msg) catch {};
-        std.process.exit(@intFromEnum(ExitCode.general_error));
+        return error.ConnectionFailed;
     };
     defer stream.deinit();
 
@@ -2582,7 +2671,7 @@ fn executeQueryOnConnection(
     writeProtoMessage(allocator, stream, .{ .hello = hello_req }) catch |err| {
         const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to send HELLO: {}\n", .{err}) catch "Error: Failed to send HELLO\n";
         _ = stderr_handle.writeAll(err_msg) catch {};
-        std.process.exit(@intFromEnum(ExitCode.general_error));
+        return error.ConnectionFailed;
     };
 
     // Use an arena for the HELLO response to ensure cleanup of decoded message fields
@@ -2592,7 +2681,7 @@ fn executeQueryOnConnection(
     const hello_resp_msg = readProtoMessage(hello_arena.allocator(), stream, quic_client, timeout_secs) catch |err| {
         const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to receive HELLO response: {}\n", .{err}) catch "Error: Failed to receive HELLO response\n";
         _ = stderr_handle.writeAll(err_msg) catch {};
-        std.process.exit(@intFromEnum(ExitCode.general_error));
+        return error.ConnectionFailed;
     };
 
     var session_id: []const u8 = "";
@@ -2604,7 +2693,7 @@ fn executeQueryOnConnection(
             if (!h.success) {
                 const err_msg = std.fmt.allocPrint(allocator, "Error: {s}\n\n", .{h.error_message}) catch "Error: Authentication failed\n\n";
                 _ = stderr_handle.writeAll(err_msg) catch {};
-                std.process.exit(@intFromEnum(ExitCode.auth_error));
+                return error.AuthenticationFailed;
             }
             if (h.session_id.len > 0) {
                 session_id_owned = try allocator.dupe(u8, h.session_id);
@@ -2613,7 +2702,7 @@ fn executeQueryOnConnection(
         },
         else => {
             _ = stderr_handle.writeAll("Error: Unexpected response type during handshake\n") catch {};
-            std.process.exit(@intFromEnum(ExitCode.auth_error));
+            return error.AuthenticationFailed;
         },
     }
     defer if (session_id_owned) |sid| allocator.free(sid);
