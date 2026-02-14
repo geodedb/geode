@@ -823,32 +823,11 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call result;
             }
 
-            // GAP-004: Wiring GQL to Time-Series
+            // Time-series value lookup function
             if (std.mem.eql(u8, function_name, "timeseries.value")) {
                 if (call.args.len != 3) return EvalError.InvalidArgs;
                 if (env.timeseries_store) |store_ptr| {
-                    // Cast to mutable pointer because Store methods might not be const-correct yet,
-                    // though getSeries should be const. current getSeries takes *Store.
-                    // We need to support *const Store if possible, or cast cast away const (unsafe) or change getSeries to *const.
-                    // Let's assume store_ptr is *const... check value_types definition.
-                    // value_types: ?*const Store.
-                    // timeseries.zig: getSeries takes *Store.
-                    // I need to change getSeries to take *const Store in timeseries.zig?
-                    // Yes, getSeries and hashKey should be *const.
-
-                    // Ignoring const correctness for a moment, let's fix timeseries.zig first?
-                    // Or cast.
-                    // Zig is strict.
-                    // Let's modify timeseries.zig to use *const Store for read ops.
-
-                    // WAIT. I already called replae_file_content on timeseries.zig.
-                    // I will fail if I try to use it with *const.
-
-                    // I should update timeseries.zig again to make getSeries const?
-                    // Or just cast in eval.zig? "(const_cast)" equivalent?
-                    // @constCast(ptr).
-
-                    const store = @constCast(store_ptr); // Temporary workaround if Store requires mut
+                    const store = @constCast(store_ptr);
 
                     const device_id_val = try evalExpr(allocator, call.args[0].*, env);
                     const metric_val = try evalExpr(allocator, call.args[1].*, env);
@@ -1921,18 +1900,15 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Int = sign_value };
             }
 
-            // Special handling for random() with no args
+            // Special handling for random() with no args — returns decimal in [0, 1)
             if (std.mem.eql(u8, function_name, "random")) {
                 if (call.args.len != 0) break :blk_call .{ .Null = {} };
-                // Use current timestamp as seed for simple randomness
-                const timestamp = @as(u64, @intCast(std.time.timestamp()));
-                // Simple linear congruential generator for a random value between 0 and 1
-                const a: u64 = 1664525;
-                const c: u64 = 1013904223;
-                const m: u64 = 2147483647; // 2^31 - 1
-                const seed = timestamp % m;
-                const next = (a * seed + c) % m;
-                const value = @as(f64, @floatFromInt(next)) / @as(f64, @floatFromInt(m));
+                // Use cryptographically secure random source
+                var rand_bytes: [8]u8 = undefined;
+                std.crypto.random.bytes(&rand_bytes);
+                const rand_u64 = std.mem.readInt(u64, &rand_bytes, .little);
+                // Map to [0, 1) with 6 decimal digits of precision
+                const value = @as(f64, @floatFromInt(rand_u64 >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53));
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(value * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 

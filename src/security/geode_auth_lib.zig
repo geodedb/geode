@@ -41,6 +41,9 @@ pub const User = struct {
     password_reset_required: bool = false,
     is_default_user: bool = false,
     password_set_by_env: bool = false,
+    // Rate limiting fields for brute force protection
+    failed_login_attempts: u16 = 0,
+    lockout_until: i64 = 0, // epoch millis; 0 = not locked
 };
 
 pub const Role = struct {
@@ -560,7 +563,17 @@ pub const SecurityManager = struct {
         try out.appendSlice(self.allocator, " WHERE (");
         for (applicable.items, 0..) |p, i| {
             if (i > 0) try out.appendSlice(self.allocator, " OR ");
+            // Sanitize using_clause: reject clauses containing statement terminators
+            // or comment sequences that could allow GQL injection.
+            if (std.mem.indexOf(u8, p.using_clause, ";") != null or
+                std.mem.indexOf(u8, p.using_clause, "--") != null or
+                std.mem.indexOf(u8, p.using_clause, "/*") != null)
+            {
+                return error.InvalidRlsPolicy;
+            }
+            try out.append(self.allocator, '(');
             try out.appendSlice(self.allocator, p.using_clause);
+            try out.append(self.allocator, ')');
         }
         try out.appendSlice(self.allocator, ")");
         return try out.toOwnedSlice(self.allocator);
@@ -858,9 +871,11 @@ pub const SecurityManager = struct {
         return constantTimeEqual(&computed_hash, &expected_hash);
     }
 
-    /// Verify legacy Blake2b password (for migration)
+    /// Verify legacy Blake2b password (for migration only — deprecated).
+    /// SECURITY NOTE: This uses a static salt which is weaker than Argon2id.
+    /// Accounts verified via this path should be flagged for password_reset_required
+    /// to force migration to Argon2id on next login.
     fn verifyBlake2bLegacy(self: *Self, password: []const u8, stored_hash: []const u8) !bool {
-        _ = self; // Not needed for Blake2b verification
         const salt = "geode-salt-secure-v2";
         var hasher = std.crypto.hash.blake2.Blake2b256.init(.{});
         hasher.update(password);
@@ -876,7 +891,12 @@ pub const SecurityManager = struct {
             computed_hex[i * 2 + 1] = hex_chars[byte & 0xf];
         }
 
-        return constantTimeEqual(&computed_hex, stored_hash);
+        const matches = constantTimeEqual(&computed_hex, stored_hash);
+        if (matches) {
+            // Flag for migration: legacy Blake2b accounts must re-hash with Argon2id
+            self.audit_log.append(.password_migration_needed, 0, "Legacy Blake2b hash verified — account should migrate to Argon2id", .{}) catch {};
+        }
+        return matches;
     }
 
     /// Check if string is valid hexadecimal
@@ -1173,6 +1193,19 @@ pub const SecurityManager = struct {
         const user = user_opt orelse return error.UserNotFound;
         if (!user.is_active) return error.UserDisabled;
 
+        // Rate limiting: check if account is currently locked out
+        const now_ms = std.time.milliTimestamp();
+        if (user.lockout_until > 0 and now_ms < user.lockout_until) {
+            try self.audit_log.append(.login_failed, user.id, "Authentication blocked: account temporarily locked due to too many failed attempts", .{});
+            return error.AccountLocked;
+        }
+
+        // If lockout period has expired, reset the counter
+        if (user.lockout_until > 0 and now_ms >= user.lockout_until) {
+            user.failed_login_attempts = 0;
+            user.lockout_until = 0;
+        }
+
         // CRITICAL SECURITY FIX (C5): Block default users until password changed
         // Prevents authentication with predictable default credentials
         if (user.is_default_user and user.password_reset_required) {
@@ -1181,9 +1214,20 @@ pub const SecurityManager = struct {
         }
 
         if (!try self.verifyPassword(password, user.password_hash)) {
+            // Increment failed attempts and potentially lock out
+            user.failed_login_attempts += 1;
+            if (user.failed_login_attempts >= 5) {
+                // Lock account for 5 minutes (300,000 ms)
+                user.lockout_until = now_ms + 300_000;
+                try self.audit_log.append(.login_failed, user.id, "Account locked: 5 failed login attempts, locked for 5 minutes", .{});
+            }
             try self.audit_log.logFailedLogin(user.id, user.username);
             return error.InvalidCredentials;
         }
+
+        // Successful login: reset failed attempt counter
+        user.failed_login_attempts = 0;
+        user.lockout_until = 0;
 
         // CANARY: REQ=REQ-AUTH-POLICY-007; FEATURE="Mandatory Password Policy Enforcement"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_007_MandatoryPolicyEnforcement; OWNER=security; UPDATED=2025-09-30
         // Check if the authenticated password meets current policy requirements

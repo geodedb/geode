@@ -21,9 +21,15 @@ docs/*.tar
 test_*
 *_test
 
+# Ignore secrets and sensitive files
+.env
+.env.*
+*.key
+*.pem
+.secrets.baseline
+
 # Ignore development files
 .envrc
-.secrets.baseline
 flake.lock
 flake.nix
 
@@ -43,5 +49,6 @@ docker-compose*.yml
 clients/go/gql/go.sum
 clients/go/gql/vendor/
 
-# Keep certificates
-!certs/
+# Note: certs/ is NOT included by default to avoid leaking private keys.
+# If you need to copy certs into a Docker build, use explicit COPY in Dockerfile
+# with only the specific .crt files needed (not .key files).

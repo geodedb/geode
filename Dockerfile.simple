@@ -43,7 +43,7 @@ RUN set -ex && \
             if [ -f "/tmp/${TARBALL}.minisig" ]; then \
                 echo "${ZIG_PUBKEY}" > /tmp/zig.pub && \
                 minisign -Vm "/tmp/${TARBALL}" -P "${ZIG_PUBKEY}" -x "/tmp/${TARBALL}.minisig" || \
-                    echo "WARNING: Signature verification failed, proceeding anyway"; \
+                    { echo "ERROR: Signature verification FAILED — aborting build"; exit 1; }; \
                 rm -f /tmp/zig.pub /tmp/${TARBALL}.minisig; \
             fi; \
             # Extract if we have a valid tarball \

@@ -94,7 +94,7 @@ All 7 development phases from the TODO list have been successfully implemented:
 - **Encrypted Page Read/Write**: Full AES-256-GCM encryption cycle
 - **Authentication Tags**: Integrity verification on read
 - **Page Locking**: Concurrent access control
-- **Implementation**: `src/storage/crypto_enhanced.zig`
+- **Implementation**: `src/security/tde.zig`
 
 ### **TDE File-Level Encryption** ✅ January 2026
 

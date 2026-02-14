@@ -187,11 +187,8 @@ pub const Connection = struct {
         // Check if insecure mode is explicitly allowed via environment variable
         const builtin = @import("builtin");
         const allow_insecure = blk: {
-            if (builtin.mode == .Debug) {
-                // Debug builds allow insecure for testing
-                break :blk true;
-            }
-            // Production builds require explicit env var to skip TLS
+            // All builds require explicit env var to skip TLS verification.
+            // Debug builds no longer auto-allow insecure connections.
             const env = std.process.getEnvVarOwned(self.allocator, "GEODE_FEDERATION_INSECURE") catch null;
             if (env) |v| {
                 defer self.allocator.free(v);

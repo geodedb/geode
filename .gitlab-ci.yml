@@ -10,7 +10,7 @@ include:
       zig_version: "0.15.2"
       paths: "src/"
       stage: lint
-      allow_failure: true
+      allow_failure: false
 
   # APT repository publishing (apt.geodedb.com)
   - component: gitlab.com/devnw/ci-catalog/apt-publish@v1.14.0
@@ -470,10 +470,12 @@ test-performance-benchmarks:
       zig build test -Doptimize=ReleaseSafe --summary all 2>&1 | tee benchmark_output.log
 
       echo "=== Verifying Benchmark Results ==="
-      # Check that ThreadPool, StreamScheduler, AdaptiveBackoff tests passed
-      grep -q "All 0 tests passed" benchmark_output.log || grep -q "test passed" benchmark_output.log || {
-        echo "Performance tests completed"
-      }
+      # Fail if no tests actually passed — ensures benchmarks are real
+      if ! grep -q "passed" benchmark_output.log; then
+        echo "ERROR: No benchmark tests passed — check benchmark_output.log"
+        exit 1
+      fi
+      echo "Performance benchmarks verified"
 
       echo "✓ GAP-0244: Performance benchmarks executed"
       echo "✓ REQ-0009 Performance budget enforcement active"

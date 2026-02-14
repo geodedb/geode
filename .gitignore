@@ -23,6 +23,10 @@ typescript
 # Audit test output files
 /audit_*.json
 /audit_*.jsonl
+audit.jsonl
+
+# Stress test data
+stress_data_integration/
 
 # Python cache
 __pycache__/

@@ -214,9 +214,8 @@ pub const State = struct {
                 std.crypto.random.bytes(&generated_admin_pw);
                 generated_admin_pw_hex = std.fmt.bytesToHex(generated_admin_pw, .lower);
                 log.warn("Generated random admin password - set GEODE_ADMIN_PASSWORD env var for persistent password", &.{});
-                log.info("Admin password generated", &.{
-                    Attr.string("password", &generated_admin_pw_hex),
-                });
+                // Security: never log the actual password, even in info level
+                log.info("Admin password generated (check stderr output)", &.{});
                 break :blk &generated_admin_pw_hex;
             }
             // Debug builds: use simple default for testing convenience
@@ -235,9 +234,7 @@ pub const State = struct {
                 std.crypto.random.bytes(&generated_test_pw);
                 generated_test_pw_hex = std.fmt.bytesToHex(generated_test_pw, .lower);
                 log.warn("Generated random testuser password - set GEODE_USER_PASSWORD env var for persistent password", &.{});
-                log.info("Testuser password generated", &.{
-                    Attr.string("password", &generated_test_pw_hex),
-                });
+                log.info("Testuser password generated (check stderr output)", &.{});
                 break :blk &generated_test_pw_hex;
             }
             // Debug builds: use simple default for testing convenience
@@ -435,7 +432,18 @@ pub const State = struct {
         if (self.findUserIndex(username)) |idx| {
             const u = self.users.items[idx];
             if (!u.active) return false;
-            return std.mem.eql(u8, u.password, password);
+            // Use constant-time comparison via hashing to fixed size first,
+            // preventing timing side-channel attacks regardless of password length.
+            const Blake2 = std.crypto.hash.blake2.Blake2b256;
+            var stored_hash: [Blake2.digest_length]u8 = undefined;
+            var input_hash: [Blake2.digest_length]u8 = undefined;
+            Blake2.hash(u.password, &stored_hash, .{});
+            Blake2.hash(password, &input_hash, .{});
+            return std.crypto.timing_safe.eql(
+                [Blake2.digest_length]u8,
+                stored_hash,
+                input_hash,
+            );
         }
         return false;
     }

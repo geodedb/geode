@@ -430,16 +430,13 @@ pub fn evalMathFunction(
         return Value{ .Int = sign_value };
     }
 
-    // random()
+    // random() — returns decimal in [0, 1) using cryptographically secure source
     if (std.mem.eql(u8, function_name, "random")) {
         if (args.len != 0) return Value{ .Null = {} };
-        const timestamp = @as(u64, @intCast(std.time.timestamp()));
-        const a: u64 = 1664525;
-        const c: u64 = 1013904223;
-        const m: u64 = 2147483647;
-        const seed = timestamp % m;
-        const next = (a * seed + c) % m;
-        const value = @as(f64, @floatFromInt(next)) / @as(f64, @floatFromInt(m));
+        var rand_bytes: [8]u8 = undefined;
+        std.crypto.random.bytes(&rand_bytes);
+        const rand_u64 = std.mem.readInt(u64, &rand_bytes, .little);
+        const value = @as(f64, @floatFromInt(rand_u64 >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53));
         return Value{ .Decimal = .{ .coeff = @intFromFloat(value * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 

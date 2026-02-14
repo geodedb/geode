@@ -881,12 +881,12 @@ pub fn testKeyZeroization(allocator: std.mem.Allocator) !struct {
         std.crypto.random.bytes(key);
     }
 
-    // Zeroize keys
+    // Zeroize keys using crypto-safe wipe (compiler cannot elide)
     for (&keys) |*key| {
-        @memset(key, 0);
+        std.crypto.secureZero(u8, key);
     }
 
-    // Verify zerization
+    // Verify zeroization
     var all_zeroed = true;
     for (keys) |key| {
         for (key) |byte| {
@@ -1299,10 +1299,10 @@ pub fn cleanupKeyHierarchy(allocator: std.mem.Allocator) !struct {
 } {
     _ = allocator;
 
-    // Zeroize all keys in hierarchy
+    // Zeroize all keys in hierarchy using crypto-safe wipe
     var keys: [3][32]u8 = undefined;
     for (&keys) |*key| {
-        @memset(key, 0);
+        std.crypto.secureZero(u8, key);
     }
 
     // Reset rotation state
