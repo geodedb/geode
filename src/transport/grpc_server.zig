@@ -1180,7 +1180,10 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                     };
                     defer resp.deinit(allocator);
 
-                    // GAP-0260: Non-txn saves deferred to background persistence thread
+                    // GAP-0260: Signal persistence for auto-committed mutations
+                    if (!state.in_txn) {
+                        graph_store.signalPersistence();
+                    }
                     return encodeMessage(allocator, resp);
                 },
                 .rows => {
@@ -1228,7 +1231,10 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                     state.result_order_keys = order_keys;
 
                     updateTxnStateFromProgram(state, &parse_result.program);
-                    // GAP-0260: Non-txn saves deferred to background persistence thread
+                    // GAP-0260: Signal persistence for auto-committed mutations
+                    if (!state.in_txn) {
+                        graph_store.signalPersistence();
+                    }
 
                     return encodeMessage(allocator, schema_resp);
                 },

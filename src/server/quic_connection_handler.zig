@@ -909,7 +909,10 @@ fn handleClientMessage(
 
                             updateTxnStateFromProgram(state, &parse_result.program);
 
-                            // GAP-0260: Non-txn saves deferred to background persistence thread
+                            // GAP-0260: Signal persistence for auto-committed mutations
+                            if (!state.in_txn) {
+                                graph_store.signalPersistence();
+                            }
                         },
                     }
                 },

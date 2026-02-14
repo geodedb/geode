@@ -3331,8 +3331,11 @@ fn persistenceLoop() void {
         ) catch {};
         g_persist_cond_mutex.unlock();
 
-        // Check if dirty (cheap atomic read — no lock needed)
-        if (!g_atomic_dirty.load(.acquire)) continue;
+        // Check if dirty — use atomic flag first (cheap), then check store.dirty
+        // as safety net in case any code path sets store.dirty without signalPersistence()
+        const atomic_dirty = g_atomic_dirty.load(.acquire);
+        const store_dirty = if (global_store) |*store| store.dirty else false;
+        if (!atomic_dirty and !store_dirty) continue;
 
         // Acquire exclusive write lock to flush
         acquireStoreWriteLock();
