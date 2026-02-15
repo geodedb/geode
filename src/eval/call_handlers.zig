@@ -936,6 +936,58 @@ pub fn evalTypeCastFunction(
             }
         }
 
+        // DATE conversion
+        if (std.mem.eql(u8, upper_type, "DATE")) {
+            switch (value_arg) {
+                .Str => |s| {
+                    const datetime_module = @import("../types/datetime.zig");
+                    const date = datetime_module.Date.fromStr(s) catch return Value{ .Null = {} };
+                    return Value{ .Date = date };
+                },
+                .Date => return value_arg,
+                .Timestamp => |ts| {
+                    const datetime_module = @import("../types/datetime.zig");
+                    const days: i32 = @intCast(@divFloor(ts.micros_since_epoch, 24 * 3600 * 1_000_000));
+                    return Value{ .Date = datetime_module.Date{ .days_since_epoch = days } };
+                },
+                else => return Value{ .Null = {} },
+            }
+        }
+
+        // TIME conversion
+        if (std.mem.eql(u8, upper_type, "TIME")) {
+            switch (value_arg) {
+                .Str => |s| {
+                    const datetime_module = @import("../types/datetime.zig");
+                    const time = datetime_module.Time.fromStr(s) catch return Value{ .Null = {} };
+                    return Value{ .Time = time };
+                },
+                .Time => return value_arg,
+                .Timestamp => |ts| {
+                    const datetime_module = @import("../types/datetime.zig");
+                    const micros = @rem(ts.micros_since_epoch, 24 * 3600 * @as(i64, 1_000_000));
+                    return Value{ .Time = datetime_module.Time{ .micros_since_midnight = if (micros < 0) micros + 24 * 3600 * 1_000_000 else micros } };
+                },
+                else => return Value{ .Null = {} },
+            }
+        }
+
+        // DATETIME/TIMESTAMP conversion
+        if (std.mem.eql(u8, upper_type, "DATETIME") or std.mem.eql(u8, upper_type, "TIMESTAMP")) {
+            switch (value_arg) {
+                .Str => |s| {
+                    const datetime_module = @import("../types/datetime.zig");
+                    const ts = datetime_module.Timestamp.fromStr(s) catch return Value{ .Null = {} };
+                    return Value{ .Timestamp = ts };
+                },
+                .Timestamp => return value_arg,
+                .Date => |d| {
+                    return Value{ .Timestamp = .{ .micros_since_epoch = @as(i64, d.days_since_epoch) * 24 * 3600 * 1_000_000 } };
+                },
+                else => return Value{ .Null = {} },
+            }
+        }
+
         // Unknown type
         return Value{ .Null = {} };
     }

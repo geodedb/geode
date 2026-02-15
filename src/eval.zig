@@ -663,6 +663,41 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         .Bool => |b| .{ .Bool = b },
         .String => |s| .{ .Str = s },
         .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale } },
+        .Date => |dt| blk_date: {
+            const datetime_module = @import("types/datetime.zig");
+            const days = datetime_module.Date.daysSinceEpoch(@intCast(dt.parsed.y), dt.parsed.m, dt.parsed.d) catch
+                break :blk_date Value{ .Null = {} };
+            break :blk_date Value{ .Date = .{ .days_since_epoch = days } };
+        },
+        .Time => |t| blk_time: {
+            const micros: i64 = @as(i64, t.parsed.h) * 3600_000_000 +
+                @as(i64, t.parsed.min) * 60_000_000 +
+                @as(i64, t.parsed.s) * 1_000_000 +
+                @divFloor(@as(i64, t.parsed.frac_nanos), 1000);
+            break :blk_time Value{ .Time = .{ .micros_since_midnight = micros } };
+        },
+        .DateTime => |dt| blk_datetime: {
+            const datetime_module = @import("types/datetime.zig");
+            const days = datetime_module.Date.daysSinceEpoch(@intCast(dt.parsed.date.y), dt.parsed.date.m, dt.parsed.date.d) catch
+                break :blk_datetime Value{ .Null = {} };
+            const time_micros: i64 = @as(i64, dt.parsed.time.h) * 3600_000_000 +
+                @as(i64, dt.parsed.time.min) * 60_000_000 +
+                @as(i64, dt.parsed.time.s) * 1_000_000 +
+                @divFloor(@as(i64, dt.parsed.time.frac_nanos), 1000);
+            const total_micros = @as(i64, days) * 24 * 3600 * 1_000_000 + time_micros;
+            break :blk_datetime Value{ .Timestamp = .{ .micros_since_epoch = total_micros } };
+        },
+        .LocalDateTime => |dt| blk_localdatetime: {
+            const datetime_module = @import("types/datetime.zig");
+            const days = datetime_module.Date.daysSinceEpoch(@intCast(dt.parsed.date.y), dt.parsed.date.m, dt.parsed.date.d) catch
+                break :blk_localdatetime Value{ .Null = {} };
+            const time_micros: i64 = @as(i64, dt.parsed.time.h) * 3600_000_000 +
+                @as(i64, dt.parsed.time.min) * 60_000_000 +
+                @as(i64, dt.parsed.time.s) * 1_000_000 +
+                @divFloor(@as(i64, dt.parsed.time.frac_nanos), 1000);
+            const total_micros = @as(i64, days) * 24 * 3600 * 1_000_000 + time_micros;
+            break :blk_localdatetime Value{ .Timestamp = .{ .micros_since_epoch = total_micros } };
+        },
         .Ident => |id| env.get(id.orig) orelse Value{ .Null = {} },
         .Param => |pname| env.getParam(pname) orelse Value{ .Null = {} },
         .Unary => |u| blk: {
