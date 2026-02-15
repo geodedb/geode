@@ -3321,7 +3321,8 @@ pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
 /// GAP-0259/0260: Persistence loop uses condition variable instead of sleep-polling.
 /// Wakes on signalPersistence() or every g_persist_interval_ms (fallback).
 /// Uses tryLock to avoid blocking query handlers — if the write lock can't be
-/// acquired (queries are in progress), the save is deferred to the next cycle.
+/// acquired (queries are in progress), retries briefly since signalPersistence()
+/// is typically called just before the shared lock is released.
 fn persistenceLoop() void {
     while (!g_persist_shutdown.load(.acquire)) {
         // Wait for signal or timeout
@@ -3338,10 +3339,18 @@ fn persistenceLoop() void {
         const store_dirty = if (global_store) |*store| store.dirty else false;
         if (!atomic_dirty and !store_dirty) continue;
 
-        // Try to acquire exclusive write lock — non-blocking to avoid stalling
-        // query handlers. If queries are in progress (shared locks held), skip
-        // this cycle and retry on the next wake-up.
-        if (!g_store_rwlock.tryLock()) continue;
+        // Try to acquire exclusive write lock. signalPersistence() is called while
+        // the QUIC handler still holds a shared lock, so the first tryLock() often
+        // fails. Retry a few times with brief sleeps to let the handler release it.
+        var locked = false;
+        for (0..10) |_| {
+            if (g_store_rwlock.tryLock()) {
+                locked = true;
+                break;
+            }
+            std.Thread.sleep(5 * std.time.ns_per_ms);
+        }
+        if (!locked) continue;
         defer g_store_rwlock.unlock();
 
         if (global_store) |*store| {
