@@ -35,12 +35,11 @@ pub fn hex64(buf: []const u8) VerifyError![64]u8 {
 
 /// GAP-0151: Full audit verification with Ed25519 signature and digest interval validation
 /// CANARY: REQ=REQ-AUDIT-VERIFY-002; FEATURE="Audit Signature Verification"; ASPECT=Ed25519Verify; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_auth.yml; OWNER=security; UPDATED=2026-01-15
-pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo, digest_interval_events: u32, require_digest: bool, pubkey: ?[32]u8) VerifyError!void {
+pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo, digest_interval_events: u32, require_digest: bool, pubkey: ?[32]u8, is_default_path: bool) VerifyError!void {
     var file = std.fs.cwd().openFile(path, .{}) catch |err| {
-        if (err == error.FileNotFound) {
-            // No audit log file — nothing to verify, treat as clean.
-            const stdout = std.io.getStdOut().writer();
-            stdout.print("audit log not found: {s} (0 records verified)\n", .{path}) catch {};
+        if (err == error.FileNotFound and is_default_path) {
+            // Default path not found — nothing to verify, treat as clean.
+            std.debug.print("audit log not found: {s} (0 records verified)\n", .{path});
             return;
         }
         return error.ReadError;

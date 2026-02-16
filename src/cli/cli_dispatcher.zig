@@ -264,6 +264,7 @@ pub fn dispatch(
         // geode audit verify --file <path> ...
         var algo: audit_cli.HashAlgo = .sha256;
         var path: []const u8 = "audit.jsonl";
+        var is_default_path = true;
         var require_digest = false;
         var pubkey: ?[32]u8 = null;
         audit_i = subcommand_start + 1;
@@ -272,6 +273,7 @@ pub fn dispatch(
                 continue;
             } else if (std.mem.eql(u8, argv[audit_i], "--file") and audit_i + 1 < argv.len) {
                 path = argv[audit_i + 1];
+                is_default_path = false;
                 audit_i += 1;
             } else if (std.mem.eql(u8, argv[audit_i], "--algo") and audit_i + 1 < argv.len) {
                 const a = argv[audit_i + 1];
@@ -284,7 +286,7 @@ pub fn dispatch(
                 audit_i += 1;
             }
         }
-        try audit_cli.verifyFile(allocator, path, algo, 100, require_digest, pubkey);
+        try audit_cli.verifyFile(allocator, path, algo, 100, require_digest, pubkey, is_default_path);
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcommand, "completion") or std.mem.eql(u8, subcommand, "completions")) {
         // CANARY: REQ=REQ-LIB-MIGRATION-CLI-002; FEATURE="External Library Migration"; ASPECT=ShellCompletions; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
