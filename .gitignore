@@ -96,6 +96,16 @@ docker/zig/*.tar.xz
 docker/zig/*.tar.gz
 docker/msquic/lib/*.so*
 docker/msquic/lib/*.a
+# Docker local build/runtime artifacts (generated)
+docker/**/*.tar
+docker/**/*.tgz
+docker/**/*.zip
+docker/**/.cache/
+docker/**/.tmp/
+docker/**/tmp/
+docker/**/zig-cache/
+docker/**/.zig-cache/
+docker/**/zig-out/
 # Keep directory structure and .gitkeep files
 !docker/*/.gitkeep
 
