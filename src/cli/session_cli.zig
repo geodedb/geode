@@ -1,10 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const geode = @import("geode");
+const auth_state = geode.auth_state;
 
 // CANARY: REQ=REQ-CLI-SESSION-001; FEATURE="CLISession"; ASPECT=Management; STATUS=TESTED; TEST=geodetestlab/specs/authn_provider.yml; OWNER=cli; UPDATED=2026-02-04
 // Session management CLI commands
 
-const SESSION_STATE_PATH = "/tmp/geode_session_state.db";
+const SESSION_STATE_FILE = "geode_session_state.db";
+
+fn sessionStatePath(allocator: std.mem.Allocator) ![]u8 {
+    return auth_state.resolveStatePath(allocator, SESSION_STATE_FILE);
+}
 
 // Exit codes for consistency with main CLI
 const ExitCode = enum(u8) {
@@ -25,7 +31,10 @@ const StoredSession = struct {
 fn loadSessionState(allocator: std.mem.Allocator) !std.StringHashMap(StoredSession) {
     var sessions = std.StringHashMap(StoredSession).init(allocator);
 
-    const file = std.fs.openFileAbsolute(SESSION_STATE_PATH, .{}) catch |err| switch (err) {
+    const state_path = try sessionStatePath(allocator);
+    defer allocator.free(state_path);
+
+    const file = std.fs.openFileAbsolute(state_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return sessions,
         else => return err,
     };
@@ -64,7 +73,14 @@ fn loadSessionState(allocator: std.mem.Allocator) !std.StringHashMap(StoredSessi
 }
 
 fn saveSessionState(allocator: std.mem.Allocator, sessions: std.StringHashMap(StoredSession)) !void {
-    const file = try std.fs.createFileAbsolute(SESSION_STATE_PATH, .{});
+    const state_path = try sessionStatePath(allocator);
+    defer allocator.free(state_path);
+
+    const file = try std.fs.createFileAbsolute(state_path, .{
+        .truncate = true,
+        .read = true,
+        .mode = 0o600,
+    });
     defer file.close();
 
     var buffer: std.ArrayListUnmanaged(u8) = .empty;

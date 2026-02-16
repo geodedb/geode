@@ -1,10 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const geode = @import("geode");
+const auth_state = geode.auth_state;
 
 // CANARY: REQ=REQ-CLI-AUTHN-001; FEATURE="CLIAuthn"; ASPECT=ProviderConfig; STATUS=TESTED; TEST=geodetestlab/specs/authn_provider.yml; OWNER=cli; UPDATED=2026-02-04
 // Authentication provider configuration CLI commands
 
-const AUTHN_STATE_PATH = "/tmp/geode_authn_state.db";
+const AUTHN_STATE_FILE = "geode_authn_state.db";
+
+fn authnStatePath(allocator: std.mem.Allocator) ![]u8 {
+    return auth_state.resolveStatePath(allocator, AUTHN_STATE_FILE);
+}
 
 // Exit codes for consistency with main CLI
 const ExitCode = enum(u8) {
@@ -41,7 +47,10 @@ const AuthnConfig = struct {
 fn loadAuthnConfig(allocator: std.mem.Allocator) !AuthnConfig {
     var config = AuthnConfig.init(allocator);
 
-    const file = std.fs.openFileAbsolute(AUTHN_STATE_PATH, .{}) catch |err| switch (err) {
+    const state_path = try authnStatePath(allocator);
+    defer allocator.free(state_path);
+
+    const file = std.fs.openFileAbsolute(state_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return config,
         else => return err,
     };
@@ -80,7 +89,14 @@ fn loadAuthnConfig(allocator: std.mem.Allocator) !AuthnConfig {
 }
 
 fn saveAuthnConfig(allocator: std.mem.Allocator, config: AuthnConfig) !void {
-    const file = try std.fs.createFileAbsolute(AUTHN_STATE_PATH, .{});
+    const state_path = try authnStatePath(allocator);
+    defer allocator.free(state_path);
+
+    const file = try std.fs.createFileAbsolute(state_path, .{
+        .truncate = true,
+        .read = true,
+        .mode = 0o600,
+    });
     defer file.close();
 
     var buffer: std.ArrayListUnmanaged(u8) = .empty;

@@ -1,0 +1,93 @@
+{
+  "dockerfiles": [
+    {
+      "path": "Dockerfile.release",
+      "title": "Production release image for GoReleaser",
+      "notes": [
+        "This Dockerfile is used by GoReleaser to build release Docker images.",
+        "The binary is copied from the GoReleaser build context."
+      ],
+      "base_image": "debian:bookworm-slim",
+      "shell": [
+        "/bin/bash",
+        "-o",
+        "pipefail",
+        "-c"
+      ],
+      "package_manager": "apt",
+      "runtime_packages": [
+        "ca-certificates",
+        "libssl3"
+      ],
+      "user_setup": "useradd -m -u 10000 geode",
+      "expose_ports": [
+        "3141/udp",
+        "50051/tcp",
+        "9090/tcp"
+      ],
+      "cmd": [
+        "serve",
+        "--data-dir",
+        "/data",
+        "--log-level",
+        "error"
+      ]
+    },
+    {
+      "path": "Dockerfile.release.alpine",
+      "title": "Alpine-based production release image for GoReleaser",
+      "notes": [
+        "Smaller image size using Alpine Linux.",
+        "The binary is copied from the GoReleaser build context (musl-linked)."
+      ],
+      "base_image": "alpine:3.20",
+      "package_manager": "apk",
+      "runtime_packages": [
+        "ca-certificates",
+        "libssl3"
+      ],
+      "user_setup": "adduser -D -u 10000 geode",
+      "expose_ports": [
+        "3141/udp",
+        "50051/tcp",
+        "9090/tcp"
+      ],
+      "cmd": [
+        "serve",
+        "--data-dir",
+        "/data",
+        "--log-level",
+        "error"
+      ]
+    },
+    {
+      "path": "Dockerfile.release.gpu",
+      "title": "GPU-enabled production release image for GoReleaser",
+      "notes": [
+        "This Dockerfile is used by GoReleaser to build GPU-enabled release Docker images.",
+        "The binary is copied from the GoReleaser build context.",
+        "Requires NVIDIA Container Toolkit on the host system."
+      ],
+      "base_image": "nvidia/cuda:12.3.2-runtime-ubuntu22.04",
+      "package_manager": "apt",
+      "runtime_packages": [
+        "ca-certificates",
+        "libssl3",
+        "libvulkan1"
+      ],
+      "user_setup": "useradd -m -u 10000 geode",
+      "expose_ports": [
+        "3141/udp",
+        "9090/tcp"
+      ],
+      "cmd": [
+        "serve",
+        "--data-dir",
+        "/data",
+        "--log-level",
+        "error",
+        "--gpu-acceleration"
+      ]
+    }
+  ]
+}

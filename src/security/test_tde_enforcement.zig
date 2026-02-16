@@ -86,27 +86,22 @@ test "TestTDE_KeyFormat_RejectNonHexChars" {
 // CANARY: REQ=REQ-TDE-ENFORCE-003; FEATURE="TDEEnforcement"; ASPECT=SnapshotEncryption; STATUS=TESTED; OWNER=security; UPDATED=2026-02-04
 // ============================================================================
 
-// Test: Snapshot nonce derivation is deterministic and content-sensitive.
-test "TestTDE_Snapshot_NonceDerivation" {
+// Test: Snapshot nonces are randomized per encryption operation.
+test "TestTDE_Snapshot_NonceRandomization" {
     const key: [tde_file.KEY_BYTES]u8 = [_]u8{0x11} ** tde_file.KEY_BYTES;
     const allocator = testing.allocator;
 
     const payload_a = "snapshot-a";
-    const payload_b = "snapshot-b";
 
     const enc_a = try tde_file.encryptWithKey(allocator, payload_a, key);
     defer allocator.free(enc_a);
-    const enc_b = try tde_file.encryptWithKey(allocator, payload_b, key);
-    defer allocator.free(enc_b);
     const enc_a2 = try tde_file.encryptWithKey(allocator, payload_a, key);
     defer allocator.free(enc_a2);
 
     const nonce_a = enc_a[tde_file.MAGIC.len .. tde_file.MAGIC.len + tde_file.NONCE_BYTES];
-    const nonce_b = enc_b[tde_file.MAGIC.len .. tde_file.MAGIC.len + tde_file.NONCE_BYTES];
     const nonce_a2 = enc_a2[tde_file.MAGIC.len .. tde_file.MAGIC.len + tde_file.NONCE_BYTES];
 
-    try testing.expect(!std.mem.eql(u8, nonce_a, nonce_b));
-    try testing.expect(std.mem.eql(u8, nonce_a, nonce_a2));
+    try testing.expect(!std.mem.eql(u8, nonce_a, nonce_a2));
 }
 
 // Test: Snapshot record structure with encryption.

@@ -1,9 +1,11 @@
-# Ignore build cache (but keep zig-out for CI Docker builds)
+# Ignore build cache and artifacts by default.
 zig-cache/
 .zig-cache/
-# Keep zig-out/bin for Docker builds
-!zig-out/
+zig-out/
+# Keep only the prebuilt runtime binary when explicitly present.
 !zig-out/bin/
+zig-out/bin/*
+!zig-out/bin/geode
 
 # Ignore local data
 data/

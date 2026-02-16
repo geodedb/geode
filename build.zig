@@ -767,6 +767,45 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addOptions("openssl_config", test_openssl_options);
     const run_custom_tests = b.addRunArtifact(custom_tests);
 
+    // GAP-0401: MATCH refactor staged parity campaign
+    const match_parity_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_match_operations_parity_campaign.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    match_parity_tests.root_module.addImport("geode", root_mod);
+    const run_match_parity_tests = b.addRunArtifact(match_parity_tests);
+    const match_parity_step = b.step("test-match-parity", "Run MATCH staged parity golden tests");
+    match_parity_step.dependOn(&run_match_parity_tests.step);
+
+    // GAP-0401: MATCH refactor staged benchmark campaign
+    const match_bench_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/benchmark_match_operations_campaign.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    match_bench_tests.root_module.addImport("geode", root_mod);
+    const run_match_bench_tests = b.addRunArtifact(match_bench_tests);
+    const match_bench_step = b.step("test-match-bench", "Run MATCH staged benchmark campaign smoke");
+    match_bench_step.dependOn(&run_match_bench_tests.step);
+
+    // GAP-0461: CLI transport response abstraction parity goldens
+    const cli_transport_parity_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_cli_transport_response_parity.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    cli_transport_parity_tests.root_module.addImport("geode", root_mod);
+    const run_cli_transport_parity_tests = b.addRunArtifact(cli_transport_parity_tests);
+    const cli_transport_parity_step = b.step("test-cli-transport-parity", "Run CLI transport response parity goldens");
+    cli_transport_parity_step.dependOn(&run_cli_transport_parity_tests.step);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_ext_builtins_tests.step);
@@ -787,6 +826,8 @@ pub fn build(b: *std.Build) void {
     // gap0203_tests moved to test-e2e (spawns QUIC servers)
     test_step.dependOn(&run_graph_persist_tests.step);
     test_step.dependOn(&run_binary_persist_tests.step);
+    test_step.dependOn(&run_match_parity_tests.step);
+    test_step.dependOn(&run_cli_transport_parity_tests.step);
 
     // E2E tests (slower, require more setup - not run in pre-push hooks)
     // Run with: zig build test-e2e

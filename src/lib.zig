@@ -260,6 +260,9 @@ pub const repl = struct {
     pub const platform = @import("client/repl/platform.zig");
 };
 
+// Shared CLI transport response formatter abstraction.
+pub const cli_transport_response = @import("cli/transport_response.zig");
+
 // Extend planner module
 pub const planner_wcoj = @import("planner/wcoj.zig");
 

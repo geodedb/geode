@@ -13,7 +13,63 @@ const is_production_build = builtin.mode == .ReleaseSafe or builtin.mode == .Rel
 /// Lightweight persistent auth state used by CLI workflows and e2e tests.
 /// Stores users/roles/policies/grants in a simple line-oriented file so state
 /// survives between CLI invocations without requiring the full storage layer.
-pub const STATE_PATH = "/tmp/geode_auth_state.db";
+const STATE_DIR_ENV = "GEODE_STATE_DIR";
+const AUTH_STATE_FILE = "geode_auth_state.db";
+
+fn secureChmod(path: []const u8, mode: std.fs.File.Mode) void {
+    if (builtin.os.tag == .windows) return;
+    if (std.fs.openFileAbsolute(path, .{})) |file| {
+        defer file.close();
+        file.chmod(mode) catch {};
+        return;
+    } else |_| {}
+
+    if (std.fs.openDirAbsolute(path, .{ .iterate = true })) |opened_dir| {
+        var dir = opened_dir;
+        defer dir.close();
+        dir.chmod(mode) catch {};
+    } else |_| {}
+}
+
+fn resolveStateDir(allocator: std.mem.Allocator) ![]u8 {
+    if (std.process.getEnvVarOwned(allocator, STATE_DIR_ENV)) |raw| {
+        defer allocator.free(raw);
+        if (std.fs.path.isAbsolute(raw)) return allocator.dupe(u8, raw);
+
+        const cwd = try std.process.getCwdAlloc(allocator);
+        defer allocator.free(cwd);
+        return std.fs.path.join(allocator, &.{ cwd, raw });
+    } else |_| {}
+
+    if (std.process.getEnvVarOwned(allocator, "XDG_STATE_HOME")) |xdg_state_home| {
+        defer allocator.free(xdg_state_home);
+        return std.fs.path.join(allocator, &.{ xdg_state_home, "geode" });
+    } else |_| {}
+
+    if (std.process.getEnvVarOwned(allocator, "HOME")) |home| {
+        defer allocator.free(home);
+        return std.fs.path.join(allocator, &.{ home, ".local", "state", "geode" });
+    } else |_| {}
+
+    if (builtin.os.tag != .windows) {
+        return std.fmt.allocPrint(allocator, "/tmp/geode-{d}", .{std.posix.getuid()});
+    }
+    return std.fs.path.join(allocator, &.{ ".", ".geode", "state" });
+}
+
+pub fn resolveStatePath(allocator: std.mem.Allocator, filename: []const u8) ![]u8 {
+    const state_dir = try resolveStateDir(allocator);
+    defer allocator.free(state_dir);
+
+    try std.fs.cwd().makePath(state_dir);
+    secureChmod(state_dir, 0o700);
+
+    return std.fs.path.join(allocator, &.{ state_dir, filename });
+}
+
+pub fn authStatePath(allocator: std.mem.Allocator) ![]u8 {
+    return resolveStatePath(allocator, AUTH_STATE_FILE);
+}
 
 pub const User = struct {
     username: []u8,
@@ -92,8 +148,10 @@ pub const State = struct {
 
     pub fn load(allocator: std.mem.Allocator) !State {
         var state = try State.init(allocator);
+        const state_path = try authStatePath(allocator);
+        defer allocator.free(state_path);
 
-        const file = std.fs.openFileAbsolute(STATE_PATH, .{}) catch |err| switch (err) {
+        const file = std.fs.openFileAbsolute(state_path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
                 try state.ensureDefaults();
                 try state.save();
@@ -159,8 +217,17 @@ pub const State = struct {
     }
 
     pub fn save(self: *State) !void {
-        const file = try std.fs.createFileAbsolute(STATE_PATH, .{ .truncate = true, .read = true });
+        const state_path = try authStatePath(self.allocator);
+        defer self.allocator.free(state_path);
+
+        const file = try std.fs.createFileAbsolute(state_path, .{
+            .truncate = true,
+            .read = true,
+            .mode = 0o600,
+        });
         defer file.close();
+        secureChmod(state_path, 0o600);
+
         var buf: [512]u8 = undefined;
 
         for (self.users.items) |u| {

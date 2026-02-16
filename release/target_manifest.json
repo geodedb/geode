@@ -1,0 +1,99 @@
+{
+  "zig_targets": [
+    "x86_64-linux-gnu",
+    "x86_64-linux-musl",
+    "aarch64-linux-gnu",
+    "aarch64-linux-musl",
+    "arm-linux-gnueabihf",
+    "riscv64-linux-gnu",
+    "x86_64-macos",
+    "aarch64-macos"
+  ],
+  "release_assets": [
+    {
+      "name": "macOS Universal (Intel + Apple Silicon)",
+      "filename": "geode_{version}_darwin_universal.tar.gz",
+      "link_type": "package"
+    },
+    {
+      "name": "macOS Intel (x86_64)",
+      "filename": "geode_{version}_x86_64-macos.tar.gz",
+      "link_type": "package"
+    },
+    {
+      "name": "macOS Apple Silicon (ARM64)",
+      "filename": "geode_{version}_aarch64-macos.tar.gz",
+      "link_type": "package"
+    },
+    {
+      "name": "Linux x86_64 (glibc)",
+      "filename": "geode_{version}_x86_64-linux-gnu.tar.gz",
+      "link_type": "package"
+    },
+    {
+      "name": "Linux x86_64 (musl/Alpine)",
+      "filename": "geode_{version}_x86_64-linux-musl.tar.gz",
+      "link_type": "package"
+    },
+    {
+      "name": "Linux ARM64 (glibc)",
+      "filename": "geode_{version}_aarch64-linux-gnu.tar.gz",
+      "link_type": "package"
+    },
+    {
+      "name": "Linux ARM64 (musl/Alpine)",
+      "filename": "geode_{version}_aarch64-linux-musl.tar.gz",
+      "link_type": "package"
+    },
+    {
+      "name": "Linux ARMv7",
+      "filename": "geode_{version}_arm-linux-gnueabihf.tar.gz",
+      "link_type": "package"
+    },
+    {
+      "name": "Linux RISC-V 64",
+      "filename": "geode_{version}_riscv64-linux-gnu.tar.gz",
+      "link_type": "package"
+    },
+    {
+      "name": "Debian/Ubuntu x86_64 (.deb)",
+      "filename": "geode_{version}_Linux_x86_64.deb",
+      "link_type": "package"
+    },
+    {
+      "name": "Debian/Ubuntu ARM64 (.deb)",
+      "filename": "geode_{version}_Linux_arm64.deb",
+      "link_type": "package"
+    },
+    {
+      "name": "RHEL/Fedora x86_64 (.rpm)",
+      "filename": "geode_{version}_Linux_x86_64.rpm",
+      "link_type": "package"
+    },
+    {
+      "name": "RHEL/Fedora ARM64 (.rpm)",
+      "filename": "geode_{version}_Linux_arm64.rpm",
+      "link_type": "package"
+    },
+    {
+      "name": "Alpine x86_64 (.apk)",
+      "filename": "geode_{version}_Linux_x86_64.apk",
+      "link_type": "package"
+    },
+    {
+      "name": "Alpine ARM64 (.apk)",
+      "filename": "geode_{version}_Linux_arm64.apk",
+      "link_type": "package"
+    },
+    {
+      "name": "Checksums (SHA256)",
+      "filename": "checksums.txt",
+      "link_type": "other"
+    },
+    {
+      "name": "Package Registry",
+      "url": "{project_url}/-/packages",
+      "link_type": "other"
+    }
+  ]
+}

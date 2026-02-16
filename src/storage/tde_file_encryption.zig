@@ -83,12 +83,10 @@ pub fn isEnabled(allocator: std.mem.Allocator) bool {
 /// Layout: [MAGIC(8)][nonce(12)][tag(16)][ciphertext]
 /// Returns a new buffer that must be freed by the caller.
 pub fn encryptWithKey(allocator: std.mem.Allocator, plaintext: []const u8, key: [KEY_BYTES]u8) ![]u8 {
-    // Generate deterministic nonce from content hash (for reproducibility)
+    // Generate a cryptographically random nonce for each encryption operation.
+    // AES-GCM requires nonce uniqueness per key; random nonces avoid deterministic reuse.
     var nonce: [NONCE_BYTES]u8 = undefined;
-    const hash_input = if (plaintext.len >= 64) plaintext[0..64] else plaintext;
-    const content_hash = std.hash.Wyhash.hash(0, hash_input);
-    std.mem.writeInt(u64, nonce[0..8], content_hash, .little);
-    std.mem.writeInt(u32, nonce[8..12], @as(u32, @intCast(plaintext.len & 0xFFFFFFFF)), .little);
+    std.crypto.random.bytes(&nonce);
 
     // Encrypt
     var tag: [TAG_BYTES]u8 = undefined;

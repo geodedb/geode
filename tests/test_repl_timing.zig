@@ -78,7 +78,7 @@ fn executeGqlWithTiming(writer: anytype, state: *MockReplState, gql: []const u8)
         const response = state.session.mock_responses.items[state.session.mock_responses.items.len - 1];
 
         // Check if this is a query result that should be formatted
-        if (std.mem.indexOf(u8, response, "\"columns\":") != null and std.mem.indexOf(u8, response", "\"data\":") != null) {
+        if (std.mem.indexOf(u8, response, "\"columns\":") != null and std.mem.indexOf(u8, response, "\"data\":") != null) {
             // For tests, just output the response as-is
             try writer.writeAll(response);
         } else {

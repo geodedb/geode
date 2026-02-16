@@ -96,7 +96,7 @@ pub fn countCommunities(labels: []const u32) usize {
     if (labels.len == 0) return 0;
 
     // Find unique labels
-    var seen = std.AutoHashMap(u32, void).init(std.heap.page_allocator);
+    var seen = std.AutoHashMap(u32, void).init(std.heap.c_allocator);
     defer seen.deinit();
 
     for (labels) |label| {

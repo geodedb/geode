@@ -318,7 +318,8 @@ fn dupOrderKeys(allocator: std.mem.Allocator, keys: []const []const u8) !std.Arr
 }
 
 fn inferColumnType(rows: [][]value_types.Value, col_idx: usize) []const u8 {
-    for (rows) |row| {
+    const sample_size = @min(rows.len, 10);
+    for (rows[0..sample_size]) |row| {
         if (col_idx >= row.len) continue;
         const val = row[col_idx];
         if (val == .Null) continue;

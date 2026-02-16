@@ -740,7 +740,7 @@ const GraphData = struct {
         // Return neighbor nodes from outgoing edges
         if (self.outgoing_edges.get(node)) |edges| {
             // Collect target nodes from edges
-            const result = std.heap.page_allocator.alloc(NodeId, edges.items.len) catch return &[_]NodeId{};
+            const result = std.heap.c_allocator.alloc(NodeId, edges.items.len) catch return &[_]NodeId{};
             for (edges.items, 0..) |edge, i| {
                 result[i] = edge.target;
             }

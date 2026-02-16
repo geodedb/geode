@@ -1,5 +1,6 @@
 const std = @import("std");
 const crypto = std.crypto;
+const auth_state = @import("auth_state.zig");
 const logging = @import("logging");
 const log = logging.scoped("security");
 const Attr = logging.Attr;
@@ -171,9 +172,9 @@ pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![108]u8
 /// Extracts the unique salt from the stored hash and uses it for verification
 // CANARY: REQ=REQ-AUTH-VERIFY-001; FEATURE="SecurePasswordVerify"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
 pub fn verifyPassword(password: []const u8, stored_hash: [108]u8) bool {
-    // Use page_allocator for Argon2id temp memory (64MB per call).
-    // This avoids GPA leak-detection overhead and is thread-safe without mutexes.
-    const allocator = std.heap.page_allocator;
+    // Use c_allocator for Argon2id scratch buffers in verification hot paths.
+    // This avoids untracked page allocator usage in production runtime paths.
+    const allocator = std.heap.c_allocator;
 
     // Extract salt from stored hash (bytes 10-41 are hex-encoded salt)
     // Format: $argon2id$<salt_hex(32)>$<hash_hex(64)>$
@@ -289,11 +290,13 @@ pub fn authenticate(username: []const u8, password: []const u8) !Role {
 /// Sync users from the auth_state file into the in-memory store.
 /// Called lazily when a user is not found in the in-memory store.
 fn syncFromAuthStateFile(store: *std.StringHashMap(User)) !void {
-    const auth_state_path = "/tmp/geode_auth_state.db";
+    const allocator = store.allocator;
+    const auth_state_path = auth_state.authStatePath(allocator) catch return;
+    defer allocator.free(auth_state_path);
+
     const file = std.fs.openFileAbsolute(auth_state_path, .{}) catch return;
     defer file.close();
 
-    const allocator = store.allocator;
     const contents = file.readToEndAlloc(allocator, 64 * 1024) catch return;
     defer allocator.free(contents);
 

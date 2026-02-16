@@ -88,8 +88,8 @@ pub const ModuleLoader = struct {
         }
 
         var func: CUfunction = undefined;
-        const name_z = try std.heap.page_allocator.dupeZ(u8, name);
-        defer std.heap.page_allocator.free(name_z);
+        const name_z = try std.heap.c_allocator.dupeZ(u8, name);
+        defer std.heap.c_allocator.free(name_z);
 
         const result = self.cuModuleGetFunction_fn.?(&func, self.module.?, name_z.ptr);
         if (result != 0) return error.FunctionNotFound;

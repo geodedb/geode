@@ -21,6 +21,12 @@ const schema = @import("schema");
 const spice_wrapper = @import("parallel/spice");
 const explain_payload = geode.explain_payload;
 const profile_payload = geode.profile_payload;
+const transport_response = @import("cli/transport_response.zig");
+const ColumnInfo = transport_response.ColumnInfo;
+const QueryResultKind = transport_response.QueryResultKind;
+const TransportResponseView = transport_response.TransportResponseView;
+const renderTransportResponse = transport_response.renderTransportResponse;
+const stdio_util = @import("utils/stdio.zig");
 
 // GAP-0203: Gate hot-path debug logging to eliminate overhead in production
 // CANARY: REQ=REQ-PERF-LOG-GATE-001; FEATURE="HotPathLogGating"; ASPECT=DebugLogControl; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
@@ -84,28 +90,16 @@ const repl_quic_transport = geode.repl.quic_transport;
 
 // Cross-platform file handle helpers with proper error handling
 // CANARY: REQ=REQ-QUALITY-GAP-406-002; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
-// On Windows, file handles are HANDLE (*anyopaque), not integers
-// On Unix, file handles are file descriptors (integers)
-const StdioError = error{ StdioUnavailable, InvalidHandle };
+const StdioError = stdio_util.StdioError;
 
 fn getStdinHandle() StdioError!std.fs.File.Handle {
-    if (builtin.os.tag == .windows) {
-        const handle = windows.GetStdHandle(windows.STD_INPUT_HANDLE) catch return error.StdioUnavailable;
-        if (handle == windows.INVALID_HANDLE_VALUE) return error.InvalidHandle;
-        return handle;
-    } else {
-        return std.posix.STDIN_FILENO;
-    }
+    const file = try stdio_util.getStdin();
+    return file.handle;
 }
 
 fn getStdoutHandle() StdioError!std.fs.File.Handle {
-    if (builtin.os.tag == .windows) {
-        const handle = windows.GetStdHandle(windows.STD_OUTPUT_HANDLE) catch return error.StdioUnavailable;
-        if (handle == windows.INVALID_HANDLE_VALUE) return error.InvalidHandle;
-        return handle;
-    } else {
-        return std.posix.STDOUT_FILENO;
-    }
+    const file = try stdio_util.getStdout();
+    return file.handle;
 }
 
 const ParamError = error{
@@ -132,13 +126,8 @@ fn freeParamValue(allocator: std.mem.Allocator, value: Value) void {
 }
 
 fn getStderrHandle() StdioError!std.fs.File.Handle {
-    if (builtin.os.tag == .windows) {
-        const handle = windows.GetStdHandle(windows.STD_ERROR_HANDLE) catch return error.StdioUnavailable;
-        if (handle == windows.INVALID_HANDLE_VALUE) return error.InvalidHandle;
-        return handle;
-    } else {
-        return std.posix.STDERR_FILENO;
-    }
+    const file = try stdio_util.getStderr();
+    return file.handle;
 }
 
 fn printServeUsage() void {
@@ -1873,8 +1862,7 @@ fn executeQueryOnGrpc(
         columns.deinit(allocator);
     }
 
-    const ResultKind = enum { rows, explain, profile };
-    var result_kind: ResultKind = .rows;
+    var result_kind: QueryResultKind = .rows;
     var result_payload: ?[]const u8 = null;
     defer if (result_payload) |payload| allocator.free(payload);
 
@@ -2049,195 +2037,34 @@ fn executeQueryOnGrpc(
         _ = resp_arena.reset(.retain_capacity);
     }
 
-    // Format and output results — identical to QUIC path
-    if (std.mem.eql(u8, format, "json")) {
-        // Use an arena for the JSON tree (ObjectMaps, Arrays, duped strings).
-        // Row json.Values from protoValueToJson are freed by the all_rows_json defer.
-        var json_arena = std.heap.ArenaAllocator.init(allocator);
-        defer json_arena.deinit();
-        const jalloc = json_arena.allocator();
-
-        const buildStringArray = struct {
-            fn apply(alloc: std.mem.Allocator, items: []const []const u8) !std.json.Array {
-                var arr = std.json.Array.init(alloc);
-                for (items) |item| {
-                    try arr.append(.{ .string = try alloc.dupe(u8, item) });
-                }
-                return arr;
-            }
-        }.apply;
-
-        const buildColumnsArray = struct {
-            fn apply(alloc: std.mem.Allocator, cols: []const ColumnInfo) !std.json.Array {
-                var arr = std.json.Array.init(alloc);
-                for (cols) |col| {
-                    var obj = std.json.ObjectMap.init(alloc);
-                    try obj.put("name", .{ .string = try alloc.dupe(u8, col.name) });
-                    try obj.put("type", .{ .string = try alloc.dupe(u8, col.type) });
-                    try arr.append(.{ .object = obj });
-                }
-                return arr;
-            }
-        }.apply;
-
-        var root = std.json.ObjectMap.init(jalloc);
-        if (has_error) {
-            try root.put("status_class", .{ .string = try jalloc.dupe(u8, error_status) });
-            if (error_status.len > 0) {
-                try root.put("error_code", .{ .string = try jalloc.dupe(u8, error_status) });
-            }
-            try root.put("error", .{ .string = try jalloc.dupe(u8, error_message) });
-        } else if (result_kind != .rows) {
-            try root.put("status_class", .{ .string = try jalloc.dupe(u8, status_class) });
-            if (status_subclass.len > 0) {
-                try root.put("status_subclass", .{ .string = try jalloc.dupe(u8, status_subclass) });
-            }
-            if (result_payload) |payload| {
-                if (std.json.parseFromSlice(std.json.Value, jalloc, payload, .{})) |parsed| {
-                    if (result_kind == .explain) {
-                        try root.put("explain", parsed.value);
-                    } else {
-                        try root.put("profile", parsed.value);
-                    }
-                } else |_| {
-                    if (result_kind == .explain) {
-                        try root.put("explain", .{ .string = try jalloc.dupe(u8, payload) });
-                    } else {
-                        try root.put("profile", .{ .string = try jalloc.dupe(u8, payload) });
-                    }
-                }
-            }
-        } else {
-            try root.put("status_class", .{ .string = try jalloc.dupe(u8, status_class) });
-            if (status_subclass.len > 0) {
-                try root.put("status_subclass", .{ .string = try jalloc.dupe(u8, status_subclass) });
-            }
-            try root.put("ordered", .{ .bool = ordered });
-            try root.put("order_keys", .{ .array = try buildStringArray(jalloc, order_keys.items) });
-            try root.put("columns", .{ .array = try buildColumnsArray(jalloc, columns.items) });
-
-            var rows_arr = std.json.Array.init(jalloc);
-            if (all_rows_json) |*rows| {
-                for (rows.items) |row| {
-                    var row_obj = std.json.ObjectMap.init(jalloc);
-                    for (row.items, 0..) |val, col_idx| {
-                        const col_name = if (col_idx < columns.items.len) columns.items[col_idx].name else "?";
-                        try row_obj.put(try jalloc.dupe(u8, col_name), val);
-                    }
-                    try rows_arr.append(.{ .object = row_obj });
-                }
-            }
-
-            try root.put("rows", .{ .array = rows_arr });
-        }
-
-        try root.put("additional_statuses", .{ .array = try buildStringArray(jalloc, additional_statuses.items) });
-        try root.put("flagger_findings", .{ .array = try buildStringArray(jalloc, flagger_findings.items) });
-
-        const root_value = std.json.Value{ .object = root };
-        const json_out = try std.json.Stringify.valueAlloc(jalloc, root_value, .{});
-        try stdout.writeAll(json_out);
-        try stdout.writeAll("\n");
-    } else if (std.mem.eql(u8, format, "csv")) {
-        if (all_rows_text) |rows| {
-            // CSV header
-            for (columns.items, 0..) |col, i| {
-                if (i > 0) _ = stdout.writeAll(",") catch {};
-                _ = stdout.writeAll(col.name) catch {};
-            }
-            _ = stdout.writeAll("\n") catch {};
-            // CSV rows
-            for (rows.items) |row| {
-                for (row.items, 0..) |cell, i| {
-                    if (i > 0) _ = stdout.writeAll(",") catch {};
-                    if (std.mem.indexOf(u8, cell, ",") != null or std.mem.indexOf(u8, cell, "\n") != null or std.mem.indexOf(u8, cell, "\"") != null) {
-                        _ = stdout.writeAll("\"") catch {};
-                        for (cell) |c| {
-                            if (c == '"') {
-                                _ = stdout.writeAll("\"\"") catch {};
-                            } else {
-                                _ = stdout.write(&[_]u8{c}) catch {};
-                            }
-                        }
-                        _ = stdout.writeAll("\"") catch {};
-                    } else {
-                        _ = stdout.writeAll(cell) catch {};
-                    }
-                }
-                _ = stdout.writeAll("\n") catch {};
-            }
-        }
-    } else if (std.mem.eql(u8, format, "table")) {
-        if (all_rows_text) |rows| {
-            var col_widths = try std.ArrayList(usize).initCapacity(allocator, columns.items.len);
-            defer col_widths.deinit(allocator);
-
-            for (columns.items) |col| {
-                try col_widths.append(allocator, col.name.len);
-            }
-
-            for (rows.items) |row| {
-                for (row.items, 0..) |cell, i| {
-                    if (i < col_widths.items.len) {
-                        if (cell.len > col_widths.items[i]) {
-                            col_widths.items[i] = cell.len;
-                        }
-                    }
-                }
-            }
-
-            const printSeparator = struct {
-                fn f(out: anytype, widths: []const usize) void {
-                    _ = out.writeAll("+") catch {};
-                    for (widths) |w| {
-                        for (0..w + 2) |_| _ = out.writeAll("-") catch {};
-                        _ = out.writeAll("+") catch {};
-                    }
-                    _ = out.writeAll("\n") catch {};
-                }
-            }.f;
-
-            printSeparator(stdout, col_widths.items);
-
-            _ = stdout.writeAll("|") catch {};
-            for (columns.items, 0..) |col, i| {
-                _ = stdout.writeAll(" ") catch {};
-                _ = stdout.writeAll(col.name) catch {};
-                const width = if (i < col_widths.items.len) col_widths.items[i] else col.name.len;
-                for (col.name.len..width) |_| _ = stdout.writeAll(" ") catch {};
-                _ = stdout.writeAll(" |") catch {};
-            }
-            _ = stdout.writeAll("\n") catch {};
-
-            printSeparator(stdout, col_widths.items);
-
-            for (rows.items) |row| {
-                _ = stdout.writeAll("|") catch {};
-                for (row.items, 0..) |cell, i| {
-                    _ = stdout.writeAll(" ") catch {};
-                    _ = stdout.writeAll(cell) catch {};
-                    const width = if (i < col_widths.items.len) col_widths.items[i] else cell.len;
-                    for (cell.len..width) |_| _ = stdout.writeAll(" ") catch {};
-                    _ = stdout.writeAll(" |") catch {};
-                }
-                _ = stdout.writeAll("\n") catch {};
-            }
-
-            printSeparator(stdout, col_widths.items);
-
-            const row_count = rows.items.len;
-            if (row_count == 1) {
-                _ = stdout.writeAll("(1 row)\n") catch {};
-            } else {
-                const count_str = std.fmt.allocPrint(allocator, "({d} rows)\n", .{row_count}) catch "(? rows)\n";
-                defer if (count_str.len > 0 and count_str[0] == '(') allocator.free(count_str);
-                _ = stdout.writeAll(count_str) catch {};
-            }
-        }
-    } else if (std.mem.eql(u8, format, "dot")) {
+    if (std.mem.eql(u8, format, "dot")) {
         if (all_rows_text) |rows| {
             try outputDotFormatFromRows(allocator, rows.items, stdout);
         }
+    } else {
+        const rows_text_ptr: ?*std.ArrayList(std.ArrayList([]const u8)) = if (all_rows_text) |*rows| rows else null;
+        const rows_json_ptr: ?*std.ArrayList(std.ArrayList(std.json.Value)) = if (all_rows_json) |*rows| rows else null;
+        try renderTransportResponse(
+            allocator,
+            stdout,
+            format,
+            rows_text_ptr,
+            rows_json_ptr,
+            .{
+                .columns = columns.items,
+                .ordered = ordered,
+                .order_keys = order_keys.items,
+                .status_class = status_class,
+                .status_subclass = status_subclass,
+                .additional_statuses = additional_statuses.items,
+                .flagger_findings = flagger_findings.items,
+                .has_error = has_error,
+                .error_message = error_message,
+                .error_status = error_status,
+                .result_kind = result_kind,
+                .result_payload = result_payload,
+            },
+        );
     }
 }
 
@@ -2287,11 +2114,6 @@ const ChunkedQueryOptions = struct {
     client_key_path: ?[]const u8 = null,
     graph: ?[]const u8 = null,
     use_grpc: bool = false,
-};
-
-const ColumnInfo = struct {
-    name: []const u8,
-    type: []const u8,
 };
 
 // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-006; FEATURE="ChunkedExecution"; ASPECT=Execution; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-13
@@ -2750,8 +2572,7 @@ fn executeQueryOnConnection(
         columns.deinit(allocator);
     }
 
-    const ResultKind = enum { rows, explain, profile };
-    var result_kind: ResultKind = .rows;
+    var result_kind: QueryResultKind = .rows;
     var result_payload: ?[]const u8 = null;
     defer if (result_payload) |payload| allocator.free(payload);
 
@@ -3254,212 +3075,36 @@ fn executeQueryOnConnection(
     }
 
     // Output final result based on format
-    if (std.mem.eql(u8, format, "json")) {
-        // Use an arena allocator for the JSON tree structure (ObjectMaps, Arrays,
-        // duped string keys/values). Row json.Values from protoValueToJson are
-        // allocated with the main allocator and freed by the all_rows_json defer.
-        var json_arena = std.heap.ArenaAllocator.init(allocator);
-        defer json_arena.deinit();
-        const jalloc = json_arena.allocator();
-
-        const buildStringArray = struct {
-            fn apply(alloc: std.mem.Allocator, items: []const []const u8) !std.json.Array {
-                var arr = std.json.Array.init(alloc);
-                for (items) |item| {
-                    try arr.append(.{ .string = try alloc.dupe(u8, item) });
-                }
-                return arr;
-            }
-        }.apply;
-
-        const buildColumnsArray = struct {
-            fn apply(alloc: std.mem.Allocator, cols: []const ColumnInfo) !std.json.Array {
-                var arr = std.json.Array.init(alloc);
-                for (cols) |col| {
-                    var obj = std.json.ObjectMap.init(alloc);
-                    try obj.put("name", .{ .string = try alloc.dupe(u8, col.name) });
-                    try obj.put("type", .{ .string = try alloc.dupe(u8, col.type) });
-                    try arr.append(.{ .object = obj });
-                }
-                return arr;
-            }
-        }.apply;
-
-        var root = std.json.ObjectMap.init(jalloc);
-        if (has_error) {
-            try root.put("status_class", .{ .string = try jalloc.dupe(u8, error_status) });
-            if (error_status.len > 0) {
-                try root.put("error_code", .{ .string = try jalloc.dupe(u8, error_status) });
-            }
-            try root.put("error", .{ .string = try jalloc.dupe(u8, error_message) });
-        } else if (result_kind != .rows) {
-            try root.put("status_class", .{ .string = try jalloc.dupe(u8, status_class) });
-            if (status_subclass.len > 0) {
-                try root.put("status_subclass", .{ .string = try jalloc.dupe(u8, status_subclass) });
-            }
-            if (result_payload) |payload| {
-                if (std.json.parseFromSlice(std.json.Value, jalloc, payload, .{})) |parsed| {
-                    if (result_kind == .explain) {
-                        try root.put("explain", parsed.value);
-                    } else {
-                        try root.put("profile", parsed.value);
-                    }
-                } else |_| {
-                    if (result_kind == .explain) {
-                        try root.put("explain", .{ .string = try jalloc.dupe(u8, payload) });
-                    } else {
-                        try root.put("profile", .{ .string = try jalloc.dupe(u8, payload) });
-                    }
-                }
-            }
-        } else {
-            try root.put("status_class", .{ .string = try jalloc.dupe(u8, status_class) });
-            if (status_subclass.len > 0) {
-                try root.put("status_subclass", .{ .string = try jalloc.dupe(u8, status_subclass) });
-            }
-            try root.put("ordered", .{ .bool = ordered });
-            try root.put("order_keys", .{ .array = try buildStringArray(jalloc, order_keys.items) });
-            try root.put("columns", .{ .array = try buildColumnsArray(jalloc, columns.items) });
-
-            var rows_arr = std.json.Array.init(jalloc);
-            if (all_rows_json) |*rows| {
-                for (rows.items) |row| {
-                    var row_obj = std.json.ObjectMap.init(jalloc);
-                    for (row.items, 0..) |val, col_idx| {
-                        const col_name = if (col_idx < columns.items.len) columns.items[col_idx].name else "?";
-                        try row_obj.put(try jalloc.dupe(u8, col_name), val);
-                    }
-                    try rows_arr.append(.{ .object = row_obj });
-                }
-            }
-
-            try root.put("rows", .{ .array = rows_arr });
-        }
-
-        try root.put("additional_statuses", .{ .array = try buildStringArray(jalloc, additional_statuses.items) });
-        try root.put("flagger_findings", .{ .array = try buildStringArray(jalloc, flagger_findings.items) });
-
-        const root_value = std.json.Value{ .object = root };
-        const json_out = try std.json.Stringify.valueAlloc(jalloc, root_value, .{});
-        try stdout.writeAll(json_out);
-        try stdout.writeAll("\n");
-        // Arena deinit (via defer above) frees the entire JSON tree.
-    } else if (std.mem.eql(u8, format, "csv")) {
-        if (all_rows_text) |rows| {
-            // CSV header
-            for (columns.items, 0..) |col, i| {
-                if (i > 0) _ = stdout.writeAll(",") catch {};
-                _ = stdout.writeAll(col.name) catch {};
-            }
-            _ = stdout.writeAll("\n") catch {};
-            // CSV rows
-            for (rows.items) |row| {
-                for (row.items, 0..) |cell, i| {
-                    if (i > 0) _ = stdout.writeAll(",") catch {};
-                    // Quote fields containing comma, newline, or quote
-                    if (std.mem.indexOf(u8, cell, ",") != null or std.mem.indexOf(u8, cell, "\n") != null or std.mem.indexOf(u8, cell, "\"") != null) {
-                        _ = stdout.writeAll("\"") catch {};
-                        for (cell) |c| {
-                            if (c == '"') {
-                                _ = stdout.writeAll("\"\"") catch {};
-                            } else {
-                                _ = stdout.write(&[_]u8{c}) catch {};
-                            }
-                        }
-                        _ = stdout.writeAll("\"") catch {};
-                    } else {
-                        _ = stdout.writeAll(cell) catch {};
-                    }
-                }
-                _ = stdout.writeAll("\n") catch {};
-            }
-        }
-    } else if (std.mem.eql(u8, format, "table")) {
-        // CANARY: REQ=REQ-CLI-TABLE-001; FEATURE="TableFormat"; ASPECT=PostgreSQLStyle; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-        // PostgreSQL-style table format with borders
-        // Calculate column widths
-        if (all_rows_text) |rows| {
-            var col_widths = try std.ArrayList(usize).initCapacity(allocator, columns.items.len);
-            defer col_widths.deinit(allocator);
-
-            for (columns.items) |col| {
-                try col_widths.append(allocator, col.name.len);
-            }
-
-            // Expand widths based on row data
-            for (rows.items) |row| {
-                for (row.items, 0..) |cell, i| {
-                    if (i < col_widths.items.len) {
-                        if (cell.len > col_widths.items[i]) {
-                            col_widths.items[i] = cell.len;
-                        }
-                    }
-                }
-            }
-
-            // Helper function to print a separator line
-            const printSeparator = struct {
-                fn f(out: anytype, widths: []const usize) void {
-                    _ = out.writeAll("+") catch {};
-                    for (widths) |w| {
-                        for (0..w + 2) |_| _ = out.writeAll("-") catch {};
-                        _ = out.writeAll("+") catch {};
-                    }
-                    _ = out.writeAll("\n") catch {};
-                }
-            }.f;
-
-            // Print top separator
-            printSeparator(stdout, col_widths.items);
-
-            // Print header row
-            _ = stdout.writeAll("|") catch {};
-            for (columns.items, 0..) |col, i| {
-                _ = stdout.writeAll(" ") catch {};
-                _ = stdout.writeAll(col.name) catch {};
-                // Pad to column width
-                const width = if (i < col_widths.items.len) col_widths.items[i] else col.name.len;
-                for (col.name.len..width) |_| _ = stdout.writeAll(" ") catch {};
-                _ = stdout.writeAll(" |") catch {};
-            }
-            _ = stdout.writeAll("\n") catch {};
-
-            // Print separator after header
-            printSeparator(stdout, col_widths.items);
-
-            // Print data rows
-            for (rows.items) |row| {
-                _ = stdout.writeAll("|") catch {};
-                for (row.items, 0..) |cell, i| {
-                    _ = stdout.writeAll(" ") catch {};
-                    _ = stdout.writeAll(cell) catch {};
-                    // Pad to column width
-                    const width = if (i < col_widths.items.len) col_widths.items[i] else cell.len;
-                    for (cell.len..width) |_| _ = stdout.writeAll(" ") catch {};
-                    _ = stdout.writeAll(" |") catch {};
-                }
-                _ = stdout.writeAll("\n") catch {};
-            }
-
-            // Print bottom separator
-            printSeparator(stdout, col_widths.items);
-
-            // Print row count
-            const row_count = rows.items.len;
-            if (row_count == 1) {
-                _ = stdout.writeAll("(1 row)\n") catch {};
-            } else {
-                const count_str = std.fmt.allocPrint(allocator, "({d} rows)\n", .{row_count}) catch "(? rows)\n";
-                defer if (count_str.len > 0 and count_str[0] == '(') allocator.free(count_str);
-                _ = stdout.writeAll(count_str) catch {};
-            }
-        }
-    } else if (std.mem.eql(u8, format, "dot")) {
+    if (std.mem.eql(u8, format, "dot")) {
         // CANARY: REQ=REQ-CLI-DOT-002; FEATURE="DotFormat"; ASPECT=GraphvizOutput; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
         // DOT format for Graphviz visualization
         if (all_rows_text) |rows| {
             try outputDotFormatFromRows(allocator, rows.items, stdout);
         }
+    } else {
+        const rows_text_ptr: ?*std.ArrayList(std.ArrayList([]const u8)) = if (all_rows_text) |*rows| rows else null;
+        const rows_json_ptr: ?*std.ArrayList(std.ArrayList(std.json.Value)) = if (all_rows_json) |*rows| rows else null;
+        try renderTransportResponse(
+            allocator,
+            stdout,
+            format,
+            rows_text_ptr,
+            rows_json_ptr,
+            .{
+                .columns = columns.items,
+                .ordered = ordered,
+                .order_keys = order_keys.items,
+                .status_class = status_class,
+                .status_subclass = status_subclass,
+                .additional_statuses = additional_statuses.items,
+                .flagger_findings = flagger_findings.items,
+                .has_error = has_error,
+                .error_message = error_message,
+                .error_status = error_status,
+                .result_kind = result_kind,
+                .result_payload = result_payload,
+            },
+        );
     }
 }
 
@@ -4176,11 +3821,7 @@ fn promptPassword(allocator: std.mem.Allocator, prompt_text: []const u8) ![]cons
         } else |_| {}
     }
 
-    const stdin_file = if (builtin.os.tag == .windows) blk: {
-        const h = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return error.StdioUnavailable;
-        if (h == std.os.windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
-        break :blk std.fs.File{ .handle = h };
-    } else std.fs.File{ .handle = std.posix.STDIN_FILENO };
+    const stdin_file = stdio_util.getStdin() catch return error.StdioUnavailable;
 
     // Read line character by character until newline
     var line_buf = try std.ArrayList(u8).initCapacity(allocator, 256);
@@ -4341,11 +3982,7 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     // Prompt for username if not provided (always dupe to ensure heap allocation)
     const final_username = if (username) |u| try allocator.dupe(u8, u) else blk: {
         std.debug.print("Username: ", .{});
-        const stdin_file = if (builtin.os.tag == .windows) stdin_blk: {
-            const h = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return error.StdioUnavailable;
-            if (h == std.os.windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
-            break :stdin_blk std.fs.File{ .handle = h };
-        } else std.fs.File{ .handle = std.posix.STDIN_FILENO };
+        const stdin_file = stdio_util.getStdin() catch return error.StdioUnavailable;
 
         // Read line character by character until newline
         var line_buf = try std.ArrayList(u8).initCapacity(allocator, 256);

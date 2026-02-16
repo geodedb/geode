@@ -836,7 +836,7 @@ pub const RecursiveQueryProcessor = struct {
     } {
         // Examine the query's return items to determine schema
         if (query.return_clause) |return_clause| {
-            var columns = std.ArrayList(RecursiveCTE.Column).init(std.heap.page_allocator);
+            var columns = std.ArrayList(RecursiveCTE.Column).init(std.heap.c_allocator);
 
             for (return_clause.items) |item| {
                 const col_name = item.alias orelse switch (item.expr) {
@@ -1020,10 +1020,10 @@ pub const RecursiveQueryProcessor = struct {
         _ = self;
 
         // Build adjacency list from working table
-        var visited = std.AutoHashMap(u64, bool).init(std.heap.page_allocator);
+        var visited = std.AutoHashMap(u64, bool).init(std.heap.c_allocator);
         defer visited.deinit();
 
-        var in_stack = std.AutoHashMap(u64, bool).init(std.heap.page_allocator);
+        var in_stack = std.AutoHashMap(u64, bool).init(std.heap.c_allocator);
         defer in_stack.deinit();
 
         for (execution.working_table.next.items) |row| {
@@ -1059,7 +1059,7 @@ pub const RecursiveQueryProcessor = struct {
         _ = self;
 
         // Parent map for union-find
-        var parent = std.AutoHashMap(u64, u64).init(std.heap.page_allocator);
+        var parent = std.AutoHashMap(u64, u64).init(std.heap.c_allocator);
         defer parent.deinit();
 
         // Find with path compression
@@ -1110,10 +1110,10 @@ pub const RecursiveQueryProcessor = struct {
         _ = self;
 
         // Build in-degree map
-        var in_degree = std.AutoHashMap(u64, u32).init(std.heap.page_allocator);
+        var in_degree = std.AutoHashMap(u64, u32).init(std.heap.c_allocator);
         defer in_degree.deinit();
 
-        var nodes = std.AutoHashMap(u64, void).init(std.heap.page_allocator);
+        var nodes = std.AutoHashMap(u64, void).init(std.heap.c_allocator);
         defer nodes.deinit();
 
         for (execution.working_table.next.items) |row| {

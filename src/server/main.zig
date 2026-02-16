@@ -295,15 +295,16 @@ pub fn main() !void {
         }
     }
 
-    // Check for audit disable flag — only allowed in debug/test builds.
-    // In production builds, audit logging cannot be disabled via environment variable.
-    if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
-        const audit_disable_env = std.process.getEnvVarOwned(gpa, "GEODE_DISABLE_AUDIT") catch null;
-        defer if (audit_disable_env) |d| gpa.free(d);
-        if (audit_disable_env) |d| {
-            if (std.mem.eql(u8, d, "1") or std.mem.eql(u8, d, "true")) {
+    // Check for audit disable flag — only allowed in Debug builds.
+    const audit_disable_env = std.process.getEnvVarOwned(gpa, "GEODE_DISABLE_AUDIT") catch null;
+    defer if (audit_disable_env) |d| gpa.free(d);
+    if (audit_disable_env) |d| {
+        if (std.mem.eql(u8, d, "1") or std.mem.eql(u8, d, "true")) {
+            if (builtin.mode == .Debug) {
                 audit_config.enabled = false;
-                log.warn("Audit logging disabled via GEODE_DISABLE_AUDIT (non-production build)", &.{});
+                log.warn("Audit logging disabled via GEODE_DISABLE_AUDIT (Debug build only)", &.{});
+            } else {
+                log.warn("GEODE_DISABLE_AUDIT ignored outside Debug builds", &.{});
             }
         }
     }

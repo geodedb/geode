@@ -3,6 +3,8 @@
 ZIG ?= $(shell command -v zig 2>/dev/null || echo zig)
 ZIG_FLAGS ?=
 ZIG_RELEASE_FLAGS ?= -Doptimize=ReleaseSafe
+RUFF_VERSION ?= 0.14.14
+LINT_VENV ?= .venv/lint
 
 # Auto-detect Wine (prefer wine64, fallback to wine) for Windows execution of cross-compiled tests/examples
 WINE64_BIN := $(shell command -v wine64 2>/dev/null)
@@ -28,12 +30,12 @@ endif
 .PHONY: all build release test integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test test-all-integration dataset-integration-test load-dataset fuzz bench tools doccheck clean cert-gen fmt ci help check-openssl
 .PHONY: goreleaser goreleaser-test goreleaser-snapshot goreleaser-check
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
-.PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate
+.PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate match-ops-parity match-ops-bench cli-transport-parity stdio-abstraction-check release-target-manifest-check docker-release-sync docker-release-check docker-release-signoff
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test client-test-zig
-.PHONY: transport-parity-smokes status-generate no-feature-flags cluster-test
+.PHONY: transport-parity-smokes status-generate no-feature-flags zig-package-cache-check cluster-test
 # Note: geodetestlab and client-test-harness moved to separate repository (geode-test-harness)
 .PHONY: deps deps-check
-.PHONY: pre-commit pre-commit-install pre-commit-update pre-commit-all setup-dev
+.PHONY: pre-commit pre-commit-install pre-commit-update pre-commit-all setup-dev lint lint-bootstrap
 
 # Default target - build everything including cross-compilation checks (non-blocking)
 # Note: Integration tests (geodetestlab) moved to ../geode-test-harness
@@ -51,12 +53,15 @@ help:
 	@echo "  make tools       - Build all tools"
 	@echo "  make clean       - Clean build artifacts"
 	@echo "  make fmt         - Format Zig code"
+	@echo "  make lint        - Run Python lint/format checks (ruff)"
 	@echo ""
 	@echo "Release targets:"
 	@echo "  make goreleaser         - Run GoReleaser (create release)"
 	@echo "  make goreleaser-test    - Test GoReleaser (snapshot mode)"
 	@echo "  make goreleaser-snapshot - Same as goreleaser-test"
 	@echo "  make goreleaser-check   - Validate GoReleaser config"
+	@echo "  make release-target-manifest-check - Ensure CI/GoReleaser target manifest is in sync"
+	@echo "  make docker-release-check - Ensure release Dockerfiles match generated manifest"
 	@echo ""
 	@echo "Test targets:"
 	@echo "  make test        - Run all tests (Zig + QUIC)"
@@ -101,6 +106,11 @@ help:
 	@echo "  make cert-gen    - Generate TLS certificates"
 	@echo "  make status-generate    - Generate docs/status.csv"
 	@echo "  make no-feature-flags   - Check for compile-time flags"
+	@echo "  make match-ops-parity   - Run MATCH staged parity golden suite"
+	@echo "  make match-ops-bench    - Run MATCH staged benchmark campaign suite"
+	@echo "  make cli-transport-parity - Run CLI transport response parity goldens"
+	@echo "  make stdio-abstraction-check - Enforce centralized CLI stdio handle wrappers"
+	@echo "  make zig-package-cache-check - Validate docker/zig-packages cache freshness"
 	@echo "  make ci          - Run CI pipeline"
 	@echo "  make help        - Show this help"
 	@echo ""
@@ -122,7 +132,7 @@ deps-check:
 		echo "✓ $(shell zig version)"; \
 	else \
 		echo "✗ missing"; \
-		echo "Please install Zig from https://ziglang.org/download/"; \
+		echo "Please install Zig via zvm: curl -fsSL https://zig.sh/install.sh | bash"; \
 		exit 1; \
 	fi
 	@echo -n "Checking Python... "
@@ -198,6 +208,19 @@ goreleaser-check:
 	@echo "Checking GoReleaser configuration..."
 	$(GORELEASER) check
 	@echo "✓ GoReleaser configuration is valid"
+
+release-target-manifest-check:
+	@python3 tools/release_target_manifest.py sync-goreleaser --manifest release/target_manifest.json --goreleaser .goreleaser.yaml --check
+
+docker-release-sync:
+	@python3 tools/release_dockerfile_manifest.py sync --manifest release/dockerfile_manifest.json --repo-root .
+
+docker-release-check:
+	@python3 tools/release_dockerfile_manifest.py check --manifest release/dockerfile_manifest.json --repo-root .
+
+docker-release-signoff:
+	@python3 tools/release_dockerfile_manifest.py signoff --manifest release/dockerfile_manifest.json --repo-root . --output /tmp/release-dockerfile-signoff.txt
+	@cat /tmp/release-dockerfile-signoff.txt
 
 # Run Zig unit tests (fast, used by pre-push hooks)
 test:
@@ -347,10 +370,29 @@ fuzz:
 bench:
 	$(ZIG) build bench $(ZIG_FLAGS)
 
+match-ops-parity:
+	@$(ZIG) build test-match-parity --summary all $(ZIG_FLAGS)
+
+match-ops-bench:
+	@GEODE_MATCH_BENCH_ENABLE=1 $(ZIG) build test-match-bench --summary all
+
+cli-transport-parity:
+	@$(ZIG) build test-cli-transport-parity --summary all $(ZIG_FLAGS)
+
+stdio-abstraction-check:
+	@python3 tools/stdio_abstraction_guard.py --repo .
+
 ## governance-check: validates CANARY markers and governance compliance
 governance-check:
 	@echo "Running governance checks..."
 	@$(ZIG) build test -Doptimize=Debug --summary all 2>&1 | grep -c "test" > /dev/null || true
+	@$(MAKE) match-ops-parity
+	@$(MAKE) match-ops-bench
+	@$(MAKE) cli-transport-parity
+	@$(MAKE) stdio-abstraction-check
+	@$(MAKE) release-target-manifest-check
+	@$(MAKE) docker-release-check
+	@python3 tools/zig_package_cache_guard.py --strict-stale
 	@echo "Governance check completed"
 
 # Convenience target: recompute sha256 of status.json and update marker in GAP_ANALYSIS.md
@@ -485,6 +527,21 @@ fmt:
 	$(ZIG) fmt src/
 	$(ZIG) fmt tests/
 	$(ZIG) fmt build.zig
+
+# Bootstrap deterministic local lint tooling (ruff) in an isolated venv
+lint-bootstrap:
+	@echo "Bootstrapping lint tools in $(LINT_VENV) (ruff==$(RUFF_VERSION))..."
+	@python3 -m venv "$(LINT_VENV)"
+	@$(LINT_VENV)/bin/python -m pip install --upgrade pip >/dev/null
+	@$(LINT_VENV)/bin/python -m pip install "ruff==$(RUFF_VERSION)" >/dev/null
+	@echo "✓ Lint tooling ready"
+
+# Run Python lint checks with deterministic pinned tooling
+lint: lint-bootstrap
+	@echo "Running ruff checks..."
+	@$(LINT_VENV)/bin/python -m ruff check .
+	@$(LINT_VENV)/bin/python -m ruff format --check .
+	@echo "✓ Lint checks passed"
 
 # =============================================================================
 # Pre-commit hooks
@@ -734,6 +791,10 @@ no-feature-flags:
 		echo "tools/no_feature_flags_check.py not found or not executable"; \
 		exit 1; \
 	fi
+
+# Ensure docker/zig-packages contains no stale cache directories.
+zig-package-cache-check:
+	@python3 tools/zig_package_cache_guard.py --strict-stale
 
 # Run multi-node Raft cluster test
 cluster-test: build

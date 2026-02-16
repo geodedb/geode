@@ -63,12 +63,12 @@ fn formatResultAsCsv(writer: anytype, allocator: std.mem.Allocator, response: []
 
             // Data rows
             for (rows.items) |row| {
-                const row_obj = if (row == .object) row.object else std.json.ObjectMap.init(allocator);
-                defer if (row != .object) row_obj.deinit();
                 for (col_names, 0..) |col_name, i| {
                     if (i > 0) try writer.writeAll(",");
-                    const cell_opt = row_obj.get(col_name);
-                    const cell = cell_opt orelse std.json.Value{ .null = {} };
+                    const cell = if (row == .object)
+                        (row.object.get(col_name) orelse std.json.Value{ .null = {} })
+                    else
+                        std.json.Value{ .null = {} };
                     switch (cell) {
                         .string => |s| {
                             try writer.writeAll("\"");
@@ -143,12 +143,12 @@ fn formatResultAsTable(writer: anytype, allocator: std.mem.Allocator, response: 
             }
 
             for (rows.items) |row| {
-                const row_obj = if (row == .object) row.object else std.json.ObjectMap.init(allocator);
-                defer if (row != .object) row_obj.deinit();
                 for (col_names, 0..) |col_name, i| {
                     if (i >= col_widths.len) continue;
-                    const cell_opt = row_obj.get(col_name);
-                    const cell = cell_opt orelse std.json.Value{ .null = {} };
+                    const cell = if (row == .object)
+                        (row.object.get(col_name) orelse std.json.Value{ .null = {} })
+                    else
+                        std.json.Value{ .null = {} };
                     const width: usize = switch (cell) {
                         .string => |s| s.len,
                         .integer => 10, // rough estimate
@@ -183,13 +183,13 @@ fn formatResultAsTable(writer: anytype, allocator: std.mem.Allocator, response: 
             // Print data rows
             for (rows.items) |row| {
                 try writer.writeAll("| ");
-                const row_obj = if (row == .object) row.object else std.json.ObjectMap.init(allocator);
-                defer if (row != .object) row_obj.deinit();
                 for (col_names, 0..) |col_name, i| {
                     if (i >= col_widths.len) continue;
                     var printed_len: usize = 0;
-                    const cell_opt = row_obj.get(col_name);
-                    const cell = cell_opt orelse std.json.Value{ .null = {} };
+                    const cell = if (row == .object)
+                        (row.object.get(col_name) orelse std.json.Value{ .null = {} })
+                    else
+                        std.json.Value{ .null = {} };
                     switch (cell) {
                         .string => |s| {
                             try writer.writeAll(s);

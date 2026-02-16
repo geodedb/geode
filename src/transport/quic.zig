@@ -511,6 +511,7 @@ pub const QuicConnection = struct {
             .connection = self.inner,
             .stream_id = stream_id,
             .poll_sync = self.poll_sync,
+            .tracking_index = self.streams.items.len,
         };
         try self.streams.append(self.allocator, stream);
         return stream;
@@ -529,6 +530,7 @@ pub const QuicConnection = struct {
             .connection = self.inner,
             .stream_id = stream_id,
             .poll_sync = self.poll_sync,
+            .tracking_index = self.streams.items.len,
         };
         try self.streams.append(self.allocator, stream);
         return stream;
@@ -557,14 +559,21 @@ pub const QuicConnection = struct {
     /// GAP-0201: Use swapRemove for O(1) removal instead of O(n) orderedRemove
     /// CANARY: REQ=REQ-PERF-STREAM-REMOVE-001; FEATURE="StreamRemovalOptimization"; ASPECT=O1Removal; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=transport; UPDATED=2026-01-30
     pub fn destroyStream(self: *QuicConnection, stream: *QuicStream) void {
-        // Remove stream from the tracked list using O(1) swapRemove
-        var idx: usize = 0;
-        while (idx < self.streams.items.len) {
-            if (self.streams.items[idx] == stream) {
-                _ = self.streams.swapRemove(idx);
-                break;
+        // Prefer O(1) removal using stream-tracked index.
+        var idx = stream.tracking_index;
+        if (idx >= self.streams.items.len or self.streams.items[idx] != stream) {
+            // Fallback for defensive consistency if index drifted.
+            idx = 0;
+            while (idx < self.streams.items.len and self.streams.items[idx] != stream) : (idx += 1) {}
+            if (idx >= self.streams.items.len) {
+                self.allocator.destroy(stream);
+                return;
             }
-            idx += 1;
+        }
+
+        _ = self.streams.swapRemove(idx);
+        if (idx < self.streams.items.len) {
+            self.streams.items[idx].tracking_index = idx;
         }
         // Now destroy the stream
         self.allocator.destroy(stream);
@@ -593,6 +602,7 @@ pub const QuicStream = struct {
     stream_id: u64,
     /// Shared poll synchronization — see PollSync docs.
     poll_sync: ?*PollSync = null,
+    tracking_index: usize = 0,
 
     pub fn write(self: *QuicStream, data: []const u8) !usize {
         if (self.poll_sync) |ps| ps.enterIo();

@@ -175,7 +175,7 @@ fn formatResultAsTable(writer: anytype, allocator: std.mem.Allocator, response: 
                         },
                         else => {},
                     }
-                    if (i < row_array.items.len - 1) try writer.writeAll(" | ");
+                    if (i < columns.items.len - 1) try writer.writeAll(" | ");
                 }
                 try writer.writeAll(" |\n");
             }

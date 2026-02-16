@@ -1,10 +1,16 @@
 const std = @import("std");
+const geode = @import("geode");
+const auth_state = geode.auth_state;
 
 // CANARY: REQ=REQ-GAP-0258-MTLS-CLI-001; FEATURE="mTLS CLI"; ASPECT=CertificateMapping; STATUS=IMPL; TEST=geodetestlab/specs/gap_0258_mtls_cli.yml; OWNER=cli; UPDATED=2026-02-09
 // mTLS CLI commands for managing mutual TLS certificate-to-user mappings
 
 /// Persistent file path for mTLS state (matches apikey_cli pattern)
-const MTLS_STATE_PATH = "/tmp/geode_mtls_state.db";
+const MTLS_STATE_FILE = "geode_mtls_state.db";
+
+fn mtlsStatePath(allocator: std.mem.Allocator) ![]u8 {
+    return auth_state.resolveStatePath(allocator, MTLS_STATE_FILE);
+}
 
 const ExitCode = enum(u8) {
     success = 0,
@@ -67,7 +73,10 @@ fn loadMtlsState(allocator: std.mem.Allocator) !struct { mappings: std.StringHas
         mappings.deinit();
     }
 
-    const file = std.fs.openFileAbsolute(MTLS_STATE_PATH, .{}) catch |err| switch (err) {
+    const state_path = try mtlsStatePath(allocator);
+    defer allocator.free(state_path);
+
+    const file = std.fs.openFileAbsolute(state_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return .{ .mappings = mappings, .config = config },
         else => return err,
     };
@@ -124,7 +133,14 @@ fn loadMtlsState(allocator: std.mem.Allocator) !struct { mappings: std.StringHas
 
 /// Save mTLS state to persistent storage
 fn saveMtlsState(mappings: *std.StringHashMap(StoredMapping), config: MtlsConfig) !void {
-    const file = try std.fs.createFileAbsolute(MTLS_STATE_PATH, .{ .truncate = true, .read = true });
+    const state_path = try mtlsStatePath(mappings.allocator);
+    defer mappings.allocator.free(state_path);
+
+    const file = try std.fs.createFileAbsolute(state_path, .{
+        .truncate = true,
+        .read = true,
+        .mode = 0o600,
+    });
     defer file.close();
 
     // Write config lines first

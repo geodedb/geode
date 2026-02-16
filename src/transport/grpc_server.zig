@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 const schema = @import("schema");
 const protobuf = @import("protobuf");
@@ -42,6 +43,38 @@ const SessionEntry = struct {
     mutex: std.Thread.Mutex = .{},
 };
 
+fn envFlagEnabled(allocator: std.mem.Allocator, name: []const u8) bool {
+    const raw = std.process.getEnvVarOwned(allocator, name) catch return false;
+    defer allocator.free(raw);
+    if (raw.len == 0) return false;
+    if (raw[0] == '0') return false;
+    if (std.ascii.eqlIgnoreCase(raw, "false")) return false;
+    if (std.ascii.eqlIgnoreCase(raw, "off")) return false;
+    return true;
+}
+
+fn shouldAllowGrpcPlaintextFallback(allocator: std.mem.Allocator) bool {
+    if (!envFlagEnabled(allocator, "GEODE_GRPC_ALLOW_PLAINTEXT_FALLBACK")) return false;
+    if (builtin.mode == .Debug) return true;
+
+    log.warn("Ignoring GEODE_GRPC_ALLOW_PLAINTEXT_FALLBACK outside Debug builds", &.{});
+    return false;
+}
+
+fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
+    var entropy: [16]u8 = undefined;
+    std.crypto.random.bytes(&entropy);
+    const token = std.fmt.bytesToHex(entropy, .lower);
+    return std.fmt.allocPrint(allocator, "sess_{s}", .{token});
+}
+
+fn throttleInvalidSessionProbe() void {
+    var jitter: [1]u8 = undefined;
+    std.crypto.random.bytes(&jitter);
+    const delay_ms: u64 = 5 + @as(u64, @intCast(jitter[0] % 6));
+    std.Thread.sleep(delay_ms * std.time.ns_per_ms);
+}
+
 // Issue #453: Use RwLock instead of Mutex to allow concurrent readers
 const SessionStore = struct {
     allocator: std.mem.Allocator,
@@ -78,7 +111,7 @@ const SessionStore = struct {
         role: ?user_mgmt.Role,
         tenant_id: ?[]const u8,
     ) ![]const u8 {
-        const session_id = try std.fmt.allocPrint(self.allocator, "sess_{d}", .{std.time.milliTimestamp()});
+        const session_id = try generateSessionId(self.allocator);
         const state = try initServerState(self.allocator, self.config);
         if (username.len > 0) {
             state.authenticated_user = try self.allocator.dupe(u8, username);
@@ -355,6 +388,7 @@ pub const GeodeGrpcServer = struct {
         config: GrpcConfig,
     ) !GeodeGrpcServer {
         var server = try GrpcServer.init(allocator, port, "secret-key");
+        const allow_plaintext_fallback = shouldAllowGrpcPlaintextFallback(allocator);
 
         // Initialize TLS if cert and key are provided
         if (cert_path) |cp| {
@@ -366,10 +400,15 @@ pub const GeodeGrpcServer = struct {
                 defer allocator.free(key_z);
 
                 grpc_tls.initTlsContext(cert_z, key_z) catch |err| {
-                    log.warn("gRPC TLS init failed, falling back to plaintext", &.{
+                    if (!allow_plaintext_fallback) {
+                        log.err("gRPC TLS init failed; refusing plaintext fallback", &.{
+                            Attr.string("error", @errorName(err)),
+                        });
+                        return err;
+                    }
+                    log.warn("gRPC TLS init failed; plaintext fallback explicitly enabled", &.{
                         Attr.string("error", @errorName(err)),
                     });
-                    // Continue without TLS — server will accept plaintext connections
                 };
                 if (grpc_tls.hasTlsContext()) {
                     server.on_tls_accept = grpc_tls.tlsAccept;
@@ -378,14 +417,12 @@ pub const GeodeGrpcServer = struct {
             }
         }
 
-        // Issue #479: Always wrap connections with write-all semantics to prevent
-        // partial HTTP/2 frame writes. grpc-zig's writeFrame ignores the return
-        // value of ioWrite, which on aarch64 under load causes partial writes that
-        // corrupt HTTP/2 framing and lead to segfaults. The rawAccept wrapper
-        // ensures all bytes are written before returning.
-        if (server.on_tls_accept == null) {
+        // Fail-closed by default: plaintext fallback requires explicit opt-in.
+        if (server.on_tls_accept == null and allow_plaintext_fallback) {
             server.on_tls_accept = grpc_tls.rawAccept;
-            log.info("gRPC plaintext with write-all wrapper enabled", &.{});
+            log.warn("gRPC plaintext fallback enabled in Debug mode", &.{});
+        } else if (server.on_tls_accept == null) {
+            return error.TlsRequired;
         }
 
         const store = try allocator.create(SessionStore);
@@ -531,6 +568,7 @@ fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !Pa
     };
 
     const entry = store.getEntry(session_id) orelse {
+        throttleInvalidSessionProbe();
         var resp = try buildErrorResponse(allocator, "28000", "Unknown session", &.{}, &.{});
         defer resp.deinit(allocator);
         return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
@@ -650,6 +688,7 @@ fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allo
             return;
         };
         const entry = store.getEntry(req.session_id) orelse {
+            throttleInvalidSessionProbe();
             trans.endStream() catch {};
             return;
         };
@@ -980,6 +1019,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
     };
 
     const entry = store.getEntry(req.session_id) orelse {
+        throttleInvalidSessionProbe();
         var resp = try buildErrorResponse(allocator, "28000", "Unknown session", &.{}, &.{});
         defer resp.deinit(allocator);
         return encodeMessage(allocator, resp);
@@ -1269,6 +1309,7 @@ fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     };
 
     const entry = store.getEntry(req.session_id) orelse {
+        throttleInvalidSessionProbe();
         var resp = try buildErrorResponse(allocator, "28000", "Unknown session", &.{}, &.{});
         defer resp.deinit(allocator);
         const pull_resp = schema.PullResponse{ .response = resp };
@@ -1327,6 +1368,7 @@ fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     };
 
     const entry = store.getEntry(req.session_id) orelse {
+        throttleInvalidSessionProbe();
         const resp = schema.BeginResponse{ .session_id = "", .tx_id = "" };
         return encodeMessage(allocator, resp);
     };
@@ -1371,6 +1413,7 @@ fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
         return encodeMessage(allocator, resp);
     };
     const entry = store.getEntry(req.session_id) orelse {
+        throttleInvalidSessionProbe();
         const resp = schema.CommitResponse{ .success = false };
         return encodeMessage(allocator, resp);
     };
@@ -1412,6 +1455,7 @@ fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
         return encodeMessage(allocator, resp);
     };
     const entry = store.getEntry(req.session_id) orelse {
+        throttleInvalidSessionProbe();
         const resp = schema.RollbackResponse{ .success = false };
         return encodeMessage(allocator, resp);
     };

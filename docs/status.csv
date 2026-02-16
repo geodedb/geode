@@ -486,7 +486,6 @@ REQ-CLI-SUBPROCESS-INTEGRATION-003,CLI Subprocess Elimination,IntegrationTesting
 REQ-CLI-SUBPROCESS-INTEGRATION-003,CLISubprocess,Integration3,TESTED,,,claude,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-CLI-SUBPROCESS-UNIT-001,CLI Subprocess Elimination,UnitTesting,EXEMPT,,,claude,2025-10-05,tests/test_cli_subprocess_elimination_unit.zig
 REQ-CLI-SUBPROCESS-UNIT-002,CLI Subprocess Elimination,UnitTesting,EXEMPT,,,claude,2025-10-05,tests/test_cli_subprocess_elimination_unit_simple.zig
-REQ-CLI-TABLE-001,TableFormat,PostgreSQLStyle,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-USER-CMD-001,User CLI Commands,UserManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig
 REQ-CLI-WD-001,CLI Working Directory Handling,TestInfrastructure,TESTED,,,cli,2025-10-04,tests/cli_working_directory_regression_test.sh
 REQ-CLIENT-ENV-001,ClientEnvironmentVariables,IntegrationTests,TESTED,,,clients,2025-10-04,tests/test_environment_variables_integration.zig
@@ -961,12 +960,10 @@ REQ-GQL-010,Governance,NextPlanFreshnessGuard,TESTED,,,tooling,2025-09-22,tests/
 REQ-GQL-010,Governance,NextSliceStructureGuard,TESTED,,,tooling,2025-09-22,scripts/governance_ci.zig
 REQ-GQL-010,Governance,RealityFreshnessGuard,TESTED,,,tooling,2025-09-22,scripts/governance_ci.zig
 REQ-GQL-010,Governance,RealityFreshnessGuard,TESTED,,,tooling,2025-09-22,tests/test_governance_guards_promote.zig
-REQ-GQL-010,Governance,SliceDeltaGuardStub,TESTED,,,tooling,2025-09-22,scripts/slice_delta_guard.zig
 REQ-GQL-010,Governance,SliceReqCrosscheckGuard,TESTED,,,tooling,2025-09-22,scripts/governance_ci.zig
 REQ-GQL-010,Governance,StubImplAudit,TESTED,,,tooling,2025-09-23,tests/canary_governance_stub_impl_audit.zig
 REQ-GQL-010,Governance,TrendAppend,TESTED,,,tooling,2025-09-22,scripts/governance_ci.zig
 REQ-GQL-010,Governance,TrendAppend,TESTED,,,tooling,2025-09-22,scripts/governance_trend_append.zig
-REQ-GQL-010,Governance,TrendRegressionGuardStub,TESTED,,,tooling,2025-09-22,scripts/trend_regression_guard.zig
 REQ-GQL-010,Governance,VarianceEnvelopeGuard,TESTED,,,tooling,2025-09-22,scripts/governance_ci.zig
 REQ-GQL-010,Governance Aggregate Nightly,GovernanceAggregate,TESTED,,,tooling,2025-09-22,tests/nightly_governance_aggregate.zig
 REQ-GQL-010,Governance Delta Detection,DeltaGuardPreview,TESTED,,,tooling,2025-09-22,tests/governance_delta.zig
@@ -3220,6 +3217,10 @@ REQ-QP-PARALLEL-001,QueryPlannerOptimization,Parallelization,EXEMPT,,,planner,20
 REQ-QP-PUSH-001,QueryPlannerOptimization,PredicatePushdown,EXEMPT,,,planner,2025-12-30,src/planner/query_optimizer.zig
 REQ-QP-SORT-001,QueryPlannerOptimization,SortElimination,EXEMPT,,,planner,2025-12-30,src/planner/query_optimizer.zig
 REQ-QP-STATS-001,QueryPlannerOptimization,StatisticsEstimation,EXEMPT,,,planner,2025-12-30,src/planner/query_optimizer.zig
+REQ-QUALITY-401-001,MatchOpsStagedParity,GoldenParity,TESTED,,,execution,2026-02-16,tests/test_match_operations_parity_campaign.zig
+REQ-QUALITY-401-002,MatchOpsBenchmarkCampaign,RefactorBenchmark,BENCHED,,,execution,2026-02-16,tests/benchmark_match_operations_campaign.zig
+REQ-QUALITY-461-001,CliTransportResponseAbstraction,GoldenParityJson,TESTED,,,cli,2026-02-16,tests/test_cli_transport_response_parity.zig
+REQ-QUALITY-461-002,CliTransportResponseAbstraction,GoldenParityTextFormats,TESTED,,,cli,2026-02-16,tests/test_cli_transport_response_parity.zig
 REQ-QUALITY-GAP-406-001,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/utils/stdio.zig
 REQ-QUALITY-GAP-406-002,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/cli/main.zig
 REQ-QUALITY-GAP-406-003,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/cli/lsp/transport.zig
@@ -3307,20 +3308,20 @@ REQ-REGRESSION-PREV-001,RegressionTesting,RegressionPrevention,TESTED,,,test,202
 REQ-REMOTE-KMS-SERVER-001,Remote KMS Server,QUICTransport,TESTED,,,security,2026-01-09,src/security/kms_remote.zig
 REQ-REPL-ADVANCED-001,REPL Advanced Features,Testing,TESTED,,,repl,2025-11-17,src/client/repl/test_repl_advanced_features.zig
 REQ-REPL-ADVANCED-002,REPL Advanced Features,AutoComplete,TESTED,,,cli,2026-01-15,tests/test_requirement_traceability.zig
-REQ-REPL-FORMAT-001,REPL Output Formatting,RegressionTesting,TESTED,,,repl,2025-10-05,tests/repl_formatting_regression_test.sh
+REQ-REPL-FORMAT-001,REPL Output Formatting,RegressionTesting,TESTED,,,repl,2026-02-16,tests/repl_formatting_regression_test.sh
 REQ-REPL-FORMAT-002,REPL Output Formatting Fixes,UnitTesting,TESTED,,,repl,2025-11-17,tests/test_repl_formatting_fixes.zig
-REQ-REPL-FORMAT-003,REPL Formatting Fixes,RegressionTesting,TESTED,,,repl,2025-11-17,tests/repl_formatting_fixes_regression_test.sh
+REQ-REPL-FORMAT-003,REPL Formatting Fixes,RegressionTesting,TESTED,,,repl,2026-02-16,tests/repl_formatting_fixes_regression_test.sh
 REQ-REPL-FORMAT-004,REPL Formatting,TableOutput,TESTED,,,cli,2026-01-15,tests/test_requirement_traceability.zig
 REQ-REPL-FUZZY-001,REPL Fuzzy Search,Implementation,TESTED,,,repl,2025-11-17,src/client/repl/fuzzy_search.zig
 REQ-REPL-HISTORY-001,REPL Persistent History,UnitTesting,TESTED,,,repl,2025-10-05,tests/test_repl_history.zig
 REQ-REPL-HISTORY-002,REPL Persistent History,IntegrationTesting,TESTED,,,repl,2025-10-05,tests/test_repl_history_integration.zig
 REQ-REPL-HISTORY-002,REPL Persistent History,IntegrationTesting,TESTED,,,repl,2025-10-05',tools/test_canary_lint.py
-REQ-REPL-HISTORY-003,REPL Persistent History,RegressionTesting,TESTED,,,repl,2025-10-05,tests/repl_history_regression_test.sh
-REQ-REPL-MULTILINE-001,REPL Multi-line Input,RegressionTesting,TESTED,,,repl,2025-10-05,tests/repl_multiline_regression_test.sh
+REQ-REPL-HISTORY-003,REPL Persistent History,RegressionTesting,TESTED,,,repl,2026-02-16,tests/repl_history_regression_test.sh
+REQ-REPL-MULTILINE-001,REPL Multi-line Input,RegressionTesting,TESTED,,,repl,2026-02-16,tests/repl_multiline_regression_test.sh
 REQ-REPL-PAGER-001,REPL Result Pagination,Implementation,TESTED,,,repl,2025-11-17,src/client/repl/result_pager.zig
 REQ-REPL-QUIC-001,REPL QUIC Integration,ClientSession,TESTED,,,repl,2026-01-15,src/client/repl/repl_dispatch.zig
 REQ-REPL-QUIC-001,REPL QUIC Integration,IntegrationTesting,TESTED,,,repl,2025-10-05,tests/test_repl_quic_integration_e2e.zig
-REQ-REPL-QUIC-001,REPL QUIC Integration,RegressionTesting,EXEMPT,,,repl,2025-10-05,tests/repl_quic_integration_regression_test.sh
+REQ-REPL-QUIC-001,REPL QUIC Integration,RegressionTesting,TESTED,,,repl,2026-02-16,tests/repl_quic_integration_regression_test.sh
 REQ-REPL-QUIC-001,REPL QUIC Integration,UnitTesting,TESTED,,,repl,2025-10-05,tests/test_repl_quic_integration.zig
 REQ-REPL-QUIC-002,REPL QUIC Transport,QuicTransportAdapter,TESTED,,,repl,2026-01-15,src/cli/main.zig
 REQ-REPL-QUIC-003,REPL QUIC Transport Tests,UnitTests,TESTED,,,repl,2025-10-05,tests/test_quic_transport.zig
@@ -3328,7 +3329,7 @@ REQ-REPL-QUIC-004,REPL Integration Tests,EndToEndTests,EXEMPT,,,repl,2025-10-05,
 REQ-REPL-QUIC-005,REPL E2E Tests,EndToEndIntegration,EXEMPT,,,repl,2025-10-05,tests/test_repl_e2e.zig
 REQ-REPL-SESSION-001,REPL Session Persistence,Implementation,TESTED,,,repl,2025-11-17,src/client/repl/session_state.zig
 REQ-REPL-SYNTAX-001,REPL Syntax Highlighting,Implementation,TESTED,,,repl,2025-11-17,src/client/repl/syntax_highlighter.zig
-REQ-REPL-TIMING-001,REPL Timing,RegressionTesting,TESTED,,,repl,2025-10-05,tests/repl_timing_regression_test.sh
+REQ-REPL-TIMING-001,REPL Timing,RegressionTesting,TESTED,,,repl,2026-02-16,tests/repl_timing_regression_test.sh
 REQ-RLS-001,RLSExpressionCompilation,PolicyParsing,TESTED,,,security,2026-01-15,tests/test_gap_0193_remaining_categories.zig
 REQ-RLS-002,RLSExpressionCompilation,ExpressionOptimization,TESTED,,,security,2026-01-15,tests/test_gap_0193_remaining_categories.zig
 REQ-RLS-003,RLSExpressionCompilation,CacheIntegration,TESTED,,,security,2026-01-15,tests/test_gap_0193_remaining_categories.zig

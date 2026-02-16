@@ -28,7 +28,7 @@ pub const tlsAccept = if (has_openssl) ssl_impl.tlsAccept else stubTlsAccept;
 /// ioWrite, which on aarch64 under load corrupts HTTP/2 framing. This wrapper
 /// ensures all bytes are written before returning, preventing frame corruption.
 pub fn rawAccept(stream: std.net.Stream) anyerror!TlsIo {
-    const conn = std.heap.page_allocator.create(RawConn) catch return error.OutOfMemory;
+    const conn = std.heap.c_allocator.create(RawConn) catch return error.OutOfMemory;
     conn.* = .{ .stream = stream };
     return TlsIo{
         .ctx = @ptrCast(conn),
@@ -63,7 +63,7 @@ fn rawClose(ctx_ptr: *anyopaque) void {
     const conn: *RawConn = @ptrCast(@alignCast(ctx_ptr));
     // Don't close the stream fd here — Transport.ioClose() calls
     // stream.close() separately after calling our close_fn.
-    std.heap.page_allocator.destroy(conn);
+    std.heap.c_allocator.destroy(conn);
 }
 
 // --- Stub implementations for non-OpenSSL builds ---
@@ -184,7 +184,7 @@ const ssl_impl = if (has_openssl) struct {
             return error.TlsHandshakeFailed;
         }
 
-        const conn = std.heap.page_allocator.create(SslConn) catch return error.OutOfMemory;
+        const conn = std.heap.c_allocator.create(SslConn) catch return error.OutOfMemory;
         conn.* = .{ .ssl = ssl_ptr, .fd = fd };
 
         return TlsIo{
@@ -235,7 +235,7 @@ const ssl_impl = if (has_openssl) struct {
         // in OpenSSL. SSL_shutdown only sends a courtesy close_notify
         // alert; SSL_free handles all resource cleanup and is always safe.
         c.SSL_free(conn.ssl);
-        std.heap.page_allocator.destroy(conn);
+        std.heap.c_allocator.destroy(conn);
     }
 } else struct {};
 

@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const build_options = @import("build_options");
 const geode = @import("geode");
 const graph_store = geode.graph_store;
@@ -14,6 +13,7 @@ const quic = @import("transport/quic");
 const migration = @import("migration");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
+const stdio_util = @import("utils/stdio.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CLI; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -61,24 +61,12 @@ const TlsConfig = struct {
 // CANARY: REQ=REQ-QUALITY-GAP-406-004; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
 // Cross-platform stdin helper with proper error handling
 fn getStdinFile() error{StdioUnavailable}!std.fs.File {
-    if (builtin.os.tag == .windows) {
-        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return error.StdioUnavailable;
-        if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
-        return std.fs.File{ .handle = handle };
-    } else {
-        return std.fs.File{ .handle = std.posix.STDIN_FILENO };
-    }
+    return stdio_util.getStdin() catch error.StdioUnavailable;
 }
 
 // Cross-platform stdout helper with proper error handling
 fn getStdoutFile() error{StdioUnavailable}!std.fs.File {
-    if (builtin.os.tag == .windows) {
-        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch return error.StdioUnavailable;
-        if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
-        return std.fs.File{ .handle = handle };
-    } else {
-        return std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-    }
+    return stdio_util.getStdout() catch error.StdioUnavailable;
 }
 
 // Helper to print formatted output to stdout

@@ -25,20 +25,18 @@ builds:
   flags:
   - -Doptimize=ReleaseSafe
   targets:
-      # Linux targets
+    # BEGIN GENERATED ZIG TARGETS (tools/release_target_manifest.py)
   - x86_64-linux-gnu
   - x86_64-linux-musl
   - aarch64-linux-gnu
   - aarch64-linux-musl
   - arm-linux-gnueabihf
   - riscv64-linux-gnu
-      # macOS targets
   - x86_64-macos
   - aarch64-macos
-      # Windows targets - currently disabled due to QUIC library socket type incompatibilities
-      # TODO: Re-enable when vendor/quic adds Windows socket support
-      # - x86_64-windows
-      # - aarch64-windows
+    # END GENERATED ZIG TARGETS
+    # Windows targets are intentionally excluded due to QUIC library socket type incompatibilities.
+    # Re-enable once vendor/quic Windows socket support is available.
 
 # =============================================================================
 # Archives - Binary Distribution

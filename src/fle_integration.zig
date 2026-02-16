@@ -190,8 +190,8 @@ pub fn fieldRequiresEncryption(type_name: []const u8, field_name: []const u8) bo
         return false;
     }
 
-    // Use page_allocator for catalog lookup — avoids leaking a new GPA per call
-    const allocator = std.heap.page_allocator;
+    // Use c_allocator for catalog lookup to avoid page_allocator usage in runtime paths.
+    const allocator = std.heap.c_allocator;
 
     // Get global catalog - FAIL-SECURE: if we can't access catalog, assume encryption IS required
     // This prevents bypassing encryption by causing catalog errors

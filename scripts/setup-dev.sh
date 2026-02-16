@@ -37,7 +37,7 @@ check_command git || MISSING_REQUIRED=1
 if [ $MISSING_REQUIRED -eq 1 ]; then
     echo ""
     echo -e "${RED}Error: Missing required tools. Please install them first.${NC}"
-    echo "  - Zig: https://ziglang.org/download/"
+    echo "  - Zig (zvm): curl -fsSL https://zig.sh/install.sh | bash"
     exit 1
 fi
 

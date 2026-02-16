@@ -139,6 +139,16 @@ fn checkNodeProperty(
     return valuesEqual(node_val, expected_val);
 }
 
+/// Stage-1 decomposition helper for executeMatchQueryImpl:
+/// isolate aggregation detection so staged refactors can split branch handlers
+/// without changing branch-selection semantics.
+fn returnItemsHaveAggregation(items: []const ast.ReturnItem) bool {
+    for (items) |item| {
+        if (isAggregationExpr(item.expr)) return true;
+    }
+    return false;
+}
+
 // CANARY: REQ=REQ-REFACTOR-MATCH-003; FEATURE="MatchOperationsRefactor"; ASPECT=ShortestPathHandler; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
 /// Handle path variable assignment for shortestPath patterns
 /// Returns the execution result if this is a shortestPath pattern, null otherwise
@@ -3097,14 +3107,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // Even with WITH clauses, we need column names for the intermediate result
     var columns = try generateUniqueColumnNames(allocator, items);
 
-    // Check if we have any aggregations
-    var has_aggregation = false;
-    for (items) |item| {
-        if (isAggregationExpr(item.expr)) {
-            has_aggregation = true;
-            break;
-        }
-    }
+    // Stage-1 decomposition: keep branch selection in a dedicated helper.
+    const has_aggregation = returnItemsHaveAggregation(items);
 
     if (has_aggregation) {
         // Check if we have GROUP BY

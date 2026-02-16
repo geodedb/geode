@@ -7,7 +7,11 @@ const auth_state = geode.auth_state;
 // API Key CLI commands for managing API keys from the command line
 
 /// Persistent file path for API keys (matches auth_state pattern)
-const APIKEY_STATE_PATH = "/tmp/geode_apikey_state.db";
+const APIKEY_STATE_FILE = "geode_apikey_state.db";
+
+fn apiKeyStatePath(allocator: std.mem.Allocator) ![]u8 {
+    return auth_state.resolveStatePath(allocator, APIKEY_STATE_FILE);
+}
 
 const ExitCode = enum(u8) {
     success = 0,
@@ -45,7 +49,10 @@ fn loadApiKeyState(allocator: std.mem.Allocator) !std.StringHashMap(StoredApiKey
         keys.deinit();
     }
 
-    const file = std.fs.openFileAbsolute(APIKEY_STATE_PATH, .{}) catch |err| switch (err) {
+    const state_path = try apiKeyStatePath(allocator);
+    defer allocator.free(state_path);
+
+    const file = std.fs.openFileAbsolute(state_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return keys,
         else => return err,
     };
@@ -95,7 +102,14 @@ fn loadApiKeyState(allocator: std.mem.Allocator) !std.StringHashMap(StoredApiKey
 
 /// Save API keys to persistent storage
 fn saveApiKeyState(keys: *std.StringHashMap(StoredApiKey)) !void {
-    const file = try std.fs.createFileAbsolute(APIKEY_STATE_PATH, .{ .truncate = true, .read = true });
+    const state_path = try apiKeyStatePath(keys.allocator);
+    defer keys.allocator.free(state_path);
+
+    const file = try std.fs.createFileAbsolute(state_path, .{
+        .truncate = true,
+        .read = true,
+        .mode = 0o600,
+    });
     defer file.close();
 
     var it = keys.iterator();

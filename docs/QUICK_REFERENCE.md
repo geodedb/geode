@@ -40,7 +40,8 @@ geode --help
 ```bash
 make build              # Debug build
 make release            # Optimized build
-make test              # Run all tests
+make test               # Core tests (unit + QUIC protocol)
+make test-all           # Full test suite (unit + e2e)
 make bench             # Run benchmarks
 make verify-all        # Full verification
 make fmt               # Format code

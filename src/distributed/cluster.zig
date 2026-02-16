@@ -12,6 +12,16 @@ const logging = @import("logging");
 const log = logging.scoped("cluster");
 const Attr = logging.Attr;
 
+fn envFlagEnabled(allocator: std.mem.Allocator, name: []const u8) bool {
+    const raw = std.process.getEnvVarOwned(allocator, name) catch return false;
+    defer allocator.free(raw);
+    if (raw.len == 0) return false;
+    if (raw[0] == '0') return false;
+    if (std.ascii.eqlIgnoreCase(raw, "false")) return false;
+    if (std.ascii.eqlIgnoreCase(raw, "off")) return false;
+    return true;
+}
+
 const MessageType = enum(i32) {
     READ = 0,
     WRITE = 1,
@@ -948,10 +958,20 @@ pub const ClusterCoordinator = struct {
         var client = quic.QuicClient.init(self.allocator);
         defer client.deinit();
 
-        // Cluster links are internal; allow self-signed certs by default.
-        _ = client.connectInsecure(host, port, true) catch |err| {
-            return err;
-        };
+        const allow_insecure = envFlagEnabled(self.allocator, "GEODE_CLUSTER_ALLOW_INSECURE");
+        if (allow_insecure) {
+            log.warn("GEODE_CLUSTER_ALLOW_INSECURE enabled; TLS certificate verification disabled", &.{});
+            _ = client.connectInsecure(host, port, true) catch |err| return err;
+        } else {
+            const ca_path = std.process.getEnvVarOwned(self.allocator, "GEODE_CLUSTER_CA_CERT") catch null;
+            defer if (ca_path) |p| self.allocator.free(p);
+
+            if (ca_path) |path| {
+                try client.connectEx(host, port, path, null, null);
+            } else {
+                try client.connect(host, port);
+            }
+        }
         _ = client.waitForHandshake(10) catch |err| return err;
 
         var stream = try client.openStream(true);

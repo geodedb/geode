@@ -594,6 +594,13 @@ fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Progra
     }
 }
 
+fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
+    var entropy: [16]u8 = undefined;
+    std.crypto.random.bytes(&entropy);
+    const token = std.fmt.bytesToHex(entropy, .lower);
+    return std.fmt.allocPrint(allocator, "sess_{s}", .{token});
+}
+
 fn handleClientMessage(
     gpa: std.mem.Allocator,
     state: *ServerState,
@@ -650,7 +657,7 @@ fn handleClientMessage(
                 state.session_config.?.tenant_id = try gpa.dupe(u8, tenant);
             }
 
-            const session_id = try std.fmt.allocPrint(gpa, "sess_{d}", .{std.time.milliTimestamp()});
+            const session_id = try generateSessionId(gpa);
             const resp = schema.QuicServerMessage{ .hello = .{
                 .success = true,
                 .session_id = session_id,

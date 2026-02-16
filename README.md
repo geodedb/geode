@@ -263,8 +263,11 @@ COMMIT;
 # Development build
 make build
 
-# Run comprehensive tests
+# Run core tests (Zig unit + QUIC protocol checks)
 make test
+
+# Run comprehensive suite (unit + e2e)
+make test-all
 
 # Generate governance status
 make status-generate

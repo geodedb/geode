@@ -29,6 +29,7 @@ stages:
   - lint
   - governance
   - test
+  - security
   - release
   - publish
 
@@ -37,8 +38,6 @@ default:
   tags:
     - company
     - linux
-  before_script:
-    - apt-get update -qq && apt-get install -y -qq libssl-dev > /dev/null 2>&1 || true
 
 # Issue #465: Global Zig build cache for CI pipeline efficiency
 cache:
@@ -53,6 +52,7 @@ variables:
   ZIG_VERSION: "0.15.2"
   ZIG_IMAGE: "registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}"
   GORELEASER_VERSION: "v2.5.0"
+  GEODE_TEST_HARNESS_REF: "bc200fdceabce0d6ad1b9919d5dc47905d84cc2c"
   # Git config for CI authentication
   GIT_CONFIG_COUNT: 2
   GIT_CONFIG_KEY_0: "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_FQDN}/.insteadOf"
@@ -115,6 +115,101 @@ governance-no-feature-flags:
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  allow_failure: false
+
+governance-zig-package-cache:
+  stage: governance
+  image: python:3.12-slim
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  script:
+    - |
+      echo "=== Running Zig Package Cache Staleness Check ==="
+      python3 tools/zig_package_cache_guard.py --strict-stale
+      echo "✓ docker/zig-packages has no stale entries"
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  allow_failure: false
+
+governance-match-ops-campaign:
+  stage: governance
+  image: $ZIG_IMAGE
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  script:
+    - |
+      echo "=== Running MATCH staged parity campaign ==="
+      zig build test-match-parity --summary all
+      echo "=== Running MATCH staged benchmark campaign ==="
+      GEODE_MATCH_BENCH_ENABLE=1 zig build test-match-bench --summary all
+      echo "=== Running CLI transport response parity goldens ==="
+      zig build test-cli-transport-parity --summary all
+      echo "✓ MATCH and CLI transport parity campaigns passed"
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  allow_failure: false
+
+governance-no-page-allocator:
+  stage: governance
+  image: alpine:3.21
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  before_script:
+    - apk add --no-cache ripgrep
+  script:
+    - |
+      echo "=== Enforcing allocator policy (no std.heap.page_allocator in production src/) ==="
+      if rg -n "std\\.heap\\.page_allocator" src \
+        --glob '!src/test*' \
+        --glob '!src/tests/**' \
+        --glob '!src/probe_*' \
+        --glob '!src/lib.zig'; then
+        echo "✗ page_allocator usage detected in production source paths"
+        exit 1
+      fi
+      echo "✓ allocator policy check passed"
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  allow_failure: false
+
+governance-stdio-abstraction:
+  stage: governance
+  image: python:3.12-slim
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  script:
+    - |
+      echo "=== Enforcing centralized CLI stdio abstraction ==="
+      python3 tools/stdio_abstraction_guard.py --repo .
+      echo "✓ CLI stdio abstraction check passed"
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  allow_failure: false
+
+governance-release-manifests:
+  stage: governance
+  image: python:3.12-slim
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  script:
+    - |
+      echo "=== Enforcing release target/docker manifest sync ==="
+      python3 tools/release_target_manifest.py sync-goreleaser \
+        --manifest release/target_manifest.json \
+        --goreleaser .goreleaser.yaml \
+        --check
+      python3 tools/release_dockerfile_manifest.py check \
+        --manifest release/dockerfile_manifest.json \
+        --repo-root .
+      echo "✓ Release manifests are in sync"
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
   allow_failure: false
 
 governance-canary-drift:
@@ -310,18 +405,28 @@ test-cross-build:
   image: $ZIG_IMAGE
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
-  parallel:
-    matrix:
-      - TARGET: x86_64-linux-gnu
-      - TARGET: x86_64-linux-musl
-      - TARGET: aarch64-linux-gnu
-      - TARGET: aarch64-linux-musl
-      - TARGET: arm-linux-gnueabihf
-      - TARGET: riscv64-linux-gnu
-      - TARGET: x86_64-macos
-      - TARGET: aarch64-macos
+  before_script:
+    - |
+      if ! command -v python3 >/dev/null 2>&1; then
+        if command -v apk >/dev/null 2>&1; then
+          apk add --no-cache python3
+        elif command -v apt-get >/dev/null 2>&1; then
+          apt-get update && apt-get install -y python3
+        else
+          echo "python3 is required for release target manifest tooling"
+          exit 1
+        fi
+      fi
   script:
-    - zig build -Doptimize=ReleaseSafe -Dtarget=$TARGET --summary all
+    - |
+      echo "=== Building release targets from manifest ==="
+      python3 tools/release_target_manifest.py list-zig-targets --manifest release/target_manifest.json > /tmp/release-targets.txt
+      while IFS= read -r TARGET; do
+        [ -z "$TARGET" ] && continue
+        echo "--- zig build target=$TARGET ---"
+        zig build -Doptimize=ReleaseSafe -Dtarget="$TARGET" --summary all
+      done < /tmp/release-targets.txt
+      echo "✓ all manifest-defined release targets built"
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
@@ -352,23 +457,29 @@ test-macos-unit:
       git config --global credential.helper ""
       git config --global "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/.insteadOf" "https://gitlab.com/"
       git config --global "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/.insteadOf" "git+https://gitlab.com/"
-    # Download and install Zig on macOS (Apple Silicon)
+    # Install Zig via zvm (https://zig.sh)
     - |
-      ZIG_VERSION="0.15.2"
-      ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/zig-aarch64-macos-${ZIG_VERSION}.tar.xz"
-      ZIG_DIR="zig-${ZIG_VERSION}"
-      if [ ! -f "${ZIG_DIR}/zig" ]; then
-        echo "Downloading Zig ${ZIG_VERSION}..."
-        curl -fsSL "$ZIG_URL" -o /tmp/zig.tar.xz
-        tar -xJf /tmp/zig.tar.xz
-        rm /tmp/zig.tar.xz
-        mv "zig-aarch64-macos-${ZIG_VERSION}" "${ZIG_DIR}"
+      if ! command -v jq >/dev/null 2>&1; then
+        if command -v brew >/dev/null 2>&1; then
+          brew install jq
+        else
+          echo "jq is required for zvm installation on macOS"
+          exit 1
+        fi
       fi
-      export PATH="$PWD/${ZIG_DIR}:$PATH"
+      export ZVM_NO_MODIFY=1
+      export PATH="$HOME/bin:$PATH"
+      curl -fsSL https://zig.sh/install.sh | bash
+      eval "$(zvm env)"
+      zvm install "${ZIG_VERSION}"
+      zvm use "${ZIG_VERSION}"
       zig version
   script:
-    - export PATH="$PWD/zig-0.15.2:$PATH"
-    - zig version
+    - |
+      export PATH="$HOME/bin:$PATH"
+      eval "$(zvm env)"
+      zvm use "${ZIG_VERSION}"
+      zig version
     # Debug build and tests only - ReleaseSafe is covered by test-cross-build jobs
     # ReleaseSafe compilation on macOS M1 runners exceeds the 1h job timeout
     - zig build --summary all
@@ -385,26 +496,27 @@ test-macos-unit:
 
 test-windows-unit:
   stage: test
+  timeout: 2h
   tags:
     - saas-windows-medium-amd64
+  retry:
+    max: 1
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
   before_script:
-    # Download and install Zig on Windows
+    # Install Zig via zvm (official bootstrap from zig.sh guidance)
     - |
-      $ZigVersion = "0.15.2"
-      $ZigUrl = "https://ziglang.org/download/${ZigVersion}/zig-x86_64-windows-${ZigVersion}.zip"
-      $ZigZip = "zig.zip"
-      $ZigDir = "zig-${ZigVersion}"
-      if (-not (Test-Path "$ZigDir\zig.exe")) {
-        Write-Host "Downloading Zig ${ZigVersion}..."
-        Invoke-WebRequest -Uri $ZigUrl -OutFile $ZigZip
-        Expand-Archive -Path $ZigZip -DestinationPath . -Force
-        Remove-Item $ZigZip
-        Rename-Item "zig-x86_64-windows-${ZigVersion}" $ZigDir
-      }
-      $env:PATH = "$PWD\$ZigDir;$env:PATH"
+      $ErrorActionPreference = "Stop"
+      $ZigVersion = "${env:ZIG_VERSION}"
+      irm https://raw.githubusercontent.com/tristanisham/zvm/master/install.ps1 | iex
+      zvm install $ZigVersion
+      zvm use $ZigVersion
+      zig version
   script:
-    - $env:PATH = "$PWD\zig-0.15.2;$env:PATH"
+    - zvm use $env:ZIG_VERSION
     - zig version
+    - zig test tests/test_cross_platform_stdio.zig --summary all
     - zig build --summary all
     - zig build test --summary all
     - zig build -Doptimize=ReleaseSafe --summary all
@@ -413,10 +525,7 @@ test-windows-unit:
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'
-  # TODO: Windows support needs cross-platform stdio fixes in src/cli/, src/client/, etc.
-  # Many files use std.posix.STDOUT_FILENO which doesn't work on Windows.
-  # See: https://github.com/ziglang/zig/wiki/Portable-alternatives-to-Unix-posix-API
-  allow_failure: true
+  allow_failure: false
 
 # =============================================================================
 # Test Stage - ReleaseSafe Build and Test (REQ-0008 enforcement)
@@ -466,13 +575,19 @@ test-performance-benchmarks:
       zig build -Doptimize=ReleaseSafe --summary all
 
       echo "=== Executing Performance Tests ==="
-      # Run the performance optimization tests which include variance checks
-      zig build test -Doptimize=ReleaseSafe --summary all 2>&1 | tee benchmark_output.log
+      # Run benchmark-focused tests with variance envelopes.
+      zig build test -Doptimize=ReleaseSafe -Dtest-filter="benchmark_" --summary all 2>&1 | tee benchmark_output.log
 
       echo "=== Verifying Benchmark Results ==="
-      # Fail if no tests actually passed — ensures benchmarks are real
-      if ! grep -q "passed" benchmark_output.log; then
-        echo "ERROR: No benchmark tests passed — check benchmark_output.log"
+      # Reject known regression signatures from benchmark envelope tests.
+      if grep -Eq "VARIANCE_FAIL|VarianceEnvelopeBreached|error\\.TestUnexpectedResult" benchmark_output.log; then
+        echo "ERROR: Performance variance envelope breached"
+        exit 1
+      fi
+
+      # Ensure benchmark telemetry was produced (guards against no-op gating).
+      if ! grep -Eq "benchmark=|VARIANCE_OK|benchmark_.*variance" benchmark_output.log; then
+        echo "ERROR: Benchmark telemetry not found in output"
         exit 1
       fi
       echo "Performance benchmarks verified"
@@ -506,9 +621,15 @@ test-gql-compliance:
     - python3 -m venv /opt/venv
     - source /opt/venv/bin/activate
     - pip install --no-cache-dir pyyaml pytest
-    # Clone test harness specs into sibling directory (matches local monorepo layout)
-    # Clone test harness (CI job token allowlisted on test-harness project)
-    - git clone --depth 1 "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/devnw/codepros/geode/geode-test-harness.git" ../geode-test-harness
+    - |
+      HARNESS_URL="https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/devnw/codepros/geode/geode-test-harness.git"
+      mkdir -p ../geode-test-harness
+      git -C ../geode-test-harness init
+      git -C ../geode-test-harness remote remove origin 2>/dev/null || true
+      git -C ../geode-test-harness remote add origin "$HARNESS_URL"
+      git -C ../geode-test-harness fetch --depth 1 origin "$GEODE_TEST_HARNESS_REF"
+      git -C ../geode-test-harness checkout --detach FETCH_HEAD
+      echo "Pinned geode-test-harness ref: $(git -C ../geode-test-harness rev-parse HEAD)"
   script:
     - |
       echo "=== Building Geode (ReleaseSafe for QUIC stability) ==="
@@ -548,9 +669,15 @@ test-geodetestlab-comprehensive:
     - python3 -m venv /opt/venv
     - source /opt/venv/bin/activate
     - pip install --no-cache-dir pyyaml pytest
-    # Clone test harness specs into sibling directory (matches local monorepo layout)
-    # Clone test harness (CI job token allowlisted on test-harness project)
-    - git clone --depth 1 "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/devnw/codepros/geode/geode-test-harness.git" ../geode-test-harness
+    - |
+      HARNESS_URL="https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/devnw/codepros/geode/geode-test-harness.git"
+      mkdir -p ../geode-test-harness
+      git -C ../geode-test-harness init
+      git -C ../geode-test-harness remote remove origin 2>/dev/null || true
+      git -C ../geode-test-harness remote add origin "$HARNESS_URL"
+      git -C ../geode-test-harness fetch --depth 1 origin "$GEODE_TEST_HARNESS_REF"
+      git -C ../geode-test-harness checkout --detach FETCH_HEAD
+      echo "Pinned geode-test-harness ref: $(git -C ../geode-test-harness rev-parse HEAD)"
   script:
     - |
       echo "=== Building Geode (ReleaseSafe for QUIC stability) ==="
@@ -585,6 +712,32 @@ test-geodetestlab-comprehensive:
   allow_failure: true
 
 # =============================================================================
+# Security Stage - Mandatory Secret + Dependency/Config Scans
+# =============================================================================
+
+security-secrets:
+  stage: security
+  image: zricethezav/gitleaks:v8.24.2
+  script:
+    - gitleaks detect --source . --redact --no-git --exit-code 1
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  allow_failure: false
+
+security-trivy:
+  stage: security
+  image: aquasec/trivy:0.58.1
+  script:
+    - trivy fs --scanners vuln,misconfig,secret --severity HIGH,CRITICAL --exit-code 1 --no-progress .
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  allow_failure: false
+
+# =============================================================================
 # Release Stage - GoReleaser with Zig Cross-Compilation
 # =============================================================================
 
@@ -594,9 +747,10 @@ snapshot:
   # Skip stage-based ordering: don't wait for test-geodetestlab-comprehensive (2h+)
   needs:
     - job: test-zig-unit
-      optional: true
     - job: test-zig-release-safe
-      optional: true
+    - job: test-performance-benchmarks
+    - job: security-secrets
+    - job: security-trivy
   # Use GitLab hosted runners for Docker-in-Docker support
   tags:
     - saas-linux-medium-amd64
@@ -609,13 +763,15 @@ snapshot:
     GIT_DEPTH: 0
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
-    - apk add --no-cache curl git bash tar xz coreutils
+    - apk add --no-cache curl git bash tar xz coreutils jq python3
     # Install Zig while Docker daemon starts up
     - |
-      ZIG_URL="https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz"
-      curl -fsSL "$ZIG_URL" -o /tmp/zig.tar.xz
-      tar -xJf /tmp/zig.tar.xz -C /usr/local
-      ln -sf /usr/local/zig-x86_64-linux-0.15.2/zig /usr/local/bin/zig
+      export ZVM_NO_MODIFY=1
+      export PATH="$HOME/bin:$PATH"
+      curl -fsSL https://zig.sh/install.sh | bash
+      eval "$(zvm env)"
+      zvm install "${ZIG_VERSION}"
+      zvm use "${ZIG_VERSION}"
       zig version
   script:
     - |
@@ -663,17 +819,25 @@ snapshot:
         docker buildx use multiarch-builder 2>/dev/null || true
       docker buildx inspect --bootstrap || true
 
-      # Install GoReleaser
-      curl -sfL https://goreleaser.com/static/run | bash -s -- --version
+      # Install GoReleaser (pinned version, no pipe-to-shell execution)
+      GORELEASER_TARBALL="goreleaser_Linux_x86_64.tar.gz"
+      GORELEASER_URL="https://github.com/goreleaser/goreleaser/releases/download/${GORELEASER_VERSION}/${GORELEASER_TARBALL}"
+      curl -fsSL "${GORELEASER_URL}" -o /tmp/goreleaser.tar.gz
+      tar -xzf /tmp/goreleaser.tar.gz -C /tmp goreleaser
+      install -m 0755 /tmp/goreleaser /usr/local/bin/goreleaser
+      goreleaser --version
+
+      # Keep GoReleaser targets synchronized from the single manifest source.
+      python3 tools/release_target_manifest.py sync-goreleaser --manifest release/target_manifest.json --goreleaser .goreleaser.yaml
+      python3 tools/release_dockerfile_manifest.py check --manifest release/dockerfile_manifest.json --repo-root .
 
       # Run GoReleaser in snapshot mode (120m timeout for 8-target cross-compilation)
       echo "SKIP_DOCKERHUB=${SKIP_DOCKERHUB}"
-      curl -sfL https://goreleaser.com/static/run | \
-        GORELEASER_KEY="${GORELEASER_KEY:-}" \
+      GORELEASER_KEY="${GORELEASER_KEY:-}" \
         CI_REGISTRY_IMAGE="$CI_REGISTRY_IMAGE" \
         SKIP_DOCKERHUB="$SKIP_DOCKERHUB" \
         HOMEBREW_TAP_TOKEN="${HOMEBREW_TAP_TOKEN:-$CI_JOB_TOKEN}" \
-        bash -s -- release --snapshot --clean --timeout 120m 2>&1 || {
+        goreleaser release --snapshot --clean --timeout 120m 2>&1 || {
           echo "GoReleaser failed, checking logs..."
           cat dist/*.log 2>/dev/null || true
           exit 1
@@ -696,9 +860,10 @@ build-release:
   # Only require unit tests and release-safe build to pass before building release
   needs:
     - job: test-zig-unit
-      optional: true
     - job: test-zig-release-safe
-      optional: true
+    - job: test-performance-benchmarks
+    - job: security-secrets
+    - job: security-trivy
   # Use GitLab hosted runners for Docker-in-Docker support
   tags:
     - saas-linux-medium-amd64
@@ -711,13 +876,15 @@ build-release:
     GIT_DEPTH: 0
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
-    - apk add --no-cache curl git bash tar xz coreutils
+    - apk add --no-cache curl git bash tar xz coreutils jq python3
     # Install Zig while Docker daemon starts up
     - |
-      ZIG_URL="https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz"
-      curl -fsSL "$ZIG_URL" -o /tmp/zig.tar.xz
-      tar -xJf /tmp/zig.tar.xz -C /usr/local
-      ln -sf /usr/local/zig-x86_64-linux-0.15.2/zig /usr/local/bin/zig
+      export ZVM_NO_MODIFY=1
+      export PATH="$HOME/bin:$PATH"
+      curl -fsSL https://zig.sh/install.sh | bash
+      eval "$(zvm env)"
+      zvm install "${ZIG_VERSION}"
+      zvm use "${ZIG_VERSION}"
       zig version
   script:
     - |
@@ -767,19 +934,31 @@ build-release:
       docker buildx inspect --bootstrap || true
       docker buildx ls
 
-      # Install GoReleaser
+      # Install GoReleaser (pinned version, no pipe-to-shell execution)
       echo "Installing GoReleaser..."
-      curl -sfL https://goreleaser.com/static/run | bash -s -- --version
+      GORELEASER_TARBALL="goreleaser_Linux_x86_64.tar.gz"
+      GORELEASER_URL="https://github.com/goreleaser/goreleaser/releases/download/${GORELEASER_VERSION}/${GORELEASER_TARBALL}"
+      curl -fsSL "${GORELEASER_URL}" -o /tmp/goreleaser.tar.gz
+      tar -xzf /tmp/goreleaser.tar.gz -C /tmp goreleaser
+      install -m 0755 /tmp/goreleaser /usr/local/bin/goreleaser
+      goreleaser --version
+
+      # Keep GoReleaser targets synchronized from the single manifest source.
+      python3 tools/release_target_manifest.py sync-goreleaser --manifest release/target_manifest.json --goreleaser .goreleaser.yaml
+      python3 tools/release_dockerfile_manifest.py signoff \
+        --manifest release/dockerfile_manifest.json \
+        --repo-root . \
+        --output /tmp/release-dockerfile-signoff.txt
+      cat /tmp/release-dockerfile-signoff.txt
 
       # Run GoReleaser to build artifacts (release publishing disabled in .goreleaser.yaml)
       echo "Running GoReleaser build..."
       echo "SKIP_DOCKERHUB=${SKIP_DOCKERHUB}"
-      curl -sfL https://goreleaser.com/static/run | \
-        GORELEASER_KEY="${GORELEASER_KEY:-}" \
+      GORELEASER_KEY="${GORELEASER_KEY:-}" \
         CI_REGISTRY_IMAGE="$CI_REGISTRY_IMAGE" \
         SKIP_DOCKERHUB="$SKIP_DOCKERHUB" \
         HOMEBREW_TAP_TOKEN="${HOMEBREW_TAP_TOKEN:-$CI_JOB_TOKEN}" \
-        bash -s -- release --clean --timeout 120m 2>&1 || {
+        goreleaser release --clean --timeout 120m 2>&1 || {
           echo "GoReleaser failed, checking logs..."
           cat dist/*.log 2>/dev/null || true
           ls -la dist/ 2>/dev/null || true
@@ -788,6 +967,14 @@ build-release:
 
       echo "=== Release build complete ==="
       ls -la dist/
+
+      # Generate release-cli asset links from the manifest and persist with artifacts.
+      VERSION="${CI_COMMIT_TAG#v}"
+      python3 tools/release_target_manifest.py render-release-cli-assets \
+        --manifest release/target_manifest.json \
+        --version "${VERSION}" \
+        --project-url "${CI_PROJECT_URL}" \
+        --tag "${CI_COMMIT_TAG}" > dist/release-assets.jsonl
 
       # Show built artifacts
       echo "=== Built artifacts ==="
@@ -819,25 +1006,10 @@ publish-release:
       VERSION="${CI_COMMIT_TAG#v}"
       echo "Version: ${VERSION}"
 
-      # Build asset links array
-      ASSETS_JSON=$(cat <<EOF
-      [
-        {"name": "Linux x86_64 (glibc)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_x86_64-linux-gnu.tar.gz?job=build-release", "link_type": "package"},
-        {"name": "Linux x86_64 (musl/Alpine)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_x86_64-linux-musl.tar.gz?job=build-release", "link_type": "package"},
-        {"name": "Linux ARM64 (glibc)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_aarch64-linux-gnu.tar.gz?job=build-release", "link_type": "package"},
-        {"name": "Linux ARM64 (musl/Alpine)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_aarch64-linux-musl.tar.gz?job=build-release", "link_type": "package"},
-        {"name": "Linux ARMv7", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_arm-linux-gnueabihf.tar.gz?job=build-release", "link_type": "package"},
-        {"name": "Linux RISC-V 64", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_riscv64-linux-gnu.tar.gz?job=build-release", "link_type": "package"},
-        {"name": "Debian/Ubuntu x86_64 (.deb)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.deb?job=build-release", "link_type": "package"},
-        {"name": "Debian/Ubuntu ARM64 (.deb)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_arm64.deb?job=build-release", "link_type": "package"},
-        {"name": "RHEL/Fedora x86_64 (.rpm)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.rpm?job=build-release", "link_type": "package"},
-        {"name": "RHEL/Fedora ARM64 (.rpm)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_arm64.rpm?job=build-release", "link_type": "package"},
-        {"name": "Alpine x86_64 (.apk)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.apk?job=build-release", "link_type": "package"},
-        {"name": "Alpine ARM64 (.apk)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_arm64.apk?job=build-release", "link_type": "package"},
-        {"name": "Checksums (SHA256)", "url": "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/checksums.txt?job=build-release", "link_type": "other"}
-      ]
-      EOF
-      )
+      if [ ! -f dist/release-assets.jsonl ]; then
+        echo "dist/release-assets.jsonl missing from build-release artifacts"
+        exit 1
+      fi
 
       # Create release description
       DESCRIPTION=$(cat <<EOF
@@ -893,28 +1065,16 @@ publish-release:
       EOF
       )
 
-      # Build release-cli command with asset links
-      release-cli create \
+      # Build release-cli command with asset links from generated manifest output.
+      set -- release-cli create \
         --name "Geode ${CI_COMMIT_TAG}" \
         --tag-name "${CI_COMMIT_TAG}" \
-        --description "${DESCRIPTION}" \
-        --assets-link "{\"name\":\"macOS Universal (Intel + Apple Silicon)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_darwin_universal.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"macOS Intel (x86_64)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_x86_64-macos.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"macOS Apple Silicon (ARM64)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_aarch64-macos.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"Linux x86_64 (glibc)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_x86_64-linux-gnu.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"Linux x86_64 (musl/Alpine)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_x86_64-linux-musl.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"Linux ARM64 (glibc)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_aarch64-linux-gnu.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"Linux ARM64 (musl/Alpine)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_aarch64-linux-musl.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"Linux ARMv7\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_arm-linux-gnueabihf.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"Linux RISC-V 64\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_riscv64-linux-gnu.tar.gz?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"Debian/Ubuntu x86_64 (.deb)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.deb?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"Debian/Ubuntu ARM64 (.deb)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_arm64.deb?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"RHEL/Fedora x86_64 (.rpm)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.rpm?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"RHEL/Fedora ARM64 (.rpm)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_arm64.rpm?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"Alpine x86_64 (.apk)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_x86_64.apk?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"Alpine ARM64 (.apk)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_Linux_arm64.apk?job=build-release\",\"link_type\":\"package\"}" \
-        --assets-link "{\"name\":\"Checksums (SHA256)\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/checksums.txt?job=build-release\",\"link_type\":\"other\"}" \
-        --assets-link "{\"name\":\"Package Registry\",\"url\":\"${CI_PROJECT_URL}/-/packages\",\"link_type\":\"other\"}"
+        --description "${DESCRIPTION}"
+      while IFS= read -r ASSET_JSON; do
+        [ -z "${ASSET_JSON}" ] && continue
+        set -- "$@" --assets-link "${ASSET_JSON}"
+      done < dist/release-assets.jsonl
+      "$@"
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+(-alpha\.\d+|-beta\.\d+|-rc\.\d+)?$/'
 

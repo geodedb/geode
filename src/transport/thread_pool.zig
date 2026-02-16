@@ -105,6 +105,8 @@ pub const ThreadPool = struct {
     config: ThreadPoolConfig,
     workers: []std.Thread,
     work_queue: QueueType,
+    wait_mutex: std.Thread.Mutex,
+    wait_cond: std.Thread.Condition,
     shutdown: std.atomic.Value(bool),
     active_workers: std.atomic.Value(usize),
     total_tasks_submitted: std.atomic.Value(usize),
@@ -126,6 +128,8 @@ pub const ThreadPool = struct {
             .config = config,
             .workers = try allocator.alloc(std.Thread, num_threads),
             .work_queue = QueueType.init(),
+            .wait_mutex = .{},
+            .wait_cond = .{},
             .shutdown = std.atomic.Value(bool).init(false),
             .active_workers = std.atomic.Value(usize).init(0),
             .total_tasks_submitted = std.atomic.Value(usize).init(0),
@@ -148,6 +152,9 @@ pub const ThreadPool = struct {
     pub fn deinit(self: *Self) void {
         // Signal shutdown
         self.shutdown.store(true, .release);
+        self.wait_mutex.lock();
+        self.wait_cond.broadcast();
+        self.wait_mutex.unlock();
 
         // Wait for all workers to finish
         for (self.workers) |worker| {
@@ -167,6 +174,9 @@ pub const ThreadPool = struct {
 
         if (self.work_queue.tryPush(item)) {
             _ = self.total_tasks_submitted.fetchAdd(1, .release);
+            self.wait_mutex.lock();
+            self.wait_cond.signal();
+            self.wait_mutex.unlock();
             return true;
         }
         return false;
@@ -184,11 +194,15 @@ pub const ThreadPool = struct {
             if (self.shutdown.load(.acquire)) {
                 return error.PoolShutdown;
             }
-            // Exponential backoff
-            std.Thread.sleep(@as(u64, backoff) * std.time.ns_per_us);
+            self.wait_mutex.lock();
+            self.wait_cond.timedWait(&self.wait_mutex, @as(u64, backoff) * std.time.ns_per_us) catch {};
+            self.wait_mutex.unlock();
             backoff = @min(backoff * 2, 1000); // Cap at 1ms
         }
         _ = self.total_tasks_submitted.fetchAdd(1, .release);
+        self.wait_mutex.lock();
+        self.wait_cond.signal();
+        self.wait_mutex.unlock();
     }
 
     /// Get the number of pending tasks in the queue
@@ -224,9 +238,8 @@ pub const ThreadPool = struct {
     fn workerMain(self: *Self, worker_id: usize) void {
         _ = worker_id;
         var idle_count: u32 = 0;
-        const max_idle: u32 = 100;
-        const min_sleep_us: u64 = 1;
-        const max_sleep_us: u64 = 100;
+        const max_spin_before_wait: u32 = 64;
+        const idle_wait_ns: u64 = 5 * std.time.ns_per_ms;
 
         while (!self.shutdown.load(.acquire)) {
             if (self.work_queue.tryPop()) |item| {
@@ -245,14 +258,24 @@ pub const ThreadPool = struct {
                 // Mark worker as idle and increment completion count
                 _ = self.active_workers.fetchSub(1, .release);
                 _ = self.total_tasks_completed.fetchAdd(1, .release);
+
+                // Wake blocked submitters waiting for queue capacity.
+                self.wait_mutex.lock();
+                self.wait_cond.signal();
+                self.wait_mutex.unlock();
             } else {
-                // No work available - use adaptive backoff
+                // No work available: brief cooperative yields, then block on condition.
                 idle_count += 1;
-                if (idle_count > max_idle) {
-                    const backoff: u6 = @intCast(@min(idle_count - max_idle, 10));
-                    const sleep_us: u64 = @min(min_sleep_us << backoff, max_sleep_us);
-                    std.Thread.sleep(sleep_us * @as(u64, std.time.ns_per_us));
+                if (idle_count <= max_spin_before_wait) {
+                    std.Thread.yield() catch {};
+                    continue;
                 }
+
+                self.wait_mutex.lock();
+                if (!self.shutdown.load(.acquire) and self.work_queue.isEmpty()) {
+                    self.wait_cond.timedWait(&self.wait_mutex, idle_wait_ns) catch {};
+                }
+                self.wait_mutex.unlock();
             }
         }
     }
