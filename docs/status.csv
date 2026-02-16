@@ -1,5 +1,4 @@
 REQ,Feature,Aspect,Status,Test,Bench,Owner,Updated,File
-<req-id>,<feature>,<aspect>,STUB,,,<owner>,<date>,tests/unit_gap_0013_0016_fixes.zig
 REQ-0001,Standards & Conformance Requirements,Compliance,TESTED,,,core,2026-01-15,src/gql/parser.zig
 REQ-0002,Language Surface Requirements,Compliance,TESTED,,,core,2026-01-15,src/gql/parser.zig
 REQ-0003,Engine Contract Requirements,Execution,TESTED,,,execution,2026-01-15,src/execution/query_execution.zig
@@ -898,7 +897,6 @@ REQ-GPU-PAGERANK-001,GPUPageRank,PTXKernel,EXEMPT,,,gpu,2026-01-10,src/gpu/kerne
 REQ-GPU-SORT-001,GPUSort,PTXKernel,EXEMPT,,,gpu,2026-01-10,src/gpu/kernel_sources.zig
 REQ-GPU-TELEMETRY-001,GPUTelemetryMetrics,OccupancyBandwidth,EXEMPT,,,gpu,2026-01-10,src/gpu/telemetry.zig
 REQ-GPU-VK-001,Vulkan FFI,Foundation,TESTED,,,gpu,2025-10-26,src/gpu/vulkan_ffi.zig
-REQ-GQL-###,Name,...,MISSING|STUB|IMPL|TESTED|BENCHED|REMOVED,,,...,YYYY-MM-DD,tools/canaryscan/README.md
 REQ-GQL-001,BasicQuery,Testing,TESTED,,,test,2025-10-02,docs/TESTING.md
 REQ-GQL-001,Binary Protocol Frames,Wire,TESTED,,,wire,2025-09-20,src/canary.zig
 REQ-GQL-001,GQLCompliance,ISOCompliance,TESTED,,,parser,2026-01-16,tests/test_gap_0193_batch2_testing.zig

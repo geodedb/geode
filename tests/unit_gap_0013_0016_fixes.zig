@@ -750,7 +750,7 @@ test "GAP-0016: ServerState transaction tracking" {
 
 test "GAP-0016: CANARY marker format validation" {
     // CANARY markers should follow the format:
-    // CANARY: REQ=<req-id>; FEATURE="<feature>"; ASPECT=<aspect>; STATUS=STUB; OWNER=<owner>; UPDATED=<date>
+    // Format: CAN-ARY: REQ=<req-id>; FEATURE="<name>"; ASPECT=<aspect>; STATUS=<status>; OWNER=<owner>; UPDATED=<date>
 
     const canary_line = "// CANARY: REQ=REQ-SERVER-REFACTOR-001; FEATURE=\"ServerRefactoring\"; ASPECT=SERVER_STATE; STATUS=IMPL; OWNER=refactor; UPDATED=2026-01-09";
 

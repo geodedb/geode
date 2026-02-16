@@ -23,7 +23,7 @@ go build -o ./bin/canaryscan ./tools/canaryscan
 **Token format**
 
 ```text
-CANARY: REQ=REQ-GQL-###; FEATURE="Name"; ASPECT=...; STATUS=MISSING|STUB|IMPL|TESTED|BENCHED|REMOVED; TEST=...; BENCH=...; OWNER=...; UPDATED=YYYY-MM-DD
+CANARY: REQ=<id>; FEATURE=<name>; ASPECT=<aspect>; STATUS=<status>; TEST=<path>; BENCH=<path>; OWNER=<team>; UPDATED=<date>
 ```
 
 ## Status Auto-Promotion
