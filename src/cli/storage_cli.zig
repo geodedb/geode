@@ -1,5 +1,5 @@
 const std = @import("std");
-const stdio_util = @import("utils/stdio.zig");
+const stdio_util = @import("../utils/stdio.zig");
 
 // CANARY: REQ=REQ-QUALITY-GAP-406-005; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
 fn getStdOut() error{StdioUnavailable}!std.fs.File {

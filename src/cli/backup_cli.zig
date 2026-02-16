@@ -13,7 +13,7 @@ const quic = @import("transport/quic");
 const migration = @import("migration");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
-const stdio_util = @import("utils/stdio.zig");
+const stdio_util = @import("../utils/stdio.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CLI; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 const logging = @import("logging");

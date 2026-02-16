@@ -21,12 +21,12 @@ const schema = @import("schema");
 const spice_wrapper = @import("parallel/spice");
 const explain_payload = geode.explain_payload;
 const profile_payload = geode.profile_payload;
-const transport_response = @import("cli/transport_response.zig");
+const transport_response = geode.cli_transport_response;
 const ColumnInfo = transport_response.ColumnInfo;
 const QueryResultKind = transport_response.QueryResultKind;
 const TransportResponseView = transport_response.TransportResponseView;
 const renderTransportResponse = transport_response.renderTransportResponse;
-const stdio_util = @import("utils/stdio.zig");
+const stdio_util = @import("../utils/stdio.zig");
 
 // GAP-0203: Gate hot-path debug logging to eliminate overhead in production
 // CANARY: REQ=REQ-PERF-LOG-GATE-001; FEATURE="HotPathLogGating"; ASPECT=DebugLogControl; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27

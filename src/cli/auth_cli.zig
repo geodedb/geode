@@ -1,7 +1,7 @@
 const std = @import("std");
 const geode = @import("geode");
 const auth_state = geode.auth_state;
-const stdio_util = @import("utils/stdio.zig");
+const stdio_util = @import("../utils/stdio.zig");
 
 // CANARY: REQ=REQ-QUALITY-GAP-406-006; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
 fn printOut(comptime fmt: []const u8, args: anytype) void {
