@@ -24,8 +24,8 @@ def load_manifest(path: pathlib.Path) -> dict[str, Any]:
     return data
 
 
-def render_target_lines(targets: list[str]) -> list[str]:
-    lines = [f"    - {target}" for target in targets]
+def render_target_lines(targets: list[str], indent: str) -> list[str]:
+    lines = [f"{indent}- {target}" for target in targets]
     return lines
 
 
@@ -43,7 +43,8 @@ def sync_goreleaser(manifest: dict[str, Any], goreleaser_path: pathlib.Path, che
         )
         return 1
 
-    replacement_body = "\n".join(render_target_lines(manifest["zig_targets"])) + "\n"
+    target_indent = detect_target_indent(match.group("body"), text, match.start())
+    replacement_body = "\n".join(render_target_lines(manifest["zig_targets"], target_indent)) + "\n"
     replacement = f"{match.group('prefix')}{replacement_body}{match.group('suffix')}"
     new_text = text[: match.start()] + replacement + text[match.end() :]
 
@@ -58,6 +59,21 @@ def sync_goreleaser(manifest: dict[str, Any], goreleaser_path: pathlib.Path, che
     goreleaser_path.write_text(new_text, encoding="utf-8")
     print(f"synced {goreleaser_path} from release target manifest")
     return 0
+
+
+def detect_target_indent(existing_body: str, source_text: str, block_start: int) -> str:
+    for line in existing_body.splitlines():
+        stripped = line.lstrip(" \t")
+        if stripped.startswith("- "):
+            return line[: len(line) - len(stripped)]
+
+    prior_lines = source_text[:block_start].splitlines()
+    if prior_lines:
+        match = re.search(r"^([ \t]*)targets:\s*$", prior_lines[-1])
+        if match:
+            return match.group(1)
+
+    return "  "
 
 
 def list_zig_targets(manifest: dict[str, Any]) -> int:
