@@ -516,7 +516,7 @@ test-windows-unit:
   script:
     - zvm use $env:ZIG_VERSION
     - zig version
-    - zig test tests/test_cross_platform_stdio.zig --summary all
+    - zig test tests/test_cross_platform_stdio.zig
     - zig build --summary all
     - zig build test --summary all
     - zig build -Doptimize=ReleaseSafe --summary all
