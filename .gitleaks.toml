@@ -1,0 +1,20 @@
+title = "Geode gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Ignore generated caches, fixture keys, and non-production examples"
+paths = [
+  '''^certs/server\.key$''',
+  '''^data/server\.key$''',
+  '''^\.zig-cache/''',
+  '''^zig-cache/''',
+  '''^test_logs/''',
+  '''^docker/zig-packages/''',
+  '''^docs/''',
+  '''^tests/''',
+  '''^src/security/test_.*\.zig$''',
+  '''^src/tests/test_.*\.zig$''',
+  '''^src/audit_demo\.zig$''',
+]

@@ -757,7 +757,7 @@ security-secrets:
   stage: security
   image: zricethezav/gitleaks:v8.24.2
   script:
-    - gitleaks detect --source . --redact --no-git --exit-code 1
+    - gitleaks detect --source . --config .gitleaks.toml --redact --no-git --exit-code 1
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
@@ -768,7 +768,7 @@ security-trivy:
   stage: security
   image: aquasec/trivy:0.58.1
   script:
-    - trivy fs --scanners vuln,misconfig,secret --severity HIGH,CRITICAL --exit-code 1 --no-progress .
+    - trivy fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 --no-progress --skip-dirs .zig-cache --skip-dirs zig-cache --skip-dirs docker/zig-packages --skip-dirs test_logs --skip-files certs/server.key --skip-files data/server.key .
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'

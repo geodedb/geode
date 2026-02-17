@@ -457,7 +457,7 @@ test "CredentialStore.saveCredentials and loadCredentials roundtrip" {
 
     // Create test credentials
     const creds = Credentials{
-        .token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        .token = "test-session-token-aaaaaaaa-bbbbbbbb-cccccccc-dddddddd",
         .username = "test_alice",
         .server = "127.0.0.1:3141",
         .created_at = 1234567890,

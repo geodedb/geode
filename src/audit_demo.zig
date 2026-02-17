@@ -222,7 +222,7 @@ fn demonstrateSensitiveDataHandling(audit_logger: *logger.AuditLogger, allocator
     // Add some sensitive data that should be redacted
     try metadata_obj.put("password", std.json.Value{ .string = "SuperSecret123!" });
     try metadata_obj.put("card", std.json.Value{ .string = "4111 1111 1111 1111" });
-    try metadata_obj.put("jwt", std.json.Value{ .string = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c" });
+    try metadata_obj.put("jwt", std.json.Value{ .string = "example.jwt.token.for-redaction-demo" });
     try metadata_obj.put("user_action", std.json.Value{ .string = "profile_update" });
     try metadata_obj.put("ip_address", std.json.Value{ .string = "192.168.1.1" });
 

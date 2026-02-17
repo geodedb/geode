@@ -2,7 +2,7 @@ module go.spyder.org/geode
 
 go 1.24.0
 
-require github.com/quic-go/quic-go v0.54.0
+require github.com/quic-go/quic-go v0.54.1
 
 require (
 	github.com/francoispqt/gojay v1.2.13 // indirect
