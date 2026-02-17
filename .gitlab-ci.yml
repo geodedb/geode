@@ -50,6 +50,8 @@ cache:
 variables:
   DOCKER_BUILDKIT: 1
   ZIG_VERSION: "0.15.2"
+  ZIG_GLOBAL_CACHE_DIR: "${CI_PROJECT_DIR}/zig-cache"
+  ZIG_LOCAL_CACHE_DIR: "${CI_PROJECT_DIR}/.zig-cache"
   ZIG_IMAGE: "registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}"
   GORELEASER_VERSION: "v2.5.0"
   GEODE_TEST_HARNESS_REF: "bc200fdceabce0d6ad1b9919d5dc47905d84cc2c"
@@ -137,6 +139,12 @@ governance-match-ops-campaign:
   image: $ZIG_IMAGE
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
+  retry:
+    max: 1
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - script_failure
   script:
     - |
       echo "=== Running MATCH staged parity campaign ==="
