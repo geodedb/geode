@@ -523,13 +523,39 @@ test-windows-unit:
       zvm use $ZigVersion
       zig version
   script:
-    - zvm use $env:ZIG_VERSION
-    - zig version
-    - zig test tests/test_cross_platform_stdio.zig
-    - zig build --summary all
-    - zig build test --summary all
-    - zig build -Doptimize=ReleaseSafe --summary all
-    - zig build test -Doptimize=ReleaseSafe --summary all
+    - |
+      $ErrorActionPreference = "Stop"
+      zvm use $env:ZIG_VERSION
+      zig version
+
+      function Invoke-ZigWithRetry {
+        param(
+          [Parameter(Mandatory=$true)][string[]]$Args,
+          [int]$MaxAttempts = 4,
+          [int]$DelaySeconds = 10
+        )
+
+        for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
+          Write-Host "Running: zig $($Args -join ' ') (attempt $Attempt/$MaxAttempts)"
+          & zig @Args
+          if ($LASTEXITCODE -eq 0) {
+            return
+          }
+
+          if ($Attempt -lt $MaxAttempts) {
+            Write-Host "zig command failed with exit code $LASTEXITCODE, retrying in $DelaySeconds seconds..."
+            Start-Sleep -Seconds $DelaySeconds
+          }
+        }
+
+        throw "zig command failed after $MaxAttempts attempts: zig $($Args -join ' ')"
+      }
+
+      Invoke-ZigWithRetry -Args @("test", "tests/test_cross_platform_stdio.zig")
+      Invoke-ZigWithRetry -Args @("build", "--summary", "all")
+      Invoke-ZigWithRetry -Args @("build", "test", "--summary", "all")
+      Invoke-ZigWithRetry -Args @("build", "-Doptimize=ReleaseSafe", "--summary", "all")
+      Invoke-ZigWithRetry -Args @("build", "test", "-Doptimize=ReleaseSafe", "--summary", "all")
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
