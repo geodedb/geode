@@ -6,6 +6,7 @@ const tde = @import("../storage/tde_file_encryption.zig");
 const logging = @import("logging");
 const log = logging.scoped("schema");
 const Attr = logging.Attr;
+const global_allocator = std.heap.smp_allocator;
 
 // CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=FLECatalog; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 
@@ -31,6 +32,20 @@ pub const SchemaCatalog = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
+        self.clearSchemasLocked();
+    }
+
+    /// Reset catalog contents while keeping the same instance pointer.
+    /// This avoids invalidating outstanding references during concurrent tests.
+    pub fn reset(self: *SchemaCatalog) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        self.clearSchemasLocked();
+        self.schemas = std.StringHashMap(*annotations.TypeMetadata).init(self.allocator);
+    }
+
+    fn clearSchemasLocked(self: *SchemaCatalog) void {
         var it = self.schemas.iterator();
         while (it.next()) |entry| {
             // Free the key (stored type name)
@@ -327,12 +342,13 @@ var global_catalog_mutex: std.Thread.Mutex = .{};
 /// Get or create the global schema catalog
 /// Thread-safe singleton access
 pub fn globalCatalog(allocator: std.mem.Allocator) !*SchemaCatalog {
+    _ = allocator; // Kept for API compatibility with existing call sites
     global_catalog_mutex.lock();
     defer global_catalog_mutex.unlock();
 
     if (global_catalog == null) {
-        const catalog = try allocator.create(SchemaCatalog);
-        catalog.* = SchemaCatalog.init(allocator);
+        const catalog = try global_allocator.create(SchemaCatalog);
+        catalog.* = SchemaCatalog.init(global_allocator);
 
         // Load persisted catalog if it exists
         loadCatalog(catalog) catch |err| {
@@ -354,10 +370,7 @@ pub fn resetGlobalCatalog(allocator: std.mem.Allocator) void {
     defer global_catalog_mutex.unlock();
 
     if (global_catalog) |catalog| {
-        const catalog_allocator = catalog.allocator;
-        catalog.deinit();
-        catalog_allocator.destroy(catalog);
-        global_catalog = null;
+        catalog.reset();
     }
 }
 
