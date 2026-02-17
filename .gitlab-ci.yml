@@ -504,6 +504,7 @@ test-windows-unit:
     when:
       - runner_system_failure
       - stuck_or_timeout_failure
+      - script_failure
   before_script:
     # Install Zig via zvm (official bootstrap from zig.sh guidance)
     - |
