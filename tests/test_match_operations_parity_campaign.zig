@@ -4,6 +4,7 @@ const geode = @import("geode");
 const execution = geode.execution;
 const graph_store = geode.graph_store;
 const Value = geode.value_types.Value;
+var parity_campaign_mutex: std.Thread.Mutex = .{};
 
 // CANARY: REQ=REQ-QUALITY-401-001; FEATURE="MatchOpsStagedParity"; ASPECT=GoldenParity; STATUS=TESTED; TEST=tests/test_match_operations_parity_campaign.zig; OWNER=execution; UPDATED=2026-02-16
 // Stage parity suite for MATCH refactor checkpoints. These golden assertions guard
@@ -94,6 +95,9 @@ fn expectValueInt(v: Value, expected: i64) !void {
 }
 
 test "match refactor parity: single-hop and aggregation goldens" {
+    parity_campaign_mutex.lock();
+    defer parity_campaign_mutex.unlock();
+
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -135,6 +139,9 @@ test "match refactor parity: single-hop and aggregation goldens" {
 }
 
 test "match refactor parity: variable-length and filtering goldens" {
+    parity_campaign_mutex.lock();
+    defer parity_campaign_mutex.unlock();
+
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();

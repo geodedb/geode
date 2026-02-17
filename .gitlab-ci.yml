@@ -575,8 +575,8 @@ test-performance-benchmarks:
       zig build -Doptimize=ReleaseSafe --summary all
 
       echo "=== Executing Performance Tests ==="
-      # Run benchmark-focused tests with variance envelopes.
-      zig build test -Doptimize=ReleaseSafe -Dtest-filter="benchmark_" --summary all 2>&1 | tee benchmark_output.log
+      # Run benchmark-focused build step.
+      zig build benchmark --summary all 2>&1 | tee benchmark_output.log
 
       echo "=== Verifying Benchmark Results ==="
       # Reject known regression signatures from benchmark envelope tests.
@@ -586,7 +586,7 @@ test-performance-benchmarks:
       fi
 
       # Ensure benchmark telemetry was produced (guards against no-op gating).
-      if ! grep -Eq "benchmark=|VARIANCE_OK|benchmark_.*variance" benchmark_output.log; then
+      if ! grep -Eq "benchmark success|Status: .*benchmarks passed target thresholds|MATCH_BENCH|VARIANCE_OK|benchmark_.*variance" benchmark_output.log; then
         echo "ERROR: Benchmark telemetry not found in output"
         exit 1
       fi
