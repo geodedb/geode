@@ -171,6 +171,42 @@ pub const Connection = struct {
         self.connected = false;
     }
 
+    /// Build HELLO request for inter-node federation authentication.
+    /// GAP-0490: Reads GEODE_CLUSTER_TOKEN from environment; sends as geode-cluster user.
+    // CANARY: REQ=REQ-GAP-0490-FEDERATION-CLIENT-AUTH; FEATURE="FederationAuth"; ASPECT=ClientToken; STATUS=TESTED; OWNER=security; UPDATED=2026-02-18
+    fn buildFederationHelloRequest(allocator: std.mem.Allocator) schema.HelloRequest {
+        const token = std.process.getenv("GEODE_CLUSTER_TOKEN") orelse {
+            log.warn("GEODE_CLUSTER_TOKEN not set — federation connections may be rejected by auth-enabled nodes", &.{});
+            return schema.HelloRequest{
+                .username = "",
+                .password = "",
+                .tenant_id = null,
+                .client_name = "geode-federation",
+                .client_version = "",
+                .wanted_conformance = "",
+            };
+        };
+        const password_copy = allocator.dupe(u8, token) catch {
+            log.warn("GEODE_CLUSTER_TOKEN: allocation failed, sending empty credentials", &.{});
+            return schema.HelloRequest{
+                .username = "",
+                .password = "",
+                .tenant_id = null,
+                .client_name = "geode-federation",
+                .client_version = "",
+                .wanted_conformance = "",
+            };
+        };
+        return schema.HelloRequest{
+            .username = "geode-cluster",
+            .password = password_copy,
+            .tenant_id = null,
+            .client_name = "geode-federation",
+            .client_version = "",
+            .wanted_conformance = "",
+        };
+    }
+
     /// GAP-0044: Initialize QUIC client and establish connection to remote federation node
     // GAP-0144: Secure TLS connections for federation
     // CANARY: REQ=REQ-FED-TLS-001; FEATURE="Federation TLS"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=distributed; UPDATED=2026-01-13
@@ -209,19 +245,15 @@ pub const Connection = struct {
         // Open a bidirectional stream for query/result exchange
         self.stream = try self.client.?.getStream();
         // HELLO handshake (protobuf)
-        const hello_req = schema.HelloRequest{
-            .username = "",
-            .password = "",
-            .tenant_id = null,
-            .client_name = "geode-federation",
-            .client_version = "",
-            .wanted_conformance = "",
-        };
-        try writeProtoMessage(self.allocator, self.stream.?, .{ .hello = hello_req });
-
+        // GAP-0490: Use GEODE_CLUSTER_TOKEN for inter-node authentication
         var hello_arena = std.heap.ArenaAllocator.init(self.allocator);
         defer hello_arena.deinit();
-        const resp = try readProtoMessage(hello_arena.allocator(), self.stream.?, &self.client.?, @intCast(timeout_ms));
+        const hello_req = buildFederationHelloRequest(hello_arena.allocator());
+        try writeProtoMessage(self.allocator, self.stream.?, .{ .hello = hello_req });
+
+        var resp_arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer resp_arena.deinit();
+        const resp = try readProtoMessage(resp_arena.allocator(), self.stream.?, &self.client.?, @intCast(timeout_ms));
         switch (resp) {
             .hello => |h| {
                 if (!h.success) return error.AuthFailed;

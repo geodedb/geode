@@ -601,6 +601,24 @@ fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
     return std.fmt.allocPrint(allocator, "sess_{s}", .{token});
 }
 
+/// Validate federation HELLO using GEODE_CLUSTER_TOKEN.
+/// GAP-0490: Both nodes must share the same cluster token.
+/// Returns true only if username is "geode-cluster" AND password matches token.
+// CANARY: REQ=REQ-GAP-0490-FEDERATION-SERVER-AUTH; FEATURE="FederationAuth"; ASPECT=ServerValidation; STATUS=TESTED; OWNER=security; UPDATED=2026-02-18
+fn validateFederationAuth(username: []const u8, password: []const u8) bool {
+    if (!std.mem.eql(u8, username, "geode-cluster")) return false;
+    const expected = std.process.getenv("GEODE_CLUSTER_TOKEN") orelse return false;
+    if (expected.len == 0 or password.len == 0) return false;
+    if (password.len != expected.len) return false;
+    // Constant-time comparison — pad both to 256 bytes to prevent timing side-channels
+    var buf_a: [256]u8 = [_]u8{0} ** 256;
+    var buf_b: [256]u8 = [_]u8{0} ** 256;
+    const n = @min(password.len, 256);
+    @memcpy(buf_a[0..n], password[0..n]);
+    @memcpy(buf_b[0..n], expected[0..n]);
+    return std.crypto.timing_safe.eql([256]u8, buf_a, buf_b);
+}
+
 fn handleClientMessage(
     gpa: std.mem.Allocator,
     state: *ServerState,
@@ -617,7 +635,24 @@ fn handleClientMessage(
             try caps.append(gpa, try gpa.dupe(u8, "TLS1.3"));
             try caps.append(gpa, try gpa.dupe(u8, "PROTOBUF"));
 
-            if (user_mgmt.isAuthEnabled()) {
+            // GAP-0490: Federation inter-node authentication via cluster token — fast-path
+            // Must be checked BEFORE normal user auth to allow federation when auth is enabled.
+            if (validateFederationAuth(hello_req.username, hello_req.password)) {
+                log.info("Federation node authenticated via cluster token", &.{
+                    Attr.string("client", hello_req.client_name),
+                });
+                // Grant federation-level session: store identity, grant ReadWrite role
+                if (state.authenticated_user) |u| gpa.free(u);
+                if (state.authenticated_password) |p| gpa.free(p);
+                state.authenticated_user = try gpa.dupe(u8, hello_req.username);
+                state.authenticated_password = try gpa.dupe(u8, hello_req.password);
+                state.authenticated_role = @intFromEnum(user_mgmt.Role.ReadWrite);
+                // GAP-0490: mTLS enforcement for federation connections (opportunistic — log only)
+                if (g_mtls_provider) |provider| {
+                    _ = provider;
+                    log.info("Federation mTLS provider configured; certificate validation deferred to TLS layer", &.{});
+                }
+            } else if (user_mgmt.isAuthEnabled()) {
                 if (hello_req.username.len == 0 or hello_req.password.len == 0) {
                     const resp = schema.QuicServerMessage{ .hello = .{
                         .success = false,

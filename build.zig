@@ -856,6 +856,26 @@ pub fn build(b: *std.Build) void {
     });
     const run_blake2b_migration_tests = b.addRunArtifact(blake2b_migration_tests);
 
+    // GAP-0490: Security test — federation client must send GEODE_CLUSTER_TOKEN in HELLO
+    const federation_auth_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/distributed/test_federation_auth.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_federation_auth_tests = b.addRunArtifact(federation_auth_tests);
+
+    // GAP-0490: Security test — server must validate federation HELLO via validateFederationAuth
+    const federation_server_auth_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/server/test_federation_server_auth.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_federation_server_auth_tests = b.addRunArtifact(federation_server_auth_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_ext_builtins_tests.step);
@@ -883,6 +903,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_secure_zero_tests.step);
     test_step.dependOn(&run_jsonb_depth_tests.step);
     test_step.dependOn(&run_blake2b_migration_tests.step);
+    test_step.dependOn(&run_federation_auth_tests.step);
+    test_step.dependOn(&run_federation_server_auth_tests.step);
 
     // E2E tests (slower, require more setup - not run in pre-push hooks)
     // Run with: zig build test-e2e
