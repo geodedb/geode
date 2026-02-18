@@ -1386,6 +1386,19 @@ pub fn build(b: *std.Build) void {
     rls_mod.addImport("logging", logging_mod);
     root_mod.addImport("rls", rls_mod);
 
+    // GAP-0496: Security test — RLS QueryRewriter must validate policy expressions to prevent GQL injection
+    const rls_injection_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/security/test_rls_injection.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    rls_injection_tests.root_module.addImport("geode_auth", auth_mod);
+    rls_injection_tests.root_module.addImport("logging", logging_mod);
+    const run_rls_injection_tests = b.addRunArtifact(rls_injection_tests);
+    test_step.dependOn(&run_rls_injection_tests.step);
+
     const audit_security_mod = b.createModule(.{ .root_source_file = b.path("src/security/audit.zig"), .target = target, .optimize = optimize });
     audit_security_mod.addImport("rls", rls_mod);
     audit_security_mod.addImport("logging", logging_mod);

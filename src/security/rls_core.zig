@@ -1419,6 +1419,46 @@ pub const QueryRewriter = struct {
         _ = self;
     }
 
+    /// Returns true if c is a GQL/SQL identifier character (alphanumeric or underscore).
+    inline fn isIdentChar(c: u8) bool {
+        return std.ascii.isAlphanumeric(c) or c == '_';
+    }
+
+    /// Validate a policy expression string for injection safety before it is
+    /// interpolated into a GQL predicate.  GAP-0496 (CWE-943): raw policy
+    /// expressions must not contain statement terminators, comment sequences,
+    /// or set operators that could escape the predicate context.
+    fn validatePolicyExpression(expr: []const u8) error{InvalidPolicyExpression}!void {
+        // Reject statement terminator
+        if (std.mem.indexOfScalar(u8, expr, ';') != null)
+            return error.InvalidPolicyExpression;
+        // Reject SQL/GQL line comments
+        if (std.mem.indexOf(u8, expr, "--") != null)
+            return error.InvalidPolicyExpression;
+        // Reject block comments
+        if (std.mem.indexOf(u8, expr, "/*") != null)
+            return error.InvalidPolicyExpression;
+        // Reject set operators (case-insensitive, whole-word only).
+        // A keyword is a whole word when not preceded or followed by an identifier char.
+        var i: usize = 0;
+        while (i < expr.len) : (i += 1) {
+            const rest = expr[i..];
+            // Check for identifier char immediately before this position
+            const prev_ident = i > 0 and isIdentChar(expr[i - 1]);
+            if (prev_ident) continue;
+            if (std.ascii.startsWithIgnoreCase(rest, "UNION")) {
+                const after_ident = rest.len > 5 and isIdentChar(rest[5]);
+                if (!after_ident) return error.InvalidPolicyExpression;
+            } else if (std.ascii.startsWithIgnoreCase(rest, "INTERSECT")) {
+                const after_ident = rest.len > 9 and isIdentChar(rest[9]);
+                if (!after_ident) return error.InvalidPolicyExpression;
+            } else if (std.ascii.startsWithIgnoreCase(rest, "EXCEPT")) {
+                const after_ident = rest.len > 6 and isIdentChar(rest[6]);
+                if (!after_ident) return error.InvalidPolicyExpression;
+            }
+        }
+    }
+
     pub fn rewrite(
         self: *QueryRewriter,
         query: []const u8,
@@ -1428,35 +1468,40 @@ pub const QueryRewriter = struct {
         _ = query;
         _ = context;
 
-        var result = std.ArrayList(u8).init(self.allocator);
+        // CANARY: REQ=REQ-GAP-0496-RLS-INJECTION-GUARD; FEATURE="RLSSecurity"; ASPECT=InjectionPrevention; STATUS=TESTED; OWNER=security; UPDATED=2026-02-18
+        var result = std.ArrayList(u8).empty;
+        errdefer result.deinit(self.allocator);
 
         // Build security predicate from policies
-        try result.appendSlice("(");
+        try result.appendSlice(self.allocator, "(");
 
         var first = true;
         for (policies.items) |policy| {
             if (!policy.enabled) continue;
 
             if (policy.using_expr) |expr| {
+                // GAP-0496: validate before interpolation to prevent GQL injection
+                try validatePolicyExpression(expr.raw);
+
                 if (!first) {
                     if (policy.permissive) {
-                        try result.appendSlice(" OR ");
+                        try result.appendSlice(self.allocator, " OR ");
                     } else {
-                        try result.appendSlice(" AND ");
+                        try result.appendSlice(self.allocator, " AND ");
                     }
                 }
 
-                try result.appendSlice("(");
-                try result.appendSlice(expr.raw);
-                try result.appendSlice(")");
+                try result.appendSlice(self.allocator, "(");
+                try result.appendSlice(self.allocator, expr.raw);
+                try result.appendSlice(self.allocator, ")");
 
                 first = false;
             }
         }
 
-        try result.appendSlice(")");
+        try result.appendSlice(self.allocator, ")");
 
-        return try result.toOwnedSlice();
+        return try result.toOwnedSlice(self.allocator);
     }
 };
 
