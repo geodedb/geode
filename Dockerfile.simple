@@ -1,6 +1,8 @@
 # Simplified Dockerfile with inline Zig installation
 FROM debian:bookworm-slim AS builder
 
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 # ARG needs to be declared at the beginning of the stage
 ARG TARGETARCH
 

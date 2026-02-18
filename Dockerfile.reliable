@@ -1,6 +1,8 @@
 # Reliable Dockerfile using community mirrors properly
 FROM debian:bookworm-slim AS builder
 
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ARG needs to be declared at the beginning of the stage
