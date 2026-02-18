@@ -12,8 +12,8 @@ mc alias set geode http://minio:9000 ${S3_ACCESS_KEY} ${S3_SECRET_KEY}
 mc mb geode/geode-backups --ignore-existing
 mc mb geode/geode-backups-gpu --ignore-existing
 
-echo "Setting bucket policies..."
-mc anonymous set download geode/geode-backups
-mc anonymous set download geode/geode-backups-gpu
+# GAP-0497: Do NOT set anonymous access on backup buckets.
+# Use IAM policies or pre-signed URLs for controlled read access.
+echo "Bucket access: private (authenticated IAM access only)"
 
 echo "MinIO initialization complete"
