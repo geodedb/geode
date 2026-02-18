@@ -1,13 +1,17 @@
 const std = @import("std");
 const geode = @import("geode");
 
-// Query plan cache for reusing compiled query plans
+// CANARY: REQ=REQ-PERF-LRU-O1-002; FEATURE="O1LRUEviction"; ASPECT=PlanCacheEviction; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
+// Query plan cache for reusing compiled query plans.
+// Uses an intrusive doubly-linked list keyed by hash for O(1) LRU eviction (Issue #456).
 pub const QueryPlanCache = struct {
     allocator: std.mem.Allocator,
     cache: std.AutoHashMap(u64, CachedPlan),
     max_size: usize,
     hit_count: u64,
     miss_count: u64,
+    lru_head: ?u64 = null,
+    lru_tail: ?u64 = null,
 
     pub fn init(allocator: std.mem.Allocator, max_size: usize) QueryPlanCache {
         return .{
@@ -34,6 +38,7 @@ pub const QueryPlanCache = struct {
             self.hit_count += 1;
             plan.access_count += 1;
             plan.last_accessed = std.time.timestamp();
+            self.lruPromote(query_hash);
             return plan;
         }
         self.miss_count += 1;
@@ -44,7 +49,7 @@ pub const QueryPlanCache = struct {
     pub fn put(self: *QueryPlanCache, query_hash: u64, query_text: []const u8, plan: CompiledPlan) !void {
         // Evict if cache is full
         if (self.cache.count() >= self.max_size) {
-            try self.evictLeastUsed();
+            self.evictTail();
         }
 
         const cached_plan = CachedPlan{
@@ -56,6 +61,7 @@ pub const QueryPlanCache = struct {
         };
 
         try self.cache.put(query_hash, cached_plan);
+        self.lruInsertHead(query_hash);
     }
 
     // Get cache statistics
@@ -85,29 +91,55 @@ pub const QueryPlanCache = struct {
         self.cache.clearAndFree();
         self.hit_count = 0;
         self.miss_count = 0;
+        self.lru_head = null;
+        self.lru_tail = null;
     }
 
-    // Evict least recently used plan
-    fn evictLeastUsed(self: *QueryPlanCache) !void {
-        var oldest_time: i64 = std.math.maxInt(i64);
-        var oldest_hash: u64 = 0;
-        var found = false;
-
-        var iter = self.cache.iterator();
-        while (iter.next()) |entry| {
-            if (entry.value_ptr.last_accessed < oldest_time) {
-                oldest_time = entry.value_ptr.last_accessed;
-                oldest_hash = entry.key_ptr.*;
-                found = true;
-            }
+    /// O(1) eviction: remove the LRU tail entry.
+    fn evictTail(self: *QueryPlanCache) void {
+        const tail_key = self.lru_tail orelse return;
+        self.lruRemoveNode(tail_key);
+        if (self.cache.fetchRemove(tail_key)) |kv| {
+            self.allocator.free(kv.value.query_text);
+            self.allocator.free(kv.value.plan.operators);
         }
+    }
 
-        if (found) {
-            if (self.cache.fetchRemove(oldest_hash)) |kv| {
-                self.allocator.free(kv.value.query_text);
-                self.allocator.free(kv.value.plan.operators);
-            }
+    // --- LRU linked-list helpers ---
+
+    fn lruPromote(self: *QueryPlanCache, key: u64) void {
+        if (self.lru_head != null and self.lru_head.? == key) return;
+        self.lruRemoveNode(key);
+        self.lruInsertHead(key);
+    }
+
+    fn lruInsertHead(self: *QueryPlanCache, key: u64) void {
+        const entry = self.cache.getPtr(key) orelse return;
+        entry.lru_prev = null;
+        entry.lru_next = self.lru_head;
+        if (self.lru_head) |old_head| {
+            if (self.cache.getPtr(old_head)) |h| h.lru_prev = key;
         }
+        self.lru_head = key;
+        if (self.lru_tail == null) self.lru_tail = key;
+    }
+
+    fn lruRemoveNode(self: *QueryPlanCache, key: u64) void {
+        const entry = self.cache.getPtr(key) orelse return;
+        const prev = entry.lru_prev;
+        const next = entry.lru_next;
+        if (prev) |pk| {
+            if (self.cache.getPtr(pk)) |p| p.lru_next = next;
+        } else {
+            self.lru_head = next;
+        }
+        if (next) |nk| {
+            if (self.cache.getPtr(nk)) |n| n.lru_prev = prev;
+        } else {
+            self.lru_tail = prev;
+        }
+        entry.lru_prev = null;
+        entry.lru_next = null;
     }
 };
 
@@ -117,6 +149,8 @@ pub const CachedPlan = struct {
     created_at: i64,
     last_accessed: i64,
     access_count: u64,
+    lru_prev: ?u64 = null,
+    lru_next: ?u64 = null,
 };
 
 pub const CompiledPlan = struct {

@@ -481,7 +481,7 @@ pub fn handleQuicConnection(
     state.query_optimizer = &query_optimizer;
 
     // Attach shared AST cache for cross-connection reuse.
-    // CANARY: REQ=REQ-PERF-AST-CACHE-003; FEATURE="SharedASTCache"; ASPECT=ConnectionState; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
+    // CANARY: REQ=REQ-PERF-AST-CACHE-003; FEATURE="SharedASTCache"; ASPECT=ConnectionState; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
     state.query_ast_cache = shared_ast_cache;
 
     // Initialize distributed query planner for federation-aware optimization
@@ -698,76 +698,107 @@ fn handleClientMessage(
             if (state.query_text) |qt| gpa.free(qt);
             state.query_text = try gpa.dupe(u8, query_text);
 
-            const outcome = try geode.parseGqlOutcome(query_text, gpa, parse_opts);
-            switch (outcome) {
-                .Err => |err_info| {
-                    const err_msg = if (err_info.has_double_dash_comment)
-                        diagnostics.defaultMessage(.GB02CommentDisabled)
-                    else
-                        err_info.msg;
-                    try sendExecuteError(gpa, stream, "42000", err_msg, &.{}, &.{});
-                    return;
-                },
-                .Ok => |parse_result_const| {
-                    var parse_result = parse_result_const;
-                    defer parse_result.deinit();
+            // Wire shared AST cache into parse hot path (Issue #444)
+            // CANARY: REQ=REQ-PERF-AST-CACHE-004; FEATURE="SharedASTCache"; ASPECT=ParseHotPathWiring; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
+            var ast_cache_handle: ?query_ast_cache.AstHandle = null;
+            var owned_parse_result: geode.ParseResult = undefined;
+            var owns_parse_result: bool = false;
+            defer {
+                if (ast_cache_handle) |*h| h.release();
+                if (owns_parse_result) owned_parse_result.deinit();
+            }
 
-                    if (parse_result.has_double_dash_comment) {
-                        try sendExecuteError(gpa, stream, "42000", diagnostics.defaultMessage(.GB02CommentDisabled), &.{}, &.{});
-                        return;
+            const parse_result: *const geode.ParseResult = parse_blk: {
+                // Try shared AST cache first for cross-connection reuse
+                if (state.query_ast_cache) |cache_ptr| {
+                    const cache: *query_ast_cache.SharedAstCache = @ptrCast(@alignCast(cache_ptr));
+                    switch (try cache.getOrParse(query_text, parse_opts)) {
+                        .Err => |err_info| {
+                            const err_msg = if (err_info.has_double_dash_comment)
+                                diagnostics.defaultMessage(.GB02CommentDisabled)
+                            else
+                                err_info.msg;
+                            try sendExecuteError(gpa, stream, "42000", err_msg, &.{}, &.{});
+                            return;
+                        },
+                        .Ok => |handle| {
+                            ast_cache_handle = handle;
+                            break :parse_blk handle.parse_result;
+                        },
                     }
+                }
+                // Fallback: parse directly when no cache is configured
+                switch (try geode.parseGqlOutcome(query_text, gpa, parse_opts)) {
+                    .Err => |err_info| {
+                        const err_msg = if (err_info.has_double_dash_comment)
+                            diagnostics.defaultMessage(.GB02CommentDisabled)
+                        else
+                            err_info.msg;
+                        try sendExecuteError(gpa, stream, "42000", err_msg, &.{}, &.{});
+                        return;
+                    },
+                    .Ok => |pr| {
+                        owned_parse_result = pr;
+                        owns_parse_result = true;
+                        break :parse_blk &owned_parse_result;
+                    },
+                }
+            };
 
-                    const analysis = query_traits.analyzeProgram(&parse_result.program);
-                    var traits = analysis.traits;
-                    const ordered = traits.ordered;
-                    const distinct = traits.distinct;
-                    const heur_index = traits.has_where_eq or traits.has_filter_eq;
+            if (parse_result.has_double_dash_comment) {
+                try sendExecuteError(gpa, stream, "42000", diagnostics.defaultMessage(.GB02CommentDisabled), &.{}, &.{});
+                return;
+            }
 
-                    const role = if (state.authenticated_role) |role_u8|
-                        @as(user_mgmt.Role, @enumFromInt(role_u8))
-                    else
-                        null;
+            const analysis = query_traits.analyzeProgram(&parse_result.program);
+            var traits = analysis.traits;
+            const ordered = traits.ordered;
+            const distinct = traits.distinct;
+            const heur_index = traits.has_where_eq or traits.has_filter_eq;
 
-                    const catalog = try execution.ensureCatalogInstance(gpa);
+            const role = if (state.authenticated_role) |role_u8|
+                @as(user_mgmt.Role, @enumFromInt(role_u8))
+            else
+                null;
 
-                    // Detect index-seek for EXPLAIN: check if query's node pattern
-                    // matches a catalog index (label + property equality)
-                    if (analysis.kind == .explain) {
-                        if (analysis.target) |target| {
-                            if (target.* == .Query) {
-                                const q = target.Query;
-                                if (q.match.chains.len > 0) {
-                                    const head_opt = q.match.chains[0].head;
-                                    if (head_opt) |head| {
-                                        if (head.labels.len > 0) {
-                                            const label = head.labels[0];
-                                            // Check inline properties
-                                            if (head.props) |props| {
-                                                if (props.len > 0) {
-                                                    const prop_name = props[0].key;
-                                                    catalog.rwlock.lockShared();
-                                                    defer catalog.rwlock.unlockShared();
-                                                    var idx_iter = catalog.indexes.valueIterator();
-                                                    while (idx_iter.next()) |info| {
-                                                        if (std.mem.eql(u8, info.table_name, label) and
-                                                            info.columns.len > 0 and
-                                                            std.mem.eql(u8, info.columns[0], prop_name))
-                                                        {
-                                                            traits.has_index_seek = true;
-                                                            break;
-                                                        }
-                                                    }
+            const catalog = try execution.ensureCatalogInstance(gpa);
+
+            // Detect index-seek for EXPLAIN: check if query's node pattern
+            // matches a catalog index (label + property equality)
+            if (analysis.kind == .explain) {
+                if (analysis.target) |target| {
+                    if (target.* == .Query) {
+                        const q = target.Query;
+                        if (q.match.chains.len > 0) {
+                            const head_opt = q.match.chains[0].head;
+                            if (head_opt) |head| {
+                                if (head.labels.len > 0) {
+                                    const label = head.labels[0];
+                                    // Check inline properties
+                                    if (head.props) |props| {
+                                        if (props.len > 0) {
+                                            const prop_name = props[0].key;
+                                            catalog.rwlock.lockShared();
+                                            defer catalog.rwlock.unlockShared();
+                                            var idx_iter = catalog.indexes.valueIterator();
+                                            while (idx_iter.next()) |info| {
+                                                if (std.mem.eql(u8, info.table_name, label) and
+                                                    info.columns.len > 0 and
+                                                    std.mem.eql(u8, info.columns[0], prop_name))
+                                                {
+                                                    traits.has_index_seek = true;
+                                                    break;
                                                 }
                                             }
-                                            // Check WHERE clause for equality on indexed property
-                                            if (!traits.has_index_seek) {
-                                                if (q.where_clause) |where_expr| {
-                                                    if (head.name) |vn| {
-                                                        catalog.rwlock.lockShared();
-                                                        defer catalog.rwlock.unlockShared();
-                                                        traits.has_index_seek = whereHasIndexedEq(where_expr, vn, label, catalog);
-                                                    }
-                                                }
+                                        }
+                                    }
+                                    // Check WHERE clause for equality on indexed property
+                                    if (!traits.has_index_seek) {
+                                        if (q.where_clause) |where_expr| {
+                                            if (head.name) |vn| {
+                                                catalog.rwlock.lockShared();
+                                                defer catalog.rwlock.unlockShared();
+                                                traits.has_index_seek = whereHasIndexedEq(where_expr, vn, label, catalog);
                                             }
                                         }
                                     }
@@ -775,152 +806,163 @@ fn handleClientMessage(
                             }
                         }
                     }
-                    const exec_context = execution.ExecutionContext{
-                        .catalog = catalog,
-                        .user = state.authenticated_user,
-                        .role = role,
-                        .token = null,
-                        .strict_offset_validation = false,
-                        .session_state = if (state.exec_session) |*s| s else null,
-                        .transaction_state = if (state.in_txn) .Active else .None,
-                        .query_param_names = bindings.names,
-                        .query_param_values = bindings.values,
+                }
+            }
+            const exec_context = execution.ExecutionContext{
+                .catalog = catalog,
+                .user = state.authenticated_user,
+                .role = role,
+                .token = null,
+                .strict_offset_validation = false,
+                .session_state = if (state.exec_session) |*s| s else null,
+                .transaction_state = if (state.in_txn) .Active else .None,
+                .query_param_names = bindings.names,
+                .query_param_values = bindings.values,
+            };
+
+            var flags = std.ArrayList([]const u8).initCapacity(gpa, 8) catch return error.OutOfMemory;
+            defer flags.deinit(gpa);
+            const base_flags = server_flags.computeBaseFlags(ordered, distinct);
+            for (base_flags) |flag| {
+                try appendFlagIfMissing(gpa, &flags, flag);
+            }
+            if (traits.has_union) {
+                try appendFlagIfMissing(gpa, &flags, server_flags.F_UNION_PHASES);
+            }
+            if (heur_index) {
+                try appendFlagIfMissing(gpa, &flags, server_flags.F_HEUR_INDEX);
+            }
+            if (parse_result.has_double_solidus_comment) {
+                try appendFlagIfMissing(gpa, &flags, "GB03:DoubleSolidusComment");
+            }
+
+            switch (analysis.kind) {
+                .explain => {
+                    const explain_msg = try explain_payload.buildExplainPayload(
+                        gpa,
+                        traits,
+                        analysis.union_part_count,
+                        normalized.explain_calibrated,
+                    );
+
+                    const status = try proto_util.buildStatus(gpa, "00000", flags.items);
+                    const resp = schema.ExecutionResponse{
+                        .status = status,
+                        .payload = .{ .explain = explain_msg },
                     };
+                    try sendQuicMessage(gpa, stream, .{ .execute = resp });
+                },
+                .profile => {
+                    const target_stmt = analysis.target orelse {
+                        try sendExecuteError(gpa, stream, "0A000", "PROFILE target missing", &.{}, &.{});
+                        return;
+                    };
+                    var exec_result = execution.executeStatementWithContext(gpa, target_stmt.*, exec_context) catch |err| {
+                        const info = proto_util.mapError(err);
+                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                        return;
+                    };
+                    defer exec_result.deinit(gpa);
 
-                    var flags = std.ArrayList([]const u8).initCapacity(gpa, 8) catch return error.OutOfMemory;
-                    defer flags.deinit(gpa);
-                    const base_flags = server_flags.computeBaseFlags(ordered, distinct);
-                    for (base_flags) |flag| {
-                        try appendFlagIfMissing(gpa, &flags, flag);
+                    for (flags.items) |flag| {
+                        try appendFlagToResult(gpa, &exec_result, flag);
                     }
-                    if (traits.has_union) {
-                        try appendFlagIfMissing(gpa, &flags, server_flags.F_UNION_PHASES);
+
+                    const store = graph_store.getGlobalStore(gpa);
+                    const profile_msg = try profile_payload.buildProfilePayload(gpa, traits, exec_result.rows.len, .{
+                        .compact = compact_profile,
+                        .include_mem_curve = memcurve_profile,
+                        .disable_estimates = disable_estimates,
+                        .spill_threshold = state.query_mem_limit_bytes,
+                        .committed_txns = state.global_commit_ts,
+                        .graph_store_nodes = @intCast(store.getNodeCount()),
+                        .graph_store_edges = @intCast(store.getEdgeCount()),
+                        .graph_store_dirty = store.isDirty(),
+                        .flagger_findings = exec_result.flags.items,
+                        .union_part_count = analysis.union_part_count,
+                    });
+
+                    const status = try proto_util.buildStatus(gpa, "00000", exec_result.flags.items);
+                    const resp = schema.ExecutionResponse{
+                        .status = status,
+                        .payload = .{ .profile = profile_msg },
+                    };
+                    try sendQuicMessage(gpa, stream, .{ .execute = resp });
+
+                    // GAP-0260: Non-txn saves deferred to background persistence thread
+                },
+                .rows => {
+                    var exec_result = execution.executeProgramWithContext(gpa, &parse_result.program, exec_context) catch |err| {
+                        const info = proto_util.mapError(err);
+                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                        return;
+                    };
+                    var store_result = false;
+                    defer if (!store_result) exec_result.deinit(gpa);
+
+                    for (flags.items) |flag| {
+                        try appendFlagToResult(gpa, &exec_result, flag);
                     }
-                    if (heur_index) {
-                        try appendFlagIfMissing(gpa, &flags, server_flags.F_HEUR_INDEX);
+
+                    var order_keys: []const []const u8 = &.{};
+                    defer if (!store_result) {
+                        for (order_keys) |key| gpa.free(key);
+                        if (order_keys.len > 0) gpa.free(order_keys);
+                    };
+                    if (ordered) {
+                        if (findOrderBy(&parse_result.program)) |ob| {
+                            order_keys = try buildOrderKeys(gpa, ob, &exec_result);
+                        }
                     }
-                    if (parse_result.has_double_solidus_comment) {
-                        try appendFlagIfMissing(gpa, &flags, "GB03:DoubleSolidusComment");
+
+                    // Arena allocator for schema definition serialization (Issue #446)
+                    {
+                        var schema_arena = std.heap.ArenaAllocator.init(gpa);
+                        defer schema_arena.deinit();
+                        const sa = schema_arena.allocator();
+                        const status = try proto_util.buildStatus(sa, "00000", exec_result.flags.items);
+                        const schema_def = try proto_util.buildSchemaDefinition(sa, &exec_result);
+                        const schema_resp = schema.ExecutionResponse{
+                            .status = status,
+                            .payload = .{ .schema = schema_def },
+                        };
+                        try sendQuicMessage(sa, stream, .{ .execute = schema_resp });
                     }
 
-                    switch (analysis.kind) {
-                        .explain => {
-                            const explain_msg = try explain_payload.buildExplainPayload(
-                                gpa,
-                                traits,
-                                analysis.union_part_count,
-                                normalized.explain_calibrated,
-                            );
+                    var sent_rows: usize = 0;
+                    var page_final = false;
+                    if (state.inline_results_enabled) {
+                        const inline_max = if (state.inline_results_max_rows == 0) exec_result.rows.len else state.inline_results_max_rows;
+                        // Arena allocator for data page serialization (Issue #446):
+                        // Per-value string dups become bump allocations; individual frees become no-ops.
+                        var page_arena = std.heap.ArenaAllocator.init(gpa);
+                        defer page_arena.deinit();
+                        const pa = page_arena.allocator();
+                        const page = try proto_util.buildDataPage(pa, &exec_result, 0, inline_max, ordered, order_keys);
+                        sent_rows = page.rows.items.len;
+                        page_final = page.final;
+                        const page_status = try proto_util.buildStatus(pa, "00000", exec_result.flags.items);
+                        const page_resp = schema.ExecutionResponse{
+                            .status = page_status,
+                            .payload = .{ .page = page },
+                        };
+                        try sendQuicMessage(pa, stream, .{ .execute = page_resp });
+                    }
 
-                            const status = try proto_util.buildStatus(gpa, "00000", flags.items);
-                            const resp = schema.ExecutionResponse{
-                                .status = status,
-                                .payload = .{ .explain = explain_msg },
-                            };
-                            try sendQuicMessage(gpa, stream, .{ .execute = resp });
-                        },
-                        .profile => {
-                            const target_stmt = analysis.target orelse {
-                                try sendExecuteError(gpa, stream, "0A000", "PROFILE target missing", &.{}, &.{});
-                                return;
-                            };
-                            var exec_result = execution.executeStatementWithContext(gpa, target_stmt.*, exec_context) catch |err| {
-                                const info = proto_util.mapError(err);
-                                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-                                return;
-                            };
-                            defer exec_result.deinit(gpa);
+                    if (!state.inline_results_enabled or !page_final) {
+                        store_result = true;
+                        state.active_result_values = exec_result;
+                        state.active_result = true;
+                        state.result_page_index = if (state.inline_results_enabled) sent_rows else 0;
+                        state.result_ordered = ordered;
+                        state.result_order_keys = order_keys;
+                    }
 
-                            for (flags.items) |flag| {
-                                try appendFlagToResult(gpa, &exec_result, flag);
-                            }
+                    updateTxnStateFromProgram(state, &parse_result.program);
 
-                            const store = graph_store.getGlobalStore(gpa);
-                            const profile_msg = try profile_payload.buildProfilePayload(gpa, traits, exec_result.rows.len, .{
-                                .compact = compact_profile,
-                                .include_mem_curve = memcurve_profile,
-                                .disable_estimates = disable_estimates,
-                                .spill_threshold = state.query_mem_limit_bytes,
-                                .committed_txns = state.global_commit_ts,
-                                .graph_store_nodes = @intCast(store.getNodeCount()),
-                                .graph_store_edges = @intCast(store.getEdgeCount()),
-                                .graph_store_dirty = store.isDirty(),
-                                .flagger_findings = exec_result.flags.items,
-                                .union_part_count = analysis.union_part_count,
-                            });
-
-                            const status = try proto_util.buildStatus(gpa, "00000", exec_result.flags.items);
-                            const resp = schema.ExecutionResponse{
-                                .status = status,
-                                .payload = .{ .profile = profile_msg },
-                            };
-                            try sendQuicMessage(gpa, stream, .{ .execute = resp });
-
-                            // GAP-0260: Non-txn saves deferred to background persistence thread
-                        },
-                        .rows => {
-                            var exec_result = execution.executeProgramWithContext(gpa, &parse_result.program, exec_context) catch |err| {
-                                const info = proto_util.mapError(err);
-                                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-                                return;
-                            };
-                            var store_result = false;
-                            defer if (!store_result) exec_result.deinit(gpa);
-
-                            for (flags.items) |flag| {
-                                try appendFlagToResult(gpa, &exec_result, flag);
-                            }
-
-                            var order_keys: []const []const u8 = &.{};
-                            defer if (!store_result) {
-                                for (order_keys) |key| gpa.free(key);
-                                if (order_keys.len > 0) gpa.free(order_keys);
-                            };
-                            if (ordered) {
-                                if (findOrderBy(&parse_result.program)) |ob| {
-                                    order_keys = try buildOrderKeys(gpa, ob, &exec_result);
-                                }
-                            }
-
-                            const status = try proto_util.buildStatus(gpa, "00000", exec_result.flags.items);
-                            const schema_def = try proto_util.buildSchemaDefinition(gpa, &exec_result);
-                            const schema_resp = schema.ExecutionResponse{
-                                .status = status,
-                                .payload = .{ .schema = schema_def },
-                            };
-                            try sendQuicMessage(gpa, stream, .{ .execute = schema_resp });
-
-                            var sent_rows: usize = 0;
-                            var page_final = false;
-                            if (state.inline_results_enabled) {
-                                const inline_max = if (state.inline_results_max_rows == 0) exec_result.rows.len else state.inline_results_max_rows;
-                                const page = try proto_util.buildDataPage(gpa, &exec_result, 0, inline_max, ordered, order_keys);
-                                sent_rows = page.rows.items.len;
-                                page_final = page.final;
-                                const page_status = try proto_util.buildStatus(gpa, "00000", exec_result.flags.items);
-                                const page_resp = schema.ExecutionResponse{
-                                    .status = page_status,
-                                    .payload = .{ .page = page },
-                                };
-                                try sendQuicMessage(gpa, stream, .{ .execute = page_resp });
-                            }
-
-                            if (!state.inline_results_enabled or !page_final) {
-                                store_result = true;
-                                state.active_result_values = exec_result;
-                                state.active_result = true;
-                                state.result_page_index = if (state.inline_results_enabled) sent_rows else 0;
-                                state.result_ordered = ordered;
-                                state.result_order_keys = order_keys;
-                            }
-
-                            updateTxnStateFromProgram(state, &parse_result.program);
-
-                            // GAP-0260: Signal persistence for auto-committed mutations
-                            if (!state.in_txn) {
-                                graph_store.signalPersistence();
-                            }
-                        },
+                    // GAP-0260: Signal persistence for auto-committed mutations
+                    if (!state.in_txn) {
+                        graph_store.signalPersistence();
                     }
                 },
             }
@@ -934,7 +976,13 @@ fn handleClientMessage(
             const page_size = pull_req.page_size;
             const start = state.result_page_index;
             const result = &state.active_result_values.?;
-            const page = try proto_util.buildDataPage(gpa, result, start, page_size, state.result_ordered, state.result_order_keys);
+
+            // Arena allocator for pull page serialization (Issue #446)
+            var pull_arena = std.heap.ArenaAllocator.init(gpa);
+            defer pull_arena.deinit();
+            const pa = pull_arena.allocator();
+
+            const page = try proto_util.buildDataPage(pa, result, start, page_size, state.result_ordered, state.result_order_keys);
             state.result_page_index = start + page.rows.items.len;
 
             if (state.telemetry_paging) {
@@ -951,12 +999,12 @@ fn handleClientMessage(
                 });
             }
 
-            const status = try proto_util.buildStatus(gpa, "00000", result.flags.items);
+            const status = try proto_util.buildStatus(pa, "00000", result.flags.items);
             const resp = schema.ExecutionResponse{
                 .status = status,
                 .payload = .{ .page = page },
             };
-            try sendQuicMessage(gpa, stream, .{ .pull = .{ .response = resp } });
+            try sendQuicMessage(pa, stream, .{ .pull = .{ .response = resp } });
 
             if (page.final) {
                 state.resetResult();

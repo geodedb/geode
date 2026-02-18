@@ -1,3 +1,4 @@
+// CANARY: REQ=REQ-PERF-PROTO-ARENA-001; FEATURE="ArenaProtoSerialization"; ASPECT=DataPageSerialization; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
 const std = @import("std");
 const schema = @import("schema");
 const spice_wrapper = @import("parallel/spice");

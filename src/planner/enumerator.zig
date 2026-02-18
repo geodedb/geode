@@ -29,7 +29,7 @@ pub const EnumeratorConfig = struct {
     max_plans: usize = 256,
     enable_join_commutativity: bool = true,
     enable_join_associativity: bool = true,
-    enable_prune: bool = false,
+    enable_prune: bool = true,
     // prune_factor: if candidate cost exceeds best_cost * prune_factor, skip exploring its children
     prune_factor: f64 = 4.0,
 };

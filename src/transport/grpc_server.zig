@@ -585,18 +585,26 @@ fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !Pa
     };
 
     const start = state.result_page_index;
-    const page = try proto_util.buildDataPage(allocator, result_ptr, start, 1000, state.result_ordered, state.result_order_keys);
+
+    // Arena allocator for data page serialization (Issue #446):
+    // Per-value string dups become bump allocations; arena bulk-frees after encode.
+    var page_arena = std.heap.ArenaAllocator.init(allocator);
+    defer page_arena.deinit();
+    const pa = page_arena.allocator();
+
+    const page = try proto_util.buildDataPage(pa, result_ptr, start, 1000, state.result_ordered, state.result_order_keys);
     state.result_page_index += page.rows.items.len;
     const is_final = page.final;
 
-    const status = try proto_util.buildStatus(allocator, "00000", result_ptr.flags.items);
-    var resp = schema.ExecutionResponse{
+    const status = try proto_util.buildStatus(pa, "00000", result_ptr.flags.items);
+    const resp = schema.ExecutionResponse{
         .status = status,
         .payload = .{ .page = page },
     };
-    defer resp.deinit(allocator);
+    // resp.deinit not needed: arena handles all proto object memory
 
-    const encoded = try encodeMessage(allocator, resp);
+    const encoded_tmp = try encodeMessage(pa, resp);
+    const encoded = try allocator.dupe(u8, encoded_tmp);
 
     if (is_final) {
         state.resetResult();
@@ -615,18 +623,24 @@ fn buildStreamDataPageLocked(state: *server_state.ServerState, allocator: std.me
     };
 
     const start = state.result_page_index;
-    const page = try proto_util.buildDataPage(allocator, result_ptr, start, 1000, state.result_ordered, state.result_order_keys);
+
+    // Arena allocator for data page serialization (Issue #446)
+    var page_arena = std.heap.ArenaAllocator.init(allocator);
+    defer page_arena.deinit();
+    const pa = page_arena.allocator();
+
+    const page = try proto_util.buildDataPage(pa, result_ptr, start, 1000, state.result_ordered, state.result_order_keys);
     state.result_page_index += page.rows.items.len;
     const is_final = page.final;
 
-    const status = try proto_util.buildStatus(allocator, "00000", result_ptr.flags.items);
-    var resp = schema.ExecutionResponse{
+    const status = try proto_util.buildStatus(pa, "00000", result_ptr.flags.items);
+    const resp = schema.ExecutionResponse{
         .status = status,
         .payload = .{ .page = page },
     };
-    defer resp.deinit(allocator);
 
-    const encoded = try encodeMessage(allocator, resp);
+    const encoded_tmp = try encodeMessage(pa, resp);
+    const encoded = try allocator.dupe(u8, encoded_tmp);
 
     if (is_final) {
         state.resetResult();
@@ -1328,19 +1342,24 @@ fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     };
 
     const start = state.result_page_index;
-    const page = try proto_util.buildDataPage(allocator, result_ptr, start, req.page_size, state.result_ordered, state.result_order_keys);
+
+    // Arena allocator for pull page serialization (Issue #446)
+    var pull_arena = std.heap.ArenaAllocator.init(allocator);
+    defer pull_arena.deinit();
+    const pa = pull_arena.allocator();
+
+    const page = try proto_util.buildDataPage(pa, result_ptr, start, req.page_size, state.result_ordered, state.result_order_keys);
     state.result_page_index += page.rows.items.len;
 
-    const status = try proto_util.buildStatus(allocator, "00000", result_ptr.flags.items);
+    const status = try proto_util.buildStatus(pa, "00000", result_ptr.flags.items);
     const resp = schema.ExecutionResponse{
         .status = status,
         .payload = .{ .page = page },
     };
-    var resp_copy = resp;
-    defer resp_copy.deinit(allocator);
 
     const pull_resp = schema.PullResponse{ .response = resp };
-    const encoded = try encodeMessage(allocator, pull_resp);
+    const encoded_tmp = try encodeMessage(pa, pull_resp);
+    const encoded = try allocator.dupe(u8, encoded_tmp);
 
     if (page.final) {
         state.resetResult();

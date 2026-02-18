@@ -2,14 +2,18 @@ const std = @import("std");
 const geode = @import("geode");
 const token = geode.gql.token;
 
-// CANARY: REQ=REQ-PERF-AST-CACHE-001; FEATURE="QueryASTCache"; ASPECT=ParseHotPath; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
+// CANARY: REQ=REQ-PERF-AST-CACHE-001; FEATURE="QueryASTCache"; ASPECT=ParseHotPath; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
+// CANARY: REQ=REQ-PERF-LRU-O1-001; FEATURE="O1LRUEviction"; ASPECT=CacheEviction; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
 /// Cache parsed ASTs keyed by query text and parse options to avoid repeat parsing.
+/// Uses an intrusive doubly-linked list keyed by hash for O(1) LRU eviction.
 pub const QueryAstCache = struct {
     allocator: std.mem.Allocator,
     cache: std.AutoHashMap(u64, CachedAst),
     max_size: usize,
     hit_count: u64 = 0,
     miss_count: u64 = 0,
+    lru_head: ?u64 = null, // Most recently used
+    lru_tail: ?u64 = null, // Least recently used
 
     pub fn init(allocator: std.mem.Allocator, max_size: usize) QueryAstCache {
         return .{
@@ -36,6 +40,7 @@ pub const QueryAstCache = struct {
                 self.hit_count += 1;
                 cached.access_count += 1;
                 cached.last_accessed = std.time.timestamp();
+                self.lruPromote(key);
                 return .{ .Ok = .{
                     .cache = null,
                     .key = 0,
@@ -44,6 +49,7 @@ pub const QueryAstCache = struct {
             }
 
             // Hash collision: evict the existing entry and treat as a miss.
+            self.lruRemoveNode(key);
             if (self.cache.fetchRemove(key)) |kv| {
                 kv.value.parse_result.deinit();
                 self.allocator.free(kv.value.query_text);
@@ -73,7 +79,7 @@ pub const QueryAstCache = struct {
                 }
 
                 if (self.cache.count() >= self.max_size) {
-                    try self.evictLeastUsed();
+                    self.evictTail();
                 }
 
                 var cached_ast = CachedAst{
@@ -89,6 +95,7 @@ pub const QueryAstCache = struct {
                 }
 
                 try self.cache.put(key, cached_ast);
+                self.lruInsertHead(key);
                 const cached_ptr = self.cache.getPtr(key) orelse return error.InvalidState;
                 return .{ .Ok = .{
                     .cache = null,
@@ -99,26 +106,54 @@ pub const QueryAstCache = struct {
         }
     }
 
-    fn evictLeastUsed(self: *QueryAstCache) !void {
-        var oldest_time: i64 = std.math.maxInt(i64);
-        var oldest_key: u64 = 0;
-        var found = false;
+    /// O(1) eviction: remove the LRU tail entry.
+    fn evictTail(self: *QueryAstCache) void {
+        const tail_key = self.lru_tail orelse return;
 
-        var iter = self.cache.iterator();
-        while (iter.next()) |entry| {
-            if (entry.value_ptr.last_accessed < oldest_time) {
-                oldest_time = entry.value_ptr.last_accessed;
-                oldest_key = entry.key_ptr.*;
-                found = true;
-            }
-        }
+        // Unlink tail from list before HashMap mutation.
+        self.lruRemoveNode(tail_key);
 
-        if (!found) return;
-
-        if (self.cache.fetchRemove(oldest_key)) |kv| {
+        if (self.cache.fetchRemove(tail_key)) |kv| {
             kv.value.parse_result.deinit();
             self.allocator.free(kv.value.query_text);
         }
+    }
+
+    // --- LRU linked-list helpers (keyed by u64 hash) ---
+
+    fn lruPromote(self: *QueryAstCache, key: u64) void {
+        if (self.lru_head != null and self.lru_head.? == key) return;
+        self.lruRemoveNode(key);
+        self.lruInsertHead(key);
+    }
+
+    fn lruInsertHead(self: *QueryAstCache, key: u64) void {
+        const entry = self.cache.getPtr(key) orelse return;
+        entry.lru_prev = null;
+        entry.lru_next = self.lru_head;
+        if (self.lru_head) |old_head| {
+            if (self.cache.getPtr(old_head)) |h| h.lru_prev = key;
+        }
+        self.lru_head = key;
+        if (self.lru_tail == null) self.lru_tail = key;
+    }
+
+    fn lruRemoveNode(self: *QueryAstCache, key: u64) void {
+        const entry = self.cache.getPtr(key) orelse return;
+        const prev = entry.lru_prev;
+        const next = entry.lru_next;
+        if (prev) |pk| {
+            if (self.cache.getPtr(pk)) |p| p.lru_next = next;
+        } else {
+            self.lru_head = next;
+        }
+        if (next) |nk| {
+            if (self.cache.getPtr(nk)) |n| n.lru_prev = prev;
+        } else {
+            self.lru_tail = prev;
+        }
+        entry.lru_prev = null;
+        entry.lru_next = null;
     }
 };
 
@@ -141,10 +176,13 @@ const CachedAst = struct {
     created_at: i64,
     last_accessed: i64,
     access_count: u64,
+    lru_prev: ?u64 = null,
+    lru_next: ?u64 = null,
 };
 
 // Shared, thread-safe AST cache for cross-connection reuse.
 // Uses ref-counting to prevent eviction while entries are in use.
+// O(1) LRU eviction via intrusive doubly-linked list (Issue #456).
 pub const SharedAstCache = struct {
     allocator: std.mem.Allocator,
     cache: std.AutoHashMap(u64, SharedCachedAst),
@@ -152,6 +190,8 @@ pub const SharedAstCache = struct {
     hit_count: u64 = 0,
     miss_count: u64 = 0,
     lock: std.Thread.Mutex = .{},
+    lru_head: ?u64 = null,
+    lru_tail: ?u64 = null,
 
     pub fn init(allocator: std.mem.Allocator, max_size: usize) SharedAstCache {
         return .{
@@ -184,6 +224,7 @@ pub const SharedAstCache = struct {
                 cached.access_count += 1;
                 cached.last_accessed = std.time.timestamp();
                 cached.ref_count += 1;
+                self.lruPromoteUnlocked(key);
                 const handle = AstHandle{
                     .cache = self,
                     .key = key,
@@ -195,6 +236,7 @@ pub const SharedAstCache = struct {
 
             // Hash collision: evict existing entry (if not in use).
             if (cached.ref_count == 0) {
+                self.lruRemoveNodeUnlocked(key);
                 if (self.cache.fetchRemove(key)) |kv| {
                     kv.value.parse_result.deinit();
                     self.allocator.destroy(kv.value.parse_result);
@@ -237,6 +279,7 @@ pub const SharedAstCache = struct {
                         existing.access_count += 1;
                         existing.last_accessed = std.time.timestamp();
                         existing.ref_count += 1;
+                        self.lruPromoteUnlocked(key);
                         return .{ .Ok = AstHandle{
                             .cache = self,
                             .key = key,
@@ -246,7 +289,6 @@ pub const SharedAstCache = struct {
                 }
 
                 if (self.cache.count() >= self.max_size) {
-                    // Best-effort eviction; skip entries that are in use.
                     self.evictLeastUsedUnlocked();
                 }
 
@@ -265,6 +307,7 @@ pub const SharedAstCache = struct {
                 }
 
                 try self.cache.put(key, cached_ast);
+                self.lruInsertHeadUnlocked(key);
                 return .{ .Ok = AstHandle{
                     .cache = self,
                     .key = key,
@@ -282,28 +325,59 @@ pub const SharedAstCache = struct {
         }
     }
 
+    /// O(1) eviction: walk backward from tail, skip entries with ref_count > 0.
     fn evictLeastUsedUnlocked(self: *SharedAstCache) void {
-        var oldest_time: i64 = std.math.maxInt(i64);
-        var oldest_key: u64 = 0;
-        var found = false;
-
-        var iter = self.cache.iterator();
-        while (iter.next()) |entry| {
-            if (entry.value_ptr.ref_count != 0) continue;
-            if (entry.value_ptr.last_accessed < oldest_time) {
-                oldest_time = entry.value_ptr.last_accessed;
-                oldest_key = entry.key_ptr.*;
-                found = true;
+        var key_opt = self.lru_tail;
+        while (key_opt) |key| {
+            const entry = self.cache.getPtr(key) orelse return;
+            if (entry.ref_count == 0) {
+                self.lruRemoveNodeUnlocked(key);
+                if (self.cache.fetchRemove(key)) |kv| {
+                    kv.value.parse_result.deinit();
+                    self.allocator.destroy(kv.value.parse_result);
+                    self.allocator.free(kv.value.query_text);
+                }
+                return;
             }
+            key_opt = entry.lru_prev;
         }
+    }
 
-        if (!found) return;
+    // --- LRU linked-list helpers (caller holds lock) ---
 
-        if (self.cache.fetchRemove(oldest_key)) |kv| {
-            kv.value.parse_result.deinit();
-            self.allocator.destroy(kv.value.parse_result);
-            self.allocator.free(kv.value.query_text);
+    fn lruPromoteUnlocked(self: *SharedAstCache, key: u64) void {
+        if (self.lru_head != null and self.lru_head.? == key) return;
+        self.lruRemoveNodeUnlocked(key);
+        self.lruInsertHeadUnlocked(key);
+    }
+
+    fn lruInsertHeadUnlocked(self: *SharedAstCache, key: u64) void {
+        const entry = self.cache.getPtr(key) orelse return;
+        entry.lru_prev = null;
+        entry.lru_next = self.lru_head;
+        if (self.lru_head) |old_head| {
+            if (self.cache.getPtr(old_head)) |h| h.lru_prev = key;
         }
+        self.lru_head = key;
+        if (self.lru_tail == null) self.lru_tail = key;
+    }
+
+    fn lruRemoveNodeUnlocked(self: *SharedAstCache, key: u64) void {
+        const entry = self.cache.getPtr(key) orelse return;
+        const prev = entry.lru_prev;
+        const next = entry.lru_next;
+        if (prev) |pk| {
+            if (self.cache.getPtr(pk)) |p| p.lru_next = next;
+        } else {
+            self.lru_head = next;
+        }
+        if (next) |nk| {
+            if (self.cache.getPtr(nk)) |n| n.lru_prev = prev;
+        } else {
+            self.lru_tail = prev;
+        }
+        entry.lru_prev = null;
+        entry.lru_next = null;
     }
 };
 
@@ -326,6 +400,8 @@ const SharedCachedAst = struct {
     last_accessed: i64,
     access_count: u64,
     ref_count: u32,
+    lru_prev: ?u64 = null,
+    lru_next: ?u64 = null,
 };
 
 fn hashQuery(query_text: []const u8, opts: geode.ParseOptions) u64 {
