@@ -228,53 +228,23 @@ RUN echo 'export PS1="\[\e[1;32m\]🐳 geode-dev\[\e[0m\] \[\e[1;34m\]\w\[\e[0m\
     echo 'export HISTSIZE=10000' >> ~/.bashrc && \
     echo 'export HISTFILESIZE=20000' >> ~/.bashrc
 
-# Display welcome message with proper version detection
-RUN cat > ~/.welcome.sh << 'WELCOME_EOF'
-#!/bin/bash
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🚀 Geode Development Environment"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-echo "📦 Development Tools:"
-echo "  • Zig $(zig version 2>/dev/null)"
-echo "  • Rust $(rustc --version 2>/dev/null | awk '{print $2}')"
-echo "  • Go $(go version 2>/dev/null | awk '{print $3}')"
-echo "  • Python $(python3 --version 2>&1 | awk '{print $2}')"
-echo "  • Node.js $(node --version 2>/dev/null)"
-echo "  • TLS: Vendored ztls (no external OpenSSL)"
-echo "  • QUIC: Vendored zig-quic (no external MsQUIC)"
-if command -v nvcc &>/dev/null; then
-    echo "  • CUDA $(nvcc --version 2>/dev/null | grep release | awk '{print $5,$6}')"
-else
-    echo "  • CUDA (not available for Ubuntu 24.04)"
-fi
-echo "  • Vulkan SDK enabled"
-if command -v claude &>/dev/null; then
-    echo "  • Claude CLI $(claude --version 2>/dev/null || echo 'available')"
-fi
-echo ""
-echo "🔨 Quick Commands:"
-echo "  • zb        - zig build"
-echo "  • zbr       - zig build -Doptimize=ReleaseSafe"
-echo "  • zbt       - zig build test"
-echo "  • make test - Run geodetestlab tests"
-echo ""
-echo "🤖 AI Assistants:"
-echo "  • IDE: GitHub Copilot, Cursor AI, Claude - available via VSCode/Cursor"
-echo "  • CLI: copilot, claude, cursor-agent, aider"
-echo "  • All configs and sessions mounted from host system"
-echo ""
-echo "💬 AI CLI Quick Start:"
-echo "  • copilot                         - GitHub Copilot interactive session"
-echo "  • claude                          - Claude Code CLI (Anthropic)"
-echo "  • cursor-agent                    - Cursor agent CLI"
-echo "  • aider                           - AI pair programming session"
-echo ""
-echo "📂 Workspace: /workspace (mounted to host)"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-WELCOME_EOF
-RUN chmod +x ~/.welcome.sh && \
+# Display welcome message with proper version detection (#441: use printf, no heredoc)
+RUN printf '%s\n' \
+    '#!/bin/bash' \
+    'echo "=================================================================="' \
+    'echo "Geode Development Environment"' \
+    'echo "=================================================================="' \
+    'echo ""' \
+    'echo "Development Tools:"' \
+    'echo "  Zig $(zig version 2>/dev/null)"' \
+    'echo "  Rust $(rustc --version 2>/dev/null | cut -d" " -f2)"' \
+    'echo "  Go $(go version 2>/dev/null | cut -d" " -f3)"' \
+    'echo "  Python $(python3 --version 2>&1 | cut -d" " -f2)"' \
+    'echo "  Node.js $(node --version 2>/dev/null)"' \
+    'echo ""' \
+    'echo "Quick Commands: zb (zig build), zbr (release), zbt (test), make test"' \
+    'echo "=================================================================="' \
+    > ~/.welcome.sh && chmod +x ~/.welcome.sh && \
     echo 'bash ~/.welcome.sh' >> ~/.bashrc
 
 # Default command
