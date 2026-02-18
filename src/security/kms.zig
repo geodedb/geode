@@ -167,7 +167,7 @@ pub const KMSProvider = struct {
 
         // Use deterministic nonce derived from key_id (for reproducibility in tests)
         var nonce: [12]u8 = undefined;
-        @memset(&nonce, 0);
+        std.crypto.secureZero(u8, &nonce);
         const key_hash = std.hash.crc.Crc32.hash(key_id);
         std.mem.writeInt(u32, nonce[0..4], key_hash, .little);
 
@@ -198,7 +198,7 @@ pub const KMSProvider = struct {
 
         // Reconstruct nonce
         var nonce: [12]u8 = undefined;
-        @memset(&nonce, 0);
+        std.crypto.secureZero(u8, &nonce);
         const key_hash = std.hash.crc.Crc32.hash(wrapped.key_id);
         std.mem.writeInt(u32, nonce[0..4], key_hash, .little);
 

@@ -63,7 +63,7 @@ pub const NonceGenerator = struct {
             .Deterministic => {
                 // TESTING ONLY: Deterministic nonce generation
                 // This is UNSAFE for production use!
-                @memset(nonce, 0);
+                std.crypto.secureZero(u8, nonce);
                 std.mem.writeInt(u64, nonce[0..8], self.deterministic_counter, .little);
                 self.deterministic_counter += 1;
             },
@@ -85,7 +85,7 @@ pub fn generateSecureNonce(nonce: *[NonceBytes]u8) void {
 /// be used in production code. Using deterministic nonces with AES-GCM
 /// allows catastrophic IV reuse attacks that completely break encryption.
 pub fn generateDeterministicNonce(nonce: *[NonceBytes]u8, counter: u64) void {
-    @memset(nonce, 0);
+    std.crypto.secureZero(u8, nonce);
     std.mem.writeInt(u64, nonce[0..8], counter, .little);
 }
 

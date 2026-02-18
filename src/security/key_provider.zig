@@ -90,7 +90,7 @@ fn wrapKey(seed: u64, plain: [32]u8) [32]u8 {
 
     // Use deterministic nonce for mock (real KMS would use random nonces)
     var nonce: [12]u8 = undefined;
-    @memset(&nonce, 0);
+    std.crypto.secureZero(u8, &nonce);
     std.mem.writeInt(u64, nonce[0..8], seed, .little);
 
     // AES-256-GCM encrypt
@@ -115,21 +115,21 @@ fn unwrapKey(seed: u64, wrapped: [32]u8) [32]u8 {
 
     // Reconstruct nonce
     var nonce: [12]u8 = undefined;
-    @memset(&nonce, 0);
+    std.crypto.secureZero(u8, &nonce);
     std.mem.writeInt(u64, nonce[0..8], seed, .little);
 
     // For mock, generate expected tag (in production, tag would be stored with ciphertext)
     var expected_tag: [16]u8 = undefined;
     var temp_ct: [32]u8 = undefined;
     var temp_plain: [32]u8 = undefined;
-    @memset(&temp_plain, 0);
+    std.crypto.secureZero(u8, &temp_plain);
     std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(&temp_ct, &expected_tag, &temp_plain, "", nonce, wrap_key);
 
     // AES-256-GCM decrypt (using zero tag for mock - production would verify stored tag)
     var plain: [32]u8 = undefined;
     std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(&plain, &wrapped, expected_tag, "", nonce, wrap_key) catch {
         // If decryption fails, return zeros (error case)
-        @memset(&plain, 0);
+        std.crypto.secureZero(u8, &plain);
     };
     return plain;
 }
