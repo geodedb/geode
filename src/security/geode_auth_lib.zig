@@ -760,16 +760,26 @@ pub const SecurityManager = struct {
         );
     }
 
-    /// Constant-time comparison to prevent timing attacks
-    /// Uses XOR pattern to ensure execution time is independent of where bytes differ
-    fn constantTimeEqual(a: []const u8, b: []const u8) bool {
-        if (a.len != b.len) return false;
+    /// Update the stored password hash for a user (used for hash migration).
+    /// GAP-0489: Called after Blake2b verification succeeds to upgrade to Argon2id.
+    fn updateStoredHash(self: *Self, user_id: UserId, new_hash: []const u8) !void {
+        const entry = self.users.getPtr(user_id) orelse return error.UserNotFound;
+        self.allocator.free(entry.password_hash);
+        entry.password_hash = try self.allocator.dupe(u8, new_hash);
+        entry.updated_at = std.time.milliTimestamp();
+    }
 
-        var result: u8 = 0;
-        for (a, b) |byte_a, byte_b| {
-            result |= byte_a ^ byte_b;
-        }
-        return result == 0;
+    /// Constant-time comparison for 32-byte arrays (Argon2id/Blake2b digests). GAP-0440.
+    /// Uses std.crypto.timing_safe.eql to prevent compiler optimisation of the comparison.
+    fn constantTimeEqual32(a: *const [32]u8, b: *const [32]u8) bool {
+        return std.crypto.timing_safe.eql([32]u8, a.*, b.*);
+    }
+
+    /// Constant-time comparison for 64-byte hex-encoded hashes. GAP-0440.
+    /// Uses std.crypto.timing_safe.eql to prevent compiler optimisation of the comparison.
+    fn constantTimeEqual64(a: *const [64]u8, b: []const u8) bool {
+        if (b.len != 64) return false;
+        return std.crypto.timing_safe.eql([64]u8, a.*, b[0..64].*);
     }
 
     fn verifyPassword(self: *Self, password: []const u8, stored_hash: []const u8) !bool {
@@ -867,8 +877,8 @@ pub const SecurityManager = struct {
             .argon2id,
         ) catch return false;
 
-        // Constant-time comparison
-        return constantTimeEqual(&computed_hash, &expected_hash);
+        // Constant-time comparison (GAP-0440)
+        return constantTimeEqual32(&computed_hash, &expected_hash);
     }
 
     /// Verify legacy Blake2b password (for migration only — deprecated).
@@ -891,7 +901,7 @@ pub const SecurityManager = struct {
             computed_hex[i * 2 + 1] = hex_chars[byte & 0xf];
         }
 
-        const matches = constantTimeEqual(&computed_hex, stored_hash);
+        const matches = constantTimeEqual64(&computed_hex, stored_hash);
         if (matches) {
             // Flag for migration: legacy Blake2b accounts must re-hash with Argon2id
             self.audit_log.append(.password_migration_needed, 0, "Legacy Blake2b hash verified — account should migrate to Argon2id", .{}) catch {};
@@ -1217,6 +1227,9 @@ pub const SecurityManager = struct {
             return error.DefaultPasswordMustBeChanged;
         }
 
+        // Capture whether this is a legacy Blake2b hash before verifyPassword consumes it,
+        // so we can trigger migration after a successful verify.
+        const is_legacy_blake2b = user.password_hash.len == 64 and isHexString(user.password_hash);
         if (!try self.verifyPassword(password, user.password_hash)) {
             // Increment failed attempts and potentially lock out
             user.failed_login_attempts += 1;
@@ -1227,6 +1240,25 @@ pub const SecurityManager = struct {
             }
             try self.audit_log.logFailedLogin(user.id, user.username);
             return error.InvalidCredentials;
+        }
+
+        // GAP-0489: Auto-migrate legacy Blake2b accounts to Argon2id on successful login.
+        // CWE-760: The Blake2b path uses a static salt; upgrading to Argon2id eliminates this.
+        // Migration is best-effort — a failure is logged but does not block the login.
+        if (is_legacy_blake2b) {
+            if (self.hashPassword(password)) |new_hash| {
+                defer self.allocator.free(new_hash);
+                self.updateStoredHash(user.id, new_hash) catch |migrate_err| {
+                    log.warn("Blake2b migration: failed to update stored hash for user", &.{
+                        Attr.string("err", @errorName(migrate_err)),
+                    });
+                };
+                try self.audit_log.append(.user_updated, user.id, "GAP-0489: Migrated legacy Blake2b hash to Argon2id on login", .{});
+            } else |hash_err| {
+                log.warn("Blake2b migration: failed to hash new password", &.{
+                    Attr.string("err", @errorName(hash_err)),
+                });
+            }
         }
 
         // Successful login: reset failed attempt counter
@@ -1285,9 +1317,27 @@ pub const SecurityManager = struct {
             return error.DefaultPasswordMustBeChanged;
         }
 
+        // Capture whether this is a legacy Blake2b hash before verifyPassword consumes it.
+        const is_legacy_blake2b_mfa = user.password_hash.len == 64 and isHexString(user.password_hash);
         if (!try self.verifyPassword(password, user.password_hash)) {
             try self.audit_log.logFailedLogin(user.id, user.username);
             return error.InvalidCredentials;
+        }
+        // GAP-0489: Auto-migrate legacy Blake2b accounts to Argon2id on successful MFA login.
+        if (is_legacy_blake2b_mfa) {
+            if (self.hashPassword(password)) |new_hash| {
+                defer self.allocator.free(new_hash);
+                self.updateStoredHash(user.id, new_hash) catch |migrate_err| {
+                    log.warn("Blake2b migration (MFA): failed to update stored hash", &.{
+                        Attr.string("err", @errorName(migrate_err)),
+                    });
+                };
+                try self.audit_log.append(.user_updated, user.id, "GAP-0489: Migrated legacy Blake2b hash to Argon2id on MFA login", .{});
+            } else |hash_err| {
+                log.warn("Blake2b migration (MFA): failed to hash new password", &.{
+                    Attr.string("err", @errorName(hash_err)),
+                });
+            }
         }
         if (!user.mfa_enabled or user.mfa_secret == null) return error.MFADisabled;
         var used_recovery = false;

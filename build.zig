@@ -846,6 +846,16 @@ pub fn build(b: *std.Build) void {
     });
     const run_jsonb_depth_tests = b.addRunArtifact(jsonb_depth_tests);
 
+    // GAP-0489: Security test — Blake2b accounts auto-migrate to Argon2id on successful login
+    const blake2b_migration_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/security/test_blake2b_migration.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_blake2b_migration_tests = b.addRunArtifact(blake2b_migration_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_ext_builtins_tests.step);
@@ -872,6 +882,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_random_security_tests.step);
     test_step.dependOn(&run_secure_zero_tests.step);
     test_step.dependOn(&run_jsonb_depth_tests.step);
+    test_step.dependOn(&run_blake2b_migration_tests.step);
 
     // E2E tests (slower, require more setup - not run in pre-push hooks)
     // Run with: zig build test-e2e
