@@ -1056,13 +1056,10 @@ pub fn exp_val(val: Value) EvaluatorError!Value {
     return Value{ .Double = result };
 }
 
+// GAP-0494: Use CSPRNG for random() GQL function — timestamp LCG was predictable
 pub fn random_val(allocator: std.mem.Allocator) EvaluatorError!Value {
     _ = allocator;
-    // Use timestamp-based pseudo-random for deterministic testing
-    const timestamp = @as(u64, @intCast(std.time.milliTimestamp()));
-    const hash = timestamp *% 1103515245 +% 12345;
-    const normalized = @as(f64, @floatFromInt(hash & 0xFFFFFF)) / @as(f64, @floatFromInt(0xFFFFFF));
-    return Value{ .Double = normalized };
+    return Value{ .Double = std.crypto.random.float(f64) };
 }
 
 pub fn sqrt_val(val: Value) EvaluatorError!Value {
