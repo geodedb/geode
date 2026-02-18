@@ -836,6 +836,16 @@ pub fn build(b: *std.Build) void {
     });
     const run_secure_zero_tests = b.addRunArtifact(secure_zero_tests);
 
+    // GAP-0436: Security test — JSONB parser must reject deeply nested input to prevent DoS
+    const jsonb_depth_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/types/test_jsonb_depth.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_jsonb_depth_tests = b.addRunArtifact(jsonb_depth_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_ext_builtins_tests.step);
@@ -861,6 +871,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_auth_security_tests.step);
     test_step.dependOn(&run_random_security_tests.step);
     test_step.dependOn(&run_secure_zero_tests.step);
+    test_step.dependOn(&run_jsonb_depth_tests.step);
 
     // E2E tests (slower, require more setup - not run in pre-push hooks)
     // Run with: zig build test-e2e

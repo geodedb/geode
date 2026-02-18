@@ -1,5 +1,28 @@
 const std = @import("std");
 
+/// Maximum allowed nesting depth for JSONB documents.
+/// Protects against stack-overflow DoS from deeply nested input (GAP-0436).
+// CANARY: REQ=GAP-0436; FEATURE="JsonbDepthGuard"; ASPECT=SECURITY; STATUS=TESTED; OWNER=security; UPDATED=2026-02-18
+pub const MAX_JSONB_DEPTH: u32 = 64;
+
+fn checkDepth(value: std.json.Value, depth: u32) error{TooDeep}!void {
+    if (depth > MAX_JSONB_DEPTH) return error.TooDeep;
+    switch (value) {
+        .object => |obj| {
+            var it = obj.iterator();
+            while (it.next()) |entry| {
+                try checkDepth(entry.value_ptr.*, depth + 1);
+            }
+        },
+        .array => |arr| {
+            for (arr.items) |item| {
+                try checkDepth(item, depth + 1);
+            }
+        },
+        else => {},
+    }
+}
+
 pub const JsonbValue = union(enum) {
     null: void,
     bool: bool,
@@ -26,6 +49,9 @@ pub const JsonbDocument = struct {
     pub fn fromString(allocator: std.mem.Allocator, json_str: []const u8) Error!JsonbDocument {
         var parsed = std.json.parseFromSlice(std.json.Value, allocator, json_str, .{}) catch return Error.InvalidJson;
         defer parsed.deinit();
+
+        // GAP-0436: Reject deeply nested documents to prevent stack-overflow DoS
+        checkDepth(parsed.value, 0) catch return Error.InvalidJson;
 
         const canonical = try canonicalize(allocator, parsed.value);
         return JsonbDocument{ .data = canonical, .allocator = allocator };
