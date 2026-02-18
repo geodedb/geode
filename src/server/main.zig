@@ -17,7 +17,7 @@ const query_ast_cache = @import("query_ast_cache.zig");
 // Note: cert_gen now imported for certificate generation (M3.2 Phase 3 CLI extraction)
 // const mvcc = @import("server/txn/mvcc.zig");
 // const logger = @import("log/logger.zig");
-// const query_plan_cache = @import("query_plan_cache.zig");
+const query_plan_cache = geode.query_plan_cache;
 
 // Import real logger for proper log level handling
 const logger = geode.audit.system_logger;
@@ -60,6 +60,8 @@ const ConnectionContext = struct {
     env_storage_checksum_error: bool,
     security_manager: ?*geode_auth.SecurityManager,
     shared_ast_cache: ?*query_ast_cache.SharedAstCache,
+    // Issue #460: Shared cross-connection query optimizer
+    shared_optimizer: ?*query_plan_cache.SharedQueryOptimizer = null,
 };
 
 // GAP-0202: Callback wrapper for thread pool execution
@@ -77,6 +79,7 @@ fn handleConnectionAsync(context: *anyopaque) void {
         false,
         ctx.security_manager,
         ctx.shared_ast_cache,
+        ctx.shared_optimizer,
     ) catch |err| {
         log.err("Error handling QUIC connection (async)", &.{
             Attr.string("error", @errorName(err)),
@@ -500,7 +503,7 @@ pub fn main() !void {
                     });
                     continue;
                 };
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err2| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache, init_ctx.shared_optimizer) catch |err2| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err2)),
                     });
@@ -540,7 +543,7 @@ pub fn main() !void {
             // GAP-0202: Create context for async connection handling
             const ctx = gpa.create(ConnectionContext) catch {
                 log.err("Failed to allocate connection context, handling sync", &.{});
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache) catch |err| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache, init_ctx.shared_optimizer) catch |err| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err)),
                     });
@@ -559,6 +562,7 @@ pub fn main() !void {
                 .env_storage_checksum_error = env_storage_checksum_error,
                 .security_manager = init_ctx.security_manager,
                 .shared_ast_cache = init_ctx.shared_ast_cache,
+                .shared_optimizer = init_ctx.shared_optimizer,
             };
 
             // Submit to thread pool for async handling

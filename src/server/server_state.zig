@@ -314,7 +314,8 @@ pub const ServerState = struct {
     distributed_query_planner: ?*anyopaque = null,
 
     // Query plan cache and optimizer for performance optimization
-    query_optimizer: ?*query_plan_cache.QueryOptimizer = null,
+    // Issue #460: Changed from per-connection QueryOptimizer to shared cross-connection optimizer
+    query_optimizer: ?*query_plan_cache.SharedQueryOptimizer = null,
     // Query optimizer gating flag (profile/explain always enables it)
     query_optimizer_enabled: bool = false,
     // Parsed AST cache for hot-path query reuse (shared across connections)

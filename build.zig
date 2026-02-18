@@ -1885,6 +1885,22 @@ pub fn build(b: *std.Build) void {
     unicode_utf16_tests.root_module.addImport("geode", root_mod);
     test_step.dependOn(&unicode_utf16_tests.step);
 
+    // Issue #445: WAL (Write-Ahead Log) unit tests
+    const wal_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/tests/test_wal.zig"), .target = target, .optimize = optimize }) });
+    wal_tests.root_module.addImport("geode", root_mod);
+    wal_tests.root_module.addImport("logging", logging_mod);
+    test_step.dependOn(&wal_tests.step);
+
+    // Issue #460: Shared cross-connection optimizer unit tests
+    const shared_opt_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/tests/test_shared_optimizer.zig"), .target = target, .optimize = optimize }) });
+    shared_opt_tests.root_module.addImport("geode", root_mod);
+    test_step.dependOn(&shared_opt_tests.step);
+
+    // Issue #452: Plan cache lifecycle unit tests
+    const plan_lifecycle_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/tests/test_plan_cache_lifecycle.zig"), .target = target, .optimize = optimize }) });
+    plan_lifecycle_tests.root_module.addImport("geode", root_mod);
+    test_step.dependOn(&plan_lifecycle_tests.step);
+
     const e2e_rls_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_rls_security.zig"), .target = target, .optimize = optimize }),
     });

@@ -533,6 +533,9 @@ pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: Pars
 // Re-export execution and graph_store for integration tests
 pub const execution = @import("execution.zig");
 pub const graph_store = @import("graph_store.zig");
+// CANARY: REQ=REQ-PERF-WAL-006; FEATURE="WriteAheadLog"; ASPECT=LibExport; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
+// Re-export WAL for server initialization and tests
+pub const wal = @import("wal.zig");
 pub const fle_integration = @import("fle_integration.zig");
 pub const fle_commands = @import("admin/fle_commands.zig");
 pub const fle_key_manager = @import("fle_key_manager");

@@ -364,6 +364,7 @@ pub fn handleQuicConnection(
     _force_serialization_failure_unused: bool,
     security_manager: ?*geode_auth.SecurityManager,
     shared_ast_cache: ?*anyopaque, // Type is query_ast_cache.SharedAstCache
+    shared_optimizer: ?*query_plan_cache.SharedQueryOptimizer, // Issue #460
 ) !void {
     _ = _force_serialization_failure_unused;
     // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-003; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=EXEMPT; OWNER=server; UPDATED=2025-12-27
@@ -475,10 +476,9 @@ pub fn handleQuicConnection(
         break :blk std.fmt.parseInt(usize, v, 10) catch state.inline_results_max_rows;
     } else |_| state.inline_results_max_rows;
 
-    // Initialize query plan cache and optimizer for performance optimization
-    var query_optimizer = query_plan_cache.QueryOptimizer.init(gpa, 100); // Cache up to 100 plans
-    defer query_optimizer.deinit();
-    state.query_optimizer = &query_optimizer;
+    // Issue #460: Use shared cross-connection optimizer instead of per-connection instance
+    // CANARY: REQ=REQ-PERF-SHARED-OPT-001; FEATURE="SharedQueryOptimizer"; ASPECT=ConnectionWiring; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
+    state.query_optimizer = shared_optimizer;
 
     // Attach shared AST cache for cross-connection reuse.
     // CANARY: REQ=REQ-PERF-AST-CACHE-003; FEATURE="SharedASTCache"; ASPECT=ConnectionState; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
@@ -808,6 +808,24 @@ fn handleClientMessage(
                     }
                 }
             }
+            // Issue #452/#460: Consult shared optimizer for plan hints
+            // CANARY: REQ=REQ-PERF-SHARED-OPT-001; FEATURE="SharedQueryOptimizer"; ASPECT=HintExtraction; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
+            var plan_handle: ?query_plan_cache.SharedPlanHandle = null;
+            var optimizer_hints_storage: query_plan_cache.OptimizerHints = .{};
+            defer if (plan_handle) |*h| h.release();
+
+            if (state.query_optimizer) |shared_opt| {
+                const store = graph_store.getGlobalStore(gpa);
+                const store_stats = query_plan_cache.StoreStats{
+                    .node_count = @intCast(store.getNodeCount()),
+                    .edge_count = @intCast(store.getEdgeCount()),
+                };
+                plan_handle = shared_opt.optimizeQuery(query_text, &parse_result.program, store_stats) catch null;
+                if (plan_handle) |*h| {
+                    optimizer_hints_storage = h.toHints();
+                }
+            }
+
             const exec_context = execution.ExecutionContext{
                 .catalog = catalog,
                 .user = state.authenticated_user,
@@ -818,6 +836,7 @@ fn handleClientMessage(
                 .transaction_state = if (state.in_txn) .Active else .None,
                 .query_param_names = bindings.names,
                 .query_param_values = bindings.values,
+                .optimizer_hints = if (plan_handle != null) &optimizer_hints_storage else null,
             };
 
             var flags = std.ArrayList([]const u8).initCapacity(gpa, 8) catch return error.OutOfMemory;

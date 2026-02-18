@@ -670,6 +670,9 @@ pub const GraphStore = struct {
             Attr.int("total_nodes", @intCast(self.nodes.count())),
         });
 
+        // WAL notification: CreateNode
+        notifyMutation(.create_node, id, 0, 0, if (labels.len > 0) labels[0] else null, null, null, graph_name);
+
         return id;
     }
 
@@ -892,6 +895,9 @@ pub const GraphStore = struct {
 
             // Mark as dirty - persistence happens at query completion
             self.dirty = true;
+
+            // WAL notification: SetNodeProperty
+            notifyMutation(.set_node_property, node_id, 0, 0, null, key, value, null);
         }
     }
 
@@ -948,6 +954,9 @@ pub const GraphStore = struct {
             }
             // Mark as dirty - persistence happens at query completion
             self.dirty = true;
+
+            // WAL notification: RemoveNodeProperty
+            notifyMutation(.remove_node_property, node_id, 0, 0, null, key, null, null);
         }
     }
 
@@ -978,6 +987,9 @@ pub const GraphStore = struct {
 
             // Mark as dirty - persistence happens at query completion
             self.dirty = true;
+
+            // WAL notification: AddNodeLabel
+            notifyMutation(.add_node_label, node_id, 0, 0, label, null, null, null);
         }
     }
 
@@ -1017,6 +1029,9 @@ pub const GraphStore = struct {
 
                 // Mark as dirty - persistence happens at query completion
                 self.dirty = true;
+
+                // WAL notification: RemoveNodeLabel
+                notifyMutation(.remove_node_label, node_id, 0, 0, label, null, null, null);
             }
         }
     }
@@ -1546,6 +1561,9 @@ pub const GraphStore = struct {
         // Mark store as dirty - persistence happens at query completion, not per-edge
         self.dirty = true;
 
+        // WAL notification: CreateEdge
+        notifyMutation(.create_edge, id, from_id, to_id, edge_type, null, null, graph_name);
+
         return id;
     }
 
@@ -1716,6 +1734,9 @@ pub const GraphStore = struct {
 
             // Mark as dirty - persistence happens at query completion
             self.dirty = true;
+
+            // WAL notification: SetEdgeProperty
+            notifyMutation(.set_edge_property, edge_id, 0, 0, null, key, value, null);
         }
     }
 
@@ -1726,6 +1747,9 @@ pub const GraphStore = struct {
                 freePropertyValue(self, kv.value);
             }
             self.dirty = true;
+
+            // WAL notification: RemoveEdgeProperty
+            notifyMutation(.remove_edge_property, edge_id, 0, 0, null, key, null, null);
         }
     }
 
@@ -3059,14 +3083,22 @@ pub const GraphStore = struct {
 
     /// Delete a node and mark store dirty
     pub fn deleteNode(self: *GraphStore, node_id: u64) void {
+        // Capture graph_name before deletion for WAL notification
+        const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "";
         self.deleteNodeNoSave(node_id);
         self.dirty = true;
+        // WAL notification: DeleteNode
+        notifyMutation(.delete_node, node_id, 0, 0, null, null, null, gn);
     }
 
     /// Delete an edge and mark store dirty
     pub fn deleteEdge(self: *GraphStore, edge_id: u64) void {
+        // Capture graph_name before deletion for WAL notification
+        const gn = if (self.edges.get(edge_id)) |e| e.graph_name else "";
         self.deleteEdgeNoSave(edge_id);
         self.dirty = true;
+        // WAL notification: DeleteEdge
+        notifyMutation(.delete_edge, edge_id, 0, 0, null, null, null, gn);
     }
 
     /// Set a node property without saving (used during rollback)
@@ -3238,6 +3270,98 @@ var last_data_dir: ?[]u8 = null;
 /// CANARY: REQ=REQ-GAP-0259-RWLOCK-001; FEATURE="AsyncPersistence"; ASPECT=RwLockMigration; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-13
 var g_store_rwlock: std.Thread.RwLock = .{};
 
+// CANARY: REQ=REQ-PERF-PLAN-LIFECYCLE-006; FEATURE="PlanCacheLifecycle"; ASPECT=SchemaEpoch; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
+/// Issue #452: Schema epoch counter for plan cache invalidation.
+/// Incremented on DDL operations (CREATE/DROP INDEX, schema changes).
+/// Plan cache entries created at an older epoch are treated as stale.
+var g_schema_epoch: u64 = 0;
+
+/// Get the current schema epoch (for plan cache invalidation checks)
+pub fn getSchemaEpoch() u64 {
+    return g_schema_epoch;
+}
+
+/// Increment the schema epoch (called on DDL: CREATE/DROP INDEX, etc.)
+pub fn bumpSchemaEpoch() void {
+    g_schema_epoch += 1;
+}
+
+// CANARY: REQ=REQ-PERF-WAL-002; FEATURE="WriteAheadLog"; ASPECT=MutationCallback; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
+// Issue #445: Mutation notification callback for WAL integration.
+// Instead of instrumenting every mutation call site, the store's mutation functions
+// call this callback after each successful mutation. The WAL installs a callback
+// to emit WAL records. A guard flag prevents re-emission during WAL replay.
+pub const MutationOp = enum(u8) {
+    create_node = 1,
+    create_edge = 2,
+    set_node_property = 3,
+    remove_node_property = 4,
+    set_edge_property = 5,
+    remove_edge_property = 6,
+    delete_node = 7,
+    delete_edge = 8,
+    add_node_label = 9,
+    remove_node_label = 10,
+};
+
+/// Callback signature for mutation notifications.
+/// Parameters: op, id1 (node/edge), id2 (to_id for edges, 0 otherwise),
+/// label/key (context string), value (for property ops), graph_name
+pub const MutationNotifyFn = *const fn (
+    op: MutationOp,
+    id1: u64,
+    id2: u64,
+    id3: u64,
+    label: ?[]const u8,
+    key: ?[]const u8,
+    value: ?PropertyValue,
+    graph_name: ?[]const u8,
+) void;
+
+var g_mutation_notify: ?MutationNotifyFn = null;
+var g_mutation_notify_inhibit: bool = false;
+
+/// Set the mutation notification callback (used by WAL to capture mutations)
+pub fn setMutationNotify(f: ?MutationNotifyFn) void {
+    g_mutation_notify = f;
+}
+
+/// Inhibit/enable mutation notifications (set during WAL replay to prevent re-emission)
+pub fn setMutationNotifyInhibit(inhibit: bool) void {
+    g_mutation_notify_inhibit = inhibit;
+}
+
+/// Invoke the mutation callback if installed and not inhibited
+inline fn notifyMutation(op: MutationOp, id1: u64, id2: u64, id3: u64, label: ?[]const u8, key: ?[]const u8, value: ?PropertyValue, graph_name: ?[]const u8) void {
+    if (g_mutation_notify) |notify| {
+        if (!g_mutation_notify_inhibit) {
+            notify(op, id1, id2, id3, label, key, value, graph_name);
+        }
+    }
+}
+
+// CANARY: REQ=REQ-PERF-WAL-003; FEATURE="WriteAheadLog"; ASPECT=PersistenceHooks; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
+// Issue #445: WAL persistence hooks — function pointers set by wal.zig to avoid circular imports.
+// The persistence loop calls these instead of always doing a full saveToFile().
+pub const WalSyncFn = *const fn () void;
+pub const WalNeedsCheckpointFn = *const fn () bool;
+pub const WalCheckpointFn = *const fn (*GraphStore) void;
+
+var g_wal_sync_fn: ?WalSyncFn = null;
+var g_wal_needs_checkpoint_fn: ?WalNeedsCheckpointFn = null;
+var g_wal_checkpoint_fn: ?WalCheckpointFn = null;
+
+/// Set WAL persistence hooks (called by wal.zig during initialization)
+pub fn setWalPersistenceHooks(
+    sync_fn: ?WalSyncFn,
+    needs_checkpoint_fn: ?WalNeedsCheckpointFn,
+    checkpoint_fn: ?WalCheckpointFn,
+) void {
+    g_wal_sync_fn = sync_fn;
+    g_wal_needs_checkpoint_fn = needs_checkpoint_fn;
+    g_wal_checkpoint_fn = checkpoint_fn;
+}
+
 /// Condition variable + mutex pair for signalling the persistence thread
 /// instead of sleep-polling.
 var g_persist_cond: std.Thread.Condition = .{};
@@ -3323,6 +3447,12 @@ pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
 /// Uses tryLock to avoid blocking query handlers — if the write lock can't be
 /// acquired (queries are in progress), retries briefly since signalPersistence()
 /// is typically called just before the shared lock is released.
+///
+/// CANARY: REQ=REQ-PERF-WAL-004; FEATURE="WriteAheadLog"; ASPECT=PersistenceLoop; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
+/// Issue #445: When WAL is enabled, the persistence loop syncs the WAL (fsync) on every
+/// wake instead of doing a full saveToFile(). Full checkpoints (saveToFile + WAL truncate)
+/// happen only when the WAL byte threshold or time threshold is exceeded. This reduces
+/// I/O from O(N) per commit to O(delta) per commit with periodic O(N) checkpoints.
 fn persistenceLoop() void {
     while (!g_persist_shutdown.load(.acquire)) {
         // Wait for signal or timeout
@@ -3339,30 +3469,50 @@ fn persistenceLoop() void {
         const store_dirty = if (global_store) |*store| store.dirty else false;
         if (!atomic_dirty and !store_dirty) continue;
 
-        // Try to acquire exclusive write lock. signalPersistence() is called while
-        // the QUIC handler still holds a shared lock, so the first tryLock() often
-        // fails. Retry a few times with brief sleeps to let the handler release it.
-        var locked = false;
-        for (0..10) |_| {
-            if (g_store_rwlock.tryLock()) {
-                locked = true;
-                break;
-            }
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+        // If WAL is enabled, sync WAL first (ensures durability without full save)
+        if (g_wal_sync_fn) |sync_fn| {
+            sync_fn();
         }
-        if (!locked) continue;
-        defer g_store_rwlock.unlock();
 
-        if (global_store) |*store| {
-            if (store.dirty) {
-                store.saveToFile() catch |err| {
-                    log.err("background save failed", &.{
-                        Attr.string("error", @errorName(err)),
-                    });
-                };
-                // Clear atomic dirty after successful save
-                g_atomic_dirty.store(false, .release);
+        // Check if a full checkpoint is needed
+        const needs_checkpoint = if (g_wal_needs_checkpoint_fn) |cp_fn| cp_fn() else true;
+
+        if (needs_checkpoint) {
+            // Try to acquire exclusive write lock. signalPersistence() is called while
+            // the QUIC handler still holds a shared lock, so the first tryLock() often
+            // fails. Retry a few times with brief sleeps to let the handler release it.
+            var locked = false;
+            for (0..10) |_| {
+                if (g_store_rwlock.tryLock()) {
+                    locked = true;
+                    break;
+                }
+                std.Thread.sleep(5 * std.time.ns_per_ms);
             }
+            if (!locked) continue;
+            defer g_store_rwlock.unlock();
+
+            if (global_store) |*store| {
+                if (store.dirty) {
+                    if (g_wal_checkpoint_fn) |checkpoint_fn| {
+                        // WAL mode: checkpoint (saveToFile + truncate WAL)
+                        checkpoint_fn(store);
+                    } else {
+                        // Legacy mode: full save every time
+                        store.saveToFile() catch |err| {
+                            log.err("background save failed", &.{
+                                Attr.string("error", @errorName(err)),
+                            });
+                        };
+                    }
+                    // Clear atomic dirty after successful save/checkpoint
+                    g_atomic_dirty.store(false, .release);
+                }
+            }
+        } else {
+            // WAL sync was sufficient — no checkpoint needed yet.
+            // Clear atomic dirty since WAL has captured all mutations.
+            g_atomic_dirty.store(false, .release);
         }
     }
 }

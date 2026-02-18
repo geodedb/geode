@@ -5,6 +5,10 @@ const server_flags = geode.server_flags;
 const graph_store = geode.graph_store;
 const index_catalog = @import("index_catalog.zig");
 const query_ast_cache = @import("query_ast_cache.zig");
+const query_plan_cache = geode.query_plan_cache;
+// CANARY: REQ=REQ-PERF-WAL-005; FEATURE="WriteAheadLog"; ASPECT=ServerInit; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
+// Issue #445: Import WAL for initialization and recovery at server startup
+const wal = geode.wal;
 // CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager initialization at server startup
 const geode_auth = @import("geode_auth");
@@ -41,6 +45,10 @@ pub const InitContext = struct {
     // GAP-0165: SecurityManager instance for RBAC+ABAC enforcement across all connections
     security_manager: ?*geode_auth.SecurityManager = null,
     security_manager_storage: ?geode_auth.SecurityManager = null,
+    // CANARY: REQ=REQ-PERF-SHARED-OPT-001; FEATURE="SharedQueryOptimizer"; ASPECT=InitContext; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
+    // Issue #460: Shared cross-connection query optimizer for plan reuse
+    shared_optimizer: ?*query_plan_cache.SharedQueryOptimizer = null,
+    shared_optimizer_storage: ?query_plan_cache.SharedQueryOptimizer = null,
 
     /// Re-derive self-referential pointers after the struct has been moved.
     /// MUST be called after `initialize()` returns, because returning the struct
@@ -53,6 +61,10 @@ pub const InitContext = struct {
             null;
         self.security_manager = if (self.security_manager_storage != null)
             &self.security_manager_storage.?
+        else
+            null;
+        self.shared_optimizer = if (self.shared_optimizer_storage != null)
+            &self.shared_optimizer_storage.?
         else
             null;
     }
@@ -68,6 +80,16 @@ pub const InitContext = struct {
         if (self.security_manager_storage) |*sm| {
             sm.deinit();
         }
+        // Issue #460: Clean up shared optimizer on server shutdown
+        if (self.shared_optimizer_storage) |*opt| {
+            opt.deinit();
+            self.shared_optimizer = null;
+            self.shared_optimizer_storage = null;
+        }
+        // Issue #445: Clean up WAL on server shutdown
+        wal.removeMutationCallback();
+        wal.removePersistenceHooks();
+        wal.deinitGlobalWal();
     }
 };
 
@@ -160,9 +182,31 @@ pub fn initialize(
     // Set data directory for GraphStore persistence (canonical configuration for isolation)
     graph_store.setDataDirOverride(allocator, data_dir);
     // Initialize GraphStore so we can surface checksum diagnostics if needed.
-    _ = graph_store.getGlobalStore(allocator);
+    const store = graph_store.getGlobalStore(allocator);
     if (graph_store.lastLoadHadChecksumError()) {
         env_config.storage_checksum_error = true;
+    }
+
+    // Issue #445: Initialize WAL and perform crash recovery (replay WAL after checkpoint)
+    wal.initGlobalWal(allocator, data_dir) catch |err| {
+        log.warn("WAL initialization failed, falling back to legacy persistence", &.{
+            Attr.string("error", @errorName(err)),
+        });
+    };
+    if (wal.getGlobalWal()) |w| {
+        // Replay any WAL records written after the last checkpoint
+        const last_lsn = w.replay(store) catch |err| blk: {
+            log.warn("WAL replay failed", &.{
+                Attr.string("error", @errorName(err)),
+            });
+            break :blk @as(u64, 0);
+        };
+        _ = last_lsn;
+        // Install mutation callback to capture future mutations in WAL
+        wal.installMutationCallback();
+        // Install persistence hooks for WAL-aware checkpoint behavior
+        wal.installPersistenceHooks();
+        log.info("WAL initialized with crash recovery", &.{});
     }
 
     // Initialize shared AST cache (cross-connection) if enabled.
@@ -175,6 +219,16 @@ pub fn initialize(
         break :blk 2048;
     };
 
+    // Issue #460: Initialize shared query optimizer (cross-connection plan cache)
+    const plan_cache_size = blk: {
+        if (std.process.getEnvVarOwned(allocator, "GEODE_PLAN_CACHE_SIZE")) |v| {
+            defer allocator.free(v);
+            const parsed = std.fmt.parseInt(usize, v, 10) catch 0;
+            break :blk parsed;
+        } else |_| {}
+        break :blk 512;
+    };
+
     // CANARY: REQ=REQ-ABAC-WIRE-010; FEATURE="ABAC Enforcement"; ASPECT=ServerStartup; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
     // GAP-0165: Initialize SecurityManager at server startup if ABAC is enabled
     var ctx = InitContext{
@@ -183,12 +237,23 @@ pub fn initialize(
         .shared_ast_cache_storage = null,
         .security_manager = null,
         .security_manager_storage = null,
+        .shared_optimizer = null,
+        .shared_optimizer_storage = null,
     };
 
     if (ast_cache_size > 0) {
         ctx.shared_ast_cache_storage = query_ast_cache.SharedAstCache.init(allocator, ast_cache_size);
         // NOTE: Do NOT set ctx.shared_ast_cache here — the pointer would dangle
         // after this struct is returned by value. Caller must use fixupSelfPointers().
+    }
+
+    // Issue #460: Initialize shared optimizer for cross-connection plan reuse
+    if (plan_cache_size > 0) {
+        ctx.shared_optimizer_storage = query_plan_cache.SharedQueryOptimizer.init(allocator, plan_cache_size);
+        // NOTE: Do NOT set ctx.shared_optimizer here — same dangling pointer issue.
+        log.info("Shared query optimizer initialized", &.{
+            Attr.int("cache_size", @intCast(plan_cache_size)),
+        });
     }
 
     if (env_config.abac_enabled) {

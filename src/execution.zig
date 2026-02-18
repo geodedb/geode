@@ -367,6 +367,9 @@ pub const ExecutionContext = struct {
     // Input parameter bindings provided by client (query-level parameters)
     query_param_names: []const []const u8 = &.{},
     query_param_values: []const value_types.Value = &.{},
+    // CANARY: REQ=REQ-PERF-PLAN-LIFECYCLE-004; FEATURE="PlanCacheLifecycle"; ASPECT=ExecutionHints; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
+    // Issue #452: Optimizer hints from shared plan cache for advisory index/scan selection
+    optimizer_hints: ?*const @import("server/query_plan_cache.zig").OptimizerHints = null,
 };
 
 threadlocal var g_active_context: ?*const ExecutionContext = null;
