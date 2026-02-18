@@ -806,6 +806,16 @@ pub fn build(b: *std.Build) void {
     const cli_transport_parity_step = b.step("test-cli-transport-parity", "Run CLI transport response parity goldens");
     cli_transport_parity_step.dependOn(&run_cli_transport_parity_tests.step);
 
+    // GAP-0481: Security audit — verify no password_hint in structured logger
+    const auth_security_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/security/test_auth_security.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_auth_security_tests = b.addRunArtifact(auth_security_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_ext_builtins_tests.step);
@@ -828,6 +838,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_binary_persist_tests.step);
     test_step.dependOn(&run_match_parity_tests.step);
     test_step.dependOn(&run_cli_transport_parity_tests.step);
+    test_step.dependOn(&run_auth_security_tests.step);
 
     // E2E tests (slower, require more setup - not run in pre-push hooks)
     // Run with: zig build test-e2e

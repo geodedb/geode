@@ -1051,11 +1051,15 @@ pub const SecurityManager = struct {
                 // Production: Generate random 32-byte password (hex encoded to 64 chars)
                 std.crypto.random.bytes(&generated_password_buf);
                 generated_password_hex = std.fmt.bytesToHex(generated_password_buf, .lower);
-                log.warn("Generated random admin password (REQUIRES IMMEDIATE CHANGE)", &.{
-                    Attr.string("password_hint", generated_password_hex[0..32]),
+                // GAP-0481: Do NOT log any portion of the generated password via structured logger.
+                // Write to stderr only so operators see it without it reaching log aggregators.
+                std.debug.print("\n[GEODE SECURITY] Generated random admin password — REQUIRES IMMEDIATE CHANGE\n" ++
+                    "[GEODE SECURITY] Set GEODE_DEFAULT_PASSWORD env var before starting in production.\n" ++
+                    "[GEODE SECURITY] Password: {s}\n\n", .{generated_password_hex});
+                log.warn("Generated random admin password — set GEODE_DEFAULT_PASSWORD env var (see stderr)", &.{
                     Attr.string("action", "Set GEODE_DEFAULT_PASSWORD env var to use a custom password"),
                 });
-                break :blk generated_password_hex[0..32];
+                break :blk generated_password_hex[0..64];
             }
             // Debug builds: Use "geodesic" for testing convenience
             break :blk "geodesic";
