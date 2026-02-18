@@ -1007,6 +1007,21 @@ build-release:
       echo "=== Release build complete ==="
       ls -la dist/
 
+      # Upload darwin universal archive to Package Registry immediately so the
+      # Homebrew formula URL is valid as soon as the formula is pushed to GitHub.
+      # The full publish-packages job will upload everything else later.
+      VERSION="${CI_COMMIT_TAG#v}"
+      DARWIN_ARCHIVE="dist/geode_${VERSION}_darwin_universal.tar.gz"
+      if [ -f "${DARWIN_ARCHIVE}" ]; then
+        echo "Uploading darwin universal archive to Package Registry..."
+        PACKAGE_API="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages"
+        curl --fail-with-body --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "${DARWIN_ARCHIVE}" \
+          "${PACKAGE_API}/generic/geode/${VERSION}/$(basename ${DARWIN_ARCHIVE})" && \
+          echo "  ✓ Uploaded $(basename ${DARWIN_ARCHIVE})" || \
+          echo "  ⚠ Package Registry upload failed (will retry in publish-packages)"
+      fi
+
       # Generate release-cli asset links from the manifest and persist with artifacts.
       VERSION="${CI_COMMIT_TAG#v}"
       python3 tools/release_target_manifest.py render-release-cli-assets \
@@ -1088,10 +1103,14 @@ publish-release:
       sudo rpm -i geode.rpm
       \`\`\`
 
-      **macOS**
+      **macOS (Homebrew)**
       \`\`\`bash
-      # Download Universal binary (Intel + Apple Silicon)
-      curl -LO ${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/geode_${VERSION}_darwin_universal.tar.gz?job=build-release
+      brew install geodedb/geode/geode
+      \`\`\`
+
+      **macOS (Manual)**
+      \`\`\`bash
+      curl -LO "https://gitlab.com/api/v4/projects/devnw%2Fcodepros%2Fgeode%2Fgeode/packages/generic/geode/${VERSION}/geode_${VERSION}_darwin_universal.tar.gz"
       tar xzf geode_${VERSION}_darwin_universal.tar.gz
       sudo mv geode /usr/local/bin/
       \`\`\`

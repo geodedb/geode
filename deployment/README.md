@@ -205,9 +205,8 @@ sudo rc-update add geode
 ### Homebrew (macOS/Linux)
 
 ```bash
-# Add tap and install
-brew tap codeprosorg/tap
-brew install geode
+# Install from tap
+brew install geodedb/geode/geode
 
 # Start service (macOS)
 brew services start geode

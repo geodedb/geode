@@ -609,8 +609,7 @@ release:
 
     **macOS (Homebrew)**
     ```bash
-    brew tap geodedb/geode
-    brew install geodedb  # Named 'geodedb' to avoid collision with Apache Geode
+    brew install geodedb/geode/geode
     ```
 
     **Binary Download**
@@ -627,32 +626,33 @@ release:
 # Publishes to geodedb/homebrew-geode on GitHub.
 # Requires HOMEBREW_TAP_TOKEN (GitHub PAT) with write access to the repo.
 # Note: Uses the macOS universal binary created by universal_binaries section.
+# Install: brew install geodedb/geode/geode
 
 brews:
-  # Named 'geodedb' to avoid collision with Apache Geode in homebrew/core
-- name: geodedb
+- name: geode
   ids:
   - geode-universal-archive
   repository:
     owner: geodedb
     name: homebrew-geode
     token: '{{ .Env.HOMEBREW_TAP_TOKEN }}'
-  # URL points to GitLab job artifacts (job artifacts are publicly accessible)
-  url_template: https://gitlab.com/devnw/codepros/geode/geode/-/jobs/artifacts/{{ .Tag }}/raw/dist/{{ .ArtifactName }}?job=build-release
-  download_strategy: CurlDownloadStrategy
+  # URL points to GitLab Generic Package Registry (permanent, does not expire)
+  url_template: https://gitlab.com/api/v4/projects/devnw%2Fcodepros%2Fgeode%2Fgeode/packages/generic/geode/{{ .Version }}/{{ .ArtifactName }}
   commit_author:
     name: geode-bot
     email: geode-bot@codepros.dev
   commit_msg_template: Brew formula update for {{ .ProjectName }} version {{ .Tag }}
   directory: Formula
-  homepage: https://gitlab.com/devnw/codepros/geode/geode
+  homepage: https://geodedb.com
   description: ISO/IEC 39075:2024 GQL-compliant property-graph database
   license: Apache-2.0
   skip_upload: auto
+  dependencies:
+  - name: openssl@3
   caveats: |
-    Geode has been installed!
+    Geode Graph Database has been installed!
 
-    Note: This is 'geodedb' (GQL graph database), not Apache Geode.
+    Note: This is Geode Graph Database (geodedb.com), not Apache Geode.
 
     To start the server:
       geode serve --listen 0.0.0.0:3141
@@ -660,11 +660,27 @@ brews:
     To use the interactive shell:
       geode shell
 
-    Documentation: https://gitlab.com/devnw/codepros/geode/geode/-/tree/main/docs
+    To run as a service:
+      brew services start geode
+
+    Data: #{var}/lib/geode
+    Logs: #{var}/log/geode
+
+    Documentation: https://geodedb.com/docs
   test: |
     system "#{bin}/geode", "--version"
   install: |
     bin.install "geode"
+    (var/"lib/geode").mkpath
+    (var/"log/geode").mkpath
+    (etc/"geode").mkpath
+    (etc/"geode/certs").mkpath
+  service: |
+    run [opt_bin/"geode", "serve", "--listen", "0.0.0.0:3141", "--data-dir", var/"lib/geode"]
+    keep_alive true
+    working_dir var/"lib/geode"
+    log_path var/"log/geode/geode.log"
+    error_log_path var/"log/geode/geode.error.log"
 
 # =============================================================================
 # Universal Binaries (macOS)
