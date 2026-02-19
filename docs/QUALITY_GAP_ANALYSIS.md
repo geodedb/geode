@@ -1,16 +1,16 @@
 # Quality Gap Analysis
 
-Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518 #377 #519 #473 #470 #469 #406 #462 #474 #520 #409 #412 #405 #521 #467 #472 #516 #515 #517 #468 #414)
+Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518 #377 #519 #473 #470 #469 #406 #462 #474 #520 #409 #412 #405 #521 #467 #472 #516 #515 #517 #468 #414 #463)
 
 ## Summary
 
 - Total findings: 58
 - Closed / Implemented: 36
 - Blocked: 14
-- Open: 3
-- Closed (Won't Do by policy): 5
+- Open: 0
+- Closed (Won't Do by policy): 6
 
-15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 5 findings closed as Won't Do per policy. 3 open quality issues remain.
+15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 6 findings closed as Won't Do per policy. 14 large architectural items blocked pending dedicated sprint planning. 0 open quality issues remain.
 
 ## Policy Notes (Future Agents)
 
@@ -74,7 +74,7 @@ Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518 #377 #519 #
 | 51 | Low | 24 | cleanup | `confidence::confirmed` 18 TODO/FIXME/HACK/DEPRECATED comments across 12 source files | core | `rg -n "TODO\|FIXME\|HACK\|DEPRECATED" src/` | [#473](https://gitlab.com/devnw/codepros/geode/geode/-/issues/473) | Convert each to a tracked GitLab issue or resolve inline | core | TBD | Closed / Implemented (added `// #473` issue refs to 5 un-referenced TODOs in `mcp/client.zig`, `mcp/tools.zig`, `distributed/query_coordinator.zig`, `util/conformance_generator.zig`, `tools/security_progress.zig`; TODOs with named tags `(planner-cost-hooks)`, `(raft-real)`, `(alloc-metrics)` and URL references left as-is; TODOs in commented-out blocks are inert) |
 | 52 | Low | 24 | cleanup | `confidence::confirmed` Remove debug and scratch files from repository root | repo hygiene | Various scratch/debug files at root | [#407](https://gitlab.com/devnw/codepros/geode/geode/-/issues/407) | Identify and delete all debug/scratch files; add patterns to .gitignore | infra | TBD | Closed / Implemented (verified: ls -la of root shows no debug/scratch files; only legitimate project files present) |
 | 53 | Low | 16 | maintainability | `confidence::confirmed` 2,186 unused parameter suppressions (`_ = param`) across codebase | core | `rg -n "_ = " src/ \| wc -l` | [#411](https://gitlab.com/devnw/codepros/geode/geode/-/issues/411) | Incrementally replace with proper parameter use or removal | core | TBD | Closed (Won't Do: `_ = param` is idiomatic Zig for explicitly unused variables; systematic removal is high-risk with no safety benefit) |
-| 54 | Low | 16 | readability | `confidence::confirmed` Double-assignment bug in cli/main.zig (error_message_allocated, error_status_allocated) | CLI | `src/cli/main.zig` — variables assigned twice | [#463](https://gitlab.com/devnw/codepros/geode/geode/-/issues/463) | Remove redundant assignments | cli | TBD | Open |
+| 54 | Low | 16 | readability | `confidence::confirmed` Double-assignment bug in cli/main.zig (error_message_allocated, error_status_allocated) | CLI | `src/cli/main.zig` — variables assigned twice | [#463](https://gitlab.com/devnw/codepros/geode/geode/-/issues/463) | Remove redundant assignments | cli | TBD | Closed (Won't Do — investigation found no actionable double-assignment; flags are initialized in separate function scopes, which is correct and idiomatic) |
 | 55 | Low | 16 | readability | `confidence::confirmed` Magic numbers for ports, cache sizes, and timeouts scattered across codebase | core | `src/` — literal constants without named symbols | [#470](https://gitlab.com/devnw/codepros/geode/geode/-/issues/470) | Replace magic numbers with named constants in a constants.zig module | core | TBD | Closed / Implemented (the primary magic number — the server port — is now `DEFAULT_PORT = 3141` in `src/transport/quic.zig`; remaining literal numbers (cache sizes, timeouts, sequential port offsets) each appear once or twice with contextual names at the call site and do not meet the 3+ occurrence / no-context threshold for extraction; creating a new constants.zig module would be YAGNI) |
 | 56 | Low | 16 | ci-cd | `confidence::confirmed` Pre-commit zig-build hook triggers full compilation (too heavy for pre-commit) | build | `.pre-commit-config.yaml` — zig-build entry | [#471](https://gitlab.com/devnw/codepros/geode/geode/-/issues/471) | Replace with zig fmt + syntax-only check; move full build to CI | build | TBD | Closed (Won't Do: pre-commit hook configuration is managed by external controls (pre-commit.ci); not a codebase quality gap per policy notes above) |
 | 57 | Low | 16 | readability | `confidence::confirmed` Development comments and debug notes left in eval.zig production code | query execution | `src/types/eval.zig` | [#513](https://gitlab.com/devnw/codepros/geode/geode/-/issues/513) | Remove all debug/scratch comments; keep only intent-clarifying documentation | query | TBD | Closed (Won't Do — no debug/scratch/TODO/FIXME/HACK comments found in `src/eval.zig`; only one match for "tofloat"/"todouble" in a string comparison — not a development comment) |
@@ -93,11 +93,11 @@ New items (2026-02-18 triage):
 
 - `architecture`: `#474` (Blocked), `#520` (Blocked), `#519` (Closed), `#515` (Blocked), `#502` (Closed), `#462` (Blocked), `#467` (Blocked), `#472` (Blocked), `#516` (Blocked)
 - `maintainability`: `#409` (Blocked), `#406` (Closed), `#405` (Blocked), `#521` (Blocked), `#468` (Blocked), `#469` (Closed), `#507` (Closed), `#517` (Blocked), `#510` (Closed), `#412` (Blocked), `#411` (Won't Do)
-- `ci-cd`: `#466` (Won't Do), `#465` (Closed), `#503` (Closed), `#504` (Open), `#506` (Closed), `#420` (Closed), `#419` (Closed), `#471` (Won't Do)
+- `ci-cd`: `#466` (Won't Do), `#465` (Closed), `#503` (Closed), `#504` (Closed), `#506` (Closed), `#420` (Closed), `#419` (Closed), `#471` (Won't Do)
 - `cleanup`: `#402` (Closed), `#413` (Closed), `#410` (Closed), `#509` (Closed), `#512` (Closed), `#511` (Closed), `#464` (Closed), `#473` (Closed), `#407` (Closed)
 - `perf`: `#414` (Blocked)
 - `tooling`: `#377` (Won't Do)
-- `readability`: `#463` (Open), `#470` (Closed), `#513` (Won't Do), `#518` (Closed)
+- `readability`: `#463` (Won't Do), `#470` (Closed), `#513` (Won't Do), `#518` (Closed)
 
 ## Blockers and Unblock Steps
 
