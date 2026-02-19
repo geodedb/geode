@@ -1,16 +1,16 @@
 # Quality Gap Analysis
 
-Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518)
+Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518 #377)
 
 ## Summary
 
 - Total findings: 58
 - Closed / Implemented: 31
 - Blocked: 0
-- Open: 23
-- Closed (Won't Do by policy): 4
+- Open: 22
+- Closed (Won't Do by policy): 5
 
-15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 4 findings closed as Won't Do per policy. 23 open quality issues remain.
+15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 5 findings closed as Won't Do per policy. 22 open quality issues remain.
 
 ## Policy Notes (Future Agents)
 
@@ -66,7 +66,7 @@ Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518)
 | 43 | Medium | 36 | cleanup | `confidence::confirmed` 23 test files still in src/ directory (was 7, grew to 23) | testing | `src/test_*.zig` — test files scattered in source tree | [#413](https://gitlab.com/devnw/codepros/geode/geode/-/issues/413) | Move to tests/; update build.zig accordingly | testing | TBD | Open |
 | 44 | Medium | 36 | perf | `confidence::suspected` 30 blocking sleep calls in production code paths | core | `rg -n "std.time.sleep" src/ --glob "!src/test*"` | [#414](https://gitlab.com/devnw/codepros/geode/geode/-/issues/414) | Replace blocking sleeps with event-driven or async waits; audit each call site | core | TBD | Open |
 | 45 | Medium | 36 | cleanup | `confidence::confirmed` Untracked security files need to be added to version control | security | `git status src/security/` — some files untracked | [#410](https://gitlab.com/devnw/codepros/geode/geode/-/issues/410) | Audit and add untracked security source files to git tracking | security | TBD | Closed / Implemented (verified: `git status --short src/security/` returns empty — all security files are tracked) |
-| 46 | Medium | 36 | tooling | `confidence::confirmed` CANARY IMPL markers not updated to TESTED despite passing tests existing (GAP-0243) | governance | CANARY status.csv — multiple IMPL markers with corresponding tests | [#377](https://gitlab.com/devnw/codepros/geode/geode/-/issues/377) | Run canary scan; promote IMPL markers to TESTED where test evidence exists | tooling | TBD | Open |
+| 46 | Medium | 36 | tooling | `confidence::confirmed` CANARY IMPL markers not updated to TESTED despite passing tests existing (GAP-0243) | governance | CANARY status.csv — multiple IMPL markers with corresponding tests | [#377](https://gitlab.com/devnw/codepros/geode/geode/-/issues/377) | Run canary scan; promote IMPL markers to TESTED where test evidence exists | tooling | TBD | Closed (Won't Do — 167 IMPL markers scanned; 3 had populated TEST= fields but none are wired into `zig build test`: `test_variable_paths.zig` exists but not in `all_tests.zig`/`build.zig`; `api_key_auth.yml` and `gap_0258_mtls_cli.yml` do not exist; no valid promotions warranted without confirmed passing tests) |
 | 47 | Low | 24 | cleanup | `confidence::confirmed` 15+ tracked stale/cruft files at repository root | repo hygiene | `ls -la` root — scratch files, one-off scripts | [#509](https://gitlab.com/devnw/codepros/geode/geode/-/issues/509) | Audit root-level files; delete or move to appropriate dirs | infra | TBD | Closed / Implemented (verified: root contains no .txt/.log/.tmp scratch files; audit_*.jsonl files are empty runtime artifacts covered by .gitignore) |
 | 48 | Low | 24 | cleanup | `confidence::confirmed` 14 completed one-shot migration scripts in tools/ (~108KB) | repo hygiene | `tools/` directory — completed migration scripts | [#512](https://gitlab.com/devnw/codepros/geode/geode/-/issues/512) | Archive or delete completed one-shot scripts; document in CHANGELOG | infra | TBD | Closed / Implemented (deleted 14 one-shot CANARY migration scripts from tools/; none referenced in CI/Makefile) |
 | 49 | Low | 24 | cleanup | `confidence::confirmed` Gitignore gaps: stress_data_integration/ and audit.jsonl not covered | repo hygiene | `.gitignore` — missing entries | [#511](https://gitlab.com/devnw/codepros/geode/geode/-/issues/511) | Add stress_data_integration/ and audit.jsonl to .gitignore | infra | TBD | Closed / Implemented (verified: grep confirms both "audit.jsonl" and "stress_data_integration/" are present in .gitignore) |
@@ -96,7 +96,7 @@ New items (2026-02-18 triage):
 - `ci-cd`: `#466` (Won't Do), `#465` (Closed), `#503` (Closed), `#504` (Open), `#506` (Closed), `#420` (Closed), `#419` (Closed), `#471` (Won't Do)
 - `cleanup`: `#402` (Open), `#413` (Open), `#410` (Closed), `#509` (Closed), `#512` (Closed), `#511` (Closed), `#464` (Closed), `#473` (Open), `#407` (Closed)
 - `perf`: `#414` (Open)
-- `tooling`: `#377` (Open)
+- `tooling`: `#377` (Won't Do)
 - `readability`: `#463` (Open), `#470` (Open), `#513` (Won't Do), `#518` (Closed)
 
 ## Blockers and Unblock Steps
