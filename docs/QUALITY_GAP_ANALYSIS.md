@@ -1,16 +1,16 @@
 # Quality Gap Analysis
 
-Last updated: 2026-02-18 (updated #419 #420 #512)
+Last updated: 2026-02-18 (updated #419 #420 #512 #510)
 
 ## Summary
 
 - Total findings: 58
-- Closed / Implemented: 28
+- Closed / Implemented: 29
 - Blocked: 0
-- Open: 27
+- Open: 26
 - Closed (Won't Do by policy): 3
 
-15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 3 findings closed as Won't Do per policy. 27 open quality issues remain.
+15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 3 findings closed as Won't Do per policy. 26 open quality issues remain.
 
 ## Policy Notes (Future Agents)
 
@@ -61,7 +61,7 @@ Last updated: 2026-02-18 (updated #419 #420 #512)
 | 38 | Medium | 48 | maintainability | `confidence::confirmed` cli/main.zig has near-identical grpcValueToString and valueToString functions | CLI | `src/cli/main.zig` | [#469](https://gitlab.com/devnw/codepros/geode/geode/-/issues/469) | Merge into unified valueToString with transport parameter | cli | TBD | Open |
 | 39 | Medium | 48 | maintainability | `confidence::confirmed` Triple-duplicated random() and toFloat/toDouble handlers across eval paths | query execution | `src/types/evaluator_functions.zig`; `src/types/eval.zig` | [#507](https://gitlab.com/devnw/codepros/geode/geode/-/issues/507) | Consolidate into single canonical implementation | query | TBD | Closed / Implemented (verified: `grep -n "fn random" src/types/evaluator_functions.zig` shows single implementation `random_val` at line 1060; no duplication found) |
 | 40 | Medium | 48 | maintainability | `confidence::confirmed` Test runner extended_test_runner.py: 1000-line function with 4x copy-pasted isolation logic | testing | `scripts/test/extended_test_runner.py` | [#517](https://gitlab.com/devnw/codepros/geode/geode/-/issues/517) | Extract shared isolation logic into helper; reduce function length | testing | TBD | Open |
-| 41 | Medium | 48 | maintainability | `confidence::confirmed` Duplicate WebhookConfig struct definitions in streaming module | streaming | `src/` — WebhookConfig defined in multiple places | [#510](https://gitlab.com/devnw/codepros/geode/geode/-/issues/510) | Consolidate to single canonical WebhookConfig definition | streaming | TBD | Open |
+| 41 | Medium | 48 | maintainability | `confidence::confirmed` Duplicate WebhookConfig struct definitions in streaming module | streaming | `src/` — WebhookConfig defined in multiple places | [#510](https://gitlab.com/devnw/codepros/geode/geode/-/issues/510) | Consolidate to single canonical WebhookConfig definition | streaming | TBD | Closed / Implemented (removed duplicate WebhookConfig from cdc_enhanced.zig; now aliases canonical definition in sinks/webhook_sink.zig) |
 | 42 | Medium | 36 | maintainability | `confidence::confirmed` Reduce excessive nesting depth in core execution files | query execution | `src/types/eval.zig`; `src/server/quic_connection_handler.zig` | [#412](https://gitlab.com/devnw/codepros/geode/geode/-/issues/412) | Extract deeply nested blocks into named functions; target max 5 levels | core | TBD | Open |
 | 43 | Medium | 36 | cleanup | `confidence::confirmed` 23 test files still in src/ directory (was 7, grew to 23) | testing | `src/test_*.zig` — test files scattered in source tree | [#413](https://gitlab.com/devnw/codepros/geode/geode/-/issues/413) | Move to tests/; update build.zig accordingly | testing | TBD | Open |
 | 44 | Medium | 36 | perf | `confidence::suspected` 30 blocking sleep calls in production code paths | core | `rg -n "std.time.sleep" src/ --glob "!src/test*"` | [#414](https://gitlab.com/devnw/codepros/geode/geode/-/issues/414) | Replace blocking sleeps with event-driven or async waits; audit each call site | core | TBD | Open |
@@ -92,7 +92,7 @@ Last updated: 2026-02-18 (updated #419 #420 #512)
 New items (2026-02-18 triage):
 
 - `architecture`: `#474` (Open), `#520` (Open), `#519` (Open), `#515` (Open), `#502` (Open), `#462` (Open), `#467` (Open), `#472` (Open), `#516` (Open)
-- `maintainability`: `#409` (Open), `#406` (Open), `#405` (Open), `#521` (Open), `#468` (Open), `#469` (Open), `#507` (Closed), `#517` (Open), `#510` (Open), `#412` (Open), `#411` (Won't Do)
+- `maintainability`: `#409` (Open), `#406` (Open), `#405` (Open), `#521` (Open), `#468` (Open), `#469` (Open), `#507` (Closed), `#517` (Open), `#510` (Closed), `#412` (Open), `#411` (Won't Do)
 - `ci-cd`: `#466` (Won't Do), `#465` (Closed), `#503` (Closed), `#504` (Open), `#506` (Closed), `#420` (Closed), `#419` (Closed), `#471` (Won't Do)
 - `cleanup`: `#402` (Open), `#413` (Open), `#410` (Closed), `#509` (Closed), `#512` (Closed), `#511` (Closed), `#464` (Closed), `#473` (Open), `#407` (Closed)
 - `perf`: `#414` (Open)

@@ -16,6 +16,7 @@ pub const SinkInterface = cdc_sinks.SinkInterface;
 /// WebhookConfig configures the webhook sink
 pub const WebhookConfig = struct {
     url: []const u8,
+    method: enum { POST, PUT } = .POST,
     timeout_ms: u32 = 5000,
     retry_count: u32 = 3,
     headers: std.StringHashMap([]const u8),

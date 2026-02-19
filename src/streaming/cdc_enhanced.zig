@@ -2,7 +2,8 @@ const std = @import("std");
 const cdc_sinks = @import("cdc_sinks.zig");
 const MemorySink = cdc_sinks.MemorySink;
 const FileSink = cdc_sinks.FileSink;
-const WebhookSink = @import("sinks/webhook_sink.zig").WebhookSink;
+const webhook_sink = @import("sinks/webhook_sink.zig");
+const WebhookSink = webhook_sink.WebhookSink;
 const KafkaSink = @import("sinks/kafka_sink.zig").KafkaSink;
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Streaming; STATUS=EXEMPT; OWNER=streaming; UPDATED=2026-01-24
@@ -137,13 +138,7 @@ pub const KinesisConfig = struct {
     endpoint: ?[]const u8 = null,
 };
 
-pub const WebhookConfig = struct {
-    url: []const u8,
-    method: enum { POST, PUT } = .POST,
-    headers: std.StringHashMap([]const u8),
-    retry_count: u32 = 3,
-    timeout_ms: u32 = 5000,
-};
+pub const WebhookConfig = webhook_sink.WebhookConfig;
 
 pub const WindowType = enum {
     tumbling,
