@@ -1,16 +1,16 @@
 # Quality Gap Analysis
 
-Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518 #377 #519 #473 #470)
+Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518 #377 #519 #473 #470 #469)
 
 ## Summary
 
 - Total findings: 58
-- Closed / Implemented: 34
+- Closed / Implemented: 35
 - Blocked: 0
-- Open: 19
+- Open: 18
 - Closed (Won't Do by policy): 5
 
-15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 5 findings closed as Won't Do per policy. 19 open quality issues remain.
+15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 5 findings closed as Won't Do per policy. 18 open quality issues remain.
 
 ## Policy Notes (Future Agents)
 
@@ -58,7 +58,7 @@ Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518 #377 #519 #
 | 35 | Medium | 48 | architecture | `confidence::confirmed` Execution module has 95 transitive imports creating circular coupling | query execution | `src/types/eval.zig` import graph | [#472](https://gitlab.com/devnw/codepros/geode/geode/-/issues/472) | Map import graph; introduce interface boundaries to break cycles | core | TBD | Open |
 | 36 | Medium | 48 | architecture | `confidence::confirmed` Layer violation: src/gql/match.zig imports execution/storage layers | parser | `src/gql/match.zig` — imports from `src/types/eval.zig` and storage | [#516](https://gitlab.com/devnw/codepros/geode/geode/-/issues/516) | Move execution logic out of parser layer; parser should emit AST only | parser | TBD | Open |
 | 37 | Medium | 48 | maintainability | `confidence::confirmed` build.zig has 330+ addImport calls — module imports not consolidated | build | `build.zig` (~330 addImport) | [#468](https://gitlab.com/devnw/codepros/geode/geode/-/issues/468) | Introduce module groups; reduce redundant addImport chains | build | TBD | Open |
-| 38 | Medium | 48 | maintainability | `confidence::confirmed` cli/main.zig has near-identical grpcValueToString and valueToString functions | CLI | `src/cli/main.zig` | [#469](https://gitlab.com/devnw/codepros/geode/geode/-/issues/469) | Merge into unified valueToString with transport parameter | cli | TBD | Open |
+| 38 | Medium | 48 | maintainability | `confidence::confirmed` cli/main.zig has near-identical grpcValueToString and valueToString functions | CLI | `src/cli/main.zig` | [#469](https://gitlab.com/devnw/codepros/geode/geode/-/issues/469) | Merged: valueToString (inside RowAppender) now delegates to grpcValueToString — single shared implementation at `src/cli/main.zig:2072` | cli | TBD | Closed / Implemented |
 | 39 | Medium | 48 | maintainability | `confidence::confirmed` Triple-duplicated random() and toFloat/toDouble handlers across eval paths | query execution | `src/types/evaluator_functions.zig`; `src/types/eval.zig` | [#507](https://gitlab.com/devnw/codepros/geode/geode/-/issues/507) | Consolidate into single canonical implementation | query | TBD | Closed / Implemented (verified: `grep -n "fn random" src/types/evaluator_functions.zig` shows single implementation `random_val` at line 1060; no duplication found) |
 | 40 | Medium | 48 | maintainability | `confidence::confirmed` Test runner extended_test_runner.py: 1000-line function with 4x copy-pasted isolation logic | testing | `scripts/test/extended_test_runner.py` | [#517](https://gitlab.com/devnw/codepros/geode/geode/-/issues/517) | Extract shared isolation logic into helper; reduce function length | testing | TBD | Open |
 | 41 | Medium | 48 | maintainability | `confidence::confirmed` Duplicate WebhookConfig struct definitions in streaming module | streaming | `src/` — WebhookConfig defined in multiple places | [#510](https://gitlab.com/devnw/codepros/geode/geode/-/issues/510) | Consolidate to single canonical WebhookConfig definition | streaming | TBD | Closed / Implemented (removed duplicate WebhookConfig from cdc_enhanced.zig; now aliases canonical definition in sinks/webhook_sink.zig) |
@@ -92,7 +92,7 @@ Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518 #377 #519 #
 New items (2026-02-18 triage):
 
 - `architecture`: `#474` (Open), `#520` (Open), `#519` (Closed), `#515` (Open), `#502` (Closed), `#462` (Open), `#467` (Open), `#472` (Open), `#516` (Open)
-- `maintainability`: `#409` (Open), `#406` (Open), `#405` (Open), `#521` (Open), `#468` (Open), `#469` (Open), `#507` (Closed), `#517` (Open), `#510` (Closed), `#412` (Open), `#411` (Won't Do)
+- `maintainability`: `#409` (Open), `#406` (Open), `#405` (Open), `#521` (Open), `#468` (Open), `#469` (Closed), `#507` (Closed), `#517` (Open), `#510` (Closed), `#412` (Open), `#411` (Won't Do)
 - `ci-cd`: `#466` (Won't Do), `#465` (Closed), `#503` (Closed), `#504` (Open), `#506` (Closed), `#420` (Closed), `#419` (Closed), `#471` (Won't Do)
 - `cleanup`: `#402` (Open), `#413` (Open), `#410` (Closed), `#509` (Closed), `#512` (Closed), `#511` (Closed), `#464` (Closed), `#473` (Closed), `#407` (Closed)
 - `perf`: `#414` (Open)
