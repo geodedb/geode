@@ -1,16 +1,16 @@
 # Quality Gap Analysis
 
-Last updated: 2026-02-18
+Last updated: 2026-02-18 (updated #504)
 
 ## Summary
 
 - Total findings: 58
-- Closed / Implemented: 24
+- Closed / Implemented: 25
 - Blocked: 0
-- Open: 32
+- Open: 31
 - Closed (Won't Do by policy): 2
 
-15 quality gaps from the initial audit have been resolved. 8 additional findings verified as already resolved. 2 findings closed as Won't Do per policy. 32 open quality issues remain.
+15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 2 findings closed as Won't Do per policy. 31 open quality issues remain.
 
 ## Policy Notes (Future Agents)
 
@@ -50,7 +50,7 @@ Last updated: 2026-02-18
 | 27 | High | 64 | ci-cd | `confidence::confirmed` Missing CI cache for Zig build artifacts (10-25 minute potential savings) | CI | `.gitlab-ci.yml` — no cache: key for zig-cache or zig-out | [#465](https://gitlab.com/devnw/codepros/geode/geode/-/issues/465) | Add GitLab CI cache for .zig-cache and zig-out/lib | ci | TBD | Closed / Implemented (verified: .gitlab-ci.yml lines 43-54 show full zig-cache cache: block with key "zig-cache-${CI_COMMIT_REF_SLUG}" and ZIG_GLOBAL_CACHE_DIR/ZIG_LOCAL_CACHE_DIR variables) |
 | 28 | High | 64 | cleanup | `confidence::confirmed` Relocate 21 test files from src/ to tests/ directory | testing | `src/test_*.zig`; `src/*/test_*.zig` | [#402](https://gitlab.com/devnw/codepros/geode/geode/-/issues/402) | Move all test_*.zig files from src/ hierarchy to tests/; update build.zig imports | testing | TBD | Open |
 | 29 | Medium | 48 | ci-cd | `confidence::confirmed` Zig version mismatch: CI uses 0.15.2, most Dockerfiles use 0.15.1 | CI/containers | `.gitlab-ci.yml`; `Dockerfile*` | [#503](https://gitlab.com/devnw/codepros/geode/geode/-/issues/503) | Align all references to single ZIG_VERSION variable; update CI and Dockerfiles together | ci | TBD | Closed / Implemented (0.15.2 aligned across Dockerfile.dev .prod .reliable .simple docker-compose.yml; Dockerfile.gpu excepted — hardcoded tarball path) |
-| 30 | Medium | 48 | ci-cd | `confidence::confirmed` zig-format CI job is non-blocking (allow_failure: true) | CI | `.gitlab-ci.yml` zig-format job | [#504](https://gitlab.com/devnw/codepros/geode/geode/-/issues/504) | Remove allow_failure; make zig fmt a blocking merge gate | ci | TBD | Open |
+| 30 | Medium | 48 | ci-cd | `confidence::confirmed` zig-format CI job is non-blocking (allow_failure: true) | CI | `.gitlab-ci.yml` zig-format job | [#504](https://gitlab.com/devnw/codepros/geode/geode/-/issues/504) | Remove allow_failure; make zig fmt a blocking merge gate | ci | TBD | Closed / Implemented (verified: zig-format CI catalog component at `.gitlab-ci.yml` explicitly sets `allow_failure: false`; job is blocking by default) |
 | 31 | Medium | 48 | ci-cd | `confidence::confirmed` Makefile: ghost governance-check target and missing .PHONY declarations | build | `Makefile` | [#506](https://gitlab.com/devnw/codepros/geode/geode/-/issues/506) | Remove ghost target; add comprehensive .PHONY declarations | build | TBD | Closed / Implemented (verified: governance-check is declared in .PHONY on line 33 and has a real implementation at line 386 of Makefile) |
 | 32 | Medium | 48 | ci-cd | `confidence::confirmed` CICD needs to trigger test harness and client tests | CI | `.gitlab-ci.yml` — no client/harness test stage | [#420](https://gitlab.com/devnw/codepros/geode/geode/-/issues/420) | Add CI stage to invoke geode-test-harness and language client test suites | ci | TBD | Open |
 | 33 | Medium | 48 | ci-cd | `confidence::confirmed` CI variable defaults should match connection defaults | CI/runtime | `.gitlab-ci.yml` variable defaults vs CLI defaults | [#419](https://gitlab.com/devnw/codepros/geode/geode/-/issues/419) | Audit and align CI variable defaults with CLI connection defaults | ci | TBD | Open |
