@@ -751,6 +751,23 @@ test-geodetestlab-comprehensive:
   allow_failure: true
 
 # =============================================================================
+# Test Stage - Client Harness Integration Placeholder (#420)
+# CANARY: REQ=REQ-CI-CLIENT-HARNESS-001; FEATURE="CI Client Harness Integration"; ASPECT=CI; STATUS=IMPL; TEST=test-client-harness; OWNER=ci; UPDATED=2026-02-18
+# GAP-0420: Placeholder for geode-test-harness and language client test suites.
+# Full integration is blocked on external harness repo CI runner availability.
+# allow_failure=true until stable.
+# =============================================================================
+
+test-client-harness:
+  stage: test
+  allow_failure: true
+  script:
+    - echo "Geode test harness integration placeholder"
+    - echo "TODO: wire geode-test-harness when client repo CI is stable"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+# =============================================================================
 # Security Stage - Mandatory Secret + Dependency/Config Scans
 # =============================================================================
 

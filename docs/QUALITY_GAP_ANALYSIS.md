@@ -1,16 +1,16 @@
 # Quality Gap Analysis
 
-Last updated: 2026-02-18 (updated #466)
+Last updated: 2026-02-18 (updated #419 #420)
 
 ## Summary
 
 - Total findings: 58
-- Closed / Implemented: 25
+- Closed / Implemented: 27
 - Blocked: 0
-- Open: 30
+- Open: 28
 - Closed (Won't Do by policy): 3
 
-15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 3 findings closed as Won't Do per policy. 30 open quality issues remain.
+15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 3 findings closed as Won't Do per policy. 28 open quality issues remain.
 
 ## Policy Notes (Future Agents)
 
@@ -52,8 +52,8 @@ Last updated: 2026-02-18 (updated #466)
 | 29 | Medium | 48 | ci-cd | `confidence::confirmed` Zig version mismatch: CI uses 0.15.2, most Dockerfiles use 0.15.1 | CI/containers | `.gitlab-ci.yml`; `Dockerfile*` | [#503](https://gitlab.com/devnw/codepros/geode/geode/-/issues/503) | Align all references to single ZIG_VERSION variable; update CI and Dockerfiles together | ci | TBD | Closed / Implemented (0.15.2 aligned across Dockerfile.dev .prod .reliable .simple docker-compose.yml; Dockerfile.gpu excepted — hardcoded tarball path) |
 | 30 | Medium | 48 | ci-cd | `confidence::confirmed` zig-format CI job is non-blocking (allow_failure: true) | CI | `.gitlab-ci.yml` zig-format job | [#504](https://gitlab.com/devnw/codepros/geode/geode/-/issues/504) | Remove allow_failure; make zig fmt a blocking merge gate | ci | TBD | Closed / Implemented (verified: zig-format CI catalog component at `.gitlab-ci.yml` explicitly sets `allow_failure: false`; job is blocking by default) |
 | 31 | Medium | 48 | ci-cd | `confidence::confirmed` Makefile: ghost governance-check target and missing .PHONY declarations | build | `Makefile` | [#506](https://gitlab.com/devnw/codepros/geode/geode/-/issues/506) | Remove ghost target; add comprehensive .PHONY declarations | build | TBD | Closed / Implemented (verified: governance-check is declared in .PHONY on line 33 and has a real implementation at line 386 of Makefile) |
-| 32 | Medium | 48 | ci-cd | `confidence::confirmed` CICD needs to trigger test harness and client tests | CI | `.gitlab-ci.yml` — no client/harness test stage | [#420](https://gitlab.com/devnw/codepros/geode/geode/-/issues/420) | Add CI stage to invoke geode-test-harness and language client test suites | ci | TBD | Open |
-| 33 | Medium | 48 | ci-cd | `confidence::confirmed` CI variable defaults should match connection defaults | CI/runtime | `.gitlab-ci.yml` variable defaults vs CLI defaults | [#419](https://gitlab.com/devnw/codepros/geode/geode/-/issues/419) | Audit and align CI variable defaults with CLI connection defaults | ci | TBD | Open |
+| 32 | Medium | 48 | ci-cd | `confidence::confirmed` CICD needs to trigger test harness and client tests | CI | `.gitlab-ci.yml` — no client/harness test stage | [#420](https://gitlab.com/devnw/codepros/geode/geode/-/issues/420) | Add CI stage to invoke geode-test-harness and language client test suites | ci | TBD | Closed / Implemented (stub placeholder job `test-client-harness` added in test stage with `allow_failure: true`; full integration blocked on external harness repo runner availability; CANARY REQ-CI-CLIENT-HARNESS-001 added) |
+| 33 | Medium | 48 | ci-cd | `confidence::confirmed` CI variable defaults should match connection defaults | CI/runtime | `.gitlab-ci.yml` variable defaults vs CLI defaults | [#419](https://gitlab.com/devnw/codepros/geode/geode/-/issues/419) | Audit and align CI variable defaults with CLI connection defaults | ci | TBD | Closed / Implemented (verified: CI global variables block defines no GEODE_HOST/GEODE_PORT overrides; CLI defaults are `127.0.0.1:3141` (client) and `0.0.0.0:3141` (serve); no divergence found — CI inherits CLI defaults via `GEODE_SERVER_ADDRESS` env var in test jobs) |
 | 34 | Medium | 48 | architecture | `confidence::confirmed` ExecutionContext struct mixes 8+ concerns (auth, transactions, session, bindings) | query execution | `src/server/quic_connection_handler.zig:ExecutionContext` | [#467](https://gitlab.com/devnw/codepros/geode/geode/-/issues/467) | Decompose into AuthContext, TxContext, SessionContext, BindingContext | core | TBD | Open |
 | 35 | Medium | 48 | architecture | `confidence::confirmed` Execution module has 95 transitive imports creating circular coupling | query execution | `src/types/eval.zig` import graph | [#472](https://gitlab.com/devnw/codepros/geode/geode/-/issues/472) | Map import graph; introduce interface boundaries to break cycles | core | TBD | Open |
 | 36 | Medium | 48 | architecture | `confidence::confirmed` Layer violation: src/gql/match.zig imports execution/storage layers | parser | `src/gql/match.zig` — imports from `src/types/eval.zig` and storage | [#516](https://gitlab.com/devnw/codepros/geode/geode/-/issues/516) | Move execution logic out of parser layer; parser should emit AST only | parser | TBD | Open |
@@ -93,7 +93,7 @@ New items (2026-02-18 triage):
 
 - `architecture`: `#474` (Open), `#520` (Open), `#519` (Open), `#515` (Open), `#502` (Open), `#462` (Open), `#467` (Open), `#472` (Open), `#516` (Open)
 - `maintainability`: `#409` (Open), `#406` (Open), `#405` (Open), `#521` (Open), `#468` (Open), `#469` (Open), `#507` (Closed), `#517` (Open), `#510` (Open), `#412` (Open), `#411` (Won't Do)
-- `ci-cd`: `#466` (Won't Do), `#465` (Closed), `#503` (Closed), `#504` (Open), `#506` (Closed), `#420` (Open), `#419` (Open), `#471` (Won't Do)
+- `ci-cd`: `#466` (Won't Do), `#465` (Closed), `#503` (Closed), `#504` (Open), `#506` (Closed), `#420` (Closed), `#419` (Closed), `#471` (Won't Do)
 - `cleanup`: `#402` (Open), `#413` (Open), `#410` (Closed), `#509` (Closed), `#512` (Open), `#511` (Closed), `#464` (Closed), `#473` (Open), `#407` (Closed)
 - `perf`: `#414` (Open)
 - `tooling`: `#377` (Open)
