@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const graph_store = @import("graph_store.zig");
+const graph_store = @import("graph_store");
 
 test "Graph store - create and retrieve nodes" {
     const allocator = testing.allocator;

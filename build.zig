@@ -604,42 +604,45 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addImport("grpc_client", grpc_client_mod);
 
     // New unit tests for recent implementations
-    // NOTE: These tests stay in src/ due to relative @import dependencies on src/types/* and src/storage/*
-    // Moving them to tests/ requires build.zig module imports refactoring (tracked in #402)
-    const math_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_math_functions.zig"), .target = target, .optimize = optimize }) });
-    math_func_tests.root_module.addImport("geode", root_mod);
-    math_func_tests.root_module.addImport("json", json_mod);
+    // Moved from src/ to tests/ (#402 #413)
+    // NOTE: test_math_functions and test_string_functions use relative @import paths
+    // (types/evaluator_functions.zig, storage/heap.zig) resolved via symlinks tests/types -> src/types
+    // and tests/storage -> src/storage. Do NOT add geode import here — it would conflict with the
+    // symlinked files which are already part of the geode module tree.
+    const math_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_math_functions.zig"), .target = target, .optimize = optimize }) });
     const run_math_func_tests = b.addRunArtifact(math_func_tests);
 
-    const string_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_string_functions.zig"), .target = target, .optimize = optimize }) });
-    string_func_tests.root_module.addImport("geode", root_mod);
-    string_func_tests.root_module.addImport("json", json_mod);
+    const string_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_string_functions.zig"), .target = target, .optimize = optimize }) });
     const run_string_func_tests = b.addRunArtifact(string_func_tests);
 
-    const graph_algo_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_graph_algorithms.zig"), .target = target, .optimize = optimize }) });
-    graph_algo_tests.root_module.addImport("geode", root_mod);
-    graph_algo_tests.root_module.addImport("logging", logging_mod);
-    graph_algo_tests.root_module.addImport("json", json_mod);
+    // graph_algo tests use @import("graph_store") which is wired as a named module rooted at
+    // src/graph_store.zig. The graph_store module needs logging as a named import.
+    // Do NOT add geode here — graph_store.zig is transitively included in geode and adding
+    // it as a separate named module would cause "file exists in multiple modules" conflicts.
+    const graph_store_mod = b.createModule(.{ .root_source_file = b.path("src/graph_store.zig"), .target = target, .optimize = optimize });
+    graph_store_mod.addImport("logging", logging_mod);
+    const graph_algo_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_graph_algorithms.zig"), .target = target, .optimize = optimize }) });
+    graph_algo_tests.root_module.addImport("graph_store", graph_store_mod);
     const run_graph_algo_tests = b.addRunArtifact(graph_algo_tests);
 
-    const match_call_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_match_call_integration.zig"), .target = target, .optimize = optimize }) });
+    const match_call_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_match_call_integration.zig"), .target = target, .optimize = optimize }) });
     match_call_tests.root_module.addImport("geode", root_mod);
     match_call_tests.root_module.addImport("json", json_mod);
     const run_match_call_tests = b.addRunArtifact(match_call_tests);
 
     // GAP-0425: Multi-hop regression tests for segfault prevention
-    const multihop_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_multihop_regression.zig"), .target = target, .optimize = optimize }) });
+    const multihop_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_multihop_regression.zig"), .target = target, .optimize = optimize }) });
     multihop_tests.root_module.addImport("geode", root_mod);
     multihop_tests.root_module.addImport("json", json_mod);
     const run_multihop_tests = b.addRunArtifact(multihop_tests);
 
     // GAP-0426: InitContext self-referential pointer regression tests
-    const init_ctx_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_init_context_regression.zig"), .target = target, .optimize = optimize }) });
+    const init_ctx_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_init_context_regression.zig"), .target = target, .optimize = optimize }) });
     init_ctx_tests.root_module.addImport("geode", root_mod);
     init_ctx_tests.root_module.addImport("json", json_mod);
     const run_init_ctx_tests = b.addRunArtifact(init_ctx_tests);
 
-    const decimal_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_decimal_handling.zig"), .target = target, .optimize = optimize }) });
+    const decimal_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_decimal_handling.zig"), .target = target, .optimize = optimize }) });
     decimal_tests.root_module.addImport("geode", root_mod);
     decimal_tests.root_module.addImport("json", json_mod);
     const run_decimal_tests = b.addRunArtifact(decimal_tests);
@@ -652,7 +655,7 @@ pub fn build(b: *std.Build) void {
     repl_advanced_tests.root_module.addImport("strings", strings_mod);
     const run_repl_advanced_tests = b.addRunArtifact(repl_advanced_tests);
 
-    const integration_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/test_integration.zig"), .target = target, .optimize = optimize }) });
+    const integration_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_integration.zig"), .target = target, .optimize = optimize }) });
     integration_tests.root_module.addImport("geode", root_mod);
     integration_tests.root_module.addImport("json", json_mod);
     const run_integration_tests = b.addRunArtifact(integration_tests);
@@ -667,12 +670,12 @@ pub fn build(b: *std.Build) void {
     const run_gap0203_tests = b.addRunArtifact(gap0203_tests);
 
     // GAP-384: Graph persistence tests
-    const graph_persist_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/tests/test_graph_persistence.zig"), .target = target, .optimize = optimize }) });
+    const graph_persist_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_graph_persistence.zig"), .target = target, .optimize = optimize }) });
     graph_persist_tests.root_module.addImport("geode", root_mod);
     const run_graph_persist_tests = b.addRunArtifact(graph_persist_tests);
 
     // Binary persistence tests (REQ-BINARY-PERSIST-TEST-001)
-    const binary_persist_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/tests/test_binary_persistence.zig"), .target = target, .optimize = optimize }) });
+    const binary_persist_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_binary_persistence.zig"), .target = target, .optimize = optimize }) });
     binary_persist_tests.root_module.addImport("geode", root_mod);
     const run_binary_persist_tests = b.addRunArtifact(binary_persist_tests);
 
@@ -817,9 +820,10 @@ pub fn build(b: *std.Build) void {
     const run_auth_security_tests = b.addRunArtifact(auth_security_tests);
 
     // GAP-0494: Security test — random() GQL function must use CSPRNG not LCG
+    // Moved from src/ to tests/ (#402 #413)
     const random_security_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/test_random_security.zig"),
+            .root_source_file = b.path("tests/test_random_security.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -1917,19 +1921,19 @@ pub fn build(b: *std.Build) void {
     const audit_bundle_mod = b.createModule(.{ .root_source_file = b.path("src/audit/mod.zig"), .target = target, .optimize = optimize });
 
     // GAP-413 FIXED: test_filters.zig (10 tests) - audit filter tests
-    const test_filters_mod = b.createModule(.{ .root_source_file = b.path("src/tests/test_filters.zig"), .target = target, .optimize = optimize });
+    const test_filters_mod = b.createModule(.{ .root_source_file = b.path("tests/test_filters.zig"), .target = target, .optimize = optimize });
     test_filters_mod.addImport("audit_bundle", audit_bundle_mod);
     const test_filters_tests = b.addTest(.{ .root_module = test_filters_mod });
     test_step.dependOn(&test_filters_tests.step);
 
     // GAP-413 FIXED: test_transports.zig (7 tests) - syslog and file sink tests
-    const test_transports_mod = b.createModule(.{ .root_source_file = b.path("src/tests/test_transports.zig"), .target = target, .optimize = optimize });
+    const test_transports_mod = b.createModule(.{ .root_source_file = b.path("tests/test_transports.zig"), .target = target, .optimize = optimize });
     test_transports_mod.addImport("audit_bundle", audit_bundle_mod);
     const test_transports_tests = b.addTest(.{ .root_module = test_transports_mod });
     test_step.dependOn(&test_transports_tests.step);
 
     // GAP-413 FIXED: test_cef.zig (4 tests) - CEF formatting tests
-    const test_cef_mod = b.createModule(.{ .root_source_file = b.path("src/tests/test_cef.zig"), .target = target, .optimize = optimize });
+    const test_cef_mod = b.createModule(.{ .root_source_file = b.path("tests/test_cef.zig"), .target = target, .optimize = optimize });
     test_cef_mod.addImport("audit_bundle", audit_bundle_mod);
     const test_cef_tests = b.addTest(.{ .root_module = test_cef_mod });
     test_step.dependOn(&test_cef_tests.step);
@@ -1976,18 +1980,18 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&unicode_utf16_tests.step);
 
     // Issue #445: WAL (Write-Ahead Log) unit tests
-    const wal_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/tests/test_wal.zig"), .target = target, .optimize = optimize }) });
+    const wal_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_wal.zig"), .target = target, .optimize = optimize }) });
     wal_tests.root_module.addImport("geode", root_mod);
     wal_tests.root_module.addImport("logging", logging_mod);
     test_step.dependOn(&wal_tests.step);
 
     // Issue #460: Shared cross-connection optimizer unit tests
-    const shared_opt_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/tests/test_shared_optimizer.zig"), .target = target, .optimize = optimize }) });
+    const shared_opt_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_shared_optimizer.zig"), .target = target, .optimize = optimize }) });
     shared_opt_tests.root_module.addImport("geode", root_mod);
     test_step.dependOn(&shared_opt_tests.step);
 
     // Issue #452: Plan cache lifecycle unit tests
-    const plan_lifecycle_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/tests/test_plan_cache_lifecycle.zig"), .target = target, .optimize = optimize }) });
+    const plan_lifecycle_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_plan_cache_lifecycle.zig"), .target = target, .optimize = optimize }) });
     plan_lifecycle_tests.root_module.addImport("geode", root_mod);
     test_step.dependOn(&plan_lifecycle_tests.step);
 

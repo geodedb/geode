@@ -1,11 +1,11 @@
 const std = @import("std");
 const testing = std.testing;
-const events = @import("../audit/events.zig");
-const config = @import("../audit/config.zig");
-const logger = @import("../audit/logger.zig");
-const db_adapter = @import("../audit/db_adapter.zig");
-const syslog = @import("../audit/syslog.zig");
-const time = @import("../audit/time.zig");
+const events = @import("../src/audit/events.zig");
+const config = @import("../src/audit/config.zig");
+const logger = @import("../src/audit/logger.zig");
+const db_adapter = @import("../src/audit/db_adapter.zig");
+const syslog = @import("../src/audit/syslog.zig");
+const time = @import("../src/audit/time.zig");
 
 // Test Case 1: Auth login success → exact RFC 5424 + CEF
 test "Case 1: Auth login success with exact syslog output" {
