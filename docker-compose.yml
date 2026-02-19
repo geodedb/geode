@@ -182,7 +182,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        ZIG_VERSION: "0.15.1"
+        ZIG_VERSION: "0.15.2"
         TARGETARCH: amd64
     image: geode:latest
     container_name: geode-db

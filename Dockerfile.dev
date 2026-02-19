@@ -116,7 +116,7 @@ RUN set -ex && \
     chmod 0440 /etc/sudoers.d/$USERNAME
 
 # Install Zig 0.15.1
-ARG ZIG_VERSION=0.15.1
+ARG ZIG_VERSION=0.15.2
 RUN ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "arm64" ]; then \
         ZIG_ARCH="aarch64"; \

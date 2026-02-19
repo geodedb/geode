@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Zig with fallback mirrors
-ARG ZIG_VERSION=0.15.1
+ARG ZIG_VERSION=0.15.2
 ENV ZIG_PUBKEY="RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
 
 # hadolint ignore=SC2086

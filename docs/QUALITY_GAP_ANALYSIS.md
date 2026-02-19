@@ -5,12 +5,12 @@ Last updated: 2026-02-18
 ## Summary
 
 - Total findings: 58
-- Closed / Implemented: 23
+- Closed / Implemented: 24
 - Blocked: 0
-- Open: 33
+- Open: 32
 - Closed (Won't Do by policy): 2
 
-15 quality gaps from the initial audit have been resolved. 8 additional findings verified as already resolved. 2 findings closed as Won't Do per policy. 33 open quality issues remain.
+15 quality gaps from the initial audit have been resolved. 8 additional findings verified as already resolved. 2 findings closed as Won't Do per policy. 32 open quality issues remain.
 
 ## Policy Notes (Future Agents)
 
@@ -49,7 +49,7 @@ Last updated: 2026-02-18
 | 26 | High | 64 | ci-cd | `confidence::confirmed` 5 redundant ReleaseSafe build jobs in CI pipeline | CI | `.gitlab-ci.yml` (multiple ReleaseSafe jobs) | [#466](https://gitlab.com/devnw/codepros/geode/geode/-/issues/466) | Consolidate to single parameterized ReleaseSafe matrix job | ci | TBD | Open |
 | 27 | High | 64 | ci-cd | `confidence::confirmed` Missing CI cache for Zig build artifacts (10-25 minute potential savings) | CI | `.gitlab-ci.yml` — no cache: key for zig-cache or zig-out | [#465](https://gitlab.com/devnw/codepros/geode/geode/-/issues/465) | Add GitLab CI cache for .zig-cache and zig-out/lib | ci | TBD | Closed / Implemented (verified: .gitlab-ci.yml lines 43-54 show full zig-cache cache: block with key "zig-cache-${CI_COMMIT_REF_SLUG}" and ZIG_GLOBAL_CACHE_DIR/ZIG_LOCAL_CACHE_DIR variables) |
 | 28 | High | 64 | cleanup | `confidence::confirmed` Relocate 21 test files from src/ to tests/ directory | testing | `src/test_*.zig`; `src/*/test_*.zig` | [#402](https://gitlab.com/devnw/codepros/geode/geode/-/issues/402) | Move all test_*.zig files from src/ hierarchy to tests/; update build.zig imports | testing | TBD | Open |
-| 29 | Medium | 48 | ci-cd | `confidence::confirmed` Zig version mismatch: CI uses 0.15.2, most Dockerfiles use 0.15.1 | CI/containers | `.gitlab-ci.yml`; `Dockerfile*` | [#503](https://gitlab.com/devnw/codepros/geode/geode/-/issues/503) | Align all references to single ZIG_VERSION variable; update CI and Dockerfiles together | ci | TBD | Open |
+| 29 | Medium | 48 | ci-cd | `confidence::confirmed` Zig version mismatch: CI uses 0.15.2, most Dockerfiles use 0.15.1 | CI/containers | `.gitlab-ci.yml`; `Dockerfile*` | [#503](https://gitlab.com/devnw/codepros/geode/geode/-/issues/503) | Align all references to single ZIG_VERSION variable; update CI and Dockerfiles together | ci | TBD | Closed / Implemented (0.15.2 aligned across Dockerfile.dev .prod .reliable .simple docker-compose.yml; Dockerfile.gpu excepted — hardcoded tarball path) |
 | 30 | Medium | 48 | ci-cd | `confidence::confirmed` zig-format CI job is non-blocking (allow_failure: true) | CI | `.gitlab-ci.yml` zig-format job | [#504](https://gitlab.com/devnw/codepros/geode/geode/-/issues/504) | Remove allow_failure; make zig fmt a blocking merge gate | ci | TBD | Open |
 | 31 | Medium | 48 | ci-cd | `confidence::confirmed` Makefile: ghost governance-check target and missing .PHONY declarations | build | `Makefile` | [#506](https://gitlab.com/devnw/codepros/geode/geode/-/issues/506) | Remove ghost target; add comprehensive .PHONY declarations | build | TBD | Closed / Implemented (verified: governance-check is declared in .PHONY on line 33 and has a real implementation at line 386 of Makefile) |
 | 32 | Medium | 48 | ci-cd | `confidence::confirmed` CICD needs to trigger test harness and client tests | CI | `.gitlab-ci.yml` — no client/harness test stage | [#420](https://gitlab.com/devnw/codepros/geode/geode/-/issues/420) | Add CI stage to invoke geode-test-harness and language client test suites | ci | TBD | Open |
@@ -93,7 +93,7 @@ New items (2026-02-18 triage):
 
 - `architecture`: `#474` (Open), `#520` (Open), `#519` (Open), `#515` (Open), `#502` (Open), `#462` (Open), `#467` (Open), `#472` (Open), `#516` (Open)
 - `maintainability`: `#409` (Open), `#406` (Open), `#405` (Open), `#521` (Open), `#468` (Open), `#469` (Open), `#507` (Closed), `#517` (Open), `#510` (Open), `#412` (Open), `#411` (Won't Do)
-- `ci-cd`: `#466` (Open), `#465` (Closed), `#503` (Open), `#504` (Open), `#506` (Closed), `#420` (Open), `#419` (Open), `#471` (Won't Do)
+- `ci-cd`: `#466` (Open), `#465` (Closed), `#503` (Closed), `#504` (Open), `#506` (Closed), `#420` (Open), `#419` (Open), `#471` (Won't Do)
 - `cleanup`: `#402` (Open), `#413` (Open), `#410` (Closed), `#509` (Closed), `#512` (Open), `#511` (Closed), `#464` (Closed), `#473` (Open), `#407` (Closed)
 - `perf`: `#414` (Open)
 - `tooling`: `#377` (Open)
