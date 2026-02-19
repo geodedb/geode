@@ -1,8 +1,10 @@
 const std = @import("std");
 const graph_store = @import("graph_store.zig");
 const txn_undo_log = @import("txn_undo_log.zig");
+const tde = @import("storage/tde_file_encryption.zig");
 
 // CANARY: REQ=REQ-PERF-WAL-001; FEATURE="WriteAheadLog"; ASPECT=DeltaPersistence; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
+// CANARY: REQ=REQ-TDE-ENFORCE-002; FEATURE=TDEEnforcement; ASPECT=WALEncryption; STATUS=TESTED; OWNER=security; UPDATED=2026-02-19
 // Issue #445: Write-Ahead Log for delta persistence.
 // Instead of serializing the entire graph on every commit, mutations are appended as
 // WAL records. Full snapshots (checkpoints) happen periodically. On recovery, the last
@@ -81,6 +83,32 @@ pub const WalRecord = union(WalOpType) {
 const RECORD_HEADER_SIZE = 8 + 8 + 1 + 4; // 21 bytes
 const CRC_SIZE = 4;
 
+/// Load the WAL encryption key. Checks GEODE_WAL_KEY first (WAL-specific key),
+/// then falls back to GEODE_TDE_KEY. Returns null if neither is set.
+fn loadWalKey(allocator: std.mem.Allocator) !?[tde.KEY_BYTES]u8 {
+    // Try WAL-specific key first
+    const wal_hex = std.process.getEnvVarOwned(allocator, "GEODE_WAL_KEY") catch |e| switch (e) {
+        error.EnvironmentVariableNotFound => null,
+        else => return e,
+    };
+    if (wal_hex) |hex| {
+        defer allocator.free(hex);
+        if (hex.len == 64) {
+            // Parse the 64-char hex string into 32 bytes
+            var key: [tde.KEY_BYTES]u8 = undefined;
+            var i: usize = 0;
+            while (i < tde.KEY_BYTES) : (i += 1) {
+                const hi = std.fmt.charToDigit(hex[i * 2], 16) catch return tde.TdeError.InvalidKey;
+                const lo = std.fmt.charToDigit(hex[i * 2 + 1], 16) catch return tde.TdeError.InvalidKey;
+                key[i] = @as(u8, @intCast(hi * 16 + lo));
+            }
+            return key;
+        }
+    }
+    // Fall back to GEODE_TDE_KEY
+    return try tde.loadKey(allocator);
+}
+
 pub const WriteAheadLog = struct {
     allocator: std.mem.Allocator,
     file: ?std.fs.File,
@@ -89,10 +117,15 @@ pub const WriteAheadLog = struct {
     bytes_since_checkpoint: u64,
     lock: std.Thread.Mutex,
     file_path: []const u8,
+    /// Non-null when WAL encryption is active (GEODE_WAL_KEY or GEODE_TDE_KEY set).
+    tde_key: ?[tde.KEY_BYTES]u8,
 
     pub fn init(allocator: std.mem.Allocator, path: []const u8) !WriteAheadLog {
         const owned_path = try allocator.dupe(u8, path);
         errdefer allocator.free(owned_path);
+
+        // Load WAL encryption key: GEODE_WAL_KEY takes precedence, then GEODE_TDE_KEY.
+        const wal_key = try loadWalKey(allocator);
 
         // Open or create the WAL file for append
         const file = std.fs.cwd().openFile(path, .{ .mode = .read_write }) catch |err| {
@@ -107,28 +140,56 @@ pub const WriteAheadLog = struct {
                     .bytes_since_checkpoint = 0,
                     .lock = .{},
                     .file_path = owned_path,
+                    .tde_key = wal_key,
                 };
             }
             return err;
         };
 
-        // Scan to find the last LSN
+        // Scan to find the last LSN, handling encrypted or plaintext format.
         var last_lsn: u64 = 0;
         var bytes_count: u64 = 0;
-        while (true) {
-            var header_buf: [RECORD_HEADER_SIZE]u8 = undefined;
-            const header_read = file.readAll(&header_buf) catch break;
-            if (header_read < RECORD_HEADER_SIZE) break;
 
-            const lsn = std.mem.readInt(u64, header_buf[0..8], .little);
-            // Skip txn_id (8 bytes) and op_type (1 byte)
-            const payload_len = std.mem.readInt(u32, header_buf[17..21], .little);
+        if (wal_key) |key| {
+            // Encrypted WAL: [u32: enc_len][GEOTDEFL_magic + nonce + tag + ciphertext]
+            while (true) {
+                var len_buf: [4]u8 = undefined;
+                const lr = file.readAll(&len_buf) catch break;
+                if (lr < 4) break;
+                const enc_len = std.mem.readInt(u32, &len_buf, .little);
+                if (enc_len == 0 or enc_len > 16 * 1024 * 1024) break;
 
-            // Skip payload + CRC
-            file.seekBy(@intCast(payload_len + CRC_SIZE)) catch break;
+                const encrypted = allocator.alloc(u8, enc_len) catch break;
+                defer allocator.free(encrypted);
+                const er = file.readAll(encrypted) catch break;
+                if (er < enc_len) break;
 
-            last_lsn = lsn;
-            bytes_count += RECORD_HEADER_SIZE + payload_len + CRC_SIZE;
+                const decrypted = tde.decryptWithKey(allocator, encrypted, key) catch break;
+                defer allocator.free(decrypted);
+
+                if (decrypted.len < RECORD_HEADER_SIZE) break;
+                const lsn = std.mem.readInt(u64, decrypted[0..8], .little);
+                const payload_len = std.mem.readInt(u32, decrypted[17..21], .little);
+                if (decrypted.len != RECORD_HEADER_SIZE + payload_len + CRC_SIZE) break;
+
+                last_lsn = lsn;
+                bytes_count += 4 + enc_len;
+            }
+        } else {
+            // Plaintext WAL (original format)
+            while (true) {
+                var header_buf: [RECORD_HEADER_SIZE]u8 = undefined;
+                const header_read = file.readAll(&header_buf) catch break;
+                if (header_read < RECORD_HEADER_SIZE) break;
+
+                const lsn = std.mem.readInt(u64, header_buf[0..8], .little);
+                const payload_len = std.mem.readInt(u32, header_buf[17..21], .little);
+
+                file.seekBy(@intCast(payload_len + CRC_SIZE)) catch break;
+
+                last_lsn = lsn;
+                bytes_count += RECORD_HEADER_SIZE + payload_len + CRC_SIZE;
+            }
         }
 
         // Seek to end for appending
@@ -142,6 +203,7 @@ pub const WriteAheadLog = struct {
             .bytes_since_checkpoint = bytes_count,
             .lock = .{},
             .file_path = owned_path,
+            .tde_key = wal_key,
         };
     }
 
@@ -186,12 +248,32 @@ pub const WriteAheadLog = struct {
         var crc_buf: [CRC_SIZE]u8 = undefined;
         std.mem.writeInt(u32, &crc_buf, checksum, .little);
 
-        // Write atomically: header + payload + crc
-        try file.writeAll(&header);
-        try file.writeAll(payload);
-        try file.writeAll(&crc_buf);
+        if (self.tde_key) |key| {
+            // TDE enabled: assemble header+payload+crc, encrypt, write with 4-byte length prefix.
+            // Format: [u32: enc_len][GEOTDEFL_magic][nonce][tag][ciphertext]
+            var rec_buf = std.ArrayList(u8).initCapacity(self.allocator, RECORD_HEADER_SIZE + payload.len + CRC_SIZE) catch return error.OutOfMemory;
+            defer rec_buf.deinit(self.allocator);
+            try rec_buf.appendSlice(self.allocator, &header);
+            try rec_buf.appendSlice(self.allocator, payload);
+            try rec_buf.appendSlice(self.allocator, &crc_buf);
 
-        self.bytes_since_checkpoint += RECORD_HEADER_SIZE + payload.len + CRC_SIZE;
+            const encrypted = try tde.encryptWithKey(self.allocator, rec_buf.items, key);
+            defer self.allocator.free(encrypted);
+
+            var len_prefix: [4]u8 = undefined;
+            std.mem.writeInt(u32, &len_prefix, @intCast(encrypted.len), .little);
+            try file.writeAll(&len_prefix);
+            try file.writeAll(encrypted);
+
+            self.bytes_since_checkpoint += 4 + encrypted.len;
+        } else {
+            // Plaintext: write header + payload + crc directly.
+            try file.writeAll(&header);
+            try file.writeAll(payload);
+            try file.writeAll(&crc_buf);
+
+            self.bytes_since_checkpoint += RECORD_HEADER_SIZE + payload.len + CRC_SIZE;
+        }
 
         return lsn;
     }
@@ -222,53 +304,106 @@ pub const WriteAheadLog = struct {
         var last_lsn: u64 = 0;
         var replayed: u64 = 0;
 
-        while (true) {
-            var header_buf: [RECORD_HEADER_SIZE]u8 = undefined;
-            const header_read = file.readAll(&header_buf) catch break;
-            if (header_read < RECORD_HEADER_SIZE) break;
+        if (self.tde_key) |key| {
+            // Encrypted WAL replay: [u32: enc_len][encrypted record]
+            while (true) {
+                var len_buf: [4]u8 = undefined;
+                const lr = file.readAll(&len_buf) catch break;
+                if (lr < 4) break;
+                const enc_len = std.mem.readInt(u32, &len_buf, .little);
+                if (enc_len == 0 or enc_len > 16 * 1024 * 1024) break;
 
-            const lsn = std.mem.readInt(u64, header_buf[0..8], .little);
-            const op_type_byte = header_buf[16];
-            const payload_len = std.mem.readInt(u32, header_buf[17..21], .little);
+                const encrypted = self.allocator.alloc(u8, enc_len) catch break;
+                defer self.allocator.free(encrypted);
+                const er = file.readAll(encrypted) catch break;
+                if (er < enc_len) break;
 
-            // Read payload
-            const payload = self.allocator.alloc(u8, payload_len) catch break;
-            defer self.allocator.free(payload);
-            const payload_read = file.readAll(payload) catch break;
-            if (payload_read < payload_len) break;
+                const rec = tde.decryptWithKey(self.allocator, encrypted, key) catch {
+                    log.warn("WAL: decryption failed, stopping replay", &.{});
+                    break;
+                };
+                defer self.allocator.free(rec);
 
-            // Read and verify CRC
-            var crc_buf: [CRC_SIZE]u8 = undefined;
-            const crc_read = file.readAll(&crc_buf) catch break;
-            if (crc_read < CRC_SIZE) break;
+                if (rec.len < RECORD_HEADER_SIZE + CRC_SIZE) break;
+                const lsn = std.mem.readInt(u64, rec[0..8], .little);
+                const op_type_byte = rec[16];
+                const payload_len = std.mem.readInt(u32, rec[17..21], .little);
+                if (rec.len < RECORD_HEADER_SIZE + payload_len + CRC_SIZE) break;
 
-            var crc32 = std.hash.crc.Crc32IsoHdlc.init();
-            crc32.update(&header_buf);
-            crc32.update(payload);
-            const computed_crc = crc32.final();
-            const stored_crc = std.mem.readInt(u32, &crc_buf, .little);
-            if (computed_crc != stored_crc) {
-                log.warn("WAL CRC mismatch at LSN, stopping replay", &.{
-                    Attr.int("lsn", @intCast(lsn)),
-                });
-                break; // Torn record — stop replay
+                const payload = rec[RECORD_HEADER_SIZE .. RECORD_HEADER_SIZE + payload_len];
+
+                var crc32 = std.hash.crc.Crc32IsoHdlc.init();
+                crc32.update(rec[0..RECORD_HEADER_SIZE]);
+                crc32.update(payload);
+                const computed_crc = crc32.final();
+                const stored_crc = std.mem.readInt(u32, rec[RECORD_HEADER_SIZE + payload_len ..][0..4], .little);
+                if (computed_crc != stored_crc) {
+                    log.warn("WAL CRC mismatch at LSN, stopping replay", &.{
+                        Attr.int("lsn", @intCast(lsn)),
+                    });
+                    break;
+                }
+
+                if (lsn <= self.checkpoint_lsn) continue;
+
+                const op_type: WalOpType = @enumFromInt(op_type_byte);
+                applyRecord(store, op_type, payload) catch |err| {
+                    log.warn("WAL replay failed for record", &.{
+                        Attr.int("lsn", @intCast(lsn)),
+                        Attr.string("error", @errorName(err)),
+                    });
+                    continue;
+                };
+
+                last_lsn = lsn;
+                replayed += 1;
             }
+        } else {
+            // Plaintext WAL replay (original format)
+            while (true) {
+                var header_buf: [RECORD_HEADER_SIZE]u8 = undefined;
+                const header_read = file.readAll(&header_buf) catch break;
+                if (header_read < RECORD_HEADER_SIZE) break;
 
-            // Skip records at or before checkpoint
-            if (lsn <= self.checkpoint_lsn) continue;
+                const lsn = std.mem.readInt(u64, header_buf[0..8], .little);
+                const op_type_byte = header_buf[16];
+                const payload_len = std.mem.readInt(u32, header_buf[17..21], .little);
 
-            // Apply the record to the store
-            const op_type: WalOpType = @enumFromInt(op_type_byte);
-            applyRecord(store, op_type, payload) catch |err| {
-                log.warn("WAL replay failed for record", &.{
-                    Attr.int("lsn", @intCast(lsn)),
-                    Attr.string("error", @errorName(err)),
-                });
-                continue; // Best-effort replay
-            };
+                const payload = self.allocator.alloc(u8, payload_len) catch break;
+                defer self.allocator.free(payload);
+                const payload_read = file.readAll(payload) catch break;
+                if (payload_read < payload_len) break;
 
-            last_lsn = lsn;
-            replayed += 1;
+                var crc_buf: [CRC_SIZE]u8 = undefined;
+                const crc_read = file.readAll(&crc_buf) catch break;
+                if (crc_read < CRC_SIZE) break;
+
+                var crc32 = std.hash.crc.Crc32IsoHdlc.init();
+                crc32.update(&header_buf);
+                crc32.update(payload);
+                const computed_crc = crc32.final();
+                const stored_crc = std.mem.readInt(u32, &crc_buf, .little);
+                if (computed_crc != stored_crc) {
+                    log.warn("WAL CRC mismatch at LSN, stopping replay", &.{
+                        Attr.int("lsn", @intCast(lsn)),
+                    });
+                    break;
+                }
+
+                if (lsn <= self.checkpoint_lsn) continue;
+
+                const op_type: WalOpType = @enumFromInt(op_type_byte);
+                applyRecord(store, op_type, payload) catch |err| {
+                    log.warn("WAL replay failed for record", &.{
+                        Attr.int("lsn", @intCast(lsn)),
+                        Attr.string("error", @errorName(err)),
+                    });
+                    continue;
+                };
+
+                last_lsn = lsn;
+                replayed += 1;
+            }
         }
 
         if (replayed > 0) {
@@ -290,31 +425,61 @@ pub const WriteAheadLog = struct {
 
         const file = self.file orelse return;
 
-        // Read all records, keep only those with LSN > up_to_lsn
         try file.seekTo(0);
         var kept = std.ArrayList(u8).initCapacity(self.allocator, 4096) catch return error.OutOfMemory;
         defer kept.deinit(self.allocator);
 
         var kept_bytes: u64 = 0;
 
-        while (true) {
-            var header_buf: [RECORD_HEADER_SIZE]u8 = undefined;
-            const header_read = file.readAll(&header_buf) catch break;
-            if (header_read < RECORD_HEADER_SIZE) break;
+        if (self.tde_key) |key| {
+            // Encrypted WAL truncation: read framed encrypted records, decrypt to check LSN,
+            // then keep the encrypted bytes verbatim (no re-encryption needed).
+            while (true) {
+                var len_buf: [4]u8 = undefined;
+                const lr = file.readAll(&len_buf) catch break;
+                if (lr < 4) break;
+                const enc_len = std.mem.readInt(u32, &len_buf, .little);
+                if (enc_len == 0 or enc_len > 16 * 1024 * 1024) break;
 
-            const lsn = std.mem.readInt(u64, header_buf[0..8], .little);
-            const payload_len = std.mem.readInt(u32, header_buf[17..21], .little);
+                const encrypted = self.allocator.alloc(u8, enc_len) catch break;
+                defer self.allocator.free(encrypted);
+                const er = file.readAll(encrypted) catch break;
+                if (er < enc_len) break;
 
-            const total_record_size = RECORD_HEADER_SIZE + payload_len + CRC_SIZE;
-            const record_data = self.allocator.alloc(u8, payload_len + CRC_SIZE) catch break;
-            defer self.allocator.free(record_data);
-            const data_read = file.readAll(record_data) catch break;
-            if (data_read < payload_len + CRC_SIZE) break;
+                const rec = tde.decryptWithKey(self.allocator, encrypted, key) catch break;
+                defer self.allocator.free(rec);
 
-            if (lsn > up_to_lsn) {
-                try kept.appendSlice(self.allocator, &header_buf);
-                try kept.appendSlice(self.allocator, record_data);
-                kept_bytes += total_record_size;
+                if (rec.len < RECORD_HEADER_SIZE) break;
+                const lsn = std.mem.readInt(u64, rec[0..8], .little);
+
+                if (lsn > up_to_lsn) {
+                    // Keep: write the original framed encrypted bytes
+                    try kept.appendSlice(self.allocator, &len_buf);
+                    try kept.appendSlice(self.allocator, encrypted);
+                    kept_bytes += 4 + enc_len;
+                }
+            }
+        } else {
+            // Plaintext WAL truncation (original logic)
+            while (true) {
+                var header_buf: [RECORD_HEADER_SIZE]u8 = undefined;
+                const header_read = file.readAll(&header_buf) catch break;
+                if (header_read < RECORD_HEADER_SIZE) break;
+
+                const lsn = std.mem.readInt(u64, header_buf[0..8], .little);
+                const payload_len = std.mem.readInt(u32, header_buf[17..21], .little);
+
+                const total_record_size = RECORD_HEADER_SIZE + payload_len + CRC_SIZE;
+                const record_data = self.allocator.alloc(u8, payload_len + CRC_SIZE) catch break;
+                defer self.allocator.free(record_data);
+                const data_read = file.readAll(record_data) catch break;
+                if (data_read < payload_len + CRC_SIZE) break;
+
+                if (lsn > up_to_lsn) {
+                    try kept.appendSlice(self.allocator, &header_buf);
+                    try kept.appendSlice(self.allocator, record_data);
+                    kept_bytes += total_record_size;
+                }
             }
         }
 

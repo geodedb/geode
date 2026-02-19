@@ -607,7 +607,7 @@ fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
 // CANARY: REQ=REQ-GAP-0490-FEDERATION-SERVER-AUTH; FEATURE="FederationAuth"; ASPECT=ServerValidation; STATUS=TESTED; OWNER=security; UPDATED=2026-02-18
 fn validateFederationAuth(username: []const u8, password: []const u8) bool {
     if (!std.mem.eql(u8, username, "geode-cluster")) return false;
-    const expected = std.process.getenv("GEODE_CLUSTER_TOKEN") orelse return false;
+    const expected = std.posix.getenv("GEODE_CLUSTER_TOKEN") orelse return false;
     if (expected.len == 0 or password.len == 0) return false;
     if (password.len != expected.len) return false;
     // Constant-time comparison — pad both to 256 bytes to prevent timing side-channels
