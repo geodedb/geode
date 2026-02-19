@@ -108,7 +108,7 @@ pub fn maxFlow(alloc: std.mem.Allocator, g: *const builders.Graph, source: u32, 
                 var advanced_this_round = false;
                 while (out_it.next()) |e| {
                     const idx = (cursor.get(top.v) orelse 0) + 1;
-                    _ = cursor.put(top.v, idx) catch unreachable;
+                    _ = try cursor.put(top.v, idx);
                     const residual = cap.get(key(e.src, e.dst)) orelse 0;
                     if (residual <= 0) continue;
                     const nl = level.get(e.dst) orelse inf;

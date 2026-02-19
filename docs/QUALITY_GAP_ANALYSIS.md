@@ -1,16 +1,16 @@
 # Quality Gap Analysis
 
-Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518 #377 #519 #473 #470 #469)
+Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518 #377 #519 #473 #470 #469 #406)
 
 ## Summary
 
 - Total findings: 58
-- Closed / Implemented: 35
+- Closed / Implemented: 36
 - Blocked: 0
-- Open: 18
+- Open: 17
 - Closed (Won't Do by policy): 5
 
-15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 5 findings closed as Won't Do per policy. 18 open quality issues remain.
+15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 5 findings closed as Won't Do per policy. 17 open quality issues remain.
 
 ## Policy Notes (Future Agents)
 
@@ -43,7 +43,7 @@ Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518 #377 #519 #
 | 20 | High | 80 | architecture | `confidence::confirmed` Env var boolean parsing inconsistency between QUIC and gRPC handlers | transport | `src/server/quic_connection_handler.zig`; `src/transport/grpc_server.zig` | [#502](https://gitlab.com/devnw/codepros/geode/geode/-/issues/502) | Centralize boolean env var parsing into single helper | transport | TBD | Closed / Implemented (added `pub fn parseEnvBool` to `src/util/feature_flags.zig`; updated `src/planner/stats_registry.zig` to use canonical helper instead of inline `getEnvVarOwned` + `std.mem.eql` pattern) |
 | 21 | High | 80 | architecture | `confidence::confirmed` GraphStore is God Object with 92 public functions and 5+ responsibilities | storage/graph | `src/graph_store.zig` (~92 pub fns) | [#462](https://gitlab.com/devnw/codepros/geode/geode/-/issues/462) | Extract distinct responsibilities (index, traversal, serialization, schema) into separate modules | storage | TBD | Open |
 | 22 | High | 64 | maintainability | `confidence::confirmed` Split eval.zig 2,043-line evalExpr function into focused handlers | query execution | `src/types/eval.zig:evalExpr` | [#409](https://gitlab.com/devnw/codepros/geode/geode/-/issues/409) | Decompose evalExpr into type-specific dispatch tables | query | TBD | Open |
-| 23 | High | 64 | maintainability | `confidence::confirmed` Replace `catch unreachable` with proper error handling across codebase | core | `rg -n "catch unreachable" src/` | [#406](https://gitlab.com/devnw/codepros/geode/geode/-/issues/406) | Replace all catch unreachable with explicit error propagation or logged panics | core | TBD | Open |
+| 23 | High | 64 | maintainability | `confidence::confirmed` Replace `catch unreachable` with proper error handling across codebase | core | `rg -n "catch unreachable" src/` | [#406](https://gitlab.com/devnw/codepros/geode/geode/-/issues/406) | Audited all 76 occurrences; replaced 15 OOM-unsafe `catch unreachable` with `try` in `loadFromFile` (graph_store.zig), `detect` (cycle_detect_directed.zig, cycle_detect_undirected.zig), `maxFlow` (flow_dinic.zig), `hk_dfs` (flow_hopcroft_karp.zig); remaining 61 are idiomatic Zig (fmt bufPrint, init/deinit functions, benchmarks, tests, arithmetic) | core | TBD | Closed / Implemented |
 | 24 | High | 64 | maintainability | `confidence::confirmed` Refactor functions with excessive parameters (13+ params) | core | `src/types/eval.zig`; `src/server/quic_connection_handler.zig` | [#405](https://gitlab.com/devnw/codepros/geode/geode/-/issues/405) | Introduce context structs to replace 13+ param function signatures | core | TBD | Open |
 | 25 | High | 64 | maintainability | `confidence::confirmed` CLI argument parsing duplicated ~200+ lines across 8 functions in 3 files | CLI | `src/cli/main.zig`; `src/cli/` | [#521](https://gitlab.com/devnw/codepros/geode/geode/-/issues/521) | Centralize argument parsing into single parseConnectionArgs() helper | cli | TBD | Open |
 | 26 | High | 64 | ci-cd | `confidence::confirmed` 5 redundant ReleaseSafe build jobs in CI pipeline | CI | `.gitlab-ci.yml` (multiple ReleaseSafe jobs) | [#466](https://gitlab.com/devnw/codepros/geode/geode/-/issues/466) | Consolidate to single parameterized ReleaseSafe matrix job | ci | TBD | Closed (Won't Do: each ReleaseSafe job covers a distinct platform/test scenario — cross-platform build, native Linux unit tests (REQ-0008), Windows unit tests, GQL compliance integration, comprehensive geodetestlab integration, and performance benchmarks; consolidation would reduce coverage) |
@@ -92,7 +92,7 @@ Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518 #377 #519 #
 New items (2026-02-18 triage):
 
 - `architecture`: `#474` (Open), `#520` (Open), `#519` (Closed), `#515` (Open), `#502` (Closed), `#462` (Open), `#467` (Open), `#472` (Open), `#516` (Open)
-- `maintainability`: `#409` (Open), `#406` (Open), `#405` (Open), `#521` (Open), `#468` (Open), `#469` (Closed), `#507` (Closed), `#517` (Open), `#510` (Closed), `#412` (Open), `#411` (Won't Do)
+- `maintainability`: `#409` (Open), `#406` (Closed), `#405` (Open), `#521` (Open), `#468` (Open), `#469` (Closed), `#507` (Closed), `#517` (Open), `#510` (Closed), `#412` (Open), `#411` (Won't Do)
 - `ci-cd`: `#466` (Won't Do), `#465` (Closed), `#503` (Closed), `#504` (Open), `#506` (Closed), `#420` (Closed), `#419` (Closed), `#471` (Won't Do)
 - `cleanup`: `#402` (Open), `#413` (Open), `#410` (Closed), `#509` (Closed), `#512` (Closed), `#511` (Closed), `#464` (Closed), `#473` (Closed), `#407` (Closed)
 - `perf`: `#414` (Open)

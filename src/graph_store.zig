@@ -2762,8 +2762,8 @@ pub const GraphStore = struct {
         }
 
         if (self.graphs.count() == 0) {
-            const default_name = self.allocator.dupe(u8, "default") catch unreachable;
-            self.graphs.put(default_name, {}) catch unreachable;
+            const default_name = try self.allocator.dupe(u8, "default");
+            try self.graphs.put(default_name, {});
         }
 
         // Read nodes

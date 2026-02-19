@@ -33,10 +33,10 @@ pub const DirectedCycle = struct {
         for (vertices) |start| {
             if (color.get(start).? != 0) continue;
             frames.clearRetainingCapacity();
-            frames.append(.{ .u = start, .idx = 0 }) catch unreachable;
-            color.put(start, 1) catch unreachable;
+            try frames.append(.{ .u = start, .idx = 0 });
+            try color.put(start, 1);
             stack.clearRetainingCapacity();
-            stack.append(start) catch unreachable;
+            try stack.append(start);
             while (frames.items.len > 0 and !found) {
                 var top = &frames.items[frames.items.len - 1];
                 neigh.clearRetainingCapacity();
@@ -44,7 +44,7 @@ pub const DirectedCycle = struct {
                 if (top.idx >= neigh.items.len) {
                     // finish node
                     _ = stack.pop();
-                    color.put(top.u, 2) catch unreachable;
+                    try color.put(top.u, 2);
                     _ = frames.pop();
                     continue;
                 }
@@ -53,9 +53,9 @@ pub const DirectedCycle = struct {
                 const c = color.get(v) orelse 0;
                 switch (c) {
                     0 => {
-                        color.put(v, 1) catch unreachable;
-                        stack.append(v) catch unreachable;
-                        frames.append(.{ .u = v, .idx = 0 }) catch unreachable;
+                        try color.put(v, 1);
+                        try stack.append(v);
+                        try frames.append(.{ .u = v, .idx = 0 });
                     },
                     1 => {
                         // back-edge: capture cycle
@@ -65,7 +65,7 @@ pub const DirectedCycle = struct {
                         var i: usize = stack.items.len;
                         while (i > 0) : (i -= 1) {
                             const cur = stack.items[i - 1];
-                            list.append(cur) catch unreachable;
+                            try list.append(cur);
                             if (cur == v) break;
                         }
                         std.mem.reverse(u64, list.items);

@@ -63,13 +63,13 @@ fn hk_dfs(
             if (pair_v_map.get(v)) |u_alt| {
                 const d_u2 = dist_map.get(u_alt) orelse std.math.maxInt(u32);
                 if (d_u2 == du + 1 and try hk_dfs(u_alt, is_left_map, adj_map, dist_map, pair_u_map, pair_v_map)) {
-                    _ = pair_u_map.put(u, v) catch unreachable;
-                    _ = pair_v_map.put(v, u) catch unreachable;
+                    _ = try pair_u_map.put(u, v);
+                    _ = try pair_v_map.put(v, u);
                     return true;
                 }
             } else {
-                _ = pair_u_map.put(u, v) catch unreachable;
-                _ = pair_v_map.put(v, u) catch unreachable;
+                _ = try pair_u_map.put(u, v);
+                _ = try pair_v_map.put(v, u);
                 return true;
             }
         }

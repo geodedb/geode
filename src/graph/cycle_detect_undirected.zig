@@ -35,10 +35,10 @@ pub const UndirectedCycle = struct {
         for (vertices) |start| {
             if (visited.get(start).?) continue;
             frames.clearRetainingCapacity();
-            frames.append(.{ .u = start, .parent = std.math.maxInt(u64), .idx = 0 }) catch unreachable;
+            try frames.append(.{ .u = start, .parent = std.math.maxInt(u64), .idx = 0 });
             stack.clearRetainingCapacity();
-            stack.append(start) catch unreachable;
-            visited.put(start, true) catch unreachable;
+            try stack.append(start);
+            try visited.put(start, true);
             while (frames.items.len > 0 and !found) {
                 var top = &frames.items[frames.items.len - 1];
                 neigh.clearRetainingCapacity();
@@ -54,9 +54,9 @@ pub const UndirectedCycle = struct {
                 if (v == top.parent) continue;
                 const was = visited.get(v) orelse false;
                 if (!was) {
-                    visited.put(v, true) catch unreachable;
-                    stack.append(v) catch unreachable;
-                    frames.append(.{ .u = v, .parent = top.u, .idx = 0 }) catch unreachable;
+                    try visited.put(v, true);
+                    try stack.append(v);
+                    try frames.append(.{ .u = v, .parent = top.u, .idx = 0 });
                 } else {
                     // Found a cycle. Reconstruct from stack back to v.
                     found = true;
@@ -64,7 +64,7 @@ pub const UndirectedCycle = struct {
                     var i: usize = stack.items.len;
                     while (i > 0) : (i -= 1) {
                         const cur = stack.items[i - 1];
-                        list.append(cur) catch unreachable;
+                        try list.append(cur);
                         if (cur == v) break;
                     }
                     // Close the cycle by appending start vertex v again if not already at ends for clarity
