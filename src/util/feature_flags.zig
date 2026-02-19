@@ -48,3 +48,14 @@ pub const GlobalFlags = struct {
 pub fn global() *GlobalFlags {
     return GlobalFlags.singleton();
 }
+
+/// parseEnvBool returns the boolean value of an environment variable.
+/// Returns default_val if the variable is not set.
+/// Accepts "true"/"1"/"yes" as true, "false"/"0"/"no" as false (case-insensitive).
+/// Uses non-allocating std.process.getenv; suitable for startup configuration reads.
+pub fn parseEnvBool(name: []const u8, default_val: bool) bool {
+    const val = std.process.getenv(name) orelse return default_val;
+    if (std.mem.eql(u8, val, "1") or std.ascii.eqlIgnoreCase(val, "true") or std.ascii.eqlIgnoreCase(val, "yes")) return true;
+    if (std.mem.eql(u8, val, "0") or std.ascii.eqlIgnoreCase(val, "false") or std.ascii.eqlIgnoreCase(val, "no")) return false;
+    return default_val;
+}

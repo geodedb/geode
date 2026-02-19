@@ -737,7 +737,7 @@ Based on this architecture analysis, the modularization phases should proceed as
 | schema | Schema management | ~5 | catalog.zig (568) |
 | security | Security features | ~15 | audit.zig (1,701), auth.zig (1,226), rls.zig (1,158), tde.zig (1,482), rls_enhanced.zig (972), user_manager.zig (733) |
 | server | Server implementation | ~15 | main.zig (7,039), index_optimizer.zig (2,444), graph/exec.zig (724), txn/mvcc.zig (708), txn/phantom_read_prevention.zig (651), txn/enhanced_isolation.zig (539) |
-| storage | Storage engine | ~15 | materialized_views.zig (1,597), heap.zig (830), s3_backup.zig (778), constraints.zig (685), user_storage.zig (681), page_manager.zig (622), backup.zig (572), crypto_enhanced.zig (568) |
+| storage | Storage engine | ~8 | heap.zig (860), user_storage.zig (763), s3_backup.zig (521), backup.zig (498), tde_file_encryption.zig (262) |
 | streaming | CDC and streaming | ~5 | cdc_enhanced.zig (1,390) |
 | temporal | Temporal data types | - | - |
 | tests | Test utilities | - | - |

@@ -1,6 +1,7 @@
 const std = @import("std");
 const enumerator = @import("enumerator.zig");
 const cost_model = @import("cost_model.zig");
+const feature_flags = @import("feature_flags");
 
 // Lightweight statistics registry mapping plan structural signatures (same hashing
 // scheme as enumerator.PlanEnumerator.signatureOf) to estimated row counts.
@@ -15,12 +16,10 @@ pub const StatsRegistry = struct {
     enabled: bool, // Runtime gate, defaults to false (rule-based)
 
     pub fn init(alloc: std.mem.Allocator) StatsRegistry {
-        const enabled = std.process.getEnvVarOwned(alloc, "GEODE_STATS_REGISTRY") catch |_| null;
-        defer if (enabled) |e| alloc.free(e);
         return .{
             .allocator = alloc,
             .map = std.AutoHashMap(u64, u64).init(alloc),
-            .enabled = if (enabled) |e| std.mem.eql(u8, e, "1") or std.mem.eql(u8, e, "true") else false,
+            .enabled = feature_flags.parseEnvBool("GEODE_STATS_REGISTRY", false),
         };
     }
     pub fn deinit(self: *StatsRegistry) void {

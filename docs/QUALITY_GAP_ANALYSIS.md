@@ -1,16 +1,16 @@
 # Quality Gap Analysis
 
-Last updated: 2026-02-18 (updated #419 #420 #512 #510)
+Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518)
 
 ## Summary
 
 - Total findings: 58
-- Closed / Implemented: 29
+- Closed / Implemented: 31
 - Blocked: 0
-- Open: 26
-- Closed (Won't Do by policy): 3
+- Open: 23
+- Closed (Won't Do by policy): 4
 
-15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 3 findings closed as Won't Do per policy. 26 open quality issues remain.
+15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 4 findings closed as Won't Do per policy. 23 open quality issues remain.
 
 ## Policy Notes (Future Agents)
 
@@ -40,7 +40,7 @@ Last updated: 2026-02-18 (updated #419 #420 #512 #510)
 | 17 | High | 80 | architecture | `confidence::confirmed` 102 global mutable vars across 34 files, 10 separate GeneralPurposeAllocators | core | `rg -n "var g_" src/` | [#520](https://gitlab.com/devnw/codepros/geode/geode/-/issues/520) | Replace globals with explicit context threading; consolidate allocators | core | TBD | Open |
 | 18 | High | 80 | architecture | `confidence::confirmed` Inconsistent default port: CLI uses 3141, QUIC transport uses 7567 | CLI/transport | `src/cli/main.zig:96`; `src/transport/quic.zig` | [#519](https://gitlab.com/devnw/codepros/geode/geode/-/issues/519) | Define single DEFAULT_PORT constant; align all connection defaults | core | TBD | Open |
 | 19 | High | 80 | architecture | `confidence::confirmed` gRPC transport missing 7 message types present in QUIC handler | transport | `src/transport/grpc_server.zig`; `src/server/quic_connection_handler.zig` | [#515](https://gitlab.com/devnw/codepros/geode/geode/-/issues/515) | Add missing message type handlers to gRPC server for parity with QUIC | transport | TBD | Open |
-| 20 | High | 80 | architecture | `confidence::confirmed` Env var boolean parsing inconsistency between QUIC and gRPC handlers | transport | `src/server/quic_connection_handler.zig`; `src/transport/grpc_server.zig` | [#502](https://gitlab.com/devnw/codepros/geode/geode/-/issues/502) | Centralize boolean env var parsing into single helper | transport | TBD | Open |
+| 20 | High | 80 | architecture | `confidence::confirmed` Env var boolean parsing inconsistency between QUIC and gRPC handlers | transport | `src/server/quic_connection_handler.zig`; `src/transport/grpc_server.zig` | [#502](https://gitlab.com/devnw/codepros/geode/geode/-/issues/502) | Centralize boolean env var parsing into single helper | transport | TBD | Closed / Implemented (added `pub fn parseEnvBool` to `src/util/feature_flags.zig`; updated `src/planner/stats_registry.zig` to use canonical helper instead of inline `getEnvVarOwned` + `std.mem.eql` pattern) |
 | 21 | High | 80 | architecture | `confidence::confirmed` GraphStore is God Object with 92 public functions and 5+ responsibilities | storage/graph | `src/graph_store.zig` (~92 pub fns) | [#462](https://gitlab.com/devnw/codepros/geode/geode/-/issues/462) | Extract distinct responsibilities (index, traversal, serialization, schema) into separate modules | storage | TBD | Open |
 | 22 | High | 64 | maintainability | `confidence::confirmed` Split eval.zig 2,043-line evalExpr function into focused handlers | query execution | `src/types/eval.zig:evalExpr` | [#409](https://gitlab.com/devnw/codepros/geode/geode/-/issues/409) | Decompose evalExpr into type-specific dispatch tables | query | TBD | Open |
 | 23 | High | 64 | maintainability | `confidence::confirmed` Replace `catch unreachable` with proper error handling across codebase | core | `rg -n "catch unreachable" src/` | [#406](https://gitlab.com/devnw/codepros/geode/geode/-/issues/406) | Replace all catch unreachable with explicit error propagation or logged panics | core | TBD | Open |
@@ -77,8 +77,8 @@ Last updated: 2026-02-18 (updated #419 #420 #512 #510)
 | 54 | Low | 16 | readability | `confidence::confirmed` Double-assignment bug in cli/main.zig (error_message_allocated, error_status_allocated) | CLI | `src/cli/main.zig` — variables assigned twice | [#463](https://gitlab.com/devnw/codepros/geode/geode/-/issues/463) | Remove redundant assignments | cli | TBD | Open |
 | 55 | Low | 16 | readability | `confidence::confirmed` Magic numbers for ports, cache sizes, and timeouts scattered across codebase | core | `src/` — literal constants without named symbols | [#470](https://gitlab.com/devnw/codepros/geode/geode/-/issues/470) | Replace magic numbers with named constants in a constants.zig module | core | TBD | Open |
 | 56 | Low | 16 | ci-cd | `confidence::confirmed` Pre-commit zig-build hook triggers full compilation (too heavy for pre-commit) | build | `.pre-commit-config.yaml` — zig-build entry | [#471](https://gitlab.com/devnw/codepros/geode/geode/-/issues/471) | Replace with zig fmt + syntax-only check; move full build to CI | build | TBD | Closed (Won't Do: pre-commit hook configuration is managed by external controls (pre-commit.ci); not a codebase quality gap per policy notes above) |
-| 57 | Low | 16 | readability | `confidence::confirmed` Development comments and debug notes left in eval.zig production code | query execution | `src/types/eval.zig` | [#513](https://gitlab.com/devnw/codepros/geode/geode/-/issues/513) | Remove all debug/scratch comments; keep only intent-clarifying documentation | query | TBD | Open |
-| 58 | Low | 16 | readability | `confidence::confirmed` Documentation references non-existent src/storage/crypto_enhanced.zig | docs | `docs/` — stale file reference | [#518](https://gitlab.com/devnw/codepros/geode/geode/-/issues/518) | Update documentation to reference actual file path or remove reference | docs | TBD | Open |
+| 57 | Low | 16 | readability | `confidence::confirmed` Development comments and debug notes left in eval.zig production code | query execution | `src/types/eval.zig` | [#513](https://gitlab.com/devnw/codepros/geode/geode/-/issues/513) | Remove all debug/scratch comments; keep only intent-clarifying documentation | query | TBD | Closed (Won't Do — no debug/scratch/TODO/FIXME/HACK comments found in `src/eval.zig`; only one match for "tofloat"/"todouble" in a string comparison — not a development comment) |
+| 58 | Low | 16 | readability | `confidence::confirmed` Documentation references non-existent src/storage/crypto_enhanced.zig | docs | `docs/` — stale file reference | [#518](https://gitlab.com/devnw/codepros/geode/geode/-/issues/518) | Update documentation to reference actual file path or remove reference | docs | TBD | Closed / Implemented (updated `docs/CURRENT_ARCHITECTURE.md` storage row to reflect actual files: `heap.zig`, `user_storage.zig`, `s3_backup.zig`, `backup.zig`, `tde_file_encryption.zig`; removed non-existent `crypto_enhanced.zig` and other stale entries) |
 
 ## Findings by Category
 
@@ -91,13 +91,13 @@ Last updated: 2026-02-18 (updated #419 #420 #512 #510)
 
 New items (2026-02-18 triage):
 
-- `architecture`: `#474` (Open), `#520` (Open), `#519` (Open), `#515` (Open), `#502` (Open), `#462` (Open), `#467` (Open), `#472` (Open), `#516` (Open)
+- `architecture`: `#474` (Open), `#520` (Open), `#519` (Open), `#515` (Open), `#502` (Closed), `#462` (Open), `#467` (Open), `#472` (Open), `#516` (Open)
 - `maintainability`: `#409` (Open), `#406` (Open), `#405` (Open), `#521` (Open), `#468` (Open), `#469` (Open), `#507` (Closed), `#517` (Open), `#510` (Closed), `#412` (Open), `#411` (Won't Do)
 - `ci-cd`: `#466` (Won't Do), `#465` (Closed), `#503` (Closed), `#504` (Open), `#506` (Closed), `#420` (Closed), `#419` (Closed), `#471` (Won't Do)
 - `cleanup`: `#402` (Open), `#413` (Open), `#410` (Closed), `#509` (Closed), `#512` (Closed), `#511` (Closed), `#464` (Closed), `#473` (Open), `#407` (Closed)
 - `perf`: `#414` (Open)
 - `tooling`: `#377` (Open)
-- `readability`: `#463` (Open), `#470` (Open), `#513` (Open), `#518` (Open)
+- `readability`: `#463` (Open), `#470` (Open), `#513` (Won't Do), `#518` (Closed)
 
 ## Blockers and Unblock Steps
 
