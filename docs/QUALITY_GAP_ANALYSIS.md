@@ -1,16 +1,16 @@
 # Quality Gap Analysis
 
-Last updated: 2026-02-18 (updated #419 #420)
+Last updated: 2026-02-18 (updated #419 #420 #512)
 
 ## Summary
 
 - Total findings: 58
-- Closed / Implemented: 27
+- Closed / Implemented: 28
 - Blocked: 0
-- Open: 28
+- Open: 27
 - Closed (Won't Do by policy): 3
 
-15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 3 findings closed as Won't Do per policy. 28 open quality issues remain.
+15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 3 findings closed as Won't Do per policy. 27 open quality issues remain.
 
 ## Policy Notes (Future Agents)
 
@@ -68,7 +68,7 @@ Last updated: 2026-02-18 (updated #419 #420)
 | 45 | Medium | 36 | cleanup | `confidence::confirmed` Untracked security files need to be added to version control | security | `git status src/security/` — some files untracked | [#410](https://gitlab.com/devnw/codepros/geode/geode/-/issues/410) | Audit and add untracked security source files to git tracking | security | TBD | Closed / Implemented (verified: `git status --short src/security/` returns empty — all security files are tracked) |
 | 46 | Medium | 36 | tooling | `confidence::confirmed` CANARY IMPL markers not updated to TESTED despite passing tests existing (GAP-0243) | governance | CANARY status.csv — multiple IMPL markers with corresponding tests | [#377](https://gitlab.com/devnw/codepros/geode/geode/-/issues/377) | Run canary scan; promote IMPL markers to TESTED where test evidence exists | tooling | TBD | Open |
 | 47 | Low | 24 | cleanup | `confidence::confirmed` 15+ tracked stale/cruft files at repository root | repo hygiene | `ls -la` root — scratch files, one-off scripts | [#509](https://gitlab.com/devnw/codepros/geode/geode/-/issues/509) | Audit root-level files; delete or move to appropriate dirs | infra | TBD | Closed / Implemented (verified: root contains no .txt/.log/.tmp scratch files; audit_*.jsonl files are empty runtime artifacts covered by .gitignore) |
-| 48 | Low | 24 | cleanup | `confidence::confirmed` 14 completed one-shot migration scripts in tools/ (~108KB) | repo hygiene | `tools/` directory — completed migration scripts | [#512](https://gitlab.com/devnw/codepros/geode/geode/-/issues/512) | Archive or delete completed one-shot scripts; document in CHANGELOG | infra | TBD | Open |
+| 48 | Low | 24 | cleanup | `confidence::confirmed` 14 completed one-shot migration scripts in tools/ (~108KB) | repo hygiene | `tools/` directory — completed migration scripts | [#512](https://gitlab.com/devnw/codepros/geode/geode/-/issues/512) | Archive or delete completed one-shot scripts; document in CHANGELOG | infra | TBD | Closed / Implemented (deleted 14 one-shot CANARY migration scripts from tools/; none referenced in CI/Makefile) |
 | 49 | Low | 24 | cleanup | `confidence::confirmed` Gitignore gaps: stress_data_integration/ and audit.jsonl not covered | repo hygiene | `.gitignore` — missing entries | [#511](https://gitlab.com/devnw/codepros/geode/geode/-/issues/511) | Add stress_data_integration/ and audit.jsonl to .gitignore | infra | TBD | Closed / Implemented (verified: grep confirms both "audit.jsonl" and "stress_data_integration/" are present in .gitignore) |
 | 50 | Low | 24 | cleanup | `confidence::confirmed` 123-line commented-out Louvain community detection code | core | `src/` — commented-out Louvain block | [#464](https://gitlab.com/devnw/codepros/geode/geode/-/issues/464) | Remove commented code; if needed, preserve in feature branch or issue | core | TBD | Closed / Implemented (verified: Louvain is fully implemented in src/graph/community_louvain.zig and src/graph/algorithms.zig with CANARY markers; no commented-out code block found) |
 | 51 | Low | 24 | cleanup | `confidence::confirmed` 18 TODO/FIXME/HACK/DEPRECATED comments across 12 source files | core | `rg -n "TODO\|FIXME\|HACK\|DEPRECATED" src/` | [#473](https://gitlab.com/devnw/codepros/geode/geode/-/issues/473) | Convert each to a tracked GitLab issue or resolve inline | core | TBD | Open |
@@ -94,7 +94,7 @@ New items (2026-02-18 triage):
 - `architecture`: `#474` (Open), `#520` (Open), `#519` (Open), `#515` (Open), `#502` (Open), `#462` (Open), `#467` (Open), `#472` (Open), `#516` (Open)
 - `maintainability`: `#409` (Open), `#406` (Open), `#405` (Open), `#521` (Open), `#468` (Open), `#469` (Open), `#507` (Closed), `#517` (Open), `#510` (Open), `#412` (Open), `#411` (Won't Do)
 - `ci-cd`: `#466` (Won't Do), `#465` (Closed), `#503` (Closed), `#504` (Open), `#506` (Closed), `#420` (Closed), `#419` (Closed), `#471` (Won't Do)
-- `cleanup`: `#402` (Open), `#413` (Open), `#410` (Closed), `#509` (Closed), `#512` (Open), `#511` (Closed), `#464` (Closed), `#473` (Open), `#407` (Closed)
+- `cleanup`: `#402` (Open), `#413` (Open), `#410` (Closed), `#509` (Closed), `#512` (Closed), `#511` (Closed), `#464` (Closed), `#473` (Open), `#407` (Closed)
 - `perf`: `#414` (Open)
 - `tooling`: `#377` (Open)
 - `readability`: `#463` (Open), `#470` (Open), `#513` (Open), `#518` (Open)
