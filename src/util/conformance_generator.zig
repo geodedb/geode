@@ -285,7 +285,7 @@ pub const ConformanceGenerator = struct {
         _ = self;
         _ = source_dir;
 
-        // TODO: Implement source code scanning
+        // TODO: Implement source code scanning // #473
         // This would parse source files looking for:
         // - Feature implementation markers
         // - Test coverage annotations

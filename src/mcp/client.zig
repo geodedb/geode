@@ -108,7 +108,7 @@ pub const GeodeClient = struct {
         // Initialize QUIC client
         self.quic_client = quic_transport.QuicClient.init(self.allocator);
 
-        // Connect with insecure mode for local development (TODO: support TLS config)
+        // Connect with insecure mode for local development (TODO: support TLS config) // #473
         self.quic_client.?.connectInsecure(self.endpoint, self.port, true) catch |err| {
             self.disconnect();
             std.debug.print("[MCP-CLIENT] Connection failed to {s}:{d}: {}\n", .{ self.endpoint, self.port, err });

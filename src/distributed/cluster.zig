@@ -430,7 +430,7 @@ pub const ClusterCoordinator = struct {
     fn networkLoop(self: *ClusterCoordinator) !void {
         // Initialize (or reuse) QUIC server transport
         if (self.network_transport.quic_server == null) {
-            const qt = try quic.QuicTransport.init(self.allocator, .{ .address = "0.0.0.0", .port = 7567 });
+            const qt = try quic.QuicTransport.init(self.allocator, .{ .address = "0.0.0.0", .port = quic.DEFAULT_PORT });
             self.network_transport.quic_server = qt;
             try self.network_transport.quic_server.?.listen();
         }

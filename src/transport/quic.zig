@@ -90,6 +90,10 @@ pub const PollSync = struct {
     }
 };
 
+/// The canonical default QUIC server port for Geode.
+/// All server and client code should reference this constant rather than hard-coding 3141 or 7567.
+pub const DEFAULT_PORT: u16 = 3141;
+
 pub const QuicTransport = struct {
     allocator: std.mem.Allocator,
     config: Config,
@@ -111,7 +115,7 @@ pub const QuicTransport = struct {
 
     pub const Config = struct {
         address: []const u8 = "0.0.0.0",
-        port: u16 = 7567,
+        port: u16 = DEFAULT_PORT,
         max_connections: usize = 1000,
         idle_timeout_ms: u64 = 300000,
         max_stream_data: u64 = 10 * 1024 * 1024,

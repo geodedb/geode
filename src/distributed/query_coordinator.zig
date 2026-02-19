@@ -774,7 +774,7 @@ const TopKHeap = struct {
         // If we exceed k items, remove the smallest
         if (self.items.items.len > self.k) {
             // Simple approach: sort and keep top k
-            // TODO: Optimize with actual heap operations
+            // TODO: Optimize with actual heap operations // #473
             std.sort.heap(protocol.BindingRow, self.items.items, self.order_keys, compareRows);
             for (self.items.items[self.k..]) |dropped| {
                 freeBindingRow(self.allocator, dropped);

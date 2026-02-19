@@ -418,16 +418,16 @@ pub fn main() !void {
     // QUIC mode: preferred over TCP
     if (listen_quic) |addr_str| {
         const colon = std.mem.lastIndexOfScalar(u8, addr_str, ':');
-        var port: u16 = 7567;
+        var port: u16 = quic_transport.DEFAULT_PORT;
         var address_str: []const u8 = "0.0.0.0";
 
         if (colon) |ci| {
             address_str = addr_str[0..ci];
             const p = addr_str[ci + 1 ..];
-            port = std.fmt.parseUnsigned(u16, p, 10) catch 7567;
+            port = std.fmt.parseUnsigned(u16, p, 10) catch quic_transport.DEFAULT_PORT;
         } else {
             // If no colon, treat as port only
-            port = std.fmt.parseUnsigned(u16, addr_str, 10) catch 7567;
+            port = std.fmt.parseUnsigned(u16, addr_str, 10) catch quic_transport.DEFAULT_PORT;
         }
 
         // Initialize QUIC transport

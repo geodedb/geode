@@ -42,7 +42,7 @@ pub fn callTool(
     args_json: []const u8,
     cancel: *const mcp.CancelToken,
 ) ![]const u8 {
-    _ = cancel; // TODO: Implement cancellation support
+    _ = cancel; // TODO: Implement cancellation support // #473
 
     if (std.mem.eql(u8, name, "query")) {
         return executeQuery(allocator, geode_endpoint, args_json);

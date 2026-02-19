@@ -266,6 +266,6 @@ pub fn main() !void {
 
     // prev_path future: diff JSON to detect illegal transitions; currently placeholder
     if (prev_path) |_| {
-        // TODO: Implement STUB->TESTED direct check by loading prev JSON; future enhancement
+        // TODO: Implement STUB->TESTED direct check by loading prev JSON; future enhancement // #473
     }
 }
