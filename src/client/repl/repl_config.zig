@@ -10,8 +10,10 @@ pub fn getHistoryPath(allocator: std.mem.Allocator) ![]u8 {
     } else |_| {}
 
     // Primary: Try ~/.geode_history as the default preference
-    if (std.posix.getenv("HOME")) |home| {
-        return std.fs.path.join(allocator, &[_][]const u8{ home, ".geode_history" });
+    if (comptime builtin.os.tag != .windows) {
+        if (std.posix.getenv("HOME")) |home| {
+            return std.fs.path.join(allocator, &[_][]const u8{ home, ".geode_history" });
+        }
     }
 
     // Secondary: Use XDG-compliant platform-specific data directory
@@ -25,8 +27,10 @@ pub fn getHistoryPath(allocator: std.mem.Allocator) ![]u8 {
 
 pub fn shouldUseColor() bool {
     // Check NO_COLOR environment variable (uses non-owning getenv)
-    if (std.posix.getenv("NO_COLOR") != null) {
-        return false;
+    if (comptime builtin.os.tag != .windows) {
+        if (std.posix.getenv("NO_COLOR") != null) {
+            return false;
+        }
     }
 
     // Check if stdout is a TTY

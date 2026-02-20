@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 const quic_transport = @import("transport/quic");
 const query_plan_cache = geode.query_plan_cache;
@@ -607,15 +608,16 @@ fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
 // CANARY: REQ=REQ-GAP-0490-FEDERATION-SERVER-AUTH; FEATURE="FederationAuth"; ASPECT=ServerValidation; STATUS=TESTED; OWNER=security; UPDATED=2026-02-18
 fn validateFederationAuth(username: []const u8, password: []const u8) bool {
     if (!std.mem.eql(u8, username, "geode-cluster")) return false;
-    const expected = std.posix.getenv("GEODE_CLUSTER_TOKEN") orelse return false;
-    if (expected.len == 0 or password.len == 0) return false;
-    if (password.len != expected.len) return false;
+    const expected = if (comptime builtin.os.tag != .windows) std.posix.getenv("GEODE_CLUSTER_TOKEN") else null;
+    const expected_tok = expected orelse return false;
+    if (expected_tok.len == 0 or password.len == 0) return false;
+    if (password.len != expected_tok.len) return false;
     // Constant-time comparison — pad both to 256 bytes to prevent timing side-channels
     var buf_a: [256]u8 = [_]u8{0} ** 256;
     var buf_b: [256]u8 = [_]u8{0} ** 256;
     const n = @min(password.len, 256);
     @memcpy(buf_a[0..n], password[0..n]);
-    @memcpy(buf_b[0..n], expected[0..n]);
+    @memcpy(buf_b[0..n], expected_tok[0..n]);
     return std.crypto.timing_safe.eql([256]u8, buf_a, buf_b);
 }
 

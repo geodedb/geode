@@ -346,7 +346,8 @@ fn generateFilePathCandidates(state: anytype, prefix: []const u8) !void {
 
     // Check for tilde expansion
     if (prefix.len > 0 and prefix[0] == '~') {
-        const home = std.posix.getenv("HOME") orelse return;
+        const home_opt = if (comptime builtin.os.tag != .windows) std.posix.getenv("HOME") else null;
+        const home = home_opt orelse return;
         if (prefix.len == 1) {
             // Just ~ - complete with home directory contents
             search_dir = home;
@@ -666,12 +667,14 @@ test "file path completion - tilde expansion" {
     defer state.deinit();
 
     // Only run if HOME is set
-    if (std.posix.getenv("HOME")) |_| {
-        try generateFilePathCandidates(&state, "~");
+    if (comptime builtin.os.tag != .windows) {
+        if (std.posix.getenv("HOME")) |_| {
+            try generateFilePathCandidates(&state, "~");
 
-        // All candidates should start with "~/"
-        for (state.completion_ctx.candidates.items) |candidate| {
-            try std.testing.expect(std.mem.startsWith(u8, candidate, "~/"));
+            // All candidates should start with "~/"
+            for (state.completion_ctx.candidates.items) |candidate| {
+                try std.testing.expect(std.mem.startsWith(u8, candidate, "~/"));
+            }
         }
     }
 }
@@ -682,12 +685,14 @@ test "file path completion - tilde with subpath" {
     defer state.deinit();
 
     // Only run if HOME is set
-    if (std.posix.getenv("HOME")) |_| {
-        try generateFilePathCandidates(&state, "~/");
+    if (comptime builtin.os.tag != .windows) {
+        if (std.posix.getenv("HOME")) |_| {
+            try generateFilePathCandidates(&state, "~/");
 
-        // All candidates should start with "~/"
-        for (state.completion_ctx.candidates.items) |candidate| {
-            try std.testing.expect(std.mem.startsWith(u8, candidate, "~/"));
+            // All candidates should start with "~/"
+            for (state.completion_ctx.candidates.items) |candidate| {
+                try std.testing.expect(std.mem.startsWith(u8, candidate, "~/"));
+            }
         }
     }
 }
@@ -1141,13 +1146,15 @@ test "file path completion - tilde with nested path" {
     defer state.deinit();
 
     // Only run if HOME is set
-    if (std.posix.getenv("HOME")) |_| {
-        // This test depends on having some directory in HOME
-        try generateFilePathCandidates(&state, "~/.");
+    if (comptime builtin.os.tag != .windows) {
+        if (std.posix.getenv("HOME")) |_| {
+            // This test depends on having some directory in HOME
+            try generateFilePathCandidates(&state, "~/.");
 
-        // All candidates should start with "~/"
-        for (state.completion_ctx.candidates.items) |candidate| {
-            try std.testing.expect(std.mem.startsWith(u8, candidate, "~/"));
+            // All candidates should start with "~/"
+            for (state.completion_ctx.candidates.items) |candidate| {
+                try std.testing.expect(std.mem.startsWith(u8, candidate, "~/"));
+            }
         }
     }
 }

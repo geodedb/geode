@@ -25,7 +25,7 @@ pub const TerminalType = enum {
             return .non_interactive;
         }
 
-        if (builtin.os.tag == .windows) {
+        if (comptime builtin.os.tag == .windows) {
             // Check for modern Windows terminals via environment variables
             if (std.posix.getenv("WT_SESSION") != null) {
                 // Windows Terminal

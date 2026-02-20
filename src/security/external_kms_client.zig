@@ -841,7 +841,8 @@ pub const Client = struct {
         // GAP-0216: Production safety check - block unless explicitly allowed
         if (is_production_build) {
             // Check for explicit override via environment variable
-            if (std.posix.getenv("GEODE_ALLOW_LOCAL_KMS")) |_| {
+            const allow_local_kms = if (comptime builtin.os.tag != .windows) std.posix.getenv("GEODE_ALLOW_LOCAL_KMS") else null;
+            if (allow_local_kms) |_| {
                 log.warn("LocalSimulated KMS allowed in production via GEODE_ALLOW_LOCAL_KMS - NOT secure", &.{
                     Attr.string("recommendation", "Configure VaultTransit or AwsKms for production"),
                 });

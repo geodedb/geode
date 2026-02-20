@@ -1018,6 +1018,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         // Expand ~ to home directory if present
         var path_buf: [4096]u8 = undefined;
         const resolved_path = if (filepath.len > 0 and filepath[0] == '~') blk: {
+            if (comptime builtin.os.tag == .windows) break :blk filepath;
             const home = std.posix.getenv("HOME") orelse {
                 std.debug.print("Error: Cannot expand ~: HOME not set\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
@@ -3939,7 +3940,7 @@ fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: [
 
 fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Use GEODE_SERVER_ADDRESS env var as default (set by test harness on random ports)
-    const env_server = std.posix.getenv("GEODE_SERVER_ADDRESS");
+    const env_server = if (comptime builtin.os.tag != .windows) std.posix.getenv("GEODE_SERVER_ADDRESS") else null;
     var server: []const u8 = env_server orelse "127.0.0.1:3141";
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
