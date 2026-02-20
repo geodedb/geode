@@ -1016,6 +1016,16 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
                     else => {},
                 };
             },
+            .execute => |exec_resp| {
+                // When inline_results_enabled is true the server delivers results
+                // inline via an extra .execute message before responding to PULL.
+                // Read it here just like executeQueryOnConnection does.
+                if (exec_resp.payload) |payload| switch (payload) {
+                    .page => |p| done = p.final,
+                    .@"error" => return error.ApplyFailed,
+                    else => {},
+                };
+            },
             else => return error.ApplyFailed,
         }
     }
