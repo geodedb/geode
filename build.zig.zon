@@ -95,8 +95,8 @@
 
         // Configuration management - XDG compliant, multi-format support
         .config = .{
-            .url = "git+https://gitlab.com/devnw/zig/config.git#15e7e586aaaf8f040f5f6a00cb025e2d5ca61f23",
-            .hash = "config-0.1.0-TiLumtQMBwBVAeiAy4BLi6syyDHjCpkNZZIA84U8A56P",
+            .url = "git+https://gitlab.com/devnw/zig/config.git#f0ef707e39e7230891c7d86ff9ec48167a530341",
+            .hash = "config-0.1.0-TiLumgsaBwD0M9PCCkXDvVN85sfYvbNJLgAKzYowlZGn",
         },
 
         // =======================================================================
