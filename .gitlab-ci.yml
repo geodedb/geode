@@ -42,6 +42,9 @@ default:
 # Issue #465: Global Zig build cache for CI pipeline efficiency
 cache:
   key: "zig-cache-${CI_COMMIT_REF_SLUG}"
+  fallback_keys:
+    - "zig-cache-main-protected"
+    - "zig-cache-main"
   paths:
     - .zig-cache/
     - zig-cache/
