@@ -841,7 +841,8 @@ fn printMigrateUsage() void {
 
 const MigrationExecContext = struct {
     allocator: std.mem.Allocator,
-    quic_client: *quic.QuicClient,
+    server_addr: []const u8,
+    tls_config: TlsConfig,
     username: ?[]const u8,
     password: ?[]const u8,
 };
@@ -948,7 +949,17 @@ fn readProtoMessage(
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-032; FEATURE="JSON Library Migration"; ASPECT=MigrationScript; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-24
 fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
     const ctx = @as(*MigrationExecContext, @ptrCast(@alignCast(ctx_ptr orelse return error.ApplyFailed)));
-    var stream = ctx.quic_client.getStream() catch |err| return err;
+
+    // Create a fresh QUIC connection per migration script. The server's handleQuicConnection
+    // handles exactly one stream per connection handler call and destroys the connection
+    // afterward, so we must reconnect for each migration rather than reusing a single connection.
+    const quic_client = connectMigrationClient(ctx.allocator, ctx.server_addr, ctx.tls_config) catch |err| return err;
+    defer {
+        quic_client.deinit();
+        ctx.allocator.destroy(quic_client);
+    }
+
+    var stream = quic_client.getStream() catch |err| return err;
     defer stream.deinit();
 
     const hello_req = schema.HelloRequest{
@@ -962,7 +973,7 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
 
     var arena = std.heap.ArenaAllocator.init(ctx.allocator);
     defer arena.deinit();
-    const hello_resp = readProtoMessage(arena.allocator(), ctx.quic_client, stream, 5000) catch |err| return err;
+    const hello_resp = readProtoMessage(arena.allocator(), quic_client, stream, 5000) catch |err| return err;
     var session_id_buf: ?[]u8 = null;
     switch (hello_resp) {
         .hello => |h| {
@@ -983,7 +994,7 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
     try writeProtoMessage(ctx.allocator, stream, .{ .execute = exec_req });
 
     _ = arena.reset(.retain_capacity);
-    const exec_resp_msg = readProtoMessage(arena.allocator(), ctx.quic_client, stream, 5000) catch |err| return err;
+    const exec_resp_msg = readProtoMessage(arena.allocator(), quic_client, stream, 5000) catch |err| return err;
     switch (exec_resp_msg) {
         .execute => |exec_resp| {
             if (exec_resp.payload) |payload| switch (payload) {
@@ -1006,7 +1017,7 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
         try writeProtoMessage(ctx.allocator, stream, .{ .pull = pull_req });
 
         _ = arena.reset(.retain_capacity);
-        const pull_resp_msg = readProtoMessage(arena.allocator(), ctx.quic_client, stream, 5000) catch |err| return err;
+        const pull_resp_msg = readProtoMessage(arena.allocator(), quic_client, stream, 5000) catch |err| return err;
         switch (pull_resp_msg) {
             .pull => |pull_resp| {
                 const exec_resp = pull_resp.response orelse return error.ApplyFailed;
@@ -1242,20 +1253,15 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     }
 
     const cfg = migration.MigrationConfig{ .migrations_dir = migrations_dir };
-    // GAP-0137: Pass TLS configuration to connection function
-    // NOTE: Heap-allocated to prevent dangling allocator pointers in QUIC Connection
-    const quic_client = connectMigrationClient(allocator, server, tls_config) catch |err| {
-        std.debug.print("Error: Failed to connect to server {s}: {}\n", .{ server, err });
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-    defer {
-        quic_client.deinit();
-        allocator.destroy(quic_client);
-    }
 
+    // Each migration script reconnects independently because the server handles
+    // exactly one QUIC stream per connection handler and destroys the connection
+    // afterward. Store connection parameters in context so execMigrationScript
+    // can create a fresh connection for each script.
     var exec_ctx = MigrationExecContext{
         .allocator = allocator,
-        .quic_client = quic_client,
+        .server_addr = server,
+        .tls_config = tls_config,
         .username = username,
         .password = password,
     };
