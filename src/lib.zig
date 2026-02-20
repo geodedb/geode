@@ -514,7 +514,6 @@ pub const ParseOutcome = union(enum) {
 
 // Parse but capture parser error details instead of throwing; allocation errors still throw.
 pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: ParseOptions) !ParseOutcome {
-    //
     var arena = std.heap.ArenaAllocator.init(allocator);
     var lx = Lexer{ .src = src };
     var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next(), .strict_order_keys = opts.strict_order_keys, .ident_order_only = opts.ident_order_only, .forbid_orderby_calls = opts.forbid_orderby_calls, .forbid_orderby_paths = opts.forbid_orderby_paths, .ts_extensions = opts.ts_extensions };

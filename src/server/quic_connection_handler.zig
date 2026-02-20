@@ -167,7 +167,7 @@ const BufferedProtoReader = struct {
                     }
                     // Note: Do NOT call transport.poll() here - it's not thread-safe
                     // The main accept loop handles polling; we just wait for data
-                    std.Thread.sleep(1 * std.time.ns_per_ms);
+                    std.Thread.sleep(100 * std.time.ns_per_us);
                     continue;
                 }
                 return err;
@@ -531,7 +531,7 @@ pub fn handleQuicConnection(
             if (err == error.WouldBlock) {
                 // Note: Do NOT call transport.poll() here - it's not thread-safe
                 // The main accept loop handles polling; just sleep and retry
-                std.Thread.sleep(1 * std.time.ns_per_ms);
+                std.Thread.sleep(100 * std.time.ns_per_us);
                 continue;
             }
             log.err("Protobuf read error", &.{Attr.string("error", @errorName(err))});

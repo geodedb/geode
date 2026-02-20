@@ -58,9 +58,17 @@ pub const QueryAstCache = struct {
 
         self.miss_count += 1;
 
-        const outcome = try geode.parseGqlOutcome(query_text, self.allocator, opts);
+        // Parse using a heap-allocated copy of the query text so that all AST
+        // lexeme slices point into the stable copy rather than the caller's
+        // transient buffer (see SharedAstCache.getOrParse for details).
+        const query_text_copy = try self.allocator.dupe(u8, query_text);
+        const outcome = geode.parseGqlOutcome(query_text_copy, self.allocator, opts) catch |err| {
+            self.allocator.free(query_text_copy);
+            return err;
+        };
         switch (outcome) {
             .Err => |er| {
+                self.allocator.free(query_text_copy);
                 return .{
                     .Err = .{
                         .msg = er.msg,
@@ -72,18 +80,13 @@ pub const QueryAstCache = struct {
                 };
             },
             .Ok => |ok| {
-                // Ensure we clean up the parse result on any later failure.
-                errdefer {
-                    var tmp = ok;
-                    tmp.deinit();
-                }
-
                 if (self.cache.count() >= self.max_size) {
                     self.evictTail();
                 }
 
+                // Use query_text_copy directly; AST lexeme slices already point into it.
                 var cached_ast = CachedAst{
-                    .query_text = try self.allocator.dupe(u8, query_text),
+                    .query_text = query_text_copy,
                     .parse_result = ok,
                     .created_at = std.time.timestamp(),
                     .last_accessed = std.time.timestamp(),
@@ -249,9 +252,23 @@ pub const SharedAstCache = struct {
         self.miss_count += 1;
 
         // Parse outside the lock to avoid blocking concurrent lookups.
-        const outcome = try geode.parseGqlOutcome(query_text, self.allocator, opts);
+        //
+        // Allocate a stable copy of the query text BEFORE parsing. The Geode lexer
+        // uses zero-copy slices into its source buffer (lexeme = src[start..end]),
+        // so all AST string references (identifiers, labels, aliases, etc.) point
+        // directly into whatever buffer is passed as `src`. By parsing with this
+        // heap-allocated copy, we guarantee that AST strings remain valid for the
+        // entire lifetime of the cached ParseResult, independent of the caller's
+        // transient query buffer (e.g., normalized.text freed per-connection).
+        const query_text_copy = try self.allocator.dupe(u8, query_text);
+        const outcome = geode.parseGqlOutcome(query_text_copy, self.allocator, opts) catch |err| {
+            self.allocator.free(query_text_copy);
+            return err;
+        };
         switch (outcome) {
             .Err => |er| {
+                // Parse error - not caching, free the copy.
+                self.allocator.free(query_text_copy);
                 return .{
                     .Err = .{
                         .msg = er.msg,
@@ -276,6 +293,7 @@ pub const SharedAstCache = struct {
                         // Another thread inserted the same entry; discard ours.
                         pr_ptr.deinit();
                         self.allocator.destroy(pr_ptr);
+                        self.allocator.free(query_text_copy);
                         existing.access_count += 1;
                         existing.last_accessed = std.time.timestamp();
                         existing.ref_count += 1;
@@ -292,8 +310,11 @@ pub const SharedAstCache = struct {
                     self.evictLeastUsedUnlocked();
                 }
 
+                // Use query_text_copy directly as the cached query_text.
+                // AST lexeme slices already point into this buffer, so no
+                // second dupe is needed.
                 var cached_ast = SharedCachedAst{
-                    .query_text = try self.allocator.dupe(u8, query_text),
+                    .query_text = query_text_copy,
                     .parse_result = pr_ptr,
                     .created_at = std.time.timestamp(),
                     .last_accessed = std.time.timestamp(),

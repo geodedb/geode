@@ -322,11 +322,15 @@ pub const QuicTransport = struct {
                 // waits for in-flight I/O to complete. This prevents concurrent
                 // HashMap access in the QUIC library (stream_txs corruption).
                 self.poll_sync.enterPoll();
-                ep.poll(10) catch |err| {
+                ep.poll(1) catch |err| {
                     self.poll_sync.leavePoll();
                     return err;
                 };
                 self.poll_sync.leavePoll();
+                // Sleep 100μs after releasing poll lock so handler threads can
+                // enter and complete their I/O. enterIo() checks every 50μs, so
+                // this guarantees at least one full check cycle without interference.
+                std.Thread.sleep(100 * std.time.ns_per_us);
 
                 // Get a connection if we don't have one yet
                 if (pending_conn == null) {
@@ -380,7 +384,7 @@ pub const QuicTransport = struct {
         if (self.endpoint) |*ep| {
             // Wait for handler threads then poll
             self.poll_sync.enterPoll();
-            ep.poll(10) catch {
+            ep.poll(1) catch {
                 self.poll_sync.leavePoll();
                 return null;
             };
