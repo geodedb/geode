@@ -1518,9 +1518,7 @@ const TerminalState = if (builtin.os.tag == .windows) std.os.windows.DWORD else 
 fn enterRawMode() !TerminalState {
     if (builtin.os.tag == .windows) {
         // Windows terminal setup
-        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch {
-            std.process.exit(1);
-        };
+        const handle = try std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE);
         var mode: std.os.windows.DWORD = undefined;
         _ = std.os.windows.kernel32.GetConsoleMode(handle, &mode);
         const original = mode;
@@ -1563,9 +1561,7 @@ fn enterRawMode() !TerminalState {
 /// Plain raw mode - disables canonical mode but keeps echo for simpler testing
 fn enterPlainRawMode() !TerminalState {
     if (builtin.os.tag == .windows) {
-        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch {
-            std.process.exit(1);
-        };
+        const handle = try std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE);
         var mode: std.os.windows.DWORD = undefined;
         _ = std.os.windows.kernel32.GetConsoleMode(handle, &mode);
         const original = mode;
@@ -1599,7 +1595,7 @@ fn restoreTerminalMode(original: TerminalState) !void {
     stdout.writeAll("\x1b[?2004l") catch {};
 
     if (builtin.os.tag == .windows) {
-        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return;
+        const handle = try std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE);
         _ = std.os.windows.kernel32.SetConsoleMode(handle, original);
         return;
     }

@@ -38,9 +38,8 @@ pub fn getStdoutHandle() std.fs.File {
 
 pub fn getStderrHandle() std.fs.File {
     if (builtin.os.tag == .windows) {
-        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch |err| {
+        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch {
             // Can't print to stderr if we can't get stderr handle, just exit
-            _ = err;
             std.process.exit(1);
         };
         if (handle == std.os.windows.INVALID_HANDLE_VALUE) {

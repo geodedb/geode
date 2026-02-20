@@ -50,13 +50,6 @@ pub fn checkForInterrupt() bool {
     if (builtin.os.tag == .windows) {
         // Windows: Check console input for Ctrl+C
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return false;
-        var events_available: u32 = 0;
-        // Check if there are any input events waiting
-        if (std.os.windows.kernel32.GetNumberOfConsoleInputEvents(handle, &events_available) == 0) {
-            return false;
-        }
-        if (events_available == 0) return false;
-
         // Peek at the input to see if it's a Ctrl+C
         var input_record: std.os.windows.INPUT_RECORD = undefined;
         var events_read: u32 = 0;
@@ -2509,6 +2502,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     // Expand ~ to home directory if present
     var path_buf: [4096]u8 = undefined;
     const resolved_path = if (filename.len > 0 and filename[0] == '~') blk: {
+        if (comptime builtin.os.tag == .windows) break :blk filename;
         const home = std.posix.getenv("HOME") orelse {
             try stderr.writeAll("Error [GEODE-E2005]: Cannot expand ~: HOME not set\r\n");
             return;
