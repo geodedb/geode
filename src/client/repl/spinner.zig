@@ -27,19 +27,23 @@ pub const TerminalType = enum {
 
         if (comptime builtin.os.tag == .windows) {
             // Check for modern Windows terminals via environment variables
-            if (std.posix.getenv("WT_SESSION") != null) {
-                // Windows Terminal
+            // std.posix.getenv is unavailable on Windows; use std.process.getEnvVarOwned
+            const ally = std.heap.page_allocator;
+            if (std.process.getEnvVarOwned(ally, "WT_SESSION")) |val| {
+                ally.free(val);
                 return .windows_modern;
-            }
-            if (std.posix.getenv("TERM_PROGRAM")) |prog| {
+            } else |_| {}
+            if (std.process.getEnvVarOwned(ally, "TERM_PROGRAM")) |prog| {
+                defer ally.free(prog);
                 if (std.mem.eql(u8, prog, "vscode")) {
                     return .windows_modern;
                 }
-            }
+            } else |_| {}
             // Check for PowerShell via PSModulePath
-            if (std.posix.getenv("PSModulePath") != null) {
+            if (std.process.getEnvVarOwned(ally, "PSModulePath")) |val| {
+                ally.free(val);
                 return .windows_modern;
-            }
+            } else |_| {}
             // Fallback to basic Windows console
             return .windows_console;
         } else {

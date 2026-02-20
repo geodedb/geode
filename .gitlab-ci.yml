@@ -554,6 +554,14 @@ test-windows-unit:
         throw "zig command failed after $MaxAttempts attempts: zig $($Args -join ' ')"
       }
 
+      # Create Windows junction points for symlinked test directories
+      # (tests/storage -> src/storage, tests/types -> src/types)
+      # Git on Windows does not create Unix symlinks; junctions are the equivalent
+      foreach ($pair in @(@{ Link = "tests\storage"; Target = "src\storage" }, @{ Link = "tests\types"; Target = "src\types" })) {
+        if (Test-Path $pair.Link) { cmd /c "rmdir /S /Q $($pair.Link)" 2>&1 | Out-Null }
+        cmd /c "mklink /J $($pair.Link) $($pair.Target)"
+      }
+
       Invoke-ZigWithRetry -Args @("test", "tests/test_cross_platform_stdio.zig")
       Invoke-ZigWithRetry -Args @("build", "--summary", "all")
       Invoke-ZigWithRetry -Args @("build", "test", "--summary", "all")

@@ -17,11 +17,8 @@ test "config library getPaths returns valid XDG paths" {
     var paths = try config_lib.getPaths(allocator);
     defer paths.deinit();
 
-    // Should return non-empty paths
+    // Should return non-empty paths (platform-agnostic check)
     try testing.expect(paths.config_home.len > 0);
-
-    // Config home should contain a valid path
-    try testing.expect(paths.config_home[0] == '/');
 }
 
 test "config library parseFile handles missing file gracefully" {
