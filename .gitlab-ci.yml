@@ -556,10 +556,12 @@ test-windows-unit:
 
       # Create Windows junction points for symlinked test directories
       # (tests/storage -> src/storage, tests/types -> src/types)
-      # Git on Windows does not create Unix symlinks; junctions are the equivalent
+      # Git on Windows creates text files for symlinks; replace with NTFS junctions
       foreach ($pair in @(@{ Link = "tests\storage"; Target = "src\storage" }, @{ Link = "tests\types"; Target = "src\types" })) {
-        if (Test-Path $pair.Link) { cmd /c "rmdir /S /Q $($pair.Link)" 2>&1 | Out-Null }
-        cmd /c "mklink /J $($pair.Link) $($pair.Target)"
+        $target = (Resolve-Path $pair.Target).Path
+        if (Test-Path $pair.Link) { Remove-Item -Path $pair.Link -Force }
+        New-Item -ItemType Junction -Path $pair.Link -Target $target | Out-Null
+        Write-Host "Junction: $($pair.Link) -> $target"
       }
 
       Invoke-ZigWithRetry -Args @("test", "tests/test_cross_platform_stdio.zig")
