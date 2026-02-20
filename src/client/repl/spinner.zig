@@ -27,21 +27,21 @@ pub const TerminalType = enum {
 
         if (comptime builtin.os.tag == .windows) {
             // Check for modern Windows terminals via environment variables
-            // std.posix.getenv is unavailable on Windows; use std.process.getEnvVarOwned
-            const ally = std.heap.page_allocator;
-            if (std.process.getEnvVarOwned(ally, "WT_SESSION")) |val| {
-                ally.free(val);
+            // std.posix.getenv is unavailable on Windows; use FixedBufferAllocator + getEnvVarOwned
+            var buf: [8192]u8 = undefined;
+            var fba = std.heap.FixedBufferAllocator.init(&buf);
+            if (std.process.getEnvVarOwned(fba.allocator(), "WT_SESSION")) |_| {
                 return .windows_modern;
             } else |_| {}
-            if (std.process.getEnvVarOwned(ally, "TERM_PROGRAM")) |prog| {
-                defer ally.free(prog);
+            fba.reset();
+            if (std.process.getEnvVarOwned(fba.allocator(), "TERM_PROGRAM")) |prog| {
                 if (std.mem.eql(u8, prog, "vscode")) {
                     return .windows_modern;
                 }
             } else |_| {}
+            fba.reset();
             // Check for PowerShell via PSModulePath
-            if (std.process.getEnvVarOwned(ally, "PSModulePath")) |val| {
-                ally.free(val);
+            if (std.process.getEnvVarOwned(fba.allocator(), "PSModulePath")) |_| {
                 return .windows_modern;
             } else |_| {}
             // Fallback to basic Windows console
