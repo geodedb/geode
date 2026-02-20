@@ -46,47 +46,25 @@ pub fn checkForInterrupt() bool {
         }
     }
 
-    // Also check stdin for raw mode terminals
-    if (builtin.os.tag == .windows) {
-        // Windows: Check console input for Ctrl+C
-        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return false;
-        // Peek at the input to see if it's a Ctrl+C
-        var input_record: std.os.windows.INPUT_RECORD = undefined;
-        var events_read: u32 = 0;
-        if (std.os.windows.kernel32.PeekConsoleInputW(handle, @ptrCast(&input_record), 1, &events_read) == 0) {
-            return false;
-        }
-        if (events_read == 0) return false;
+    // On Windows, Ctrl+C is handled exclusively via SetConsoleCtrlHandler in platform.zig.
+    // The checkAndClearSigint() call above is sufficient for Windows.
+    if (comptime builtin.os.tag == .windows) return false;
 
-        // Check if it's a key event for Ctrl+C
-        if (input_record.EventType == 1) { // KEY_EVENT
-            const key_event = input_record.Event.KeyEvent;
-            if (key_event.bKeyDown != 0 and key_event.wVirtualKeyCode == 'C' and
-                (key_event.dwControlKeyState & 0x0008) != 0)
-            { // LEFT_CTRL_PRESSED
-                // Consume the event
-                _ = std.os.windows.kernel32.ReadConsoleInputW(handle, @ptrCast(&input_record), 1, &events_read);
-                return true;
-            }
+    // POSIX: use poll with 0 timeout to check if data is available
+    var fds = [_]std.posix.pollfd{
+        .{ .fd = std.posix.STDIN_FILENO, .events = std.posix.POLL.IN, .revents = 0 },
+    };
+    const result = std.posix.poll(&fds, 0) catch return false;
+    if (result > 0 and (fds[0].revents & std.posix.POLL.IN) != 0) {
+        // Data available, check if it's Ctrl+C (ASCII 3)
+        var buf: [1]u8 = undefined;
+        const stdin = platform.getStdinHandle();
+        const bytes_read = stdin.read(&buf) catch return false;
+        if (bytes_read > 0 and buf[0] == 3) { // Ctrl+C
+            return true;
         }
-        return false;
-    } else {
-        // POSIX: use poll with 0 timeout to check if data is available
-        var fds = [_]std.posix.pollfd{
-            .{ .fd = std.posix.STDIN_FILENO, .events = std.posix.POLL.IN, .revents = 0 },
-        };
-        const result = std.posix.poll(&fds, 0) catch return false;
-        if (result > 0 and (fds[0].revents & std.posix.POLL.IN) != 0) {
-            // Data available, check if it's Ctrl+C (ASCII 3)
-            var buf: [1]u8 = undefined;
-            const stdin = platform.getStdinHandle();
-            const bytes_read = stdin.read(&buf) catch return false;
-            if (bytes_read > 0 and buf[0] == 3) { // Ctrl+C
-                return true;
-            }
-        }
-        return false;
     }
+    return false;
 }
 
 // CANARY: REQ=REQ-REPL-QUIC-001; FEATURE="REPL QUIC Integration"; ASPECT=ClientSession; STATUS=TESTED; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=repl; UPDATED=2026-01-15
