@@ -1024,10 +1024,7 @@ pub fn build(b: *std.Build) void {
     const run_lsp_tests = b.addRunArtifact(lsp_tests);
     test_step.dependOn(&run_lsp_tests.step);
 
-    if (is_windows) {
-        const echo_skip = b.addSystemCommand(&.{ "sh", "-lc", "echo 'Skipping fuzz on Windows (unsupported in Zig 0.15.1)'" });
-        test_step.dependOn(&echo_skip.step);
-    } else {
+    if (!is_windows) {
         const parser_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/parser_fuzz.zig"), .target = target, .optimize = .Debug }) });
         parser_fuzz_tests.root_module.addImport("geode", root_mod);
         parser_fuzz_tests.root_module.addImport("build_options", build_options_mod);
