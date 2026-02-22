@@ -76,11 +76,11 @@
         },
 
         // QUIC v1/v2 protocol implementation
-        // GAP-0200: Updated to v0.1.7 with mutex-based thread-safety for Recovery struct
-        // GAP-0203: Discard frames for closed connections (RFC 9000 §10.2)
+        // Updated 2026-02: batch UDP recv, retry hardening, initial_max_stream_data_uni,
+        // stream credit recycling, transport.zig PollSync/endpointInit migration.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#da487422a46345f27a2782d0dae9500c72338225",
-            .hash = "quic-0.1.6-gBIqUTEaOwBiGabrTr0Z2S23pGnY8oDspoOFUQri1ZZC",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#49a0d427a539a9fa38a92c32cd143cd379338b4d",
+            .hash = "quic-0.1.6-gBIqUSDLMgAOKQ5uZ8LslAkBNXqIpztbLPiiH_zK26nv",
         },
 
         // =======================================================================

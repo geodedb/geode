@@ -3,6 +3,10 @@ const std = @import("std");
 // VENDOR QUIC MIGRATION COMPLETE - 2025-11-20
 // This module now uses the vendor/quic library's native Endpoint API
 // Following the pattern from vendor/quic/echo_quic_server.zig
+//
+// Updated 2026-02: Endpoint stored as heap pointer (api.endpointInit/endpointDeinit),
+// PollSync uses mutex+condvar instead of atomic spin-loops, QuicConfig heap-allocated
+// to ensure cert/key DER lifetime, quic_connection nullable field on QuicConnection.
 
 // CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICCore; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICCore; OWNER=wire; UPDATED=2025-11-21
 
@@ -47,46 +51,47 @@ inline fn debugLog(comptime fmt: []const u8, args: anytype) void {
 /// - Handler threads are "readers" (can do I/O concurrently with each other)
 /// - The main thread is the "writer" (needs exclusive access for poll())
 ///
-/// Uses SeqCst ordering to ensure a total order and eliminate TOCTOU races.
+/// Uses mutex+condvar for correct and efficient blocking without spin-loops.
 pub const PollSync = struct {
-    /// Set to true by the main thread when it wants to poll.
-    /// Handler threads check this before starting I/O and back off if set.
-    poll_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    /// Count of handler threads currently performing connection I/O.
-    active_io_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    mu: std.Thread.Mutex = .{},
+    cv: std.Thread.Condition = .{},
+    poll_requested: bool = false,
+    active_io_count: u32 = 0,
 
     /// Called by handler threads before I/O. Blocks until safe to proceed.
     pub fn enterIo(self: *PollSync) void {
-        while (true) {
-            // Increment count first, then check flag — this ordering with SeqCst
-            // guarantees that either we see poll_requested=true (and back off),
-            // or the main thread sees our incremented count (and waits for us).
-            _ = self.active_io_count.fetchAdd(1, .seq_cst);
-            if (!self.poll_requested.load(.seq_cst)) return; // Safe to proceed
-            // Poll was requested — back off and wait
-            _ = self.active_io_count.fetchSub(1, .seq_cst);
-            while (self.poll_requested.load(.seq_cst)) {
-                std.Thread.sleep(50 * std.time.ns_per_us);
-            }
+        self.mu.lock();
+        defer self.mu.unlock();
+        while (self.poll_requested) {
+            self.cv.wait(&self.mu);
         }
+        self.active_io_count += 1;
     }
 
     /// Called by handler threads after I/O.
     pub fn leaveIo(self: *PollSync) void {
-        _ = self.active_io_count.fetchSub(1, .seq_cst);
+        self.mu.lock();
+        defer self.mu.unlock();
+        if (self.active_io_count > 0) self.active_io_count -= 1;
+        if (self.active_io_count == 0) self.cv.signal();
     }
 
     /// Called by the main thread before poll(). Blocks until all I/O finishes.
     pub fn enterPoll(self: *PollSync) void {
-        self.poll_requested.store(true, .seq_cst);
-        while (self.active_io_count.load(.seq_cst) > 0) {
-            std.Thread.sleep(50 * std.time.ns_per_us);
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.poll_requested = true;
+        while (self.active_io_count > 0) {
+            self.cv.wait(&self.mu);
         }
     }
 
     /// Called by the main thread after poll().
     pub fn leavePoll(self: *PollSync) void {
-        self.poll_requested.store(false, .seq_cst);
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.poll_requested = false;
+        self.cv.broadcast();
     }
 };
 
@@ -97,7 +102,8 @@ pub const DEFAULT_PORT: u16 = 3141;
 pub const QuicTransport = struct {
     allocator: std.mem.Allocator,
     config: Config,
-    endpoint: ?Endpoint = null,
+    /// Heap-allocated endpoint (via api.endpointInit / api.endpointDeinit).
+    endpoint: ?*Endpoint = null,
     connections: std.ArrayList(*QuicConnection),
     // GAP-0202: Mutex for thread-safe connection list access in async mode
     connections_mutex: std.Thread.Mutex = .{},
@@ -105,13 +111,13 @@ pub const QuicTransport = struct {
     // Handler threads add inner connections here after sending CONNECTION_CLOSE;
     // the main accept loop thread processes them via drainPendingDestroy()
     // where endpoint bookkeeping can be safely updated without racing with poll().
-    pending_destroy: std.ArrayList(*Connection) = .empty,
+    pending_destroy: std.ArrayList(*Connection),
     pending_destroy_mutex: std.Thread.Mutex = .{},
     /// Readers-writer sync: handler threads are "readers" (concurrent I/O),
     /// main thread is the "writer" (exclusive poll). See PollSync docs.
     poll_sync: PollSync = .{},
-    cert_der: ?[]u8 = null,
-    key_der: ?[]u8 = null,
+    /// Heap-allocated QUIC config; owns the inline cert/key DER byte slices.
+    quic_config: ?*VendorQuicConfig = null,
 
     pub const Config = struct {
         address: []const u8 = "0.0.0.0",
@@ -138,6 +144,7 @@ pub const QuicTransport = struct {
             .allocator = allocator,
             .config = config,
             .connections = try std.ArrayList(*QuicConnection).initCapacity(allocator, 0),
+            .pending_destroy = try std.ArrayList(*Connection).initCapacity(allocator, 0),
         };
     }
 
@@ -146,23 +153,35 @@ pub const QuicTransport = struct {
         // These are inner connections queued by handler threads via destroyConnection().
         self.drainPendingDestroy();
 
-        for (self.connections.items) |conn| {
+        self.connections_mutex.lock();
+        var conns = self.connections;
+        self.connections = .empty;
+        self.connections_mutex.unlock();
+
+        for (conns.items) |conn| {
             conn.close();
             self.allocator.destroy(conn);
         }
-        self.connections.deinit(self.allocator);
+        conns.deinit(self.allocator);
+
+        self.drainPendingDestroy();
         self.pending_destroy.deinit(self.allocator);
 
-        if (self.endpoint) |*ep| {
-            ep.deinit();
+        if (self.endpoint) |ep| {
+            api.endpointDeinit(ep);
             self.endpoint = null;
         }
 
-        if (self.cert_der) |cert| {
-            self.allocator.free(cert);
-        }
-        if (self.key_der) |key| {
-            self.allocator.free(key);
+        // Free the heap-allocated config and its owned cert/key DER bytes.
+        if (self.quic_config) |cfg| {
+            if (cfg.inline_server_cert_der) |cert| {
+                self.allocator.free(cert);
+            }
+            if (cfg.inline_server_priv_p256) |key| {
+                self.allocator.free(key);
+            }
+            self.allocator.destroy(cfg);
+            self.quic_config = null;
         }
     }
 
@@ -181,7 +200,7 @@ pub const QuicTransport = struct {
         defer self.poll_sync.leavePoll();
 
         for (self.pending_destroy.items) |inner_conn| {
-            if (self.endpoint) |*ep| {
+            if (self.endpoint) |ep| {
                 // Use vendor API to properly remove from all endpoint tracking
                 // tables (conns, accepted, retired, timers) before freeing.
                 api.destroy(ep, inner_conn);
@@ -224,7 +243,7 @@ pub const QuicTransport = struct {
         defer cert_file.close();
         const cert_pem = try cert_file.readToEndAlloc(self.allocator, 1024 * 1024);
         defer self.allocator.free(cert_pem);
-        self.cert_der = api.pem.parseCertificate(self.allocator, cert_pem) catch |err| {
+        const inline_cert_der = api.pem.parseCertificate(self.allocator, cert_pem) catch |err| {
             tlog.err("failed to parse certificate", &.{
                 Attr.string("path", self.config.cert_path),
                 Attr.string("error", @errorName(err)),
@@ -237,18 +256,24 @@ pub const QuicTransport = struct {
         defer key_file.close();
         const key_pem = try key_file.readToEndAlloc(self.allocator, 1024 * 1024);
         defer self.allocator.free(key_pem);
-        self.key_der = api.pem.parsePrivateKey(self.allocator, key_pem) catch |err| {
+        const inline_priv_key = api.pem.parsePrivateKey(self.allocator, key_pem) catch |err| {
             tlog.err("failed to parse private key", &.{
                 Attr.string("path", self.config.key_path),
                 Attr.string("error", @errorName(err)),
             });
+            self.allocator.free(inline_cert_der);
             return QuicError.CertificateError;
         };
 
-        // Create QUIC configuration using simplified public API
-        // Note: Detailed RFC 9000 parameters (max_streams_bidi, max_stream_data_*, etc.)
-        // are not exposed in the public QuicConfig and use library defaults
-        var quic_config = VendorQuicConfig{
+        // Allocate QuicConfig on the heap so cert/key DER slices remain valid
+        // for the lifetime of the endpoint (endpointInit stores references).
+        const cfg = try self.allocator.create(VendorQuicConfig);
+        errdefer {
+            self.allocator.free(inline_cert_der);
+            self.allocator.free(inline_priv_key);
+            self.allocator.destroy(cfg);
+        }
+        cfg.* = VendorQuicConfig{
             .version = .v1,
             .alpn = &[_][]const u8{"geode/1"},
             .cc = .cubic,
@@ -269,9 +294,12 @@ pub const QuicTransport = struct {
             .allow_insecure = self.config.allow_insecure,
             .aead_confidentiality_limit_override = null,
             .aead_integrity_limit_override = null,
-            .inline_server_cert_der = self.cert_der,
-            .inline_server_priv_p256 = self.key_der,
+            .max_connections = self.config.max_connections,
+            .require_client_cert = self.config.require_client_cert,
+            .inline_server_cert_der = inline_cert_der,
+            .inline_server_priv_p256 = inline_priv_key,
         };
+        self.quic_config = cfg;
 
         // Normalize "localhost" to "127.0.0.1"
         const bind_address = if (std.mem.eql(u8, self.config.address, "localhost"))
@@ -283,8 +311,8 @@ pub const QuicTransport = struct {
         const bind_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ bind_address, self.config.port });
         defer self.allocator.free(bind_addr);
 
-        // Initialize endpoint using native API (stores by value)
-        self.endpoint = try Endpoint.init(self.allocator, bind_addr, &quic_config);
+        // Initialize endpoint using api.endpointInit (heap-allocates the Endpoint struct).
+        self.endpoint = try api.endpointInit(&self.allocator, bind_addr, cfg);
 
         tlog.info("QUIC transport listening", &.{
             Attr.int("port", @intCast(self.config.port)),
@@ -296,13 +324,19 @@ pub const QuicTransport = struct {
     }
 
     pub fn poll(self: *QuicTransport, timeout_ms: u32) !void {
-        if (self.endpoint) |*ep| {
-            try ep.poll(@intCast(timeout_ms));
+        if (self.endpoint) |ep| {
+            const timeout_i32: i32 = if (timeout_ms > std.math.maxInt(i32))
+                std.math.maxInt(i32)
+            else
+                @intCast(timeout_ms);
+            self.poll_sync.enterPoll();
+            defer self.poll_sync.leavePoll();
+            try api.poll(ep, timeout_i32);
         }
     }
 
     pub fn accept(self: *QuicTransport) !*QuicConnection {
-        if (self.endpoint) |*ep| {
+        if (self.endpoint) |ep| {
             // Poll the endpoint to process incoming UDP packets and complete handshakes
             // This is required before connections can be accepted
             // Keep polling until a connection is ready with available streams
@@ -321,16 +355,14 @@ pub const QuicTransport = struct {
                 // Acquire exclusive poll access — blocks new handler I/O and
                 // waits for in-flight I/O to complete. This prevents concurrent
                 // HashMap access in the QUIC library (stream_txs corruption).
+                // With mutex+condvar PollSync, leavePoll() broadcasts to wake
+                // waiting I/O threads immediately — no extra sleep required.
                 self.poll_sync.enterPoll();
                 ep.poll(1) catch |err| {
                     self.poll_sync.leavePoll();
                     return err;
                 };
                 self.poll_sync.leavePoll();
-                // Sleep 100μs after releasing poll lock so handler threads can
-                // enter and complete their I/O. enterIo() checks every 50μs, so
-                // this guarantees at least one full check cycle without interference.
-                std.Thread.sleep(100 * std.time.ns_per_us);
 
                 // Get a connection if we don't have one yet
                 if (pending_conn == null) {
@@ -343,6 +375,7 @@ pub const QuicTransport = struct {
                         const wrapper = try self.allocator.create(QuicConnection);
                         wrapper.* = QuicConnection{
                             .allocator = self.allocator,
+                            .quic_connection = conn,
                             .inner = conn,
                             .streams = try std.ArrayList(*QuicStream).initCapacity(self.allocator, 0),
                             .poll_sync = &self.poll_sync,
@@ -364,6 +397,7 @@ pub const QuicTransport = struct {
                 const wrapper = try self.allocator.create(QuicConnection);
                 wrapper.* = QuicConnection{
                     .allocator = self.allocator,
+                    .quic_connection = conn,
                     .inner = conn,
                     .streams = try std.ArrayList(*QuicStream).initCapacity(self.allocator, 0),
                     .poll_sync = &self.poll_sync,
@@ -381,7 +415,7 @@ pub const QuicTransport = struct {
     }
 
     pub fn tryAccept(self: *QuicTransport) ?*QuicConnection {
-        if (self.endpoint) |*ep| {
+        if (self.endpoint) |ep| {
             // Wait for handler threads then poll
             self.poll_sync.enterPoll();
             ep.poll(1) catch {
@@ -393,6 +427,7 @@ pub const QuicTransport = struct {
             const wrapper = self.allocator.create(QuicConnection) catch return null;
             wrapper.* = QuicConnection{
                 .allocator = self.allocator,
+                .quic_connection = conn,
                 .inner = conn,
                 .streams = std.ArrayList(*QuicStream).initCapacity(self.allocator, 0) catch return null,
                 .poll_sync = &self.poll_sync,
@@ -448,8 +483,10 @@ pub const QuicTransport = struct {
         // Queue the inner connection for deferred destruction on the main thread.
         // drainPendingDestroy() will use api.destroy() to properly remove it
         // from all endpoint bookkeeping before freeing.
+        // Use quic_connection (nullable, nulled by close()) with inner as fallback.
+        const inner_conn = conn.quic_connection orelse conn.inner;
         self.pending_destroy_mutex.lock();
-        self.pending_destroy.append(self.allocator, conn.inner) catch {
+        self.pending_destroy.append(self.allocator, inner_conn) catch {
             // If append fails (OOM), fall back to direct deinit.
             // This risks a crash but avoids a resource leak.
             conn.inner.deinit();
@@ -501,6 +538,9 @@ pub const QuicTransport = struct {
 
 pub const QuicConnection = struct {
     allocator: std.mem.Allocator,
+    /// Nullable; nulled in close() to prevent double-close.
+    quic_connection: ?*Connection = null,
+    /// Non-nullable alias for the underlying connection (stays set after close).
     inner: *Connection,
     streams: std.ArrayList(*QuicStream),
     /// Shared poll synchronization — see PollSync docs.
@@ -511,7 +551,8 @@ pub const QuicConnection = struct {
         defer {
             if (self.poll_sync) |ps| ps.leaveIo();
         }
-        const stream_id = try self.inner.openStream(bidirectional);
+        const qc = self.quic_connection orelse return QuicError.Closed;
+        const stream_id = try api.openStream(qc, bidirectional);
 
         const stream = try self.allocator.create(QuicStream);
         stream.* = QuicStream{
@@ -530,7 +571,8 @@ pub const QuicConnection = struct {
         defer {
             if (self.poll_sync) |ps| ps.leaveIo();
         }
-        const stream_id = try self.inner.acceptStream();
+        const qc = self.quic_connection orelse return QuicError.Closed;
+        const stream_id = try api.acceptStream(qc);
         // GAP-0200: Debug print removed from hot path for performance
         const stream = try self.allocator.create(QuicStream);
         stream.* = QuicStream{
@@ -545,18 +587,21 @@ pub const QuicConnection = struct {
     }
 
     pub fn isDrained(self: *QuicConnection) bool {
-        return api.isDrained(self.inner);
+        const qc = self.quic_connection orelse return true;
+        return api.isDrained(qc);
     }
 
     pub fn isHandshakeConfirmed(self: *QuicConnection) bool {
-        return api.isHandshakeConfirmed(self.inner);
+        const qc = self.quic_connection orelse return false;
+        return api.isHandshakeConfirmed(qc);
     }
 
     /// Retrieve the peer's leaf certificate in DER format from the TLS handshake.
     /// Returns null if no client certificate was presented or the TLS context is unavailable.
     /// CANARY: REQ=REQ-AUTH-MTLS-QUIC-001; FEATURE="mTLS over QUIC"; ASPECT=PeerCertExtraction; STATUS=IMPL; OWNER=transport; UPDATED=2026-02-13
     pub fn getPeerCertificateDer(self: *QuicConnection) ?[]const u8 {
-        const tls_ctx = self.inner.tls_context orelse return null;
+        const qc = self.quic_connection orelse return null;
+        const tls_ctx = qc.tls_context orelse return null;
         const chain = tls_ctx.peer_cert_chain orelse return null;
         if (chain.len == 0) return null;
         return chain[0];
@@ -597,10 +642,12 @@ pub const QuicConnection = struct {
             self.allocator.destroy(stream);
         }
         self.streams.deinit(self.allocator);
-        api.closeConnection(self.inner, 0) catch {};
         // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-001; FEATURE="ConnectionMemoryManagement"; ASPECT=ResourceLeak; STATUS=EXEMPT; OWNER=transport; UPDATED=2025-12-27
-        // Call deinit() on the inner connection to free TLS state, streams, crypto buffers, etc.
-        self.inner.deinit();
+        // Use quic_connection and null it out to prevent double-close.
+        if (self.quic_connection) |qc| {
+            api.closeConnection(qc, 0) catch {};
+            self.quic_connection = null;
+        }
     }
 };
 
@@ -709,8 +756,11 @@ pub const QuicStream = struct {
 
 pub const QuicClient = struct {
     allocator: std.mem.Allocator,
-    endpoint: ?Endpoint = null,
+    /// Heap-allocated endpoint (via api.endpointInit / api.endpointDeinit).
+    endpoint: ?*Endpoint = null,
     connection: ?*Connection = null,
+    /// Heap-allocated QUIC config; freed in deinit().
+    quic_config: ?*VendorQuicConfig = null,
     alpn_storage: [1][]const u8 = undefined,
 
     pub fn init(allocator: std.mem.Allocator) QuicClient {
@@ -727,10 +777,14 @@ pub const QuicClient = struct {
             self.connection = null;
             api.closeConnection(conn, 0) catch {};
         }
-        if (self.endpoint) |*ep| {
-            ep.deinit();
+        if (self.endpoint) |ep| {
+            api.endpointDeinit(ep);
+            self.endpoint = null;
         }
-        self.endpoint = null;
+        if (self.quic_config) |cfg| {
+            self.allocator.destroy(cfg);
+            self.quic_config = null;
+        }
     }
 
     pub fn connect(self: *QuicClient, host: []const u8, port: u16) !void {
@@ -745,10 +799,11 @@ pub const QuicClient = struct {
         else
             address;
 
+        // Allocate QUIC config on the heap so the alpn_storage slice remains valid.
+        const cfg = try self.allocator.create(VendorQuicConfig);
+        errdefer self.allocator.destroy(cfg);
         // ALPN is stored in struct field to persist beyond this function call
-        // Create QUIC configuration for client using simplified public API
-        // Note: Detailed RFC 9000 parameters use library defaults
-        var quic_config = VendorQuicConfig{
+        cfg.* = VendorQuicConfig{
             .version = .v1,
             .alpn = &self.alpn_storage,
             .cc = .cubic,
@@ -773,9 +828,10 @@ pub const QuicClient = struct {
             .inline_server_cert_der = null,
             .inline_server_priv_p256 = null,
         };
+        self.quic_config = cfg;
 
-        // Initialize client endpoint (bind to any port)
-        self.endpoint = try Endpoint.init(self.allocator, "0.0.0.0:0", &quic_config);
+        // Initialize client endpoint using api.endpointInit (heap-allocates Endpoint).
+        self.endpoint = try api.endpointInit(&self.allocator, "0.0.0.0:0", cfg);
 
         // Create server address string
         const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ normalized_address, port });
@@ -784,7 +840,7 @@ pub const QuicClient = struct {
         // Connect to server using public API
         // When allow_insecure is true, use "localhost" as SNI to match self-signed cert CN
         const sni = if (allow_insecure) "localhost" else normalized_address;
-        self.connection = try api.connect(&self.endpoint.?, server_addr, sni);
+        self.connection = try api.connect(self.endpoint.?, server_addr, sni);
     }
 
     pub fn connectEx(self: *QuicClient, address: []const u8, port: u16, ca_cert_path: ?[]const u8, client_cert_path: ?[]const u8, client_key_path: ?[]const u8) !void {
@@ -795,8 +851,10 @@ pub const QuicClient = struct {
         else
             address;
 
-        // Create QUIC configuration for client with custom certificates using simplified public API
-        var quic_config = VendorQuicConfig{
+        // Allocate QUIC config on the heap so the alpn_storage slice remains valid.
+        const cfg = try self.allocator.create(VendorQuicConfig);
+        errdefer self.allocator.destroy(cfg);
+        cfg.* = VendorQuicConfig{
             .version = .v1,
             .alpn = &self.alpn_storage,
             .cc = .cubic,
@@ -821,16 +879,17 @@ pub const QuicClient = struct {
             .inline_server_cert_der = null,
             .inline_server_priv_p256 = null,
         };
+        self.quic_config = cfg;
 
-        // Initialize client endpoint (bind to any port)
-        self.endpoint = try Endpoint.init(self.allocator, "0.0.0.0:0", &quic_config);
+        // Initialize client endpoint using api.endpointInit (heap-allocates Endpoint).
+        self.endpoint = try api.endpointInit(&self.allocator, "0.0.0.0:0", cfg);
 
         // Create server address string
         const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ normalized_address, port });
         defer self.allocator.free(server_addr);
 
         // Connect to server using public API
-        self.connection = try api.connect(&self.endpoint.?, server_addr, normalized_address);
+        self.connection = try api.connect(self.endpoint.?, server_addr, normalized_address);
     }
 
     pub fn waitForHandshake(self: *QuicClient, timeout_secs: u32) !void {
@@ -842,7 +901,7 @@ pub const QuicClient = struct {
         const start = std.time.nanoTimestamp();
 
         while (std.time.nanoTimestamp() - start < timeout_ns) {
-            try self.endpoint.?.poll(10);
+            try api.poll(self.endpoint.?, 10);
             if (api.isHandshakeConfirmed(self.connection.?)) {
                 return;
             }
@@ -863,7 +922,7 @@ pub const QuicClient = struct {
             .allocator = self.allocator,
             .connection = self.connection.?,
             .stream_id = stream_id,
-            .endpoint = &self.endpoint.?,
+            .endpoint = self.endpoint.?,
         };
         return stream;
     }
@@ -873,8 +932,12 @@ pub const QuicClient = struct {
     }
 
     pub fn poll(self: *QuicClient, timeout_ms: u32) !void {
-        if (self.endpoint) |*ep| {
-            try ep.poll(@intCast(timeout_ms));
+        if (self.endpoint) |ep| {
+            const timeout_i32: i32 = if (timeout_ms > std.math.maxInt(i32))
+                std.math.maxInt(i32)
+            else
+                @intCast(timeout_ms);
+            try api.poll(ep, timeout_i32);
         }
     }
 };
@@ -907,7 +970,7 @@ pub const QuicClientStream = struct {
             if (err == error.WouldBlock) {
                 if (debug_read) std.debug.print("[QUIC] read: WouldBlock, polling\n", .{});
                 // Drive the endpoint to allow incoming packets
-                self.endpoint.poll(10) catch {};
+                api.poll(self.endpoint, 10) catch {};
                 return error.WouldBlock;
             }
             if (debug_read) std.debug.print("[QUIC] read: error {}\n", .{err});
@@ -915,7 +978,7 @@ pub const QuicClientStream = struct {
         };
         if (debug_read) std.debug.print("[QUIC] read: got {} bytes\n", .{result});
         if (result == 0) {
-            self.endpoint.poll(10) catch {};
+            api.poll(self.endpoint, 10) catch {};
         }
         return result;
     }
@@ -961,7 +1024,7 @@ pub const QuicClientStream = struct {
                         return error.UnexpectedEndOfStream;
                     }
                     // Poll for incoming data and wait before retrying
-                    self.endpoint.poll(10) catch {};
+                    api.poll(self.endpoint, 10) catch {};
                     std.Thread.sleep(5 * std.time.ns_per_ms);
                     continue;
                 }
@@ -976,7 +1039,7 @@ pub const QuicClientStream = struct {
                 if (retry_count > max_retries) {
                     return error.UnexpectedEndOfStream;
                 }
-                self.endpoint.poll(10) catch {};
+                api.poll(self.endpoint, 10) catch {};
                 std.Thread.sleep(5 * std.time.ns_per_ms);
                 continue;
             }
