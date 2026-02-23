@@ -1,7 +1,17 @@
 const std = @import("std");
 // CANARY: REQ=REQ-GQL-026; FEATURE="Conformance/Flagger"; ASPECT=FlaggerCompleteness; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_026_FlaggerCompleteness,TestCANARY_REQ_GQL_026_FlaggerNegativeMissing; BENCH=BenchmarkCANARY_REQ_GQL_026_FlaggerGenerationVarianceEnvelope; OWNER=conformance; UPDATED=2026-02-23
-// CANARY: REQ=GQL-39075-RQ-0004; FEATURE="ConformanceProfile/ISOFeatureIDs"; ASPECT=IsoFeatures; STATUS=TESTED; TEST=GQL39075_RQ0004_iso_features_in_profile,GQL39075_RQ0005_minimum_conformance_gating; OWNER=conformance; UPDATED=2026-02-23
-// CANARY: REQ=GQL-39075-RQ-0024; FEATURE="ConformanceProfile/AnnexB"; ASPECT=ImplDefined; STATUS=TESTED; TEST=GQL39075_RQ0024_conformance_json_includes_iso_features; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0004; FEATURE="ConformanceProfile/ISOFeatureIDs"; ASPECT=IsoFeatures; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0004_IsoFeaturesInProfile,TestCANARY_GQL39075_RQ_0005_MinimumConformanceGating; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0024; FEATURE="ConformanceProfile/AnnexB"; ASPECT=ImplDefined; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0024_ConformanceJsonIncludesIsoFeatures,TestCANARY_GQL39075_RQ_0024_ImplDefinedFlagsComplete; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0006; FEATURE="GQL Conformance Profile"; ASPECT=UnicodeVersionDeclaration; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0006_UnicodeVersionDeclared; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0007; FEATURE="GQL Conformance Profile"; ASPECT=MinPropertyTypesDeclaration; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0007_MinPropertyTypes; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0008; FEATURE="GQL Conformance Profile"; ASPECT=CharRepertoireDeclaration; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0008_CharRepertoire; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0009; FEATURE="GQL Conformance Profile"; ASPECT=ExactlyOneDefaultCollation; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0009_ExactlyOneCollation; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0010; FEATURE="GQL Conformance Profile"; ASPECT=StringMaxLengthDeclaration; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0010_StringMaxLength; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0013; FEATURE="GQL Conformance Profile"; ASPECT=UtcSlsDeclaration; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0013_UtcSlsDeclared; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0014; FEATURE="GQL Conformance Profile"; ASPECT=TemporalLiteralFormat; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0014_TemporalFormat; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0015; FEATURE="GQL Conformance Profile"; ASPECT=SecondsPrecisionDeclaration; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0015_SecondsPrecision6; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0016; FEATURE="GQL Conformance Profile"; ASPECT=BytestringMaxLengthDeclaration; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0016_BytestringMaxLength; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0017; FEATURE="GQL Conformance Profile"; ASPECT=SessionParamPrefixDeclaration; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0017_SessionParamPrefix; OWNER=conformance; UPDATED=2026-02-23
 
 /// ISO/IEC 39075:2024 §24.2 optional feature IDs required for minimum conformance claim.
 pub const IsoFeatures = struct {
@@ -43,8 +53,6 @@ pub const ImplDefined = struct {
     confusable_detection: []const u8 = "TR39-skeleton",
     // Minimum supported property value types (§24.2)
     min_property_types: []const u8 = "STRING,BOOLEAN,SIGNEDINTEGER,FLOAT",
-    // Temporal literal format declaration
-    temporal_literal_format: []const u8 = "ISO8601",
 };
 
 pub const Profile = struct {
@@ -223,14 +231,14 @@ test "BenchmarkCANARY_REQ_GQL_026_FlaggerGenerationVarianceEnvelope" {
     try std.testing.expect(cv <= 0.30);
 }
 
-test "GQL39075_RQ0004_iso_features_in_profile" {
+test "TestCANARY_GQL39075_RQ_0004_IsoFeaturesInProfile" {
     const prof = Profile{ .features = .{}, .iso_features = .{}, .impl_defined = .{} };
     try std.testing.expect(prof.iso_features.GG01 == true);
     try std.testing.expect(prof.iso_features.GT01 == true);
     try std.testing.expect(prof.iso_features.GA08 == true);
 }
 
-test "GQL39075_RQ0005_minimum_conformance_gating" {
+test "TestCANARY_GQL39075_RQ_0005_MinimumConformanceGating" {
     const prof = Profile{ .features = .{}, .iso_features = .{}, .impl_defined = .{} };
     const has_gg01_or_gg02 = prof.iso_features.GG01 or prof.iso_features.GG02;
     const has_gg20_23 = prof.iso_features.GG20 or prof.iso_features.GG21 or
@@ -238,42 +246,42 @@ test "GQL39075_RQ0005_minimum_conformance_gating" {
     try std.testing.expect(has_gg01_or_gg02 and has_gg20_23);
 }
 
-test "GQL39075_RQ0006_unicode_version_declared" {
+test "TestCANARY_GQL39075_RQ_0006_UnicodeVersionDeclared" {
     const prof = Profile{ .features = .{}, .iso_features = .{}, .impl_defined = .{} };
     try std.testing.expectEqualStrings("15.1.0", prof.impl_defined.unicode_version);
 }
 
-test "GQL39075_RQ0009_exactly_one_collation" {
+test "TestCANARY_GQL39075_RQ_0009_ExactlyOneCollation" {
     const prof = Profile{ .features = .{}, .iso_features = .{}, .impl_defined = .{} };
     try std.testing.expect(prof.impl_defined.default_collation.len > 0);
 }
 
-test "GQL39075_RQ0010_string_max_length" {
+test "TestCANARY_GQL39075_RQ_0010_StringMaxLength" {
     const prof = Profile{ .features = .{}, .iso_features = .{}, .impl_defined = .{} };
     try std.testing.expect(prof.impl_defined.string_max_length >= 16383);
 }
 
-test "GQL39075_RQ0013_utc_sls_declared" {
+test "TestCANARY_GQL39075_RQ_0013_UtcSlsDeclared" {
     const prof = Profile{ .features = .{}, .iso_features = .{}, .impl_defined = .{} };
     try std.testing.expect(prof.impl_defined.utc_sls == true);
 }
 
-test "GQL39075_RQ0015_seconds_precision_6" {
+test "TestCANARY_GQL39075_RQ_0015_SecondsPrecision6" {
     const prof = Profile{ .features = .{}, .iso_features = .{}, .impl_defined = .{} };
     try std.testing.expect(prof.impl_defined.seconds_precision >= 6);
 }
 
-test "GQL39075_RQ0016_bytestring_max_length" {
+test "TestCANARY_GQL39075_RQ_0016_BytestringMaxLength" {
     const prof = Profile{ .features = .{}, .iso_features = .{}, .impl_defined = .{} };
     try std.testing.expect(prof.impl_defined.bytestring_max_length >= 65534);
 }
 
-test "GQL39075_RQ0017_session_param_prefix" {
+test "TestCANARY_GQL39075_RQ_0017_SessionParamPrefix" {
     const prof = Profile{ .features = .{}, .iso_features = .{}, .impl_defined = .{} };
     try std.testing.expectEqualStrings("_", prof.impl_defined.session_param_prefix);
 }
 
-test "GQL39075_RQ0024_conformance_json_includes_iso_features" {
+test "TestCANARY_GQL39075_RQ_0024_ConformanceJsonIncludesIsoFeatures" {
     var buf = std.ArrayList(u8).init(std.testing.allocator);
     defer buf.deinit(std.testing.allocator);
     const prof = Profile{ .features = .{}, .iso_features = .{}, .impl_defined = .{} };
@@ -287,7 +295,7 @@ test "GQL39075_RQ0024_conformance_json_includes_iso_features" {
     try std.testing.expect(std.mem.indexOf(u8, s, "\"unicode_version\"") != null);
 }
 
-test "GQL39075_RQ0024_impl_defined_flags_complete" {
+test "TestCANARY_GQL39075_RQ_0024_ImplDefinedFlagsComplete" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
@@ -299,4 +307,58 @@ test "GQL39075_RQ0024_impl_defined_flags_complete" {
         if (std.mem.startsWith(u8, f, "UnicodeVersion")) found_unicode = true;
     }
     try std.testing.expect(found_unicode);
+}
+
+test "TestCANARY_GQL39075_RQ_0007_MinPropertyTypes" {
+    // RQ-0007: Implementation declares support for minimum required property types
+    // (STRING, BOOLEAN, SIGNED INTEGER, FLOAT) per ISO 39075 §7.2
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const alloc = gpa.allocator();
+    const flags = try collectImplDefinedFlags(alloc);
+    defer alloc.free(flags);
+    var found = false;
+    for (flags) |f| {
+        if (std.mem.startsWith(u8, f, "MinPropertyTypes=")) {
+            found = true;
+            break;
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "TestCANARY_GQL39075_RQ_0008_CharRepertoire" {
+    // RQ-0008: Implementation declares the source text character repertoire
+    // per ISO 39075 §5.1
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const alloc = gpa.allocator();
+    const flags = try collectImplDefinedFlags(alloc);
+    defer alloc.free(flags);
+    var found = false;
+    for (flags) |f| {
+        if (std.mem.startsWith(u8, f, "CharRepertoire=")) {
+            found = true;
+            break;
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "TestCANARY_GQL39075_RQ_0014_TemporalFormat" {
+    // RQ-0014: Implementation declares temporal literal format (ISO 8601)
+    // per ISO 39075 §8.4
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const alloc = gpa.allocator();
+    const flags = try collectImplDefinedFlags(alloc);
+    defer alloc.free(flags);
+    var found = false;
+    for (flags) |f| {
+        if (std.mem.startsWith(u8, f, "TemporalFormat=")) {
+            found = true;
+            break;
+        }
+    }
+    try std.testing.expect(found);
 }
