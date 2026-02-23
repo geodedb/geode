@@ -42,7 +42,13 @@ pub fn collect(
     },
 ) ![]ImplDefinedFinding {
     var list = try std.ArrayList(ImplDefinedFinding).initCapacity(allocator, 16);
-    errdefer list.deinit();
+    errdefer {
+        // Free heap-allocated detail strings for value-declaration items already appended.
+        for (list.items) |f| {
+            if (isHeapAllocatedCode(f.code)) allocator.free(f.detail);
+        }
+        list.deinit();
+    }
 
     // Optional: zero-length path exclusion policy
     if (opts.zero_length_paths_excluded) {
@@ -100,27 +106,28 @@ pub fn collect(
     return try list.toOwnedSlice();
 }
 
-// freeFindings releases allocator memory for findings whose .detail strings
-// were allocated by collect() (the value-declaration items).
+/// isHeapAllocatedCode returns true for codes whose .detail strings are
+/// allocated by collect() via allocPrint (the 10 value-declaration items).
+/// Boolean-gated items use string literals and must NOT be freed.
+inline fn isHeapAllocatedCode(code: []const u8) bool {
+    const heap_codes = [_][]const u8{
+        "UnicodeVersion",     "StringMaxLength",     "BytestringMaxLength",
+        "SecondsPrec",        "TemporalFormat",      "UtcSls",
+        "SessionParamPrefix", "ConfusableDetection", "MinPropertyTypes",
+        "CharRepertoire",
+    };
+    for (heap_codes) |hc| {
+        if (std.mem.eql(u8, code, hc)) return true;
+    }
+    return false;
+}
+
+// freeFindings releases allocator memory for findings returned by collect().
+// The 10 value-declaration findings have heap-allocated detail strings;
+// the 5 boolean-gated findings use string literals and must not be freed.
 pub fn freeFindings(allocator: std.mem.Allocator, findings: []ImplDefinedFinding) void {
-    // The 10 value-declaration findings (indices from the end) have heap-allocated
-    // detail strings.  The boolean-gated findings use string literals.
-    // Rather than tracking which are heap-allocated, callers should use an arena.
-    // This helper is provided for convenience when using a GPA.
     for (findings) |f| {
-        if (std.mem.startsWith(u8, f.code, "UnicodeVersion") or
-            std.mem.startsWith(u8, f.code, "StringMaxLength") or
-            std.mem.startsWith(u8, f.code, "BytestringMaxLength") or
-            std.mem.startsWith(u8, f.code, "SecondsPrec") or
-            std.mem.startsWith(u8, f.code, "TemporalFormat") or
-            std.mem.startsWith(u8, f.code, "UtcSls") or
-            std.mem.startsWith(u8, f.code, "SessionParamPrefix") or
-            std.mem.startsWith(u8, f.code, "ConfusableDetection") or
-            std.mem.startsWith(u8, f.code, "MinPropertyTypes") or
-            std.mem.startsWith(u8, f.code, "CharRepertoire"))
-        {
-            allocator.free(f.detail);
-        }
+        if (isHeapAllocatedCode(f.code)) allocator.free(f.detail);
     }
     allocator.free(findings);
 }
