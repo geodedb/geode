@@ -3,6 +3,7 @@ GAP-0436,JsonbDepthGuard,SECURITY,TESTED,,,security,2026-02-18,src/types/jsonb.z
 GQL-39075-CK-001,GQLConformance/AllRQs,UnitTestCoverage,TESTED,,,conformance,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md
 GQL-39075-RQ-0003,ConformanceFlagger,AllImplDefined,TESTED,,,conformance,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md
 GQL-39075-RQ-0004,ConformanceProfile/ISOFeatureIDs,IsoFeatures,TESTED,,,conformance,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md
+GQL-39075-RQ-0004,ConformanceProfile/ISOFeatureIDs,IsoFeatures,TESTED,,,conformance,2026-02-23,src/conformance.zig
 GQL-39075-RQ-0011,Confusables/SkeletonAlgorithm,NeverSelfConfusable,TESTED,,,unicode,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md
 GQL-39075-RQ-0012,Confusables/SkeletonAlgorithm,DetectConfusablePair,TESTED,,,unicode,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md
 GQL-39075-RQ-0012,GQLStatus/SQLSTATE42004,ConfusableIdentifier,TESTED,,,conformance,2026-02-23,src/gql/status.zig
@@ -11,6 +12,7 @@ GQL-39075-RQ-0019,GQLStatus/SQLSTATE42000,PrivilegeViolation,TESTED,,,conformanc
 GQL-39075-RQ-0020,GQLStatus/SQLSTATE40003/08007,ConnectionLoss,TESTED,,,conformance,2026-02-23,src/gql/status.zig
 GQL-39075-RQ-0023,ConformanceFlags/GT01,ExplicitTransactionGating,TESTED,,,conformance,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md
 GQL-39075-RQ-0024,ConformanceProfile/AnnexB,ImplDefined,TESTED,,,conformance,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md
+GQL-39075-RQ-0024,ConformanceProfile/AnnexB,ImplDefined,TESTED,,,conformance,2026-02-23,src/conformance.zig
 REQ-0001,Standards & Conformance Requirements,Compliance,TESTED,,,core,2026-01-15,src/gql/parser.zig
 REQ-0002,Language Surface Requirements,Compliance,TESTED,,,core,2026-01-15,src/gql/parser.zig
 REQ-0003,Engine Contract Requirements,Execution,TESTED,,,execution,2026-01-15,src/execution/query_execution.zig
@@ -1257,7 +1259,7 @@ REQ-GQL-025,DistributedQueryPlanning,CoordinatorOperations,TESTED,,,distributed,
 REQ-GQL-025,Transactions/MVCC,WriteSkewDetection,TESTED,,,txn,2025-09-26,src/transactions/manager.zig
 REQ-GQL-025,Transactions/MVCC,WriteSkewDetection,TESTED,,,txn,2025-09-21,tests/canary_txn_write_skew.zig
 REQ-GQL-026,Conformance/Flagger,FlaggerCompleteness,TESTED,,,conformance,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md
-REQ-GQL-026,Conformance/Flagger,FlaggerCompleteness,TESTED,,,conformance,2025-09-27,src/conformance.zig
+REQ-GQL-026,Conformance/Flagger,FlaggerCompleteness,TESTED,,,conformance,2026-02-23,src/conformance.zig
 REQ-GQL-026,DistributedQueryPlanning,ExecutionPhasing,TESTED,,,distributed,2025-10-05,tests/distributed_query_planner_test.zig
 REQ-GQL-028,Recovery After Compaction,Storage,TESTED,,,storage,2025-09-20,src/canary.zig
 REQ-GQL-028,Recovery After Compaction,Storage,TESTED,,,storage,2026-02-04,tests/canary_snapshot_recovery_after_compaction.zig
