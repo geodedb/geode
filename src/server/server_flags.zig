@@ -153,10 +153,14 @@ pub fn getEstimateAdjustFactor() f64 {
 
 /// GA08: ISO/IEC 39075:2024 optional feature — structured diagnostic records.
 /// When false, diagnostic record payloads are suppressed in server responses.
+/// Access pattern: write-once at startup before request handlers start;
+/// read-only during request handling (no synchronization required).
 var g_ga08_diagnostics_enabled: bool = true;
 
 /// GT01: ISO/IEC 39075:2024 optional feature — explicit transaction commands.
 /// When false, START TRANSACTION / END TRANSACTION commands are rejected.
+/// Access pattern: write-once at startup before request handlers start;
+/// read-only during request handling (no synchronization required).
 var g_gt01_explicit_transactions: bool = true;
 
 /// Get GA08 diagnostics enabled state
@@ -183,10 +187,18 @@ test "TestCANARY_GQL39075_RQ_0018_GA08FlagPresent" {
     // RQ-0018: GA08 feature flag controls diagnostic record suppression
     // When ga08_diagnostics_enabled=false, implementations must suppress diagnostic payloads
     try std.testing.expect(getGA08DiagnosticsEnabled() == true); // default enabled
+    // Verify setter round-trip
+    setGA08DiagnosticsEnabled(false);
+    try std.testing.expect(getGA08DiagnosticsEnabled() == false);
+    setGA08DiagnosticsEnabled(true); // restore
 }
 
 test "TestCANARY_GQL39075_RQ_0023_GT01FlagPresent" {
     // RQ-0023: GT01 feature flag controls explicit transaction command acceptance
     // When gt01_explicit_transactions=false, START/END TRANSACTION should be rejected
     try std.testing.expect(getGT01ExplicitTransactions() == true); // default enabled
+    // Verify setter round-trip
+    setGT01ExplicitTransactions(false);
+    try std.testing.expect(getGT01ExplicitTransactions() == false);
+    setGT01ExplicitTransactions(true); // restore
 }
