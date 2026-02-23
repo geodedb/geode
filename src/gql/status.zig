@@ -154,15 +154,14 @@ pub fn writeJson(writer: anytype, status: GqlStatus) !void {
     try writer.writeByte('}');
 }
 
-pub fn confusableIdentifier(name1: []const u8, name2: []const u8, line: u32, column: u32) GqlStatus {
-    _ = name2;
+pub fn confusableIdentifier(name: []const u8, line: u32, column: u32) GqlStatus {
     return GqlStatus{
         .sqlstate = SQLSTATE.CONFUSABLE_IDENTIFIER,
         .class = .ERROR,
         .message = "visually confusable identifiers in same program (ISO 39075 §6)",
         .line = line,
         .column = column,
-        .token = name1,
+        .token = name,
     };
 }
 
@@ -216,7 +215,7 @@ test "GQL39075_RQ0020_sqlstate_08007_exists" {
 }
 
 test "GQL39075_RQ0012_confusable_identifier_helper" {
-    const s = confusableIdentifier("myVar", "myVar_lookalike", 1, 5);
+    const s = confusableIdentifier("myVar", 1, 5);
     try std.testing.expectEqualStrings("42004", &s.sqlstate);
     try std.testing.expectEqual(StatusClass.ERROR, s.class);
 }
