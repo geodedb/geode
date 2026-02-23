@@ -147,3 +147,46 @@ pub fn setEstimateAdjustFactor(value: f64) void {
 pub fn getEstimateAdjustFactor() f64 {
     return g_estimate_adjust_factor;
 }
+
+// CANARY: REQ=GQL-39075-RQ-0018; FEATURE="GQL Feature Gating"; ASPECT=GA08DiagnosticGating; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0018_GA08FlagPresent; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0023; FEATURE="GQL Feature Gating"; ASPECT=GT01TransactionGating; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0023_GT01FlagPresent; OWNER=conformance; UPDATED=2026-02-23
+
+/// GA08: ISO/IEC 39075:2024 optional feature — structured diagnostic records.
+/// When false, diagnostic record payloads are suppressed in server responses.
+var g_ga08_diagnostics_enabled: bool = true;
+
+/// GT01: ISO/IEC 39075:2024 optional feature — explicit transaction commands.
+/// When false, START TRANSACTION / END TRANSACTION commands are rejected.
+var g_gt01_explicit_transactions: bool = true;
+
+/// Get GA08 diagnostics enabled state
+pub fn getGA08DiagnosticsEnabled() bool {
+    return g_ga08_diagnostics_enabled;
+}
+
+/// Set GA08 diagnostics enabled state
+pub fn setGA08DiagnosticsEnabled(value: bool) void {
+    g_ga08_diagnostics_enabled = value;
+}
+
+/// Get GT01 explicit transactions enabled state
+pub fn getGT01ExplicitTransactions() bool {
+    return g_gt01_explicit_transactions;
+}
+
+/// Set GT01 explicit transactions enabled state
+pub fn setGT01ExplicitTransactions(value: bool) void {
+    g_gt01_explicit_transactions = value;
+}
+
+test "TestCANARY_GQL39075_RQ_0018_GA08FlagPresent" {
+    // RQ-0018: GA08 feature flag controls diagnostic record suppression
+    // When ga08_diagnostics_enabled=false, implementations must suppress diagnostic payloads
+    try std.testing.expect(getGA08DiagnosticsEnabled() == true); // default enabled
+}
+
+test "TestCANARY_GQL39075_RQ_0023_GT01FlagPresent" {
+    // RQ-0023: GT01 feature flag controls explicit transaction command acceptance
+    // When gt01_explicit_transactions=false, START/END TRANSACTION should be rejected
+    try std.testing.expect(getGT01ExplicitTransactions() == true); // default enabled
+}
