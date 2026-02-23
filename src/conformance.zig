@@ -210,13 +210,13 @@ test "BenchmarkCANARY_REQ_GQL_026_FlaggerGenerationVarianceEnvelope" {
     const iterations: usize = 64;
     var samples = try alloc.alloc(u64, iterations);
     defer alloc.free(samples);
+    var timer = try std.time.Timer.start();
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
-        const start = std.time.nanoTimestamp();
+        timer.reset();
         const flags = collectImplDefinedFlags(alloc) catch unreachable;
         alloc.free(flags);
-        const end = std.time.nanoTimestamp();
-        samples[i] = @as(u64, @intCast(end - start));
+        samples[i] = timer.read();
     }
     var sum: f64 = 0;
     for (samples) |s| sum += @as(f64, @floatFromInt(s));
