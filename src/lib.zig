@@ -124,6 +124,7 @@ pub const type_promotion = @import("eval/type_promotion.zig");
 // Re-export unicode utilities (normalization, case folding, UTF-16/WTF-8 helpers)
 pub const unicode = @import("unicode/geode_unicode.zig");
 pub const unicode_tables = @import("unicode/unicode_tables.zig");
+pub const confusables = @import("unicode/confusables.zig");
 // Re-export extended evaluation registry and extended types for CANARY tests
 pub const eval_ext = @import("eval_extended.zig");
 pub const ext_types = @import("types/extended.zig");

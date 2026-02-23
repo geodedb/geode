@@ -11,8 +11,10 @@ GQL-39075-RQ-0008,GQL Conformance Profile,CharRepertoireDeclaration,TESTED,,,con
 GQL-39075-RQ-0009,GQL Conformance Profile,ExactlyOneDefaultCollation,TESTED,,,conformance,2026-02-23,src/conformance.zig
 GQL-39075-RQ-0010,GQL Conformance Profile,StringMaxLengthDeclaration,TESTED,,,conformance,2026-02-23,src/conformance.zig
 GQL-39075-RQ-0011,Confusables/SkeletonAlgorithm,NeverSelfConfusable,TESTED,,,unicode,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md
+GQL-39075-RQ-0011,Unicode Confusable Detection,ConfusableNeverSelf,TESTED,,,conformance,2026-02-23,src/unicode/confusables.zig
 GQL-39075-RQ-0012,Confusables/SkeletonAlgorithm,DetectConfusablePair,TESTED,,,unicode,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md
 GQL-39075-RQ-0012,GQLStatus/SQLSTATE42004,ConfusableIdentifier,TESTED,,,conformance,2026-02-23,src/gql/status.zig
+GQL-39075-RQ-0012,Unicode Confusable Detection,ConfusableIdentifierSqlstate42004,TESTED,,,conformance,2026-02-23,src/unicode/confusables.zig
 GQL-39075-RQ-0013,GQL Conformance Profile,UtcSlsDeclaration,TESTED,,,conformance,2026-02-23,src/conformance.zig
 GQL-39075-RQ-0014,GQL Conformance Profile,TemporalLiteralFormat,TESTED,,,conformance,2026-02-23,src/conformance.zig
 GQL-39075-RQ-0015,GQL Conformance Profile,SecondsPrecisionDeclaration,TESTED,,,conformance,2026-02-23,src/conformance.zig
