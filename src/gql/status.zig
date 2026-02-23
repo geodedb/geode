@@ -39,6 +39,10 @@ pub const SQLSTATE = struct {
     pub const UNDEFINED_OBJECT = "42703".*;
     pub const DUPLICATE_ALIAS = "42712".*;
     pub const INVALID_SCHEMA = "42000".*;
+    pub const PRIVILEGE_VIOLATION = "42000".*; // ISO 39075 §4.2.4.2 — access rule violation
+    pub const CONFUSABLE_IDENTIFIER = "42004".*; // ISO 39075 §6 — visually confusable identifiers
+    pub const TRANSACTION_ROLLBACK = "40003".*; // ISO 39075 §4.2.3.2 — connection failure during statement
+    pub const CONNECTION_FAILURE_COMMIT = "08007".*; // ISO 39075 §4.2.3.2 — connection failure during commit
 };
 
 // Create standard error statuses
@@ -148,4 +152,87 @@ pub fn writeJson(writer: anytype, status: GqlStatus) !void {
     try writer.writeAll("]");
 
     try writer.writeByte('}');
+}
+
+pub fn confusableIdentifier(name1: []const u8, name2: []const u8, line: u32, column: u32) GqlStatus {
+    _ = name2;
+    return GqlStatus{
+        .sqlstate = SQLSTATE.CONFUSABLE_IDENTIFIER,
+        .class = .ERROR,
+        .message = "visually confusable identifiers in same program (ISO 39075 §6)",
+        .line = line,
+        .column = column,
+        .token = name1,
+    };
+}
+
+pub fn privilegeViolation(operation: []const u8) GqlStatus {
+    return GqlStatus{
+        .sqlstate = SQLSTATE.PRIVILEGE_VIOLATION,
+        .class = .ERROR,
+        .message = "access rule violation: insufficient privilege",
+        .token = operation,
+    };
+}
+
+pub fn connectionFailure() GqlStatus {
+    return GqlStatus{
+        .sqlstate = SQLSTATE.TRANSACTION_ROLLBACK,
+        .class = .ERROR,
+        .message = "connection failure during statement execution — transaction outcome unknown",
+    };
+}
+
+pub fn connectionFailureCommit() GqlStatus {
+    return GqlStatus{
+        .sqlstate = SQLSTATE.CONNECTION_FAILURE_COMMIT,
+        .class = .ERROR,
+        .message = "connection failure during commit — transaction resolution unknown",
+    };
+}
+// GQL-39075 conformance SQLSTATE tests
+// CANARY: REQ=GQL-39075-RQ-0012; FEATURE="GQLStatus/SQLSTATE42004"; ASPECT=ConfusableIdentifier; STATUS=TESTED; TEST=GQL39075_RQ0012_sqlstate_42004_exists,GQL39075_RQ0012_confusable_identifier_helper; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0019; FEATURE="GQLStatus/SQLSTATE42000"; ASPECT=PrivilegeViolation; STATUS=TESTED; TEST=GQL39075_RQ0019_sqlstate_42000_privilege_violation,GQL39075_RQ0019_privilege_violation_helper; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0020; FEATURE="GQLStatus/SQLSTATE40003/08007"; ASPECT=ConnectionLoss; STATUS=TESTED; TEST=GQL39075_RQ0020_sqlstate_40003_exists,GQL39075_RQ0020_sqlstate_08007_exists; OWNER=conformance; UPDATED=2026-02-23
+
+test "GQL39075_RQ0012_sqlstate_42004_exists" {
+    const code: [5]u8 = SQLSTATE.CONFUSABLE_IDENTIFIER;
+    try std.testing.expectEqualStrings("42004", &code);
+}
+
+test "GQL39075_RQ0019_sqlstate_42000_privilege_violation" {
+    const code: [5]u8 = SQLSTATE.PRIVILEGE_VIOLATION;
+    try std.testing.expectEqualStrings("42000", &code);
+}
+
+test "GQL39075_RQ0020_sqlstate_40003_exists" {
+    const code: [5]u8 = SQLSTATE.TRANSACTION_ROLLBACK;
+    try std.testing.expectEqualStrings("40003", &code);
+}
+
+test "GQL39075_RQ0020_sqlstate_08007_exists" {
+    const code: [5]u8 = SQLSTATE.CONNECTION_FAILURE_COMMIT;
+    try std.testing.expectEqualStrings("08007", &code);
+}
+
+test "GQL39075_RQ0012_confusable_identifier_helper" {
+    const s = confusableIdentifier("myVar", "myVar_lookalike", 1, 5);
+    try std.testing.expectEqualStrings("42004", &s.sqlstate);
+    try std.testing.expectEqual(StatusClass.ERROR, s.class);
+}
+
+test "GQL39075_RQ0019_privilege_violation_helper" {
+    const s = privilegeViolation("CREATE GRAPH");
+    try std.testing.expectEqualStrings("42000", &s.sqlstate);
+    try std.testing.expectEqual(StatusClass.ERROR, s.class);
+}
+
+test "GQL39075_RQ0020_connection_failure_helper" {
+    const s = connectionFailure();
+    try std.testing.expectEqualStrings("40003", &s.sqlstate);
+}
+
+test "GQL39075_RQ0020_connection_failure_commit_helper" {
+    const s = connectionFailureCommit();
+    try std.testing.expectEqualStrings("08007", &s.sqlstate);
 }
