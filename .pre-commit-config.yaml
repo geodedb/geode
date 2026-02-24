@@ -37,7 +37,7 @@ repos:
 
       # Security
   - id: detect-private-key
-    exclude: ^(certs/|test.*certs/|.*test.*\.pem$|tests/|src/tests/)
+    exclude: ^(certs/|test.*certs/|.*test.*\.pem$|tests/|src/tests/|docker/zig-packages/)
   - id: check-added-large-files
     args: [--maxkb=1024]
     exclude: ^(vendor/|dist/|docs/kb/)
@@ -84,7 +84,7 @@ repos:
   hooks:
   - id: markdownlint
     args: [--fix, --disable, MD013, MD033, MD041, MD024, MD060, MD036, MD051, MD052, MD055, --]
-    exclude: ^(vendor/|dist/|docs/kb/|CHANGELOG\.md|specs/|docs/testing/)
+    exclude: ^(vendor/|dist/|docs/kb/|CHANGELOG\.md|specs/|docs/testing/|docker/zig-packages/)
 
   # =============================================================================
   # YAML formatting
@@ -210,7 +210,7 @@ repos:
       echo "✓ All CANARY markers conform to schema"
     language: system
     files: \.zig$
-    exclude: ^(vendor/|dist/|zig-out/)
+    exclude: ^(vendor/|dist/|zig-out/|docker/zig-packages/)
     pass_filenames: false
     stages: [pre-commit, pre-push]
 

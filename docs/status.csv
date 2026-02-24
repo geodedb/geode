@@ -1539,11 +1539,9 @@ REQ-GQL-073,MvccAdvanced,RepairThroughputBench,BENCHED,,,txn,2025-09-20,src/tran
 REQ-GQL-073,MvccAdvanced,RepairThroughputBench,BENCHED,,,txn,2025-09-20,tests/benchmark_mvcc_repair_throughput.zig
 REQ-GQL-074,Network Transport,AlgorithmIntegration,TESTED,,,wire,2025-10-31,tests/quic_algorithms_integration_test.zig
 REQ-GQL-074,Network Transport,ConnectionManagement,EXEMPT,,,wire,2025-10-31,src/transport/connection_manager.zig
-REQ-GQL-074,Network Transport,QUICAccept,TESTED,,,wire,2025-09-22,docker/zig-packages/quic-0.1.6-gBIqUTEaOwBiGabrTr0Z2S23pGnY8oDspoOFUQri1ZZC/src/quic/transport.zig
 REQ-GQL-074,Network Transport,QUICAccept,TESTED,,,wire,2025-09-22,tests/canary_quic.zig
 REQ-GQL-074,Network Transport,QUICAlgorithms,TESTED,,,wire,2026-01-15,src/algorithms.zig
 REQ-GQL-074,Network Transport,QUICBasicE2E,TESTED,,,wire,2025-09-22,tests/e2e_quic_basic.zig
-REQ-GQL-074,Network Transport,QUICClientConnect,TESTED,,,wire,2025-09-22,docker/zig-packages/quic-0.1.6-gBIqUTEaOwBiGabrTr0Z2S23pGnY8oDspoOFUQri1ZZC/src/quic/transport.zig
 REQ-GQL-074,Network Transport,QUICClientConnect,TESTED,,,wire,2025-09-22,tests/canary_quic.zig
 REQ-GQL-074,Network Transport,QUICConnectionMigration,TESTED,,,wire,2025-09-22,tests/canary_quic_tls.zig
 REQ-GQL-074,Network Transport,QUICConnectionParams,TESTED,,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
@@ -1555,16 +1553,16 @@ REQ-GQL-074,Network Transport,QUICFlowControl,TESTED,,,wire,2025-09-22,tests/can
 REQ-GQL-074,Network Transport,QUICHandshake,TESTED,,,wire,2025-09-22,tests/canary_quic_tls.zig
 REQ-GQL-074,Network Transport,QUICHandshakeRegression,TESTED,,,wire,2025-10-01,tests/test_quic_handshake_regression.zig
 REQ-GQL-074,Network Transport,QUICIdleTimeout,TESTED,,,wire,2025-09-22,tests/canary_quic_tls.zig
-REQ-GQL-074,Network Transport,QUICListener,TESTED,,,wire,2025-09-25,docker/zig-packages/quic-0.1.6-gBIqUTEaOwBiGabrTr0Z2S23pGnY8oDspoOFUQri1ZZC/src/quic/transport.zig
+REQ-GQL-074,Network Transport,QUICListener,TESTED,,,wire,2025-09-25,docker/zig-packages/quic-0.1.6-gBIqUSDLMgAOKQ5uZ8LslAkBNXqIpztbLPiiH_zK26nv/src/quic/transport.zig
 REQ-GQL-074,Network Transport,QUICListener,TESTED,,,wire,2025-09-22,tests/canary_quic.zig
 REQ-GQL-074,Network Transport,QUICMultiplexedStreams,TESTED,,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QUICMultiplexing,TESTED,,,wire,2025-09-22,src/canary.zig
 REQ-GQL-074,Network Transport,QUICMultiplexing,TESTED,,,wire,2025-09-22,tests/canary_quic.zig
 REQ-GQL-074,Network Transport,QUICPerformanceMetrics,BENCHED,,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QUICProtocol,TESTED,,,wire,2025-09-22,tests/e2e_quic_basic.zig
-REQ-GQL-074,Network Transport,QUICStream,TESTED,,,wire,2025-09-22,docker/zig-packages/quic-0.1.6-gBIqUTEaOwBiGabrTr0Z2S23pGnY8oDspoOFUQri1ZZC/src/quic/transport.zig
+REQ-GQL-074,Network Transport,QUICStream,TESTED,,,wire,2025-09-22,docker/zig-packages/quic-0.1.6-gBIqUSDLMgAOKQ5uZ8LslAkBNXqIpztbLPiiH_zK26nv/src/quic/transport.zig
 REQ-GQL-074,Network Transport,QUICStream,TESTED,,,wire,2025-09-22,tests/canary_quic.zig
-REQ-GQL-074,Network Transport,QUICStreamOpen,TESTED,,,wire,2025-09-22,docker/zig-packages/quic-0.1.6-gBIqUTEaOwBiGabrTr0Z2S23pGnY8oDspoOFUQri1ZZC/src/quic/transport.zig
+REQ-GQL-074,Network Transport,QUICStreamOpen,TESTED,,,wire,2025-09-22,docker/zig-packages/quic-0.1.6-gBIqUSDLMgAOKQ5uZ8LslAkBNXqIpztbLPiiH_zK26nv/src/quic/transport.zig
 REQ-GQL-074,Network Transport,QUICStreamOpen,TESTED,,,wire,2025-09-22,tests/canary_quic.zig
 REQ-GQL-074,Network Transport,QUICTLS,TESTED,,,wire,2025-09-22,tests/canary_quic_tls.zig
 REQ-GQL-074,Network Transport,QUICTLSComprehensive,TESTED,,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
@@ -3878,7 +3876,7 @@ REQ-TESTING-STRESS-001,TESTING,StressTests,TESTED,,,test,2026-01-16,tests/test_g
 REQ-TESTING-UNIT-001,TESTING,UnitTestFramework,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-TLS-CERT-002,TLSCertVerification,Core,EXEMPT,,,cli,2026-01-12,src/cli/main.zig
 REQ-TRACEABILITY-001,Requirement Traceability Tests,Governance,TESTED,,,compliance,2026-01-15,tests/test_requirement_traceability.zig
-REQ-TRANSPORT-001,AmplificationProtection,LocalhostExemption,TESTED,,,transport,2025-10-15,docker/zig-packages/quic-0.1.6-gBIqUTEaOwBiGabrTr0Z2S23pGnY8oDspoOFUQri1ZZC/src/quic/conn.zig
+REQ-TRANSPORT-001,AmplificationProtection,LocalhostExemption,IMPLEMENTED,,,transport,2025-10-15,docker/zig-packages/quic-0.1.6-gBIqUSDLMgAOKQ5uZ8LslAkBNXqIpztbLPiiH_zK26nv/src/quic/conn.zig
 REQ-TRIG-001,TrigonometricFunctions,Sin,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-TRIG-002,TrigonometricFunctions,Cos,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-TXN-ISOLATION-001,Enhanced Transaction Isolation,IsolationLevels,TESTED,,,txn,2025-10-05,src/server/txn/enhanced_isolation.zig
