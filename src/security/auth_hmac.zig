@@ -63,22 +63,10 @@ pub fn computeRecordHmac(key: *const [32]u8, props: []const KeyValue) [32]u8 {
         var indices: [max_stack]usize = undefined;
         return computeRecordHmacWithBuf(key, props, indices[0..props.len]);
     } else {
-        // Fallback: use page_allocator for huge property sets (extremely rare).
-        const alloc = std.heap.page_allocator;
-        const indices = alloc.alloc(usize, props.len) catch {
-            // If allocation fails (effectively impossible with page_allocator),
-            // compute unsorted as a last resort -- callers are expected to
-            // never hit this path.
-            var hmac = HmacSha256.init(key);
-            for (props) |kv| {
-                feedKv(&hmac, kv);
-            }
-            var out: [32]u8 = undefined;
-            hmac.final(&out);
-            return out;
-        };
-        defer alloc.free(indices);
-        return computeRecordHmacWithBuf(key, props, indices);
+        // Auth records have ~15 properties at most; hitting this path means
+        // something is seriously wrong.  Panic rather than silently computing
+        // an unsorted (non-deterministic) HMAC.
+        @panic("auth_hmac: property count exceeds stack limit — this should never happen for auth records");
     }
 }
 
@@ -131,6 +119,7 @@ fn feedKv(hmac: *HmacSha256, kv: KeyValue) void {
 /// Including the record count prevents truncation attacks where an attacker
 /// removes trailing records while keeping the prefix valid.
 pub fn computeChainHash(key: *const [32]u8, record_hmacs: []const [32]u8, record_count: u64) [32]u8 {
+    std.debug.assert(record_hmacs.len == record_count);
     var hmac = HmacSha256.init(key);
     for (record_hmacs) |rec| {
         hmac.update(&rec);
@@ -155,7 +144,7 @@ pub fn hmacToHex(hmac: *const [32]u8) [64]u8 {
     return std.fmt.bytesToHex(hmac.*, .lower);
 }
 
-/// Decode a 64-character lowercase hex string into a 32-byte HMAC.
+/// Decode a 64-character hex string (any case) into a 32-byte HMAC.
 ///
 /// Returns `error.InvalidCharacter` if any character is not a valid hex digit.
 pub fn hexToHmac(hex: *const [64]u8) ![32]u8 {
@@ -229,12 +218,14 @@ test "computeChainHash is deterministic" {
     try std.testing.expectEqualSlices(u8, &c1, &c2);
 }
 
-test "computeChainHash differs when record_count differs" {
+test "computeChainHash differs for different record sets" {
     const key = [_]u8{0x04} ** 32;
-    const rec = [_]u8{0xcc} ** 32;
-    const records = [_][32]u8{rec};
-    const c1 = computeChainHash(&key, &records, 1);
-    const c2 = computeChainHash(&key, &records, 2);
+    const rec_a = [_]u8{0xcc} ** 32;
+    const rec_b = [_]u8{0xdd} ** 32;
+    const records_1 = [_][32]u8{rec_a};
+    const records_2 = [_][32]u8{ rec_a, rec_b };
+    const c1 = computeChainHash(&key, &records_1, 1);
+    const c2 = computeChainHash(&key, &records_2, 2);
     try std.testing.expect(!std.mem.eql(u8, &c1, &c2));
 }
 
