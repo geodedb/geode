@@ -1,11 +1,11 @@
 const std = @import("std");
-const crypto = std.crypto;
+const geode_auth = @import("geode_auth");
 const logging = @import("logging");
 const log = logging.scoped("security");
 const Attr = logging.Attr;
 
 // CANARY: REQ=REQ-AUTH-001; FEATURE="UserManagement"; ASPECT=Authentication; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
-// User management system with bcrypt password hashing and role-based access control
+// User management system with Argon2id password hashing and role-based access control
 
 pub const Role = enum {
     Admin, // Full access: read, write, schema changes
@@ -47,7 +47,7 @@ pub const Permission = enum {
 
 pub const User = struct {
     username: []const u8,
-    password_hash: [108]u8, // $argon2id$ + salt_hex(32) + $ + hash_hex(64) + $ = 108 bytes
+    password_hash: []const u8, // Argon2id PHC format: $argon2id$v=19$m=19456,t=2,p=1$<salt_hex>$<hash_hex>
     email: []const u8,
     role: Role,
     created_at: i64,
@@ -57,6 +57,7 @@ pub const User = struct {
 
     pub fn deinit(self: *User, allocator: std.mem.Allocator) void {
         allocator.free(self.username);
+        allocator.free(self.password_hash);
         allocator.free(self.email);
     }
 };
@@ -107,125 +108,22 @@ pub fn deinitUserStore() void {
     }
 }
 
-/// Hash password using Argon2id with cryptographically random salt
-/// Argon2id is the recommended password hashing algorithm (combines Argon2i and Argon2d)
-/// Resistant to both side-channel and GPU cracking attacks
-// CANARY: REQ=REQ-AUTH-SALT-001; FEATURE="SecurePasswordSalt"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
-pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![108]u8 {
-    // Argon2id parameters (OWASP recommendations for server-side hashing)
-    // - time_cost: Number of iterations (3 is recommended minimum)
-    // - memory_cost: Memory in KiB (65536 = 64 MiB, recommended for server)
-    // - parallelism: Number of threads (4 is typical for modern CPUs)
-    const params = crypto.pwhash.argon2.Params{
-        .t = 3, // time cost (iterations)
-        .m = 65536, // memory cost in KiB (64 MiB)
-        .p = 4, // parallelism (threads)
-    };
-
-    // Generate a cryptographically random 16-byte salt
-    // Each user gets a unique salt preventing rainbow table attacks
-    var salt: [16]u8 = undefined;
-    crypto.random.bytes(&salt);
-
-    // Hash the password with Argon2id - produces 32-byte output
-    var hash: [32]u8 = undefined;
-    crypto.pwhash.argon2.kdf(
-        allocator,
-        &hash,
-        password,
-        &salt,
-        params,
-        .argon2id,
-    ) catch |err| {
-        // If allocation fails, return the error
-        if (err == error.OutOfMemory) return err;
-        // For other errors, treat as OutOfMemory
-        return error.OutOfMemory;
-    };
-
-    // Encode as: $argon2id$ + salt_hex(32) + $ + hash_hex(64) + $ = 108 bytes total
-    // Format: $argon2id$<salt_hex>$<hash_hex>$
-    // 10 + 32 + 1 + 64 + 1 = 108 bytes
-    var result: [108]u8 = undefined;
-    const hex_chars = "0123456789abcdef";
-
-    // Write header: $argon2id$
-    _ = std.fmt.bufPrint(result[0..10], "$argon2id$", .{}) catch unreachable;
-    var idx: usize = 10;
-
-    // Write salt as 32 hex chars
-    for (salt) |b| {
-        result[idx] = hex_chars[b >> 4];
-        result[idx + 1] = hex_chars[b & 0x0F];
-        idx += 2;
-    }
-    result[idx] = '$';
-    idx += 1;
-
-    // Write hash as 64 hex chars
-    for (hash) |b| {
-        result[idx] = hex_chars[b >> 4];
-        result[idx + 1] = hex_chars[b & 0x0F];
-        idx += 2;
-    }
-    result[idx] = '$';
-
-    return result;
+/// Hash password using the canonical Argon2id implementation with OWASP parameters.
+/// Returns a heap-allocated PHC format string that must be freed by the caller.
+/// Delegates to geode_auth.hashPasswordArgon2id (single source of truth).
+// CANARY: REQ=REQ-AUTH-SALT-001; FEATURE="SecurePasswordSalt"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-02-24
+pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![]const u8 {
+    return geode_auth.hashPasswordArgon2id(allocator, password);
 }
 
-/// Verify password against stored hash using Argon2id
-/// Extracts the unique salt from the stored hash and uses it for verification
-// CANARY: REQ=REQ-AUTH-VERIFY-001; FEATURE="SecurePasswordVerify"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
-pub fn verifyPassword(password: []const u8, stored_hash: [108]u8) bool {
+/// Verify password against stored hash using the canonical Argon2id verification.
+/// Delegates to geode_auth.verifyPasswordArgon2id (single source of truth).
+// CANARY: REQ=REQ-AUTH-VERIFY-001; FEATURE="SecurePasswordVerify"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-02-24
+pub fn verifyPassword(password: []const u8, stored_hash: []const u8) bool {
     // Use c_allocator for Argon2id scratch buffers in verification hot paths.
     // This avoids untracked page allocator usage in production runtime paths.
     const allocator = std.heap.c_allocator;
-
-    // Extract salt from stored hash (bytes 10-41 are hex-encoded salt)
-    // Format: $argon2id$<salt_hex(32)>$<hash_hex(64)>$
-    var salt: [16]u8 = undefined;
-    const salt_hex = stored_hash[10..42];
-    for (0..16) |i| {
-        const hi = hexCharToVal(salt_hex[i * 2]) orelse return false;
-        const lo = hexCharToVal(salt_hex[i * 2 + 1]) orelse return false;
-        salt[i] = (hi << 4) | lo;
-    }
-
-    // Compute hash with extracted salt
-    const params = crypto.pwhash.argon2.Params{
-        .t = 3,
-        .m = 65536,
-        .p = 4,
-    };
-
-    var computed_hash: [32]u8 = undefined;
-    crypto.pwhash.argon2.kdf(
-        allocator,
-        &computed_hash,
-        password,
-        &salt,
-        params,
-        .argon2id,
-    ) catch return false;
-
-    // Extract stored hash portion (bytes 43-106 are hex-encoded hash)
-    var stored_hash_bytes: [32]u8 = undefined;
-    const hash_hex = stored_hash[43..107];
-    for (0..32) |i| {
-        const hi = hexCharToVal(hash_hex[i * 2]) orelse return false;
-        const lo = hexCharToVal(hash_hex[i * 2 + 1]) orelse return false;
-        stored_hash_bytes[i] = (hi << 4) | lo;
-    }
-
-    // Constant-time comparison to prevent timing attacks
-    return crypto.timing_safe.eql([32]u8, computed_hash, stored_hash_bytes);
-}
-
-fn hexCharToVal(c: u8) ?u8 {
-    if (c >= '0' and c <= '9') return c - '0';
-    if (c >= 'a' and c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' and c <= 'F') return c - 'A' + 10;
-    return null;
+    return geode_auth.verifyPasswordArgon2id(allocator, password, stored_hash) catch false;
 }
 
 /// Create a new user
@@ -337,6 +235,8 @@ pub fn updateUserPassword(allocator: std.mem.Allocator, username: []const u8, ne
         return error.PasswordReuse;
     }
 
+    // Free the old password hash before replacing
+    allocator.free(user_ptr.password_hash);
     user_ptr.password_hash = try hashPassword(allocator, new_password);
     user_ptr.password_reset_required = false;
 }

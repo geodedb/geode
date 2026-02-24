@@ -13,6 +13,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const graph_store = @import("geode").graph_store;
 const auth_hmac = @import("geode").auth_hmac;
+const geode_auth = @import("geode_auth");
 const user_storage = @import("user_storage");
 const UserStorageBackend = user_storage.UserStorageBackend;
 const logging = @import("logging");
@@ -428,8 +429,8 @@ pub const AuthGraphManager = struct {
             password[i * 2 + 1] = hex_chars[byte & 0xf];
         }
 
-        // 3. Hash password with Argon2id
-        const password_hash = try hashPasswordArgon2id(self.allocator, password);
+        // 3. Hash password with Argon2id (canonical implementation)
+        const password_hash = try geode_auth.hashPasswordArgon2id(self.allocator, password);
         defer self.allocator.free(password_hash);
 
         // 4. Create User node with HMAC
@@ -707,53 +708,6 @@ fn sortHmacs(hmacs: [][32]u8) void {
     std.mem.sortUnstable([32]u8, hmacs, Ctx{}, Ctx.lessThan);
 }
 
-/// Hash a password using Argon2id with standard parameters.
-/// Returns a PHC format string: $argon2id$v=19$m=19456,t=2,p=1$salt_hex$hash_hex
-fn hashPasswordArgon2id(allocator: Allocator, password: []const u8) ![]const u8 {
-    // Generate random 16-byte salt
-    var salt: [16]u8 = undefined;
-    std.crypto.random.bytes(&salt);
-
-    // OWASP recommended Argon2id parameters
-    const argon2_params = std.crypto.pwhash.argon2.Params{
-        .t = 2, // 2 iterations
-        .m = 19456, // 19 MiB memory
-        .p = 1, // 1 parallel lane
-    };
-
-    var hash: [32]u8 = undefined;
-    std.crypto.pwhash.argon2.kdf(
-        allocator,
-        &hash,
-        password,
-        &salt,
-        argon2_params,
-        .argon2id,
-    ) catch return error.HashingFailed;
-
-    // Encode as hex strings
-    const hex_chars = "0123456789abcdef";
-
-    var salt_hex: [32]u8 = undefined;
-    for (salt, 0..) |byte, i| {
-        salt_hex[i * 2] = hex_chars[byte >> 4];
-        salt_hex[i * 2 + 1] = hex_chars[byte & 0xf];
-    }
-
-    var hash_hex: [64]u8 = undefined;
-    for (hash, 0..) |byte, i| {
-        hash_hex[i * 2] = hex_chars[byte >> 4];
-        hash_hex[i * 2 + 1] = hex_chars[byte & 0xf];
-    }
-
-    // Standard PHC format: "$argon2id$v=19$m=19456,t=2,p=1$<salt_hex>$<hash_hex>"
-    return std.fmt.allocPrint(
-        allocator,
-        "$argon2id$v=19$m=19456,t=2,p=1${s}${s}",
-        .{ &salt_hex, &hash_hex },
-    );
-}
-
 fn sliceUntilZero(bytes: []const u8) ?[]const u8 {
     var len: usize = 0;
     while (len < bytes.len) : (len += 1) {
@@ -908,7 +862,7 @@ test "createUser adds user and maintains valid chain" {
     }
 
     // Create another user
-    const pw_hash = try hashPasswordArgon2id(testing.allocator, "testpassword123");
+    const pw_hash = try geode_auth.hashPasswordArgon2id(testing.allocator, "testpassword123");
     defer testing.allocator.free(pw_hash);
 
     const new_id = try mgr.createUser(&hmac_key, "alice", "alice@example.com", pw_hash, false);

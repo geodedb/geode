@@ -1448,6 +1448,7 @@ pub fn build(b: *std.Build) void {
     // Create auth graph manager module (orchestration layer for HMAC auth)
     const auth_graph_manager_mod = b.createModule(.{ .root_source_file = b.path("src/security/auth_graph_manager.zig"), .target = target, .optimize = optimize });
     auth_graph_manager_mod.addImport("geode", root_mod);
+    auth_graph_manager_mod.addImport("geode_auth", auth_mod);
     auth_graph_manager_mod.addImport("user_storage", user_storage_mod);
     auth_graph_manager_mod.addImport("logging", logging_mod);
     // Note: auth_graph_manager imports geode (root_mod), so it cannot be added back to
@@ -1464,6 +1465,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     auth_graph_manager_tests.root_module.addImport("geode", root_mod);
+    auth_graph_manager_tests.root_module.addImport("geode_auth", auth_mod);
     auth_graph_manager_tests.root_module.addImport("user_storage", user_storage_mod);
     auth_graph_manager_tests.root_module.addImport("logging", logging_mod);
     const run_auth_graph_manager_tests = b.addRunArtifact(auth_graph_manager_tests);

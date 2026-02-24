@@ -794,65 +794,14 @@ pub const SecurityManager = struct {
 
     // ---- Passwords ----
     // CANARY: REQ=REQ-AUTH-HASH-001; FEATURE="Argon2id Password Hashing"; ASPECT=PostQuantumSecurity; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_HASH_001_Argon2id; OWNER=security; UPDATED=2025-10-16
-    // CRITICAL SECURITY FIX (C2): Proper Argon2id implementation with random salts and PHC format
+    // Delegates to the canonical standalone hashPasswordArgon2id after policy validation.
     pub fn hashPassword(self: *Self, password: []const u8) ![]const u8 {
         // CANARY: REQ=REQ-AUTH-POLICY-008; FEATURE="Pre-Hash Password Validation"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_008_PreHashValidation; OWNER=security; UPDATED=2025-09-30
         // Validate password against policy before hashing
         try self.validatePasswordAgainstCurrentPolicy(password);
 
-        // Generate cryptographically random 16-byte salt
-        var salt: [16]u8 = undefined;
-        std.crypto.random.bytes(&salt);
-
-        // OWASP recommended Argon2id parameters (ASVS 2.4.1)
-        const argon2_params = std.crypto.pwhash.argon2.Params{
-            .t = 2, // 2 iterations (OWASP minimum)
-            .m = 19456, // 19 MiB memory (OWASP minimum)
-            .p = 1, // 1 parallel lane
-        };
-
-        // Hash password with Argon2id
-        var hash: [32]u8 = undefined;
-        std.crypto.pwhash.argon2.kdf(
-            self.allocator,
-            &hash,
-            password,
-            &salt,
-            argon2_params,
-            .argon2id,
-        ) catch |err| {
-            log.err("Argon2id hashing failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.HashingFailed;
-        };
-
-        // Encode as PHC string format: $argon2id$v=19$m=19456,t=2,p=1$salt$hash
-        // This is the standard format for Argon2 hashes (password-hashing.net/argon2-specs.pdf)
-        const hex_chars = "0123456789abcdef";
-
-        // Encode salt as hex
-        var salt_hex = try self.allocator.alloc(u8, 32);
-        for (salt, 0..) |byte, i| {
-            salt_hex[i * 2] = hex_chars[byte >> 4];
-            salt_hex[i * 2 + 1] = hex_chars[byte & 0xf];
-        }
-        defer self.allocator.free(salt_hex);
-
-        // Encode hash as hex
-        var hash_hex = try self.allocator.alloc(u8, 64);
-        for (hash, 0..) |byte, i| {
-            hash_hex[i * 2] = hex_chars[byte >> 4];
-            hash_hex[i * 2 + 1] = hex_chars[byte & 0xf];
-        }
-        defer self.allocator.free(hash_hex);
-
-        // Create PHC format string
-        return std.fmt.allocPrint(
-            self.allocator,
-            "$argon2id$v=19$m=19456,t=2,p=1${s}${s}",
-            .{ salt_hex, hash_hex },
-        );
+        // Delegate to the canonical standalone implementation
+        return hashPasswordArgon2id(self.allocator, password);
     }
 
     /// Update the stored password hash for a user (used for hash migration).
@@ -901,79 +850,10 @@ pub const SecurityManager = struct {
         return error.InvalidHashFormat;
     }
 
-    /// Verify Argon2id password in PHC format
+    /// Verify Argon2id password in PHC format.
+    /// Delegates to the canonical standalone verifyPasswordArgon2id.
     fn verifyArgon2idPHC(self: *Self, password: []const u8, phc_string: []const u8) !bool {
-        // Parse PHC string: $argon2id$v=19$m=19456,t=2,p=1$salt$hash
-        var parts = std.mem.splitScalar(u8, phc_string, '$');
-
-        _ = parts.next(); // Empty before first $
-        const alg = parts.next() orelse return false;
-        if (!std.mem.eql(u8, alg, "argon2id")) return false;
-
-        const version = parts.next() orelse return false;
-        if (!std.mem.eql(u8, version, "v=19")) return false;
-
-        const params_str = parts.next() orelse return false;
-        // Parse params: m=19456,t=2,p=1
-        var param_parts = std.mem.splitScalar(u8, params_str, ',');
-        var m: u32 = 19456;
-        var t: u32 = 2;
-        var p: u32 = 1;
-
-        while (param_parts.next()) |param| {
-            var kv = std.mem.splitScalar(u8, param, '=');
-            const key = kv.next() orelse continue;
-            const value = kv.next() orelse continue;
-
-            if (std.mem.eql(u8, key, "m")) {
-                m = std.fmt.parseInt(u32, value, 10) catch 19456;
-            } else if (std.mem.eql(u8, key, "t")) {
-                t = std.fmt.parseInt(u32, value, 10) catch 2;
-            } else if (std.mem.eql(u8, key, "p")) {
-                p = std.fmt.parseInt(u32, value, 10) catch 1;
-            }
-        }
-
-        const salt_hex = parts.next() orelse return false;
-        const hash_hex = parts.next() orelse return false;
-
-        // Decode salt from hex
-        if (salt_hex.len != 32) return false; // 16 bytes = 32 hex chars
-        var salt: [16]u8 = undefined;
-        for (0..16) |i| {
-            const hi = std.fmt.charToDigit(salt_hex[i * 2], 16) catch return false;
-            const lo = std.fmt.charToDigit(salt_hex[i * 2 + 1], 16) catch return false;
-            salt[i] = @as(u8, hi) * 16 + @as(u8, lo);
-        }
-
-        // Decode expected hash from hex
-        if (hash_hex.len != 64) return false; // 32 bytes = 64 hex chars
-        var expected_hash: [32]u8 = undefined;
-        for (0..32) |i| {
-            const hi = std.fmt.charToDigit(hash_hex[i * 2], 16) catch return false;
-            const lo = std.fmt.charToDigit(hash_hex[i * 2 + 1], 16) catch return false;
-            expected_hash[i] = @as(u8, hi) * 16 + @as(u8, lo);
-        }
-
-        // Re-hash password with same salt and params
-        const argon2_params = std.crypto.pwhash.argon2.Params{
-            .t = t,
-            .m = m,
-            .p = @intCast(p),
-        };
-
-        var computed_hash: [32]u8 = undefined;
-        std.crypto.pwhash.argon2.kdf(
-            self.allocator,
-            &computed_hash,
-            password,
-            &salt,
-            argon2_params,
-            .argon2id,
-        ) catch return false;
-
-        // Constant-time comparison (GAP-0440)
-        return constantTimeEqual32(&computed_hash, &expected_hash);
+        return verifyPasswordArgon2id(self.allocator, password, phc_string);
     }
 
     /// Verify legacy Blake2b password (for migration only — deprecated).
@@ -1487,6 +1367,155 @@ pub const SecurityManager = struct {
         return token;
     }
 };
+
+// ============================================================================
+// Standalone Argon2id Password Hashing (canonical implementation)
+// CANARY: REQ=REQ-AUTH-HASH-002; FEATURE="Canonical Argon2id Hashing"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_HASH_002_StandaloneArgon2id; OWNER=security; UPDATED=2026-02-24
+// ============================================================================
+
+/// Canonical Argon2id password hashing with OWASP recommended parameters.
+/// Returns a PHC format string: $argon2id$v=19$m=19456,t=2,p=1$<salt_hex>$<hash_hex>
+///
+/// This is the single source of truth for password hashing in Geode.
+/// All components (SecurityManager, user_management, auth_graph_manager) must
+/// use this function rather than maintaining their own implementations.
+///
+/// Parameters (OWASP ASVS 2.4.1):
+///   - t=2: 2 iterations (OWASP minimum)
+///   - m=19456: 19 MiB memory (OWASP minimum)
+///   - p=1: 1 parallel lane
+pub fn hashPasswordArgon2id(allocator: Allocator, password: []const u8) ![]const u8 {
+    // Generate cryptographically random 16-byte salt
+    var salt: [16]u8 = undefined;
+    std.crypto.random.bytes(&salt);
+
+    // OWASP recommended Argon2id parameters (ASVS 2.4.1)
+    const argon2_params = std.crypto.pwhash.argon2.Params{
+        .t = 2, // 2 iterations (OWASP minimum)
+        .m = 19456, // 19 MiB memory (OWASP minimum)
+        .p = 1, // 1 parallel lane
+    };
+
+    // Hash password with Argon2id
+    var hash: [32]u8 = undefined;
+    std.crypto.pwhash.argon2.kdf(
+        allocator,
+        &hash,
+        password,
+        &salt,
+        argon2_params,
+        .argon2id,
+    ) catch |err| {
+        log.err("Argon2id hashing failed", &.{
+            Attr.string("error", @errorName(err)),
+        });
+        return error.HashingFailed;
+    };
+
+    // Encode as PHC string format: $argon2id$v=19$m=19456,t=2,p=1$salt$hash
+    const hex_chars = "0123456789abcdef";
+
+    // Encode salt as hex
+    var salt_hex: [32]u8 = undefined;
+    for (salt, 0..) |byte, i| {
+        salt_hex[i * 2] = hex_chars[byte >> 4];
+        salt_hex[i * 2 + 1] = hex_chars[byte & 0xf];
+    }
+
+    // Encode hash as hex
+    var hash_hex: [64]u8 = undefined;
+    for (hash, 0..) |byte, i| {
+        hash_hex[i * 2] = hex_chars[byte >> 4];
+        hash_hex[i * 2 + 1] = hex_chars[byte & 0xf];
+    }
+
+    // Create PHC format string
+    return std.fmt.allocPrint(
+        allocator,
+        "$argon2id$v=19$m=19456,t=2,p=1${s}${s}",
+        .{ &salt_hex, &hash_hex },
+    );
+}
+
+/// Canonical Argon2id password verification against PHC format strings.
+/// Parses the PHC string to extract parameters, salt, and expected hash,
+/// then re-derives the hash and compares using constant-time equality.
+///
+/// Supports any valid Argon2id PHC string (not just OWASP params), enabling
+/// verification of hashes created with different parameter sets during migration.
+pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_string: []const u8) !bool {
+    // Parse PHC string: $argon2id$v=19$m=19456,t=2,p=1$salt$hash
+    var parts = std.mem.splitScalar(u8, phc_string, '$');
+
+    _ = parts.next(); // Empty before first $
+    const alg = parts.next() orelse return false;
+    if (!std.mem.eql(u8, alg, "argon2id")) return false;
+
+    const version = parts.next() orelse return false;
+    if (!std.mem.eql(u8, version, "v=19")) return false;
+
+    const params_str = parts.next() orelse return false;
+    // Parse params: m=19456,t=2,p=1
+    var param_parts = std.mem.splitScalar(u8, params_str, ',');
+    var m: u32 = 19456;
+    var t: u32 = 2;
+    var p: u32 = 1;
+
+    while (param_parts.next()) |param| {
+        var kv = std.mem.splitScalar(u8, param, '=');
+        const key = kv.next() orelse continue;
+        const value = kv.next() orelse continue;
+
+        if (std.mem.eql(u8, key, "m")) {
+            m = std.fmt.parseInt(u32, value, 10) catch 19456;
+        } else if (std.mem.eql(u8, key, "t")) {
+            t = std.fmt.parseInt(u32, value, 10) catch 2;
+        } else if (std.mem.eql(u8, key, "p")) {
+            p = std.fmt.parseInt(u32, value, 10) catch 1;
+        }
+    }
+
+    const salt_hex = parts.next() orelse return false;
+    const hash_hex = parts.next() orelse return false;
+
+    // Decode salt from hex
+    if (salt_hex.len != 32) return false; // 16 bytes = 32 hex chars
+    var salt: [16]u8 = undefined;
+    for (0..16) |i| {
+        const hi = std.fmt.charToDigit(salt_hex[i * 2], 16) catch return false;
+        const lo = std.fmt.charToDigit(salt_hex[i * 2 + 1], 16) catch return false;
+        salt[i] = @as(u8, hi) * 16 + @as(u8, lo);
+    }
+
+    // Decode expected hash from hex
+    if (hash_hex.len != 64) return false; // 32 bytes = 64 hex chars
+    var expected_hash: [32]u8 = undefined;
+    for (0..32) |i| {
+        const hi = std.fmt.charToDigit(hash_hex[i * 2], 16) catch return false;
+        const lo = std.fmt.charToDigit(hash_hex[i * 2 + 1], 16) catch return false;
+        expected_hash[i] = @as(u8, hi) * 16 + @as(u8, lo);
+    }
+
+    // Re-hash password with same salt and params
+    const argon2_params = std.crypto.pwhash.argon2.Params{
+        .t = t,
+        .m = m,
+        .p = @intCast(p),
+    };
+
+    var computed_hash: [32]u8 = undefined;
+    std.crypto.pwhash.argon2.kdf(
+        allocator,
+        &computed_hash,
+        password,
+        &salt,
+        argon2_params,
+        .argon2id,
+    ) catch return false;
+
+    // Constant-time comparison to prevent timing attacks
+    return std.crypto.timing_safe.eql([32]u8, computed_hash, expected_hash);
+}
 
 // ============================================================================
 // Unit Tests for GAP-0149: Fail-Secure Risk Score Parsing
