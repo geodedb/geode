@@ -550,6 +550,10 @@ pub const mtls_provider = @import("security/mtls_provider.zig");
 // HMAC chain integrity module for internal auth storage
 pub const auth_hmac = @import("security/auth_hmac.zig");
 
+// Auth graph manager module is available as a separate build module import:
+// @import("auth_graph_manager") — see build.zig for module registration.
+// It depends on geode (root_mod) so it cannot be re-exported here without a cycle.
+
 // QUIC algorithms and connection management
 pub const algorithms = @import("algorithms.zig");
 pub const connection_manager = @import("transport/connection_manager.zig");
