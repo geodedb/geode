@@ -981,7 +981,7 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
             };
             return encodeMessage(allocator, resp);
         }
-        const role = user_mgmt.authenticate(req.username, req.password) catch {
+        const auth_result = user_mgmt.authenticate(req.username, req.password) catch {
             const resp = schema.HelloResponse{
                 .success = false,
                 .session_id = "",
@@ -990,12 +990,13 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
             };
             return encodeMessage(allocator, resp);
         };
-        const session_id = try store.createSession(req.username, req.password, role, req.tenant_id);
+        const session_id = try store.createSession(req.username, req.password, auth_result.role, req.tenant_id);
         const resp = schema.HelloResponse{
             .success = true,
             .session_id = try allocator.dupe(u8, session_id),
             .error_message = "",
             .capabilities = caps,
+            .password_reset_required = auth_result.password_reset_required,
         };
         return encodeMessage(allocator, resp);
     }

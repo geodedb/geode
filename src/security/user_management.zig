@@ -54,11 +54,17 @@ pub const User = struct {
     created_at: i64,
     last_login: ?i64,
     active: bool,
+    password_reset_required: bool = false,
 
     pub fn deinit(self: *User, allocator: std.mem.Allocator) void {
         allocator.free(self.username);
         allocator.free(self.email);
     }
+};
+
+pub const AuthResult = struct {
+    role: Role,
+    password_reset_required: bool,
 };
 
 /// Global user store - in-memory for now
@@ -224,7 +230,7 @@ fn hexCharToVal(c: u8) ?u8 {
 }
 
 /// Create a new user
-pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: []const u8, email: []const u8, role: Role) !void {
+pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: []const u8, email: []const u8, role: Role, password_reset_required: bool) !void {
     user_store_mutex.lock();
     defer user_store_mutex.unlock();
 
@@ -251,13 +257,14 @@ pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: 
         .created_at = std.time.timestamp(),
         .last_login = null,
         .active = true,
+        .password_reset_required = password_reset_required,
     };
 
     try store.put(try allocator.dupe(u8, username), user);
 }
 
 /// Authenticate user with username and password
-pub fn authenticate(username: []const u8, password: []const u8) !Role {
+pub fn authenticate(username: []const u8, password: []const u8) !AuthResult {
     user_store_mutex.lock();
     defer user_store_mutex.unlock();
 
@@ -284,7 +291,10 @@ pub fn authenticate(username: []const u8, password: []const u8) !Role {
         return error.Unauthenticated;
     }
 
-    return user.role;
+    return AuthResult{
+        .role = user.role,
+        .password_reset_required = user.password_reset_required,
+    };
 }
 
 /// Sync users from the auth_state file into the in-memory store.
@@ -369,6 +379,25 @@ pub fn hasUsers() bool {
     return user_store.?.count() > 0;
 }
 
+/// Update a user's password and clear the password_reset_required flag.
+/// The new password must not match the current password (prevents reuse).
+pub fn updateUserPassword(allocator: std.mem.Allocator, username: []const u8, new_password: []const u8) !void {
+    user_store_mutex.lock();
+    defer user_store_mutex.unlock();
+
+    if (user_store == null) return error.Unauthenticated;
+    var store = &user_store.?;
+    const user_ptr = store.getPtr(username) orelse return error.Unauthenticated;
+
+    // Reject if new password matches current password
+    if (verifyPassword(new_password, user_ptr.password_hash)) {
+        return error.PasswordReuse;
+    }
+
+    user_ptr.password_hash = try hashPassword(allocator, new_password);
+    user_ptr.password_reset_required = false;
+}
+
 /// Generate a cryptographically secure random password
 /// GAP-0104/GAP-0108 SECURITY FIX: Use crypto random for initial passwords
 fn generateSecurePassword(allocator: std.mem.Allocator) ![]const u8 {
@@ -388,6 +417,17 @@ fn generateSecurePassword(allocator: std.mem.Allocator) ![]const u8 {
 /// GAP-0104 SECURITY FIX: Removed hardcoded credentials. Uses environment variables
 /// or generates cryptographically secure random passwords that are logged once on first startup.
 pub fn ensureDefaultUser(allocator: std.mem.Allocator) !void {
+    // Sync persisted users from auth_state file into the in-memory store
+    // before checking hasUsers(). This prevents GEODE_ADMIN_PASSWORD from
+    // overwriting an existing admin user on server restart.
+    {
+        user_store_mutex.lock();
+        defer user_store_mutex.unlock();
+        if (user_store) |*store| {
+            syncFromAuthStateFile(store) catch {};
+        }
+    }
+
     if (!hasUsers()) {
         // Get credentials from environment variables (no hardcoded fallback)
         const admin_user = std.process.getEnvVarOwned(allocator, "GEODE_ADMIN_USERNAME") catch |err| blk: {
@@ -413,14 +453,16 @@ pub fn ensureDefaultUser(allocator: std.mem.Allocator) !void {
         };
         defer allocator.free(admin_password);
 
-        // Create admin user
-        try createUser(allocator, admin_user, admin_password, admin_email, .Admin);
+        // Create admin user (force password reset only for auto-generated passwords)
+        try createUser(allocator, admin_user, admin_password, admin_email, .Admin, generated_password);
 
-        // Log if password was generated (only on first startup)
+        // Log generated password so the admin can retrieve it from journal/logs.
+        // Uses log.err to ensure visibility even at --log-level error (the default).
         if (generated_password) {
-            log.warn("Generated initial admin password - Set GEODE_ADMIN_PASSWORD environment variable for production", &.{
+            log.err("Initial admin password generated - change on first login", &.{
                 Attr.string("admin_username", admin_user),
-                Attr.string("note", "In production, password should be written to a secure file, not logged"),
+                Attr.string("GEODE_INITIAL_ADMIN_PASSWORD", admin_password),
+                Attr.string("action_required", "Password must be changed on first login"),
             });
         }
     }

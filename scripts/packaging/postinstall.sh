@@ -22,11 +22,15 @@ chmod 700 /etc/geode/certs
 # Reload systemd to recognize the new service
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload
-    echo "Systemd service installed: geode.service"
+    echo "Enabling geode.service..."
+    systemctl enable geode.service || true
+    echo "Starting geode.service..."
+    systemctl start geode.service || true
     echo ""
-    echo "To enable and start the service:"
-    echo "  sudo systemctl enable geode"
-    echo "  sudo systemctl start geode"
+    echo "Geode service enabled and started."
+    echo ""
+    echo "To view the initial admin password:"
+    echo "  sudo journalctl -u geode | grep GEODE_INITIAL_ADMIN_PASSWORD"
     echo ""
     echo "To check status:"
     echo "  sudo systemctl status geode"

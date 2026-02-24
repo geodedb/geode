@@ -973,7 +973,7 @@ pub const ClientSession = struct {
                 return AuthHelloResult{
                     .success = true,
                     .session_token = null,
-                    .requires_password_reset = false,
+                    .requires_password_reset = resp.password_reset_required,
                     .error_message = null,
                 };
             },

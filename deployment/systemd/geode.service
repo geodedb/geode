@@ -7,9 +7,9 @@ After=network.target
 Type=simple
 User=geode
 Group=geode
-# Production default: error-level logging only
+# Production default: warn-level logging (ensures initial admin password is visible)
 # Override via /etc/geode/geode.conf or systemd override for debug/info
-ExecStart=/usr/bin/geode serve --data-dir /var/lib/geode --log-level error
+ExecStart=/usr/bin/geode serve --data-dir /var/lib/geode --log-level warn
 Restart=on-failure
 RestartSec=5s
 

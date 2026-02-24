@@ -63,12 +63,14 @@ pub const HelloResponse = struct {
     session_id: []const u8 = "",
     error_message: []const u8 = "",
     capabilities: std.ArrayList([]const u8),
+    password_reset_required: bool = false,
 
     pub const _desc_table = .{
         .success = fd(1, .{ .scalar = .bool }),
         .session_id = fd(2, .{ .scalar = .string }),
         .error_message = fd(3, .{ .scalar = .string }),
         .capabilities = fd(4, .{ .repeated = .{ .scalar = .string } }),
+        .password_reset_required = fd(5, .{ .scalar = .bool }),
     };
 
     pub fn deinit(self: *HelloResponse, allocator: std.mem.Allocator) void {

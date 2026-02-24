@@ -621,6 +621,113 @@ fn validateFederationAuth(username: []const u8, password: []const u8) bool {
     return std.crypto.timing_safe.eql([256]u8, buf_a, buf_b);
 }
 
+/// Parse an ALTER USER <name> SET PASSWORD '<pwd>' statement from raw query text.
+/// Returns the extracted username and new password, or null if the query doesn't match.
+fn parseAlterUserSetPassword(query: []const u8) ?struct { username: []const u8, new_password: []const u8 } {
+    // Case-insensitive prefix match: ALTER USER
+    var pos: usize = 0;
+    const q = query;
+    if (q.len < 30) return null; // minimum: "ALTER USER x SET PASSWORD 'y'"
+
+    // Skip leading whitespace
+    while (pos < q.len and (q[pos] == ' ' or q[pos] == '\t')) pos += 1;
+
+    // Match ALTER
+    if (pos + 5 > q.len) return null;
+    if (!std.ascii.eqlIgnoreCase(q[pos..][0..5], "ALTER")) return null;
+    pos += 5;
+
+    // Skip whitespace
+    while (pos < q.len and q[pos] == ' ') pos += 1;
+
+    // Match USER
+    if (pos + 4 > q.len) return null;
+    if (!std.ascii.eqlIgnoreCase(q[pos..][0..4], "USER")) return null;
+    pos += 4;
+
+    // Skip whitespace
+    while (pos < q.len and q[pos] == ' ') pos += 1;
+
+    // Extract username (until next space)
+    const uname_start = pos;
+    while (pos < q.len and q[pos] != ' ') pos += 1;
+    if (pos == uname_start) return null;
+    const username = q[uname_start..pos];
+
+    // Skip whitespace
+    while (pos < q.len and q[pos] == ' ') pos += 1;
+
+    // Match SET
+    if (pos + 3 > q.len) return null;
+    if (!std.ascii.eqlIgnoreCase(q[pos..][0..3], "SET")) return null;
+    pos += 3;
+
+    // Skip whitespace
+    while (pos < q.len and q[pos] == ' ') pos += 1;
+
+    // Match PASSWORD
+    if (pos + 8 > q.len) return null;
+    if (!std.ascii.eqlIgnoreCase(q[pos..][0..8], "PASSWORD")) return null;
+    pos += 8;
+
+    // Skip whitespace
+    while (pos < q.len and q[pos] == ' ') pos += 1;
+
+    // Extract password from single quotes
+    if (pos >= q.len or q[pos] != '\'') return null;
+    pos += 1; // skip opening quote
+    const pwd_start = pos;
+    while (pos < q.len and q[pos] != '\'') pos += 1;
+    if (pos >= q.len) return null; // no closing quote
+    const new_password = q[pwd_start..pos];
+
+    return .{ .username = username, .new_password = new_password };
+}
+
+/// Handle ALTER USER SET PASSWORD when password reset is required.
+/// Updates the user's password, clears the reset flag, and sends a success response.
+fn handleAlterUserSetPassword(
+    gpa: std.mem.Allocator,
+    state: *ServerState,
+    stream: *quic_transport.QuicStream,
+    username: []const u8,
+    new_password: []const u8,
+) !void {
+    // Verify the user is changing their own password
+    if (state.authenticated_user) |auth_user| {
+        if (!std.mem.eql(u8, auth_user, username)) {
+            try sendExecuteError(gpa, stream, "42501", "Password reset required: you can only change your own password", &.{}, &.{});
+            return;
+        }
+    }
+
+    user_mgmt.updateUserPassword(gpa, username, new_password) catch |err| {
+        const msg = switch (err) {
+            error.PasswordReuse => "New password must not match the current password",
+            else => "Failed to update password",
+        };
+        try sendExecuteError(gpa, stream, "28P01", msg, &.{}, &.{});
+        return;
+    };
+
+    state.password_reset_required = false;
+
+    // Send success response as a status-only execution result
+    const status = try proto_util.buildStatus(gpa, "00000", &.{});
+    const resp = schema.ExecutionResponse{
+        .status = status,
+        .payload = .{
+            .page = .{
+                .rows = std.ArrayList(schema.Row){},
+                .final = true,
+                .ordered = false,
+                .order_keys = std.ArrayList([]const u8){},
+            },
+        },
+    };
+    try sendQuicMessage(gpa, stream, .{ .execute = resp });
+}
+
 fn handleClientMessage(
     gpa: std.mem.Allocator,
     state: *ServerState,
@@ -666,7 +773,7 @@ fn handleClientMessage(
                     return;
                 }
 
-                const role = user_mgmt.authenticate(hello_req.username, hello_req.password) catch {
+                const auth_result = user_mgmt.authenticate(hello_req.username, hello_req.password) catch {
                     const resp = schema.QuicServerMessage{ .hello = .{
                         .success = false,
                         .session_id = try gpa.dupe(u8, ""),
@@ -681,7 +788,8 @@ fn handleClientMessage(
                 if (state.authenticated_password) |p| gpa.free(p);
                 state.authenticated_user = try gpa.dupe(u8, hello_req.username);
                 state.authenticated_password = try gpa.dupe(u8, hello_req.password);
-                state.authenticated_role = @intFromEnum(role);
+                state.authenticated_role = @intFromEnum(auth_result.role);
+                state.password_reset_required = auth_result.password_reset_required;
             }
 
             if (hello_req.tenant_id) |tenant| {
@@ -700,6 +808,7 @@ fn handleClientMessage(
                 .session_id = session_id,
                 .error_message = try gpa.dupe(u8, ""),
                 .capabilities = caps,
+                .password_reset_required = state.password_reset_required,
             } };
             try sendQuicMessage(gpa, stream, resp);
         },
@@ -713,6 +822,18 @@ fn handleClientMessage(
             if (user_mgmt.isAuthEnabled() and state.authenticated_user == null) {
                 try sendExecuteError(gpa, stream, "28000", "Authentication required", &.{}, &.{});
                 return;
+            }
+
+            // Block all queries except ALTER USER SET PASSWORD when password reset is required
+            if (state.password_reset_required) {
+                const trimmed = std.mem.trim(u8, exec_req.query, " \t\r\n");
+                if (parseAlterUserSetPassword(trimmed)) |parsed| {
+                    try handleAlterUserSetPassword(gpa, state, stream, parsed.username, parsed.new_password);
+                    return;
+                } else {
+                    try sendExecuteError(gpa, stream, "08P01", "Password reset required. Change password with: ALTER USER <username> SET PASSWORD '<new_password>'", &.{}, &.{});
+                    return;
+                }
             }
 
             const bindings = proto_util.parseParams(gpa, exec_req.params.items) catch |err| {

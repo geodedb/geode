@@ -85,15 +85,17 @@ if command -v systemctl >/dev/null 2>&1; then
     echo "Reloading systemd daemon..."
     systemctl daemon-reload
 
-    # Enable service on installation
+    # Enable and start service on installation
     echo "Enabling geode.service..."
     systemctl enable geode.service || true
+    echo "Starting geode.service..."
+    systemctl start geode.service || true
 
     echo ""
-    echo "Installation complete!"
+    echo "Installation complete! Geode service enabled and started."
     echo ""
-    echo "To start Geode:"
-    echo "  sudo systemctl start geode"
+    echo "To view the initial admin password:"
+    echo "  sudo journalctl -u geode | grep GEODE_INITIAL_ADMIN_PASSWORD"
     echo ""
     echo "To check status:"
     echo "  sudo systemctl status geode"

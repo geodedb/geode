@@ -345,6 +345,8 @@ pub const ServerState = struct {
     authenticated_password: ?[]const u8 = null,
     // Type is user_management.Role but we use u8 enum value to avoid circular dep
     authenticated_role: ?u8 = null,
+    // Whether the authenticated user must change their password before running queries
+    password_reset_required: bool = false,
 
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphSupport"; ASPECT=SessionGraph; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-20
     // Current graph for this session (set by USE GRAPH command)
