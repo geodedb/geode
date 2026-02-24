@@ -44,7 +44,7 @@ pub const UserStorageBackend = struct {
         username_len: u16,
         email: [128]u8,
         email_len: u16,
-        password_hash: [128]u8,
+        password_hash: [256]u8,
         password_hash_len: u16,
         salt: [32]u8,
         is_active: bool,
@@ -349,7 +349,7 @@ pub const UserStorageBackend = struct {
 
     // User operations
     pub fn persistUser(self: *Self, user_id: u64, username: []const u8, email: []const u8, password_hash: []const u8, salt: []const u8) !void {
-        if (username.len > 63 or email.len > 127 or password_hash.len > 127 or salt.len > 31) {
+        if (username.len > 63 or email.len > 127 or password_hash.len > 255 or salt.len > 31) {
             return error.FieldTooLong;
         }
 
@@ -684,7 +684,7 @@ pub const UserStorageBackend = struct {
             .username_len = 0,
             .email = [_]u8{0} ** 128,
             .email_len = 0,
-            .password_hash = [_]u8{0} ** 128,
+            .password_hash = [_]u8{0} ** 256,
             .password_hash_len = 0,
             .salt = [_]u8{0} ** 32,
             .is_active = true,

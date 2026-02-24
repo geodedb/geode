@@ -716,10 +716,10 @@ fn hashPasswordArgon2id(allocator: Allocator, password: []const u8) ![]const u8 
         hash_hex[i * 2 + 1] = hex_chars[byte & 0xf];
     }
 
-    // Compact format: "argon2id:<salt_hex>:<hash_hex>" (106 chars, fits in 127-char field)
+    // Standard PHC format: "$argon2id$v=19$m=19456,t=2,p=1$<salt_hex>$<hash_hex>"
     return std.fmt.allocPrint(
         allocator,
-        "argon2id:{s}:{s}",
+        "$argon2id$v=19$m=19456,t=2,p=1${s}${s}",
         .{ &salt_hex, &hash_hex },
     );
 }
