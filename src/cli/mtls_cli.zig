@@ -1,15 +1,14 @@
 const std = @import("std");
-const geode = @import("geode");
-const auth_state = geode.auth_state;
+const cli_auth = @import("cli_auth_helpers.zig");
 
 // CANARY: REQ=REQ-GAP-0258-MTLS-CLI-001; FEATURE="mTLS CLI"; ASPECT=CertificateMapping; STATUS=IMPL; TEST=geodetestlab/specs/gap_0258_mtls_cli.yml; OWNER=cli; UPDATED=2026-02-09
 // mTLS CLI commands for managing mutual TLS certificate-to-user mappings
 
-/// Persistent file path for mTLS state (matches apikey_cli pattern)
+/// Persistent file path for mTLS state (uses cli_auth helpers for state dir resolution)
 const MTLS_STATE_FILE = "geode_mtls_state.db";
 
 fn mtlsStatePath(allocator: std.mem.Allocator) ![]u8 {
-    return auth_state.resolveStatePath(allocator, MTLS_STATE_FILE);
+    return cli_auth.resolveStatePath(allocator, MTLS_STATE_FILE);
 }
 
 const ExitCode = enum(u8) {

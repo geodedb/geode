@@ -543,7 +543,6 @@ pub const fle_key_types = @import("fle_key_types");
 
 // User management and authentication
 pub const user_management = @import("security/user_management.zig");
-pub const auth_state = @import("security/auth_state.zig");
 pub const api_keys = @import("security/api_keys.zig");
 pub const mtls_provider = @import("security/mtls_provider.zig");
 

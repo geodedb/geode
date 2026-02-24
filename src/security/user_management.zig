@@ -1,6 +1,5 @@
 const std = @import("std");
 const crypto = std.crypto;
-const auth_state = @import("auth_state.zig");
 const logging = @import("logging");
 const log = logging.scoped("security");
 const Attr = logging.Attr;
@@ -274,12 +273,8 @@ pub fn authenticate(username: []const u8, password: []const u8) !AuthResult {
 
     var store = &user_store.?;
 
-    // Get user — if not found, try reloading from auth_state file
-    // (the CLI writes user creates to the file, server keeps in-memory store)
-    const user = store.get(username) orelse blk: {
-        syncFromAuthStateFile(store) catch {};
-        break :blk store.get(username) orelse return error.Unauthenticated;
-    };
+    // Get user from in-memory store (populated from graph store at startup)
+    const user = store.get(username) orelse return error.Unauthenticated;
 
     // Check if user is active
     if (!user.active) {
@@ -297,59 +292,7 @@ pub fn authenticate(username: []const u8, password: []const u8) !AuthResult {
     };
 }
 
-/// Sync users from the auth_state file into the in-memory store.
-/// Called lazily when a user is not found in the in-memory store.
-fn syncFromAuthStateFile(store: *std.StringHashMap(User)) !void {
-    const allocator = store.allocator;
-    const auth_state_path = auth_state.authStatePath(allocator) catch return;
-    defer allocator.free(auth_state_path);
-
-    const file = std.fs.openFileAbsolute(auth_state_path, .{}) catch return;
-    defer file.close();
-
-    const contents = file.readToEndAlloc(allocator, 64 * 1024) catch return;
-    defer allocator.free(contents);
-
-    var lines = std.mem.tokenizeScalar(u8, contents, '\n');
-    while (lines.next()) |line| {
-        if (line.len == 0) continue;
-        var parts = std.mem.splitScalar(u8, line, '|');
-        const kind = parts.next() orelse continue;
-
-        if (std.mem.eql(u8, kind, "U")) {
-            const uname = parts.next() orelse continue;
-            _ = parts.next() orelse continue; // email
-            const pwd_hash = parts.next() orelse continue;
-            const role_str = parts.next() orelse "user";
-            const active_str = parts.next() orelse "1";
-
-            // Skip if already in store
-            if (store.contains(uname)) continue;
-
-            const role = Role.fromString(role_str) orelse .User;
-            const active = std.mem.eql(u8, active_str, "1") or std.mem.eql(u8, active_str, "true");
-
-            // Auth state file stores plaintext passwords; hash them for in-memory use
-            const pwd_hash_buf: [108]u8 = if (pwd_hash.len == 108 and std.mem.startsWith(u8, pwd_hash, "$argon2id$"))
-                // Already hashed
-                pwd_hash[0..108].*
-            else
-                // Plaintext password — hash it
-                hashPassword(allocator, pwd_hash) catch continue;
-
-            const user = User{
-                .username = allocator.dupe(u8, uname) catch continue,
-                .password_hash = pwd_hash_buf,
-                .email = allocator.dupe(u8, "") catch continue,
-                .role = role,
-                .created_at = std.time.timestamp(),
-                .last_login = null,
-                .active = active,
-            };
-            store.put(allocator.dupe(u8, uname) catch continue, user) catch continue;
-        }
-    }
-}
+// syncFromAuthStateFile removed — CLI and server both use graph store backend now.
 
 /// Check if user has permission for operation
 pub fn hasPermission(role: Role, permission: Permission) bool {
@@ -417,17 +360,6 @@ fn generateSecurePassword(allocator: std.mem.Allocator) ![]const u8 {
 /// GAP-0104 SECURITY FIX: Removed hardcoded credentials. Uses environment variables
 /// or generates cryptographically secure random passwords that are logged once on first startup.
 pub fn ensureDefaultUser(allocator: std.mem.Allocator) !void {
-    // Sync persisted users from auth_state file into the in-memory store
-    // before checking hasUsers(). This prevents GEODE_ADMIN_PASSWORD from
-    // overwriting an existing admin user on server restart.
-    {
-        user_store_mutex.lock();
-        defer user_store_mutex.unlock();
-        if (user_store) |*store| {
-            syncFromAuthStateFile(store) catch {};
-        }
-    }
-
     if (!hasUsers()) {
         // Get credentials from environment variables (no hardcoded fallback)
         const admin_user = std.process.getEnvVarOwned(allocator, "GEODE_ADMIN_USERNAME") catch |err| blk: {

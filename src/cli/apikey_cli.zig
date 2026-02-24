@@ -1,16 +1,16 @@
 const std = @import("std");
 const geode = @import("geode");
 const api_keys = geode.api_keys;
-const auth_state = geode.auth_state;
+const cli_auth = @import("cli_auth_helpers.zig");
 
 // CANARY: REQ=REQ-AUTH-APIKEYS-CLI-001; FEATURE="ApiKeyCLI"; ASPECT=CLI; STATUS=IMPL; TEST=geodetestlab/specs/api_key_auth.yml; OWNER=cli; UPDATED=2026-02-04
 // API Key CLI commands for managing API keys from the command line
 
-/// Persistent file path for API keys (matches auth_state pattern)
+/// Persistent file path for API keys (uses cli_auth helpers for state dir resolution)
 const APIKEY_STATE_FILE = "geode_apikey_state.db";
 
 fn apiKeyStatePath(allocator: std.mem.Allocator) ![]u8 {
-    return auth_state.resolveStatePath(allocator, APIKEY_STATE_FILE);
+    return cli_auth.resolveStatePath(allocator, APIKEY_STATE_FILE);
 }
 
 const ExitCode = enum(u8) {
@@ -208,11 +208,26 @@ fn parseScopes(allocator: std.mem.Allocator, scope_str: []const u8) ![][]const u
     return scopes.toOwnedSlice(allocator);
 }
 
+/// Extract --data-dir from argv (returns null if not found)
+fn extractDataDir(argv: [][:0]u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < argv.len) : (i += 1) {
+        if (std.mem.eql(u8, argv[i], "--data-dir") and i + 1 < argv.len) {
+            return argv[i + 1];
+        }
+    }
+    return null;
+}
+
 /// API Key management command handler
 pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Load auth state for user lookup
-    var state = try auth_state.State.load(allocator);
-    defer state.deinit();
+    // Open graph store for user lookup
+    const data_dir = extractDataDir(argv);
+    var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
+        std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    };
+    defer mgr.deinit();
 
     // Initialize API key manager
     var manager = api_keys.ApiKeyManager.init(allocator);
@@ -299,8 +314,7 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         }
 
         // Lookup user to get user_id
-        try state.ensureDefaults();
-        const user = state.getUser(username.?) orelse {
+        const user_record = mgr.storage.getUserByUsername(username.?) orelse {
             std.debug.print("Error: user '{s}' does not exist\n", .{username.?});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -327,7 +341,7 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 
         // Create the key using the manager
         const key_string = try manager.createKey(
-            @intCast(@intFromPtr(user)),
+            @intCast(user_record.id),
             keyname.?,
             scopes,
             expires_in,
@@ -391,8 +405,7 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         }
 
         // Lookup user
-        try state.ensureDefaults();
-        _ = state.getUser(username.?) orelse {
+        _ = mgr.storage.getUserByUsername(username.?) orelse {
             std.debug.print("Error: user '{s}' does not exist\n", .{username.?});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -462,8 +475,7 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         }
 
         // Lookup user
-        try state.ensureDefaults();
-        _ = state.getUser(username.?) orelse {
+        _ = mgr.storage.getUserByUsername(username.?) orelse {
             std.debug.print("Error: user '{s}' does not exist\n", .{username.?});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -520,8 +532,7 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         }
 
         // Lookup user
-        try state.ensureDefaults();
-        _ = state.getUser(username.?) orelse {
+        _ = mgr.storage.getUserByUsername(username.?) orelse {
             std.debug.print("Error: user '{s}' does not exist\n", .{username.?});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -626,8 +637,7 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         }
 
         // Lookup user
-        try state.ensureDefaults();
-        _ = state.getUser(username.?) orelse {
+        _ = mgr.storage.getUserByUsername(username.?) orelse {
             std.debug.print("Error: user '{s}' does not exist\n", .{username.?});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };

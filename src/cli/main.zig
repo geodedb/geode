@@ -65,7 +65,6 @@ const backup_cli = @import("backup_cli.zig");
 const cmdBackup = backup_cli.cmdBackup;
 const cmdRestore = backup_cli.cmdRestore;
 const cmdMigrate = backup_cli.cmdMigrate;
-const auth_state = geode.auth_state;
 const execution = geode.execution;
 
 // CANARY: REQ=REQ-M4.4-CLI-DISPATCHER-002; FEATURE="CLI Modularization"; ASPECT=DispatcherIntegration; STATUS=TESTED; TEST=tests/test_cli_integration.zig; OWNER=cli; UPDATED=2026-01-15

@@ -302,7 +302,7 @@ REQ-AUTH-POLICY-001,Password Reset Tracking,Security,TESTED,,,security,2025-09-3
 REQ-AUTH-POLICY-001,UserAuthPolicy,ForceReset,TESTED,,,security,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-AUTH-POLICY-002,AuthPolicy,EnhancedPolicy,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-AUTH-POLICY-002,Enhanced Password Policy,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig
-REQ-AUTH-POLICY-002,UserAuthPolicy,PassphrasePolicy,TESTED,,,security,2026-01-15,tests/test_gap_analysis_january_2026.zig
+REQ-AUTH-POLICY-002,UserAuthPolicy,PassphrasePolicy,TESTED,,,security,2026-02-24,tests/test_gap_analysis_january_2026.zig
 REQ-AUTH-POLICY-003,AuthPolicy,PasswordValidation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-AUTH-POLICY-003,Enhanced Password Validation,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig
 REQ-AUTH-POLICY-004,AuthPolicy,UnifiedPolicy,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
@@ -332,7 +332,6 @@ REQ-AUTH-SESSION-008,TokenBasedLogin,IMPL,TESTED,,,security,2026-01-15,src/cli/m
 REQ-AUTH-SESSION-009,AutoLoadSessionToken,IMPL,TESTED,,,security,2026-01-15,src/cli/main.zig
 REQ-AUTH-SESSION-ROTATE-001,RotatingSessionToken,SECURITY,TESTED,,,security,2026-01-29,src/security/authn.zig
 REQ-AUTH-STATE-DEFAULTS-001,AuthState,ProductionGuard,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
-REQ-AUTH-STATE-DEFAULTS-001,Production Password Guard,Security,TESTED,,,security,2026-01-14,src/security/auth_state.zig
 REQ-AUTH-TOKEN-001,AuthToken,Testing,TESTED,,,cli,2025-10-14,src/cli/main.zig
 REQ-AUTH-TOKEN-001,AuthToken,Testing,TESTED,,,cli,2025-10-14,src/cli/main.zig
 REQ-AUTH-TOKEN-001,AuthToken,TokenValidation,TESTED,,,cli,2026-01-16,tests/test_gap_0193_batch2_testing.zig
@@ -505,6 +504,7 @@ REQ-CIRCULAR-DEP-017,Circular Dependency Resolution,AuditIndep,TESTED,,,build,20
 REQ-CIRCULAR-DEP-018,Circular Dependency Resolution,DistributedIndep,TESTED,,,build,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-CIRCULAR-DEP-019,Circular Dependency Resolution,BackupIndep,TESTED,,,build,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-CIRCULAR-DEP-020,Circular Dependency Resolution,BuildVerification,TESTED,,,build,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
+REQ-CLI-AUTH-HELPERS-001,CLI Auth Helpers,Offline,IMPL,,,cli,2026-02-24,src/cli/cli_auth_helpers.zig
 REQ-CLI-AUTHN-001,CLIAuthn,ProviderConfig,TESTED,,,cli,2026-02-04,src/cli/authn_cli.zig
 REQ-CLI-AUTO-001,GQL Query Auto-detection,UserExperience,TESTED,,,cli,2025-10-04,tests/cli_gql_autodetection_regression_test.sh
 REQ-CLI-AUTO-002,Basic GQL Query Auto-detection,UserExperience,TESTED,,,cli,2025-10-04,tests/cli_gql_autodetection_basic_test.sh
@@ -4038,7 +4038,7 @@ REQ-UNITTEST-PLANNER-001,UnitTests,PlannerTests,TESTED,,,test,2026-01-16,tests/t
 REQ-UNITTEST-STORAGE-001,UnitTests,StorageTests,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-UNITTEST-STORE-001,UnitTests,StorageTests,TESTED,,,testing,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-UNITTESTING-001,UnitTesting,TestHarness,TESTED,,,test,2026-01-15,tests/test_gap_0193_final_batch.zig
-REQ-USER-CREATE-PASSWORD-001,CLI Password Security,Security,TESTED,,,cli,2026-01-14,src/cli/user_mgmt_cli.zig
+REQ-USER-CREATE-PASSWORD-001,CLI Password Security,Security,TESTED,,,cli,2026-02-24,src/cli/user_mgmt_cli.zig
 REQ-USER-METADATA-001,User Metadata Handling,DataIntegrity,EXEMPT,,,security,2026-01-13,src/security/user_manager.zig
 REQ-VALID-001,Validation,InputValidation,TESTED,,,core,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-VALIDATION-INPUT-001,Validation,InputValidation,TESTED,,,core,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig

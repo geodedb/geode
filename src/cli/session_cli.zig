@@ -1,7 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const geode = @import("geode");
-const auth_state = geode.auth_state;
+const cli_auth = @import("cli_auth_helpers.zig");
 
 // CANARY: REQ=REQ-CLI-SESSION-001; FEATURE="CLISession"; ASPECT=Management; STATUS=TESTED; TEST=geodetestlab/specs/authn_provider.yml; OWNER=cli; UPDATED=2026-02-04
 // Session management CLI commands
@@ -9,7 +8,7 @@ const auth_state = geode.auth_state;
 const SESSION_STATE_FILE = "geode_session_state.db";
 
 fn sessionStatePath(allocator: std.mem.Allocator) ![]u8 {
-    return auth_state.resolveStatePath(allocator, SESSION_STATE_FILE);
+    return cli_auth.resolveStatePath(allocator, SESSION_STATE_FILE);
 }
 
 // Exit codes for consistency with main CLI

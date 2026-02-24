@@ -311,10 +311,10 @@ test "GAP-0202: REQ-AUTH-POLICY-001 - Security module accessible" {
     try testing.expect(@hasDecl(geode.security, "auth"));
 }
 
-// CANARY: REQ=REQ-AUTH-POLICY-002; FEATURE="UserAuthPolicy"; ASPECT=PassphrasePolicy; STATUS=TESTED; TEST=test_gap_analysis_january_2026.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-AUTH-POLICY-002; FEATURE="UserAuthPolicy"; ASPECT=PassphrasePolicy; STATUS=TESTED; TEST=test_gap_analysis_january_2026.zig; OWNER=security; UPDATED=2026-02-24
 test "GAP-0202: REQ-AUTH-POLICY-002 - Authentication state management" {
-    // Verify auth_state module is accessible
-    try testing.expect(@hasDecl(geode, "auth_state"));
+    // Verify user_management module is accessible (auth_state removed; graph store backend used instead)
+    try testing.expect(@hasDecl(geode, "user_management"));
 }
 
 // CANARY: REQ=REQ-AUTH-CONFIG-001; FEATURE="UserAuthPolicy"; ASPECT=ConfigurablePolicy; STATUS=TESTED; TEST=test_gap_analysis_january_2026.zig; OWNER=security; UPDATED=2026-01-15
@@ -398,7 +398,7 @@ test "GAP-0172..0203: Summary verification" {
 
     // GAP-0202: Security/Auth
     try testing.expect(@hasDecl(geode, "security"));
-    try testing.expect(@hasDecl(geode, "auth_state"));
+    try testing.expect(@hasDecl(geode, "user_management"));
 
     // GAP-0203: Types/Eval Performance
     try testing.expect(@hasDecl(geode, "types"));

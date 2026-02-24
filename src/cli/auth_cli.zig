@@ -1,6 +1,7 @@
 const std = @import("std");
 const geode = @import("geode");
-const auth_state = geode.auth_state;
+const cli_auth = @import("cli_auth_helpers.zig");
+const AuthGraphManager = cli_auth.AuthGraphManager;
 const stdio_util = @import("../utils/stdio.zig");
 
 // CANARY: REQ=REQ-QUALITY-GAP-406-006; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
@@ -38,11 +39,27 @@ const ExitCode = enum(u8) {
     usage_error = 2,
 };
 
+/// Extract --data-dir from argv (returns null if not found)
+fn extractDataDir(argv: [][:0]u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < argv.len) : (i += 1) {
+        if (std.mem.eql(u8, argv[i], "--data-dir") and i + 1 < argv.len) {
+            return argv[i + 1];
+        }
+    }
+    return null;
+}
+
 /// Policy management command handler
 /// Handles: policy create, policy list, policy show, policy delete
 pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    var state = try auth_state.State.load(allocator);
-    defer state.deinit();
+    // Open graph store for offline auth operations
+    const data_dir = extractDataDir(argv);
+    var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
+        std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer mgr.deinit();
 
     const subcmd_idx = start_idx + 1;
 
@@ -81,8 +98,23 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                 i += 1;
             }
         }
-        try state.upsertPolicy(name, table, condition);
-        try state.save();
+        const policy_id = mgr.next_user_id;
+        mgr.next_user_id += 1;
+
+        try mgr.storage.persistPolicy(.{
+            .policy_id = policy_id,
+            .name = name,
+            .description = "",
+            .graph = "",
+            .table = table,
+            .operation = 0,
+            .permissive = false,
+            .enabled = true,
+            .using_clause = condition,
+            .check_clause = null,
+            .audit_level = 0,
+            .created_by = 0,
+        });
         printOut("RLS policy '{s}' created for table '{s}'\n", .{ name, table });
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcmd, "list")) {
@@ -90,12 +122,19 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             printPolicyUsage();
             std.process.exit(@intFromEnum(ExitCode.success));
         }
-        if (state.policies.items.len == 0) {
+        var found = false;
+        var it = mgr.storage.policyIterator();
+        while (it.next()) |_| {
+            found = true;
+            break;
+        }
+        if (!found) {
             printOut("No policies configured (RLS list)\n", .{});
         } else {
             printOut("Policies:\n", .{});
-            for (state.policies.items) |p| {
-                printOut("- {s} on {s}\n", .{ p.name, p.table });
+            var it2 = mgr.storage.policyIterator();
+            while (it2.next()) |record| {
+                printOut("- {s} on {s}\n", .{ record.getName(), record.getTable() });
             }
         }
         std.process.exit(@intFromEnum(ExitCode.success));
@@ -105,9 +144,18 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         const name = argv[subcmd_idx + 1];
-        if (state.getPolicy(name)) |p| {
-            printOut("Policy: {s}\nTable: {s}\nCondition: {s}\n", .{ p.name, p.table, p.condition });
-        } else {
+        // Find policy by name
+        var found = false;
+        var it = mgr.storage.policyIterator();
+        while (it.next()) |record| {
+            if (std.mem.eql(u8, record.getName(), name)) {
+                const using = record.getUsingClause() orelse "";
+                printOut("Policy: {s}\nTable: {s}\nCondition: {s}\n", .{ record.getName(), record.getTable(), using });
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
             printOut("Policy '{s}' not found\n", .{name});
         }
         std.process.exit(@intFromEnum(ExitCode.success));
@@ -117,8 +165,14 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         const name = argv[subcmd_idx + 1];
-        _ = state.deletePolicy(name);
-        try state.save();
+        // Find and remove policy by name
+        var it = mgr.storage.policy_cache.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.getName(), name)) {
+                mgr.storage.removePolicy(entry.key_ptr.*) catch {};
+                break;
+            }
+        }
         printOut("Policy '{s}' deleted\n", .{name});
         std.process.exit(@intFromEnum(ExitCode.success));
     }
@@ -131,8 +185,13 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 /// Grant permission command handler
 /// Handles: grant <permission> [target] [resource] / --to / --resource
 pub fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    var state = try auth_state.State.load(allocator);
-    defer state.deinit();
+    // Open graph store for offline auth operations
+    const data_dir = extractDataDir(argv);
+    var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
+        std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer mgr.deinit();
 
     const perm_idx = start_idx + 1;
     if (perm_idx >= argv.len) {
@@ -192,8 +251,10 @@ pub fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
-    _ = try state.grantPermission(target.?, permission, resource);
-    try state.save();
+    // Persist the permission grant in the graph store
+    const perm_id = mgr.next_user_id;
+    mgr.next_user_id += 1;
+    try mgr.storage.persistPermission(perm_id, permission, resource, 0, target);
     printOut("Granted permission '{s}' to '{s}'{s}{s}\n", .{ permission, target.?, if (resource.len > 0) " on resource " else "", if (resource.len > 0) resource else "" });
     std.process.exit(@intFromEnum(ExitCode.success));
 }
@@ -201,8 +262,13 @@ pub fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
 /// Revoke permission command handler
 /// Handles: revoke <permission> [target] / --from
 pub fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    var state = try auth_state.State.load(allocator);
-    defer state.deinit();
+    // Open graph store for offline auth operations
+    const data_dir = extractDataDir(argv);
+    var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
+        std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer mgr.deinit();
 
     const perm_idx = start_idx + 1;
     if (perm_idx >= argv.len) {
@@ -254,8 +320,14 @@ pub fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    _ = state.revokePermission(target.?, permission, resource);
-    try state.save();
+    // Find and remove matching permission from graph store
+    var it = mgr.storage.permission_cache.iterator();
+    while (it.next()) |entry| {
+        if (std.mem.eql(u8, entry.value_ptr.getName(), permission)) {
+            mgr.storage.removePermission(entry.key_ptr.*) catch {};
+            break;
+        }
+    }
     printOut("Revoked permission '{s}' from '{s}'{s}{s}\n", .{ permission, target.?, if (resource.len > 0) " on resource " else "", if (resource.len > 0) resource else "" });
     std.process.exit(@intFromEnum(ExitCode.success));
 }
