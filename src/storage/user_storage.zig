@@ -1,8 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const graph_store = @import("geode").graph_store;
+const auth_hmac = @import("geode").auth_hmac;
 
-// CANARY: REQ=REQ-GQL-202; FEATURE="UserStorage"; ASPECT=PersistentStorage; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_202_UserStorage; OWNER=security; UPDATED=2026-02-04
+// CANARY: REQ=REQ-GQL-202; FEATURE="UserStorage"; ASPECT=PersistentStorage; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_202_UserStorage; OWNER=security; UPDATED=2026-02-24
 
 const logging = @import("logging");
 const log = logging.scoped("user_storage");
@@ -13,6 +14,7 @@ const USER_LABEL = "User";
 const ROLE_LABEL = "Role";
 const PERMISSION_LABEL = "Permission";
 const POLICY_LABEL = "Policy";
+const AUTH_CHAIN_ROOT_LABEL = "AuthChainRoot";
 
 pub const UserStorageBackend = struct {
     allocator: Allocator,
@@ -29,6 +31,9 @@ pub const UserStorageBackend = struct {
     role_nodes: std.AutoHashMap(u64, u64),
     permission_nodes: std.AutoHashMap(u64, u64),
     policy_nodes: std.AutoHashMap(u64, u64),
+
+    // AuthChainRoot singleton node ID (null if not yet created)
+    chain_root_node: ?u64,
 
     const Self = @This();
 
@@ -52,6 +57,12 @@ pub const UserStorageBackend = struct {
         last_login: i64,
         created_at: i64,
         updated_at: i64,
+        // HMAC chain integrity fields (added for auth storage migration)
+        password_changed_at: i64, // timestamp for password expiry policy
+        hash_algorithm: [16]u8, // stores "argon2id" or "blake2b"
+        hash_algorithm_len: u16,
+        is_default_user: bool, // auto-created admin flag
+        password_reset_required: bool, // force password change on next login
         // Variable-length attributes section follows (unused in GraphStore backend)
         attributes_len: u32,
 
@@ -70,6 +81,10 @@ pub const UserStorageBackend = struct {
         pub fn getMFASecret(self: *const UserRecord) ?[]const u8 {
             if (self.mfa_secret_len == 0) return null;
             return self.mfa_secret[0..self.mfa_secret_len];
+        }
+
+        pub fn getHashAlgorithm(self: *const UserRecord) []const u8 {
+            return self.hash_algorithm[0..self.hash_algorithm_len];
         }
     };
 
@@ -182,6 +197,7 @@ pub const UserStorageBackend = struct {
             .role_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .permission_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .policy_nodes = std.AutoHashMap(u64, u64).init(allocator),
+            .chain_root_node = null,
         };
 
         try self.loadCache();
@@ -239,6 +255,10 @@ pub const UserStorageBackend = struct {
             record.last_login = getIntProp(self.store, node_id, "last_login", 0);
             record.created_at = getIntProp(self.store, node_id, "created_at", std.time.milliTimestamp());
             record.updated_at = getIntProp(self.store, node_id, "updated_at", record.created_at);
+            record.hash_algorithm_len = copyIntoField(&record.hash_algorithm, getStringProp(self.store, node_id, "hash_algorithm", ""));
+            record.is_default_user = getBoolProp(self.store, node_id, "is_default_user", false);
+            record.password_reset_required = getBoolProp(self.store, node_id, "password_reset_required", false);
+            record.password_changed_at = getIntProp(self.store, node_id, "password_changed_at", 0);
 
             try self.user_cache.put(user_id, record);
             try self.user_nodes.put(user_id, node_id);
@@ -394,6 +414,122 @@ pub const UserStorageBackend = struct {
         return null;
     }
 
+    // HMAC-aware user persist
+    pub fn persistUserWithHmac(self: *Self, user_id: u64, username: []const u8, email: []const u8, password_hash: []const u8, salt: []const u8, hmac_key: *const [32]u8) !void {
+        // Persist the user record first (creates/updates node in graph)
+        try self.persistUser(user_id, username, email, password_hash, salt);
+
+        // Compute HMAC over all user properties (sorted by key name)
+        var id_buf: [20]u8 = undefined;
+        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{user_id}) catch "0";
+
+        const record = self.user_cache.get(user_id) orelse return error.UserNotFound;
+
+        var created_buf: [20]u8 = undefined;
+        const created_str = std.fmt.bufPrint(&created_buf, "{d}", .{record.created_at}) catch "0";
+        var updated_buf: [20]u8 = undefined;
+        const updated_str = std.fmt.bufPrint(&updated_buf, "{d}", .{record.updated_at}) catch "0";
+        var pwd_changed_buf: [20]u8 = undefined;
+        const pwd_changed_str = std.fmt.bufPrint(&pwd_changed_buf, "{d}", .{record.password_changed_at}) catch "0";
+        var lockout_buf: [20]u8 = undefined;
+        const lockout_str = std.fmt.bufPrint(&lockout_buf, "{d}", .{record.lockout_until}) catch "0";
+        var last_login_buf: [20]u8 = undefined;
+        const last_login_str = std.fmt.bufPrint(&last_login_buf, "{d}", .{record.last_login}) catch "0";
+        var failed_buf: [10]u8 = undefined;
+        const failed_str = std.fmt.bufPrint(&failed_buf, "{d}", .{record.failed_login_attempts}) catch "0";
+
+        const mfa_secret = record.getMFASecret() orelse "";
+
+        const props = [_]auth_hmac.KeyValue{
+            .{ .key = "created_at", .value = created_str },
+            .{ .key = "email", .value = email },
+            .{ .key = "failed_login_attempts", .value = failed_str },
+            .{ .key = "hash_algorithm", .value = record.getHashAlgorithm() },
+            .{ .key = "id", .value = id_str },
+            .{ .key = "is_active", .value = if (record.is_active) "true" else "false" },
+            .{ .key = "is_default_user", .value = if (record.is_default_user) "true" else "false" },
+            .{ .key = "is_superuser", .value = if (record.is_superuser) "true" else "false" },
+            .{ .key = "last_login", .value = last_login_str },
+            .{ .key = "lockout_until", .value = lockout_str },
+            .{ .key = "mfa_enabled", .value = if (record.mfa_enabled) "true" else "false" },
+            .{ .key = "mfa_secret", .value = mfa_secret },
+            .{ .key = "password_changed_at", .value = pwd_changed_str },
+            .{ .key = "password_hash", .value = password_hash },
+            .{ .key = "password_reset_required", .value = if (record.password_reset_required) "true" else "false" },
+            .{ .key = "salt", .value = salt },
+            .{ .key = "updated_at", .value = updated_str },
+            .{ .key = "username", .value = username },
+        };
+
+        const hmac_bytes = auth_hmac.computeRecordHmac(hmac_key, &props);
+        const hmac_hex = auth_hmac.hmacToHex(&hmac_bytes);
+
+        // Store the HMAC hex string as a node property
+        const node_id = self.user_nodes.get(user_id) orelse return error.UserNotFound;
+        try self.store.setNodeProperty(node_id, "hmac", .{ .String = &hmac_hex });
+        self.store.saveIfDirty();
+    }
+
+    // ChainRootRecord for HMAC chain integrity
+    pub const ChainRootRecord = struct {
+        chain_hash: [64]u8, // hex string
+        chain_hash_len: u16,
+        record_count: u64,
+        last_verified: i64,
+        hmac_key_id: [64]u8,
+        hmac_key_id_len: u16,
+        node_id: ?u64, // graph store node ID, null if not yet created
+    };
+
+    pub fn loadChainRoot(self: *Self) ?ChainRootRecord {
+        const nodes_opt = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, AUTH_CHAIN_ROOT_LABEL);
+        if (nodes_opt == null) return null;
+        const nodes = nodes_opt.?;
+        if (nodes.len == 0) return null;
+
+        const node_id = nodes[0];
+        const node = self.store.getNodePtr(node_id) orelse return null;
+        if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) return null;
+
+        self.chain_root_node = node_id;
+
+        var record = ChainRootRecord{
+            .chain_hash = [_]u8{0} ** 64,
+            .chain_hash_len = 0,
+            .record_count = 0,
+            .last_verified = 0,
+            .hmac_key_id = [_]u8{0} ** 64,
+            .hmac_key_id_len = 0,
+            .node_id = node_id,
+        };
+
+        record.chain_hash_len = copyIntoField(&record.chain_hash, getStringProp(self.store, node_id, "chain_hash", ""));
+        const count_val = getIntProp(self.store, node_id, "record_count", 0);
+        record.record_count = if (count_val >= 0) @intCast(count_val) else 0;
+        record.last_verified = getIntProp(self.store, node_id, "last_verified", 0);
+        record.hmac_key_id_len = copyIntoField(&record.hmac_key_id, getStringProp(self.store, node_id, "hmac_key_id", ""));
+
+        // Only return if we actually have a chain hash stored
+        if (record.chain_hash_len == 0) return null;
+
+        return record;
+    }
+
+    pub fn persistChainRoot(self: *Self, chain_hash_hex: []const u8, record_count: u64, hmac_key_id: []const u8) !void {
+        const node_id = self.chain_root_node orelse blk: {
+            const new_id = try self.createEntityNode(AUTH_CHAIN_ROOT_LABEL);
+            self.chain_root_node = new_id;
+            break :blk new_id;
+        };
+
+        try self.store.setNodeProperty(node_id, "chain_hash", .{ .String = chain_hash_hex });
+        try self.store.setNodeProperty(node_id, "record_count", .{ .Int = safeI64(record_count) });
+        try self.store.setNodeProperty(node_id, "last_verified", .{ .Int = std.time.milliTimestamp() });
+        try self.store.setNodeProperty(node_id, "hmac_key_id", .{ .String = hmac_key_id });
+
+        self.store.saveIfDirty();
+    }
+
     // Role operations
     pub fn persistRole(self: *Self, role_id: u64, name: []const u8, description: []const u8, parent_role: u64, priority: u32, is_system: bool) !void {
         if (name.len > 63 or description.len > 255) {
@@ -541,7 +677,7 @@ pub const UserStorageBackend = struct {
         return self.policy_cache.valueIterator();
     }
 
-    fn blankUserRecord(user_id: u64) UserRecord {
+    pub fn blankUserRecord(user_id: u64) UserRecord {
         return UserRecord{
             .id = user_id,
             .username = [_]u8{0} ** 64,
@@ -561,6 +697,11 @@ pub const UserStorageBackend = struct {
             .last_login = 0,
             .created_at = std.time.milliTimestamp(),
             .updated_at = std.time.milliTimestamp(),
+            .password_changed_at = 0,
+            .hash_algorithm = [_]u8{0} ** 16,
+            .hash_algorithm_len = 0,
+            .is_default_user = false,
+            .password_reset_required = false,
             .attributes_len = 0,
         };
     }
@@ -619,7 +760,7 @@ pub const UserStorageBackend = struct {
         };
     }
 
-    fn copyIntoField(dest: []u8, src: []const u8) u16 {
+    pub fn copyIntoField(dest: []u8, src: []const u8) u16 {
         const max_len = dest.len;
         const len = @min(src.len, max_len);
         @memset(dest, 0);
@@ -654,7 +795,7 @@ pub const UserStorageBackend = struct {
         return default;
     }
 
-    fn upsertUserNode(self: *Self, record: UserRecord) !void {
+    pub fn upsertUserNode(self: *Self, record: UserRecord) !void {
         const node_id = self.user_nodes.get(record.id) orelse try self.createEntityNode(USER_LABEL);
         try self.user_nodes.put(record.id, node_id);
 
@@ -676,6 +817,12 @@ pub const UserStorageBackend = struct {
         try self.store.setNodeProperty(node_id, "last_login", .{ .Int = record.last_login });
         try self.store.setNodeProperty(node_id, "created_at", .{ .Int = record.created_at });
         try self.store.setNodeProperty(node_id, "updated_at", .{ .Int = record.updated_at });
+        if (record.hash_algorithm_len > 0) {
+            try self.store.setNodeProperty(node_id, "hash_algorithm", .{ .String = record.getHashAlgorithm() });
+        }
+        try self.store.setNodeProperty(node_id, "is_default_user", .{ .Bool = record.is_default_user });
+        try self.store.setNodeProperty(node_id, "password_reset_required", .{ .Bool = record.password_reset_required });
+        try self.store.setNodeProperty(node_id, "password_changed_at", .{ .Int = record.password_changed_at });
 
         self.store.saveIfDirty();
     }
@@ -761,3 +908,179 @@ pub const UserStorageBackend = struct {
         return bytes[0..len];
     }
 };
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+const testing = std.testing;
+
+test "blankUserRecord initializes new HMAC fields correctly" {
+    const record = UserStorageBackend.blankUserRecord(42);
+
+    // Verify new fields are initialized to defaults
+    try testing.expectEqual(@as(u16, 0), record.hash_algorithm_len);
+    try testing.expect(std.mem.eql(u8, record.hash_algorithm[0..16], &([_]u8{0} ** 16)));
+    try testing.expectEqual(false, record.is_default_user);
+    try testing.expectEqual(false, record.password_reset_required);
+    try testing.expectEqual(@as(i64, 0), record.password_changed_at);
+
+    // Verify existing fields still initialized correctly
+    try testing.expectEqual(@as(u64, 42), record.id);
+    try testing.expectEqual(true, record.is_active);
+    try testing.expectEqual(false, record.is_superuser);
+    try testing.expectEqual(@as(u32, 0), record.attributes_len);
+}
+
+test "blankUserRecord getHashAlgorithm returns empty for default" {
+    const record = UserStorageBackend.blankUserRecord(1);
+    try testing.expectEqual(@as(usize, 0), record.getHashAlgorithm().len);
+}
+
+test "persistUserWithHmac stores hmac property on graph node" {
+    var store = graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var backend = try UserStorageBackend.init(testing.allocator, &store);
+    defer backend.deinit();
+
+    const hmac_key = [_]u8{0xab} ** 32;
+    try backend.persistUserWithHmac(1, "alice", "alice@example.com", "hashed_pw", "salt123", &hmac_key);
+
+    // Verify user was persisted
+    const user = backend.getUser(1);
+    try testing.expect(user != null);
+    try testing.expect(std.mem.eql(u8, user.?.getUsername(), "alice"));
+
+    // Verify the hmac property is stored on the graph node (64 hex chars)
+    const node_id = backend.user_nodes.get(1);
+    try testing.expect(node_id != null);
+    const hmac_prop = store.getNodeProperty(node_id.?, "hmac");
+    try testing.expect(hmac_prop != null);
+    try testing.expect(hmac_prop.? == .String);
+    try testing.expectEqual(@as(usize, 64), hmac_prop.?.String.len);
+
+    // Verify all chars are valid hex
+    for (hmac_prop.?.String) |c| {
+        try testing.expect((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f'));
+    }
+}
+
+test "persistUserWithHmac produces deterministic HMAC" {
+    var store1 = graph_store.GraphStore.init(testing.allocator);
+    defer store1.deinit();
+    var backend1 = try UserStorageBackend.init(testing.allocator, &store1);
+    defer backend1.deinit();
+
+    var store2 = graph_store.GraphStore.init(testing.allocator);
+    defer store2.deinit();
+    var backend2 = try UserStorageBackend.init(testing.allocator, &store2);
+    defer backend2.deinit();
+
+    const hmac_key = [_]u8{0x42} ** 32;
+
+    try backend1.persistUserWithHmac(1, "bob", "bob@example.com", "pw_hash", "saltsalt", &hmac_key);
+    try backend2.persistUserWithHmac(1, "bob", "bob@example.com", "pw_hash", "saltsalt", &hmac_key);
+
+    const node_id1 = backend1.user_nodes.get(1).?;
+    const node_id2 = backend2.user_nodes.get(1).?;
+
+    const hmac1 = store1.getNodeProperty(node_id1, "hmac").?.String;
+    const hmac2 = store2.getNodeProperty(node_id2, "hmac").?.String;
+
+    try testing.expect(std.mem.eql(u8, hmac1, hmac2));
+}
+
+test "loadChainRoot returns null when no chain root exists" {
+    var store = graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var backend = try UserStorageBackend.init(testing.allocator, &store);
+    defer backend.deinit();
+
+    const root = backend.loadChainRoot();
+    try testing.expect(root == null);
+}
+
+test "persistChainRoot creates and loadChainRoot retrieves" {
+    var store = graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var backend = try UserStorageBackend.init(testing.allocator, &store);
+    defer backend.deinit();
+
+    // Persist a chain root
+    const chain_hash_hex = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    try backend.persistChainRoot(chain_hash_hex, 5, "key-id-001");
+
+    // Load and verify
+    const root = backend.loadChainRoot();
+    try testing.expect(root != null);
+    const r = root.?;
+    try testing.expectEqual(@as(u64, 5), r.record_count);
+    try testing.expect(r.node_id != null);
+    try testing.expect(r.last_verified > 0);
+    try testing.expect(std.mem.eql(u8, r.chain_hash[0..r.chain_hash_len], chain_hash_hex));
+    try testing.expect(std.mem.eql(u8, r.hmac_key_id[0..r.hmac_key_id_len], "key-id-001"));
+}
+
+test "persistChainRoot updates existing chain root" {
+    var store = graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var backend = try UserStorageBackend.init(testing.allocator, &store);
+    defer backend.deinit();
+
+    const hash1 = "1111111111111111111111111111111111111111111111111111111111111111";
+    const hash2 = "2222222222222222222222222222222222222222222222222222222222222222";
+
+    try backend.persistChainRoot(hash1, 3, "key-v1");
+    try backend.persistChainRoot(hash2, 7, "key-v2");
+
+    const root = backend.loadChainRoot();
+    try testing.expect(root != null);
+    const r = root.?;
+    try testing.expectEqual(@as(u64, 7), r.record_count);
+    try testing.expect(std.mem.eql(u8, r.chain_hash[0..r.chain_hash_len], hash2));
+    try testing.expect(std.mem.eql(u8, r.hmac_key_id[0..r.hmac_key_id_len], "key-v2"));
+}
+
+test "new UserRecord fields persist and reload from graph" {
+    var store = graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var backend = try UserStorageBackend.init(testing.allocator, &store);
+    defer backend.deinit();
+
+    // Create a user and manually set new fields
+    try backend.persistUser(10, "admin", "admin@db.local", "argon2hash", "randomsalt");
+    var record = backend.getUser(10).?;
+
+    // Set the new HMAC-related fields
+    record.hash_algorithm_len = UserStorageBackend.copyIntoField(&record.hash_algorithm, "argon2id");
+    record.is_default_user = true;
+    record.password_reset_required = true;
+    record.password_changed_at = 1700000000;
+
+    // Update cache and persist to graph
+    try backend.user_cache.put(10, record);
+    try backend.upsertUserNode(record);
+
+    // Verify values in the graph node
+    const node_id = backend.user_nodes.get(10).?;
+    const algo = store.getNodeProperty(node_id, "hash_algorithm");
+    try testing.expect(algo != null);
+    try testing.expect(std.mem.eql(u8, algo.?.String, "argon2id"));
+
+    const default_user = store.getNodeProperty(node_id, "is_default_user");
+    try testing.expect(default_user != null);
+    try testing.expect(default_user.?.Bool == true);
+
+    const reset_req = store.getNodeProperty(node_id, "password_reset_required");
+    try testing.expect(reset_req != null);
+    try testing.expect(reset_req.?.Bool == true);
+
+    const pwd_changed = store.getNodeProperty(node_id, "password_changed_at");
+    try testing.expect(pwd_changed != null);
+    try testing.expectEqual(@as(i64, 1700000000), pwd_changed.?.Int);
+}
+
+// CANARY: REQ=REQ-AUTH-HMAC-002; FEATURE="UserStorageHmac"; ASPECT=Integration; STATUS=TESTED; TEST=test_persistUserWithHmac_stores_hmac; OWNER=security; UPDATED=2026-02-24
