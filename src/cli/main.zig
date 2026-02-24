@@ -900,14 +900,14 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
             client_key_path = argv[i + 1];
             i += 1;
-        } else if (std.mem.eql(u8, arg, "--user") or std.mem.eql(u8, arg, "-U")) {
+        } else if (std.mem.eql(u8, arg, "--user") or std.mem.eql(u8, arg, "--username") or std.mem.eql(u8, arg, "-U")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --user requires a username\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             user = argv[i + 1];
             i += 1;
-        } else if (std.mem.eql(u8, arg, "--password") or std.mem.eql(u8, arg, "-P")) {
+        } else if (std.mem.eql(u8, arg, "--password") or std.mem.eql(u8, arg, "--pass") or std.mem.eql(u8, arg, "-P")) {
             // CANARY: REQ=REQ-CLI-PASSWORD-PROMPT-001; FEATURE="PasswordPrompt"; ASPECT=QueryCommand; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
             // Issue #385: If no password provided after -P, prompt interactively
             if (i + 1 >= argv.len or std.mem.startsWith(u8, argv[i + 1], "-")) {
@@ -3571,15 +3571,15 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
             // Just skip the log level value - shell command doesn't use it but we need to consume it
             i += 1;
-        } else if (std.mem.eql(u8, argv[i], "--username") or std.mem.eql(u8, argv[i], "-U")) {
+        } else if (std.mem.eql(u8, argv[i], "--username") or std.mem.eql(u8, argv[i], "--user") or std.mem.eql(u8, argv[i], "-U")) {
             // Issue #387: Username for authentication
             if (i + 1 >= argv.len) {
-                std.debug.print("Error: --username/-U requires a username\n", .{});
+                std.debug.print("Error: --user/-U requires a username\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             username = argv[i + 1];
             i += 1;
-        } else if (std.mem.eql(u8, argv[i], "--password") or std.mem.eql(u8, argv[i], "-P")) {
+        } else if (std.mem.eql(u8, argv[i], "--password") or std.mem.eql(u8, argv[i], "--pass") or std.mem.eql(u8, argv[i], "-P")) {
             // Issue #387: Password for authentication
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --password/-P requires a password\n", .{});
@@ -3957,7 +3957,7 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         } else if (std.mem.eql(u8, argv[i], "--server") and i + 1 < argv.len) {
             server = argv[i + 1];
             i += 1;
-        } else if (std.mem.eql(u8, argv[i], "-U") or std.mem.eql(u8, argv[i], "--user")) {
+        } else if (std.mem.eql(u8, argv[i], "-U") or std.mem.eql(u8, argv[i], "--user") or std.mem.eql(u8, argv[i], "--username")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --user requires a username\n", .{});
                 std.debug.print("Example: --user alice\n", .{});
@@ -3965,7 +3965,7 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
             }
             username = argv[i + 1];
             i += 1;
-        } else if (std.mem.eql(u8, argv[i], "--password") and i + 1 < argv.len) {
+        } else if ((std.mem.eql(u8, argv[i], "--password") or std.mem.eql(u8, argv[i], "--pass") or std.mem.eql(u8, argv[i], "-P")) and i + 1 < argv.len) {
             password = argv[i + 1];
             i += 1;
         } else if (std.mem.eql(u8, argv[i], "--password-file") and i + 1 < argv.len) {

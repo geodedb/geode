@@ -58,7 +58,12 @@ def main():
     print()
 
     tests = [
-        ("Simple count", '{"status_class":"00000","columns":[{"name":"count","type":"INTEGER"}],"rows":[{"count":1}]}', ["1"], ["1"]),
+        (
+            "Simple count",
+            '{"status_class":"00000","columns":[{"name":"count","type":"INTEGER"}],"rows":[{"count":1}]}',
+            ["1"],
+            ["1"],
+        ),
         (
             "Multiple values in row",
             '{"status_class":"00000","columns":[{"name":"a","type":"INTEGER"},{"name":"b","type":"INTEGER"},{"name":"c","type":"INTEGER"}],"rows":[{"a":1,"b":2,"c":3}]}',
