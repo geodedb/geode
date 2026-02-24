@@ -12,6 +12,8 @@ const wal = geode.wal;
 // CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager initialization at server startup
 const geode_auth = @import("geode_auth");
+// CANARY: REQ=REQ-AUTH-GRAPH-WIRE-004; FEATURE="AuthGraphManager Integration"; ASPECT=ServerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+const auth_graph_manager = @import("auth_graph_manager");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-014; FEATURE="Structured Logging"; ASPECT=ServerInit; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -49,6 +51,9 @@ pub const InitContext = struct {
     // Issue #460: Shared cross-connection query optimizer for plan reuse
     shared_optimizer: ?*query_plan_cache.SharedQueryOptimizer = null,
     shared_optimizer_storage: ?query_plan_cache.SharedQueryOptimizer = null,
+    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-005; FEATURE="AuthGraphManager Integration"; ASPECT=InitContext; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    auth_graph_mgr: ?*auth_graph_manager.AuthGraphManager = null,
+    auth_graph_mgr_storage: ?auth_graph_manager.AuthGraphManager = null,
 
     /// Re-derive self-referential pointers after the struct has been moved.
     /// MUST be called after `initialize()` returns, because returning the struct
@@ -65,6 +70,10 @@ pub const InitContext = struct {
             null;
         self.shared_optimizer = if (self.shared_optimizer_storage != null)
             &self.shared_optimizer_storage.?
+        else
+            null;
+        self.auth_graph_mgr = if (self.auth_graph_mgr_storage != null)
+            &self.auth_graph_mgr_storage.?
         else
             null;
     }
@@ -85,6 +94,12 @@ pub const InitContext = struct {
             opt.deinit();
             self.shared_optimizer = null;
             self.shared_optimizer_storage = null;
+        }
+        // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-006; FEATURE="AuthGraphManager Integration"; ASPECT=Cleanup; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+        if (self.auth_graph_mgr_storage) |*agm| {
+            agm.deinit();
+            self.auth_graph_mgr = null;
+            self.auth_graph_mgr_storage = null;
         }
         // Issue #445: Clean up WAL on server shutdown
         wal.removeMutationCallback();
@@ -209,6 +224,70 @@ pub fn initialize(
         log.info("WAL initialized with crash recovery", &.{});
     }
 
+    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-007; FEATURE="AuthGraphManager Integration"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    // Initialize AuthGraphManager: resolve HMAC key, verify or bootstrap auth chain
+    const hmac_key_result: ?auth_graph_manager.HmacKeyResult = hmac_blk: {
+        const kr = auth_graph_manager.AuthGraphManager.resolveHmacKey(allocator, data_dir) catch |err| {
+            switch (err) {
+                error.NoHmacKeyAvailable => {
+                    log.warn("No HMAC key available for auth chain verification - auth graph disabled", &.{});
+                },
+                else => {
+                    log.warn("HMAC key resolution failed", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                },
+            }
+            break :hmac_blk null;
+        };
+        break :hmac_blk kr;
+    };
+
+    var agm_storage: ?auth_graph_manager.AuthGraphManager = agm_blk: {
+        if (hmac_key_result) |*kr| {
+            var agm = auth_graph_manager.AuthGraphManager.init(allocator, store) catch |err| {
+                log.warn("AuthGraphManager initialization failed", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+                break :agm_blk null;
+            };
+
+            if (agm.hasAuthRecords()) {
+                // Verify HMAC chain integrity
+                agm.verifyChain(&kr.key) catch |err| {
+                    log.err("AUTH TAMPER DETECTED - auth chain verification failed", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.string("key_source", kr.key_id),
+                    });
+                    agm.deinit();
+                    return error.AuthChainTampered;
+                };
+                log.info("Auth HMAC chain verified successfully", &.{
+                    Attr.string("key_source", kr.key_id),
+                });
+            } else {
+                // First boot: bootstrap default admin user
+                const result = agm.bootstrapDefaultAdmin(&kr.key) catch |err| {
+                    log.err("Failed to bootstrap default admin user", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                    agm.deinit();
+                    break :agm_blk null;
+                };
+                // Print generated password to stderr only (never to structured log)
+                std.debug.print("\n*** Generated admin password: {s} ***\n", .{result.password});
+                log.info("Default admin user bootstrapped via auth graph", &.{
+                    Attr.string("username", result.username),
+                });
+                allocator.free(result.username);
+                allocator.free(result.password);
+            }
+
+            break :agm_blk agm;
+        }
+        break :agm_blk null;
+    };
+
     // Initialize shared AST cache (cross-connection) if enabled.
     const ast_cache_size = blk: {
         if (std.process.getEnvVarOwned(allocator, "GEODE_AST_CACHE_SIZE")) |v| {
@@ -239,6 +318,8 @@ pub fn initialize(
         .security_manager_storage = null,
         .shared_optimizer = null,
         .shared_optimizer_storage = null,
+        .auth_graph_mgr = null,
+        .auth_graph_mgr_storage = agm_storage,
     };
 
     if (ast_cache_size > 0) {
@@ -256,16 +337,71 @@ pub fn initialize(
         });
     }
 
+    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-008; FEATURE="AuthGraphManager Integration"; ASPECT=SecurityManagerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
     if (env_config.abac_enabled) {
-        ctx.security_manager_storage = initializeSecurityManager(allocator) catch |err| blk: {
-            log.err("Failed to initialize SecurityManager", &.{Attr.string("error", @errorName(err))});
-            break :blk null;
-        };
-        if (ctx.security_manager_storage != null) {
-            // NOTE: Do NOT set ctx.security_manager here — same dangling pointer issue.
-            log.info("ABAC enforcement enabled - SecurityManager initialized", &.{});
+        if (agm_storage != null) {
+            // Auth graph is available: hydrate SecurityManager from graph records
+            ctx.security_manager_storage = hydrateSecurityManagerFromGraph(allocator, &agm_storage.?, hmac_key_result) catch |err| blk: {
+                log.err("Failed to hydrate SecurityManager from auth graph", &.{Attr.string("error", @errorName(err))});
+                break :blk null;
+            };
+            if (ctx.security_manager_storage != null) {
+                log.info("ABAC enforcement enabled - SecurityManager hydrated from auth graph", &.{});
+            }
+        } else {
+            // Fallback: old behavior (no auth graph, create default user)
+            ctx.security_manager_storage = initializeSecurityManager(allocator) catch |err| blk: {
+                log.err("Failed to initialize SecurityManager", &.{Attr.string("error", @errorName(err))});
+                break :blk null;
+            };
+            if (ctx.security_manager_storage != null) {
+                log.info("ABAC enforcement enabled - SecurityManager initialized (legacy mode)", &.{});
+            }
         }
     }
 
     return ctx;
+}
+
+// CANARY: REQ=REQ-AUTH-GRAPH-WIRE-009; FEATURE="AuthGraphManager Integration"; ASPECT=Hydration; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+/// Hydrate SecurityManager from AuthGraphManager's stored records.
+/// Creates an empty SecurityManager and populates it with users from the auth graph.
+fn hydrateSecurityManagerFromGraph(
+    allocator: std.mem.Allocator,
+    agm: *auth_graph_manager.AuthGraphManager,
+    hmac_key_result: ?auth_graph_manager.HmacKeyResult,
+) !geode_auth.SecurityManager {
+    var sm = try geode_auth.SecurityManager.initEmpty(allocator);
+
+    // Hydrate users from auth graph storage
+    var user_count: usize = 0;
+    var it = agm.storage.userIterator();
+    while (it.next()) |record| {
+        try sm.hydrateUser(
+            record.id,
+            record.getUsername(),
+            record.getEmail(),
+            record.getPasswordHash(),
+            record.is_superuser,
+            record.is_active,
+            record.is_default_user,
+            record.password_reset_required,
+            record.mfa_enabled,
+            record.getMFASecret(),
+        );
+        user_count += 1;
+    }
+
+    // Set auth_graph_mgr and hmac_key on SecurityManager for future runtime mutations (Task 5)
+    // NOTE: auth_graph_mgr pointer will be fixed up after InitContext is moved via fixupSelfPointers.
+    // The actual pointer is set in fixupSelfPointers via the InitContext fields.
+    if (hmac_key_result) |kr| {
+        sm.hmac_key = kr.key;
+    }
+
+    log.info("Hydrated SecurityManager from auth graph", &.{
+        Attr.int("user_count", @intCast(user_count)),
+    });
+
+    return sm;
 }

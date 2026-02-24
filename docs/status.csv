@@ -266,6 +266,15 @@ REQ-AUTH-ENFORCE-029,AuthEnforcement,UnicodeHomographPrevention,TESTED,,,securit
 REQ-AUTH-ENFORCE-030,AuthEnforcement,ControlCharacterPrevention,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
 REQ-AUTH-GRAPH-MGR-001,AuthGraphManager,Orchestration,TESTED,,,security,2026-02-24,src/security/auth_graph_manager.zig
 REQ-AUTH-GRAPH-MGR-002,AuthGraphManagerTests,ChainIntegrity,TESTED,,,security,2026-02-24,src/security/auth_graph_manager.zig
+REQ-AUTH-GRAPH-WIRE-001,AuthGraphManager Integration,SecurityManager,IMPL,,,security,2026-02-24,src/security/geode_auth_lib.zig
+REQ-AUTH-GRAPH-WIRE-002,AuthGraphManager Integration,InitEmpty,IMPL,,,security,2026-02-24,src/security/geode_auth_lib.zig
+REQ-AUTH-GRAPH-WIRE-003,AuthGraphManager Integration,HydrateUser,IMPL,,,security,2026-02-24,src/security/geode_auth_lib.zig
+REQ-AUTH-GRAPH-WIRE-004,AuthGraphManager Integration,ServerInit,IMPL,,,security,2026-02-24,src/server/server_init.zig
+REQ-AUTH-GRAPH-WIRE-005,AuthGraphManager Integration,InitContext,IMPL,,,security,2026-02-24,src/server/server_init.zig
+REQ-AUTH-GRAPH-WIRE-006,AuthGraphManager Integration,Cleanup,IMPL,,,security,2026-02-24,src/server/server_init.zig
+REQ-AUTH-GRAPH-WIRE-007,AuthGraphManager Integration,ServerStartup,IMPL,,,security,2026-02-24,src/server/server_init.zig
+REQ-AUTH-GRAPH-WIRE-008,AuthGraphManager Integration,SecurityManagerInit,IMPL,,,security,2026-02-24,src/server/server_init.zig
+REQ-AUTH-GRAPH-WIRE-009,AuthGraphManager Integration,Hydration,IMPL,,,security,2026-02-24,src/server/server_init.zig
 REQ-AUTH-HASH-001,Argon2id Password Hashing,PostQuantumSecurity,TESTED,,,security,2025-10-16,src/security/geode_auth_lib.zig
 REQ-AUTH-HASH-002,Argon2id_Password_Hashing,Core,TESTED,,,security,2026-01-25,src/security/test_argon2id_hashing.zig
 REQ-AUTH-HMAC-001,AuthHmacChain,Core,TESTED,,,security,2026-02-24,src/security/auth_hmac.zig

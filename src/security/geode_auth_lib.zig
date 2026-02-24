@@ -310,6 +310,12 @@ pub const SecurityManager = struct {
     audit_log: AuditLog,
     password_policy: PasswordPolicy,
     elevation_ttl_ms: i64 = 5 * 60 * 1000, // default 5 minutes; configurable
+    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-001; FEATURE="AuthGraphManager Integration"; ASPECT=SecurityManager; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    // Opaque pointer to AuthGraphManager for runtime mutation persistence (set by server_init).
+    // Uses anyopaque because geode_auth_lib cannot import auth_graph_manager (circular dep).
+    auth_graph_mgr: ?*anyopaque = null,
+    // HMAC key for chain signing (set by server_init after auth graph verification).
+    hmac_key: ?[32]u8 = null,
 
     pub fn init(a: Allocator) !Self {
         var sm = Self{
@@ -330,6 +336,51 @@ pub const SecurityManager = struct {
         // Initialize with default user
         try sm.initializeDefaultUser();
         return sm;
+    }
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-002; FEATURE="AuthGraphManager Integration"; ASPECT=InitEmpty; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    /// Create a SecurityManager with empty user/role maps.
+    /// Does NOT call initializeDefaultUser — use when hydrating from AuthGraphManager.
+    pub fn initEmpty(a: Allocator) !Self {
+        return Self{
+            .allocator = a,
+            .users = std.AutoHashMap(UserId, User).init(a),
+            .roles = std.AutoHashMap(RoleId, Role).init(a),
+            .permissions = std.AutoHashMap(PermissionId, Permission).init(a),
+            .rbac = RBACPolicy{ .user_roles = std.AutoHashMap(UserId, std.ArrayList(RoleId)).init(a), .role_permissions = std.AutoHashMap(RoleId, std.ArrayList(Permission)).init(a), .role_hierarchy = std.AutoHashMap(RoleId, std.ArrayList(RoleId)).init(a) },
+            .abac_policies = try std.ArrayList(ABACPolicy).initCapacity(a, 0),
+            .row_policies = try std.ArrayList(RowLevelPolicy).initCapacity(a, 0),
+            .sessions = std.StringHashMap(Session).init(a),
+            .mfa_policies = try std.ArrayList(MfaAdminPolicy).initCapacity(a, 0),
+            .mfa_require_cache = std.AutoHashMap(UserId, bool).init(a),
+            .audit_log = try AuditLog.init(a),
+            .password_policy = PasswordPolicy.geodeSecure(),
+        };
+    }
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-003; FEATURE="AuthGraphManager Integration"; ASPECT=HydrateUser; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    /// Add a user to in-memory maps from external data (e.g. AuthGraphManager).
+    /// The password_hash is already hashed; no policy validation is performed.
+    pub fn hydrateUser(self: *Self, id: UserId, username: []const u8, email: []const u8, password_hash: []const u8, is_superuser: bool, is_active: bool, is_default_user: bool, password_reset_required: bool, mfa_enabled: bool, mfa_secret: ?[]const u8) !void {
+        const attrs = std.StringHashMap([]const u8).init(self.allocator);
+        const user = User{
+            .id = id,
+            .username = try self.allocator.dupe(u8, username),
+            .email = try self.allocator.dupe(u8, email),
+            .password_hash = try self.allocator.dupe(u8, password_hash),
+            .created_at = std.time.milliTimestamp(),
+            .updated_at = std.time.milliTimestamp(),
+            .last_login = null,
+            .is_active = is_active,
+            .is_superuser = is_superuser,
+            .mfa_enabled = mfa_enabled,
+            .mfa_secret = if (mfa_secret) |s| try self.allocator.dupe(u8, s) else null,
+            .attributes = attrs,
+            .password_reset_required = password_reset_required,
+            .is_default_user = is_default_user,
+            .password_set_by_env = false,
+        };
+        try self.users.put(id, user);
     }
 
     pub fn deinit(self: *Self) void {
