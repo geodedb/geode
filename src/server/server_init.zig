@@ -109,7 +109,9 @@ pub const InitContext = struct {
             self.shared_optimizer_storage = null;
         }
         // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-006; FEATURE="AuthGraphManager Integration"; ASPECT=Cleanup; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+        // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-004; FEATURE="PeriodicHmacVerification"; ASPECT=Shutdown; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
         if (self.auth_graph_mgr_storage) |*agm| {
+            agm.requestShutdown();
             agm.deinit();
             self.auth_graph_mgr = null;
             self.auth_graph_mgr_storage = null;
@@ -290,6 +292,10 @@ pub fn initialize(
                 allocator.free(result.username);
                 allocator.free(result.password);
             }
+
+            // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-003; FEATURE="PeriodicHmacVerification"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+            // Start background thread to re-verify HMAC chain every 5 minutes
+            agm.startPeriodicVerification(&kr.key, 5);
 
             break :agm_blk agm;
         }

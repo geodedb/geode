@@ -40,6 +40,9 @@ pub const AuthGraphManager = struct {
     allocator: Allocator,
     storage: UserStorageBackend,
     next_user_id: u64, // track next available user ID
+    // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-001; FEATURE="PeriodicHmacVerification"; ASPECT=BackgroundThread; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    shutdown: std.atomic.Value(bool),
+    verify_thread: ?std.Thread = null,
 
     const Self = @This();
 
@@ -57,11 +60,58 @@ pub const AuthGraphManager = struct {
             .allocator = allocator,
             .storage = storage,
             .next_user_id = max_id + 1,
+            .shutdown = std.atomic.Value(bool).init(false),
+            .verify_thread = null,
         };
     }
 
     pub fn deinit(self: *Self) void {
+        self.requestShutdown();
         self.storage.deinit();
+    }
+
+    // -- Periodic HMAC Verification --
+
+    // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-002; FEATURE="PeriodicHmacVerification"; ASPECT=BackgroundThread; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    /// Spawn a background thread that periodically re-verifies the HMAC chain
+    /// to detect runtime tampering.
+    pub fn startPeriodicVerification(self: *Self, hmac_key: *const [32]u8, interval_minutes: u32) void {
+        self.verify_thread = std.Thread.spawn(.{}, periodicVerifyLoop, .{ self, hmac_key, interval_minutes }) catch |err| {
+            log.err("Failed to spawn periodic HMAC verification thread", &.{
+                Attr.string("error", @errorName(err)),
+            });
+            return;
+        };
+        log.info("Periodic HMAC verification thread started", &.{
+            Attr.uint("interval_minutes", @intCast(interval_minutes)),
+        });
+    }
+
+    fn periodicVerifyLoop(self: *Self, hmac_key: *const [32]u8, interval_minutes: u32) void {
+        while (!self.shutdown.load(.acquire)) {
+            // Sleep in small increments so we can check shutdown flag
+            var elapsed: u64 = 0;
+            const target_ns = @as(u64, interval_minutes) * 60 * std.time.ns_per_s;
+            while (elapsed < target_ns and !self.shutdown.load(.acquire)) {
+                std.Thread.sleep(1 * std.time.ns_per_s); // 1 second increments
+                elapsed += std.time.ns_per_s;
+            }
+            if (self.shutdown.load(.acquire)) break;
+            self.verifyChain(hmac_key) catch |err| {
+                log.err("PERIODIC HMAC CHECK FAILED - POSSIBLE TAMPERING", &.{Attr.string("error", @errorName(err))});
+                continue;
+            };
+            log.info("Periodic HMAC chain verification passed", &.{});
+        }
+    }
+
+    /// Signal the periodic verification thread to stop and wait for it to finish.
+    pub fn requestShutdown(self: *Self) void {
+        self.shutdown.store(true, .release);
+        if (self.verify_thread) |t| {
+            t.join();
+            self.verify_thread = null;
+        }
     }
 
     // -- HMAC Key Resolution --
