@@ -266,6 +266,7 @@ REQ-AUTH-ENFORCE-029,AuthEnforcement,UnicodeHomographPrevention,TESTED,,,securit
 REQ-AUTH-ENFORCE-030,AuthEnforcement,ControlCharacterPrevention,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
 REQ-AUTH-HASH-001,Argon2id Password Hashing,PostQuantumSecurity,TESTED,,,security,2025-10-16,src/security/geode_auth_lib.zig
 REQ-AUTH-HASH-002,Argon2id_Password_Hashing,Core,TESTED,,,security,2026-01-25,src/security/test_argon2id_hashing.zig
+REQ-AUTH-HMAC-001,AuthHmacChain,Core,TESTED,,,security,2026-02-24,src/security/auth_hmac.zig
 REQ-AUTH-MTLS-001,MtlsAuthentication,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
 REQ-AUTH-MTLS-002,CertificateMappingCreation,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
 REQ-AUTH-MTLS-003,CertificateAuthentication,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig

@@ -547,6 +547,9 @@ pub const auth_state = @import("security/auth_state.zig");
 pub const api_keys = @import("security/api_keys.zig");
 pub const mtls_provider = @import("security/mtls_provider.zig");
 
+// HMAC chain integrity module for internal auth storage
+pub const auth_hmac = @import("security/auth_hmac.zig");
+
 // QUIC algorithms and connection management
 pub const algorithms = @import("algorithms.zig");
 pub const connection_manager = @import("transport/connection_manager.zig");
