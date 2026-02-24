@@ -536,6 +536,36 @@ pub const AuthGraphManager = struct {
         try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
         self.storage.store.saveIfDirty();
     }
+
+    // -- Runtime Mutation Persistence (called via SecurityManager callbacks) --
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-006; FEATURE="Runtime Auth Graph Persistence"; ASPECT=LoginState; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    /// Update a user record's login state (failed_attempts, lockout_until) in the graph store.
+    /// Recomputes the record HMAC and reseals the chain.
+    pub fn updateUserLoginState(self: *Self, hmac_key: *const [32]u8, user_id: u64, failed_attempts: u16, lockout_until: i64) !void {
+        var record = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
+        record.failed_login_attempts = failed_attempts;
+        record.lockout_until = lockout_until;
+        record.updated_at = std.time.milliTimestamp();
+        try self.storage.user_cache.put(user_id, record);
+        try self.storage.upsertUserNode(record);
+        try self.recomputeAndStoreUserHmac(user_id, hmac_key);
+        try self.sealChain(hmac_key);
+    }
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-007; FEATURE="Runtime Auth Graph Persistence"; ASPECT=PasswordChange; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+    /// Update a user record's password hash in the graph store.
+    /// Recomputes the record HMAC and reseals the chain.
+    pub fn updateUserPassword(self: *Self, hmac_key: *const [32]u8, user_id: u64, new_password_hash: []const u8) !void {
+        var record = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
+        record.password_hash_len = UserStorageBackend.copyIntoField(&record.password_hash, new_password_hash);
+        record.password_changed_at = std.time.milliTimestamp();
+        record.updated_at = std.time.milliTimestamp();
+        try self.storage.user_cache.put(user_id, record);
+        try self.storage.upsertUserNode(record);
+        try self.recomputeAndStoreUserHmac(user_id, hmac_key);
+        try self.sealChain(hmac_key);
+    }
 };
 
 // -- HMAC Computation Helpers (module-level) --

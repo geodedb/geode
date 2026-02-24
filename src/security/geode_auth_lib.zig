@@ -317,6 +317,24 @@ pub const SecurityManager = struct {
     // HMAC key for chain signing (set by server_init after auth graph verification).
     hmac_key: ?[32]u8 = null,
 
+    // -- Graph persistence callbacks (set by server wiring code) --
+    // These function pointers allow SecurityManager to persist mutations to the auth graph
+    // without importing auth_graph_manager (which would create a circular dependency).
+    // All callbacks are best-effort: failures are logged but do not block in-memory operations.
+
+    /// Callback to persist a new user to the auth graph.
+    /// Args: opaque_ctx, hmac_key, username, email, password_hash, is_superuser
+    /// Returns: user ID in graph store, or error.
+    graph_persist_user_create: ?*const fn (*anyopaque, *const [32]u8, []const u8, []const u8, []const u8, bool) callconv(.auto) u64 = null,
+
+    /// Callback to persist login state changes (failed_attempts, lockout_until) to the auth graph.
+    /// Args: opaque_ctx, hmac_key, user_id, failed_attempts, lockout_until
+    graph_persist_login_state: ?*const fn (*anyopaque, *const [32]u8, u64, u16, i64) callconv(.auto) void = null,
+
+    /// Callback to persist password change to the auth graph.
+    /// Args: opaque_ctx, hmac_key, user_id, new_password_hash
+    graph_persist_password: ?*const fn (*anyopaque, *const [32]u8, u64, []const u8) callconv(.auto) void = null,
+
     pub fn init(a: Allocator) !Self {
         var sm = Self{
             .allocator = a,
@@ -381,6 +399,32 @@ pub const SecurityManager = struct {
             .password_set_by_env = false,
         };
         try self.users.put(id, user);
+    }
+
+    // -- Graph Persistence Helpers (best-effort, log-and-continue) --
+
+    /// Persist a newly created user to the auth graph store.
+    fn persistUserCreateToGraph(self: *Self, username: []const u8, email: []const u8, password_hash: []const u8, is_superuser: bool) void {
+        const agm_ptr = self.auth_graph_mgr orelse return;
+        const hk = &(self.hmac_key orelse return);
+        const cb = self.graph_persist_user_create orelse return;
+        _ = cb(agm_ptr, hk, username, email, password_hash, is_superuser);
+    }
+
+    /// Persist login state changes (failed attempts, lockout) to the auth graph store.
+    fn persistLoginStateToGraph(self: *Self, user_id: u64, failed_attempts: u16, lockout_until: i64) void {
+        const agm_ptr = self.auth_graph_mgr orelse return;
+        const hk = &(self.hmac_key orelse return);
+        const cb = self.graph_persist_login_state orelse return;
+        cb(agm_ptr, hk, user_id, failed_attempts, lockout_until);
+    }
+
+    /// Persist a password change to the auth graph store.
+    fn persistPasswordToGraph(self: *Self, user_id: u64, new_password_hash: []const u8) void {
+        const agm_ptr = self.auth_graph_mgr orelse return;
+        const hk = &(self.hmac_key orelse return);
+        const cb = self.graph_persist_password orelse return;
+        cb(agm_ptr, hk, user_id, new_password_hash);
     }
 
     pub fn deinit(self: *Self) void {
@@ -993,6 +1037,11 @@ pub const SecurityManager = struct {
         };
         try self.users.put(id, user);
         try self.audit_log.logUserCreated(id, username);
+
+        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-001; FEATURE="Runtime Auth Graph Persistence"; ASPECT=UserCreate; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+        // Best-effort: persist new user to auth graph store for durability across restarts.
+        self.persistUserCreateToGraph(username, email, hash, is_superuser);
+
         return id;
     }
     // Backwards compatible wrapper (previous signature without explicit is_superuser; defaults false). Some tests call createUser(username,email,password)
@@ -1210,6 +1259,10 @@ pub const SecurityManager = struct {
         user.password_reset_required = false;
         user.updated_at = std.time.milliTimestamp();
 
+        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-005; FEATURE="Runtime Auth Graph Persistence"; ASPECT=PasswordChange; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+        // Best-effort: persist new password hash to auth graph store for durability.
+        self.persistPasswordToGraph(user_id, new_hash);
+
         try self.audit_log.append(.user_updated, user_id, "Password updated", .{});
     }
     fn initializeDefaultRoles(self: *Self) !void {
@@ -1269,6 +1322,8 @@ pub const SecurityManager = struct {
         if (user.lockout_until > 0 and now_ms >= user.lockout_until) {
             user.failed_login_attempts = 0;
             user.lockout_until = 0;
+            // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-002; FEATURE="Runtime Auth Graph Persistence"; ASPECT=LoginState; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+            self.persistLoginStateToGraph(user.id, 0, 0);
         }
 
         // CRITICAL SECURITY FIX (C5): Block default users until password changed
@@ -1289,6 +1344,8 @@ pub const SecurityManager = struct {
                 user.lockout_until = now_ms + 300_000;
                 try self.audit_log.append(.login_failed, user.id, "Account locked: 5 failed login attempts, locked for 5 minutes", .{});
             }
+            // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-003; FEATURE="Runtime Auth Graph Persistence"; ASPECT=FailedLogin; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+            self.persistLoginStateToGraph(user.id, user.failed_login_attempts, user.lockout_until);
             try self.audit_log.logFailedLogin(user.id, user.username);
             return error.InvalidCredentials;
         }
@@ -1315,6 +1372,8 @@ pub const SecurityManager = struct {
         // Successful login: reset failed attempt counter
         user.failed_login_attempts = 0;
         user.lockout_until = 0;
+        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-004; FEATURE="Runtime Auth Graph Persistence"; ASPECT=SuccessfulLogin; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+        self.persistLoginStateToGraph(user.id, 0, 0);
 
         // CANARY: REQ=REQ-AUTH-POLICY-007; FEATURE="Mandatory Password Policy Enforcement"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_007_MandatoryPolicyEnforcement; OWNER=security; UPDATED=2025-09-30
         // Check if the authenticated password meets current policy requirements

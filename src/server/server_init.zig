@@ -76,6 +76,19 @@ pub const InitContext = struct {
             &self.auth_graph_mgr_storage.?
         else
             null;
+
+        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-008; FEATURE="Runtime Auth Graph Persistence"; ASPECT=WireCallbacks; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+        // Wire SecurityManager's opaque pointer and callbacks to AuthGraphManager
+        // so that runtime mutations (user create, login state, password change) are
+        // persisted to the auth graph store for durability across restarts.
+        if (self.security_manager) |sm| {
+            if (self.auth_graph_mgr) |agm| {
+                sm.auth_graph_mgr = @ptrCast(agm);
+                sm.graph_persist_user_create = &graphPersistUserCreate;
+                sm.graph_persist_login_state = &graphPersistLoginState;
+                sm.graph_persist_password = &graphPersistPassword;
+            }
+        }
     }
 
     pub fn deinit(self: *InitContext) void {
@@ -404,4 +417,41 @@ fn hydrateSecurityManagerFromGraph(
     });
 
     return sm;
+}
+
+// -- Graph Persistence Callbacks for SecurityManager --
+// These are called via function pointers from SecurityManager, casting the opaque
+// pointer back to *AuthGraphManager. All operations are best-effort (catch + log).
+
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-009; FEATURE="Runtime Auth Graph Persistence"; ASPECT=Callbacks; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+
+fn graphPersistUserCreate(opaque_agm: *anyopaque, hmac_key: *const [32]u8, username: []const u8, email: []const u8, password_hash: []const u8, is_superuser: bool) callconv(.auto) u64 {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(opaque_agm));
+    return agm.createUser(hmac_key, username, email, password_hash, is_superuser) catch |err| {
+        log.warn("Failed to persist user creation to auth graph", &.{
+            Attr.string("error", @errorName(err)),
+            Attr.string("username", username),
+        });
+        return 0;
+    };
+}
+
+fn graphPersistLoginState(opaque_agm: *anyopaque, hmac_key: *const [32]u8, user_id: u64, failed_attempts: u16, lockout_until: i64) callconv(.auto) void {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(opaque_agm));
+    agm.updateUserLoginState(hmac_key, user_id, failed_attempts, lockout_until) catch |err| {
+        log.warn("Failed to persist login state to auth graph", &.{
+            Attr.string("error", @errorName(err)),
+            Attr.uint("user_id", user_id),
+        });
+    };
+}
+
+fn graphPersistPassword(opaque_agm: *anyopaque, hmac_key: *const [32]u8, user_id: u64, new_password_hash: []const u8) callconv(.auto) void {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(opaque_agm));
+    agm.updateUserPassword(hmac_key, user_id, new_password_hash) catch |err| {
+        log.warn("Failed to persist password change to auth graph", &.{
+            Attr.string("error", @errorName(err)),
+            Attr.uint("user_id", user_id),
+        });
+    };
 }
