@@ -73,6 +73,10 @@ const cli_dispatcher = @import("cli_dispatcher.zig");
 const fle_cli = @import("fle_cli.zig");
 const cmdFLE = fle_cli.cmdFLE;
 
+// CANARY: REQ=REQ-AUTH-INIT-CLI-002; FEATURE="AuthInitCLI"; ASPECT=DispatcherIntegration; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-24
+// Auth chain management CLI module (init, reseal, verify)
+const auth_init_cli = @import("auth_init_cli.zig");
+
 // Import shared types and functions from cli_dispatcher
 const ExitCode = cli_dispatcher.ExitCode;
 const getEnvVar = cli_dispatcher.getEnvVar;
@@ -428,6 +432,9 @@ fn printAuthUsage() void {
         "  login                  Authenticate and optionally save session\n" ++
         "  logout                 Clear saved credentials\n" ++
         "  token                  Print saved credentials JSON (if present)\n" ++
+        "  init                   Bootstrap admin user into graph store (offline)\n" ++
+        "  reseal                 Recompute HMAC chain (offline)\n" ++
+        "  verify                 Check HMAC chain integrity (offline)\n" ++
         "\n" ++
         "Login Options:\n" ++
         "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
@@ -437,6 +444,9 @@ fn printAuthUsage() void {
         "  --save-session         Save session token to ~/.geode/credentials.json\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
+        "Offline Options (init, reseal, verify):\n" ++
+        "  --data-dir <path>      Data directory (default: GEODE_DATA_DIR env or ./data)\n" ++
+        "\n" ++
         "Session Management:\n" ++
         "  Sessions are issued by the server and stored in ~/.geode/credentials.json\n" ++
         "  Use --save-session to persist credentials locally\n" ++
@@ -445,6 +455,9 @@ fn printAuthUsage() void {
         "  geode auth login -U alice --save-session\n" ++
         "  geode auth login -U alice --password-file /dev/stdin\n" ++
         "  geode auth logout\n" ++
+        "  geode auth init --data-dir /var/lib/geode\n" ++
+        "  geode auth reseal --data-dir /var/lib/geode\n" ++
+        "  geode auth verify --data-dir /var/lib/geode\n" ++
         "\n", .{});
 }
 
@@ -3698,6 +3711,15 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
     } else if (std.mem.eql(u8, subcmd, "token")) {
         // CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
         try cmdAuthToken(allocator);
+    } else if (std.mem.eql(u8, subcmd, "init")) {
+        // CANARY: REQ=REQ-AUTH-INIT-CLI-003; FEATURE="AuthInitCLI"; ASPECT=Bootstrap; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-24
+        try auth_init_cli.cmdAuthInit(allocator, argv, subcmd_idx + 1);
+    } else if (std.mem.eql(u8, subcmd, "reseal")) {
+        // CANARY: REQ=REQ-AUTH-INIT-CLI-004; FEATURE="AuthInitCLI"; ASPECT=Reseal; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-24
+        try auth_init_cli.cmdAuthReseal(allocator, argv, subcmd_idx + 1);
+    } else if (std.mem.eql(u8, subcmd, "verify")) {
+        // CANARY: REQ=REQ-AUTH-INIT-CLI-005; FEATURE="AuthInitCLI"; ASPECT=Verify; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-24
+        try auth_init_cli.cmdAuthVerify(allocator, argv, subcmd_idx + 1);
     } else if (std.mem.eql(u8, subcmd, "-h") or std.mem.eql(u8, subcmd, "--help")) {
         printAuthUsage();
         std.process.exit(@intFromEnum(ExitCode.success));

@@ -512,7 +512,7 @@ pub const AuthGraphManager = struct {
 
     // -- Internal Helpers --
 
-    fn countAuthRecords(self: *Self) u64 {
+    pub fn countAuthRecords(self: *Self) u64 {
         return self.storage.user_cache.count() +
             self.storage.role_cache.count() +
             self.storage.permission_cache.count() +

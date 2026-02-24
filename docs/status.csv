@@ -288,6 +288,11 @@ REQ-AUTH-HASH-001,Argon2id Password Hashing,PostQuantumSecurity,TESTED,,,securit
 REQ-AUTH-HASH-002,Argon2id_Password_Hashing,Core,TESTED,,,security,2026-01-25,src/security/test_argon2id_hashing.zig
 REQ-AUTH-HMAC-001,AuthHmacChain,Core,TESTED,,,security,2026-02-24,src/security/auth_hmac.zig
 REQ-AUTH-HMAC-002,UserStorageHmac,Integration,TESTED,,,security,2026-02-24,src/storage/user_storage.zig
+REQ-AUTH-INIT-CLI-001,AuthInitCLI,OfflineAuthManagement,IMPL,,,cli,2026-02-24,src/cli/auth_init_cli.zig
+REQ-AUTH-INIT-CLI-002,AuthInitCLI,DispatcherIntegration,IMPL,,,cli,2026-02-24,src/cli/main.zig
+REQ-AUTH-INIT-CLI-003,AuthInitCLI,Bootstrap,IMPL,,,cli,2026-02-24,src/cli/main.zig
+REQ-AUTH-INIT-CLI-004,AuthInitCLI,Reseal,IMPL,,,cli,2026-02-24,src/cli/main.zig
+REQ-AUTH-INIT-CLI-005,AuthInitCLI,Verify,IMPL,,,cli,2026-02-24,src/cli/main.zig
 REQ-AUTH-MTLS-001,MtlsAuthentication,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
 REQ-AUTH-MTLS-002,CertificateMappingCreation,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
 REQ-AUTH-MTLS-003,CertificateAuthentication,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
