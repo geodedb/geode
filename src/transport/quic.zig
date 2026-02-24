@@ -73,7 +73,10 @@ pub const PollSync = struct {
         self.mu.lock();
         defer self.mu.unlock();
         if (self.active_io_count > 0) self.active_io_count -= 1;
-        if (self.active_io_count == 0) self.cv.signal();
+        // broadcast, not signal: both enterIo and enterPoll wait on the same cv.
+        // signal() could wake a handler blocked in enterIo (poll_requested=true)
+        // instead of the main thread blocked in enterPoll, causing permanent stall.
+        if (self.active_io_count == 0) self.cv.broadcast();
     }
 
     /// Called by the main thread before poll(). Blocks until all I/O finishes.
