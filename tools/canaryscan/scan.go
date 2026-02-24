@@ -20,7 +20,7 @@ var kvRe = regexp.MustCompile(`\s*([^=;\s]+)\s*=\s*([^;]+)\s*`)
 // directories to skip during scan
 var skipDirs = map[string]bool{
     ".git": true, "node_modules": true, "vendor": true, "bin": true, "zig-out": true, ".zig-cache": true,
-    ".crush": true, "data": true, "certs": true,
+    ".crush": true, "data": true, "certs": true, "zig-packages": true,
 }
 
 func Scan(root string) (report, error) {

@@ -8,7 +8,6 @@ import csv
 import os
 import re
 from pathlib import Path
-from typing import Dict, List
 
 # CANARY pattern: CANARY: REQ=REQ-XXX; FEATURE="..."; ASPECT=...; STATUS=...; [TEST=...;]* [BENCH=...;]* OWNER=...; UPDATED=...
 # Allows multiple TEST= and BENCH= fields (common in test files)
@@ -26,7 +25,7 @@ CANARY_PATTERN = re.compile(
 )
 
 
-def find_canary_markers(repo_path: Path) -> List[Dict[str, str]]:
+def find_canary_markers(repo_path: Path) -> list[dict[str, str]]:
     """Find all CANARY markers in the repository."""
     markers = []
 
@@ -35,7 +34,7 @@ def find_canary_markers(repo_path: Path) -> List[Dict[str, str]]:
 
     for root, _, files in os.walk(repo_path):
         # Skip hidden directories and vendor directories
-        if "/.git" in root or "/vendor" in root or "/zig-cache" in root:
+        if "/.git" in root or "/vendor" in root or "/zig-cache" in root or "/zig-packages" in root:
             continue
 
         for file in files:
@@ -61,7 +60,7 @@ def find_canary_markers(repo_path: Path) -> List[Dict[str, str]]:
     return markers
 
 
-def generate_status_csv(markers: List[Dict[str, str]], output_path: Path) -> int:
+def generate_status_csv(markers: list[dict[str, str]], output_path: Path) -> int:
     """Generate status.csv from CANARY markers."""
 
     # Sort by REQ ID, then by feature, then by aspect, then by file for deterministic output
