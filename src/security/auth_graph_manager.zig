@@ -121,8 +121,9 @@ pub const AuthGraphManager = struct {
     /// Resolution order:
     /// 1. `GEODE_AUTH_HMAC_KEY` env var (64-char hex -> 32 bytes)
     /// 2. `GEODE_TDE_KEY` env var -> derive via auth_hmac.deriveHmacKeyFromTde
-    /// 3. `.geode_hmac_key` file in data directory (32 raw bytes, 0o600)
-    /// 4. error.NoHmacKeyAvailable
+    /// 3. `.geode_hmac_key` file in data directory (64 hex chars or 32 raw bytes)
+    /// 4. Auto-generate random 256-bit key -> write to `.geode_hmac_key` (0o600)
+    /// 5. error.NoHmacKeyAvailable (only if no data_dir provided)
     pub fn resolveHmacKey(allocator: Allocator, data_dir: ?[]const u8) !HmacKeyResult {
         // 1. Try GEODE_AUTH_HMAC_KEY env var
         if (std.process.getEnvVarOwned(allocator, "GEODE_AUTH_HMAC_KEY")) |env_val| {
@@ -163,29 +164,47 @@ pub const AuthGraphManager = struct {
 
             const file = std.fs.openFileAbsolute(path, .{}) catch |err| {
                 switch (err) {
-                    error.FileNotFound => {},
+                    error.FileNotFound => {
+                        // 4. Auto-generate a random 256-bit HMAC key and write to file
+                        return autoGenerateHmacKeyFile(path);
+                    },
                     else => {
                         log.warn("Failed to open HMAC key file", &.{
                             Attr.string("path", path),
                         });
+                        return error.NoHmacKeyAvailable;
                     },
                 }
-                return error.NoHmacKeyAvailable;
             };
             defer file.close();
 
-            var key: [32]u8 = undefined;
-            const bytes_read = file.readAll(&key) catch {
+            // Read hex-encoded key (64 hex chars = 32 bytes)
+            var hex_buf: [64]u8 = undefined;
+            const bytes_read = file.readAll(&hex_buf) catch {
                 log.warn("Failed to read HMAC key file", &.{});
                 return error.NoHmacKeyAvailable;
             };
-            if (bytes_read != 32) {
-                log.warn("HMAC key file must be exactly 32 bytes", &.{
+            if (bytes_read == 64) {
+                // Hex-encoded key file (64 hex chars -> 32 bytes)
+                var key: [32]u8 = undefined;
+                _ = std.fmt.hexToBytes(&key, &hex_buf) catch {
+                    log.warn("HMAC key file contains invalid hex", &.{
+                        Attr.string("path", path),
+                    });
+                    return error.NoHmacKeyAvailable;
+                };
+                return HmacKeyResult{ .key = key, .key_id = "file" };
+            } else if (bytes_read == 32) {
+                // Legacy raw-bytes key file (32 raw bytes)
+                var key: [32]u8 = undefined;
+                @memcpy(&key, hex_buf[0..32]);
+                return HmacKeyResult{ .key = key, .key_id = "file" };
+            } else {
+                log.warn("HMAC key file must be exactly 64 hex chars or 32 raw bytes", &.{
                     Attr.uint("actual", @intCast(bytes_read)),
                 });
                 return error.NoHmacKeyAvailable;
             }
-            return HmacKeyResult{ .key = key, .key_id = "file" };
         }
 
         return error.NoHmacKeyAvailable;
@@ -619,6 +638,41 @@ pub const AuthGraphManager = struct {
     }
 };
 
+// -- HMAC Key Auto-Generation (module-level) --
+
+// CANARY: REQ=REQ-AUTH-HMAC-KEYGEN-001; FEATURE="HmacKeyAutoGeneration"; ASPECT=KeyFile; STATUS=TESTED; OWNER=security; UPDATED=2026-02-24
+/// Auto-generate a random 256-bit HMAC key and write it to the given file path
+/// as 64 hex characters with restricted permissions (0o600).
+fn autoGenerateHmacKeyFile(path: []const u8) !HmacKeyResult {
+    // Generate cryptographically random 32-byte key
+    var key: [32]u8 = undefined;
+    std.crypto.random.bytes(&key);
+
+    // Convert to hex for human-readable file format
+    const hex = auth_hmac.hmacToHex(&key);
+
+    // Write to file with restricted permissions
+    const file = std.fs.createFileAbsolute(path, .{ .mode = 0o600 }) catch |err| {
+        log.warn("Failed to create HMAC key file", &.{
+            Attr.string("path", path),
+            Attr.string("error", @errorName(err)),
+        });
+        return error.NoHmacKeyAvailable;
+    };
+    defer file.close();
+
+    file.writeAll(&hex) catch |err| {
+        log.warn("Failed to write HMAC key file", &.{
+            Attr.string("path", path),
+            Attr.string("error", @errorName(err)),
+        });
+        return error.NoHmacKeyAvailable;
+    };
+
+    log.info("Auto-generated HMAC key file", &.{Attr.string("path", path)});
+    return HmacKeyResult{ .key = key, .key_id = "generated" };
+}
+
 // -- HMAC Computation Helpers (module-level) --
 
 fn computeUserHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.UserRecord) [32]u8 {
@@ -775,6 +829,30 @@ test "resolveHmacKey returns NoHmacKeyAvailable when no source available" {
     // With no env vars set and no data dir, should fail
     const result = AuthGraphManager.resolveHmacKey(testing.allocator, null);
     try testing.expectError(error.NoHmacKeyAvailable, result);
+}
+
+test "resolveHmacKey auto-generates key file when data_dir exists but key file missing" {
+    // Use a temporary directory for the data_dir
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const dir_path = tmp_dir.dir.realpathAlloc(testing.allocator, ".") catch unreachable;
+    defer testing.allocator.free(dir_path);
+
+    // First call should auto-generate the key file
+    const result1 = try AuthGraphManager.resolveHmacKey(testing.allocator, dir_path);
+    try testing.expect(std.mem.eql(u8, result1.key_id, "generated"));
+
+    // Verify the key is non-zero (random)
+    const zero_key = [_]u8{0} ** 32;
+    try testing.expect(!std.mem.eql(u8, &result1.key, &zero_key));
+
+    // Second call should read the file back and return "file" source
+    const result2 = try AuthGraphManager.resolveHmacKey(testing.allocator, dir_path);
+    try testing.expect(std.mem.eql(u8, result2.key_id, "file"));
+
+    // Both calls should return the same key
+    try testing.expect(std.mem.eql(u8, &result1.key, &result2.key));
 }
 
 test "hasAuthRecords returns false on empty store" {
