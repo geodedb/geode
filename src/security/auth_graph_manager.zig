@@ -97,7 +97,18 @@ pub const AuthGraphManager = struct {
                 elapsed += std.time.ns_per_s;
             }
             if (self.shutdown.load(.acquire)) break;
-            self.verifyChain(hmac_key) catch |err| {
+            // Acquire the shared store lock before reading graph data.
+            // verifyChain accesses label_index (via getNodesByLabel) and node
+            // properties (via getNodeProperty), which are concurrently modified
+            // by QUIC query handlers holding the same shared lock during MERGE
+            // execution.  Without this synchronisation the verify thread races
+            // with active MERGE batches: a HashMap rehash in the query handler
+            // frees the old backing array while we are mid-read, causing a
+            // General Protection Fault.
+            graph_store.acquireStoreLock();
+            const verify_result = self.verifyChain(hmac_key);
+            graph_store.releaseStoreLock();
+            verify_result catch |err| {
                 log.err("PERIODIC HMAC CHECK FAILED - POSSIBLE TAMPERING", &.{Attr.string("error", @errorName(err))});
                 continue;
             };
