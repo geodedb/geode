@@ -2437,9 +2437,26 @@ pub const GraphStore = struct {
         const file_path = try getPersistenceFilePath(self.allocator);
         defer self.allocator.free(file_path);
 
-        // Buffer all data to memory first for TDE encryption
-        var buffer = try std.ArrayList(u8).initCapacity(self.allocator, 4096);
+        var buffer = try self.serializeToBuffer();
         defer buffer.deinit(self.allocator);
+
+        try finalizeAndWriteBuffer(self.allocator, &buffer, file_path);
+
+        // Clear dirty flag after successful save
+        self.dirty = false;
+    }
+
+    /// Serialize graph state into an in-memory buffer (nodes, edges, properties).
+    /// Callers must hold the store lock for the duration of this call.
+    /// The returned buffer owns its memory and has no references back to the graph.
+    pub fn serializeToBuffer(self: *GraphStore) !std.ArrayList(u8) {
+        // Pre-allocate based on last known size to avoid reallocation churn.
+        // Estimate: ~200 bytes per node, ~150 bytes per edge (rough heuristic).
+        const estimated_size = @max(
+            @as(usize, 4096),
+            self.nodes.count() * 200 + self.edges.count() * 150 + HEADER_LEN,
+        );
+        var buffer = try std.ArrayList(u8).initCapacity(self.allocator, estimated_size);
 
         // Write header placeholder: magic, version, ids/counts, checksum (filled after data write)
         var header: [HEADER_LEN]u8 = [_]u8{0} ** HEADER_LEN;
@@ -2647,6 +2664,12 @@ pub const GraphStore = struct {
             try buffer.appendSlice(self.allocator, edge.graph_name);
         }
 
+        return buffer;
+    }
+
+    /// Finalize a serialized buffer (CRC, encrypt, write to disk).
+    /// Does NOT require the store lock — operates only on the standalone buffer.
+    fn finalizeAndWriteBuffer(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), file_path: []const u8) !void {
         // Compute checksum over payload (after header) and fill header slot
         if (buffer.items.len >= HEADER_LEN) {
             const checksum = crc.Crc32.hash(buffer.items[HEADER_LEN..]);
@@ -2654,10 +2677,7 @@ pub const GraphStore = struct {
         }
 
         // Encrypt and write to file using TDE
-        try tde.writeEncryptedFile(self.allocator, file_path, buffer.items);
-
-        // Clear dirty flag after successful save
-        self.dirty = false;
+        try tde.writeEncryptedFile(allocator, file_path, buffer.items);
     }
 
     // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-002; FEATURE="BinaryPersistence"; ASPECT=ConditionalSave; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
@@ -3490,24 +3510,47 @@ fn persistenceLoop() void {
                 std.Thread.sleep(5 * std.time.ns_per_ms);
             }
             if (!locked) continue;
-            defer g_store_rwlock.unlock();
 
             if (global_store) |*store| {
                 if (store.dirty) {
                     if (g_wal_checkpoint_fn) |checkpoint_fn| {
                         // WAL mode: checkpoint (saveToFile + truncate WAL)
                         checkpoint_fn(store);
+                        g_store_rwlock.unlock();
                     } else {
-                        // Legacy mode: full save every time
-                        store.saveToFile() catch |err| {
-                            log.err("background save failed", &.{
+                        // Legacy mode: serialize under lock, then release lock
+                        // before CRC/encrypt/disk-write to minimize lock hold time.
+                        const file_path = getPersistenceFilePath(store.allocator) catch {
+                            g_store_rwlock.unlock();
+                            continue;
+                        };
+                        var buffer = store.serializeToBuffer() catch |err| {
+                            store.allocator.free(file_path);
+                            g_store_rwlock.unlock();
+                            log.err("background serialize failed", &.{
+                                Attr.string("error", @errorName(err)),
+                            });
+                            continue;
+                        };
+                        store.dirty = false;
+                        g_store_rwlock.unlock();
+
+                        // CRC, TDE encryption, and disk I/O happen outside the lock
+                        defer buffer.deinit(store.allocator);
+                        defer store.allocator.free(file_path);
+                        GraphStore.finalizeAndWriteBuffer(store.allocator, &buffer, file_path) catch |err| {
+                            log.err("background save write failed", &.{
                                 Attr.string("error", @errorName(err)),
                             });
                         };
                     }
                     // Clear atomic dirty after successful save/checkpoint
                     g_atomic_dirty.store(false, .release);
+                } else {
+                    g_store_rwlock.unlock();
                 }
+            } else {
+                g_store_rwlock.unlock();
             }
         } else {
             // WAL sync was sufficient — no checkpoint needed yet.
