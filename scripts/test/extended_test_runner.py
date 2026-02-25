@@ -975,6 +975,29 @@ def run_test(
         if isinstance(stdout_patterns, str):
             stdout_patterns = [stdout_patterns]
         for pattern in stdout_patterns:
+            # YAML 1.1 parses unquoted HH:MM as sexagesimal integers (e.g., 14:30 → 870).
+            # Detect this and convert back to time strings for matching.
+            if isinstance(pattern, (int, float)) and 0 <= pattern <= 86400:
+                n = int(pattern)
+                # Two-part sexagesimal (A:B → A*60+B): e.g., 14:30 → 870
+                a2, b2 = divmod(n, 60)
+                # Three-part sexagesimal (A:B:C → A*3600+B*60+C): e.g., 14:30:00 → 52200
+                a3, rem3 = divmod(n, 3600)
+                b3, c3 = divmod(rem3, 60)
+                time_candidates = [
+                    f"{a2}:{b2:02d}",  # 14:30
+                    f"{a3}:{b3:02d}:{c3:02d}",  # 0:14:30 or 14:30:00
+                ]
+                found = False
+                for tc in time_candidates:
+                    if json_values and tc in json_values:
+                        found = True
+                        break
+                    if tc.lower() in combined.lower() or tc.lower() in combined_stripped.lower():
+                        found = True
+                        break
+                if found:
+                    continue
             pattern = str(pattern)  # YAML may parse dates/numbers as non-string types
             # Try exact match in JSON values first (most reliable)
             if json_values and pattern in json_values:
