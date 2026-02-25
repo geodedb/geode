@@ -583,10 +583,14 @@ pub const AuthGraphManager = struct {
     // -- Internal Helpers --
 
     pub fn countAuthRecords(self: *Self) u64 {
-        return self.storage.user_cache.count() +
-            self.storage.role_cache.count() +
-            self.storage.permission_cache.count() +
-            self.storage.policy_cache.count();
+        // Cast each count() to u64 before summing. HashMap.count() returns u32
+        // (HashMap.Size), so four-operand u32 addition can overflow when the
+        // total exceeds ~4 billion records. Casting first lifts the arithmetic
+        // to u64, preventing the panic in safe/debug builds.
+        return @as(u64, self.storage.user_cache.count()) +
+            @as(u64, self.storage.role_cache.count()) +
+            @as(u64, self.storage.permission_cache.count()) +
+            @as(u64, self.storage.policy_cache.count());
     }
 
     fn recomputeAndStoreUserHmac(self: *Self, user_id: u64, hmac_key: *const [32]u8) !void {
