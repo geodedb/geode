@@ -1624,6 +1624,28 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
 
     // Handle RETURN clause if present
     if (c.return_clause) |ret| {
+        // Check if RETURN uses count(*) aggregation — return total created entity count
+        if (ret.items.len == 1 and ret.items[0].expr == .Call) {
+            const call = ret.items[0].expr.Call;
+            if (call.callee.* == .Ident and
+                (std.mem.eql(u8, call.callee.Ident.orig, "count") or
+                    std.mem.eql(u8, call.callee.Ident.orig, "COUNT")))
+            {
+                const created_entity_count: i64 = @intCast(created_nodes.count() + created_relationships.count());
+                var columns = try allocator.alloc([]const u8, 1);
+                columns[0] = try allocator.dupe(u8, ret.items[0].alias orelse "count");
+                var rows = try allocator.alloc([]Value, 1);
+                var ret_row = try allocator.alloc(Value, 1);
+                ret_row[0] = Value{ .Int = created_entity_count };
+                rows[0] = ret_row;
+                return ExecutionResult{
+                    .columns = columns,
+                    .rows = rows,
+                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                };
+            }
+        }
+
         // Build environment with created nodes and relationships
         const total_count = created_nodes.count() + created_relationships.count();
         var names = try allocator.alloc([]const u8, total_count);
