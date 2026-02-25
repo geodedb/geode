@@ -1277,12 +1277,15 @@ pub fn executeCreateQuery(
         };
     } else {
         // Check if RETURN uses count(*) aggregation — return total created entity count
+        // Only match count(*), not count(variable) which should be evaluated normally
         if (q.ret.items.len == 1 and q.ret.items[0].expr == .Call) {
             const call = q.ret.items[0].expr.Call;
-            if (call.callee.* == .Ident and
+            const is_count_star = call.callee.* == .Ident and
                 (std.mem.eql(u8, call.callee.Ident.orig, "count") or
-                    std.mem.eql(u8, call.callee.Ident.orig, "COUNT")))
-            {
+                    std.mem.eql(u8, call.callee.Ident.orig, "COUNT")) and
+                call.args.len == 1 and call.args[0].* == .Ident and
+                std.mem.eql(u8, call.args[0].Ident.orig, "*");
+            if (is_count_star) {
                 var columns = try allocator.alloc([]const u8, 1);
                 columns[0] = try allocator.dupe(u8, q.ret.items[0].alias orelse "count");
                 var rows = try allocator.alloc([]Value, 1);
@@ -1625,11 +1628,14 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
     // Handle RETURN clause if present
     if (c.return_clause) |ret| {
         // Check if RETURN uses count(*) aggregation — return total created entity count
+        // Only match count(*), not count(variable) which should be evaluated normally
         if (ret.items.len == 1 and ret.items[0].expr == .Call) {
             const call = ret.items[0].expr.Call;
             if (call.callee.* == .Ident and
                 (std.mem.eql(u8, call.callee.Ident.orig, "count") or
-                    std.mem.eql(u8, call.callee.Ident.orig, "COUNT")))
+                    std.mem.eql(u8, call.callee.Ident.orig, "COUNT")) and
+                call.args.len == 1 and call.args[0].* == .Ident and
+                std.mem.eql(u8, call.args[0].Ident.orig, "*"))
             {
                 const created_entity_count: i64 = @intCast(created_nodes.count() + created_relationships.count());
                 var columns = try allocator.alloc([]const u8, 1);
