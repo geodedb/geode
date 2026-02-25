@@ -556,6 +556,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
     const store = graph_store.getGlobalStore(allocator);
     const target_graph = current_graph orelse "default";
     var created_relationships_count: i64 = 0;
+    var created_nodes_count: i64 = 0;
 
     // Track created nodes by variable name
     var created_nodes = std.StringHashMap(u64).init(allocator);
@@ -584,10 +585,12 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                     // Variable not bound, create new node in target graph
                     const new_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
+                    created_nodes_count += 1;
                     break :blk new_id;
                 }
             } else blk: {
                 // No variable name, always create new node in target graph
+                created_nodes_count += 1;
                 break :blk try store.createNodeWithGraph(node_pattern.labels, target_graph);
             };
 
@@ -653,11 +656,13 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                 } else {
                     const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
+                    created_nodes_count += 1;
                     ensureAutoIndexes(allocator, hop.left.labels);
                     break :blk new_id;
                 }
             } else blk: {
                 const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
+                created_nodes_count += 1;
                 ensureAutoIndexes(allocator, hop.left.labels);
                 break :blk new_id;
             };
@@ -670,11 +675,13 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                 } else {
                     const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
+                    created_nodes_count += 1;
                     ensureAutoIndexes(allocator, hop.right.labels);
                     break :blk new_id;
                 }
             } else blk: {
                 const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
+                created_nodes_count += 1;
                 ensureAutoIndexes(allocator, hop.right.labels);
                 break :blk new_id;
             };
@@ -732,7 +739,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
     }
 
     return CreateBatchResult{
-        .created_count = created_relationships_count,
+        .created_count = created_nodes_count + created_relationships_count,
         .created_nodes = created_nodes,
         .created_relationships = created_relationships,
     };

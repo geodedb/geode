@@ -39,6 +39,11 @@ pub fn isDateStrict(s: []const u8) bool {
             else => if (!(s[i] >= '0' and s[i] <= '9')) return false,
         }
     }
+    // Validate month and day ranges
+    const m = (s[5] - '0') * 10 + (s[6] - '0');
+    const d = (s[8] - '0') * 10 + (s[9] - '0');
+    if (m < 1 or m > 12) return false;
+    if (d < 1 or d > 31) return false;
     return true;
 }
 

@@ -2232,6 +2232,12 @@ pub const Parser = struct {
             try self.parseProjectionItems(&items);
             return_clause = .{ .items = try items.toOwnedSlice(self.arena.allocator()), .distinct = distinct };
 
+            // Allow WHERE after RETURN items as post-projection filter
+            if (self.cur.kind == .WHERE) {
+                self.advance();
+                having_expr = try self.parseOrExpr();
+            }
+
             // Allow GROUP BY (and optional HAVING) after RETURN as well
             if (self.cur.kind == .GROUP) {
                 self.advance();

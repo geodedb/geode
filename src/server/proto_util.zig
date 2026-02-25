@@ -531,6 +531,7 @@ fn extValueToProto(allocator: std.mem.Allocator, ext: eval_extended.ExtValue) !s
         .BitString => |b| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try b.toString(allocator) } },
         .VarBit => |b| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try b.toString(allocator) } },
         .IntRange => |r| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try r.toString(allocator) } },
+        .LanguageTag => |lt| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, lt.tag) } },
         else => .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try std.fmt.allocPrint(allocator, "{any}", .{ext}) } },
     };
 }
