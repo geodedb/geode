@@ -97,17 +97,25 @@ pub const AuthGraphManager = struct {
                 elapsed += std.time.ns_per_s;
             }
             if (self.shutdown.load(.acquire)) break;
-            // Acquire the shared store lock before reading graph data.
-            // verifyChain accesses label_index (via getNodesByLabel) and node
-            // properties (via getNodeProperty), which are concurrently modified
-            // by QUIC query handlers holding the same shared lock during MERGE
-            // execution.  Without this synchronisation the verify thread races
-            // with active MERGE batches: a HashMap rehash in the query handler
-            // frees the old backing array while we are mid-read, causing a
-            // General Protection Fault.
-            graph_store.acquireStoreLock();
+            // Acquire the EXCLUSIVE write lock before reading graph data.
+            //
+            // verifyChain reads label_index (via getNodesByLabel) and node
+            // properties (via getNodeProperty).  QUIC query handlers hold the
+            // SHARED lock (lockShared) while executing MERGE statements that
+            // call addNodeLabel → label_index.getOrPut(), which may rehash
+            // and free the old backing array.
+            //
+            // Using acquireStoreLock() (shared / lockShared) was insufficient:
+            // multiple shared-lock holders run concurrently, so the verify
+            // thread and a query handler could still race on label_index.
+            //
+            // The exclusive write lock (lock()) blocks until all shared-lock
+            // holders have released, and prevents new shared locks from being
+            // acquired while it is held.  This fully serialises the verify
+            // read against any concurrent MERGE writes.
+            graph_store.acquireStoreWriteLock();
             const verify_result = self.verifyChain(hmac_key);
-            graph_store.releaseStoreLock();
+            graph_store.releaseStoreWriteLock();
             verify_result catch |err| {
                 log.err("PERIODIC HMAC CHECK FAILED - POSSIBLE TAMPERING", &.{Attr.string("error", @errorName(err))});
                 continue;

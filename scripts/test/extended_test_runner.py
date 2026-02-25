@@ -600,7 +600,7 @@ def run_test(
                         # Add --insecure flag (test servers use self-signed certs)
                         setup_processed.insert(3, "--insecure")
                         # Inject auth credentials if not already present
-                        has_user = any("-U" in str(arg) for arg in setup_processed)
+                        has_user = any(str(arg) == "-U" or str(arg) == "--user" for arg in setup_processed)
                         if not has_user:
                             _secrets = resolved_secrets or {}
                             setup_processed.insert(4, "-U")
@@ -698,7 +698,7 @@ def run_test(
             # Add --insecure flag (test servers use self-signed certs)
             modified_args.insert(3, "--insecure")
             # Inject auth credentials if not already present
-            has_user = any("-U" in str(arg) for arg in modified_args)
+            has_user = any(str(arg) == "-U" or str(arg) == "--user" for arg in modified_args)
             if not has_user:
                 _secrets = resolved_secrets or {}
                 modified_args.insert(4, "-U")

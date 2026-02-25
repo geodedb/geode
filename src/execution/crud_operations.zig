@@ -775,6 +775,9 @@ pub fn executeCreateQuery(
     var created_relationships = std.StringHashMap(Value).init(allocator);
     defer created_relationships.deinit();
 
+    // Track total created entities for count(*) aggregation
+    var total_created_count: i64 = 0;
+
     // Create nodes from pattern
     for (create_pattern.chains) |chain| {
         // Handle single node creation
@@ -788,10 +791,12 @@ pub fn executeCreateQuery(
                     // Variable not bound, create new node in target graph
                     const new_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
                     try created_nodes.put(var_name, new_id);
+                    total_created_count += 1;
                     break :blk new_id;
                 }
             } else blk: {
                 // No variable name, always create new node in target graph
+                total_created_count += 1;
                 break :blk try store.createNodeWithGraph(node_pattern.labels, target_graph);
             };
 
@@ -844,6 +849,7 @@ pub fn executeCreateQuery(
                 }
                 // Variable not bound - create new node in target graph
                 const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
+                total_created_count += 1;
                 ensureAutoIndexes(allocator, hop.left.labels);
                 if (hop.left.name) |var_name| {
                     try created_nodes.put(var_name, new_id);
@@ -860,6 +866,7 @@ pub fn executeCreateQuery(
                 }
                 // Variable not bound - create new node in target graph
                 const new_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
+                total_created_count += 1;
                 ensureAutoIndexes(allocator, hop.right.labels);
                 if (hop.right.name) |var_name| {
                     try created_nodes.put(var_name, new_id);
@@ -938,6 +945,7 @@ pub fn executeCreateQuery(
             // Create the relationship in target graph
             const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATES_TO";
             const edge_id = try store.createEdgeWithGraph(left_id, right_id, rel_type, target_graph);
+            total_created_count += 1;
             // Log edge creation for rollback support
             const undo_log3 = txn_undo_log.getGlobalUndoLog(allocator);
             undo_log3.logCreateEdge(edge_id, current_graph) catch {};
@@ -1268,6 +1276,33 @@ pub fn executeCreateQuery(
             .variable_bindings = bindings_ptr,
         };
     } else {
+        // Check if RETURN uses count(*) aggregation — return total created entity count
+        if (q.ret.items.len == 1 and q.ret.items[0].expr == .Call) {
+            const call = q.ret.items[0].expr.Call;
+            if (call.callee.* == .Ident and
+                (std.mem.eql(u8, call.callee.Ident.orig, "count") or
+                    std.mem.eql(u8, call.callee.Ident.orig, "COUNT")))
+            {
+                var columns = try allocator.alloc([]const u8, 1);
+                columns[0] = try allocator.dupe(u8, q.ret.items[0].alias orelse "count");
+                var rows = try allocator.alloc([]Value, 1);
+                var ret_row = try allocator.alloc(Value, 1);
+                ret_row[0] = Value{ .Int = total_created_count };
+                rows[0] = ret_row;
+
+                const bindings_ptr = try allocator.create(std.StringHashMap(u64));
+                bindings_ptr.* = try created_nodes.clone();
+                created_nodes.deinit();
+
+                return ExecutionResult{
+                    .columns = columns,
+                    .rows = rows,
+                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    .variable_bindings = bindings_ptr,
+                };
+            }
+        }
+
         // No WITH clause - use created nodes and relationships directly for RETURN
         var ret_result = try executeReturnClauseWithNodes(allocator, q.ret, created_nodes, created_relationships);
 
