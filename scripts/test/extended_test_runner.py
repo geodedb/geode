@@ -44,16 +44,60 @@ def run_test(
     spec_data_dir=None,
     spec_id=None,
     is_first_test=False,
+    env_overrides=None,
+    resolved_secrets=None,
 ):
     """Run a single test case with optional instance_id and loop_index for parallel/loop tests.
 
     Args:
         spec_id: A unique ID shared across all tests in the same spec file for data persistence.
         is_first_test: If True, clear persistence files (only first test in spec should do this).
+        env_overrides: Dict of env vars to set for CLI commands (e.g., GEODE_MASTER_KEY for FLE).
+        resolved_secrets: Dict of resolved secret name->value from spec's secrets section.
     """
     # Check if test should be skipped
     if test_case.get("skip", False):
         return None, "skipped"
+
+    # Handle type: shell tests - run entire command string via shell
+    test_type = test_case.get("type", "")
+    test_command_str = test_case.get("command", None)
+    if test_type == "shell" and isinstance(test_command_str, str):
+        expect = test_case.get("expect", {})
+        test_timeout_seconds = 10
+        if spec_config and isinstance(spec_config, dict):
+            cli_config = spec_config.get("cli", {})
+            if isinstance(cli_config, dict):
+                client_config = cli_config.get("client", {})
+                if isinstance(client_config, dict) and client_config.get("timeout_ms"):
+                    test_timeout_seconds = max(5, client_config.get("timeout_ms", 10000) // 1000)
+        print(f"  [DEBUG] shell cmd={test_command_str}, timeout={test_timeout_seconds}s")
+        try:
+            result = subprocess.run(
+                test_command_str,
+                shell=True,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=test_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            return False, "timeout"
+        except Exception as e:
+            return False, str(e)
+
+        expected_exit_code = expect.get("exit_code", 0)
+        if result.returncode != expected_exit_code:
+            return False, f"exit code: expected {expected_exit_code}, got {result.returncode}"
+
+        if "stdout_contains" in expect:
+            combined = (result.stdout or "") + (result.stderr or "")
+            for pattern in expect["stdout_contains"]:
+                pattern = str(pattern)
+                if pattern.lower() not in combined.lower():
+                    return False, f"missing: '{pattern}'"
+
+        return True, "pass"
 
     # Extract command and args from test case
     test_command = test_case.get("command", None)
@@ -80,6 +124,11 @@ def run_test(
         "stat",
         "sh",
         "bash",
+        "cut",
+        "sort",
+        "uniq",
+        "tr",
+        "sleep",
     }
     is_external_command = isinstance(test_command, str) and test_command in external_commands
 
@@ -135,11 +184,49 @@ def run_test(
             processed_arg = processed_arg.replace("${server_address}", server_address)
             processed_arg = processed_arg.replace("${server}", server_address)
 
-        # Replace secret variables
+        # Replace secret variables using resolved_secrets from spec, with fallback defaults
         if "${secret" in processed_arg:
-            processed_arg = processed_arg.replace("${secret:api_token}", "test-token-123")
-            processed_arg = processed_arg.replace("${secret:user_password}", "password123")
-            processed_arg = processed_arg.replace("${secret:admin_password}", "geode-test-password")
+            secrets = resolved_secrets or {}
+            # Use spec-resolved secrets first, then hardcoded fallbacks
+            processed_arg = processed_arg.replace("${secret:api_token}", secrets.get("api_token", "test-token-123"))
+            processed_arg = processed_arg.replace(
+                "${secret:user_password}", secrets.get("user_password", "UserPass123!")
+            )
+            processed_arg = processed_arg.replace(
+                "${secret:admin_password}", secrets.get("admin_password", "geode-test-password")
+            )
+            # Generic secret replacement for any other ${secret:NAME} patterns
+            import re as _re
+
+            for match in _re.findall(r"\$\{secret:([^}]+)\}", processed_arg):
+                processed_arg = processed_arg.replace(f"${{secret:{match}}}", secrets.get(match, f"default-{match}"))
+
+        # Replace env var references like ${GEODE_SERVER_ADDRESS}, ${GEODE_ADMIN_PASSWORD}
+        if "${GEODE_" in processed_arg or "${geode_" in processed_arg:
+            import re as _re2
+
+            secrets = resolved_secrets or {}
+            for match in _re2.findall(r"\$\{([A-Z_]+)\}", processed_arg):
+                # Check env_overrides first, then os.environ, then resolved secrets mapping
+                val = None
+                if env_overrides and match in env_overrides:
+                    val = env_overrides[match]
+                elif match in os.environ:
+                    val = os.environ[match]
+                elif match == "GEODE_ADMIN_PASSWORD":
+                    val = secrets.get("admin_password", "geode-test-password")
+                elif match == "GEODE_SERVER_ADDRESS":
+                    # Derive from spec config
+                    sp = "8443"
+                    if spec_config and isinstance(spec_config, dict):
+                        cli_cfg = spec_config.get("cli", {})
+                        if isinstance(cli_cfg, dict):
+                            srv_cfg = cli_cfg.get("server", {})
+                            if isinstance(srv_cfg, dict) and srv_cfg.get("port"):
+                                sp = str(srv_cfg["port"])
+                    val = f"127.0.0.1:{sp}"
+                if val:
+                    processed_arg = processed_arg.replace(f"${{{match}}}", val)
 
         # Replace instance_id for parallel tests
         if instance_id is not None and "${instance_id}" in processed_arg:
@@ -344,8 +431,34 @@ def run_test(
                             return False, error_msg
                         continue  # Move to next setup command
                     else:
-                        # Geode command string format: "geode query '...'"
-                        setup_args = shlex.split(cmd_item)
+                        # Check if it looks like a GQL query (starts with GQL keywords)
+                        gql_keywords = {
+                            "CREATE",
+                            "MATCH",
+                            "RETURN",
+                            "DELETE",
+                            "DETACH",
+                            "MERGE",
+                            "SET",
+                            "REMOVE",
+                            "WITH",
+                            "OPTIONAL",
+                            "CALL",
+                            "INSERT",
+                            "DROP",
+                            "ALTER",
+                            "FOR",
+                            "FILTER",
+                            "LET",
+                            "EXPLAIN",
+                            "PROFILE",
+                        }
+                        if first_word.upper() in gql_keywords:
+                            # Treat the entire string as a single query argument
+                            setup_args = ["query", cmd_item]
+                        else:
+                            # Geode command string format: "geode query '...'"
+                            setup_args = shlex.split(cmd_item)
                         setup_stdin = None
                 elif isinstance(cmd_item, dict):
                     # Dict format: {"args": ["query", "..."]} or {"command": "shell", "args": [], "stdin": "..."}
@@ -489,10 +602,11 @@ def run_test(
                         # Inject auth credentials if not already present
                         has_user = any("-U" in str(arg) for arg in setup_processed)
                         if not has_user:
+                            _secrets = resolved_secrets or {}
                             setup_processed.insert(4, "-U")
                             setup_processed.insert(5, "geode")
                             setup_processed.insert(6, "-P")
-                            setup_processed.insert(7, "geode-test-password")
+                            setup_processed.insert(7, _secrets.get("admin_password", "geode-test-password"))
 
                 # Add --non-interactive for shell commands when stdin is used
                 if len(setup_processed) > 0 and setup_processed[0] == "shell" and setup_stdin:
@@ -503,7 +617,7 @@ def run_test(
                 # Inject --data-dir for setup commands if spec_data_dir is provided
                 if spec_data_dir and len(setup_processed) > 0:
                     first_cmd = setup_processed[0]
-                    if first_cmd in ["user", "role", "auth", "policy"]:
+                    if first_cmd in ["user", "role", "auth", "policy", "apikey"]:
                         # Only inject --data-dir if there's a subcommand (not just flags like --help)
                         # Check if position 1 exists and is not a flag (meaning it's a subcommand)
                         has_subcommand = len(setup_processed) > 1 and not str(setup_processed[1]).startswith("-")
@@ -586,10 +700,11 @@ def run_test(
             # Inject auth credentials if not already present
             has_user = any("-U" in str(arg) for arg in modified_args)
             if not has_user:
+                _secrets = resolved_secrets or {}
                 modified_args.insert(4, "-U")
                 modified_args.insert(5, "geode")
                 modified_args.insert(6, "-P")
-                modified_args.insert(7, "geode-test-password")
+                modified_args.insert(7, _secrets.get("admin_password", "geode-test-password"))
             # Inject --timeout so the CLI's internal watchdog matches the test runner's
             # subprocess timeout. Without this, the CLI's default 10s watchdog may kill
             # the process before the test runner's timeout expires, causing false failures.
@@ -638,7 +753,7 @@ def run_test(
     if spec_data_dir and len(modified_args) > 0:
         first_cmd = modified_args[0]
         # Commands that use user storage and need isolated data directories
-        if first_cmd in ["user", "role", "auth", "policy"]:
+        if first_cmd in ["user", "role", "auth", "policy", "apikey"]:
             # Only inject --data-dir if there's a subcommand (not just flags like --help)
             # Check if position 1 exists and is not a flag (meaning it's a subcommand)
             has_subcommand = len(modified_args) > 1 and not str(modified_args[1]).startswith("-")
@@ -658,6 +773,12 @@ def run_test(
 
     # Build command with global flags (must come before subcommand)
     global_flags = []
+
+    # Build environment with overrides (for FLE master key, TDE key, etc.)
+    run_env = None
+    if env_overrides:
+        run_env = os.environ.copy()
+        run_env.update(env_overrides)
 
     try:
         # Construct command: external command OR binary + global_flags + subcommand_args
@@ -682,6 +803,7 @@ def run_test(
             encoding="utf-8",
             errors="replace",  # Handle binary debug output gracefully
             timeout=test_timeout_seconds,  # Use spec config timeout
+            env=run_env,
         )
     except subprocess.TimeoutExpired:
         return False, "timeout"
@@ -848,7 +970,12 @@ def run_test(
             )
             print(f"    [DEBUG] looking for: {expect['stdout_contains']}")
 
-        for pattern in expect["stdout_contains"]:
+        stdout_patterns = expect["stdout_contains"]
+        # Handle scalar string (YAML may parse "stdout_contains: word" as a string)
+        if isinstance(stdout_patterns, str):
+            stdout_patterns = [stdout_patterns]
+        for pattern in stdout_patterns:
+            pattern = str(pattern)  # YAML may parse dates/numbers as non-string types
             # Try exact match in JSON values first (most reliable)
             if json_values and pattern in json_values:
                 continue  # Pattern found in JSON values
@@ -861,7 +988,12 @@ def run_test(
     if "stderr_contains" in expect:
         # Use both filtered and original for stderr checks
         combined_stderr = filtered_stderr + result.stderr
-        for pattern in expect["stderr_contains"]:
+        stderr_patterns = expect["stderr_contains"]
+        # Handle scalar string (YAML may parse "stderr_contains: word" as a string)
+        if isinstance(stderr_patterns, str):
+            stderr_patterns = [stderr_patterns]
+        for pattern in stderr_patterns:
+            pattern = str(pattern)  # YAML may parse dates/numbers as non-string types
             if pattern.lower() not in combined_stderr.lower():
                 return False, f"stderr missing: '{pattern}'"
 
@@ -870,7 +1002,12 @@ def run_test(
         import re
 
         combined = result.stdout + result.stderr
-        for pattern in expect["stdout_regex"]:
+        regex_patterns = expect["stdout_regex"]
+        # Handle scalar string
+        if isinstance(regex_patterns, str):
+            regex_patterns = [regex_patterns]
+        for pattern in regex_patterns:
+            pattern = str(pattern)  # YAML may parse dates/numbers as non-string types
             try:
                 if not re.search(pattern, combined):
                     return False, f"regex not matched: '{pattern}'"
@@ -1156,15 +1293,41 @@ def main():
                     for key, value in server_env.items():
                         server_env_overrides[key] = str(value)
 
+        # Resolve secrets from spec's secrets section
+        resolved_secrets = {}
+        spec_secrets = spec.get("secrets", {})
+        if isinstance(spec_secrets, dict):
+            for secret_name, secret_config in spec_secrets.items():
+                if isinstance(secret_config, dict):
+                    env_key = secret_config.get("key", "")
+                    default_val = str(secret_config.get("default", ""))
+                    # Check env var first, then spec default, then hardcoded fallback
+                    if env_key and env_key in os.environ:
+                        resolved_secrets[secret_name] = os.environ[env_key]
+                    elif env_key and env_key in server_env_overrides:
+                        resolved_secrets[secret_name] = server_env_overrides[env_key]
+                    elif default_val:
+                        resolved_secrets[secret_name] = default_val
+                elif isinstance(secret_config, str):
+                    resolved_secrets[secret_name] = secret_config
+
+        # Use resolved admin_password for GEODE_ADMIN_PASSWORD (ensures server and CLI use same password)
+        admin_pw = resolved_secrets.get("admin_password", "geode-test-password")
+
         # Ensure default credentials are available for test clients
         # Note: user_management.zig reads GEODE_ADMIN_PASSWORD while
         # geode_auth_lib.zig reads GEODE_DEFAULT_PASSWORD - set both for compatibility
         if "GEODE_ADMIN_USERNAME" not in server_env_overrides and "GEODE_ADMIN_USERNAME" not in os.environ:
             server_env_overrides["GEODE_ADMIN_USERNAME"] = "geode"
         if "GEODE_DEFAULT_PASSWORD" not in server_env_overrides and "GEODE_DEFAULT_PASSWORD" not in os.environ:
-            server_env_overrides["GEODE_DEFAULT_PASSWORD"] = "geode-test-password"
+            server_env_overrides["GEODE_DEFAULT_PASSWORD"] = admin_pw
         if "GEODE_ADMIN_PASSWORD" not in server_env_overrides and "GEODE_ADMIN_PASSWORD" not in os.environ:
-            server_env_overrides["GEODE_ADMIN_PASSWORD"] = "geode-test-password"
+            server_env_overrides["GEODE_ADMIN_PASSWORD"] = admin_pw
+
+        # Isolate CLI state files (apikey, session, authn, mtls) per spec
+        # Without this, all specs share ~/.local/state/geode/ and see stale keys
+        if "GEODE_STATE_DIR" not in server_env_overrides and "GEODE_STATE_DIR" not in os.environ:
+            server_env_overrides["GEODE_STATE_DIR"] = spec_data_dir
 
         # Start server if required
         if spec_server_enabled:
@@ -1326,6 +1489,8 @@ def main():
                             spec_data_dir=spec_data_dir,
                             spec_id=spec_id,
                             is_first_test=is_first,
+                            env_overrides=server_env_overrides if server_env_overrides else None,
+                            resolved_secrets=resolved_secrets if resolved_secrets else None,
                         )
 
                         if success is None:
@@ -1356,6 +1521,8 @@ def main():
                             spec_data_dir=spec_data_dir,
                             spec_id=spec_id,
                             is_first_test=is_first,
+                            env_overrides=server_env_overrides if server_env_overrides else None,
+                            resolved_secrets=resolved_secrets if resolved_secrets else None,
                         )
 
                         if success is None:
@@ -1384,6 +1551,8 @@ def main():
                         spec_data_dir=spec_data_dir,
                         spec_id=spec_id,
                         is_first_test=is_first,
+                        env_overrides=server_env_overrides if server_env_overrides else None,
+                        resolved_secrets=resolved_secrets if resolved_secrets else None,
                     )
 
                     if success is None:

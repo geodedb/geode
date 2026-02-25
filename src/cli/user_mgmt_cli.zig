@@ -291,6 +291,10 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         const username = argv[subcmd_idx + 1];
+        if (std.mem.eql(u8, username, "--help") or std.mem.eql(u8, username, "-h")) {
+            printOut("geode user delete - Delete a user\n\nUsage: geode user delete <username>\n\nDeletes the specified user from the local user store.\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.success));
+        }
         // Find user by username and remove
         var found = false;
         var it = mgr.storage.user_cache.iterator();
