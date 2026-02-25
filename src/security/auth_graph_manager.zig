@@ -43,6 +43,10 @@ pub const AuthGraphManager = struct {
     // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-001; FEATURE="PeriodicHmacVerification"; ASPECT=BackgroundThread; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
     shutdown: std.atomic.Value(bool),
     verify_thread: ?std.Thread = null,
+    /// Owned copy of the HMAC key for the periodic verification thread.
+    /// Stored in-struct so the thread can reference it without dangling pointers
+    /// (the struct is moved by value during server initialization).
+    hmac_key: [32]u8 = [_]u8{0} ** 32,
 
     const Self = @This();
 
@@ -75,8 +79,16 @@ pub const AuthGraphManager = struct {
     // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-002; FEATURE="PeriodicHmacVerification"; ASPECT=BackgroundThread; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
     /// Spawn a background thread that periodically re-verifies the HMAC chain
     /// to detect runtime tampering.
+    ///
+    /// IMPORTANT: `self` must be at its FINAL memory location before calling
+    /// this method. The spawned thread captures `self` by pointer — if the
+    /// struct is moved after the thread starts, the pointer becomes dangling
+    /// and the server will GPF when the thread wakes up.
     pub fn startPeriodicVerification(self: *Self, hmac_key: *const [32]u8, interval_minutes: u32) void {
-        self.verify_thread = std.Thread.spawn(.{}, periodicVerifyLoop, .{ self, hmac_key, interval_minutes }) catch |err| {
+        // Copy the key into the struct so the thread references owned memory
+        // instead of a caller-provided pointer that may go out of scope.
+        self.hmac_key = hmac_key.*;
+        self.verify_thread = std.Thread.spawn(.{}, periodicVerifyLoop, .{ self, &self.hmac_key, interval_minutes }) catch |err| {
             log.err("Failed to spawn periodic HMAC verification thread", &.{
                 Attr.string("error", @errorName(err)),
             });

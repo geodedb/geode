@@ -24,7 +24,9 @@ pub const Date = struct {
 
     pub fn toString(self: Date, allocator: std.mem.Allocator) ![]u8 {
         const ymd = dateFromDays(self.days_since_epoch);
-        return std.fmt.allocPrint(allocator, "{d:0>4}-{d:0>2}-{d:0>2}", .{ ymd.year, ymd.month, ymd.day });
+        // Cast year to unsigned to avoid '+' sign in Zig 0.15.1 {d:0>N} formatting
+        const y: u32 = @intCast(ymd.year);
+        return std.fmt.allocPrint(allocator, "{d:0>4}-{d:0>2}-{d:0>2}", .{ y, ymd.month, ymd.day });
     }
 
     // CANARY: REQ=REQ-DATE-INTERVAL-003; FEATURE="DateIntervalArithmetic"; ASPECT=Helper; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2026-01-09
@@ -107,15 +109,16 @@ pub const Time = struct {
 
     pub fn toString(self: Time, allocator: std.mem.Allocator) ![]u8 {
         const total_micros = self.micros_since_midnight;
-        const hours = @divFloor(total_micros, 3600_000_000);
-        const minutes = @divFloor(@rem(total_micros, 3600_000_000), 60_000_000);
-        const seconds = @divFloor(@rem(total_micros, 60_000_000), 1_000_000);
-        const micros = @rem(total_micros, 1_000_000);
+        // Cast to unsigned to avoid '+' sign in formatted output (Zig 0.15.1 {d:0>2} on signed types)
+        const h: u32 = @intCast(@divFloor(total_micros, 3600_000_000));
+        const m: u32 = @intCast(@divFloor(@rem(total_micros, 3600_000_000), 60_000_000));
+        const s: u32 = @intCast(@divFloor(@rem(total_micros, 60_000_000), 1_000_000));
+        const us: u32 = @intCast(@rem(total_micros, 1_000_000));
 
-        if (micros == 0) {
-            return std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hours, minutes, seconds });
+        if (us == 0) {
+            return std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}:{d:0>2}", .{ h, m, s });
         } else {
-            return std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}:{d:0>2}.{d:0>6}", .{ hours, minutes, seconds, micros });
+            return std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}:{d:0>2}.{d:0>6}", .{ h, m, s, us });
         }
     }
 };

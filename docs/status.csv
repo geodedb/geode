@@ -293,6 +293,7 @@ REQ-AUTH-HMAC-KEYGEN-001,HmacKeyAutoGeneration,KeyFile,TESTED,,,security,2026-02
 REQ-AUTH-HMAC-PERIODIC-001,PeriodicHmacVerification,BackgroundThread,IMPL,,,security,2026-02-24,src/security/auth_graph_manager.zig
 REQ-AUTH-HMAC-PERIODIC-002,PeriodicHmacVerification,BackgroundThread,IMPL,,,security,2026-02-24,src/security/auth_graph_manager.zig
 REQ-AUTH-HMAC-PERIODIC-003,PeriodicHmacVerification,ServerStartup,IMPL,,,security,2026-02-24,src/server/server_init.zig
+REQ-AUTH-HMAC-PERIODIC-003,PeriodicHmacVerification,ServerStartup,IMPL,,,security,2026-02-24,src/server/server_init.zig
 REQ-AUTH-HMAC-PERIODIC-004,PeriodicHmacVerification,Shutdown,IMPL,,,security,2026-02-24,src/server/server_init.zig
 REQ-AUTH-INIT-CLI-001,AuthInitCLI,OfflineAuthManagement,IMPL,,,cli,2026-02-24,src/cli/auth_init_cli.zig
 REQ-AUTH-INIT-CLI-002,AuthInitCLI,DispatcherIntegration,IMPL,,,cli,2026-02-24,src/cli/main.zig

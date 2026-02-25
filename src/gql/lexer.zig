@@ -264,8 +264,9 @@ pub const Lexer = struct {
             const save_line = self.line;
             const save_col = self.col;
             self.skipSeparators();
-            if (self.idx < self.src.len and self.src[self.idx] == '"') {
-                const str = self.scanStringAny('"');
+            if (self.idx < self.src.len and (self.src[self.idx] == '"' or self.src[self.idx] == '\'')) {
+                const quote = self.src[self.idx];
+                const str = self.scanStringAny(quote);
                 if (kind == .DATE and !temporal.isDateStrict(str.lexeme)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
                 if (kind == .DATETIME and !temporal.isDateTimeIso(str.lexeme, true)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
                 if (kind == .TIME and !temporal.isTimeIso(str.lexeme, true)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
@@ -293,8 +294,9 @@ pub const Lexer = struct {
                 const w = self.src[ident_start..self.idx];
                 if (std.ascii.eqlIgnoreCase(w, "DATETIME")) {
                     self.skipSeparators();
-                    if (self.idx < self.src.len and self.src[self.idx] == '"') {
-                        const str = self.scanStringAny('"');
+                    if (self.idx < self.src.len and (self.src[self.idx] == '"' or self.src[self.idx] == '\'')) {
+                        const ldt_quote = self.src[self.idx];
+                        const str = self.scanStringAny(ldt_quote);
                         if (!temporal.isDateTimeIso(str.lexeme, false)) return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };
                         return .{ .kind = .local_datetime_lit, .lexeme = str.lexeme, .loc = str.loc };
                     }
@@ -616,10 +618,11 @@ pub const Lexer = struct {
     }
 
     pub fn nextAfterKeyword(self: *Lexer, kind: t.TokenKind) t.Token {
-        // Support DATE"..." / DATETIME"..." immediately after keyword
+        // Support DATE"..." / DATETIME"..." / DATE'...' immediately after keyword
         self.skipSeparators();
-        if (self.idx < self.src.len and self.src[self.idx] == '"') {
-            const str = self.scanStringAny('"');
+        if (self.idx < self.src.len and (self.src[self.idx] == '"' or self.src[self.idx] == '\'')) {
+            const nak_quote = self.src[self.idx];
+            const str = self.scanStringAny(nak_quote);
             if (kind == .DATE or kind == .date_lit) {
                 if (!temporal.isDateStrict(str.lexeme)) {
                     return .{ .kind = .invalid, .lexeme = str.lexeme, .loc = str.loc };

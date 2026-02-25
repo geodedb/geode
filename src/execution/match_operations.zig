@@ -294,14 +294,15 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, curre
 
     // Handle RETURN clause
     if (q.ret.items.len > 0) {
-        // Check if RETURN uses count(*) aggregation
+        // Check if RETURN uses count(*) aggregation — only for count(*), not count(variable)
         if (q.ret.items.len == 1 and q.ret.items[0].expr == .Call) {
             const call = q.ret.items[0].expr.Call;
-            // Check if it's a count function
-            if (call.callee.* == .Ident and
+            const is_count_star = call.callee.* == .Ident and
                 (std.mem.eql(u8, call.callee.Ident.orig, "count") or
-                    std.mem.eql(u8, call.callee.Ident.orig, "COUNT")))
-            {
+                    std.mem.eql(u8, call.callee.Ident.orig, "COUNT")) and
+                call.args.len == 1 and call.args[0].* == .Ident and
+                std.mem.eql(u8, call.args[0].Ident.orig, "*");
+            if (is_count_star) {
                 // Return the total count
                 var columns = try allocator.alloc([]const u8, 1);
                 columns[0] = try allocator.dupe(u8, q.ret.items[0].alias orelse "count");

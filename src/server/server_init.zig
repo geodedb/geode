@@ -89,6 +89,14 @@ pub const InitContext = struct {
                 sm.graph_persist_password = &graphPersistPassword;
             }
         }
+
+        // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-003; FEATURE="PeriodicHmacVerification"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
+        // Start periodic HMAC verification AFTER all pointer fixups.
+        // The thread captures `self` by pointer, so it must not be started until
+        // the AuthGraphManager is at its final memory location.
+        if (self.auth_graph_mgr) |agm| {
+            agm.startPeriodicVerification(&agm.hmac_key, 5);
+        }
     }
 
     pub fn deinit(self: *InitContext) void {
@@ -294,8 +302,12 @@ pub fn initialize(
             }
 
             // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-003; FEATURE="PeriodicHmacVerification"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
-            // Start background thread to re-verify HMAC chain every 5 minutes
-            agm.startPeriodicVerification(&kr.key, 5);
+            // NOTE: Do NOT start periodic verification here. `agm` is a stack local
+            // that will be moved by value into `agm_storage` and then again when
+            // InitContext is returned. The thread captures `self` by pointer, so
+            // starting it here creates a dangling pointer.  The thread is started
+            // in fixupSelfPointers() after the struct reaches its final location.
+            agm.hmac_key = kr.key;
 
             break :agm_blk agm;
         }

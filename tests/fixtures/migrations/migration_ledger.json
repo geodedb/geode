@@ -1,0 +1,1 @@
+{"baseline_fingerprint":14037138416687337835,"rows":[{"version":1,"name":"001_seed.gql","applied":true,"checksum_prefix":"5ae0a4c"},{"version":2,"name":"002_add_index.gql","applied":true,"checksum_prefix":"e9a2023"}],"metrics":{"applied_total":2,"failed_total":0,"drift_detected_total":0}}
