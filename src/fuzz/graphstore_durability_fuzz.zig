@@ -7,7 +7,9 @@ test "graphstore durability fuzz recovery invariants" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    graph_store.setDataDirOverride(allocator, tmp.dir_path);
+    const dir_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(dir_path);
+    graph_store.setDataDirOverride(allocator, dir_path);
     defer graph_store.setDataDirOverride(allocator, null);
 
     // Build a small graph and persist.

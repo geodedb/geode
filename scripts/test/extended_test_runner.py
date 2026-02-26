@@ -71,6 +71,10 @@ def run_test(
                 client_config = cli_config.get("client", {})
                 if isinstance(client_config, dict) and client_config.get("timeout_ms"):
                     test_timeout_seconds = max(5, client_config.get("timeout_ms", 10000) // 1000)
+            if spec_config.get("default_timeout_ms"):
+                test_timeout_seconds = max(5, spec_config["default_timeout_ms"] // 1000)
+        if isinstance(test_case, dict) and test_case.get("timeout_ms"):
+            test_timeout_seconds = max(5, test_case["timeout_ms"] // 1000)
         print(f"  [DEBUG] shell cmd={test_command_str}, timeout={test_timeout_seconds}s")
         try:
             result = subprocess.run(
@@ -635,13 +639,46 @@ def run_test(
                             setup_processed.insert(insert_pos, "--data-dir")
                             setup_processed.insert(insert_pos + 1, spec_data_dir)
 
+                # Apply label suffixing to setup stdin for test isolation
+                # This mirrors the label suffixing applied to setup args (lines ~548-570)
+                if setup_stdin and not skip_isolation:
+                    import re as re_setup_stdin
+
+                    label_pattern_setup = r":([A-Z][a-zA-Z0-9_]*)"
+                    label_matches_setup = list(re_setup_stdin.finditer(label_pattern_setup, setup_stdin))
+                    label_replacements_setup = {}
+                    for match in label_matches_setup:
+                        old_label = match.group(1)
+                        if old_label.upper() in [
+                            "ORDER",
+                            "BY",
+                            "ASC",
+                            "DESC",
+                            "NULL",
+                            "TRUE",
+                            "FALSE",
+                            "AND",
+                            "OR",
+                            "NOT",
+                        ]:
+                            continue
+                        new_label = f"{old_label}_{test_id}"
+                        label_replacements_setup[f":{old_label}"] = f":{new_label}"
+                    for old, new in label_replacements_setup.items():
+                        setup_stdin = setup_stdin.replace(old, new)
+
                 setup_result = subprocess.run(
                     [binary] + setup_processed,
                     input=setup_stdin,
                     capture_output=True,
                     encoding="utf-8",
                     errors="replace",  # Handle binary debug output gracefully
-                    timeout=10,  # Allow more time for QUIC connection setup
+                    timeout=max(
+                        10,
+                        spec_config.get("default_timeout_ms", 10000) // 1000
+                        if spec_config and isinstance(spec_config, dict)
+                        else 10,
+                    ),
                 )
                 if setup_result.returncode != 0:
                     # Include stderr in error message for debugging
@@ -666,6 +703,12 @@ def run_test(
             client_config = cli_config.get("client", {})
             if isinstance(client_config, dict) and client_config.get("timeout_ms"):
                 test_timeout_seconds = max(5, client_config.get("timeout_ms", 10000) // 1000)
+        # Check spec-level default_timeout_ms (overrides the hardcoded 10s default)
+        if spec_config.get("default_timeout_ms"):
+            test_timeout_seconds = max(5, spec_config["default_timeout_ms"] // 1000)
+    # Per-test timeout_ms takes highest priority
+    if isinstance(test_case, dict) and test_case.get("timeout_ms"):
+        test_timeout_seconds = max(5, test_case["timeout_ms"] // 1000)
 
     # Debug: print timeout being used
     if os.environ.get("DEBUG_TIMEOUT"):
@@ -722,7 +765,7 @@ def run_test(
         stdin_content = fix_surrogate_pairs(stdin_content)
 
     # Inject unique identifiers for test isolation if stdin contains certain patterns
-    if stdin_content:
+    if stdin_content and not skip_isolation:
         # Replace common test names with unique versions to avoid conflicts
         stdin_content = stdin_content.replace("'Test'", f"'Test_{test_id}'")
         stdin_content = stdin_content.replace("'Unique'", f"'Unique_{test_id}'")
@@ -740,6 +783,24 @@ def run_test(
             new_index_name = f"{old_index_name}_{test_id}"
             replacements[f"INDEX {old_index_name}"] = f"INDEX {new_index_name}"
         for old, new in replacements.items():
+            stdin_content = stdin_content.replace(old, new)
+
+        # Add unique suffixes to labels/types in stdin for test isolation
+        # This mirrors the label suffixing applied to command args (lines ~321-335)
+        # Without this, MERGE via stdin creates nodes with unsuffixed labels while
+        # MATCH via args looks for suffixed labels, causing count mismatches.
+        label_pattern = r":([A-Z][a-zA-Z0-9_]*)"
+        label_matches = list(re.finditer(label_pattern, stdin_content))
+        label_replacements = {}
+        for match in label_matches:
+            old_label = match.group(1)
+            # Skip common GQL keywords that look like labels
+            if old_label.upper() in ["ORDER", "BY", "ASC", "DESC", "NULL", "TRUE", "FALSE", "AND", "OR", "NOT"]:
+                continue
+            new_label = f"{old_label}_{test_id}"
+            # Use full match with colon to avoid partial word replacements
+            label_replacements[f":{old_label}"] = f":{new_label}"
+        for old, new in label_replacements.items():
             stdin_content = stdin_content.replace(old, new)
 
     # Add --non-interactive for shell commands when stdin is used
@@ -1429,6 +1490,63 @@ def main():
                         setup_args = setup_item.get("args", [])
                         setup_stdin = setup_item.get("stdin", None)
                         setup_expect = setup_item.get("expect", {})
+
+                        # Apply label suffixing to spec-level setup args for test isolation
+                        # This ensures labels created in setup match the suffixed labels used by tests
+                        import re as re_spec_setup
+
+                        setup_args_processed = []
+                        for sa in setup_args:
+                            if not isinstance(sa, str):
+                                setup_args_processed.append(sa)
+                                continue
+                            processed_sa = sa
+                            label_pattern_spec = r":([A-Z][a-zA-Z0-9_]*)"
+                            label_matches_spec = list(re_spec_setup.finditer(label_pattern_spec, processed_sa))
+                            label_replacements_spec = {}
+                            for m in label_matches_spec:
+                                old_label = m.group(1)
+                                if old_label.upper() in [
+                                    "ORDER",
+                                    "BY",
+                                    "ASC",
+                                    "DESC",
+                                    "NULL",
+                                    "TRUE",
+                                    "FALSE",
+                                    "AND",
+                                    "OR",
+                                    "NOT",
+                                ]:
+                                    continue
+                                label_replacements_spec[f":{old_label}"] = f":{old_label}_{spec_id}"
+                            for old, new in label_replacements_spec.items():
+                                processed_sa = processed_sa.replace(old, new)
+                            setup_args_processed.append(processed_sa)
+                        setup_args = setup_args_processed
+
+                        # Apply label suffixing to spec-level setup stdin for test isolation
+                        if setup_stdin:
+                            label_matches_stdin = list(re_spec_setup.finditer(r":([A-Z][a-zA-Z0-9_]*)", setup_stdin))
+                            label_replacements_stdin = {}
+                            for m in label_matches_stdin:
+                                old_label = m.group(1)
+                                if old_label.upper() in [
+                                    "ORDER",
+                                    "BY",
+                                    "ASC",
+                                    "DESC",
+                                    "NULL",
+                                    "TRUE",
+                                    "FALSE",
+                                    "AND",
+                                    "OR",
+                                    "NOT",
+                                ]:
+                                    continue
+                                label_replacements_stdin[f":{old_label}"] = f":{old_label}_{spec_id}"
+                            for old, new in label_replacements_stdin.items():
+                                setup_stdin = setup_stdin.replace(old, new)
 
                         # Build command for setup
                         setup_cmd = [binary] + setup_args

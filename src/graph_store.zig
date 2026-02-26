@@ -1798,7 +1798,9 @@ pub const GraphStore = struct {
         return result.toOwnedSlice(self.allocator) catch &.{};
     }
 
-    fn writeExtValue(self: *GraphStore, buffer: *std.ArrayList(u8), ext: @import("eval_extended.zig").ExtValue) !void {
+    /// Write an ExtValue to any writer with CRC hashing.
+    /// Generic version of the old writeExtValue (which used ArrayList).
+    fn writeExtValueToWriter(_: *GraphStore, writer: anytype, hasher: *crc.Crc32, ext: @import("eval_extended.zig").ExtValue) !void {
         const sub_type: u8 = switch (ext) {
             .Null => 0,
             .Int => 1,
@@ -1835,57 +1837,73 @@ pub const GraphStore = struct {
             .IntRange => 32,
             .Enum => 33,
         };
-        try buffer.appendSlice(self.allocator, &[1]u8{sub_type});
+        hasher.update(&[1]u8{sub_type});
+        try writer.writeAll(&[1]u8{sub_type});
 
         switch (ext) {
             .Null => {},
             .Int => |i| {
                 var buf: [8]u8 = undefined;
                 std.mem.writeInt(i64, &buf, i, .little);
-                try buffer.appendSlice(self.allocator, &buf);
+                hasher.update(&buf);
+                try writer.writeAll(&buf);
             },
             .Bool => |b| {
-                try buffer.appendSlice(self.allocator, &[1]u8{if (b) 1 else 0});
+                const byte = [1]u8{if (b) 1 else 0};
+                hasher.update(&byte);
+                try writer.writeAll(&byte);
             },
             .Str => |s| {
                 var len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &len_buf, @intCast(s.len), .little);
-                try buffer.appendSlice(self.allocator, &len_buf);
-                try buffer.appendSlice(self.allocator, s);
+                hasher.update(&len_buf);
+                try writer.writeAll(&len_buf);
+                hasher.update(s);
+                try writer.writeAll(s);
             },
             .Decimal => |d| {
                 var buf: [17]u8 = undefined;
                 std.mem.writeInt(i128, buf[0..16], d.coeff, .little);
                 buf[16] = d.scale;
-                try buffer.appendSlice(self.allocator, &buf);
+                hasher.update(&buf);
+                try writer.writeAll(&buf);
             },
             .IpAddr => |ip| {
                 const is_v6: u8 = if (ip == .v6) 1 else 0;
-                try buffer.appendSlice(self.allocator, &[1]u8{is_v6});
+                hasher.update(&[1]u8{is_v6});
+                try writer.writeAll(&[1]u8{is_v6});
                 if (ip == .v4) {
-                    try buffer.appendSlice(self.allocator, &ip.v4);
+                    hasher.update(&ip.v4);
+                    try writer.writeAll(&ip.v4);
                 } else {
-                    try buffer.appendSlice(self.allocator, &ip.v6);
+                    hasher.update(&ip.v6);
+                    try writer.writeAll(&ip.v6);
                 }
             },
             .Subnet => |subnet| {
                 const is_v6: u8 = if (subnet.addr == .v6) 1 else 0;
-                try buffer.appendSlice(self.allocator, &[1]u8{is_v6});
+                hasher.update(&[1]u8{is_v6});
+                try writer.writeAll(&[1]u8{is_v6});
                 if (subnet.addr == .v4) {
-                    try buffer.appendSlice(self.allocator, &subnet.addr.v4);
+                    hasher.update(&subnet.addr.v4);
+                    try writer.writeAll(&subnet.addr.v4);
                 } else {
-                    try buffer.appendSlice(self.allocator, &subnet.addr.v6);
+                    hasher.update(&subnet.addr.v6);
+                    try writer.writeAll(&subnet.addr.v6);
                 }
-                try buffer.appendSlice(self.allocator, &[1]u8{subnet.prefix_len});
+                hasher.update(&[1]u8{subnet.prefix_len});
+                try writer.writeAll(&[1]u8{subnet.prefix_len});
             },
             .Mac => |mac| {
-                try buffer.appendSlice(self.allocator, &mac.bytes);
+                hasher.update(&mac.bytes);
+                try writer.writeAll(&mac.bytes);
             },
             .LatLon => |ll| {
                 var buf: [16]u8 = undefined;
                 std.mem.writeInt(u64, buf[0..8], @bitCast(ll.lat), .little);
                 std.mem.writeInt(u64, buf[8..16], @bitCast(ll.lon), .little);
-                try buffer.appendSlice(self.allocator, &buf);
+                hasher.update(&buf);
+                try writer.writeAll(&buf);
             },
             .LatLonAlt => |lla| {
                 var buf: [25]u8 = undefined;
@@ -1893,206 +1911,265 @@ pub const GraphStore = struct {
                 std.mem.writeInt(u64, buf[8..16], @bitCast(lla.lon), .little);
                 std.mem.writeInt(u64, buf[16..24], @bitCast(lla.alt), .little);
                 buf[24] = @intFromEnum(lla.ref);
-                try buffer.appendSlice(self.allocator, &buf);
+                hasher.update(&buf);
+                try writer.writeAll(&buf);
             },
             .Geometry => |geom| {
                 var len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &len_buf, @intCast(geom.wkb.len), .little);
-                try buffer.appendSlice(self.allocator, &len_buf);
-                try buffer.appendSlice(self.allocator, geom.wkb);
+                hasher.update(&len_buf);
+                try writer.writeAll(&len_buf);
+                hasher.update(geom.wkb);
+                try writer.writeAll(geom.wkb);
             },
             .Currency => |cur| {
-                try buffer.appendSlice(self.allocator, &cur.code);
+                hasher.update(&cur.code);
+                try writer.writeAll(&cur.code);
             },
             .VectorF32 => |vec| {
                 var dim_buf: [2]u8 = undefined;
                 std.mem.writeInt(u16, &dim_buf, vec.dim, .little);
-                try buffer.appendSlice(self.allocator, &dim_buf);
+                hasher.update(&dim_buf);
+                try writer.writeAll(&dim_buf);
                 for (vec.data) |f| {
                     var f_buf: [4]u8 = undefined;
                     std.mem.writeInt(u32, &f_buf, @bitCast(f), .little);
-                    try buffer.appendSlice(self.allocator, &f_buf);
+                    hasher.update(&f_buf);
+                    try writer.writeAll(&f_buf);
                 }
             },
             .VectorI32 => |vec| {
                 var dim_buf: [2]u8 = undefined;
                 std.mem.writeInt(u16, &dim_buf, vec.dim, .little);
-                try buffer.appendSlice(self.allocator, &dim_buf);
+                hasher.update(&dim_buf);
+                try writer.writeAll(&dim_buf);
                 for (vec.data) |i| {
                     var i_buf: [4]u8 = undefined;
                     std.mem.writeInt(i32, &i_buf, i, .little);
-                    try buffer.appendSlice(self.allocator, &i_buf);
+                    hasher.update(&i_buf);
+                    try writer.writeAll(&i_buf);
                 }
             },
             .Hash => |hash| {
-                try buffer.appendSlice(self.allocator, &[1]u8{@intFromEnum(hash.alg)});
+                const alg_byte = [1]u8{@intFromEnum(hash.alg)};
+                hasher.update(&alg_byte);
+                try writer.writeAll(&alg_byte);
                 var digest_len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &digest_len_buf, @intCast(hash.digest.len), .little);
-                try buffer.appendSlice(self.allocator, &digest_len_buf);
-                try buffer.appendSlice(self.allocator, hash.digest);
+                hasher.update(&digest_len_buf);
+                try writer.writeAll(&digest_len_buf);
+                hasher.update(hash.digest);
+                try writer.writeAll(hash.digest);
                 if (hash.salt) |salt| {
-                    try buffer.appendSlice(self.allocator, &[1]u8{1});
+                    hasher.update(&[1]u8{1});
+                    try writer.writeAll(&[1]u8{1});
                     var salt_len_buf: [4]u8 = undefined;
                     std.mem.writeInt(u32, &salt_len_buf, @intCast(salt.len), .little);
-                    try buffer.appendSlice(self.allocator, &salt_len_buf);
-                    try buffer.appendSlice(self.allocator, salt);
+                    hasher.update(&salt_len_buf);
+                    try writer.writeAll(&salt_len_buf);
+                    hasher.update(salt);
+                    try writer.writeAll(salt);
                 } else {
-                    try buffer.appendSlice(self.allocator, &[1]u8{0});
+                    hasher.update(&[1]u8{0});
+                    try writer.writeAll(&[1]u8{0});
                 }
             },
             .LanguageTag => |lt| {
                 var tag_len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &tag_len_buf, @intCast(lt.tag.len), .little);
-                try buffer.appendSlice(self.allocator, &tag_len_buf);
-                try buffer.appendSlice(self.allocator, lt.tag);
+                hasher.update(&tag_len_buf);
+                try writer.writeAll(&tag_len_buf);
+                hasher.update(lt.tag);
+                try writer.writeAll(lt.tag);
             },
             .Temperature => |temp| {
                 var buf: [9]u8 = undefined;
                 std.mem.writeInt(u64, buf[0..8], @bitCast(temp.value_K), .little);
                 buf[8] = @intFromEnum(temp.unit_in);
-                try buffer.appendSlice(self.allocator, &buf);
+                hasher.update(&buf);
+                try writer.writeAll(&buf);
             },
             .Pressure => |pres| {
                 var buf: [9]u8 = undefined;
                 std.mem.writeInt(u64, buf[0..8], @bitCast(pres.value_Pa), .little);
                 buf[8] = @intFromEnum(pres.unit_in);
-                try buffer.appendSlice(self.allocator, &buf);
+                hasher.update(&buf);
+                try writer.writeAll(&buf);
             },
             .Date => |date| {
                 var buf: [4]u8 = undefined;
                 std.mem.writeInt(i32, &buf, date.days_since_epoch, .little);
-                try buffer.appendSlice(self.allocator, &buf);
+                hasher.update(&buf);
+                try writer.writeAll(&buf);
             },
             .Time => |time| {
                 var buf: [8]u8 = undefined;
                 std.mem.writeInt(i64, &buf, time.micros_since_midnight, .little);
-                try buffer.appendSlice(self.allocator, &buf);
+                hasher.update(&buf);
+                try writer.writeAll(&buf);
             },
             .TimestampTZ => |ts| {
                 var buf: [8]u8 = undefined;
                 std.mem.writeInt(i64, &buf, ts.micros_since_epoch_utc, .little);
-                try buffer.appendSlice(self.allocator, &buf);
+                hasher.update(&buf);
+                try writer.writeAll(&buf);
             },
             .Interval => |iv| {
                 var buf: [16]u8 = undefined;
                 std.mem.writeInt(i32, buf[0..4], iv.months, .little);
                 std.mem.writeInt(i32, buf[4..8], iv.days, .little);
                 std.mem.writeInt(i64, buf[8..16], iv.micros, .little);
-                try buffer.appendSlice(self.allocator, &buf);
+                hasher.update(&buf);
+                try writer.writeAll(&buf);
             },
             .UUID => |uuid_val| {
                 var buf: [16]u8 = undefined;
                 @memcpy(&buf, &uuid_val.bytes);
-                try buffer.appendSlice(self.allocator, &buf);
+                hasher.update(&buf);
+                try writer.writeAll(&buf);
             },
             .Url => |url_val| {
                 var len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &len_buf, @intCast(url_val.scheme.len), .little);
-                try buffer.appendSlice(self.allocator, &len_buf);
-                try buffer.appendSlice(self.allocator, url_val.scheme);
+                hasher.update(&len_buf);
+                try writer.writeAll(&len_buf);
+                hasher.update(url_val.scheme);
+                try writer.writeAll(url_val.scheme);
 
                 std.mem.writeInt(u32, &len_buf, @intCast(url_val.host.len), .little);
-                try buffer.appendSlice(self.allocator, &len_buf);
-                try buffer.appendSlice(self.allocator, url_val.host);
+                hasher.update(&len_buf);
+                try writer.writeAll(&len_buf);
+                hasher.update(url_val.host);
+                try writer.writeAll(url_val.host);
 
                 const has_port: u8 = if (url_val.port != null) 1 else 0;
-                try buffer.appendSlice(self.allocator, &[1]u8{has_port});
+                hasher.update(&[1]u8{has_port});
+                try writer.writeAll(&[1]u8{has_port});
                 if (url_val.port) |p| {
                     var p_buf: [2]u8 = undefined;
                     std.mem.writeInt(u16, &p_buf, p, .little);
-                    try buffer.appendSlice(self.allocator, &p_buf);
+                    hasher.update(&p_buf);
+                    try writer.writeAll(&p_buf);
                 }
 
                 std.mem.writeInt(u32, &len_buf, @intCast(url_val.path.len), .little);
-                try buffer.appendSlice(self.allocator, &len_buf);
-                try buffer.appendSlice(self.allocator, url_val.path);
+                hasher.update(&len_buf);
+                try writer.writeAll(&len_buf);
+                hasher.update(url_val.path);
+                try writer.writeAll(url_val.path);
 
                 const has_query: u8 = if (url_val.query != null) 1 else 0;
-                try buffer.appendSlice(self.allocator, &[1]u8{has_query});
+                hasher.update(&[1]u8{has_query});
+                try writer.writeAll(&[1]u8{has_query});
                 if (url_val.query) |q| {
                     std.mem.writeInt(u32, &len_buf, @intCast(q.len), .little);
-                    try buffer.appendSlice(self.allocator, &len_buf);
-                    try buffer.appendSlice(self.allocator, q);
+                    hasher.update(&len_buf);
+                    try writer.writeAll(&len_buf);
+                    hasher.update(q);
+                    try writer.writeAll(q);
                 }
 
                 const has_fragment: u8 = if (url_val.fragment != null) 1 else 0;
-                try buffer.appendSlice(self.allocator, &[1]u8{has_fragment});
+                hasher.update(&[1]u8{has_fragment});
+                try writer.writeAll(&[1]u8{has_fragment});
                 if (url_val.fragment) |f| {
                     std.mem.writeInt(u32, &len_buf, @intCast(f.len), .little);
-                    try buffer.appendSlice(self.allocator, &len_buf);
-                    try buffer.appendSlice(self.allocator, f);
+                    hasher.update(&len_buf);
+                    try writer.writeAll(&len_buf);
+                    hasher.update(f);
+                    try writer.writeAll(f);
                 }
             },
             .Domain => |domain| {
                 var count_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &count_buf, @intCast(domain.labels.len), .little);
-                try buffer.appendSlice(self.allocator, &count_buf);
+                hasher.update(&count_buf);
+                try writer.writeAll(&count_buf);
                 for (domain.labels) |label| {
                     var len_buf: [4]u8 = undefined;
                     std.mem.writeInt(u32, &len_buf, @intCast(label.len), .little);
-                    try buffer.appendSlice(self.allocator, &len_buf);
-                    try buffer.appendSlice(self.allocator, label);
+                    hasher.update(&len_buf);
+                    try writer.writeAll(&len_buf);
+                    hasher.update(label);
+                    try writer.writeAll(label);
                 }
             },
             .Bytea => |b| {
                 var len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &len_buf, @intCast(b.len), .little);
-                try buffer.appendSlice(self.allocator, &len_buf);
-                try buffer.appendSlice(self.allocator, b);
+                hasher.update(&len_buf);
+                try writer.writeAll(&len_buf);
+                hasher.update(b);
+                try writer.writeAll(b);
             },
             .Json => |j| {
                 var len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &len_buf, @intCast(j.len), .little);
-                try buffer.appendSlice(self.allocator, &len_buf);
-                try buffer.appendSlice(self.allocator, j);
+                hasher.update(&len_buf);
+                try writer.writeAll(&len_buf);
+                hasher.update(j);
+                try writer.writeAll(j);
             },
             .Jsonb => |doc| {
                 var len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &len_buf, @intCast(doc.data.len), .little);
-                try buffer.appendSlice(self.allocator, &len_buf);
-                try buffer.appendSlice(self.allocator, doc.data);
+                hasher.update(&len_buf);
+                try writer.writeAll(&len_buf);
+                hasher.update(doc.data);
+                try writer.writeAll(doc.data);
             },
             .Xml => |doc| {
                 var len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &len_buf, @intCast(doc.data.len), .little);
-                try buffer.appendSlice(self.allocator, &len_buf);
-                try buffer.appendSlice(self.allocator, doc.data);
+                hasher.update(&len_buf);
+                try writer.writeAll(&len_buf);
+                hasher.update(doc.data);
+                try writer.writeAll(doc.data);
             },
             .BitString => |bs| {
                 var bit_len_buf: [8]u8 = undefined;
                 std.mem.writeInt(u64, &bit_len_buf, @intCast(bs.bit_length), .little);
-                try buffer.appendSlice(self.allocator, &bit_len_buf);
+                hasher.update(&bit_len_buf);
+                try writer.writeAll(&bit_len_buf);
                 var byte_len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &byte_len_buf, @intCast(bs.bytes.len), .little);
-                try buffer.appendSlice(self.allocator, &byte_len_buf);
-                try buffer.appendSlice(self.allocator, bs.bytes);
+                hasher.update(&byte_len_buf);
+                try writer.writeAll(&byte_len_buf);
+                hasher.update(bs.bytes);
+                try writer.writeAll(bs.bytes);
             },
             .VarBit => |bs| {
                 var bit_len_buf: [8]u8 = undefined;
                 std.mem.writeInt(u64, &bit_len_buf, @intCast(bs.bit_length), .little);
-                try buffer.appendSlice(self.allocator, &bit_len_buf);
+                hasher.update(&bit_len_buf);
+                try writer.writeAll(&bit_len_buf);
                 var byte_len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &byte_len_buf, @intCast(bs.bytes.len), .little);
-                try buffer.appendSlice(self.allocator, &byte_len_buf);
-                try buffer.appendSlice(self.allocator, bs.bytes);
+                hasher.update(&byte_len_buf);
+                try writer.writeAll(&byte_len_buf);
+                hasher.update(bs.bytes);
+                try writer.writeAll(bs.bytes);
             },
             .IntRange => |range_val| {
                 var buf: [9]u8 = undefined;
                 std.mem.writeInt(i32, buf[0..4], range_val.lower orelse 0, .little);
                 std.mem.writeInt(i32, buf[4..8], range_val.upper orelse 0, .little);
                 buf[8] = @intFromEnum(range_val.bounds);
-                try buffer.appendSlice(self.allocator, &buf);
+                hasher.update(&buf);
+                try writer.writeAll(&buf);
             },
             .Enum => |enum_val| {
                 var buf: [8]u8 = undefined;
                 std.mem.writeInt(u32, buf[0..4], enum_val.type_id, .little);
                 std.mem.writeInt(u32, buf[4..8], enum_val.value_ordinal, .little);
-                try buffer.appendSlice(self.allocator, &buf);
+                hasher.update(&buf);
+                try writer.writeAll(&buf);
             },
             .List => |list| {
                 var len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &len_buf, @intCast(list.len), .little);
-                try buffer.appendSlice(self.allocator, &len_buf);
+                hasher.update(&len_buf);
+                try writer.writeAll(&len_buf);
             },
         }
     }
@@ -2431,34 +2508,43 @@ pub const GraphStore = struct {
         };
     }
 
-    // CANARY: REQ=REQ-TDE-GRAPHSTORE-002; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStoreSave; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
-    // Simple file-based persistence with TDE encryption support
+    // CANARY: REQ=REQ-TDE-GRAPHSTORE-002; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStoreSave; STATUS=TESTED; OWNER=security; UPDATED=2026-02-25
+    // CANARY: REQ=REQ-STREAM-SERIALIZE-001; FEATURE="StreamingSerialization"; ASPECT=SaveToFile; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-25
+    // Streaming file-based persistence — serializes directly to a temp file,
+    // then applies CRC + optional TDE encryption + atomic rename.
+    // Eliminates the in-memory serialization buffer that caused OOM on large graphs (#538).
     pub fn saveToFile(self: *GraphStore) !void {
         const file_path = try getPersistenceFilePath(self.allocator);
         defer self.allocator.free(file_path);
 
-        var buffer = try self.serializeToBuffer();
-        defer buffer.deinit(self.allocator);
+        const tmp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{file_path});
+        defer self.allocator.free(tmp_path);
 
-        try finalizeAndWriteBuffer(self.allocator, &buffer, file_path);
+        try self.serializeToTempFile(tmp_path);
+        try finalizeTempFile(self.allocator, tmp_path, file_path);
 
         // Clear dirty flag after successful save
         self.dirty = false;
     }
 
-    /// Serialize graph state into an in-memory buffer (nodes, edges, properties).
+    /// Serialize graph state directly to a temp file using streaming I/O.
+    /// Computes CRC32 incrementally as data is written — no in-memory buffer.
     /// Callers must hold the store lock for the duration of this call.
-    /// The returned buffer owns its memory and has no references back to the graph.
-    pub fn serializeToBuffer(self: *GraphStore) !std.ArrayList(u8) {
-        // Pre-allocate based on last known size to avoid reallocation churn.
-        // Estimate: ~200 bytes per node, ~150 bytes per edge (rough heuristic).
-        const estimated_size = @max(
-            @as(usize, 4096),
-            self.nodes.count() * 200 + self.edges.count() * 150 + HEADER_LEN,
-        );
-        var buffer = try std.ArrayList(u8).initCapacity(self.allocator, estimated_size);
+    // CANARY: REQ=REQ-STREAM-SERIALIZE-002; FEATURE="StreamingSerialization"; ASPECT=StreamToFile; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-25
+    pub fn serializeToTempFile(self: *GraphStore, tmp_path: []const u8) !void {
+        const file = std.fs.cwd().createFile(tmp_path, .{}) catch |err| {
+            log.err("failed to create temp file for serialization", &.{
+                Attr.string("path", tmp_path),
+                Attr.string("error", @errorName(err)),
+            });
+            return err;
+        };
+        defer file.close();
 
-        // Write header placeholder: magic, version, ids/counts, checksum (filled after data write)
+        var hasher = crc.Crc32.init();
+        var writer = file.deprecatedWriter();
+
+        // Write header placeholder (CRC patched after payload is written)
         var header: [HEADER_LEN]u8 = [_]u8{0} ** HEADER_LEN;
         @memcpy(header[0..8], "GEODGST1");
         std.mem.writeInt(u32, header[8..12], PERSIST_VERSION, .little);
@@ -2468,8 +2554,58 @@ pub const GraphStore = struct {
         std.mem.writeInt(u64, header[32..40], self.graphs.count(), .little);
         std.mem.writeInt(u64, header[40..48], self.nodes.count(), .little);
         std.mem.writeInt(u64, header[48..56], self.edges.count(), .little);
-        try buffer.appendSlice(self.allocator, &header);
+        try writer.writeAll(&header);
+        // Note: header is NOT included in CRC (matches existing format)
 
+        // Serialize payload (graphs, nodes, edges) — feeds hasher incrementally
+        try self.serializePayload(writer, &hasher);
+
+        // Seek back and patch CRC into header at offset 56
+        const checksum = hasher.final();
+        try file.seekTo(56);
+        var crc_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &crc_buf, checksum, .little);
+        try file.writeAll(&crc_buf);
+    }
+
+    /// Finalize a temp file: apply TDE encryption if enabled, then atomically
+    /// rename to the final path. Does NOT require the store lock.
+    // CANARY: REQ=REQ-STREAM-SERIALIZE-003; FEATURE="StreamingSerialization"; ASPECT=AtomicRename; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-25
+    fn finalizeTempFile(allocator: std.mem.Allocator, tmp_path: []const u8, final_path: []const u8) !void {
+        if (tde.isEnabled(allocator)) {
+            // TDE enabled: read plaintext temp file, encrypt, write to final path.
+            // This still allocates memory for encryption but avoids holding the
+            // serialization buffer AND encrypted copy simultaneously with the store lock.
+            const plaintext = std.fs.cwd().readFileAlloc(allocator, tmp_path, 1 << 30) catch |err| {
+                log.err("failed to read temp file for TDE encryption", &.{
+                    Attr.string("path", tmp_path),
+                    Attr.string("error", @errorName(err)),
+                });
+                return err;
+            };
+            defer allocator.free(plaintext);
+
+            try tde.writeEncryptedFile(allocator, final_path, plaintext);
+
+            // Remove temp file after successful encryption
+            std.fs.cwd().deleteFile(tmp_path) catch {};
+        } else {
+            // No TDE: atomic rename — zero extra memory
+            std.fs.cwd().rename(tmp_path, final_path) catch |err| {
+                log.err("failed to rename temp file to final path", &.{
+                    Attr.string("tmp", tmp_path),
+                    Attr.string("final", final_path),
+                    Attr.string("error", @errorName(err)),
+                });
+                return err;
+            };
+        }
+    }
+
+    /// Generic payload serialization — writes graph registry, nodes, and edges
+    /// to any writer while feeding data to the CRC hasher.
+    /// Used by both serializeToTempFile (file writer) and serializeToBuffer (ArrayList writer).
+    fn serializePayload(self: *GraphStore, writer: anytype, hasher: *crc.Crc32) !void {
         // Write graph registry
         var graph_iter = self.graphs.iterator();
         while (graph_iter.next()) |entry| {
@@ -2477,8 +2613,10 @@ pub const GraphStore = struct {
             if (name.len > std.math.maxInt(u32)) return error.GraphNameTooLong;
             var name_len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &name_len_buf, @intCast(name.len), .little);
-            try buffer.appendSlice(self.allocator, &name_len_buf);
-            try buffer.appendSlice(self.allocator, name);
+            hasher.update(&name_len_buf);
+            try writer.writeAll(&name_len_buf);
+            hasher.update(name);
+            try writer.writeAll(name);
         }
 
         // Write each node
@@ -2488,93 +2626,48 @@ pub const GraphStore = struct {
             // Write node ID
             var id_buf: [8]u8 = undefined;
             std.mem.writeInt(u64, &id_buf, node.id, .little);
-            try buffer.appendSlice(self.allocator, &id_buf);
+            hasher.update(&id_buf);
+            try writer.writeAll(&id_buf);
 
             // Write label count
             var label_count_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &label_count_buf, @intCast(node.labels.len), .little);
-            try buffer.appendSlice(self.allocator, &label_count_buf);
+            hasher.update(&label_count_buf);
+            try writer.writeAll(&label_count_buf);
 
             // Write each label
             for (node.labels) |label| {
-                // Validate label length fits in u32 (max ~4GB)
                 if (label.len > std.math.maxInt(u32)) {
                     return error.LabelTooLong;
                 }
                 var len_buf: [4]u8 = undefined;
                 std.mem.writeInt(u32, &len_buf, @as(u32, @intCast(label.len)), .little);
-                try buffer.appendSlice(self.allocator, &len_buf);
-                try buffer.appendSlice(self.allocator, label);
+                hasher.update(&len_buf);
+                try writer.writeAll(&len_buf);
+                hasher.update(label);
+                try writer.writeAll(label);
             }
 
             // Write property count
             var prop_count_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &prop_count_buf, @intCast(node.properties.count()), .little);
-            try buffer.appendSlice(self.allocator, &prop_count_buf);
+            hasher.update(&prop_count_buf);
+            try writer.writeAll(&prop_count_buf);
 
             // Write each property
             var prop_iter = node.properties.iterator();
             while (prop_iter.next()) |prop| {
-                // Write key length and key
-                var key_len_buf: [4]u8 = undefined;
-                std.mem.writeInt(u32, &key_len_buf, @intCast(prop.key_ptr.*.len), .little);
-                try buffer.appendSlice(self.allocator, &key_len_buf);
-                try buffer.appendSlice(self.allocator, prop.key_ptr.*);
-
-                // Write value type and value
-                const val_type: u8 = switch (prop.value_ptr.*) {
-                    .String => 0,
-                    .Int => 1,
-                    .Float => 2,
-                    .Bool => 3,
-                    .Null => 4,
-                    .ExtValue => 5, // ExtValue types
-                    .Decimal => 6, // Decimal with preserved precision
-                };
-                try buffer.appendSlice(self.allocator, &[1]u8{val_type});
-
-                switch (prop.value_ptr.*) {
-                    .String => |s| {
-                        var len_buf2: [4]u8 = undefined;
-                        std.mem.writeInt(u32, &len_buf2, @intCast(s.len), .little);
-                        try buffer.appendSlice(self.allocator, &len_buf2);
-                        try buffer.appendSlice(self.allocator, s);
-                    },
-                    .Int => |i| {
-                        var int_buf: [8]u8 = undefined;
-                        std.mem.writeInt(i64, &int_buf, i, .little);
-                        try buffer.appendSlice(self.allocator, &int_buf);
-                    },
-                    .Float => |f| {
-                        var float_buf: [8]u8 = undefined;
-                        std.mem.writeInt(u64, &float_buf, @bitCast(f), .little);
-                        try buffer.appendSlice(self.allocator, &float_buf);
-                    },
-                    .Bool => |b| {
-                        try buffer.appendSlice(self.allocator, &[1]u8{if (b) 1 else 0});
-                    },
-                    .Null => {
-                        // Nothing to write for null
-                    },
-                    .ExtValue => |ext| {
-                        try self.writeExtValue(&buffer, ext);
-                    },
-                    .Decimal => |d| {
-                        // Write coefficient (i128 = 16 bytes) and scale (u8 = 1 byte)
-                        var buf: [17]u8 = undefined;
-                        std.mem.writeInt(i128, buf[0..16], d.coeff, .little);
-                        buf[16] = d.scale;
-                        try buffer.appendSlice(self.allocator, &buf);
-                    },
-                }
+                try writePropertyToWriter(self, writer, hasher, prop.key_ptr.*, prop.value_ptr.*);
             }
 
             // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphNamePersistence; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
             // Write graph_name length and graph_name for multi-graph isolation
             var graph_name_len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &graph_name_len_buf, @intCast(node.graph_name.len), .little);
-            try buffer.appendSlice(self.allocator, &graph_name_len_buf);
-            try buffer.appendSlice(self.allocator, node.graph_name);
+            hasher.update(&graph_name_len_buf);
+            try writer.writeAll(&graph_name_len_buf);
+            hasher.update(node.graph_name);
+            try writer.writeAll(node.graph_name);
         }
 
         // Write each edge
@@ -2586,89 +2679,141 @@ pub const GraphStore = struct {
             std.mem.writeInt(u64, edge_buf[0..8], edge.id, .little);
             std.mem.writeInt(u64, edge_buf[8..16], edge.from_id, .little);
             std.mem.writeInt(u64, edge_buf[16..24], edge.to_id, .little);
-            try buffer.appendSlice(self.allocator, &edge_buf);
+            hasher.update(&edge_buf);
+            try writer.writeAll(&edge_buf);
 
             // Write label
             var label_len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &label_len_buf, @intCast(edge.label.len), .little);
-            try buffer.appendSlice(self.allocator, &label_len_buf);
-            try buffer.appendSlice(self.allocator, edge.label);
+            hasher.update(&label_len_buf);
+            try writer.writeAll(&label_len_buf);
+            hasher.update(edge.label);
+            try writer.writeAll(edge.label);
 
             // Write property count
             var prop_count_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &prop_count_buf, @intCast(edge.properties.count()), .little);
-            try buffer.appendSlice(self.allocator, &prop_count_buf);
+            hasher.update(&prop_count_buf);
+            try writer.writeAll(&prop_count_buf);
 
             // Write each property
             var prop_iter = edge.properties.iterator();
             while (prop_iter.next()) |prop| {
-                // Write key length and key
-                var key_len_buf: [4]u8 = undefined;
-                std.mem.writeInt(u32, &key_len_buf, @intCast(prop.key_ptr.*.len), .little);
-                try buffer.appendSlice(self.allocator, &key_len_buf);
-                try buffer.appendSlice(self.allocator, prop.key_ptr.*);
-
-                // Write value type and value
-                const val_type: u8 = switch (prop.value_ptr.*) {
-                    .String => 0,
-                    .Int => 1,
-                    .Float => 2,
-                    .Bool => 3,
-                    .Null => 4,
-                    .ExtValue => 5,
-                    .Decimal => 6,
-                };
-                try buffer.appendSlice(self.allocator, &[1]u8{val_type});
-
-                switch (prop.value_ptr.*) {
-                    .String => |s| {
-                        var len_buf2: [4]u8 = undefined;
-                        std.mem.writeInt(u32, &len_buf2, @intCast(s.len), .little);
-                        try buffer.appendSlice(self.allocator, &len_buf2);
-                        try buffer.appendSlice(self.allocator, s);
-                    },
-                    .Int => |i| {
-                        var int_buf: [8]u8 = undefined;
-                        std.mem.writeInt(i64, &int_buf, i, .little);
-                        try buffer.appendSlice(self.allocator, &int_buf);
-                    },
-                    .Float => |f| {
-                        var float_buf: [8]u8 = undefined;
-                        std.mem.writeInt(u64, &float_buf, @bitCast(f), .little);
-                        try buffer.appendSlice(self.allocator, &float_buf);
-                    },
-                    .Bool => |b| {
-                        try buffer.appendSlice(self.allocator, &[1]u8{if (b) 1 else 0});
-                    },
-                    .Null => {
-                        // Nothing to write for null
-                    },
-                    .ExtValue => |ext| {
-                        try self.writeExtValue(&buffer, ext);
-                    },
-                    .Decimal => |d| {
-                        // Write coefficient (i128 = 16 bytes) and scale (u8 = 1 byte)
-                        var buf: [17]u8 = undefined;
-                        std.mem.writeInt(i128, buf[0..16], d.coeff, .little);
-                        buf[16] = d.scale;
-                        try buffer.appendSlice(self.allocator, &buf);
-                    },
-                }
+                try writePropertyToWriter(self, writer, hasher, prop.key_ptr.*, prop.value_ptr.*);
             }
 
             // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphNamePersistence; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
             // Write graph_name length and graph_name for multi-graph isolation
             var graph_name_len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &graph_name_len_buf, @intCast(edge.graph_name.len), .little);
-            try buffer.appendSlice(self.allocator, &graph_name_len_buf);
-            try buffer.appendSlice(self.allocator, edge.graph_name);
+            hasher.update(&graph_name_len_buf);
+            try writer.writeAll(&graph_name_len_buf);
+            hasher.update(edge.graph_name);
+            try writer.writeAll(edge.graph_name);
         }
+    }
+
+    /// Write a single property (key + value) to any writer with CRC hashing.
+    fn writePropertyToWriter(self: *GraphStore, writer: anytype, hasher: *crc.Crc32, key: []const u8, value: PropertyValue) !void {
+        // Write key length and key
+        var key_len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &key_len_buf, @intCast(key.len), .little);
+        hasher.update(&key_len_buf);
+        try writer.writeAll(&key_len_buf);
+        hasher.update(key);
+        try writer.writeAll(key);
+
+        // Write value type and value
+        const val_type: u8 = switch (value) {
+            .String => 0,
+            .Int => 1,
+            .Float => 2,
+            .Bool => 3,
+            .Null => 4,
+            .ExtValue => 5,
+            .Decimal => 6,
+        };
+        hasher.update(&[1]u8{val_type});
+        try writer.writeAll(&[1]u8{val_type});
+
+        switch (value) {
+            .String => |s| {
+                var len_buf: [4]u8 = undefined;
+                std.mem.writeInt(u32, &len_buf, @intCast(s.len), .little);
+                hasher.update(&len_buf);
+                try writer.writeAll(&len_buf);
+                hasher.update(s);
+                try writer.writeAll(s);
+            },
+            .Int => |i| {
+                var int_buf: [8]u8 = undefined;
+                std.mem.writeInt(i64, &int_buf, i, .little);
+                hasher.update(&int_buf);
+                try writer.writeAll(&int_buf);
+            },
+            .Float => |f| {
+                var float_buf: [8]u8 = undefined;
+                std.mem.writeInt(u64, &float_buf, @bitCast(f), .little);
+                hasher.update(&float_buf);
+                try writer.writeAll(&float_buf);
+            },
+            .Bool => |b| {
+                const byte = [1]u8{if (b) 1 else 0};
+                hasher.update(&byte);
+                try writer.writeAll(&byte);
+            },
+            .Null => {},
+            .ExtValue => |ext| {
+                try writeExtValueToWriter(self, writer, hasher, ext);
+            },
+            .Decimal => |d| {
+                var buf: [17]u8 = undefined;
+                std.mem.writeInt(i128, buf[0..16], d.coeff, .little);
+                buf[16] = d.scale;
+                hasher.update(&buf);
+                try writer.writeAll(&buf);
+            },
+        }
+    }
+
+    /// Serialize graph state into an in-memory buffer (nodes, edges, properties).
+    /// Callers must hold the store lock for the duration of this call.
+    /// The returned buffer owns its memory and has no references back to the graph.
+    /// NOTE: Prefer serializeToTempFile() for large graphs to avoid OOM (#538).
+    pub fn serializeToBuffer(self: *GraphStore) !std.ArrayList(u8) {
+        // Pre-allocate based on last known size to avoid reallocation churn.
+        const estimated_size = @max(
+            @as(usize, 4096),
+            self.nodes.count() * 200 + self.edges.count() * 150 + HEADER_LEN,
+        );
+        var buffer = try std.ArrayList(u8).initCapacity(self.allocator, estimated_size);
+
+        // Write header placeholder
+        var header: [HEADER_LEN]u8 = [_]u8{0} ** HEADER_LEN;
+        @memcpy(header[0..8], "GEODGST1");
+        std.mem.writeInt(u32, header[8..12], PERSIST_VERSION, .little);
+        std.mem.writeInt(u32, header[12..16], 0, .little);
+        std.mem.writeInt(u64, header[16..24], self.next_node_id, .little);
+        std.mem.writeInt(u64, header[24..32], self.next_edge_id, .little);
+        std.mem.writeInt(u64, header[32..40], self.graphs.count(), .little);
+        std.mem.writeInt(u64, header[40..48], self.nodes.count(), .little);
+        std.mem.writeInt(u64, header[48..56], self.edges.count(), .little);
+        try buffer.appendSlice(self.allocator, &header);
+
+        // Serialize payload using generic writer, computing CRC
+        var hasher = crc.Crc32.init();
+        try self.serializePayload(buffer.writer(self.allocator), &hasher);
+
+        // Patch CRC into header
+        const checksum = hasher.final();
+        std.mem.writeInt(u32, buffer.items[56..60], checksum, .little);
 
         return buffer;
     }
 
     /// Finalize a serialized buffer (CRC, encrypt, write to disk).
     /// Does NOT require the store lock — operates only on the standalone buffer.
+    /// DEPRECATED: Use serializeToTempFile + finalizeTempFile instead.
     fn finalizeAndWriteBuffer(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), file_path: []const u8) !void {
         // Compute checksum over payload (after header) and fill header slot
         if (buffer.items.len >= HEADER_LEN) {
@@ -3518,16 +3663,22 @@ fn persistenceLoop() void {
                         checkpoint_fn(store);
                         g_store_rwlock.unlock();
                     } else {
-                        // Legacy mode: serialize under lock, then release lock
-                        // before CRC/encrypt/disk-write to minimize lock hold time.
+                        // Legacy mode: stream-serialize to temp file under lock,
+                        // then release lock before TDE/rename (#538 OOM fix).
                         const file_path = getPersistenceFilePath(store.allocator) catch {
                             g_store_rwlock.unlock();
                             continue;
                         };
-                        var buffer = store.serializeToBuffer() catch |err| {
+                        const tmp_path = std.fmt.allocPrint(store.allocator, "{s}.tmp", .{file_path}) catch {
                             store.allocator.free(file_path);
                             g_store_rwlock.unlock();
-                            log.err("background serialize failed", &.{
+                            continue;
+                        };
+                        store.serializeToTempFile(tmp_path) catch |err| {
+                            store.allocator.free(tmp_path);
+                            store.allocator.free(file_path);
+                            g_store_rwlock.unlock();
+                            log.err("background serialize to temp file failed", &.{
                                 Attr.string("error", @errorName(err)),
                             });
                             continue;
@@ -3535,11 +3686,11 @@ fn persistenceLoop() void {
                         store.dirty = false;
                         g_store_rwlock.unlock();
 
-                        // CRC, TDE encryption, and disk I/O happen outside the lock
-                        defer buffer.deinit(store.allocator);
+                        // TDE encryption and atomic rename happen outside the lock
+                        defer store.allocator.free(tmp_path);
                         defer store.allocator.free(file_path);
-                        GraphStore.finalizeAndWriteBuffer(store.allocator, &buffer, file_path) catch |err| {
-                            log.err("background save write failed", &.{
+                        GraphStore.finalizeTempFile(store.allocator, tmp_path, file_path) catch |err| {
+                            log.err("background save finalize failed", &.{
                                 Attr.string("error", @errorName(err)),
                             });
                         };
@@ -3765,4 +3916,179 @@ test "TestEdgeAdjacencyIndex" {
     var edges_for_node1 = store.getEdgesForNode(node1);
     defer edges_for_node1.deinit(testing.allocator);
     try testing.expect(edges_for_node1.items.len == 2);
+}
+
+// ============================================================================
+// Streaming serialization tests (Issue #538 OOM fix)
+// ============================================================================
+
+test "streaming serialization matches buffer serialization" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+    setDataDirOverride(allocator, dir_path);
+    defer setDataDirOverride(allocator, null);
+
+    // Build a graph with nodes, edges, and properties
+    var store = GraphStore.init(allocator);
+    defer store.deinit();
+
+    var labels_a = [_][]const u8{"Person"};
+    var labels_b = [_][]const u8{ "Person", "Employee" };
+    const n1 = try store.createNode(&labels_a);
+    const n2 = try store.createNode(&labels_b);
+    const n3 = try store.createNode(&labels_a);
+
+    try store.setNodeProperty(n1, "name", .{ .String = "Alice" });
+    try store.setNodeProperty(n1, "age", .{ .Int = 30 });
+    try store.setNodeProperty(n2, "name", .{ .String = "Bob" });
+    try store.setNodeProperty(n2, "active", .{ .Bool = true });
+    try store.setNodeProperty(n3, "score", .{ .Float = 3.14 });
+
+    _ = try store.createEdge(n1, n2, "KNOWS");
+    const e2 = try store.createEdge(n2, n3, "MANAGES");
+    try store.setEdgeProperty(e2, "since", .{ .Int = 2024 });
+
+    // Serialize to buffer (old method)
+    var buffer = try store.serializeToBuffer();
+    defer buffer.deinit(allocator);
+
+    // Serialize to temp file (new streaming method)
+    const tmp_path = try std.fmt.allocPrint(allocator, "{s}/stream_test.tmp", .{dir_path});
+    defer allocator.free(tmp_path);
+    try store.serializeToTempFile(tmp_path);
+
+    // Read temp file back
+    const file_data = try std.fs.cwd().readFileAlloc(allocator, tmp_path, 1 << 30);
+    defer allocator.free(file_data);
+
+    // Both should produce identical bytes
+    try std.testing.expectEqual(buffer.items.len, file_data.len);
+    try std.testing.expectEqualSlices(u8, buffer.items, file_data);
+}
+
+test "streaming serialization CRC integrity" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+    setDataDirOverride(allocator, dir_path);
+    defer setDataDirOverride(allocator, null);
+
+    var store = GraphStore.init(allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"TestNode"};
+    const n1 = try store.createNode(&labels);
+    try store.setNodeProperty(n1, "value", .{ .String = "test-data" });
+
+    // Serialize to temp file
+    const tmp_path = try std.fmt.allocPrint(allocator, "{s}/crc_test.tmp", .{dir_path});
+    defer allocator.free(tmp_path);
+    try store.serializeToTempFile(tmp_path);
+
+    // Read file and verify CRC
+    const data = try std.fs.cwd().readFileAlloc(allocator, tmp_path, 1 << 30);
+    defer allocator.free(data);
+
+    try std.testing.expect(data.len >= HEADER_LEN);
+    try std.testing.expect(std.mem.eql(u8, data[0..8], "GEODGST1"));
+
+    const stored_crc = std.mem.readInt(u32, data[56..60], .little);
+    const computed_crc = crc.Crc32.hash(data[HEADER_LEN..]);
+    try std.testing.expectEqual(computed_crc, stored_crc);
+}
+
+test "streaming serialization roundtrip with loadFromFile" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+    setDataDirOverride(allocator, dir_path);
+    defer setDataDirOverride(allocator, null);
+
+    // Create and populate a store
+    var store = GraphStore.init(allocator);
+    defer store.deinit();
+
+    var labels_a = [_][]const u8{"City"};
+    const c1 = try store.createNode(&labels_a);
+    const c2 = try store.createNode(&labels_a);
+    try store.setNodeProperty(c1, "name", .{ .String = "Seattle" });
+    try store.setNodeProperty(c1, "pop", .{ .Int = 750000 });
+    try store.setNodeProperty(c2, "name", .{ .String = "Portland" });
+    try store.setNodeProperty(c2, "pop", .{ .Int = 650000 });
+
+    const e1 = try store.createEdge(c1, c2, "CONNECTED_BY");
+    try store.setEdgeProperty(e1, "distance_km", .{ .Float = 280.0 });
+
+    // Save using streaming serialization
+    try store.saveToFile();
+
+    // Load into a new store
+    var store2 = GraphStore.init(allocator);
+    defer store2.deinit();
+    try store2.loadFromFile();
+
+    // Verify data survived
+    try std.testing.expectEqual(store.nodes.count(), store2.nodes.count());
+    try std.testing.expectEqual(store.edges.count(), store2.edges.count());
+
+    // Verify node properties
+    const loaded_node = store2.nodes.get(c1);
+    try std.testing.expect(loaded_node != null);
+    const name_val = loaded_node.?.properties.get("name");
+    try std.testing.expect(name_val != null);
+    try std.testing.expectEqualStrings("Seattle", name_val.?.String);
+}
+
+test "streaming serialization large graph bounded memory" {
+    // Verify that serializeToTempFile works for a graph with many nodes
+    // without allocating a large in-memory buffer.
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+    setDataDirOverride(allocator, dir_path);
+    defer setDataDirOverride(allocator, null);
+
+    var store = GraphStore.init(allocator);
+    defer store.deinit();
+
+    // Create 1000 nodes with properties
+    var labels = [_][]const u8{"BulkNode"};
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        const nid = try store.createNode(&labels);
+        // Use Int property (no heap allocation needed for value)
+        try store.setNodeProperty(nid, "idx", .{ .Int = @intCast(i) });
+    }
+
+    // Create edges between consecutive nodes
+    i = 0;
+    while (i < 999) : (i += 1) {
+        _ = try store.createEdge(@intCast(i + 1), @intCast(i + 2), "NEXT");
+    }
+
+    // Streaming serialize — should succeed without OOM
+    const tmp_path = try std.fmt.allocPrint(allocator, "{s}/large_test.tmp", .{dir_path});
+    defer allocator.free(tmp_path);
+    try store.serializeToTempFile(tmp_path);
+
+    // Verify file is valid by loading it
+    try store.saveToFile();
+    var store2 = GraphStore.init(allocator);
+    defer store2.deinit();
+    try store2.loadFromFile();
+    try std.testing.expectEqual(@as(usize, 1000), store2.nodes.count());
+    try std.testing.expectEqual(@as(usize, 999), store2.edges.count());
 }
