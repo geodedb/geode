@@ -239,7 +239,22 @@ pub fn initialize(
             });
             break :blk @as(u64, 0);
         };
-        _ = last_lsn;
+
+        // Issue #539: End-of-recovery checkpoint.
+        // After replay, immediately snapshot graph_store.dat and truncate the WAL.
+        // Without this, the WAL grows unboundedly across restarts and startup RSS
+        // scales with total historical mutations rather than current graph size.
+        if (last_lsn > 0) {
+            log.info("Writing end-of-recovery checkpoint after WAL replay", &.{
+                Attr.int("last_lsn", @intCast(last_lsn)),
+            });
+            w.checkpoint(store) catch |err| {
+                log.warn("End-of-recovery checkpoint failed, WAL will be replayed again on next restart", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+        }
+
         // Install mutation callback to capture future mutations in WAL
         wal.installMutationCallback();
         // Install persistence hooks for WAL-aware checkpoint behavior
