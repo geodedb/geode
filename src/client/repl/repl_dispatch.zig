@@ -611,7 +611,7 @@ pub const ClientSession = struct {
         var retry_count: usize = 0;
         const max_retries: usize = 100; // 100ms max wait
         while (retry_count < max_retries) : (retry_count += 1) {
-            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+            const response = self.connection.?.readLine(self.allocator, 0) catch |err| {
                 if (err == error.WouldBlock) {
                     std.Thread.sleep(1 * std.time.ns_per_ms);
                     continue;
@@ -845,7 +845,7 @@ pub const ClientSession = struct {
                 return error.Interrupted;
             }
 
-            const hello_ack = self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+            const hello_ack = self.connection.?.readLine(self.allocator, 0) catch |err| {
                 if (err == error.WouldBlock) {
                     std.Thread.sleep(50 * std.time.ns_per_ms);
                     continue;
@@ -915,7 +915,7 @@ pub const ClientSession = struct {
                 };
             }
 
-            break self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+            break self.connection.?.readLine(self.allocator, 0) catch |err| {
                 if (err == error.WouldBlock) {
                     std.Thread.sleep(50 * std.time.ns_per_ms);
                     continue;
@@ -1097,7 +1097,7 @@ pub const ClientSession = struct {
         // Heap-allocate the context so it survives if we detach the worker thread
         const ctx = self.allocator.create(ReadContext) catch {
             // Allocation failed, fall back to blocking read
-            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |read_err| {
+            const response = self.connection.?.readLine(self.allocator, 0) catch |read_err| {
                 return read_err;
             };
             try ResponseHandler.handle(self, response);
@@ -1113,7 +1113,7 @@ pub const ClientSession = struct {
         // Spawn worker thread to do the blocking read
         const worker = std.Thread.spawn(.{}, struct {
             fn run(c: *ReadContext) void {
-                const result = c.connection.readLine(c.allocator, 1 << 16) catch |err| {
+                const result = c.connection.readLine(c.allocator, 0) catch |err| {
                     // Check if we were abandoned before storing error
                     if (c.abandoned.load(.acquire)) {
                         // Main thread abandoned us, clean up and exit
@@ -1139,7 +1139,7 @@ pub const ClientSession = struct {
         }.run, .{ctx}) catch {
             // Thread spawn failed, free context and fall back to blocking read
             self.allocator.destroy(ctx);
-            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |read_err| {
+            const response = self.connection.?.readLine(self.allocator, 0) catch |read_err| {
                 return read_err;
             };
             try ResponseHandler.handle(self, response);
@@ -1210,7 +1210,7 @@ pub const ClientSession = struct {
                 return error.Interrupted;
             }
 
-            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+            const response = self.connection.?.readLine(self.allocator, 0) catch |err| {
                 if (err == error.WouldBlock) {
                     std.Thread.sleep(50 * std.time.ns_per_ms);
                     continue;
@@ -1357,7 +1357,7 @@ pub const ClientSession = struct {
                 }
             }
 
-            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+            const response = self.connection.?.readLine(self.allocator, 0) catch |err| {
                 if (err == error.WouldBlock) {
                     std.Thread.sleep(50 * std.time.ns_per_ms);
                     continue;
@@ -1413,7 +1413,7 @@ pub const ClientSession = struct {
                 return error.Interrupted;
             }
 
-            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+            const response = self.connection.?.readLine(self.allocator, 0) catch |err| {
                 if (err == error.WouldBlock) {
                     // Poll and wait before retrying (use shorter sleep to be more responsive)
                     std.Thread.sleep(25 * std.time.ns_per_ms);
@@ -1466,7 +1466,7 @@ pub const ClientSession = struct {
                 if (checkForInterrupt()) {
                     return error.Interrupted;
                 }
-                break self.connection.?.readLine(self.allocator, 1 << 20) catch |err| {
+                break self.connection.?.readLine(self.allocator, 0) catch |err| {
                     if (err == error.WouldBlock) {
                         std.Thread.sleep(50 * std.time.ns_per_ms);
                         continue;
@@ -1580,7 +1580,7 @@ pub const ClientSession = struct {
             const max_polls: usize = 20; // 100ms timeout per message (20 * 5ms)
 
             const response = while (poll_count < max_polls) : (poll_count += 1) {
-                break self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+                break self.connection.?.readLine(self.allocator, 0) catch |err| {
                     if (err == error.WouldBlock) {
                         std.Thread.sleep(5 * std.time.ns_per_ms);
                         continue;
@@ -1688,7 +1688,7 @@ pub const ClientSession = struct {
             }
 
             // Try to read one message quickly
-            const response = self.connection.?.readLine(self.allocator, 1 << 16) catch |err| {
+            const response = self.connection.?.readLine(self.allocator, 0) catch |err| {
                 if (err == error.WouldBlock) {
                     empty_count += 1;
                     // Stop after 3 consecutive empty reads (150ms of no data)
