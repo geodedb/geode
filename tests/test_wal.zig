@@ -252,7 +252,7 @@ test "WAL: multiple record types roundtrip" {
     try testing.expect(score == null);
 }
 
-test "WAL: needsCheckpoint respects threshold" {
+test "WAL: needsCheckpoint respects byte threshold" {
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
@@ -275,6 +275,175 @@ test "WAL: needsCheckpoint respects threshold" {
     try testing.expect(w.needsCheckpoint(1, 0));
     // With default threshold, shouldn't
     try testing.expect(!w.needsCheckpoint(wal_mod.CHECKPOINT_BYTE_THRESHOLD, 0));
+}
+
+test "WAL: needsCheckpoint respects time threshold" {
+    const allocator = testing.allocator;
+    const path = try getTempPath(allocator);
+    defer allocator.free(path);
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var w = try wal_mod.WriteAheadLog.init(allocator, path);
+    defer w.deinit();
+
+    // Write a record so bytes_since_checkpoint > 0
+    _ = try w.appendRecord(1, .{ .CreateNode = .{
+        .node_id = 1,
+        .graph_name = "default",
+        .labels = &.{},
+    } });
+
+    // Should NOT need checkpoint with very large time threshold (we just started)
+    try testing.expect(!w.needsCheckpoint(wal_mod.CHECKPOINT_BYTE_THRESHOLD, 999_999_999));
+
+    // Should need checkpoint with time threshold of 1ms (already elapsed)
+    // Set last_checkpoint_ms to the past to simulate time passing
+    w.last_checkpoint_ms = std.time.milliTimestamp() - 5000; // 5 seconds ago
+    try testing.expect(w.needsCheckpoint(wal_mod.CHECKPOINT_BYTE_THRESHOLD, 1000)); // 1s threshold
+
+    // Reset to now — should NOT trigger with 60s threshold
+    w.last_checkpoint_ms = std.time.milliTimestamp();
+    try testing.expect(!w.needsCheckpoint(wal_mod.CHECKPOINT_BYTE_THRESHOLD, 60_000));
+}
+
+test "WAL: needsCheckpoint time threshold ignored when no data written" {
+    const allocator = testing.allocator;
+    const path = try getTempPath(allocator);
+    defer allocator.free(path);
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var w = try wal_mod.WriteAheadLog.init(allocator, path);
+    defer w.deinit();
+
+    // No data written, even with time threshold exceeded — should NOT checkpoint
+    // (there's nothing to checkpoint)
+    w.last_checkpoint_ms = std.time.milliTimestamp() - 120_000; // 2 minutes ago
+    try testing.expect(!w.needsCheckpoint(wal_mod.CHECKPOINT_BYTE_THRESHOLD, 1000));
+}
+
+test "WAL: checkpoint resets time and byte counters" {
+    const allocator = testing.allocator;
+    const path = try getTempPath(allocator);
+    defer allocator.free(path);
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var store = graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+
+    var w = try wal_mod.WriteAheadLog.init(allocator, path);
+    defer w.deinit();
+
+    // Write records
+    _ = try w.appendRecord(1, .{ .CreateNode = .{
+        .node_id = 10,
+        .graph_name = "default",
+        .labels = &.{},
+    } });
+    _ = try w.appendRecord(1, .{ .CreateNode = .{
+        .node_id = 11,
+        .graph_name = "default",
+        .labels = &.{},
+    } });
+
+    // Verify bytes accumulated
+    try testing.expect(w.bytes_since_checkpoint > 0);
+
+    // Simulate old timestamp
+    w.last_checkpoint_ms = std.time.milliTimestamp() - 120_000;
+    const old_time = w.last_checkpoint_ms;
+
+    // Truncate (which is what checkpoint calls internally)
+    try w.truncate(2);
+
+    // Verify counters reset
+    try testing.expectEqual(@as(u64, 0), w.bytes_since_checkpoint);
+    try testing.expect(w.last_checkpoint_ms > old_time); // Time was reset to now
+
+    // After checkpoint, should NOT need another checkpoint
+    try testing.expect(!w.needsCheckpoint(1, 60_000));
+}
+
+test "WAL: time-based checkpoint triggers with small data below byte threshold" {
+    // This is the key regression test: even a small amount of WAL data
+    // should eventually be checkpointed based on time, not only bytes.
+    const allocator = testing.allocator;
+    const path = try getTempPath(allocator);
+    defer allocator.free(path);
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var w = try wal_mod.WriteAheadLog.init(allocator, path);
+    defer w.deinit();
+
+    // Write a single small record (far below 16MB byte threshold)
+    _ = try w.appendRecord(1, .{ .CreateNode = .{
+        .node_id = 1,
+        .graph_name = "default",
+        .labels = &.{"SmallNode"},
+    } });
+
+    // Verify below byte threshold
+    try testing.expect(w.bytes_since_checkpoint < wal_mod.CHECKPOINT_BYTE_THRESHOLD);
+
+    // With no time threshold, should NOT need checkpoint (bytes too low)
+    try testing.expect(!w.needsCheckpoint(wal_mod.CHECKPOINT_BYTE_THRESHOLD, 0));
+
+    // Simulate 61 seconds passing (beyond CHECKPOINT_INTERVAL_MS of 60s)
+    w.last_checkpoint_ms = std.time.milliTimestamp() - 61_000;
+
+    // NOW should need checkpoint due to time threshold
+    try testing.expect(w.needsCheckpoint(wal_mod.CHECKPOINT_BYTE_THRESHOLD, wal_mod.CHECKPOINT_INTERVAL_MS));
+}
+
+test "WAL: walNeedsCheckpointHook uses time threshold" {
+    const allocator = testing.allocator;
+    const path = try getTempPath(allocator);
+    defer allocator.free(path);
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    // Initialize global WAL
+    wal_mod.g_wal_storage = try wal_mod.WriteAheadLog.init(allocator, path);
+    wal_mod.g_wal = &wal_mod.g_wal_storage.?;
+    defer wal_mod.deinitGlobalWal();
+
+    // Install persistence hooks
+    wal_mod.installPersistenceHooks();
+
+    // Write a small record
+    const w = wal_mod.getGlobalWal().?;
+    _ = try w.appendRecord(1, .{ .CreateNode = .{
+        .node_id = 1,
+        .graph_name = "default",
+        .labels = &.{},
+    } });
+
+    // With recent checkpoint time, hook should return false (below byte threshold)
+    const needs_now = w.needsCheckpoint(wal_mod.CHECKPOINT_BYTE_THRESHOLD, wal_mod.CHECKPOINT_INTERVAL_MS);
+    try testing.expect(!needs_now);
+
+    // Simulate time passing
+    w.last_checkpoint_ms = std.time.milliTimestamp() - 120_000; // 2 minutes ago
+
+    // Now hook should return true (time threshold exceeded with pending data)
+    const needs_later = w.needsCheckpoint(wal_mod.CHECKPOINT_BYTE_THRESHOLD, wal_mod.CHECKPOINT_INTERVAL_MS);
+    try testing.expect(needs_later);
+}
+
+test "WAL: last_checkpoint_ms initialized on creation" {
+    const allocator = testing.allocator;
+    const path = try getTempPath(allocator);
+    defer allocator.free(path);
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    const before = std.time.milliTimestamp();
+
+    var w = try wal_mod.WriteAheadLog.init(allocator, path);
+    defer w.deinit();
+
+    const after = std.time.milliTimestamp();
+
+    // last_checkpoint_ms should be set to approximately now
+    try testing.expect(w.last_checkpoint_ms >= before);
+    try testing.expect(w.last_checkpoint_ms <= after);
 }
 
 test "WAL: LSN monotonically increasing" {

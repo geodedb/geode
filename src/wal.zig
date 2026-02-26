@@ -115,6 +115,7 @@ pub const WriteAheadLog = struct {
     current_lsn: u64,
     checkpoint_lsn: u64,
     bytes_since_checkpoint: u64,
+    last_checkpoint_ms: i64,
     lock: std.Thread.Mutex,
     file_path: []const u8,
     /// Non-null when WAL encryption is active (GEODE_WAL_KEY or GEODE_TDE_KEY set).
@@ -138,6 +139,7 @@ pub const WriteAheadLog = struct {
                     .current_lsn = 0,
                     .checkpoint_lsn = 0,
                     .bytes_since_checkpoint = 0,
+                    .last_checkpoint_ms = std.time.milliTimestamp(),
                     .lock = .{},
                     .file_path = owned_path,
                     .tde_key = wal_key,
@@ -201,6 +203,7 @@ pub const WriteAheadLog = struct {
             .current_lsn = last_lsn,
             .checkpoint_lsn = 0,
             .bytes_since_checkpoint = bytes_count,
+            .last_checkpoint_ms = std.time.milliTimestamp(),
             .lock = .{},
             .file_path = owned_path,
             .tde_key = wal_key,
@@ -493,6 +496,7 @@ pub const WriteAheadLog = struct {
 
         self.checkpoint_lsn = up_to_lsn;
         self.bytes_since_checkpoint = kept_bytes;
+        self.last_checkpoint_ms = std.time.milliTimestamp();
     }
 
     /// Perform a checkpoint: save full snapshot via store.saveToFile(), then truncate WAL.
@@ -510,12 +514,19 @@ pub const WriteAheadLog = struct {
         try self.truncate(checkpoint_at);
     }
 
-    /// Check if a checkpoint is needed based on thresholds
+    /// Check if a checkpoint is needed based on byte or time thresholds.
+    /// Returns true if bytes since last checkpoint exceed byte_threshold,
+    /// or if time since last checkpoint exceeds time_threshold_ms (when > 0).
     pub fn needsCheckpoint(self: *WriteAheadLog, byte_threshold: u64, time_threshold_ms: u64) bool {
         self.lock.lock();
         defer self.lock.unlock();
-        _ = time_threshold_ms; // Time-based check left to caller
-        return self.bytes_since_checkpoint >= byte_threshold;
+        if (self.bytes_since_checkpoint >= byte_threshold) return true;
+        if (time_threshold_ms > 0 and self.bytes_since_checkpoint > 0) {
+            const now = std.time.milliTimestamp();
+            const elapsed: u64 = @intCast(@max(0, now - self.last_checkpoint_ms));
+            return elapsed >= time_threshold_ms;
+        }
+        return false;
     }
 };
 
@@ -880,10 +891,10 @@ fn walSyncHook() void {
     }
 }
 
-/// Check if a full checkpoint is needed based on WAL byte threshold.
+/// Check if a full checkpoint is needed based on WAL byte or time threshold.
 fn walNeedsCheckpointHook() bool {
     if (g_wal) |w| {
-        return w.needsCheckpoint(CHECKPOINT_BYTE_THRESHOLD, 0);
+        return w.needsCheckpoint(CHECKPOINT_BYTE_THRESHOLD, CHECKPOINT_INTERVAL_MS);
     }
     return true; // If WAL not available, always checkpoint (legacy behavior)
 }
