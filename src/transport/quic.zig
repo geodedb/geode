@@ -14,6 +14,9 @@ const logging = @import("logging");
 const tlog = logging.scoped("transport");
 const Attr = logging.Attr;
 
+// DNS resolution for hostnames that the vendor QUIC library cannot resolve.
+const dns = @import("dns");
+
 // Import the QUIC modules through the vendor API which re-exports them
 const api = @import("vendor_quic");
 const Endpoint = api.QuicEndpoint;
@@ -757,6 +760,43 @@ pub const QuicStream = struct {
     }
 };
 
+/// Resolve a hostname to an IPv4 address string.
+/// If the host is already an IP address, returns it unchanged (no allocation).
+/// If it's a hostname, performs DNS resolution and returns an allocated IP string
+/// that the caller must free.
+fn resolveHostToIp(allocator: std.mem.Allocator, host: []const u8) !struct { ip: []const u8, allocated: bool } {
+    // Fast path: already an IP address.
+    if (std.net.Address.parseIp4(host, 0)) |_| {
+        return .{ .ip = host, .allocated = false };
+    } else |_| {}
+
+    // Try IPv6.
+    if (std.net.Address.parseIp6(host, 0)) |_| {
+        return .{ .ip = host, .allocated = false };
+    } else |_| {}
+
+    // DNS resolution needed.
+    var client = dns.Client.init(allocator) catch {
+        return error.InvalidAddress;
+    };
+    defer client.deinit();
+
+    var result = client.resolveA(host) catch {
+        return error.InvalidAddress;
+    };
+    defer result.deinit(allocator);
+
+    if (result.addresses.len > 0) {
+        const addr_bytes = result.addresses[0];
+        const ip_str = try std.fmt.allocPrint(allocator, "{d}.{d}.{d}.{d}", .{
+            addr_bytes[0], addr_bytes[1], addr_bytes[2], addr_bytes[3],
+        });
+        return .{ .ip = ip_str, .allocated = true };
+    }
+
+    return error.InvalidAddress;
+}
+
 pub const QuicClient = struct {
     allocator: std.mem.Allocator,
     /// Heap-allocated endpoint (via api.endpointInit / api.endpointDeinit).
@@ -802,9 +842,17 @@ pub const QuicClient = struct {
         else
             address;
 
+        // Resolve hostname to IP for the vendor QUIC library (which cannot resolve DNS).
+        // Keep the original hostname for TLS SNI verification.
+        const resolved = try resolveHostToIp(self.allocator, normalized_address);
+        defer if (resolved.allocated) self.allocator.free(resolved.ip);
+
         // Allocate QUIC config on the heap so the alpn_storage slice remains valid.
         const cfg = try self.allocator.create(VendorQuicConfig);
-        errdefer self.allocator.destroy(cfg);
+        errdefer {
+            self.allocator.destroy(cfg);
+            self.quic_config = null;
+        }
         // ALPN is stored in struct field to persist beyond this function call
         cfg.* = VendorQuicConfig{
             .version = .v1,
@@ -836,14 +884,13 @@ pub const QuicClient = struct {
         // Initialize client endpoint using api.endpointInit (heap-allocates Endpoint).
         self.endpoint = try api.endpointInit(&self.allocator, "0.0.0.0:0", cfg);
 
-        // Create server address string
-        const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ normalized_address, port });
+        // Create server address string using resolved IP.
+        const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ resolved.ip, port });
         defer self.allocator.free(server_addr);
 
-        // Connect to server using public API
-        // When allow_insecure is true, use "localhost" as SNI to match self-signed cert CN
-        const sni = if (allow_insecure) "localhost" else normalized_address;
-        self.connection = try api.connect(self.endpoint.?, server_addr, sni);
+        // Connect to server using public API.
+        // SNI always uses original hostname so server can match its certificate.
+        self.connection = try api.connect(self.endpoint.?, server_addr, normalized_address);
     }
 
     pub fn connectEx(self: *QuicClient, address: []const u8, port: u16, ca_cert_path: ?[]const u8, client_cert_path: ?[]const u8, client_key_path: ?[]const u8) !void {
@@ -854,9 +901,16 @@ pub const QuicClient = struct {
         else
             address;
 
+        // Resolve hostname to IP for the vendor QUIC library (which cannot resolve DNS).
+        const resolved = try resolveHostToIp(self.allocator, normalized_address);
+        defer if (resolved.allocated) self.allocator.free(resolved.ip);
+
         // Allocate QUIC config on the heap so the alpn_storage slice remains valid.
         const cfg = try self.allocator.create(VendorQuicConfig);
-        errdefer self.allocator.destroy(cfg);
+        errdefer {
+            self.allocator.destroy(cfg);
+            self.quic_config = null;
+        }
         cfg.* = VendorQuicConfig{
             .version = .v1,
             .alpn = &self.alpn_storage,
@@ -887,11 +941,11 @@ pub const QuicClient = struct {
         // Initialize client endpoint using api.endpointInit (heap-allocates Endpoint).
         self.endpoint = try api.endpointInit(&self.allocator, "0.0.0.0:0", cfg);
 
-        // Create server address string
-        const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ normalized_address, port });
+        // Create server address string using resolved IP.
+        const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ resolved.ip, port });
         defer self.allocator.free(server_addr);
 
-        // Connect to server using public API
+        // Connect to server using public API. SNI uses original hostname for TLS.
         self.connection = try api.connect(self.endpoint.?, server_addr, normalized_address);
     }
 
