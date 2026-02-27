@@ -786,11 +786,10 @@ fn resolveHostToIp(allocator: std.mem.Allocator, host: []const u8) !struct { ip:
     };
     defer result.deinit(allocator);
 
+    // ResolveResult.addresses is []const []const u8 — each entry is an
+    // IP address string like "172.176.193.24" (not binary bytes).
     if (result.addresses.len > 0) {
-        const addr_bytes = result.addresses[0];
-        const ip_str = try std.fmt.allocPrint(allocator, "{d}.{d}.{d}.{d}", .{
-            addr_bytes[0], addr_bytes[1], addr_bytes[2], addr_bytes[3],
-        });
+        const ip_str = try allocator.dupe(u8, result.addresses[0]);
         return .{ .ip = ip_str, .allocated = true };
     }
 
