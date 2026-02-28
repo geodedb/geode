@@ -40,13 +40,9 @@ fn resolveHostToAddress(allocator: std.mem.Allocator, host: []const u8, port: u1
 
         // Use the first resolved address
         if (result.addresses.len > 0) {
-            // Convert the IPv4 bytes to a string and parse to Address
-            const addr_bytes = result.addresses[0];
-            var ip_buf: [16]u8 = undefined;
-            const ip_str = std.fmt.bufPrint(&ip_buf, "{d}.{d}.{d}.{d}", .{
-                addr_bytes[0], addr_bytes[1], addr_bytes[2], addr_bytes[3],
-            }) catch return error.FormatError;
-            return std.net.Address.parseIp4(ip_str, port) catch error.InvalidAddress;
+            // ResolveResult.addresses is []const []const u8 — each entry is an
+            // IP address string like "172.176.193.24" (not binary bytes).
+            return std.net.Address.parseIp4(result.addresses[0], port) catch error.InvalidAddress;
         }
 
         return error.NoAddressFound;

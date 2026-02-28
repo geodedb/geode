@@ -111,8 +111,8 @@
 
         // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
         .dns = .{
-            .url = "git+https://gitlab.com/devnw/zig/dns.git#9b5c05a5ba3222faa9d44ff7a8312fbbd06691b9",
-            .hash = "dns-0.1.0-x4U-zbNRDAD49_qce0R1hK-yyWk3LTfMDZhRCY7gLi7M",
+            .url = "git+https://gitlab.com/devnw/zig/dns.git#976fedf07befad3724fa66092677b9e5242a58fc",
+            .hash = "dns-0.1.0-x4U-zalRDABmEIaJxV8eY7UqOlpvJRJIbtIQ-CSgCzVL",
         },
 
         // Spice - Fork/join parallelism for recursive divide-and-conquer algorithms
