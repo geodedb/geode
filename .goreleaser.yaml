@@ -514,15 +514,15 @@ nfpms:
     file_info:
       mode: 0755
 
-  # Issue #379: Use zstd compression for .deb packages (supported by dpkg 1.21.18+,
-  # i.e., Ubuntu 22.04+, Debian 12+). This is the modern default that newer
-  # dpkg/apt toolchains expect. For older systems, users should use the .tar.gz
-  # binary archives instead.
+  # Issue #379: Use xz compression for .deb packages (supported everywhere,
+  # standard for modern dpkg). Previously used zstd but GoReleaser v2.13.3/nfpm
+  # has a bug where the AR archive member offset can be misaligned by 2 bytes,
+  # producing a corrupt .deb (bad archive header magic). xz avoids this.
   deb:
-    compression: zstd
+    compression: xz
 
   rpm:
-    compression: zstd
+    compression: xz
 
   overrides:
     deb:
