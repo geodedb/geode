@@ -56,6 +56,55 @@ pub fn getMtlsProvider() ?*mtls_provider.MtlsProvider {
     return g_mtls_provider;
 }
 
+/// GAP-0001: Check whether a single AST statement mutates the graph store.
+/// Used to decide between shared (read) and exclusive (write) locking for
+/// concurrent QUIC query execution.  Conservative: unknown / ambiguous
+/// statement types (e.g. CALL) are treated as mutations.
+fn isMutatingStatement(stmt: *const gql_ast.Statement) bool {
+    return switch (stmt.*) {
+        // DML mutations
+        .Create, .Insert, .InsertValue, .Merge, .Delete => true,
+        // DDL mutations
+        .CreateIndex, .DropIndex => true,
+        .CreateConstraint, .DropConstraint => true,
+        .CreateSchema, .DropSchema => true,
+        .CreateGraph, .DropGraph => true,
+        .CreateGraphType, .DropGraphType => true,
+        // Backup/restore mutate on-disk state
+        .Backup, .Restore => true,
+        // CALL may invoke mutating procedures / subqueries
+        .Call => |c| switch (c) {
+            .Procedure => true,
+            .Subquery => |sq| isMutatingStatement(sq.statement),
+        },
+        // PROFILE executes its inner statement — check it
+        .Profile => |prof| isMutatingStatement(prof.query),
+        // EXPLAIN never executes
+        .Explain => false,
+        // START TRANSACTION with a body can contain mutations
+        .StartTransaction => |txn| blk: {
+            if (txn.body) |body| {
+                for (body) |*body_stmt| {
+                    if (isMutatingStatement(body_stmt)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        // Everything else (Query, Union, For, Show, etc.) is read-only
+        else => false,
+    };
+}
+
+/// GAP-0001: Check whether any statement in a parsed program mutates the
+/// graph store.  When true the caller must hold the exclusive write lock
+/// instead of the shared read lock.
+fn isMutatingProgram(program: *const gql_ast.Program) bool {
+    for (program.statements) |*stmt| {
+        if (isMutatingStatement(stmt)) return true;
+    }
+    return false;
+}
+
 /// Build a protobuf error response with status and error payload
 fn buildErrorResponse(
     allocator: std.mem.Allocator,
@@ -550,9 +599,9 @@ pub fn handleQuicConnection(
         };
 
         // Process protobuf message and emit responses directly.
-        // Acquire store lock to prevent race with background persistence thread.
-        graph_store.acquireStoreLock();
-        defer graph_store.releaseStoreLock();
+        // Lock acquisition moved inside handleClientMessage so that mutations
+        // acquire the exclusive write lock while reads use the shared lock.
+        // (GAP-0001: fixes data race on concurrent MERGE/CREATE/DELETE)
         handleClientMessage(gpa, &state, stream, msg, disable_estimates, compact_profile, memcurve_profile) catch |err| {
             log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
             // Best-effort error response — stream may already be closed
@@ -1013,6 +1062,30 @@ fn handleClientMessage(
                 try appendFlagIfMissing(gpa, &flags, "GB03:DoubleSolidusComment");
             }
 
+            // GAP-0001: Acquire the appropriate store lock based on query type.
+            // Mutations (CREATE, MERGE, DELETE, INSERT, DDL) take the exclusive
+            // write lock to prevent concurrent HashMap rehash races (CWE-362).
+            // Read-only queries take the shared lock so they can run in parallel.
+            // EXPLAIN never executes, so no lock is needed.
+            const needs_store_lock = analysis.kind != .explain;
+            const is_mutation = needs_store_lock and isMutatingProgram(&parse_result.program);
+            if (needs_store_lock) {
+                if (is_mutation) {
+                    graph_store.acquireStoreWriteLock();
+                } else {
+                    graph_store.acquireStoreLock();
+                }
+            }
+            defer {
+                if (needs_store_lock) {
+                    if (is_mutation) {
+                        graph_store.releaseStoreWriteLock();
+                    } else {
+                        graph_store.releaseStoreLock();
+                    }
+                }
+            }
+
             switch (analysis.kind) {
                 .explain => {
                     const explain_msg = try explain_payload.buildExplainPayload(
@@ -1220,6 +1293,9 @@ fn handleClientMessage(
         },
         .rollback => |_| {
             if (state.in_txn) {
+                // GAP-0001: Rollback reverses mutations on the store — needs exclusive lock
+                graph_store.acquireStoreWriteLock();
+                defer graph_store.releaseStoreWriteLock();
                 const store = graph_store.getGlobalStore(gpa);
                 txn_undo_log.getGlobalUndoLog(gpa).rollback(store) catch |err| {
                     log.err("Rollback failed", &.{Attr.string("error", @errorName(err))});
@@ -1268,6 +1344,10 @@ fn handleClientMessage(
             }
         },
         .backup => |backup_req| {
+            // GAP-0001: Backup reads from the store — shared lock prevents
+            // concurrent mutations from corrupting the snapshot.
+            graph_store.acquireStoreLock();
+            defer graph_store.releaseStoreLock();
             const backup_dir = "./server_backups";
             const backup_config = BackupConfig{
                 .compression = if (backup_req.compress) .zstd else .none,
@@ -1345,6 +1425,9 @@ fn handleClientMessage(
             }
         },
         .restore => |restore_req| {
+            // GAP-0001: Restore mutates on-disk state — exclusive write lock
+            graph_store.acquireStoreWriteLock();
+            defer graph_store.releaseStoreWriteLock();
             if (!restore_req.confirm) {
                 const msg_text = try gpa.dupe(u8, "Restore requires confirmation");
                 try sendQuicMessage(gpa, stream, .{ .restore = .{ .success = false, .message = msg_text } });

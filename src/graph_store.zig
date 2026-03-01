@@ -3536,7 +3536,9 @@ var g_persist_cond_mutex: std.Thread.Mutex = .{};
 /// CANARY: REQ=REQ-GAP-0260-ATOMIC-DIRTY-001; FEATURE="AsyncPersistence"; ASPECT=AtomicDirty; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-13
 var g_atomic_dirty: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
-/// Acquire the global store lock (shared — for use by query handlers during reads/mutations)
+/// Acquire the global store lock (shared — for read-only query handlers).
+/// GAP-0001: Mutation operations must use acquireStoreWriteLock() instead
+/// to prevent concurrent HashMap rehash races (CWE-362, CWE-416).
 pub fn acquireStoreLock() void {
     g_store_rwlock.lockShared();
 }
@@ -3546,7 +3548,7 @@ pub fn releaseStoreLock() void {
     g_store_rwlock.unlockShared();
 }
 
-/// Acquire exclusive write lock (for use by persistence thread only)
+/// Acquire exclusive write lock (for mutations and persistence thread)
 pub fn acquireStoreWriteLock() void {
     g_store_rwlock.lock();
 }
