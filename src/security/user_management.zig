@@ -160,6 +160,37 @@ pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: 
     try store.put(try allocator.dupe(u8, username), user);
 }
 
+/// Create a user with a pre-hashed password (for syncing from auth graph store).
+/// Skips if the user already exists in the in-memory store.
+pub fn createUserWithHash(allocator: std.mem.Allocator, username: []const u8, password_hash: []const u8, email: []const u8, role: Role, password_reset_required: bool) !void {
+    user_store_mutex.lock();
+    defer user_store_mutex.unlock();
+
+    if (user_store == null) {
+        try initUserStore(allocator);
+    }
+
+    var store = &user_store.?;
+
+    // Skip if user already exists
+    if (store.contains(username)) {
+        return;
+    }
+
+    const user = User{
+        .username = try allocator.dupe(u8, username),
+        .password_hash = try allocator.dupe(u8, password_hash),
+        .email = try allocator.dupe(u8, email),
+        .role = role,
+        .created_at = std.time.timestamp(),
+        .last_login = null,
+        .active = true,
+        .password_reset_required = password_reset_required,
+    };
+
+    try store.put(try allocator.dupe(u8, username), user);
+}
+
 /// Authenticate user with username and password
 pub fn authenticate(username: []const u8, password: []const u8) !AuthResult {
     user_store_mutex.lock();

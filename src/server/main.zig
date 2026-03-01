@@ -260,10 +260,9 @@ pub fn main() !void {
     };
     defer user_mgmt.deinitUserStore();
     user_mgmt.setAuthEnabled(true);
-    user_mgmt.ensureDefaultUser(gpa) catch |err| {
-        log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
-        return err;
-    };
+    // NOTE: ensureDefaultUser() is called AFTER server_init.initialize() below
+    // so that users from the auth graph store are synced first (avoiding a
+    // second admin with a different password).
 
     // Resolve certificate paths and ensure they exist
     const cert_paths = try cli_args.resolveCertPaths(gpa, &config);
@@ -339,6 +338,36 @@ pub fn main() !void {
     // pointers point at the callee's dead stack. Re-derive them at the final location.
     init_ctx.fixupSelfPointers();
     defer init_ctx.deinit();
+
+    // Sync users from auth graph store into the in-memory user store so that
+    // authenticate() can find users created by bootstrapDefaultAdmin().
+    if (init_ctx.auth_graph_mgr) |agm| {
+        var it = agm.storage.userIterator();
+        while (it.next()) |record| {
+            const username = record.getUsername();
+            if (username.len == 0) continue;
+            const role: user_mgmt.Role = if (record.is_superuser) .Admin else .ReadWrite;
+            user_mgmt.createUserWithHash(
+                gpa,
+                username,
+                record.getPasswordHash(),
+                record.getEmail(),
+                role,
+                record.password_reset_required,
+            ) catch |err| {
+                log.warn("Failed to sync auth graph user to in-memory store", &.{
+                    Attr.string("username", username),
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+        }
+    }
+
+    // Create a default admin user if no users were loaded from the auth graph.
+    user_mgmt.ensureDefaultUser(gpa) catch |err| {
+        log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
+        return err;
+    };
 
     // Extract initialization values for compatibility with existing code
     const env_spill_threshold = init_ctx.env_config.spill_threshold;

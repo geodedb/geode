@@ -30,7 +30,7 @@ if command -v systemctl >/dev/null 2>&1; then
     echo "Geode service enabled and started."
     echo ""
     echo "To view the initial admin password:"
-    echo "  sudo journalctl -u geode | grep GEODE_INITIAL_ADMIN_PASSWORD"
+    echo "  sudo journalctl -u geode | grep 'Generated admin password'"
     echo ""
     echo "To check status:"
     echo "  sudo systemctl status geode"
