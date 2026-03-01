@@ -3638,7 +3638,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    std.debug.print("Geode Shell v0.1.0\n", .{});
+    std.debug.print("Geode Shell " ++ VERSION ++ "\n", .{});
     // GAP-0113: Display TLS certificate status
     // Note: Print "Connecting to..." here since actual connection happens in REPL loop
     if (insecure) {

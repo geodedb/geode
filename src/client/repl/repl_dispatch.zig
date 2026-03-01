@@ -829,7 +829,7 @@ pub const ClientSession = struct {
 
         const hello_req = proto_schema.HelloRequest{
             .client_name = "geode-repl",
-            .client_version = "0.18.0",
+            .client_version = @import("build_options").version,
             .wanted_conformance = "min",
         };
 
@@ -894,7 +894,7 @@ pub const ClientSession = struct {
             .username = username,
             .password = password,
             .client_name = "geode-cli",
-            .client_version = "0.18.0",
+            .client_version = @import("build_options").version,
             .wanted_conformance = "min",
         };
 

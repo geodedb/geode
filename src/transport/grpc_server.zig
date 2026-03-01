@@ -1525,7 +1525,7 @@ fn handleCdcDiag(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
         .engine = .{ .is_running = false },
         .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot){},
         .malformed_hashes = std.ArrayList(schema.CdcMalformedHash){},
-        .version = try allocator.dupe(u8, "v0.1.0"),
+        .version = try allocator.dupe(u8, @import("build_options").version),
         .timestamp_ms = std.time.milliTimestamp(),
     };
     return encodeMessage(allocator, resp);

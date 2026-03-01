@@ -871,7 +871,7 @@ pub const CDCEngine = struct {
             },
             .malformed_snapshots = snapshots,
             .malformed_hashes = hashes,
-            .version = try allocator.dupe(u8, "v0.1.0"),
+            .version = try allocator.dupe(u8, @import("build_options").version),
             .timestamp_ms = now_ms,
         };
 

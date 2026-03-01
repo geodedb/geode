@@ -1444,7 +1444,7 @@ fn executeRemoteBackup(
         .username = username orelse "",
         .password = password orelse "",
         .client_name = "geode-backup",
-        .client_version = "0.1.0",
+        .client_version = build_options.version,
         .wanted_conformance = "GQL/1.0",
     };
     writeProtoMessage(allocator, stream, .{ .hello = hello_req }) catch |err| {

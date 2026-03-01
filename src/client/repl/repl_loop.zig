@@ -1630,11 +1630,13 @@ fn printWelcomeMessage() !void {
     // Title lines with proper centered spacing
     try stdout.writeAll("  ");
     try stdout.writeAll(bold);
-    try stdout.writeAll("          Welcome to Geode Shell v0.1.0");
+    const build_options = @import("build_options");
+    const title = "          Welcome to Geode Shell " ++ build_options.version;
+    try stdout.writeAll(title);
     try stdout.writeAll(reset);
     try stdout.writeAll(green);
     // Pad to match box width
-    const title_len = 41; // "          Welcome to Geode Shell v0.1.0".len
+    const title_len = title.len;
     const padding = 64 - title_len;
     var j: usize = 0;
     while (j < padding) : (j += 1) {

@@ -336,6 +336,9 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("cli", cli_mod);
     root_mod.addImport("dns", dns_mod);
 
+    // Build options (version from git tags)
+    root_mod.addImport("build_options", build_options_mod);
+
     // Phase 5 External Library Imports (optional enhancements)
     root_mod.addImport("mcp", mcp_mod);
     root_mod.addImport("protobuf", protobuf_mod);

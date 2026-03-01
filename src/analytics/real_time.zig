@@ -81,7 +81,7 @@ pub const AnalyticsValue = union(enum) {
 /// Metadata for analytics events
 pub const AnalyticsMetadata = struct {
     source: []const u8 = "geode",
-    version: []const u8 = "0.18.0",
+    version: []const u8 = @import("build_options").version,
     processing_time: ?i64 = null,
     correlation_id: ?u64 = null,
     session_id: ?u64 = null,

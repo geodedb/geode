@@ -1249,7 +1249,7 @@ fn handleClientMessage(
                     .engine = .{ .is_running = false },
                     .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot){},
                     .malformed_hashes = std.ArrayList(schema.CdcMalformedHash){},
-                    .version = try gpa.dupe(u8, "v0.1.0"),
+                    .version = try gpa.dupe(u8, @import("build_options").version),
                     .timestamp_ms = std.time.milliTimestamp(),
                 };
                 try sendQuicMessage(gpa, stream, .{ .cdc_diag = payload });

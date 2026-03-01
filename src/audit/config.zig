@@ -307,7 +307,7 @@ pub fn loadTestConfig(allocator: std.mem.Allocator) !Config {
             .cef = CefIdentityConfig{
                 .vendor = try allocator.dupe(u8, "DEVNW"),
                 .product = try allocator.dupe(u8, "GEODE"),
-                .version = try allocator.dupe(u8, "0.1.0"),
+                .version = try allocator.dupe(u8, @import("build_options").version),
             },
         },
         .sinks = SinksConfig{

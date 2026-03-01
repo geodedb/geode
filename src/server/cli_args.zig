@@ -139,7 +139,8 @@ pub fn mergeFileConfig(config: *ServerConfig, file_result: config_lib.Value) voi
 
 /// Print help message to stdout
 pub fn printHelp() void {
-    std.debug.print("Geode Server v0.1.0\n\n", .{});
+    const build_options = @import("build_options");
+    std.debug.print("Geode Server " ++ build_options.version ++ "\n\n", .{});
     std.debug.print("Usage: geode serve [OPTIONS]\n\n", .{});
     std.debug.print("Options:\n", .{});
     std.debug.print("  -c, --config <path>          Path to config file (YAML, TOML, or JSON)\n", .{});

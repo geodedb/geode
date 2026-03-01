@@ -203,7 +203,7 @@ test "CEF formatting" {
     const identity = config.CefIdentityConfig{
         .vendor = "DEVNW",
         .product = "GEODE",
-        .version = "0.1.0",
+        .version = @import("build_options").version,
     };
 
     var event = events.AuditEvent{
