@@ -696,7 +696,7 @@ fn handleAlterUserSetPassword(
     // Verify the user is changing their own password
     if (state.authenticated_user) |auth_user| {
         if (!std.mem.eql(u8, auth_user, username)) {
-            try sendExecuteError(gpa, stream, "42501", "Password reset required: you can only change your own password", &.{}, &.{});
+            try sendExecuteError(gpa, stream, "42501", "You can only change your own password", &.{}, &.{});
             return;
         }
     }
@@ -712,18 +712,13 @@ fn handleAlterUserSetPassword(
 
     state.password_reset_required = false;
 
-    // Send success response as a status-only execution result
+    // Send success response as a status-only execution result (no payload).
+    // Sending a page payload would cause the REPL to issue a PULL request,
+    // which fails with "no active result set" since no query was executed.
     const status = try proto_util.buildStatus(gpa, "00000", &.{});
     const resp = schema.ExecutionResponse{
         .status = status,
-        .payload = .{
-            .page = .{
-                .rows = std.ArrayList(schema.Row){},
-                .final = true,
-                .ordered = false,
-                .order_keys = std.ArrayList([]const u8){},
-            },
-        },
+        .payload = null,
     };
     try sendQuicMessage(gpa, stream, .{ .execute = resp });
 }
@@ -824,16 +819,21 @@ fn handleClientMessage(
                 return;
             }
 
-            // Block all queries except ALTER USER SET PASSWORD when password reset is required
-            if (state.password_reset_required) {
+            // Handle ALTER USER SET PASSWORD — intercept before GQL parser since
+            // ALTER USER is not part of GQL syntax. Works both during forced
+            // password reset and for normal password changes.
+            {
                 const trimmed = std.mem.trim(u8, exec_req.query, " \t\r\n");
                 if (parseAlterUserSetPassword(trimmed)) |parsed| {
                     try handleAlterUserSetPassword(gpa, state, stream, parsed.username, parsed.new_password);
                     return;
-                } else {
-                    try sendExecuteError(gpa, stream, "08P01", "Password reset required. Change password with: ALTER USER <username> SET PASSWORD '<new_password>'", &.{}, &.{});
-                    return;
                 }
+            }
+
+            // Block all other queries when password reset is required
+            if (state.password_reset_required) {
+                try sendExecuteError(gpa, stream, "08P01", "Password reset required. Change password with: ALTER USER <username> SET PASSWORD '<new_password>'", &.{}, &.{});
+                return;
             }
 
             const bindings = proto_util.parseParams(gpa, exec_req.params.items) catch |err| {
