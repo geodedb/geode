@@ -519,15 +519,22 @@ pub const AuthGraphManager = struct {
         // 1. Resolve admin username
         const username = if (std.process.getEnvVarOwned(self.allocator, "GEODE_ADMIN_USERNAME")) |name| name else |_| try self.allocator.dupe(u8, "geode");
 
-        // 2. Generate random 32-char hex password
-        var random_bytes: [16]u8 = undefined;
-        std.crypto.random.bytes(&random_bytes);
-        const password = try self.allocator.alloc(u8, 32);
-        const hex_chars = "0123456789abcdef";
-        for (random_bytes, 0..) |byte, i| {
-            password[i * 2] = hex_chars[byte >> 4];
-            password[i * 2 + 1] = hex_chars[byte & 0xf];
-        }
+        // 2. Use GEODE_ADMIN_PASSWORD from env if set, otherwise generate random 32-char hex password
+        var password_from_env = false;
+        const password = if (std.process.getEnvVarOwned(self.allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| pw_blk: {
+            password_from_env = true;
+            break :pw_blk env_pw;
+        } else |_| blk: {
+            var random_bytes: [16]u8 = undefined;
+            std.crypto.random.bytes(&random_bytes);
+            const pw = try self.allocator.alloc(u8, 32);
+            const hex_chars = "0123456789abcdef";
+            for (random_bytes, 0..) |byte, i| {
+                pw[i * 2] = hex_chars[byte >> 4];
+                pw[i * 2 + 1] = hex_chars[byte & 0xf];
+            }
+            break :blk pw;
+        };
 
         // 3. Hash password with Argon2id (canonical implementation)
         const password_hash = try geode_auth.hashPasswordArgon2id(self.allocator, password);
@@ -544,7 +551,7 @@ pub const AuthGraphManager = struct {
         var record = self.storage.getUser(user_id) orelse return error.UserNotFound;
         record.is_superuser = true;
         record.is_default_user = true;
-        record.password_reset_required = true;
+        record.password_reset_required = !password_from_env;
         record.hash_algorithm_len = UserStorageBackend.copyIntoField(&record.hash_algorithm, "argon2id");
         record.password_changed_at = std.time.milliTimestamp();
         try self.storage.user_cache.put(user_id, record);

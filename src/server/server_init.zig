@@ -307,8 +307,14 @@ pub fn initialize(
                     agm.deinit();
                     break :agm_blk null;
                 };
-                // Print generated password to stderr only (never to structured log)
-                std.debug.print("\n*** Generated admin password: {s} ***\n", .{result.password});
+                // Print generated password to stderr only (never to structured log).
+                // Skip the message when the password came from GEODE_ADMIN_PASSWORD
+                // so test runners don't see a misleading "generated" label.
+                if (std.process.getEnvVarOwned(allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| {
+                    allocator.free(env_pw);
+                } else |_| {
+                    std.debug.print("\n*** Generated admin password: {s} ***\n", .{result.password});
+                }
                 log.info("Default admin user bootstrapped via auth graph", &.{
                     Attr.string("username", result.username),
                 });
