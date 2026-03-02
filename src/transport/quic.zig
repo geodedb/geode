@@ -58,6 +58,10 @@ inline fn debugLog(comptime fmt: []const u8, args: anytype) void {
 pub const PollSync = struct {
     mu: std.Thread.Mutex = .{},
     cv: std.Thread.Condition = .{},
+    /// Signaled after every leavePoll() so handler threads waiting for data
+    /// can wake up promptly instead of blind-sleeping. Separate from `cv`
+    /// to avoid spurious wakeups between handler data-wait and protocol-wait.
+    poll_cv: std.Thread.Condition = .{},
     poll_requested: bool = false,
     active_io_count: u32 = 0,
 
@@ -98,6 +102,15 @@ pub const PollSync = struct {
         defer self.mu.unlock();
         self.poll_requested = false;
         self.cv.broadcast();
+        self.poll_cv.broadcast(); // Wake handlers waiting for data after poll
+    }
+
+    /// Handler threads call this instead of blind Thread.sleep().
+    /// Blocks until the next poll cycle completes or timeout expires.
+    pub fn waitForPoll(self: *PollSync, timeout_ns: u64) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.poll_cv.timedWait(&self.mu, timeout_ns) catch {}; // timeout is expected
     }
 };
 
@@ -343,81 +356,46 @@ pub const QuicTransport = struct {
 
     pub fn accept(self: *QuicTransport) !*QuicConnection {
         if (self.endpoint) |ep| {
-            // Poll the endpoint to process incoming UDP packets and complete handshakes
-            // This is required before connections can be accepted
-            // Keep polling until a connection is ready with available streams
-            // GAP-0200-FIX: Increased poll count and wait for streams to be ready
-            // to prevent race condition where connection is returned before client
-            // sends its first STREAM frame (containing HELLO message)
-            var poll_count: usize = 0;
-            var pending_conn: ?*Connection = null;
+            // GAP-0203: Drain deferred connection cleanups before polling.
+            self.drainPendingDestroy();
 
-            // First, try to get a connection (if we don't have one pending)
-            while (poll_count < 300) : (poll_count += 1) {
-                // GAP-0203: Drain deferred connection cleanups before polling.
-                // This ensures connections marked for destruction are removed from
-                // the endpoint's tracking tables before poll() processes packets.
-                self.drainPendingDestroy();
-                // Acquire exclusive poll access — blocks new handler I/O and
-                // waits for in-flight I/O to complete. This prevents concurrent
-                // HashMap access in the QUIC library (stream_txs corruption).
-                // With mutex+condvar PollSync, leavePoll() broadcasts to wake
-                // waiting I/O threads immediately — no extra sleep required.
-                self.poll_sync.enterPoll();
-                ep.poll(1) catch |err| {
-                    self.poll_sync.leavePoll();
-                    return err;
-                };
+            // #47: Single poll: 1ms exclusive access instead of 300ms.
+            // The old 300-iteration loop monopolized PollSync for up to 300ms
+            // per connection, blocking all handler I/O. Now we poll once and
+            // return immediately — the handler thread waits for streams via poll_cv.
+            self.poll_sync.enterPoll();
+            ep.poll(1) catch |err| {
                 self.poll_sync.leavePoll();
+                return err;
+            };
+            self.poll_sync.leavePoll();
 
-                // Get a connection if we don't have one yet
-                if (pending_conn == null) {
-                    pending_conn = api.tryAccept(ep);
-                }
+            // Non-blocking check for completed handshakes
+            const conn = api.tryAccept(ep) orelse return QuicError.WouldBlock;
 
-                // If we have a connection, check for streams
-                if (pending_conn) |conn| {
-                    if (conn.hasIncomingStreams()) {
-                        const wrapper = try self.allocator.create(QuicConnection);
-                        wrapper.* = QuicConnection{
-                            .allocator = self.allocator,
-                            .quic_connection = conn,
-                            .inner = conn,
-                            .streams = try std.ArrayList(*QuicStream).initCapacity(self.allocator, 0),
-                            .poll_sync = &self.poll_sync,
-                        };
-                        // GAP-0202: Thread-safe connection list append
-                        self.connections_mutex.lock();
-                        defer self.connections_mutex.unlock();
-                        try self.connections.append(self.allocator, wrapper);
-                        return wrapper;
-                    }
-                    // Connection exists but no streams yet - continue polling
-                    // This ensures we process incoming STREAM frames before returning
-                }
-            }
-
-            // Timeout waiting for streams - return connection anyway but with warning
-            // The handler will wait for streams with its own timeout
-            if (pending_conn) |conn| {
-                const wrapper = try self.allocator.create(QuicConnection);
-                wrapper.* = QuicConnection{
-                    .allocator = self.allocator,
-                    .quic_connection = conn,
-                    .inner = conn,
-                    .streams = try std.ArrayList(*QuicStream).initCapacity(self.allocator, 0),
-                    .poll_sync = &self.poll_sync,
-                };
-                self.connections_mutex.lock();
-                defer self.connections_mutex.unlock();
-                try self.connections.append(self.allocator, wrapper);
-                return wrapper;
-            }
-
-            // No connections ready after polling
-            return QuicError.WouldBlock;
+            // Return immediately — handler waits for streams via poll_cv
+            const wrapper = try self.allocator.create(QuicConnection);
+            wrapper.* = QuicConnection{
+                .allocator = self.allocator,
+                .quic_connection = conn,
+                .inner = conn,
+                .streams = try std.ArrayList(*QuicStream).initCapacity(self.allocator, 0),
+                .poll_sync = &self.poll_sync,
+            };
+            // GAP-0202: Thread-safe connection list append
+            self.connections_mutex.lock();
+            defer self.connections_mutex.unlock();
+            try self.connections.append(self.allocator, wrapper);
+            return wrapper;
         }
         return QuicError.InvalidState;
+    }
+
+    /// #49: Returns the current number of tracked connections for admission control.
+    pub fn getConnectionCount(self: *QuicTransport) usize {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+        return self.connections.items.len;
     }
 
     pub fn tryAccept(self: *QuicTransport) ?*QuicConnection {
@@ -1127,3 +1105,45 @@ pub const QuicClientStream = struct {
         _ = try self.connection.writeStream(self.stream_id, &.{}, true);
     }
 };
+
+// --- Unit tests for PollSync ---
+
+test "PollSync: waitForPoll times out without signal" {
+    var ps = PollSync{};
+    const start = std.time.nanoTimestamp();
+    ps.waitForPoll(10 * std.time.ns_per_ms);
+    const elapsed_ns: u64 = @intCast(std.time.nanoTimestamp() - start);
+    try std.testing.expect(elapsed_ns >= 8 * std.time.ns_per_ms);
+    try std.testing.expect(elapsed_ns < 100 * std.time.ns_per_ms);
+}
+
+test "PollSync: waitForPoll wakes on leavePoll broadcast" {
+    var ps = PollSync{};
+    const t = try std.Thread.spawn(.{}, struct {
+        fn run(sync: *PollSync) void {
+            std.Thread.sleep(5 * std.time.ns_per_ms);
+            sync.mu.lock();
+            defer sync.mu.unlock();
+            sync.poll_cv.broadcast();
+        }
+    }.run, .{&ps});
+    const start = std.time.nanoTimestamp();
+    ps.waitForPoll(200 * std.time.ns_per_ms); // should return in ~5ms, not 200ms
+    const elapsed_ns: u64 = @intCast(std.time.nanoTimestamp() - start);
+    try std.testing.expect(elapsed_ns < 100 * std.time.ns_per_ms);
+    t.join();
+}
+
+test "PollSync: enterIo/leaveIo/enterPoll/leavePoll still correct" {
+    var ps = PollSync{};
+    ps.enterIo();
+    ps.enterIo();
+    try std.testing.expectEqual(@as(u32, 2), ps.active_io_count);
+    ps.leaveIo();
+    ps.leaveIo();
+    try std.testing.expectEqual(@as(u32, 0), ps.active_io_count);
+    ps.enterPoll();
+    try std.testing.expect(ps.poll_requested);
+    ps.leavePoll();
+    try std.testing.expect(!ps.poll_requested);
+}

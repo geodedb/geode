@@ -555,6 +555,14 @@ pub fn main() !void {
             // tables, timers) without racing with poll().
             transport.drainPendingDestroy();
 
+            // #49: Admission control — skip accept when at capacity.
+            // This prevents resource exhaustion under heavy load by refusing
+            // new connections before they consume thread pool and memory resources.
+            if (transport.getConnectionCount() >= transport.config.max_connections) {
+                std.Thread.sleep(5 * std.time.ns_per_ms);
+                continue;
+            }
+
             const conn = transport.accept() catch |err| {
                 // WouldBlock is expected when no connections are pending
                 if (err != quic_transport.QuicError.WouldBlock) {
@@ -570,13 +578,10 @@ pub fn main() !void {
 
             // CANARY: REQ=REQ-ABAC-WIRE-016; FEATURE="ABAC Enforcement"; ASPECT=QUICLoop; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
             // GAP-0202: Create context for async connection handling
+            // #50: Reject connection on alloc failure instead of blocking main thread
             const ctx = gpa.create(ConnectionContext) catch {
-                log.err("Failed to allocate connection context, handling sync", &.{});
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache, init_ctx.shared_optimizer) catch |err| {
-                    log.err("Error handling QUIC connection", &.{
-                        Attr.string("error", @errorName(err)),
-                    });
-                };
+                log.err("Failed to allocate connection context, rejecting connection", &.{});
+                transport.destroyConnection(conn);
                 continue;
             };
 
@@ -601,9 +606,15 @@ pub fn main() !void {
             };
 
             if (!pool.submit(work_item)) {
-                // Queue full - handle synchronously as fallback
-                log.warn("Thread pool queue full, handling connection sync", &.{});
-                handleConnectionAsync(@ptrCast(ctx));
+                // #50: Reject instead of blocking main thread with sync handling.
+                // Inline handleConnectionAsync() would block the accept loop for
+                // the entire duration of the connection (seconds to minutes).
+                log.warn("Thread pool queue full, rejecting connection", &.{
+                    Attr.int("queue_size", @intCast(pool.pendingTasks())),
+                    Attr.int("active_workers", @intCast(pool.activeWorkers())),
+                });
+                transport.destroyConnection(conn);
+                gpa.destroy(ctx);
             } else {
                 log.debug("Connection submitted to thread pool", &.{});
             }

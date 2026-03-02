@@ -215,9 +215,10 @@ const BufferedProtoReader = struct {
                     if (would_block_attempts >= max_would_block_attempts) {
                         return error.Timeout;
                     }
-                    // Note: Do NOT call transport.poll() here - it's not thread-safe
-                    // The main accept loop handles polling; we just wait for data
-                    std.Thread.sleep(100 * std.time.ns_per_us);
+                    // #53: Wait for main thread's next poll cycle via condvar
+                    // instead of blind 100μs sleep. Wakes promptly when poll()
+                    // delivers data rather than spinning on fixed intervals.
+                    self.transport.poll_sync.waitForPoll(5 * std.time.ns_per_ms);
                     continue;
                 }
                 return err;
@@ -422,23 +423,20 @@ pub fn handleQuicConnection(
     defer transport.destroyConnection(conn);
     log.debug("Entering handleQuicConnection", &.{});
 
-    // Wait for incoming STREAM frames using a simple retry loop
-    // Note: transport.poll() is NOT thread-safe and must only be called from the main accept loop
-    // The main accept loop's poll() already processes incoming packets, so streams should be queued
-    // GAP-0200-FIX: Increased timeout from 50ms to 500ms to handle slower clients
-    // and network latency. The accept() function now waits longer for streams before
-    // returning, but we still need this as a fallback.
-    // Issue #447: Use exponential backoff instead of fixed 1ms busy-wait polling
+    // Wait for incoming STREAM frames using poll_cv event-driven wait.
+    // #51/#53: Uses poll_cv.waitForPoll() instead of blind Thread.sleep(),
+    // waking promptly when the main thread's poll() delivers data.
+    // Reduced total wait from 500ms to 200ms since accept() no longer
+    // waits for streams (returns immediately after tryAccept).
     var poll_attempts: usize = 0;
-    var backoff_us: u64 = 100; // Start at 100μs
-    const max_backoff_us: u64 = 50_000; // Cap at 50ms
-    const max_total_wait_ms: u64 = 500;
+    const max_wait_ms: u64 = 200;
     var total_waited_us: u64 = 0;
-    while (total_waited_us < max_total_wait_ms * 1000) : (poll_attempts += 1) {
+    const poll_wait_ns: u64 = 10 * std.time.ns_per_ms; // 10ms per wait
+
+    while (total_waited_us < max_wait_ms * 1000) : (poll_attempts += 1) {
         if (conn.inner.hasIncomingStreams()) break;
-        std.Thread.sleep(backoff_us * std.time.ns_per_us);
-        total_waited_us += backoff_us;
-        backoff_us = @min(backoff_us * 2, max_backoff_us);
+        transport.poll_sync.waitForPoll(poll_wait_ns); // event-driven, not blind sleep
+        total_waited_us += 10_000; // 10ms per iteration
         if (poll_attempts > 0 and poll_attempts % 10 == 0) {
             log.debug("No streams yet, retrying", &.{
                 Attr.int("attempt", @intCast(poll_attempts + 1)),
@@ -579,9 +577,8 @@ pub fn handleQuicConnection(
         const packet_opt = line_reader.nextMessage() catch |err| {
             if (err == error.EndOfStream) return;
             if (err == error.WouldBlock) {
-                // Note: Do NOT call transport.poll() here - it's not thread-safe
-                // The main accept loop handles polling; just sleep and retry
-                std.Thread.sleep(100 * std.time.ns_per_us);
+                // #53: Wait for next poll cycle via condvar instead of blind sleep
+                transport.poll_sync.waitForPoll(5 * std.time.ns_per_ms);
                 continue;
             }
             log.err("Protobuf read error", &.{Attr.string("error", @errorName(err))});
@@ -1067,6 +1064,9 @@ fn handleClientMessage(
             // write lock to prevent concurrent HashMap rehash races (CWE-362).
             // Read-only queries take the shared lock so they can run in parallel.
             // EXPLAIN never executes, so no lock is needed.
+            // #52: Lock is released explicitly after execution completes but BEFORE
+            // response serialization and network send, to avoid holding the global
+            // write lock during slow I/O operations.
             const needs_store_lock = analysis.kind != .explain;
             const is_mutation = needs_store_lock and isMutatingProgram(&parse_result.program);
             if (needs_store_lock) {
@@ -1076,8 +1076,10 @@ fn handleClientMessage(
                     graph_store.acquireStoreLock();
                 }
             }
+            // Safety net: release on any unexpected error path not explicitly handled.
+            var lock_released = false;
             defer {
-                if (needs_store_lock) {
+                if (!lock_released and needs_store_lock) {
                     if (is_mutation) {
                         graph_store.releaseStoreWriteLock();
                     } else {
@@ -1118,16 +1120,28 @@ fn handleClientMessage(
                         try appendFlagToResult(gpa, &exec_result, flag);
                     }
 
+                    // Capture store stats while under lock
                     const store = graph_store.getGlobalStore(gpa);
+                    const profile_node_count: u64 = @intCast(store.getNodeCount());
+                    const profile_edge_count: u64 = @intCast(store.getEdgeCount());
+                    const profile_is_dirty = store.isDirty();
+
+                    // #52: Release lock before serialization and network send.
+                    // exec_result is a thread-local copy; store stats are captured above.
+                    if (needs_store_lock) {
+                        if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
+                        lock_released = true;
+                    }
+
                     const profile_msg = try profile_payload.buildProfilePayload(gpa, traits, exec_result.rows.len, .{
                         .compact = compact_profile,
                         .include_mem_curve = memcurve_profile,
                         .disable_estimates = disable_estimates,
                         .spill_threshold = state.query_mem_limit_bytes,
                         .committed_txns = state.global_commit_ts,
-                        .graph_store_nodes = @intCast(store.getNodeCount()),
-                        .graph_store_edges = @intCast(store.getEdgeCount()),
-                        .graph_store_dirty = store.isDirty(),
+                        .graph_store_nodes = profile_node_count,
+                        .graph_store_edges = profile_edge_count,
+                        .graph_store_dirty = profile_is_dirty,
                         .flagger_findings = exec_result.flags.items,
                         .union_part_count = analysis.union_part_count,
                     });
@@ -1149,6 +1163,15 @@ fn handleClientMessage(
                     };
                     var store_result = false;
                     defer if (!store_result) exec_result.deinit(gpa);
+
+                    // #52: Release lock immediately after execution completes.
+                    // exec_result is a thread-local copy (owned data, freed by connection allocator).
+                    // Everything below (flags, ordering, serialization, send, txn state update,
+                    // signalPersistence) does not access the store and does not need the lock.
+                    if (needs_store_lock) {
+                        if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
+                        lock_released = true;
+                    }
 
                     for (flags.items) |flag| {
                         try appendFlagToResult(gpa, &exec_result, flag);
