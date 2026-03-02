@@ -97,6 +97,9 @@ pub const ReplLoop = struct {
                 } else {
                     try stderr_file.writeAll("\r\nError [GEODE-E0021]: Authentication failed\r\n");
                 }
+                // Restore terminal before exit — std.process.exit bypasses defers,
+                // leaving the terminal in raw mode (OPOST disabled) for the next session.
+                restoreTerminalMode(original_termios) catch {};
                 std.process.exit(21);
             }
             if (auth_result.session_token) |token| {
@@ -112,6 +115,7 @@ pub const ReplLoop = struct {
                     try stderr_file.writeAll("\r\nError [GEODE-E0022]: Server requires authentication.\r\n");
                     try stderr_file.writeAll("Use --username/-U and --password/-P options to provide credentials.\r\n");
                     try stderr_file.writeAll("Example: geode shell --server localhost:3141 -U myuser -P mypassword\r\n");
+                    restoreTerminalMode(original_termios) catch {};
                     std.process.exit(22);
                 }
                 return err;
@@ -1615,9 +1619,10 @@ fn printWelcomeMessage() !void {
     const reset = if (use_color) "\x1b[0m" else "";
     const bold = if (use_color) "\x1b[1m" else "";
 
-    try stdout.writeAll("\n");
+    // Use \r\n throughout so output renders correctly even if a previous
+    // session left the terminal in raw mode (OPOST disabled).
+    try stdout.writeAll("\r\n");
 
-    // FIXED: Improved box formatting with consistent spacing
     // Box top
     try stdout.writeAll(green);
     try stdout.writeAll("  ");
@@ -1625,7 +1630,7 @@ fn printWelcomeMessage() !void {
     while (i < 64) : (i += 1) {
         try stdout.writeAll("=");
     }
-    try stdout.writeAll("\n");
+    try stdout.writeAll("\r\n");
 
     // Title lines with proper centered spacing
     try stdout.writeAll("  ");
@@ -1642,11 +1647,11 @@ fn printWelcomeMessage() !void {
     while (j < padding) : (j += 1) {
         try stdout.writeAll(" ");
     }
-    try stdout.writeAll("\n");
+    try stdout.writeAll("\r\n");
 
     try stdout.writeAll("  ");
     try stdout.writeAll("      Interactive GQL REPL (ISO/IEC 39075:2024 compliant)");
-    try stdout.writeAll("\n");
+    try stdout.writeAll("\r\n");
 
     // Box bottom
     try stdout.writeAll("  ");
@@ -1655,57 +1660,57 @@ fn printWelcomeMessage() !void {
         try stdout.writeAll("=");
     }
     try stdout.writeAll(reset);
-    try stdout.writeAll("\n\n");
+    try stdout.writeAll("\r\n\r\n");
 
     // Commands section
     try stdout.writeAll(cyan);
     try stdout.writeAll("  Quick commands to get started:");
     try stdout.writeAll(reset);
-    try stdout.writeAll("\n");
+    try stdout.writeAll("\r\n");
 
     try stdout.writeAll("    ");
     try stdout.writeAll(yellow);
     try stdout.writeAll("\\help");
     try stdout.writeAll(reset);
-    try stdout.writeAll("          Show all available commands\n");
+    try stdout.writeAll("          Show all available commands\r\n");
 
     try stdout.writeAll("    ");
     try stdout.writeAll(yellow);
     try stdout.writeAll("\\quit");
     try stdout.writeAll(reset);
-    try stdout.writeAll("          Exit the shell (also \\exit)\n");
+    try stdout.writeAll("          Exit the shell (also \\exit)\r\n");
 
     try stdout.writeAll("    ");
     try stdout.writeAll(yellow);
     try stdout.writeAll("\\clear");
     try stdout.writeAll(reset);
-    try stdout.writeAll("         Clear screen\n");
+    try stdout.writeAll("         Clear screen\r\n");
 
     try stdout.writeAll("    ");
     try stdout.writeAll(yellow);
     try stdout.writeAll("RETURN 1;");
     try stdout.writeAll(reset);
-    try stdout.writeAll("      Execute a simple GQL query\n");
+    try stdout.writeAll("      Execute a simple GQL query\r\n");
 
-    try stdout.writeAll("\n");
+    try stdout.writeAll("\r\n");
 
     // Tips section
     try stdout.writeAll(cyan);
     try stdout.writeAll("  Tips:");
     try stdout.writeAll(reset);
-    try stdout.writeAll("\n");
-    try stdout.writeAll("    • Meta commands start with \\ or / (e.g., \\help or /help)\n");
-    try stdout.writeAll("    • End GQL statements with semicolon (;)\n");
-    try stdout.writeAll("    • Use Ctrl+C to exit (on empty line) or cancel input\n");
-    try stdout.writeAll("    • Use Ctrl+D to exit on empty line\n");
+    try stdout.writeAll("\r\n");
+    try stdout.writeAll("    • Meta commands start with \\ or / (e.g., \\help or /help)\r\n");
+    try stdout.writeAll("    • End GQL statements with semicolon (;)\r\n");
+    try stdout.writeAll("    • Use Ctrl+C to exit (on empty line) or cancel input\r\n");
+    try stdout.writeAll("    • Use Ctrl+D to exit on empty line\r\n");
 
-    try stdout.writeAll("\n");
+    try stdout.writeAll("\r\n");
     try stdout.writeAll("  Type ");
     try stdout.writeAll(yellow);
     try stdout.writeAll("\\help");
     try stdout.writeAll(reset);
-    try stdout.writeAll(" for more information.\n");
-    try stdout.writeAll("\n");
+    try stdout.writeAll(" for more information.\r\n");
+    try stdout.writeAll("\r\n");
 
     // Note: Don't call sync() on stdout - it panics on ttys/pipes
 }

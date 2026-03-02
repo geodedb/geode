@@ -885,7 +885,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             insecure = true;
         } else if (std.mem.eql(u8, arg, "--insecure")) {
             insecure = true;
-            std.debug.print("Warning: --insecure is deprecated. Use --insecure-tls-skip-verify instead.\n", .{});
+            std.debug.print("Warning: --insecure is deprecated. Use --insecure-tls-skip-verify instead.\r\n", .{});
         } else if (std.mem.eql(u8, arg, "--grpc")) {
             use_grpc = true;
         } else if (std.mem.eql(u8, arg, "--ca-cert")) {
@@ -3546,7 +3546,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             insecure = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             insecure = true;
-            std.debug.print("Warning: --insecure is deprecated. Use --insecure-tls-skip-verify instead.\n", .{});
+            std.debug.print("Warning: --insecure is deprecated. Use --insecure-tls-skip-verify instead.\r\n", .{});
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             // GAP-0113: CA certificate path for server verification
             if (i + 1 >= argv.len) {
@@ -3638,20 +3638,22 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    std.debug.print("Geode Shell " ++ VERSION ++ "\n", .{});
+    // Use \r\n so output renders correctly even if a previous session left
+    // the terminal in raw mode (OPOST disabled).
+    std.debug.print("Geode Shell " ++ VERSION ++ "\r\n", .{});
     // GAP-0113: Display TLS certificate status
     // Note: Print "Connecting to..." here since actual connection happens in REPL loop
     if (insecure) {
-        std.debug.print("Connecting to {s} (insecure mode - TLS verification disabled)\n", .{server});
+        std.debug.print("Connecting to {s} (insecure mode - TLS verification disabled)\r\n", .{server});
     } else if (ca_cert_path != null or client_cert_path != null) {
-        std.debug.print("Connecting to {s} (TLS with custom certificates)\n", .{server});
-        if (ca_cert_path) |ca| std.debug.print("  CA cert: {s}\n", .{ca});
-        if (client_cert_path) |cert| std.debug.print("  Client cert: {s}\n", .{cert});
-        if (client_key_path) |key| std.debug.print("  Client key: {s}\n", .{key});
+        std.debug.print("Connecting to {s} (TLS with custom certificates)\r\n", .{server});
+        if (ca_cert_path) |ca| std.debug.print("  CA cert: {s}\r\n", .{ca});
+        if (client_cert_path) |cert| std.debug.print("  Client cert: {s}\r\n", .{cert});
+        if (client_key_path) |key| std.debug.print("  Client key: {s}\r\n", .{key});
     } else {
-        std.debug.print("Connecting to {s} (TLS enabled)\n", .{server});
+        std.debug.print("Connecting to {s} (TLS enabled)\r\n", .{server});
     }
-    std.debug.print("Type 'help' for help, 'exit' to quit.\n", .{});
+    std.debug.print("Type 'help' for help, 'exit' to quit.\r\n", .{});
 
     // GAP-0134: Set TLS configuration for shell transport before REPL
     // CANARY: REQ=REQ-SHELL-TLS-003; FEATURE="Shell TLS Config Setup"; ASPECT=SecureConnection; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-13
@@ -3682,8 +3684,8 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     };
 
     repl_loop.ReplLoop.run(options) catch |err| {
-        std.debug.print("REPL error: {s}\n", .{@errorName(err)});
-        std.debug.print("Try checking server connectivity or run 'geode shell --help' for options\n", .{});
+        std.debug.print("REPL error: {s}\r\n", .{@errorName(err)});
+        std.debug.print("Try checking server connectivity or run 'geode shell --help' for options\r\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 }
