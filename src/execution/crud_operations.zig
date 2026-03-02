@@ -32,6 +32,19 @@ const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 const Value = value_types.Value;
 const Env = value_types.Env;
 const ExtValue = @import("../eval_extended.zig").ExtValue;
+const ExecutionContext = execution.ExecutionContext;
+
+/// Build an Env populated with query parameters from ExecutionContext.
+/// GAP #54: Ensures $param references resolve inside CREATE/MERGE/DELETE property maps.
+fn envFromContext(allocator: std.mem.Allocator, context: ExecutionContext) Env {
+    return Env{
+        .allocator = allocator,
+        .names = &.{},
+        .values = &.{},
+        .param_names = context.query_param_names,
+        .param_values = context.query_param_values,
+    };
+}
 
 // CANARY: REQ=REQ-AUTO-INDEX-003; FEATURE="AutoIdIndex"; ASPECT=CrudAutoIndex; STATUS=TESTED; OWNER=crud_operations; UPDATED=2026-02-07
 /// Ensure auto-indexes exist for the given labels.
@@ -396,11 +409,7 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
 
             // Set properties if present
             if (node_pattern.props) |props| {
-                const env = Env{
-                    .names = &.{},
-                    .values = &.{},
-                    .allocator = allocator,
-                };
+                const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
 
                 for (props) |prop| {
                     const value = try eval.evalExpr(allocator, prop.value.*, env);
@@ -596,11 +605,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
 
             // Set properties if present
             if (node_pattern.props) |props| {
-                const env = Env{
-                    .names = &.{},
-                    .values = &.{},
-                    .allocator = allocator,
-                };
+                const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
 
                 for (props) |prop| {
                     const value = try eval.evalExpr(allocator, prop.value.*, env);
@@ -1380,7 +1385,7 @@ pub fn executeReturnClauseWithNodes(
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-018; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteCreate; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, current_graph: ?[]const u8) !ExecutionResult {
+pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
     const target_graph = current_graph orelse "default";
 
@@ -1405,11 +1410,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
 
             // Set properties if present
             if (node_pattern.props) |props| {
-                const env = Env{
-                    .names = &.{},
-                    .values = &.{},
-                    .allocator = allocator,
-                };
+                const env = envFromContext(allocator, context);
 
                 for (props) |prop| {
                     const value = try eval.evalExpr(allocator, prop.value.*, env);
@@ -1717,11 +1718,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
 
             // Set properties if present
             if (node_pattern.props) |props| {
-                const env = Env{
-                    .names = &.{},
-                    .values = &.{},
-                    .allocator = allocator,
-                };
+                const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
 
                 for (props) |prop| {
                     const value = try eval.evalExpr(allocator, prop.value.*, env);
@@ -1972,7 +1969,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
 // CANARY: REQ=REQ-MULTI-GRAPH-020; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteMerge; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // CANARY: REQ=REQ-PERF-LABEL-INDEX-004; FEATURE="LabelBasedIndex"; ASPECT=MergeOptimization; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
 // Issue #391: Optimized MERGE using label index instead of O(n) full table scan
-pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current_graph: ?[]const u8) !ExecutionResult {
+pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
     const target_graph = current_graph orelse "default";
 
@@ -2000,63 +1997,22 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                     if (!std.mem.eql(u8, node.graph_name, target_graph)) continue;
 
                     // Check if properties match (if properties are specified)
+                    // GAP #55: Use evalExpr + valuesEqual to handle all expression types
+                    // including parameter references ($param), not just literal String/Int/Bool.
                     if (node_pattern.props != null and node_pattern.props.?.len > 0) {
                         var props_match = true;
+                        const env = envFromContext(allocator, context);
                         for (node_pattern.props.?) |prop| {
-                            // For MERGE, we need to evaluate the property value
-                            // Handle String properties
-                            if (prop.value.* == .String) {
-                                const expected_val = prop.value.String;
-                                if (node.properties.get(prop.key)) |actual_val| {
-                                    if (actual_val == .String) {
-                                        if (!std.mem.eql(u8, actual_val.String, expected_val)) {
-                                            props_match = false;
-                                            break;
-                                        }
-                                    } else {
-                                        props_match = false;
-                                        break;
-                                    }
-                                } else {
-                                    props_match = false;
-                                    break;
-                                }
-                            } else if (prop.value.* == .Int) {
-                                // Handle Integer properties
-                                const expected_val = prop.value.Int;
-                                if (node.properties.get(prop.key)) |actual_val| {
-                                    if (actual_val == .Int) {
-                                        if (actual_val.Int != expected_val) {
-                                            props_match = false;
-                                            break;
-                                        }
-                                    } else {
-                                        props_match = false;
-                                        break;
-                                    }
-                                } else {
-                                    props_match = false;
-                                    break;
-                                }
-                            } else if (prop.value.* == .Bool) {
-                                // Handle Boolean properties
-                                const expected_val = prop.value.Bool;
-                                if (node.properties.get(prop.key)) |actual_val| {
-                                    if (actual_val == .Bool) {
-                                        if (actual_val.Bool != expected_val) {
-                                            props_match = false;
-                                            break;
-                                        }
-                                    } else {
-                                        props_match = false;
-                                        break;
-                                    }
-                                } else {
+                            const expected = eval.evalExpr(allocator, prop.value.*, env) catch {
+                                props_match = false;
+                                break;
+                            };
+                            if (node.properties.get(prop.key)) |actual| {
+                                if (!valuesEqual(actual, expected)) {
                                     props_match = false;
                                     break;
                                 }
                             } else {
-                                // For other types, property doesn't match (conservative)
                                 props_match = false;
                                 break;
                             }
@@ -2096,7 +2052,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                         if (node_pattern.name) |var_name| {
                             if (std.mem.eql(u8, prop.target.object, var_name)) {
                                 // Evaluate the property expression
-                                const value = try eval.evalExpr(allocator, prop.value, Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
+                                const value = try eval.evalExpr(allocator, prop.value, envFromContext(allocator, context));
                                 const prop_value = switch (value) {
                                     .Str => |s| blk: {
                                         // Get node to determine its labels for encryption
@@ -2138,7 +2094,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                         if (node_pattern.name) |var_name| {
                             if (std.mem.eql(u8, all_props.node, var_name)) {
                                 // Evaluate the properties expression (should be a map literal)
-                                const props_value = try eval.evalExpr(allocator, all_props.properties, Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
+                                const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
 
                                 // Clear all existing properties by getting node and manually clearing
                                 if (store.nodes.getPtr(node_id)) |node_ptr| {
@@ -2186,7 +2142,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
             // Set properties from pattern
             if (node_pattern.props) |props| {
                 for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
+                    const value = try eval.evalExpr(allocator, prop.value.*, envFromContext(allocator, context));
                     const prop_value = switch (value) {
                         .Str => |s| graph_store.PropertyValue{ .String = s },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
@@ -2205,7 +2161,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                         if (node_pattern.name) |var_name| {
                             if (std.mem.eql(u8, prop.target.object, var_name)) {
                                 // Evaluate the property expression
-                                const value = try eval.evalExpr(allocator, prop.value, Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
+                                const value = try eval.evalExpr(allocator, prop.value, envFromContext(allocator, context));
                                 const prop_value = switch (value) {
                                     .Str => |s| blk: {
                                         // Get node to determine its labels for encryption
@@ -2247,7 +2203,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                         if (node_pattern.name) |var_name| {
                             if (std.mem.eql(u8, all_props.node, var_name)) {
                                 // Evaluate the properties expression (should be a map literal)
-                                const props_value = try eval.evalExpr(allocator, all_props.properties, Env{ .allocator = allocator, .names = &.{}, .values = &.{} });
+                                const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
 
                                 // Clear all existing properties by getting node and manually clearing
                                 if (store.nodes.getPtr(node_id)) |node_ptr| {
@@ -2342,6 +2298,82 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
         }
     }
 
+    // GAP #58: Handle edge MERGE patterns (e.g., MATCH (a), (b) MERGE (a)-[:REL]->(b))
+    if (m.pattern.chains.len > 0 and m.pattern.chains[0].hops.len > 0) {
+        const chain = m.pattern.chains[0];
+        const hop = chain.hops[0];
+        const rel_types = hop.rel.types;
+
+        var source_id: ?u64 = null;
+        var target_id: ?u64 = null;
+
+        // Try to resolve source/target from context bindings first
+        if (context.bindings) |bindings| {
+            if (hop.left.name) |name| {
+                if (bindings.get(name)) |binding| {
+                    switch (binding) {
+                        .node_id => |nid| source_id = nid,
+                        .edge_id => {},
+                    }
+                }
+            }
+            if (hop.right.name) |name| {
+                if (bindings.get(name)) |binding| {
+                    switch (binding) {
+                        .node_id => |nid| target_id = nid,
+                        .edge_id => {},
+                    }
+                }
+            }
+        }
+
+        // Fallback: find nodes by labels
+        if (source_id == null and hop.left.labels.len > 0) {
+            var candidates = store.getNodesByLabels(target_graph, hop.left.labels) catch blk: {
+                break :blk std.ArrayList(u64).empty;
+            };
+            defer candidates.deinit(store.allocator);
+            if (candidates.items.len > 0) source_id = candidates.items[0];
+        }
+        if (target_id == null and hop.right.labels.len > 0) {
+            var candidates = store.getNodesByLabels(target_graph, hop.right.labels) catch blk: {
+                break :blk std.ArrayList(u64).empty;
+            };
+            defer candidates.deinit(store.allocator);
+            if (candidates.items.len > 0) target_id = candidates.items[0];
+        }
+
+        if (source_id != null and target_id != null) {
+            // Check if edge already exists between these nodes with matching type
+            var found_edge = false;
+            var edge_iter = store.edges.iterator();
+            while (edge_iter.next()) |edge_entry| {
+                const edge = edge_entry.value_ptr;
+                if (edge.from_id == source_id.? and edge.to_id == target_id.? and
+                    std.mem.eql(u8, edge.graph_name, target_graph))
+                {
+                    if (rel_types.len > 0) {
+                        for (rel_types) |rt| {
+                            if (std.mem.eql(u8, edge.label, rt)) {
+                                found_edge = true;
+                                break;
+                            }
+                        }
+                    } else {
+                        found_edge = true;
+                    }
+                    if (found_edge) break;
+                }
+            }
+
+            // If no matching edge found, create one
+            if (!found_edge) {
+                const edge_type = if (rel_types.len > 0) rel_types[0] else "";
+                _ = try store.createEdgeWithGraph(source_id.?, target_id.?, edge_type, target_graph);
+            }
+        }
+    }
+
     // Return empty result if no RETURN clause
     return ExecutionResult{
         .columns = try allocator.alloc([]const u8, 0),
@@ -2354,7 +2386,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-DELETE-001; FEATURE="MultiGraphIsolation"; ASPECT=DeleteGraphFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
-pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, current_graph: ?[]const u8) !ExecutionResult {
+pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
     // Filter by graph - use "default" if no graph specified
     const filter_graph = current_graph orelse "default";
@@ -2362,154 +2394,282 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
     // Track deleted node count
     var deleted_count: usize = 0;
 
-    // If there's a MATCH clause, delete matching nodes
+    // If there's a MATCH clause, delete matching nodes/edges
     if (d.match_clause) |match_pattern| {
-        // Extract pattern information from MATCH
-        var match_labels: [][]const u8 = &.{};
-        // CANARY: REQ=REQ-DELETE-PROPS-001; FEATURE="DeletePropertyFilter"; ASPECT=PropertyMatching; STATUS=TESTED; TEST=geodetestlab/specs/merge_performance_january_2026.yml; OWNER=crud_operations; UPDATED=2026-02-02
-        var match_props: ?[]ast.Property = null;
+        // GAP #56: Build a set of item variable names to determine what to delete.
+        // If items specify relationship variables, only delete edges (not nodes).
+        var delete_node_vars = std.StringHashMap(void).init(allocator);
+        defer delete_node_vars.deinit();
+        var delete_edge_vars = std.StringHashMap(void).init(allocator);
+        defer delete_edge_vars.deinit();
 
-        if (match_pattern.chains.len > 0) {
-            if (match_pattern.chains[0].head) |node_pattern| {
-                match_labels = node_pattern.labels;
-                match_props = node_pattern.props;
+        // Classify each delete item as node or edge by examining the MATCH pattern
+        if (d.items.len > 0 and match_pattern.chains.len > 0) {
+            // Build maps of variable names to their roles in the pattern
+            var node_var_set = std.StringHashMap(void).init(allocator);
+            defer node_var_set.deinit();
+            var edge_var_set = std.StringHashMap(void).init(allocator);
+            defer edge_var_set.deinit();
+
+            for (match_pattern.chains) |chain| {
+                if (chain.head) |head| {
+                    if (head.name) |name| try node_var_set.put(name, {});
+                }
+                for (chain.hops) |hop| {
+                    if (hop.left.name) |name| try node_var_set.put(name, {});
+                    if (hop.right.name) |name| try node_var_set.put(name, {});
+                    if (hop.rel.name) |name| try edge_var_set.put(name, {});
+                }
+            }
+
+            for (d.items) |item| {
+                const var_name = switch (item) {
+                    .Variable => |n| n,
+                    .Node => |n| n,
+                    .Relationship => |n| n,
+                };
+                if (edge_var_set.contains(var_name)) {
+                    try delete_edge_vars.put(var_name, {});
+                } else {
+                    try delete_node_vars.put(var_name, {});
+                }
             }
         }
 
-        // Collect nodes to delete (need to collect first to avoid iterator invalidation)
-        var nodes_to_delete = try std.ArrayList(u64).initCapacity(allocator, 0);
-        defer nodes_to_delete.deinit(allocator);
+        // Determine if we should delete nodes (either no items, or items include node vars)
+        const should_delete_nodes = d.items.len == 0 or delete_node_vars.count() > 0;
 
-        var iter = store.nodes.iterator();
-        while (iter.next()) |entry| {
-            const node = entry.value_ptr;
+        // --- Node deletion path (existing logic) ---
+        if (should_delete_nodes) {
+            // Extract pattern information from MATCH
+            var match_labels: [][]const u8 = &.{};
+            // CANARY: REQ=REQ-DELETE-PROPS-001; FEATURE="DeletePropertyFilter"; ASPECT=PropertyMatching; STATUS=TESTED; TEST=geodetestlab/specs/merge_performance_january_2026.yml; OWNER=crud_operations; UPDATED=2026-02-02
+            var match_props: ?[]ast.Property = null;
 
-            // CRITICAL FIX: Filter by graph_name to ensure graph isolation
-            if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
-
-            // Check WHERE clause if present
-            var should_delete = true;
-
-            // Filter by labels if specified
-            if (match_labels.len > 0) {
-                var has_all_labels = true;
-                for (match_labels) |required_label| {
-                    var found = false;
-                    for (node.labels) |node_label| {
-                        if (std.mem.eql(u8, required_label, node_label)) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        has_all_labels = false;
-                        break;
-                    }
+            if (match_pattern.chains.len > 0) {
+                if (match_pattern.chains[0].head) |node_pattern| {
+                    match_labels = node_pattern.labels;
+                    match_props = node_pattern.props;
                 }
-                if (!has_all_labels) should_delete = false;
-            }
-
-            // CANARY: REQ=REQ-DELETE-PROPS-002; FEATURE="DeletePropertyFilter"; ASPECT=PropertyEvaluation; STATUS=TESTED; TEST=geodetestlab/specs/merge_performance_january_2026.yml; OWNER=crud_operations; UPDATED=2026-02-02
-            // Filter by inline properties if specified (e.g., MATCH (n:Label {id: 'value'}) DELETE n)
-            if (should_delete) {
-                if (match_props) |props| {
-                    for (props) |prop| {
-                        if (node.properties.get(prop.key)) |node_prop_val| {
-                            // Evaluate the expected property value from pattern
-                            const empty_env = Env{
-                                .names = &.{},
-                                .values = &.{},
-                                .allocator = allocator,
-                            };
-                            const prop_val = eval.evalExpr(allocator, prop.value.*, empty_env) catch {
-                                should_delete = false;
-                                break;
-                            };
-                            // Compare using existing valuesEqual helper
-                            if (!valuesEqual(node_prop_val, prop_val)) {
-                                should_delete = false;
+                // Also check hop nodes for label extraction
+                if (match_pattern.chains[0].hops.len > 0) {
+                    // For node deletion, find the hop node whose variable is in delete_node_vars
+                    for (match_pattern.chains[0].hops) |hop| {
+                        if (hop.left.name) |name| {
+                            if (delete_node_vars.contains(name)) {
+                                match_labels = hop.left.labels;
+                                match_props = hop.left.props;
                                 break;
                             }
-                        } else {
-                            // Property doesn't exist on node, so it doesn't match
-                            should_delete = false;
-                            break;
+                        }
+                        if (hop.right.name) |name| {
+                            if (delete_node_vars.contains(name)) {
+                                match_labels = hop.right.labels;
+                                match_props = hop.right.props;
+                                break;
+                            }
                         }
                     }
                 }
             }
 
-            // CANARY: REQ=REQ-DELETE-WHERE-001; FEATURE="DeleteWhereEvaluation"; ASPECT=WhereClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_data_modification_comprehensive.yml; OWNER=crud_operations; UPDATED=2026-01-09
-            // Apply WHERE clause if present - evaluate with node bound to variable
-            if (d.where_clause) |where_expr| {
+            // Collect nodes to delete (need to collect first to avoid iterator invalidation)
+            var nodes_to_delete = try std.ArrayList(u64).initCapacity(allocator, 0);
+            defer nodes_to_delete.deinit(allocator);
+
+            var iter = store.nodes.iterator();
+            while (iter.next()) |entry| {
+                const node = entry.value_ptr;
+
+                // CRITICAL FIX: Filter by graph_name to ensure graph isolation
+                if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+
+                var should_delete = true;
+
+                // Filter by labels if specified
+                if (match_labels.len > 0) {
+                    var has_all_labels = true;
+                    for (match_labels) |required_label| {
+                        var found = false;
+                        for (node.labels) |node_label| {
+                            if (std.mem.eql(u8, required_label, node_label)) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            has_all_labels = false;
+                            break;
+                        }
+                    }
+                    if (!has_all_labels) should_delete = false;
+                }
+
+                // CANARY: REQ=REQ-DELETE-PROPS-002; FEATURE="DeletePropertyFilter"; ASPECT=PropertyEvaluation; STATUS=TESTED; TEST=geodetestlab/specs/merge_performance_january_2026.yml; OWNER=crud_operations; UPDATED=2026-02-02
+                // Filter by inline properties if specified
                 if (should_delete) {
-                    // Get variable name from MATCH pattern (e.g., "n" from MATCH (n:Person))
-                    var var_name: []const u8 = "n"; // Default variable name
-                    if (match_pattern.chains.len > 0) {
-                        if (match_pattern.chains[0].head) |node_pattern| {
-                            if (node_pattern.name) |name| {
-                                var_name = name;
+                    if (match_props) |props| {
+                        for (props) |prop| {
+                            if (node.properties.get(prop.key)) |node_prop_val| {
+                                const delete_env = envFromContext(allocator, context);
+                                const prop_val = eval.evalExpr(allocator, prop.value.*, delete_env) catch {
+                                    should_delete = false;
+                                    break;
+                                };
+                                if (!valuesEqual(node_prop_val, prop_val)) {
+                                    should_delete = false;
+                                    break;
+                                }
+                            } else {
+                                should_delete = false;
+                                break;
                             }
                         }
                     }
-
-                    // Create environment with node bound to the variable
-                    const names = try allocator.alloc([]const u8, 1);
-                    names[0] = var_name;
-                    const values = try allocator.alloc(Value, 1);
-                    values[0] = Value{ .Node = entry.value_ptr };
-
-                    const env = Env{
-                        .allocator = allocator,
-                        .names = names,
-                        .values = values,
-                    };
-
-                    // Evaluate WHERE expression
-                    const result = eval.evalExpr(allocator, where_expr, env) catch {
-                        // If evaluation fails, don't delete the node
-                        should_delete = false;
-                        continue;
-                    };
-
-                    // Check if result is truthy - only delete if WHERE evaluates to true
-                    should_delete = switch (result) {
-                        .Bool => |b| b,
-                        .Null => false,
-                        else => false, // Non-boolean results are falsy for DELETE purposes
-                    };
                 }
-            }
 
-            if (should_delete) {
-                try nodes_to_delete.append(allocator, entry.key_ptr.*);
-            }
-        }
-
-        // Delete the collected nodes
-        for (nodes_to_delete.items) |node_id| {
-            // If DETACH DELETE, also delete associated edges
-            if (d.detach) {
-                // Delete edges where this node is the source or target
-                var edges_to_delete = std.ArrayList(u64).empty;
-                defer edges_to_delete.deinit(allocator);
-
-                var edge_iter = store.edges.iterator();
-                while (edge_iter.next()) |edge_entry| {
-                    const edge = edge_entry.value_ptr;
-                    if (edge.from_id == node_id or edge.to_id == node_id) {
-                        try edges_to_delete.append(allocator, edge.id);
+                // CANARY: REQ=REQ-DELETE-WHERE-001; FEATURE="DeleteWhereEvaluation"; ASPECT=WhereClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_data_modification_comprehensive.yml; OWNER=crud_operations; UPDATED=2026-01-09
+                if (d.where_clause) |where_expr| {
+                    if (should_delete) {
+                        var var_name: []const u8 = "n";
+                        if (match_pattern.chains.len > 0) {
+                            if (match_pattern.chains[0].head) |node_pattern| {
+                                if (node_pattern.name) |name| {
+                                    var_name = name;
+                                }
+                            }
+                        }
+                        const names = try allocator.alloc([]const u8, 1);
+                        names[0] = var_name;
+                        const values = try allocator.alloc(Value, 1);
+                        values[0] = Value{ .Node = entry.value_ptr };
+                        const env = Env{
+                            .allocator = allocator,
+                            .names = names,
+                            .values = values,
+                        };
+                        const result = eval.evalExpr(allocator, where_expr, env) catch {
+                            should_delete = false;
+                            continue;
+                        };
+                        should_delete = switch (result) {
+                            .Bool => |b| b,
+                            .Null => false,
+                            else => false,
+                        };
                     }
                 }
 
-                for (edges_to_delete.items) |edge_id| {
-                    _ = store.edges.remove(edge_id);
+                if (should_delete) {
+                    try nodes_to_delete.append(allocator, entry.key_ptr.*);
                 }
             }
 
-            if (store.nodes.fetchRemove(node_id)) |_| {
-                // Note: The global store manages its own memory
-                deleted_count += 1;
+            // Delete the collected nodes
+            for (nodes_to_delete.items) |node_id| {
+                if (d.detach) {
+                    var edges_to_delete = std.ArrayList(u64).empty;
+                    defer edges_to_delete.deinit(allocator);
+                    var edge_iter = store.edges.iterator();
+                    while (edge_iter.next()) |edge_entry| {
+                        const edge = edge_entry.value_ptr;
+                        if (edge.from_id == node_id or edge.to_id == node_id) {
+                            try edges_to_delete.append(allocator, edge.id);
+                        }
+                    }
+                    for (edges_to_delete.items) |edge_id| {
+                        _ = store.edges.remove(edge_id);
+                    }
+                }
+                if (store.nodes.fetchRemove(node_id)) |_| {
+                    deleted_count += 1;
+                }
+            }
+        }
+
+        // --- Edge deletion path (GAP #56: relationship-targeted DELETE) ---
+        if (delete_edge_vars.count() > 0) {
+            // Extract relationship type constraints from MATCH pattern hops
+            for (match_pattern.chains) |chain| {
+                for (chain.hops) |hop| {
+                    const rel_name = hop.rel.name orelse continue;
+                    if (!delete_edge_vars.contains(rel_name)) continue;
+
+                    // Find edges matching this relationship pattern
+                    var edges_to_delete = std.ArrayList(u64).empty;
+                    defer edges_to_delete.deinit(allocator);
+
+                    var edge_iter = store.edges.iterator();
+                    while (edge_iter.next()) |edge_entry| {
+                        const edge = edge_entry.value_ptr;
+
+                        // Filter by graph
+                        if (!std.mem.eql(u8, edge.graph_name, filter_graph)) continue;
+
+                        // Filter by relationship type if specified
+                        if (hop.rel.types.len > 0) {
+                            var type_matches = false;
+                            for (hop.rel.types) |rel_type| {
+                                if (std.mem.eql(u8, edge.label, rel_type)) {
+                                    type_matches = true;
+                                    break;
+                                }
+                            }
+                            if (!type_matches) continue;
+                        }
+
+                        // Filter by source node labels
+                        if (hop.left.labels.len > 0) {
+                            if (store.nodes.get(edge.from_id)) |from_node| {
+                                var has_labels = true;
+                                for (hop.left.labels) |req_label| {
+                                    var found = false;
+                                    for (from_node.labels) |node_label| {
+                                        if (std.mem.eql(u8, req_label, node_label)) {
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!found) {
+                                        has_labels = false;
+                                        break;
+                                    }
+                                }
+                                if (!has_labels) continue;
+                            } else continue;
+                        }
+
+                        // Filter by target node labels
+                        if (hop.right.labels.len > 0) {
+                            if (store.nodes.get(edge.to_id)) |to_node| {
+                                var has_labels = true;
+                                for (hop.right.labels) |req_label| {
+                                    var found = false;
+                                    for (to_node.labels) |node_label| {
+                                        if (std.mem.eql(u8, req_label, node_label)) {
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!found) {
+                                        has_labels = false;
+                                        break;
+                                    }
+                                }
+                                if (!has_labels) continue;
+                            } else continue;
+                        }
+
+                        try edges_to_delete.append(allocator, edge_entry.key_ptr.*);
+                    }
+
+                    // Delete the collected edges
+                    for (edges_to_delete.items) |edge_id| {
+                        if (store.edges.remove(edge_id)) {
+                            deleted_count += 1;
+                        }
+                    }
+                }
             }
         }
 
@@ -2520,23 +2680,53 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
             });
         };
     } else if (d.items.len > 0) {
-        // Delete specific items
-        for (d.items) |item| {
-            switch (item) {
-                .Variable => |var_name| {
-                    // For now, we don't have variable resolution context
-                    // This would require tracking variables from MATCH clause
-                    _ = var_name;
-                },
-                .Node => |node_name| {
-                    // Delete node by variable name
-                    _ = node_name;
-                },
-                .Relationship => |rel_name| {
-                    // Delete relationship by variable name
-                    _ = rel_name;
-                },
+        // GAP #56: Delete specific items by variable name.
+        // Without a MATCH clause, items refer to variables bound in a preceding
+        // MATCH statement (query-level delete_items path). For standalone DELETE
+        // statements, attempt to resolve items via context bindings.
+        if (context.bindings) |bindings| {
+            for (d.items) |item| {
+                const var_name = switch (item) {
+                    .Variable => |n| n,
+                    .Node => |n| n,
+                    .Relationship => |n| n,
+                };
+                if (bindings.get(var_name)) |binding| {
+                    switch (binding) {
+                        .node_id => |nid| {
+                            if (d.detach) {
+                                // DETACH: delete connected edges first
+                                var edges_to_remove = std.ArrayList(u64).empty;
+                                defer edges_to_remove.deinit(allocator);
+                                var edge_it = store.edges.iterator();
+                                while (edge_it.next()) |edge_entry| {
+                                    const edge = edge_entry.value_ptr;
+                                    if (edge.from_id == nid or edge.to_id == nid) {
+                                        try edges_to_remove.append(allocator, edge.id);
+                                    }
+                                }
+                                for (edges_to_remove.items) |eid| {
+                                    _ = store.edges.remove(eid);
+                                }
+                            }
+                            if (store.nodes.fetchRemove(nid)) |_| {
+                                deleted_count += 1;
+                            }
+                        },
+                        .edge_id => |eid| {
+                            if (store.edges.remove(eid)) {
+                                deleted_count += 1;
+                            }
+                        },
+                    }
+                }
             }
+            // Persist changes
+            store.saveToFile() catch |err| {
+                log.err("CRITICAL: Failed to persist after targeted delete", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+            };
         }
     }
 

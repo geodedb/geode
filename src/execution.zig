@@ -802,7 +802,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         .Create => |c| {
             const create_graph = if (context.session_state) |session| session.graph else null;
-            return executeCreate(allocator, c, create_graph);
+            return executeCreate(allocator, c, create_graph, context);
         },
         .Insert => |ins| {
             const insert_graph = if (context.session_state) |session| session.graph else null;
@@ -810,11 +810,11 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         .Delete => |d| {
             const delete_graph = if (context.session_state) |session| session.graph else null;
-            return executeDelete(allocator, d, delete_graph);
+            return executeDelete(allocator, d, delete_graph, context);
         },
         .Merge => |m| {
             const merge_graph = if (context.session_state) |session| session.graph else null;
-            return executeMerge(allocator, m, merge_graph);
+            return executeMerge(allocator, m, merge_graph, context);
         },
         .StartTransaction => |txn| {
             // CANARY: REQ=REQ-GQL-082; FEATURE="TransactionManagement"; ASPECT=StartTransaction; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
@@ -846,8 +846,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                             .Procedure => |proc| executeCallProcedure(allocator, proc, mut_context),
                             .Subquery => |subq| executeCallSubquery(allocator, subq, mut_context),
                         },
-                        .Create => |create_stmt| executeCreate(allocator, create_stmt, txn_graph),
-                        .Merge => |m| executeMerge(allocator, m, txn_graph),
+                        .Create => |create_stmt| executeCreate(allocator, create_stmt, txn_graph, mut_context),
+                        .Merge => |m| executeMerge(allocator, m, txn_graph, mut_context),
                         .StartTransaction => return error.NestedTransactionNotAllowed,
                         .Commit => return error.CommitInTransactionBody,
                         .Rollback => return error.RollbackInTransactionBody,

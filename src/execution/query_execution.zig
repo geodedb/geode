@@ -1436,6 +1436,19 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         return executeCreateQuery(allocator, q, create_pattern, null, param_names.items, param_values.items, create_graph);
     }
 
+    // GAP #57: Check if there's a MERGE statement in the query chain
+    if (q.merge_statement) |merge_stmt| {
+        const merge_graph = if (context.session_state) |session| session.graph else null;
+        const crud = @import("crud_operations.zig");
+        const merge_result = try crud.executeMerge(allocator, merge_stmt.*, merge_graph, context);
+        // If there's a return clause on the query (not the merge), apply it
+        // Otherwise return the merge result directly
+        if (q.ret.items.len > 0 and merge_result.rows.len > 0) {
+            return merge_result;
+        }
+        return merge_result;
+    }
+
     // Check if there's a MATCH + CALL pattern
     if (q.match.chains.len > 0 and q.call_clause != null) {
         return executeMatchCallQuery(allocator, q, context);

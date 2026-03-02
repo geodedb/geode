@@ -101,6 +101,8 @@ pub const Query = struct {
     // Initial CALL subquery for CALL { ... } WITH ... RETURN pattern
     // When set, this subquery should be executed first and its results used as input to WITH/WHERE/RETURN
     initial_call_subquery: ?*Query = null,
+    // GAP #57: MERGE statement within a query chain (e.g., WITH a MERGE (b:T) RETURN ...)
+    merge_statement: ?*MergeStatement = null,
 };
 
 pub const UnionQuery = struct {

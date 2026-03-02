@@ -711,3 +711,70 @@ test "ORDER BY path alias is rejected (policy)" {
     defer result.deinit();
     try std.testing.expect(result.program.statements.len == 1);
 }
+
+// ── GAP #54-#59 TDD Tests ──────────────────────────────────────────────────
+
+// GAP #59: Bare SET after MERGE must parse successfully
+test "GAP59: MERGE with bare SET parses" {
+    var result = lib.parse(std.testing.allocator, "MERGE (n:T {id: '1'}) SET n.status = 'active'", .{}) catch |err| {
+        std.debug.print("GAP59 FAIL: parse error: {}\n", .{err});
+        return err;
+    };
+    defer result.deinit();
+    try std.testing.expect(result.program.statements.len > 0);
+    try std.testing.expect(result.program.statements[0] == .Merge);
+}
+
+// GAP #59: Bare SET should populate both on_create and on_match
+test "GAP59: MERGE bare SET populates on_create and on_match" {
+    var result = lib.parse(std.testing.allocator, "MERGE (n:T {id: '1'}) SET n.status = 'active'", .{}) catch |err| {
+        std.debug.print("GAP59 FAIL: parse error: {}\n", .{err});
+        return err;
+    };
+    defer result.deinit();
+    const merge = result.program.statements[0].Merge;
+    try std.testing.expectEqual(@as(usize, 1), merge.on_create.len);
+    try std.testing.expectEqual(@as(usize, 1), merge.on_match.len);
+}
+
+// GAP #59: Bare SET + RETURN
+test "GAP59: MERGE bare SET with RETURN parses" {
+    var result = lib.parse(std.testing.allocator, "MERGE (n:T {id: '1'}) SET n.val = 'x' RETURN n.val AS v", .{}) catch |err| {
+        std.debug.print("GAP59 FAIL: parse error: {}\n", .{err});
+        return err;
+    };
+    defer result.deinit();
+    try std.testing.expect(result.program.statements[0] == .Merge);
+    try std.testing.expect(result.program.statements[0].Merge.return_clause != null);
+}
+
+// GAP #58: Edge MERGE pattern parses with hops
+test "GAP58: MERGE (a)-[:REL]->(b) parses edge pattern in hops" {
+    var result = lib.parse(std.testing.allocator, "MERGE (a:X)-[:KNOWS]->(b:Y)", .{}) catch |err| {
+        std.debug.print("GAP58 FAIL: parse error: {}\n", .{err});
+        return err;
+    };
+    defer result.deinit();
+    try std.testing.expect(result.program.statements.len >= 1);
+    try std.testing.expect(result.program.statements[0] == .Merge);
+    const merge = result.program.statements[0].Merge;
+    // Should have hops for edge pattern
+    try std.testing.expect(merge.pattern.chains.len > 0);
+    try std.testing.expect(merge.pattern.chains[0].hops.len > 0);
+    const hop = merge.pattern.chains[0].hops[0];
+    try std.testing.expect(hop.rel.types.len > 0);
+    try std.testing.expectEqualStrings("KNOWS", hop.rel.types[0]);
+}
+
+// GAP #57: WITH after MERGE parses as two statements (MERGE + Query with MERGE chain)
+test "GAP57: MERGE WITH MERGE RETURN parses without error" {
+    var result = lib.parse(std.testing.allocator, "MERGE (a:T1 {id: 'a1'}) WITH a MERGE (b:T2 {id: 'b1'}) RETURN a.id AS a_id, b.id AS b_id", .{}) catch |err| {
+        std.debug.print("GAP57 FAIL: parse error: {}\n", .{err});
+        return err;
+    };
+    defer result.deinit();
+    // Should parse as 2 statements: MERGE + Query(WITH...MERGE...RETURN)
+    try std.testing.expect(result.program.statements.len >= 2);
+    try std.testing.expect(result.program.statements[0] == .Merge);
+    try std.testing.expect(result.program.statements[1] == .Query);
+}

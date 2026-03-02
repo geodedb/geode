@@ -123,7 +123,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // Check write permission
             try checkPermission(context, .Write);
             const create_graph = if (context.session_state) |session| session.graph else null;
-            return executeCreate(allocator, c, create_graph);
+            return executeCreate(allocator, c, create_graph, context);
         },
         .Insert => |ins| {
             // Check write permission
@@ -136,13 +136,13 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             try checkPermission(context, .Write);
             // CANARY: REQ=REQ-MULTI-GRAPH-DELETE-002; FEATURE="MultiGraphIsolation"; ASPECT=DeleteGraphContext; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
             const delete_graph = if (context.session_state) |session| session.graph else null;
-            return executeDelete(allocator, d, delete_graph);
+            return executeDelete(allocator, d, delete_graph, context);
         },
         .Merge => |m| {
             // Check write permission
             try checkPermission(context, .Write);
             const merge_graph = if (context.session_state) |session| session.graph else null;
-            return executeMerge(allocator, m, merge_graph);
+            return executeMerge(allocator, m, merge_graph, context);
         },
         .StartTransaction => |txn| {
             // CANARY: REQ=REQ-GQL-082; FEATURE="TransactionManagement"; ASPECT=StartTransaction; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
@@ -183,12 +183,12 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                         .Create => |create_stmt| blk: {
                             // CRITICAL SECURITY: Check Write permission for Create in transaction
                             checkPermission(mut_context, .Write) catch |err| break :blk err;
-                            break :blk executeCreate(allocator, create_stmt, txn_graph);
+                            break :blk executeCreate(allocator, create_stmt, txn_graph, mut_context);
                         },
                         .Merge => |m| blk: {
                             // CRITICAL SECURITY: Check Write permission for Merge in transaction
                             checkPermission(mut_context, .Write) catch |err| break :blk err;
-                            break :blk executeMerge(allocator, m, txn_graph);
+                            break :blk executeMerge(allocator, m, txn_graph, mut_context);
                         },
                         .StartTransaction => return error.NestedTransactionNotAllowed,
                         .Commit => return error.CommitInTransactionBody,

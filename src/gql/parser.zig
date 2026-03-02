@@ -1663,6 +1663,32 @@ pub const Parser = struct {
                     .having = null,
                 };
             }
+
+            // GAP #57: Handle MERGE after initial WITH clause (e.g., WITH a MERGE (b) RETURN ...)
+            if (self.cur.kind == .MERGE) {
+                const merge_stmt = try self.parseMergeStatement();
+                const merge_ptr = try self.arena.allocator().create(ast.MergeStatement);
+                merge_ptr.* = merge_stmt.Merge;
+
+                return ast.Query{
+                    .optional_match = false,
+                    .match = .{ .chains = &.{} },
+                    .create_pattern = null,
+                    .where_clause = initial_where_expr,
+                    .with_clause = null,
+                    .is_initial_with = true,
+                    .set_clauses = &.{},
+                    .remove_clauses = &.{},
+                    .ret = merge_stmt.Merge.return_clause orelse .{ .items = initial_with_clause.?.items, .distinct = false },
+                    .order_by = null,
+                    .limit = null,
+                    .offset = null,
+                    .next_query = null,
+                    .group_by = null,
+                    .having = null,
+                    .merge_statement = merge_ptr,
+                };
+            }
         }
 
         // Check for SELECT at the beginning (for queries like: SELECT 1 AS x)
@@ -2106,7 +2132,7 @@ pub const Parser = struct {
             // CANARY: REQ=REQ-GQL-WITH-CHAIN-001; FEATURE="ChainedWithClauses"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
             // Check for query chaining: WITH ... WITH/MATCH/CREATE/FOR ...
             // If we see WITH, MATCH, CREATE, or FOR after WITH, parse it as a chained query or statement
-            if (self.cur.kind == .WITH or self.cur.kind == .MATCH or self.cur.kind == .CREATE or self.cur.kind == .FOR) {
+            if (self.cur.kind == .WITH or self.cur.kind == .MATCH or self.cur.kind == .CREATE or self.cur.kind == .FOR or self.cur.kind == .MERGE) {
                 if (self.cur.kind == .FOR) {
                     // FOR needs special handling as it's a statement, not a query
                     // Parse the FOR statement and store it in the query
@@ -2133,6 +2159,32 @@ pub const Parser = struct {
                         .for_statement = for_ptr,
                     };
                     // Allocate on arena and store pointer
+                    const next_ptr = try self.arena.allocator().create(ast.Query);
+                    next_ptr.* = next_query;
+                    next_query_ptr = next_ptr;
+                } else if (self.cur.kind == .MERGE) {
+                    // GAP #57: MERGE needs special handling as it's a statement, not a query.
+                    // Parse the MERGE and wrap it in a query for chaining.
+                    const merge_stmt = try self.parseMergeStatement();
+                    const merge_ptr = try self.arena.allocator().create(ast.MergeStatement);
+                    merge_ptr.* = merge_stmt.Merge;
+                    const next_query = ast.Query{
+                        .optional_match = false,
+                        .match = .{ .chains = &.{} },
+                        .create_pattern = null,
+                        .where_clause = null,
+                        .with_clause = null,
+                        .set_clauses = &.{},
+                        .remove_clauses = &.{},
+                        .ret = merge_stmt.Merge.return_clause orelse .{ .items = &.{}, .distinct = false },
+                        .order_by = null,
+                        .limit = null,
+                        .offset = null,
+                        .next_query = null,
+                        .group_by = null,
+                        .having = null,
+                        .merge_statement = merge_ptr,
+                    };
                     const next_ptr = try self.arena.allocator().create(ast.Query);
                     next_ptr.* = next_query;
                     next_query_ptr = next_ptr;
@@ -4391,6 +4443,14 @@ pub const Parser = struct {
             } else {
                 return error.UnexpectedToken;
             }
+        }
+
+        // Handle bare SET (applies to both create and match paths) - GAP #59
+        if (self.cur.kind == .SET) {
+            self.advance();
+            const clauses = try self.parseSetClauses();
+            try on_create.appendSlice(self.arena.allocator(), clauses);
+            try on_match.appendSlice(self.arena.allocator(), clauses);
         }
 
         // Optional RETURN clause
