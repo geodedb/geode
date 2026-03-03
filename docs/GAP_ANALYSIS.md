@@ -1,13 +1,13 @@
 # Security Gap Analysis
 
-Last updated: 2026-03-02
+Last updated: 2026-03-03
 
 ## Summary
 
-- Total findings: 59
-- Closed / Implemented: 47
+- Total findings: 60
+- Closed / Implemented: 48
 - Blocked: 5
-- Open: 1 (security)
+- Open: 1 (1 security)
 - Closed (Won't Do by policy): 6 (`#431`, `#432`, `#433`, `#434`, `#438`, `#492`)
 
 ## Policy Exceptions (Future Agents)
@@ -84,12 +84,19 @@ Last updated: 2026-03-02
 | 58 | Medium | 40 | Edge MERGE not supported: `MERGE (a)-[r:TYPE]->(b)` returns parse error. Only node MERGE is supported. Must use MATCH + CREATE as workaround. (`confidence::confirmed`) | query/parser | CWE-20 | Confirmed via CLI: `MATCH (a:A), (b:B) MERGE (a)-[:REL]->(b)` returns parse error. Workaround: `MATCH (a:A), (b:B) CREATE (a)-[:REL]->(b)`. | TBD | `executeMerge` in `crud_operations.zig` now handles edge patterns in `chains[0].hops`. Resolves source/target from context bindings or label lookup, checks for existing edges, creates via `createEdgeWithGraph` if not found. | query/engine | 2026-03-02 | Closed / Implemented |
 | 59 | Medium | 40 | MERGE bare SET parse error: `MERGE (n:L {id: ?}) SET n.prop = val` returns parse error. Only ON CREATE SET / ON MATCH SET allowed after MERGE. (`confidence::confirmed`) | query/parser | CWE-20 | Confirmed via CLI: `MERGE (n:T {id: '1'}) SET n.status = 'active'` returns `42000: parse error`. Must use `ON CREATE SET` or `ON MATCH SET`. | TBD | `parseMergeStatement()` in `parser.zig` now accepts bare SET after the ON loop. SET clauses are appended to both `on_create` and `on_match` lists (applied unconditionally). | query/parser | 2026-03-02 | Closed / Implemented |
 
+## Transport Interoperability Findings (from Weaver integration testing)
+
+| Rank | Sev | Risk | Finding | Component | CWE/OWASP | Evidence(file:line) | Issue URL | Fix | Owner | Due | Status |
+|---|---|---:|---|---|---|---|---|---|---|---|---|
+| 60 | Critical | 90 | QUIC interop regression with quic-go: Go client (quic-go v0.55.0 through v0.59.0) could not complete TLS handshake with Geode in intermediate builds between `667fafc4` and `a11c2104`. The accept loop rewrite in `667fafc4` (300-iteration poll → single-poll) exposed a connection handling bottleneck that prevented timely handshake completion under the new PollSync mutex+condvar design. Fixed by commit `a11c2104` which resolved connection handling bottlenecks (#47-#53) including poll starvation, accept timing, and handler stream-wait improvements. (`confidence::confirmed`) | server/transport | CWE-400, OWASP A05 | Verified 2026-03-03: quic-go v0.54.1 and v0.59.0 both pass — 10/10 concurrent connections with handshake + stream open in <300ms. Transport code unchanged since v0.1.13. QUIC library interop matrix (commit `49a0d427`) shows quic-go PASS for handshake/transfer/retry/http3. Regression test: `tests/quic_tests/test_quicgo_interop_regression.go`. | Commits `a11c2104`, `667fafc4` | Root cause: the old 300-iteration accept loop masked a timing dependency where multiple poll cycles were needed for the full handshake exchange. The single-poll rewrite returned connections before the handshake completed; handler threads then competed for poll access via PollSync, delaying Handshake Finished processing. Fix `a11c2104` optimized poll timing (1ms poll + 100μs gap), handler stream-wait (poll_cv event-driven), and PollSync coordination. | server/transport | 2026-03-03 | Closed / Implemented |
+
 ## Remaining Blockers
 
 1. `#483` needs org-level signing/SBOM tooling enablement in release infrastructure (cosign identity policy, SBOM attestation policy, and CI secret/oidc wiring).
 
 ## Closed Findings (Previously Open — Now Resolved)
 
+- `#60`: **Closed 2026-03-03.** QUIC interop regression with quic-go resolved. Root cause: accept loop rewrite (`667fafc4`) exposed connection handling bottleneck where single-poll pattern returned connections before handshake completed; handler threads then competed for PollSync, delaying Handshake Finished processing. Fixed by `a11c2104` (connection handling bottleneck fixes #47-#53). Verified: quic-go v0.54.1 and v0.59.0 pass 10/10 concurrent connections with handshake + stream in <300ms. Regression test added: `tests/quic_tests/test_quicgo_interop_regression.go`.
 - `#428`, `#429`, `#482`: **Closed 2026-02-18.** Git history audit complete: `.env` committed in `2308910d`, removed in `3b21201c`; TLS private keys never committed; all exposed dev credentials (Vault token, S3 key, Redis password, Grafana admin password) treated as compromised and superseded/rotated. Git history not rewritten — residual risk accepted (dev-stack credentials only, no production secrets). `.gitignore` excludes `.env` going forward. Commit: `3c15f0fc`.
 - `#490`: **Closed 2026-02-18.** Federation HELLO handshake cluster token auth implemented; `GEODE_CLUSTER_TOKEN` env var wired into federation; server-side `validateFederationAuth()` uses `std.crypto.timing_safe.eql` with 256-byte padded comparison; opportunistic mTLS logging added. Commit: `049fe724`.
 - `#481`: **Closed 2026-02-18.** `password_hint` attribute removed from structured log in `geode_auth_lib.zig:1054-1059`; password written only to stderr via `std.debug.print`. Commit: `80830631`.
