@@ -215,10 +215,9 @@ const BufferedProtoReader = struct {
                     if (would_block_attempts >= max_would_block_attempts) {
                         return error.Timeout;
                     }
-                    // #53: Wait for main thread's next poll cycle via condvar
-                    // instead of blind 100μs sleep. Wakes promptly when poll()
-                    // delivers data rather than spinning on fixed intervals.
-                    self.transport.poll_sync.waitForPoll(5 * std.time.ns_per_ms);
+                    // #60: Use Thread.sleep instead of waitForPoll to avoid
+                    // PollSync mutex contention that blocks QUIC handshake completion.
+                    std.Thread.sleep(100 * std.time.ns_per_us);
                     continue;
                 }
                 return err;
@@ -423,20 +422,21 @@ pub fn handleQuicConnection(
     defer transport.destroyConnection(conn);
     log.debug("Entering handleQuicConnection", &.{});
 
-    // Wait for incoming STREAM frames using poll_cv event-driven wait.
-    // #51/#53: Uses poll_cv.waitForPoll() instead of blind Thread.sleep(),
-    // waking promptly when the main thread's poll() delivers data.
-    // Reduced total wait from 500ms to 200ms since accept() no longer
-    // waits for streams (returns immediately after tryAccept).
+    // Wait for incoming STREAM frames using exponential backoff.
+    // #60: Uses Thread.sleep instead of poll_cv.waitForPoll() because
+    // waitForPoll's mutex acquisition on PollSync.mu contends with the
+    // main thread's enterPoll()/leavePoll() cycle, preventing the QUIC
+    // handshake from completing (clients see "no recent network activity").
     var poll_attempts: usize = 0;
-    const max_wait_ms: u64 = 200;
+    var backoff_us: u64 = 100; // Start at 100μs
+    const max_backoff_us: u64 = 50_000; // Cap at 50ms
+    const max_total_wait_ms: u64 = 500;
     var total_waited_us: u64 = 0;
-    const poll_wait_ns: u64 = 10 * std.time.ns_per_ms; // 10ms per wait
-
-    while (total_waited_us < max_wait_ms * 1000) : (poll_attempts += 1) {
+    while (total_waited_us < max_total_wait_ms * 1000) : (poll_attempts += 1) {
         if (conn.inner.hasIncomingStreams()) break;
-        transport.poll_sync.waitForPoll(poll_wait_ns); // event-driven, not blind sleep
-        total_waited_us += 10_000; // 10ms per iteration
+        std.Thread.sleep(backoff_us * std.time.ns_per_us);
+        total_waited_us += backoff_us;
+        backoff_us = @min(backoff_us * 2, max_backoff_us);
         if (poll_attempts > 0 and poll_attempts % 10 == 0) {
             log.debug("No streams yet, retrying", &.{
                 Attr.int("attempt", @intCast(poll_attempts + 1)),
@@ -577,8 +577,9 @@ pub fn handleQuicConnection(
         const packet_opt = line_reader.nextMessage() catch |err| {
             if (err == error.EndOfStream) return;
             if (err == error.WouldBlock) {
-                // #53: Wait for next poll cycle via condvar instead of blind sleep
-                transport.poll_sync.waitForPoll(5 * std.time.ns_per_ms);
+                // #60: Use Thread.sleep instead of waitForPoll to avoid
+                // PollSync mutex contention that blocks QUIC handshake completion.
+                std.Thread.sleep(100 * std.time.ns_per_us);
                 continue;
             }
             log.err("Protobuf read error", &.{Attr.string("error", @errorName(err))});
