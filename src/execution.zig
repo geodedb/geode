@@ -701,7 +701,14 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
         }
 
         last_result = executeStatementWithContext(allocator, stmt, current_context) catch |err| {
-            // On error, clean up both result pointers before returning
+            // If inside an active transaction, don't abort immediately — allow
+            // subsequent ROLLBACK/COMMIT/RETURN statements to execute so the
+            // transaction can be properly closed and results returned.
+            if (current_context.transaction_state == .Active) {
+                last_result = null;
+                continue;
+            }
+            // Outside a transaction, clean up and propagate the error
             if (last_data_result) |*result| {
                 result.deinit(allocator);
             }
