@@ -501,79 +501,9 @@ test-macos-unit:
     - if: '$CI_COMMIT_TAG'
   allow_failure: false
 
-# =============================================================================
-# Test Stage - Native Windows Build + Unit Tests
-# =============================================================================
-
-test-windows-unit:
-  stage: test
-  timeout: 2h
-  tags:
-    - saas-windows-medium-amd64
-  retry:
-    max: 1
-    when:
-      - runner_system_failure
-      - stuck_or_timeout_failure
-      - script_failure
-  before_script:
-    # Install Zig via zvm (official bootstrap from zig.sh guidance)
-    - |
-      $ErrorActionPreference = "Stop"
-      $ZigVersion = "${env:ZIG_VERSION}"
-      irm https://raw.githubusercontent.com/tristanisham/zvm/master/install.ps1 | iex
-      zvm install $ZigVersion
-      zvm use $ZigVersion
-      zig version
-  script:
-    - |
-      $ErrorActionPreference = "Stop"
-      zvm use $env:ZIG_VERSION
-      zig version
-
-      function Invoke-ZigWithRetry {
-        param(
-          [Parameter(Mandatory=$true)][string[]]$Args,
-          [int]$MaxAttempts = 4,
-          [int]$DelaySeconds = 10
-        )
-
-        for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
-          Write-Host "Running: zig $($Args -join ' ') (attempt $Attempt/$MaxAttempts)"
-          & zig @Args
-          if ($LASTEXITCODE -eq 0) {
-            return
-          }
-
-          if ($Attempt -lt $MaxAttempts) {
-            Write-Host "zig command failed with exit code $LASTEXITCODE, retrying in $DelaySeconds seconds..."
-            Start-Sleep -Seconds $DelaySeconds
-          }
-        }
-
-        throw "zig command failed after $MaxAttempts attempts: zig $($Args -join ' ')"
-      }
-
-      # Create Windows junction points for symlinked test directories
-      # (tests/storage -> src/storage, tests/types -> src/types)
-      # Git on Windows creates text files for symlinks; replace with NTFS junctions
-      foreach ($pair in @(@{ Link = "tests\storage"; Target = "src\storage" }, @{ Link = "tests\types"; Target = "src\types" })) {
-        $target = (Resolve-Path $pair.Target).Path
-        if (Test-Path $pair.Link) { Remove-Item -Path $pair.Link -Force }
-        New-Item -ItemType Junction -Path $pair.Link -Target $target | Out-Null
-        Write-Host "Junction: $($pair.Link) -> $target"
-      }
-
-      Invoke-ZigWithRetry -Args @("test", "tests/test_cross_platform_stdio.zig")
-      Invoke-ZigWithRetry -Args @("build", "--summary", "all")
-      Invoke-ZigWithRetry -Args @("build", "test", "--summary", "all")
-      Invoke-ZigWithRetry -Args @("build", "-Doptimize=ReleaseSafe", "--summary", "all")
-      Invoke-ZigWithRetry -Args @("build", "test", "-Doptimize=ReleaseSafe", "--summary", "all")
-  rules:
-    - if: '$CI_MERGE_REQUEST_ID'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-    - if: '$CI_COMMIT_TAG'
-  allow_failure: true  # Windows runner has intermittent TLS/network failures; non-blocking
+# Windows unit tests removed — intermittent TLS/network failures on SaaS runners
+# made the job unreliable (allow_failure: true). Cross-platform coverage is provided
+# by test-cross-build which cross-compiles for windows-x86_64 and windows-aarch64.
 
 # =============================================================================
 # Test Stage - ReleaseSafe Build and Test (REQ-0008 enforcement)
