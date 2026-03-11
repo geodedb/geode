@@ -5,7 +5,6 @@ This directory contains the integration test framework for the QUIC implementati
 ## Overview
 
 The integration test framework provides infrastructure for testing complete QUIC connections, including:
-
 - Full TLS handshakes
 - Loss recovery and congestion control
 - Connection establishment and migration
@@ -17,9 +16,7 @@ The integration test framework provides infrastructure for testing complete QUIC
 ### Core Infrastructure (Phase 1) ✅
 
 #### `harness.zig` - Test Harness Base
-
 Provides the foundation for all integration tests:
-
 - **TestEndpoint**: Wrapper around Endpoint with test-specific features
   - Packet capture for verification
   - Mock time control for deterministic testing
@@ -29,9 +26,7 @@ Provides the foundation for all integration tests:
 - **TimeControl**: Mock time for deterministic testing
 
 #### `loopback.zig` - In-Memory Transport
-
 Simulates network communication without UDP sockets:
-
 - **LoopbackTransport**: Queue-based packet delivery
   - Configurable packet loss (0-100%)
   - Configurable packet corruption
@@ -43,9 +38,7 @@ Simulates network communication without UDP sockets:
 ### Test Fixtures (Phase 2) ✅
 
 #### `connection_pair.zig` - Connection Pair Fixture
-
 Linked client-server connections for easy testing:
-
 - Automatic loopback transport wiring
 - Synchronized packet delivery
 - Helper methods for common operations
@@ -53,9 +46,7 @@ Linked client-server connections for easy testing:
 - 8 tests passing
 
 #### `scenarios.zig` - Scenario Builder
-
 Fluent API for building test scenarios:
-
 ```zig
 scenario.createClient()
     .withALPN("h3")
@@ -65,16 +56,13 @@ scenario.createClient()
     .expectAck()
     .close();
 ```
-
 - Pre-configured templates for common scenarios
 - Supports packet loss, delay, corruption, reordering
 - Integration with packet capture and time control
 - 11 tests passing
 
 #### `tls_helpers.zig` - TLS Test Infrastructure
-
 Helpers for TLS testing:
-
 - Generate self-signed certificates
 - Create test key pairs
 - Set up client/server TLS configs
@@ -85,9 +73,7 @@ Helpers for TLS testing:
 ### RFC Compliance Test Suites (Phase 3) ✅
 
 #### `rfc9000_section7.zig` - Connection Establishment
-
 34 tests (8 infrastructure + 26 skip):
-
 - Client Initial packet generation (RFC 9000 §7)
 - Server Initial response (RFC 9000 §7)
 - Transport parameter exchange (RFC 9000 §7.3)
@@ -98,9 +84,7 @@ Helpers for TLS testing:
 Infrastructure tests verify the test framework is ready. Skip tests document what needs to be verified once endpoint integration is complete.
 
 #### `rfc9002_recovery.zig` - Loss Recovery
-
 34 tests (5 infrastructure + 29 skip):
-
 - PTO timer behavior (RFC 9002 §6.2)
 - Loss detection (RFC 9002 §6.1)
 - RTT estimation (RFC 9002 §5)
@@ -111,9 +95,7 @@ Infrastructure tests verify the test framework is ready. Skip tests document wha
 Includes infrastructure for packet loss, delay simulation, and deterministic time control essential for recovery testing.
 
 #### `rfc9000_packets.zig` - Packet Processing
-
 46 tests (6 infrastructure + 40 skip):
-
 - Initial packet processing
 - Handshake packet processing
 - 1-RTT packet processing
@@ -125,9 +107,7 @@ Includes infrastructure for packet loss, delay simulation, and deterministic tim
 Supports packet corruption, reordering, and ECN marking simulation for comprehensive packet testing.
 
 #### `rfc9000_section8.zig` - Address Validation
-
 40 tests (4 infrastructure + 36 skip):
-
 - Token generation and validation
 - Retry packet mechanism
 - Anti-amplification limits (RFC 9000 §8.1)
@@ -140,9 +120,7 @@ Infrastructure ready for address validation and connection migration testing.
 ### Advanced Feature Testing (Phase 4) ✅
 
 #### `migration.zig` - Connection Migration
-
 53 tests (7 infrastructure + 46 skip):
-
 - Client-initiated migration (RFC 9000 §9.1-9.2)
 - Server validation of new paths (RFC 9000 §9.3)
 - PATH_CHALLENGE/PATH_RESPONSE (RFC 9000 §8.2)
@@ -152,9 +130,7 @@ Infrastructure ready for address validation and connection migration testing.
 - Anti-amplification during migration
 
 #### `flow_control.zig` - Flow Control Mechanisms
-
 62 tests (11 infrastructure + 51 skip):
-
 - Stream-level flow control (RFC 9000 §4.1)
 - Connection-level flow control (RFC 9000 §4.1)
 - MAX_DATA and MAX_STREAM_DATA frames (RFC 9000 §19.9-19.10)
@@ -163,9 +139,7 @@ Infrastructure ready for address validation and connection migration testing.
 - Flow control window management
 
 #### `key_update.zig` - Key Updates
-
 61 tests (9 infrastructure + 52 skip):
-
 - Key update initiation (RFC 9001 §6.1)
 - Key phase bit handling (RFC 9001 §6.5)
 - Simultaneous key updates (RFC 9001 §6.5)
@@ -174,9 +148,7 @@ Infrastructure ready for address validation and connection migration testing.
 - Key derivation from TLS key schedule
 
 #### `zero_rtt.zig` - 0-RTT and Session Resumption
-
 72 tests (10 infrastructure + 62 skip):
-
 - Session resumption (RFC 9001 §4.6.1)
 - 0-RTT data transmission (RFC 9000 §2.3)
 - Early data security properties (RFC 9001 §4.6.2)
@@ -188,9 +160,7 @@ Infrastructure ready for address validation and connection migration testing.
 ### Interop and Stress Testing (Phase 5) ✅
 
 #### `interop/interop.zig` - Interoperability Testing
-
 48 tests (8 infrastructure + 40 skip):
-
 - **quic-go** (Go implementation): Handshake, version negotiation, data transfer, migration, 0-RTT
 - **aioquic** (Python implementation): Handshake, data transfer, HTTP/3, migration, 0-RTT
 - **quinn** (Rust implementation): Handshake, bidirectional streams, migration, 0-RTT
@@ -200,9 +170,7 @@ Infrastructure ready for address validation and connection migration testing.
 Infrastructure includes external process management, packet capture for debugging, and timeout handling.
 
 #### `stress/stress.zig` - Stress and Performance Testing
-
 46 tests (9 infrastructure + 37 skip):
-
 - High-load testing: 100/1000/10000 concurrent connections
 - Large data transfers: 1MB to 1GB across single/multiple streams
 - Resource exhaustion: Memory limits, FD limits, buffer exhaustion
@@ -213,9 +181,7 @@ Infrastructure includes external process management, packet capture for debuggin
 Infrastructure includes performance measurement (throughput, latency histograms), resource monitoring, and large data generation.
 
 #### `fault/fault.zig` - Fault Injection Testing
-
 62 tests (6 infrastructure + 56 skip):
-
 - **Packet loss**: Low (1%), medium (5%), high (20%), burst loss, complete partition
 - **Packet corruption**: Random, header, payload, auth tag, length field corruption
 - **Packet reordering**: Mild (10%) to severe (50%) reordering scenarios
@@ -229,9 +195,7 @@ Infrastructure integrates with loopback transport for configurable fault rates, 
 ### Endpoint Integration (Phase 6) ✅
 
 #### `real_endpoint.zig` - Real Endpoint Integration Tests
-
 16 tests (all skip - require build system configuration):
-
 - **Infrastructure** (3 tests): Server/client initialization, socket binding
 - **Connection establishment** (3 tests): Handshake, version negotiation
 - **Data transfer** (3 tests): Send/receive, multiple streams
@@ -242,9 +206,7 @@ Infrastructure integrates with loopback transport for configurable fault rates, 
 These tests demonstrate real UDP-based integration testing with the production endpoint. Currently all marked as "skip" because they require build system configuration to import actual endpoint modules.
 
 #### `ENDPOINT_INTEGRATION_GUIDE.md` - Integration Strategy Document
-
 Comprehensive guide covering:
-
 - **Architectural Analysis**: Loopback transport vs UDP sockets gap
 - **Integration Approaches**:
   - Approach 1: Real UDP testing on localhost (Phase 6 - current)
@@ -260,9 +222,7 @@ Comprehensive guide covering:
 ### Transport Abstraction Layer (Phase 7) ✅
 
 #### `transport.zig` - Pluggable Transport Interface
-
 510+ lines with 7 tests passing:
-
 - **Transport Interface**: Fat pointer pattern (vtable + context) for zero-cost abstraction
   - `send()`, `recv()`, `poll()`, `close()`, `getLocalAddr()` methods
   - Optional function pointers for flexibility
@@ -277,7 +237,6 @@ Comprehensive guide covering:
   - Will replace direct socket calls in endpoint.zig
 
 **Tests**:
-
 1. Transport interface basic structure (✅ passing)
 2. LoopbackTransportAdapter initialization (✅ passing)
 3. Send and receive between two sides (✅ passing)
@@ -287,9 +246,7 @@ Comprehensive guide covering:
 7. Multiple transports with same interface (✅ passing)
 
 #### `TRANSPORT_ABSTRACTION_RFC.md` - Design Document
-
 490+ lines covering:
-
 - **Design Rationale**: Fat pointer pattern for zero-cost abstraction
 - **Interface Definition**: Complete Transport struct with function pointers
 - **Adapter Implementations**: LoopbackTransportAdapter and UdpTransport examples
@@ -303,9 +260,7 @@ Comprehensive guide covering:
 ### Endpoint Integration Planning (Phase 8) ✅
 
 #### `ENDPOINT_TRANSPORT_INTEGRATION_PLAN.md` - Comprehensive Integration Strategy
-
 800+ lines covering complete endpoint integration roadmap:
-
 - **Three-Phase Migration Strategy**: Minimal disruption approach
   - Phase 8a: Add transport field (non-breaking, additive only)
   - Phase 8b: Implement UdpTransport (parallel development)
@@ -323,7 +278,6 @@ Comprehensive guide covering:
 - **Rollback Procedures**: How to safely revert if issues arise
 
 **Key Decision**: Phase 8 focuses on **planning and documentation** rather than modifying production endpoint.zig. This allows for:
-
 1. Thorough risk analysis before touching production code
 2. Complete implementation roadmap for future execution
 3. Resource allocation planning (1-2 week dedicated sprint needed)
@@ -425,7 +379,6 @@ The integration test framework provides:
 | Phase 8 | transport.zig (UdpTransport doc) | ✅ Complete | Documented implementation strategy |
 
 **Total Progress**:
-
 - **Infrastructure tests**: 127/127 passing (100%) - includes 7 Phase 7 transport tests
 - **Skip tests documented**: 474 tests ready for endpoint integration
 - **Total test framework**: 601 tests created
@@ -450,7 +403,6 @@ The integration test framework provides:
 ## Contributing
 
 When adding new integration tests:
-
 1. Reference specific RFC sections in test names
 2. Include RFC quote comments explaining requirements
 3. Use packet capture to verify wire format

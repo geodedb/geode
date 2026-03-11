@@ -5,7 +5,6 @@ This directory contains fault injection tests for evaluating the QUIC implementa
 ## Test Categories
 
 ### Network Failure Injection
-
 - Packet loss (random, burst, periodic)
 - Packet reordering
 - Packet duplication
@@ -14,7 +13,6 @@ This directory contains fault injection tests for evaluating the QUIC implementa
 - Asymmetric failures (one-way loss)
 
 ### Packet Corruption Injection
-
 - Random bit flips
 - Header corruption
 - Payload corruption
@@ -22,7 +20,6 @@ This directory contains fault injection tests for evaluating the QUIC implementa
 - Length field corruption
 
 ### Protocol Violation Injection
-
 - Malformed packets
 - Invalid frame sequences
 - Protocol state violations
@@ -30,7 +27,6 @@ This directory contains fault injection tests for evaluating the QUIC implementa
 - Invalid connection IDs
 
 ### Resource Failure Injection
-
 - Simulated memory allocation failures
 - File descriptor exhaustion
 - Buffer overflow scenarios
@@ -38,7 +34,6 @@ This directory contains fault injection tests for evaluating the QUIC implementa
 - Clock skew/drift
 
 ### Timing Failure Injection
-
 - Extreme delays (seconds, minutes)
 - Timeout scenarios
 - Timer precision issues
@@ -87,21 +82,18 @@ var transport = try loopback.LoopbackTransport.init(allocator, .{
 ## Fault Scenarios
 
 ### Basic Fault Scenarios
-
 - Single packet loss
 - Burst packet loss (3+ consecutive)
 - Random corruption
 - Extreme delay (>1 second)
 
 ### Complex Fault Scenarios
-
 - Loss + Corruption + Delay combined
 - Asymmetric faults (client-to-server vs server-to-client)
 - Time-varying faults (increase over time)
 - Targeted faults (only Initial packets, only Handshake, etc.)
 
 ### Catastrophic Fault Scenarios
-
 - Complete network partition
 - Sustained 100% packet loss
 - All packets corrupted
@@ -111,26 +103,22 @@ var transport = try loopback.LoopbackTransport.init(allocator, .{
 ## Expected Behavior Under Faults
 
 ### Packet Loss
-
 - **Low loss (<1%)**: Minimal impact, recovery via retransmission
 - **Medium loss (1-10%)**: Increased latency, successful recovery
 - **High loss (>10%)**: Slower recovery, possible timeout
 - **Complete loss**: Connection timeout and closure
 
 ### Packet Corruption
-
 - **Authenticated**: Corrupted packets rejected, retransmission
 - **Header corruption**: Packet discarded, no side effects
 - **Systematic corruption**: Connection may fail authentication
 
 ### Packet Reordering
-
 - **Mild reordering**: Transparent to application
 - **Extreme reordering**: Out-of-order processing
 - **Should not**: Cause data corruption or protocol violations
 
 ### Extreme Delays
-
 - **<RTT**: Minimal impact
 - **>RTT**: Triggers retransmission, PTO
 - **>>RTT**: Multiple PTOs, eventual timeout
@@ -138,20 +126,16 @@ var transport = try loopback.LoopbackTransport.init(allocator, .{
 ## Debugging Fault Scenarios
 
 ### Packet Capture
-
 ```bash
 # Capture packets during fault injection
 tcpdump -i lo -w fault_test.pcap 'udp'
 ```
 
 ### Detailed Logging
-
 Enable logging in both test framework and implementation to trace fault handling.
 
 ### Reproducing Faults
-
 All tests use seeded random number generators for reproducibility:
-
 ```zig
 test "Reproducible packet loss" {
     const seed: u64 = 12345;
@@ -163,7 +147,6 @@ test "Reproducible packet loss" {
 ## Contributing
 
 When adding fault injection tests:
-
 1. Use reproducible random seeds
 2. Document expected recovery behavior
 3. Set appropriate timeouts for fault scenarios

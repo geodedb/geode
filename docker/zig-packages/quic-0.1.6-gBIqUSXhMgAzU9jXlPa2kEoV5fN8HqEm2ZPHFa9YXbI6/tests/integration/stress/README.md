@@ -5,28 +5,24 @@ This directory contains stress tests for evaluating the QUIC implementation unde
 ## Test Categories
 
 ### High-Load Tests
-
 - Thousands of concurrent connections
 - High packet rate (>100k packets/sec)
 - Large data transfers (>1GB)
 - Many concurrent streams per connection
 
 ### Resource Exhaustion Tests
-
 - Memory pressure scenarios
 - File descriptor exhaustion
 - CPU saturation
 - Network buffer exhaustion
 
 ### Long-Lived Connection Tests
-
 - Connections lasting hours/days
 - Idle timeout edge cases
 - Key update frequency under load
 - Memory leak detection
 
 ### Scalability Tests
-
 - Connection establishment rate
 - Stream creation rate
 - Throughput vs connection count
@@ -50,7 +46,6 @@ timeout 300 zig test tests/integration/stress/stress.zig
 ## System Requirements
 
 Stress tests may require:
-
 - **RAM**: 4GB+ available
 - **File Descriptors**: Increase `ulimit -n` to 10000+
 - **CPU**: Multi-core recommended
@@ -96,7 +91,6 @@ valgrind --leak-check=full zig test tests/integration/stress/stress.zig
 ## Performance Metrics
 
 Tests track and report:
-
 - **Throughput**: MB/s, packets/s
 - **Latency**: p50, p95, p99, max
 - **Resource Usage**: memory, CPU, file descriptors
@@ -106,7 +100,6 @@ Tests track and report:
 ## Expected Performance
 
 Target performance benchmarks:
-
 - **Connection Rate**: 1000+ connections/sec
 - **Throughput**: 1+ Gbps per connection
 - **Latency**: <10ms p99 under load
@@ -116,7 +109,6 @@ Target performance benchmarks:
 ## Known Limitations
 
 Document current implementation limits:
-
 - **Max Connections**: TBD
 - **Max Streams Per Connection**: TBD
 - **Max Throughput**: TBD
@@ -125,7 +117,6 @@ Document current implementation limits:
 ## Debugging Performance Issues
 
 ### CPU Profiling
-
 ```bash
 # Generate CPU flame graph
 perf record -F 99 -g -- zig test tests/integration/stress/stress.zig
@@ -133,7 +124,6 @@ perf script | flamegraph.pl > flamegraph.svg
 ```
 
 ### Memory Profiling
-
 ```bash
 # Track allocations
 heaptrack zig test tests/integration/stress/stress.zig
@@ -141,7 +131,6 @@ heaptrack_gui heaptrack.*.gz
 ```
 
 ### Network Analysis
-
 ```bash
 # Capture packets during stress test
 tcpdump -i any -w stress_test.pcap udp
@@ -150,7 +139,6 @@ tcpdump -i any -w stress_test.pcap udp
 ## Contributing
 
 When adding stress tests:
-
 1. Set realistic timeouts
 2. Clean up resources on failure
 3. Report performance metrics

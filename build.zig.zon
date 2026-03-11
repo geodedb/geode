@@ -79,8 +79,8 @@
         // Updated 2026-02: batch UDP recv, retry hardening, initial_max_stream_data_uni,
         // stream credit recycling, transport.zig PollSync/endpointInit migration.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#49a0d427a539a9fa38a92c32cd143cd379338b4d",
-            .hash = "quic-0.1.6-gBIqUSDLMgAOKQ5uZ8LslAkBNXqIpztbLPiiH_zK26nv",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#316b0264b34258845c15dac36d6749c43d6cb034",
+            .hash = "quic-0.1.6-gBIqUSXhMgAzU9jXlPa2kEoV5fN8HqEm2ZPHFa9YXbI6",
         },
 
         // =======================================================================

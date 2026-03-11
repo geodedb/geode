@@ -20,7 +20,6 @@ You must generate them locally before running tests.
 ## Security Warning
 
 Generated test certificates are:
-
 - Self-signed with no chain of trust
 - NOT suitable for any production use
 - NOT secure for any real TLS communication
@@ -51,7 +50,6 @@ openssl req -new -x509 -key server-rsa.key -out server-rsa.crt -days 365 \
 ## Production Certificates
 
 For production deployments:
-
 1. Obtain certificates from a trusted Certificate Authority (CA)
 2. Use proper key management (HSM, secure key storage)
 3. Never commit private keys to version control
