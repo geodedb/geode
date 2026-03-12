@@ -62,7 +62,7 @@ repos:
   hooks:
   - id: shellcheck
     args: [--severity=error, --shell=bash]
-    exclude: ^(vendor/|dist/|tests/|scripts/test/|scripts/modularization/|geodetestlab/fixtures/|scripts/comprehensive_graph_test\.sh|scripts/current_graph_capabilities_test\.sh|scripts/graph_data_integration_test\.sh)
+    exclude: ^(vendor/|dist/|docker/zig-packages/|tests/|scripts/test/|scripts/modularization/|geodetestlab/fixtures/|scripts/comprehensive_graph_test\.sh|scripts/current_graph_capabilities_test\.sh|scripts/graph_data_integration_test\.sh)
 
   # =============================================================================
   # Python linting (for test scripts and tools)

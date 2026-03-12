@@ -13,10 +13,16 @@ import collections
 import pathlib
 import re
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 
 HASH_RE = re.compile(r"\.hash\s*=\s*\"([^\"]+)\"")
+
+# Zig 0.15 migrated from hex hashes (1220...) to base64 directory names.
+# Old-format hashes in transitive build.zig.zon files are resolved transparently
+# by Zig's package manager but don't correspond to directory names in the cache.
+OLD_HEX_HASH_RE = re.compile(r"^[0-9a-f]{64,}$")
 
 
 @dataclass
@@ -46,16 +52,30 @@ def analyze(root_zon: pathlib.Path, cache_dir: pathlib.Path) -> AnalysisResult:
         pkg_hash = queue.popleft()
         pkg_dir = cache_dir / pkg_hash
         if not pkg_dir.is_dir():
+            # Old hex hashes won't have matching directories — skip quietly
+            if OLD_HEX_HASH_RE.match(pkg_hash) or pkg_hash == "...":
+                continue
             missing.add(pkg_hash)
             continue
 
         dep_hashes = extract_hashes(pkg_dir / "build.zig.zon")
         for dep_hash in dep_hashes:
+            if dep_hash == "...":
+                continue
             if dep_hash not in reachable:
                 reachable.add(dep_hash)
                 queue.append(dep_hash)
 
     cache_dirs = {p.name for p in cache_dir.iterdir() if p.is_dir()}
+
+    # Use `zig build --fetch` as the authoritative source for which packages
+    # are actually needed.  Any directory present in the fetch output is NOT
+    # stale, even if the hash-graph walk couldn't reach it (e.g. old-format
+    # hex hashes that Zig resolves internally to new-format directory names).
+    fetch_dirs = _fetch_required_dirs(root_zon, cache_dir)
+    if fetch_dirs is not None:
+        reachable |= fetch_dirs
+
     stale_dirs = sorted(cache_dirs - reachable)
 
     return AnalysisResult(
@@ -65,6 +85,45 @@ def analyze(root_zon: pathlib.Path, cache_dir: pathlib.Path) -> AnalysisResult:
         cache_dirs=cache_dirs,
         stale_dirs=stale_dirs,
     )
+
+
+def _fetch_required_dirs(root_zon: pathlib.Path, cache_dir: pathlib.Path) -> set[str] | None:
+    """Run ``zig build --fetch`` into a temp cache and return the directory names.
+
+    Returns None if zig is not available or the command fails.
+    """
+    import tempfile
+
+    zig = shutil.which("zig")
+    if zig is None:
+        return None
+
+    with tempfile.TemporaryDirectory(prefix="zig-guard-") as tmpdir:
+        env = {
+            "ZIG_GLOBAL_CACHE_DIR": tmpdir,
+            "ZIG_LOCAL_CACHE_DIR": str(pathlib.Path(tmpdir) / "local"),
+            "PATH": "",  # will be overridden
+        }
+        import os
+
+        env["PATH"] = os.environ.get("PATH", "")
+
+        try:
+            subprocess.run(
+                [zig, "build", "--fetch"],
+                cwd=root_zon.parent,
+                env={**os.environ, **env},
+                capture_output=True,
+                timeout=120,
+                check=True,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+            return None
+
+        pkg_dir = pathlib.Path(tmpdir) / "p"
+        if not pkg_dir.is_dir():
+            return None
+        return {p.name for p in pkg_dir.iterdir() if p.is_dir()}
 
 
 def print_report(result: AnalysisResult) -> None:
