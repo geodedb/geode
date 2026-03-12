@@ -757,6 +757,20 @@ fn handleAlterUserSetPassword(
         return;
     };
 
+    // Persist the password change to the auth graph store so it survives restarts.
+    // The in-memory user_mgmt store is ephemeral; the SecurityManager's callback
+    // writes the new hash to the persistent GraphStore via AuthGraphManager.
+    if (state.security_manager) |sm| {
+        if (sm.getUserIdByUsername(username)) |user_id| {
+            sm.updatePassword(user_id, new_password) catch |err| {
+                log.warn("Failed to persist password change to auth graph", &.{
+                    Attr.string("username", username),
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+        }
+    }
+
     state.password_reset_required = false;
 
     // Send success response as a status-only execution result (no payload).

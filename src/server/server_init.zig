@@ -384,26 +384,32 @@ pub fn initialize(
         });
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-008; FEATURE="AuthGraphManager Integration"; ASPECT=SecurityManagerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
-    if (env_config.abac_enabled) {
-        if (agm_storage != null) {
-            // Auth graph is available: hydrate SecurityManager from graph records
-            ctx.security_manager_storage = hydrateSecurityManagerFromGraph(allocator, &agm_storage.?, hmac_key_result) catch |err| blk: {
-                log.err("Failed to hydrate SecurityManager from auth graph", &.{Attr.string("error", @errorName(err))});
-                break :blk null;
-            };
-            if (ctx.security_manager_storage != null) {
+    // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-008; FEATURE="AuthGraphManager Integration"; ASPECT=SecurityManagerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-03-12
+    // Always initialize SecurityManager when auth graph is available so that
+    // runtime password changes are persisted to disk.  ABAC policy enforcement
+    // is gated separately; the SecurityManager is needed for persistence even
+    // when ABAC is disabled.
+    if (agm_storage != null) {
+        // Auth graph is available: hydrate SecurityManager from graph records
+        ctx.security_manager_storage = hydrateSecurityManagerFromGraph(allocator, &agm_storage.?, hmac_key_result) catch |err| blk: {
+            log.err("Failed to hydrate SecurityManager from auth graph", &.{Attr.string("error", @errorName(err))});
+            break :blk null;
+        };
+        if (ctx.security_manager_storage != null) {
+            if (env_config.abac_enabled) {
                 log.info("ABAC enforcement enabled - SecurityManager hydrated from auth graph", &.{});
+            } else {
+                log.info("SecurityManager hydrated from auth graph (ABAC enforcement disabled)", &.{});
             }
-        } else {
-            // Fallback: old behavior (no auth graph, create default user)
-            ctx.security_manager_storage = initializeSecurityManager(allocator) catch |err| blk: {
-                log.err("Failed to initialize SecurityManager", &.{Attr.string("error", @errorName(err))});
-                break :blk null;
-            };
-            if (ctx.security_manager_storage != null) {
-                log.info("ABAC enforcement enabled - SecurityManager initialized (legacy mode)", &.{});
-            }
+        }
+    } else if (env_config.abac_enabled) {
+        // Fallback: old behavior (no auth graph, create default user)
+        ctx.security_manager_storage = initializeSecurityManager(allocator) catch |err| blk: {
+            log.err("Failed to initialize SecurityManager", &.{Attr.string("error", @errorName(err))});
+            break :blk null;
+        };
+        if (ctx.security_manager_storage != null) {
+            log.info("ABAC enforcement enabled - SecurityManager initialized (legacy mode)", &.{});
         }
     }
 

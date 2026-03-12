@@ -1120,6 +1120,17 @@ pub const SecurityManager = struct {
         try self.audit_log.append(.user_updated, user_id, "Password reset forced", .{});
     }
 
+    /// Look up a user's ID by username. Returns null if no matching user found.
+    pub fn getUserIdByUsername(self: *const Self, username: []const u8) ?UserId {
+        var it = self.users.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.username, username)) {
+                return entry.key_ptr.*;
+            }
+        }
+        return null;
+    }
+
     // Update password and clear reset requirement
     pub fn updatePassword(self: *Self, user_id: UserId, new_password: []const u8) !void {
         // CANARY: REQ=REQ-AUTH-POLICY-009; FEATURE="Password Update Policy Validation"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_009_UpdateValidation; OWNER=security; UPDATED=2025-09-30
