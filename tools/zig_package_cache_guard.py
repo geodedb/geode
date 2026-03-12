@@ -32,6 +32,7 @@ class AnalysisResult:
     missing_hashes: set[str]
     cache_dirs: set[str]
     stale_dirs: list[str]
+    zig_fetch_available: bool  # True when `zig build --fetch` was used
 
 
 def extract_hashes(path: pathlib.Path) -> list[str]:
@@ -73,7 +74,8 @@ def analyze(root_zon: pathlib.Path, cache_dir: pathlib.Path) -> AnalysisResult:
     # stale, even if the hash-graph walk couldn't reach it (e.g. old-format
     # hex hashes that Zig resolves internally to new-format directory names).
     fetch_dirs = _fetch_required_dirs(root_zon, cache_dir)
-    if fetch_dirs is not None:
+    zig_fetch_available = fetch_dirs is not None
+    if zig_fetch_available:
         reachable |= fetch_dirs
 
     stale_dirs = sorted(cache_dirs - reachable)
@@ -84,6 +86,7 @@ def analyze(root_zon: pathlib.Path, cache_dir: pathlib.Path) -> AnalysisResult:
         missing_hashes=missing,
         cache_dirs=cache_dirs,
         stale_dirs=stale_dirs,
+        zig_fetch_available=zig_fetch_available,
     )
 
 
@@ -212,7 +215,15 @@ def main() -> int:
 
     exit_code = 0
     if args.strict_stale and result.stale_dirs:
-        exit_code = 1
+        if not result.zig_fetch_available:
+            print(
+                "\nWarning: zig not available — stale detection is unreliable "
+                "(transitive deps resolved by zig cannot be verified). "
+                "Treating as non-fatal.",
+                file=sys.stderr,
+            )
+        else:
+            exit_code = 1
     if args.strict_missing and result.missing_hashes:
         exit_code = 1
     return exit_code
