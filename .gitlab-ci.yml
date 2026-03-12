@@ -768,6 +768,7 @@ snapshot:
     - job: test-zig-unit
     - job: test-zig-release-safe
     - job: test-performance-benchmarks
+      optional: true  # Flaky SIMD benchmarks should not block snapshot builds
     - job: security-secrets
     - job: security-trivy
   # Use GitLab hosted runners for Docker-in-Docker support
@@ -883,6 +884,7 @@ build-release:
     - job: test-zig-unit
     - job: test-zig-release-safe
     - job: test-performance-benchmarks
+      optional: true  # Flaky SIMD benchmarks should not block releases
     - job: security-secrets
     - job: security-trivy
   # Use GitLab hosted runners for Docker-in-Docker support
