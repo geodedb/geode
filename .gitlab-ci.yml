@@ -772,6 +772,8 @@ snapshot:
       zvm install "${ZIG_VERSION}"
       zvm use "${ZIG_VERSION}"
       zig version
+    # Pre-populate Zig package cache from vendored packages (same as Dockerfile)
+    - mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p" && cp -r docker/zig-packages/* "${ZIG_GLOBAL_CACHE_DIR}/p/"
   script:
     - |
       echo "=== Running GoReleaser Snapshot ==="
@@ -885,6 +887,8 @@ build-release:
       zvm install "${ZIG_VERSION}"
       zvm use "${ZIG_VERSION}"
       zig version
+    # Pre-populate Zig package cache from vendored packages (same as Dockerfile)
+    - mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p" && cp -r docker/zig-packages/* "${ZIG_GLOBAL_CACHE_DIR}/p/"
   script:
     - |
       echo "=== Building Release: ${CI_COMMIT_TAG} ==="
