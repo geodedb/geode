@@ -736,6 +736,7 @@ test-client-harness:
 
 security-secrets:
   stage: security
+  needs: []  # Run independently of test stage
   image: zricethezav/gitleaks:v8.24.2
   script:
     - gitleaks detect --source . --config .gitleaks.toml --redact --no-git --exit-code 1
@@ -747,6 +748,7 @@ security-secrets:
 
 security-trivy:
   stage: security
+  needs: []  # Run independently of test stage
   image: aquasec/trivy:0.58.1
   script:
     - trivy fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 --no-progress --skip-dirs .zig-cache --skip-dirs zig-cache --skip-dirs docker/zig-packages --skip-dirs test_logs --skip-files certs/server.key --skip-files data/server.key .
