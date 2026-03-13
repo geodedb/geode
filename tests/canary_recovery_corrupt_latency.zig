@@ -26,7 +26,7 @@ test "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency" {
     graph_store.setDataDirOverride(allocator, tmp_path);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     var labels = [_][]const u8{"Person"};
     _ = try store.createNode(&labels);
@@ -44,7 +44,7 @@ test "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency" {
         try file.seekTo(0);
     }
 
-    var store2 = graph_store.GraphStore.init(allocator);
+    var store2 = try graph_store.GraphStore.init(allocator);
     defer store2.deinit();
     _ = store2.loadFromFile() catch {};
 }
@@ -65,7 +65,7 @@ test "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope" {
     defer graph_store.setDataDirOverride(allocator, null);
 
     while (i < iters) : (i += 1) {
-        var store = graph_store.GraphStore.init(allocator);
+        var store = try graph_store.GraphStore.init(allocator);
         defer store.deinit();
         var t: usize = 0;
         var bench_labels = [_][]const u8{"Bench"};
@@ -87,7 +87,7 @@ test "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope" {
         }
 
         const start = std.time.microTimestamp();
-        var store2 = graph_store.GraphStore.init(allocator);
+        var store2 = try graph_store.GraphStore.init(allocator);
         defer store2.deinit();
         _ = store2.loadFromFile() catch {}; // tolerate checksum mismatch
         const endt = std.time.microTimestamp();

@@ -15,7 +15,7 @@ pub fn main() !void {
     graph_store.setDataDirOverride(allocator, dir);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var ids = std.ArrayList(u64).init(allocator);

@@ -10,7 +10,7 @@ test "graphstore checksum diagnostic" {
     graph_store.setDataDirOverride(allocator, tmp.dir_path);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     _ = try store.createNode(&.{ "x" });
     try store.saveToFile();
@@ -23,7 +23,7 @@ test "graphstore checksum diagnostic" {
     const flip: [4]u8 = .{ 0xFF, 0xFF, 0xFF, 0xFF };
     try f.writeAll(&flip);
 
-    var store2 = graph_store.GraphStore.init(allocator);
+    var store2 = try graph_store.GraphStore.init(allocator);
     defer store2.deinit();
     try std.testing.expectError(error.ChecksumMismatch, store2.loadFromFile());
 }

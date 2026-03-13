@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Start geode server
 timeout 15 ./zig-out/bin/geode serve --listen 127.0.0.1:3141 2>&1 | grep -E "recvfrom got" &

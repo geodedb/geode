@@ -14,7 +14,7 @@ fn makeTempDir(allocator: std.mem.Allocator) ![]u8 {
 test "TestCANARY_REQ_GQL_082_FullBackup" {
     const allocator = std.testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     var person_labels = [_][]const u8{"Person"};
     _ = try store.createNode(&person_labels);
@@ -54,7 +54,7 @@ test "TestCANARY_REQ_GQL_082_FullBackup" {
 // TestCANARY_REQ_GQL_082_MetadataLog
 test "TestCANARY_REQ_GQL_082_MetadataLog" {
     const allocator = std.testing.allocator;
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     var seed_labels = [_][]const u8{"Seed"};
     _ = try store.createNode(&seed_labels);
@@ -73,7 +73,7 @@ test "TestCANARY_REQ_GQL_082_MetadataLog" {
 test "TestCANARY_REQ_GQL_082_RestoreDriver" {
     const allocator = std.testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     var restore_labels = [_][]const u8{"Restore"};
     _ = try store.createNode(&restore_labels);

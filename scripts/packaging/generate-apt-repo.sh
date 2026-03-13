@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # Generate APT Repository Metadata
 # Creates Packages, Release, and InRelease files for a Debian repository
 #

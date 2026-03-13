@@ -10,7 +10,7 @@ test "graphstore: checksum corruption detected" {
     graph_store.setDataDirOverride(allocator, tmp.dir_path);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     _ = try store.createNode(&.{ "abc" });
     _ = try store.createNode(&.{ "def" });
@@ -26,7 +26,7 @@ test "graphstore: checksum corruption detected" {
     const zeros: [4]u8 = .{ 0, 0, 0, 0 };
     try f.writeAll(&zeros);
 
-    var store2 = graph_store.GraphStore.init(allocator);
+    var store2 = try graph_store.GraphStore.init(allocator);
     defer store2.deinit();
     try std.testing.expectError(error.ChecksumMismatch, store2.loadFromFile());
     try std.testing.expect(graph_store.lastLoadHadChecksumError());

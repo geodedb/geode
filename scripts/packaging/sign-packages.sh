@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # Sign Debian/RPM packages using GPG key from Vault or CI variable
 #
 # Usage:

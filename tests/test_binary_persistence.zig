@@ -81,7 +81,7 @@ test "binary persistence: basic save and load cycle" {
     graph_storage_mgr.setDataDir(test_dir);
 
     // Create a fresh store and add data
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     // Create a node with labels and properties
@@ -112,7 +112,7 @@ test "binary persistence: basic save and load cycle" {
     // Save to disk and reload into a new store
     try store.saveToFile();
 
-    var loaded = graph_store.GraphStore.init(allocator);
+    var loaded = try graph_store.GraphStore.init(allocator);
     defer loaded.deinit();
     try loaded.loadFromFile();
 
@@ -126,7 +126,7 @@ test "binary persistence: basic save and load cycle" {
 test "binary persistence: multiple nodes with different labels" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     // Create multiple nodes with different labels
@@ -157,7 +157,7 @@ test "binary persistence: multiple nodes with different labels" {
 test "binary persistence: edges between nodes" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     // Create nodes
@@ -200,7 +200,7 @@ test "binary persistence: edges between nodes" {
 test "binary persistence: null property values" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var labels = [_][]const u8{"Item"};
@@ -223,7 +223,7 @@ test "binary persistence: null property values" {
 test "binary persistence: empty store operations" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     // Verify empty store
@@ -238,7 +238,7 @@ test "binary persistence: empty store operations" {
 test "binary persistence: large number of nodes" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     // Create 100 nodes with properties
@@ -276,7 +276,7 @@ test "binary persistence: large number of nodes" {
 test "binary persistence: special characters in strings" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var labels = [_][]const u8{"Test"};
@@ -306,7 +306,7 @@ test "binary persistence: special characters in strings" {
 test "binary persistence: multi-graph isolation" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     // Create nodes in different graphs
@@ -340,7 +340,7 @@ test "binary persistence: multi-graph isolation" {
 test "binary persistence: node and edge IDs are unique" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     // Create several nodes
@@ -366,7 +366,7 @@ test "binary persistence: node and edge IDs are unique" {
 test "binary persistence: all property types" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var labels = [_][]const u8{"AllTypes"};
@@ -410,7 +410,7 @@ test "binary persistence: all property types" {
 test "binary persistence: property updates" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var labels = [_][]const u8{"Mutable"};
@@ -439,7 +439,7 @@ test "binary persistence: property updates" {
 test "binary persistence: getAllNodes returns all nodes" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var labels = [_][]const u8{"Item"};
@@ -458,7 +458,7 @@ test "binary persistence: getAllNodes returns all nodes" {
 test "binary persistence: multiple edge types" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var labels = [_][]const u8{"Entity"};

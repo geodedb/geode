@@ -73,7 +73,7 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_003_SharedTypeAccessibility" {
 
     // Test GraphStore accessibility
     const allocator = testing.allocator;
-    var graph = geode.graph_common.GraphStore.init(allocator);
+    var graph = try geode.graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Test that we can create nodes and edges
@@ -215,7 +215,7 @@ test "Cross-module type compatibility" {
     try testing.expect(schema.items.len == 5);
 
     // Test that PropertyValue works with graph operations
-    var graph = geode.graph_common.GraphStore.init(allocator);
+    var graph = try geode.graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Test adding nodes with various property types

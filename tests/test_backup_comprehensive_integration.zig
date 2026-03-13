@@ -23,7 +23,7 @@ fn countFullBackups(dir: []const u8) !usize {
 
 test "backup: full + metadata log persisted" {
     const allocator = std.testing.allocator;
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     _ = try store.createNode(&.{"Seed"});
 
@@ -43,7 +43,7 @@ test "backup: full + metadata log persisted" {
 
 test "backup: retention removes old full backups" {
     const allocator = std.testing.allocator;
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     _ = try store.createNode(&.{"Retention"});
 
@@ -71,7 +71,7 @@ test "backup: retention removes old full backups" {
 
 test "backup: point-in-time restore selects latest snapshot before target" {
     const allocator = std.testing.allocator;
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     _ = try store.createNode(&.{"A"});
 

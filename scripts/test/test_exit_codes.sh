@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 echo "Testing TDE error exit code..."
 echo "CALL tde.configure_provider('InvalidProvider') YIELD status RETURN status" | ./zig-out/bin/geode query --server 127.0.0.1:3141 --insecure --format json - >/dev/null 2>&1

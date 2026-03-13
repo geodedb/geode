@@ -48,7 +48,7 @@ test "BenchmarkCANARY_REQ_GQL_028_SnapshotLoadOptimizedVarianceEnvelope" {
     graph_store.setDataDirOverride(std.testing.allocator, tmp.dir_path);
     defer graph_store.setDataDirOverride(std.testing.allocator, null);
 
-    var store = graph_store.GraphStore.init(std.testing.allocator);
+    var store = try graph_store.GraphStore.init(std.testing.allocator);
     defer store.deinit();
     var i: usize = 0;
     while (i < 400) : (i += 1) {
@@ -64,7 +64,7 @@ test "BenchmarkCANARY_REQ_GQL_028_SnapshotLoadOptimizedVarianceEnvelope" {
 
     var r: usize = 0;
     while (r < Runs) : (r += 1) {
-        var baseline = graph_store.GraphStore.init(std.testing.allocator);
+        var baseline = try graph_store.GraphStore.init(std.testing.allocator);
         defer baseline.deinit();
         const t0 = std.time.nanoTimestamp();
         try baseline.loadFromFile();
@@ -74,7 +74,7 @@ test "BenchmarkCANARY_REQ_GQL_028_SnapshotLoadOptimizedVarianceEnvelope" {
         // Warm cache by reading snapshot bytes, then load again.
         const warm = try std.fs.cwd().readFileAlloc(std.testing.allocator, file_path, 8 * 1024 * 1024);
         std.testing.allocator.free(warm);
-        var optimized = graph_store.GraphStore.init(std.testing.allocator);
+        var optimized = try graph_store.GraphStore.init(std.testing.allocator);
         defer optimized.deinit();
         const t2 = std.time.nanoTimestamp();
         try optimized.loadFromFile();

@@ -9,7 +9,7 @@ pub fn main() !void {
     const graph_exec = @import("src/server/graph/exec.zig");
 
     // Initialize graph storage
-    var storage = graph_exec.GraphStore.init(allocator);
+    var storage = try graph_exec.GraphStore.init(allocator);
     defer storage.deinit();
 
     // Add a test node with properties

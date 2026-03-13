@@ -1,4 +1,5 @@
 #!/bin/sh
+set -eu
 
 rm -f /tmp/geode_catalog.dat
 

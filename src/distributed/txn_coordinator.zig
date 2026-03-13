@@ -304,7 +304,7 @@ fn encodeWriteSet(allocator: Allocator, msg: *dist_schema.TwoPhaseMessage) ![]u8
 test "TestCANARY_2PC_Coordinator basic prepare and commit" {
     const allocator = std.testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var coordinator = try TxnCoordinator.init(allocator, &store);
@@ -363,7 +363,7 @@ test "TestCANARY_2PC_Coordinator basic prepare and commit" {
 test "TestCANARY_2PC_Idempotent repeated prepare" {
     const allocator = std.testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var coordinator = try TxnCoordinator.init(allocator, &store);
@@ -411,7 +411,7 @@ test "TestCANARY_2PC_Idempotent repeated prepare" {
 test "TestCANARY_2PC_WriteSetApplied verifies data is persisted" {
     const allocator = std.testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var coordinator = try TxnCoordinator.init(allocator, &store);
@@ -480,7 +480,7 @@ test "TestCANARY_2PC_WriteSetApplied verifies data is persisted" {
 test "TestCANARY_2PC_WriteSetDelete verifies delete operations" {
     const allocator = std.testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var coordinator = try TxnCoordinator.init(allocator, &store);

@@ -9,7 +9,7 @@ test "graphstore snapshot save schedule triggers after repeated changes" {
     graph_store.setDataDirOverride(allocator, tmp.dir_path);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var i: usize = 0;

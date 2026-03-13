@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # REPL Multi-line Input Regression Test Suite
 # Tests multi-line input behavior to prevent regressions

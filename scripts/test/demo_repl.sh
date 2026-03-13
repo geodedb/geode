@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Demo script showing REPL usage
 echo "==================================="

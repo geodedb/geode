@@ -303,7 +303,7 @@ REQ-AUTH-INIT-CLI-005,AuthInitCLI,Verify,IMPL,,,cli,2026-02-24,src/cli/main.zig
 REQ-AUTH-MTLS-001,MtlsAuthentication,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
 REQ-AUTH-MTLS-002,CertificateMappingCreation,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
 REQ-AUTH-MTLS-003,CertificateAuthentication,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
-REQ-AUTH-MTLS-004,CertificateIdentityExtraction,SECURITY,TESTED,,,security,2026-01-29,src/security/mtls_provider.zig
+REQ-AUTH-MTLS-004,CertificateIdentityExtraction,SECURITY,TESTED,,,security,2026-03-13,src/security/mtls_provider.zig
 REQ-AUTH-MTLS-QUIC-001,mTLS over QUIC,PeerCertExtraction,IMPL,,,transport,2026-02-13,src/transport/quic.zig
 REQ-AUTH-MTLS-QUIC-002,mTLS over QUIC,Config,IMPL,,,transport,2026-02-13,src/transport/quic.zig
 REQ-AUTH-MTLS-QUIC-003,mTLS over QUIC,ConnectionAuth,IMPL,,,security,2026-02-13,src/server/quic_connection_handler.zig
@@ -486,6 +486,7 @@ REQ-CI-CANARYSCAN-001,CI Canaryscan Verify,Governance,TESTED,,,ci,2026-01-17,.gi
 REQ-CI-CLIENT-HARNESS-001,CI Client Harness Integration,CI,IMPL,,,ci,2026-02-18,.gitlab-ci.yml
 REQ-CI-COMPLIANCE-001,GQL Compliance CI,Core,TESTED,,,ci,2026-01-14,.gitlab-ci.yml
 REQ-CI-CONFORMANCE-SYNC-001,CI Conformance Sync,Governance,TESTED,,,ci,2026-01-25,.gitlab-ci.yml
+REQ-CI-COVERAGE-001,CodeCoverageCI,Core,IMPL,,,ci,2026-03-13,.gitlab-ci.yml
 REQ-CI-GOV-001,CI Governance Checks,Core,TESTED,,,ci,2026-01-16,.gitlab-ci.yml
 REQ-CI-REQ-DOC-REPORT-001,CI REQ-DOC Reports,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml
 REQ-CI-REQ-DOC-REPORT-001,Requirement ID Report Generator,Governance,TESTED,,,governance,2026-01-17,tools/req_doc_report.py
@@ -859,7 +860,7 @@ REQ-FLE-ENFORCE-009,FLEEnforcement,UnicodeRoleValidation,TESTED,,,security,2026-
 REQ-FLE-ENFORCE-010,FLEEnforcement,ControlCharRoleValidation,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-011,FLEEnforcement,FailSecureOnCatalogError,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-012,FLEEnforcement,FailSecureOnKeyError,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
-REQ-FLE-ENFORCE-013,FLEEnforcement,NoPlaintextFallback,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ENFORCE-013,FLEEnforcement,NoPlaintextFallback,TESTED,,,security,2026-03-13,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-014,FLEEnforcement,DecryptionFailureReturnsRedacted,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-015,FLEEnforcement,MasterKeyRequired,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-ENFORCE-016,FLEEnforcement,KeySecureZeroing,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
@@ -880,7 +881,7 @@ REQ-FLE-ENFORCE-030,FLEEnforcement,GlobalFlagSkipDisabled,TESTED,,,security,2026
 REQ-FLE-EXECUTION-001,FieldLevelEncryption,EXECUTION,TESTED,,,security,2025-10-15,src/execution.zig
 REQ-FLE-EXECUTION-001,FieldLevelEncryption,EXECUTION,TESTED,,,security,2026-01-28,src/execution/fle_hooks.zig
 REQ-FLE-EXECUTION-001,FieldLevelEncryption,Execution,TESTED,,,security,2026-01-15,tests/test_gap_0193_impl_verification.zig
-REQ-FLE-FAILSECURE-001,FLEFailSecure,EncryptionFailureError,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-FAILSECURE-001,FLEFailSecure,EncryptionFailureError,TESTED,,,security,2026-03-13,src/security/test_fle_enforcement.zig
 REQ-FLE-FAILSECURE-001,FLEFailSecure,SECURITY,TESTED,,,security,2026-01-28,src/execution/fle_hooks.zig
 REQ-FLE-FAILSECURE-002,FLEFailSecure,CatalogErrorDenyAccess,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-FAILSECURE-002,FLEFailSecure,EncryptionRequired,TESTED,,,security,2026-01-28,src/execution/fle_hooks.zig
@@ -1869,6 +1870,7 @@ REQ-GQL-COUNT-SUBQUERY-001,CountSubquery,WhereClause,TESTED,,,parser,2025-12-28,
 REQ-GQL-COUNT-SUBQUERY-001,GQLCountSubquery,Basic,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig
 REQ-GQL-COUNT-SUBQUERY-002,CountSubquery,Evaluation,TESTED,,,eval,2025-12-28,src/eval.zig
 REQ-GQL-COUNT-SUBQUERY-002,GQLCountSubquery,WithWhere,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig
+REQ-GQL-CRYPTO-ECDSA-001,ECDSA P256/P384 Sign/Verify,DigitalSignatures,TESTED,,,security,2026-03-13,src/types/cryptographic.zig
 REQ-GQL-CRYPTO-TYPES-001,CryptoTypes,Implementation,TESTED,,,types,2026-01-16,tests/test_gap_0193_batch2_engine.zig
 REQ-GQL-CRYPTO-TYPES-001,Cryptographic Types Implementation,Types,TESTED,,,types,2025-01-03,src/types/cryptographic.zig
 REQ-GQL-CRYPTO-TYPES-001,RSA Key Generation,UnsupportedAlgorithm,TESTED,,,security,2026-01-16,src/types/cryptographic.zig
@@ -2748,8 +2750,8 @@ REQ-M6.1-TYPE-PROMOTION-009,Comparison Helpers,Core,TESTED,,,eval,2026-01-17,src
 REQ-M6.1-TYPE-PROMOTION-010,Comparison Helpers,Core,TESTED,,,eval,2026-01-17,src/eval/type_promotion.zig
 REQ-M6.1-TYPE-PROMOTION-011,Comparison Helpers,Core,TESTED,,,eval,2026-01-25,src/eval/type_promotion.zig
 REQ-M6.1-TYPE-PROMOTION-012,ExtValueHeapConversion,Core,TESTED,,,eval,2026-01-10,src/eval/type_promotion.zig
-REQ-M7-SIGNATURE-001,CodeQuality,SignatureVerification,TESTED,,,security,2025-10-17,src/types/cryptographic.zig
-REQ-M7-SIGNATURE-002,CodeQuality,SignatureSigning,TESTED,,,security,2025-10-17,src/types/cryptographic.zig
+REQ-M7-SIGNATURE-001,CodeQuality,SignatureVerification,TESTED,,,security,2026-03-13,src/types/cryptographic.zig
+REQ-M7-SIGNATURE-002,CodeQuality,SignatureSigning,TESTED,,,security,2026-03-13,src/types/cryptographic.zig
 REQ-M7.1-SCHEMA-MANAGER-001,Phase 7 Modularization,SchemaManager,TESTED,,,schema,2026-01-15,src/schema/schema_manager.zig
 REQ-M7.1-SCHEMA-MANAGER-002,Catalog Re-export,Core,EXEMPT,,,core,2026-01-17,src/schema/schema_manager.zig
 REQ-M7.1-SCHEMA-MANAGER-003,FLE Catalog Re-export,Core,EXEMPT,,,core,2026-01-17,src/schema/schema_manager.zig

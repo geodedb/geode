@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # Generate Final Modularization Metrics
 #
 # This script generates comprehensive metrics for the modularization effort,

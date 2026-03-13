@@ -1,4 +1,5 @@
 #!/bin/sh
+set -eu
 
 echo "=== Vendor QUIC End-to-End Test ==="
 pkill -KILL quic-server 2>/dev/null || true

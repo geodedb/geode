@@ -72,3 +72,30 @@ This page mirrors GitLab requirement issues. GitLab is the source of truth for s
 - [REQ-DOC-REPL_FORMATTING_FIXES: REPL Formatting Fixes Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/274)
 - [REQ-DOC-RUST_CLIENT_S2N_QUIC_FINDINGS: Rust Client Migration to s2n-quic - Findings Report Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/270)
 - [REQ-DOC-ZIG_CLIENT_V2_COMPLETION_REPORT: Zig Client v2: Zig 0.15.1 Migration - Completion Report Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/271)
+
+## Open Gaps (from Gap Analysis — March 2026)
+
+See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for full details. GitLab is the source of truth.
+
+### Critical
+
+- [GAP-0249: Concurrent MERGE data race (SIGSEGV)](https://gitlab.com/devnw/codepros/geode/geode/-/issues/542)
+- [GAP-0250: FLE plaintext fallback on encryption failure](https://gitlab.com/devnw/codepros/geode/geode/-/issues/543)
+- [GAP-0256: Unsigned release artifacts / no SBOM](https://gitlab.com/devnw/codepros/geode/geode/-/issues/483) — Blocked
+
+### High
+
+- [GAP-0248: mTLS X.509 parsing stub-only](https://gitlab.com/devnw/codepros/geode/geode/-/issues/399)
+- [GAP-0255: gRPC transport parity gaps vs QUIC](https://gitlab.com/devnw/codepros/geode/geode/-/issues/548)
+- [GAP-0251: No code coverage instrumentation in CI](https://gitlab.com/devnw/codepros/geode/geode/-/issues/544)
+- [GAP-0252: CI benchmarks optional for release builds](https://gitlab.com/devnw/codepros/geode/geode/-/issues/545)
+
+### Medium
+
+- [GAP-0246: LDAP/AD authentication not implemented](https://gitlab.com/devnw/codepros/geode/geode/-/issues/397) — Blocked (Q2 2026)
+- [GAP-0247: OAuth2/OIDC authentication not implemented](https://gitlab.com/devnw/codepros/geode/geode/-/issues/398) — Blocked (Q3 2026)
+- [GAP-0253: Incomplete cryptographic signature algorithms](https://gitlab.com/devnw/codepros/geode/geode/-/issues/546)
+
+### Recently Resolved
+
+- ~~[GAP-0245: API Keys not implemented](https://gitlab.com/devnw/codepros/geode/geode/-/issues/396)~~ — Closed 2026-03-13, fully implemented in `src/security/api_keys.zig`

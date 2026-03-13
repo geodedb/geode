@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # CANARY: REQ=REQ-GQL-NODE-PROPERTY-ACCESS; FEATURE="Node Property Access"; ASPECT=RuntimeStability; STATUS=EXEMPT; TEST=TestNodePropertyHashMapAccess; OWNER=core; UPDATED=2025-10-05
 

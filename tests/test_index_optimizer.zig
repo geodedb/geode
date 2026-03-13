@@ -98,7 +98,7 @@ test "IndexOptimizer: executeOptimizedScan sequential" {
     var optimizer = IndexOptimizer.init(allocator, &mock_index_manager);
 
     // Create test graph storage
-    var graph = graph_common.GraphStore.init(allocator);
+    var graph = try graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add test nodes
@@ -140,7 +140,7 @@ test "IndexOptimizer: executeOptimizedScan index" {
     var optimizer = IndexOptimizer.init(allocator, &mock_index_manager);
 
     // Create test graph storage
-    var graph = graph_common.GraphStore.init(allocator);
+    var graph = try graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add test nodes
@@ -291,7 +291,7 @@ test "IndexOptimizer: integration with graph execution" {
     var optimizer = IndexOptimizer.init(allocator, &mock_index_manager);
 
     // Create test graph storage
-    var graph = graph_common.GraphStore.init(allocator);
+    var graph = try graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add test nodes

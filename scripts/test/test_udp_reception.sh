@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Start geode server in background
 ./zig-out/bin/geode serve --listen 0.0.0.0:3141 2>&1 | grep -E "recvfrom got" &

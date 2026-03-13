@@ -10,14 +10,14 @@ test "graphstore recovery applies only persisted snapshot" {
     defer graph_store.setDataDirOverride(allocator, null);
 
     // Phase 1: persist first node, then add another without saving.
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     const id_alpha = try store.createNode(&.{ "alpha" });
     try store.saveToFile();
     const id_beta = try store.createNode(&.{ "beta" });
 
     // Simulate crash: new store loads from snapshot.
-    var store2 = graph_store.GraphStore.init(allocator);
+    var store2 = try graph_store.GraphStore.init(allocator);
     defer store2.deinit();
     try store2.loadFromFile();
 

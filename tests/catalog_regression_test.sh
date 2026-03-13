@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # CANARY: REQ=REQ-GQL-CATALOG-005; FEATURE="Catalog Regression Test Suite"; ASPECT=TestAutomation; STATUS=EXEMPT; TEST=CatalogRegressionSuite; OWNER=testing; UPDATED=2025-10-04
 

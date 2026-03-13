@@ -1,4 +1,5 @@
 #!/bin/sh
+set -eu
 
 echo "Testing Category 3 System Features"
 echo "===================================="

@@ -71,7 +71,7 @@ test "advanced FTS: language analyzers" {
 test "graph algorithms: comprehensive suite" {
     const allocator = std.testing.allocator;
 
-    var graph = @import("geode").graph_store.GraphStore.init(allocator);
+    var graph = try @import("geode").graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     const n1 = try graph.createNode(&.{ "Person" });

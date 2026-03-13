@@ -519,7 +519,7 @@ test "buildMemberPath - member expression" {
 test "getEdgeWeight - default weight" {
     const testing = std.testing;
 
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     const weight = getEdgeWeight(&store, 1, 2, "weight");
@@ -529,7 +529,7 @@ test "getEdgeWeight - default weight" {
 test "BFS - single node" {
     const testing = std.testing;
 
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     // Add single node
@@ -556,7 +556,7 @@ test "BFS - single node" {
 test "DFS - single node" {
     const testing = std.testing;
 
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     // Add single node
@@ -583,7 +583,7 @@ test "DFS - single node" {
 test "Dijkstra - no path" {
     const testing = std.testing;
 
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     // Add two disconnected nodes

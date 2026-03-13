@@ -366,12 +366,12 @@ pub const GraphStore = struct {
     dirty: bool = false,
 
     /// Initialize GraphStore with default tenant
-    pub fn init(allocator: std.mem.Allocator) GraphStore {
+    pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}!GraphStore {
         return initWithTenant(allocator, "default", "default");
     }
 
     /// Initialize GraphStore with specific tenant and schema
-    pub fn initWithTenant(allocator: std.mem.Allocator, tenant_id: []const u8, schema_name: []const u8) GraphStore {
+    pub fn initWithTenant(allocator: std.mem.Allocator, tenant_id: []const u8, schema_name: []const u8) error{OutOfMemory}!GraphStore {
         var store = GraphStore{
             .allocator = allocator,
             .nodes = std.AutoHashMap(u64, Node).init(allocator),
@@ -387,8 +387,8 @@ pub const GraphStore = struct {
             .incoming_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
         };
         // Register default graph name
-        const default_name = allocator.dupe(u8, "default") catch unreachable;
-        store.graphs.put(default_name, {}) catch unreachable;
+        const default_name = try allocator.dupe(u8, "default");
+        try store.graphs.put(default_name, {});
         return store;
     }
 
@@ -509,8 +509,8 @@ pub const GraphStore = struct {
         }
         self.graphs.deinit();
         self.graphs = std.StringHashMap(void).init(self.allocator);
-        const default_name = self.allocator.dupe(u8, "default") catch unreachable;
-        self.graphs.put(default_name, {}) catch unreachable;
+        const default_name = self.allocator.dupe(u8, "default") catch @panic("OOM: failed to allocate default graph name during clearNodes");
+        self.graphs.put(default_name, {}) catch @panic("OOM: failed to register default graph during clearNodes");
 
         // Reset label index
         var label_iter = self.label_index.iterator();
@@ -3767,7 +3767,7 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
         // Use a persistent arena allocator for the global store
         // P2-3: Use global allocator instead of page_allocator
         global_arena = std.heap.ArenaAllocator.init(global_gpa.allocator());
-        global_store = GraphStore.init(global_arena.?.allocator());
+        global_store = GraphStore.init(global_arena.?.allocator()) catch @panic("OOM: failed to initialize global graph store");
         // Try to load existing data from the new location
         global_store.?.loadFromFile() catch |err| {
             log.warn("Failed to load graph store from file (starting fresh)", &.{
@@ -3806,7 +3806,7 @@ const testing = std.testing;
 
 test "TestLabelIndexBasic" {
     // Issue #391: Test that label index is maintained during node creation
-    var store = GraphStore.init(testing.allocator);
+    var store = try GraphStore.init(testing.allocator);
     defer store.deinit();
 
     // Create a node with label "Person"
@@ -3822,7 +3822,7 @@ test "TestLabelIndexBasic" {
 
 test "TestLabelIndexMultipleNodes" {
     // Issue #391: Test index with multiple nodes having same label
-    var store = GraphStore.init(testing.allocator);
+    var store = try GraphStore.init(testing.allocator);
     defer store.deinit();
 
     var labels = [_][]const u8{"Person"};
@@ -3848,7 +3848,7 @@ test "TestLabelIndexMultipleNodes" {
 
 test "TestLabelIndexDifferentGraphs" {
     // Issue #391: Test that label index respects graph isolation
-    var store = GraphStore.init(testing.allocator);
+    var store = try GraphStore.init(testing.allocator);
     defer store.deinit();
 
     var labels = [_][]const u8{"Person"};
@@ -3869,7 +3869,7 @@ test "TestLabelIndexDifferentGraphs" {
 
 test "TestGetNodesByLabels" {
     // Issue #391: Test getting nodes with multiple labels
-    var store = GraphStore.init(testing.allocator);
+    var store = try GraphStore.init(testing.allocator);
     defer store.deinit();
 
     // Create node with multiple labels
@@ -3891,7 +3891,7 @@ test "TestGetNodesByLabels" {
 
 test "TestEdgeAdjacencyIndex" {
     // Issue #392: Test edge adjacency index for DELETE DETACH optimization
-    var store = GraphStore.init(testing.allocator);
+    var store = try GraphStore.init(testing.allocator);
     defer store.deinit();
 
     var labels = [_][]const u8{"Node"};
@@ -3935,7 +3935,7 @@ test "streaming serialization matches buffer serialization" {
     defer setDataDirOverride(allocator, null);
 
     // Build a graph with nodes, edges, and properties
-    var store = GraphStore.init(allocator);
+    var store = try GraphStore.init(allocator);
     defer store.deinit();
 
     var labels_a = [_][]const u8{"Person"};
@@ -3982,7 +3982,7 @@ test "streaming serialization CRC integrity" {
     setDataDirOverride(allocator, dir_path);
     defer setDataDirOverride(allocator, null);
 
-    var store = GraphStore.init(allocator);
+    var store = try GraphStore.init(allocator);
     defer store.deinit();
 
     var labels = [_][]const u8{"TestNode"};
@@ -4017,7 +4017,7 @@ test "streaming serialization roundtrip with loadFromFile" {
     defer setDataDirOverride(allocator, null);
 
     // Create and populate a store
-    var store = GraphStore.init(allocator);
+    var store = try GraphStore.init(allocator);
     defer store.deinit();
 
     var labels_a = [_][]const u8{"City"};
@@ -4035,7 +4035,7 @@ test "streaming serialization roundtrip with loadFromFile" {
     try store.saveToFile();
 
     // Load into a new store
-    var store2 = GraphStore.init(allocator);
+    var store2 = try GraphStore.init(allocator);
     defer store2.deinit();
     try store2.loadFromFile();
 
@@ -4063,7 +4063,7 @@ test "streaming serialization large graph bounded memory" {
     setDataDirOverride(allocator, dir_path);
     defer setDataDirOverride(allocator, null);
 
-    var store = GraphStore.init(allocator);
+    var store = try GraphStore.init(allocator);
     defer store.deinit();
 
     // Create 1000 nodes with properties
@@ -4088,7 +4088,7 @@ test "streaming serialization large graph bounded memory" {
 
     // Verify file is valid by loading it
     try store.saveToFile();
-    var store2 = GraphStore.init(allocator);
+    var store2 = try GraphStore.init(allocator);
     defer store2.deinit();
     try store2.loadFromFile();
     try std.testing.expectEqual(@as(usize, 1000), store2.nodes.count());

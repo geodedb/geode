@@ -13,7 +13,7 @@ test "graphstore durability fuzz recovery invariants" {
     defer graph_store.setDataDirOverride(allocator, null);
 
     // Build a small graph and persist.
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     _ = try store.createNode(&.{"A"});
     _ = try store.createNode(&.{"B"});
@@ -31,7 +31,7 @@ test "graphstore durability fuzz recovery invariants" {
     f.close();
 
     // Recovery should detect corruption.
-    var store2 = graph_store.GraphStore.init(allocator);
+    var store2 = try graph_store.GraphStore.init(allocator);
     defer store2.deinit();
     const load_err = store2.loadFromFile();
     if (load_err) |_| {} else |err| switch (err) {
@@ -42,7 +42,7 @@ test "graphstore durability fuzz recovery invariants" {
 
     // Re-save a clean snapshot and verify node count loads correctly.
     try store.saveToFile();
-    var store3 = graph_store.GraphStore.init(allocator);
+    var store3 = try graph_store.GraphStore.init(allocator);
     defer store3.deinit();
     try store3.loadFromFile();
     try std.testing.expectEqual(saved_nodes, store3.nodes.count());

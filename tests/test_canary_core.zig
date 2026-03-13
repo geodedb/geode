@@ -36,7 +36,7 @@ test "TestCANARY_REQ_GQL_028_SnapshotCompaction" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var pipeline = snapshot_pipeline.Pipeline.init(allocator, &store, .{

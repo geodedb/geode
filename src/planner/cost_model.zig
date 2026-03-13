@@ -66,8 +66,8 @@ pub const CostModel = struct {
     stats_registry: *cbo.StatsRegistry,
     cardinality_estimator: *CardinalityEstimator,
 
-    pub fn init(allocator: std.mem.Allocator, stats: *cbo.StatsRegistry) CostModel {
-        const card_est = allocator.create(CardinalityEstimator) catch unreachable;
+    pub fn init(allocator: std.mem.Allocator, stats: *cbo.StatsRegistry) error{OutOfMemory}!CostModel {
+        const card_est = try allocator.create(CardinalityEstimator);
         card_est.* = CardinalityEstimator.init(allocator, stats);
 
         return .{

@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Index Operations Regression Test Suite
 # Tests CREATE INDEX, DROP INDEX with various index types

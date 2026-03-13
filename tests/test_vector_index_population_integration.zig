@@ -73,7 +73,7 @@ test "integration vector index population on CREATE INDEX" {
 
     // Create mock graph storage with vector data
     const graph = try allocator.create(graph_store.GraphStore);
-    graph.* = graph_store.GraphStore.init(allocator);
+    graph.* = try graph_store.GraphStore.init(allocator);
     defer {
         graph.deinit();
         allocator.destroy(graph);
@@ -181,7 +181,7 @@ test "integration vector index population VectorI32 conversion" {
 
     // Create mock graph storage with integer vector data
     const graph = try allocator.create(graph_store.GraphStore);
-    graph.* = graph_store.GraphStore.init(allocator);
+    graph.* = try graph_store.GraphStore.init(allocator);
     defer {
         graph.deinit();
         allocator.destroy(graph);
@@ -299,7 +299,7 @@ test "integration vector index population dimension mismatch handling" {
 
     // Create mock graph storage
     const graph = try allocator.create(graph_store.GraphStore);
-    graph.* = graph_store.GraphStore.init(allocator);
+    graph.* = try graph_store.GraphStore.init(allocator);
     defer {
         graph.deinit();
         allocator.destroy(graph);
@@ -388,7 +388,7 @@ test "integration vector index population performance" {
 
     // Create mock graph storage
     const graph = try allocator.create(graph_store.GraphStore);
-    graph.* = graph_store.GraphStore.init(allocator);
+    graph.* = try graph_store.GraphStore.init(allocator);
     defer {
         graph.deinit();
         allocator.destroy(graph);
@@ -502,7 +502,7 @@ test "integration vector index population mixed data types" {
 
     // Create mock graph storage with mixed property types
     const graph = try allocator.create(graph_store.GraphStore);
-    graph.* = graph_store.GraphStore.init(allocator);
+    graph.* = try graph_store.GraphStore.init(allocator);
     defer {
         graph.deinit();
         allocator.destroy(graph);
@@ -599,7 +599,7 @@ test "TestCANARY_REQ_VECTOR_INDEX_POPULATION_INTEGRATION_001" {
 
     // Test complete end-to-end vector index population with CREATE INDEX simulation
     const graph = try allocator.create(graph_store.GraphStore);
-    graph.* = graph_store.GraphStore.init(allocator);
+    graph.* = try graph_store.GraphStore.init(allocator);
     defer {
         graph.deinit();
         allocator.destroy(graph);

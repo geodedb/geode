@@ -10,7 +10,7 @@ test "graphstore snapshot compaction reclaims deleted nodes" {
     graph_store.setDataDirOverride(allocator, tmp.dir_path);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var ids = std.ArrayList(u64).init(allocator);
@@ -36,7 +36,7 @@ test "graphstore snapshot compaction reclaims deleted nodes" {
 
     try std.testing.expect(after_size < before_size);
 
-    var store2 = graph_store.GraphStore.init(allocator);
+    var store2 = try graph_store.GraphStore.init(allocator);
     defer store2.deinit();
     try store2.loadFromFile();
     try std.testing.expectEqual(@as(usize, 100), store2.getNodeCount());

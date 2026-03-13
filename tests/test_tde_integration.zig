@@ -22,7 +22,7 @@ test "tde: graphstore plaintext when disabled" {
     graph_store.setDataDirOverride(allocator, tmp_path);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     _ = try store.createNode(&.{"Person"});
     try store.saveToFile();
@@ -51,7 +51,7 @@ test "tde: graphstore encrypt/decrypt round trip" {
     graph_store.setDataDirOverride(allocator, tmp_path);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     _ = try store.createNode(&.{"Encrypted"});
     try store.saveToFile();
@@ -65,7 +65,7 @@ test "tde: graphstore encrypt/decrypt round trip" {
     try std.testing.expect(raw.len >= tde_file.MAGIC.len);
     try std.testing.expect(std.mem.eql(u8, raw[0..tde_file.MAGIC.len], &tde_file.MAGIC));
 
-    var store2 = graph_store.GraphStore.init(allocator);
+    var store2 = try graph_store.GraphStore.init(allocator);
     defer store2.deinit();
     try store2.loadFromFile();
     try std.testing.expect(store2.getNodeCount() == 1);

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # Shared helpers for REPL regression shell suites.
 # Eliminates duplicated harness logic across repl_*_regression_test.sh scripts.

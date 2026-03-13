@@ -15,7 +15,7 @@ test "BenchmarkCANARY_REQ_GQL_083_CompactionVarianceEnvelope" {
         graph_store.setDataDirOverride(allocator, tmp.dir_path);
         defer graph_store.setDataDirOverride(allocator, null);
 
-        var store = graph_store.GraphStore.init(allocator);
+        var store = try graph_store.GraphStore.init(allocator);
         defer store.deinit();
         var pipe = pipeline_mod.Pipeline.init(allocator, &store, .{
             .checkpoint_interval_override = 2,

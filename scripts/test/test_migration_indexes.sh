@@ -1,4 +1,5 @@
 #!/bin/sh
+set -eu
 
 cd /home/benji/src/spyder/geode
 rm -f /tmp/geode_catalog.dat

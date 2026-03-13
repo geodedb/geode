@@ -243,11 +243,17 @@ pub fn containsVariableReference(expr: ast.Expr) bool {
 }
 
 // Helper function to check if a node matches required labels
+// #561: Optimized with pointer equality fast-path — labels from the same store often share
+// string allocations, so ptr+len equality avoids byte-by-byte comparison in the common case
 pub fn matchesLabels(node: *graph_store.Node, required_labels: []const []const u8) bool {
     for (required_labels) |required| {
         var found = false;
         for (node.labels) |label| {
-            if (std.mem.eql(u8, required, label)) {
+            if (label.ptr == required.ptr and label.len == required.len) {
+                found = true;
+                break;
+            }
+            if (label.len == required.len and std.mem.eql(u8, required, label)) {
                 found = true;
                 break;
             }

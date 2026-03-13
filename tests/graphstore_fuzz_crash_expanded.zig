@@ -17,7 +17,7 @@ test "graphstore crash fuzz expanded 1k" {
         graph_store.setDataDirOverride(allocator, tmp.dir_path);
         defer graph_store.setDataDirOverride(allocator, null);
 
-        var store = graph_store.GraphStore.init(allocator);
+        var store = try graph_store.GraphStore.init(allocator);
         defer store.deinit();
 
         var ids = std.ArrayList(u64).init(allocator);
@@ -64,11 +64,11 @@ test "graphstore crash fuzz expanded 1k" {
         }
         f.close();
 
-        var store2 = graph_store.GraphStore.init(allocator);
+        var store2 = try graph_store.GraphStore.init(allocator);
         defer store2.deinit();
         const res = store2.loadFromFile();
         if (res) |_| {
-            var store3 = graph_store.GraphStore.init(allocator);
+            var store3 = try graph_store.GraphStore.init(allocator);
             defer store3.deinit();
             try store3.loadFromFile();
             try std.testing.expectEqual(store2.getNodeCount(), store3.getNodeCount());

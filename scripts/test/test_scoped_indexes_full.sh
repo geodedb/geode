@@ -1,4 +1,5 @@
 #!/bin/sh
+set -eu
 
 echo "===== Full Scoped Index Test ====="
 echo "Removing old catalog..."

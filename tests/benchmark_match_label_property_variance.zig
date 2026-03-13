@@ -35,7 +35,7 @@ fn cv(samples: []const u64, mean: f64) f64 {
 }
 
 test "BenchmarkCANARY_REQ_GQL_017_MatchLabelPropertyVarianceEnvelope" {
-    var g = exec.GraphStore.init(std.testing.allocator);
+    var g = try exec.GraphStore.init(std.testing.allocator);
     defer g.deinit();
 
     const total_nodes: usize = 5000;

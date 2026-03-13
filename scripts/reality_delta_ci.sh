@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Reality Delta CI Gate
 # Verifies that IMPLEMENTATION_REALITY.md reflects current CANARY evidence counts.
 # Fails if counts diverge or canaryscan verification fails.

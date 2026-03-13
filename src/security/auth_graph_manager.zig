@@ -898,7 +898,7 @@ test "resolveHmacKey auto-generates key file when data_dir exists but key file m
 }
 
 test "hasAuthRecords returns false on empty store" {
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     var mgr = try AuthGraphManager.init(testing.allocator, &store);
@@ -908,7 +908,7 @@ test "hasAuthRecords returns false on empty store" {
 }
 
 test "bootstrapDefaultAdmin creates user + role + chain root with valid HMAC chain" {
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     var mgr = try AuthGraphManager.init(testing.allocator, &store);
@@ -945,7 +945,7 @@ test "bootstrapDefaultAdmin creates user + role + chain root with valid HMAC cha
 }
 
 test "verifyChain passes after bootstrap" {
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     var mgr = try AuthGraphManager.init(testing.allocator, &store);
@@ -963,7 +963,7 @@ test "verifyChain passes after bootstrap" {
 }
 
 test "verifyChain fails after tampering with a user property" {
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     var mgr = try AuthGraphManager.init(testing.allocator, &store);
@@ -986,7 +986,7 @@ test "verifyChain fails after tampering with a user property" {
 }
 
 test "sealChain fixes a tampered chain" {
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     var mgr = try AuthGraphManager.init(testing.allocator, &store);
@@ -1016,7 +1016,7 @@ test "sealChain fixes a tampered chain" {
 }
 
 test "createUser adds user and maintains valid chain" {
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     var mgr = try AuthGraphManager.init(testing.allocator, &store);
@@ -1052,7 +1052,7 @@ test "createUser adds user and maintains valid chain" {
 }
 
 test "verifyChain on empty store passes" {
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     var mgr = try AuthGraphManager.init(testing.allocator, &store);

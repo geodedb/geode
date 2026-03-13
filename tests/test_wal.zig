@@ -90,7 +90,7 @@ test "WAL: replay on fresh store" {
     }
 
     // Phase 2: Replay onto a fresh store
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var w2 = try wal_mod.WriteAheadLog.init(allocator, path);
@@ -120,7 +120,7 @@ test "WAL: checkpoint and truncation" {
     defer allocator.free(path);
     defer std.fs.cwd().deleteFile(path) catch {};
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var w = try wal_mod.WriteAheadLog.init(allocator, path);
@@ -175,7 +175,7 @@ test "WAL: CRC32 integrity validation" {
     }
 
     // Replay should stop at corrupted record (CRC mismatch)
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var w2 = try wal_mod.WriteAheadLog.init(allocator, path);
@@ -225,7 +225,7 @@ test "WAL: multiple record types roundtrip" {
     }
 
     // Replay
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var w2 = try wal_mod.WriteAheadLog.init(allocator, path);
@@ -327,7 +327,7 @@ test "WAL: checkpoint resets time and byte counters" {
     defer allocator.free(path);
     defer std.fs.cwd().deleteFile(path) catch {};
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var w = try wal_mod.WriteAheadLog.init(allocator, path);
@@ -490,7 +490,7 @@ test "WAL: mutation callback integration" {
     defer wal_mod.removeMutationCallback();
 
     // Create a store and perform mutations — callback should emit WAL records
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     const labels: []const []const u8 = &.{"Test"};

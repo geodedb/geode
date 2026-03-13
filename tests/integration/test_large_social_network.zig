@@ -18,7 +18,7 @@ const SocialNetworkData = struct {
 
     pub fn init(allocator: std.mem.Allocator) !SocialNetworkData {
         const graph = try allocator.create(geode.graph_store.GraphStore);
-        graph.* = geode.graph_store.GraphStore.init(allocator);
+        graph.* = try geode.graph_store.GraphStore.init(allocator);
 
         const index_mgr = try allocator.create(geode.index.IndexManager);
         index_mgr.* = geode.index.IndexManager.init(allocator);

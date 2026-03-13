@@ -19,7 +19,7 @@ test "massive graph store stress test" {
     graph_store.setDataDirOverride(allocator, data_dir);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     try store.reserve(MASSIVE_ITEM_COUNT, 0);
@@ -105,7 +105,7 @@ test "massive graph store stress test" {
     // Integrity Check (reload from disk)
     std.debug.print("[Phase 4] Verifying Integrity of Remaining Items...\n", .{});
 
-    var reloaded = graph_store.GraphStore.init(allocator);
+    var reloaded = try graph_store.GraphStore.init(allocator);
     defer reloaded.deinit();
     try reloaded.loadFromFile();
 

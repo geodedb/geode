@@ -1,15 +1,16 @@
 # Performance Gap Analysis
 
-Last updated: 2026-02-17
+Last updated: 2026-03-13
 
 ## Summary
 
-- Total findings: 17
-- Closed / Implemented: 16
+- Total findings: 24
+- Open: 0
+- Closed / Implemented: 23
 - Closed (Won't Do / Sufficient): 1
 - Blocked: 0
 
-All 17 performance gaps are resolved. No remaining blockers.
+Previous 17 findings (2026-02-17 audit) all resolved. March 2026 audit added 7 new findings — all 7 closed 2026-03-13.
 
 ## Stack-Ranked Findings
 
@@ -33,13 +34,35 @@ All 17 performance gaps are resolved. No remaining blockers.
 | 16 | P2 | 36 | Exponential plan enumeration without early stop | Planner | `src/planner/enumerator.zig:32` | [#459](https://gitlab.com/devnw/codepros/geode/geode/-/issues/459) | Pruning logic already existed but was disabled; enabled `enable_prune: true` default with conservative 4x prune_factor | Closed / Implemented |
 | 17 | P2 | 32 | Per-connection optimizer (no sharing) | Query exec | `src/server/quic_connection_handler.zig:455` | [#460](https://gitlab.com/devnw/codepros/geode/geode/-/issues/460) | `SharedQueryOptimizer` in `query_plan_cache.zig` provides thread-safe cross-connection plan reuse with Mutex + ref-counting + O(1) LRU eviction; `SharedPlanHandle` prevents eviction while in use; schema epoch invalidation ensures fresh plans after DDL; wired into `InitContext` alongside `SharedAstCache` | Closed / Implemented |
 
+### March 2026 Audit — New Findings
+
+| Rank | Sev | Score | Finding | Component | Evidence | GitLab | Fix Summary | Status |
+|---|---|---:|---|---|---|---|---|---|
+| 18 | P0 | 90 | N² binding clone in multi-chain MATCH joins — HashMap.clone() per edge match | Query exec | `src/execution/match_operations.zig:1343-1443` | [#557](https://gitlab.com/devnw/codepros/geode/geode/-/issues/557) | Pre-sized clone HashMap with `ensureTotalCapacity(count + 2)` to eliminate rehash during clone; pre-sized `new_bindings` ArrayList based on current bindings count | Closed / Implemented |
+| 19 | P1 | 64 | Full node scan fallback when MATCH pattern has no labels | Query exec | `src/execution/match_operations.zig:1264-1302` | [#558](https://gitlab.com/devnw/codepros/geode/geode/-/issues/558) | Added right-label index path (use `getNodesByLabels` on right labels when left labels absent); added edge-type scan path (use `getEdgesByType` when relationship type present); full scan only when no labels AND no rel type | Closed / Implemented |
+| 20 | P1 | 60 | WAL per-record unbuffered writes — multiple syscalls per mutation | Storage | `src/wal.zig:223-282` | [#559](https://gitlab.com/devnw/codepros/geode/geode/-/issues/559) | Assembled record (header+payload+crc) into single buffer before `writeAll`; plaintext uses stack buffer ≤64KB, heap fallback for larger; TDE path combines len_prefix+encrypted into single write | Closed / Implemented |
+| 21 | P1 | 56 | Per-row environment allocation in MATCH pipeline | Query exec | `src/execution/match_operations.zig:1454-1493` | [#560](https://gitlab.com/devnw/codepros/geode/geode/-/issues/560) | Hoisted `env_names` and `env_values` ArrayLists outside the binding loop; reuse via `clearRetainingCapacity()` per iteration; pre-sized rows ArrayList to `bindings.items.len` | Closed / Implemented |
+| 22 | P2 | 42 | O(M×N×L) label string comparison — no label interning | Query exec | `src/execution/pattern_helpers.zig:246-258` | [#561](https://gitlab.com/devnw/codepros/geode/geode/-/issues/561) | Added pointer equality fast-path (`ptr == ptr and len == len`) before byte comparison in `matchesLabels`; replaced inline label check in OPTIONAL MATCH with shared helper | Closed / Implemented |
+| 23 | P2 | 36 | WAL truncation is O(n) full file rewrite | Storage | `src/wal.zig:425-500` | [#562](https://gitlab.com/devnw/codepros/geode/geode/-/issues/562) | Added early exit for `up_to_lsn == 0`; pre-sized `kept` buffer from file end position instead of 4096 | Closed / Implemented |
+| 24 | P2 | 32 | GroupBy HashMap allocation churn — per-query HashMap without reuse | Query exec | `src/execution/match_operations.zig:852` | [#563](https://gitlab.com/devnw/codepros/geode/geode/-/issues/563) | Pre-sized with `ensureTotalCapacity` at 5 GroupBy locations (heuristic: 25% distinct groups or min 16); addressed via #552 | Closed / Implemented |
+
 ## Findings by Area
 
-- Query execution: `#444` (Closed), `#452` (Closed), `#456` (Closed), `#460` (Closed)
-- Storage/graph: `#445` (Closed), `#449` (Closed), `#450` (Closed), `#451` (Closed)
+- Query execution: `#444` (Closed), `#452` (Closed), `#456` (Closed), `#460` (Closed), `#557` (Closed), `#558` (Closed), `#560` (Closed), `#561` (Closed), `#563` (Closed)
+- Storage/graph: `#445` (Closed), `#449` (Closed), `#450` (Closed), `#451` (Closed), `#559` (Closed), `#562` (Closed)
 - Serialization: `#446` (Closed), `#448` (Closed)
 - Transport/concurrency: `#447` (Closed), `#453` (Closed), `#454` (Closed), `#457` (Closed), `#458` (Closed/Won't Do)
 - Planner/index: `#455` (Closed), `#459` (Closed)
+
+## Related Open Performance Bugs (tracked separately)
+
+| Issue | Title | Severity | Relates to |
+|-------|-------|----------|------------|
+| [#538](https://gitlab.com/devnw/codepros/geode/geode/-/issues/538) | OOM on large-graph ingest | High | Storage memory |
+| [#539](https://gitlab.com/devnw/codepros/geode/geode/-/issues/539) | WAL grows unboundedly across restarts | High | #559, #562 (WAL write path) |
+| [#540](https://gitlab.com/devnw/codepros/geode/geode/-/issues/540) | Excessive CPU usage: idles at ~60% CPU | High | QUIC handshake spin |
+| [#545](https://gitlab.com/devnw/codepros/geode/geode/-/issues/545) | CI benchmarks optional for release builds | High | Regression detection — **fixed via GAP-0252** |
+| [#552](https://gitlab.com/devnw/codepros/geode/geode/-/issues/552) | HashMap/ArrayList pre-sizing ratio 0.7% | Medium | #561, #563 (allocation churn) — **fixed: 5 GroupBy locations pre-sized** |
 
 ## Blockers and Unblock Steps
 
@@ -51,7 +74,7 @@ All blockers resolved (2026-02-17):
 
 ## Verification Executed for Closed Items
 
-- `zig build test --summary all` — 570/570 tests passed (2026-02-17)
+- `zig build test --summary all` — 628/628 tests passed (2026-03-13)
 - `rg -n "tracking_index|destroyStream" src/transport/quic.zig`
 - `rg -n "sample_size|@min\(rows.len, 10\)" src/server/proto_util.zig`
 - `rg -n "wait_cond|timedWait|signal\(" src/transport/thread_pool.zig`
@@ -67,3 +90,13 @@ All blockers resolved (2026-02-17):
 - `rg -n "SharedQueryOptimizer|SharedPlanHandle" src/server/query_plan_cache.zig` — confirmed shared optimizer
 - `rg -n "schema_epoch" src/graph_store.zig` — confirmed schema epoch invalidation
 - Unit tests: `test_wal.zig` (10 tests), `test_plan_cache_lifecycle.zig` (10 tests), `test_shared_optimizer.zig` (8 tests)
+
+### March 2026 Verification
+
+- `zig build test --summary all` — 628/628 tests passed (2026-03-13)
+- `rg -n "ensureTotalCapacity" src/execution/match_operations.zig` — confirmed #557 clone pre-sizing + #563 GroupBy pre-sizing
+- `rg -n "getNodesByLabels\|getEdgesByType" src/execution/match_operations.zig` — confirmed #558 index-driven scan paths
+- `rg -n "clearRetainingCapacity" src/execution/match_operations.zig` — confirmed #560 env list reuse
+- `rg -n "ptr ==" src/execution/pattern_helpers.zig` — confirmed #561 pointer equality fast-path
+- `rg -n "record_buf\|enc_buf" src/wal.zig` — confirmed #559 single-write buffering
+- `rg -n "up_to_lsn == 0\|getEndPos" src/wal.zig` — confirmed #562 truncation optimizations

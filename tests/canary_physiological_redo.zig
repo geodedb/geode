@@ -6,7 +6,7 @@ const graph_store = @import("geode").graph_store;
 const NODE_COUNT: usize = 4096;
 
 fn buildSnapshot(allocator: std.mem.Allocator) !void {
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     try store.reserve(NODE_COUNT, 0);
@@ -34,7 +34,7 @@ test "TestCANARY_REQ_GQL_022_GraphStoreLoadCorrectness" {
 
     try buildSnapshot(allocator);
 
-    var loaded = graph_store.GraphStore.init(allocator);
+    var loaded = try graph_store.GraphStore.init(allocator);
     defer loaded.deinit();
     try loaded.loadFromFile();
 
@@ -62,7 +62,7 @@ test "BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadVarianceEnvelope" {
 
     var i: usize = 0;
     while (i < sample_n) : (i += 1) {
-        var store = graph_store.GraphStore.init(allocator);
+        var store = try graph_store.GraphStore.init(allocator);
         defer store.deinit();
         const t0 = std.time.nanoTimestamp();
         try store.loadFromFile();

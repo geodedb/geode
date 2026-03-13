@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # REPL Persistent History Regression Test Suite
 # Tests the persistent command history functionality to prevent regressions

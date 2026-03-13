@@ -5,7 +5,7 @@ const graph_store = @import("graph_store");
 test "Graph store - create and retrieve nodes" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     // Clear any existing data
@@ -32,7 +32,7 @@ test "Graph store - create and retrieve nodes" {
 test "Graph store - create edges between nodes" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     store.clearNodes();
@@ -65,7 +65,7 @@ test "Graph store - create edges between nodes" {
 test "Graph store - set and get node properties" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     store.clearNodes();
@@ -108,7 +108,7 @@ test "Graph store - set and get node properties" {
 test "Graph store - get outgoing edges" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     store.clearNodes();
@@ -146,7 +146,7 @@ test "Graph store - get outgoing edges" {
 test "Graph store - clear nodes" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     // Create some nodes
@@ -170,7 +170,7 @@ test "Graph store - clear nodes" {
 test "Graph store - count edges for degree calculation" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     store.clearNodes();

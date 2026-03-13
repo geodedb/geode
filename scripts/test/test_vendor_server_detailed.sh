@@ -1,4 +1,5 @@
 #!/bin/sh
+set -eu
 
 echo "=== Test: Vendor Server with Different Configurations ==="
 pkill -KILL quic-server 2>/dev/null || true

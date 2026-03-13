@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Integration test runner for Geode
 # Runs all integration test files

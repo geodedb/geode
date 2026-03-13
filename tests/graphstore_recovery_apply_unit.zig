@@ -10,12 +10,12 @@ test "graphstore recovery applies insert" {
     graph_store.setDataDirOverride(gpa, tmp.dir_path);
     defer graph_store.setDataDirOverride(gpa, null);
 
-    var store = graph_store.GraphStore.init(gpa);
+    var store = try graph_store.GraphStore.init(gpa);
     defer store.deinit();
     _ = try store.createNode(&.{ "X" });
     try store.saveToFile();
 
-    var store2 = graph_store.GraphStore.init(gpa);
+    var store2 = try graph_store.GraphStore.init(gpa);
     defer store2.deinit();
     try store2.loadFromFile();
     try std.testing.expect(store2.getNodeCount() > 0);

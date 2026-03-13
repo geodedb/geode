@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # CANARY: REQ=REQ-LABEL-TAXONOMY-001; FEATURE="GitLab Label Setup"; ASPECT=Core; STATUS=IMPL; OWNER=ci; UPDATED=2026-01-14
 # GAP-0164: Script to create required type:: labels for gap analysis taxonomy
 #

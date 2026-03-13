@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # REPL Formatting Regression Test Suite
 # Tests REPL output formatting behavior to prevent regressions

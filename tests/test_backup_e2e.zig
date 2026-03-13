@@ -37,7 +37,7 @@ test "TestCANARY_REQ_GQL_201_BackupE2E" {
     graph_store.setDataDirOverride(allocator, data_dir);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     _ = try store.createNode(&.{ "E2E" });
 
@@ -75,7 +75,7 @@ test "backup workflow metadata log" {
     graph_store.setDataDirOverride(allocator, data_dir);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     _ = try store.createNode(&.{ "Meta" });
 
@@ -98,7 +98,7 @@ test "backup restore without backups returns error" {
     graph_store.setDataDirOverride(allocator, data_dir);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     const backup_dir = try makeTempDir(allocator, "empty_backups");

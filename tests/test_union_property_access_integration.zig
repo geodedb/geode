@@ -14,7 +14,7 @@ test "TestCANARY_REQ_GQL_UNION_INTEGRATION_001_PropertyAccessIntegration" {
     const allocator = testing.allocator;
 
     // Create a test graph storage
-    var graph = graph_common.GraphStore.init(allocator);
+    var graph = try graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add test nodes with properties
@@ -77,7 +77,7 @@ test "TestCANARY_REQ_GQL_UNION_INTEGRATION_002_MemberExpressionEvaluation" {
     const allocator = testing.allocator;
 
     // Create a test graph storage
-    var graph = graph_common.GraphStore.init(allocator);
+    var graph = try graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add a test node
@@ -140,7 +140,7 @@ test "TestCANARY_REQ_GQL_UNION_INTEGRATION_003_NodeSerialization" {
     const allocator = testing.allocator;
 
     // Create a test graph storage
-    var graph = graph_common.GraphStore.init(allocator);
+    var graph = try graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add test nodes
@@ -198,7 +198,7 @@ test "TestCANARY_REQ_GQL_UNION_INTEGRATION_004_PropertyPersistence" {
     const allocator = testing.allocator;
 
     // Test that properties are properly persisted and accessible
-    var graph = graph_common.GraphStore.init(allocator);
+    var graph = try graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add nodes with various property types
@@ -238,7 +238,7 @@ test "TestCANARY_REQ_GQL_UNION_INTEGRATION_005_MemoryManagement" {
     const allocator = testing.allocator;
 
     // Test proper memory management for properties and labels
-    var graph = graph_common.GraphStore.init(allocator);
+    var graph = try graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add multiple nodes with properties

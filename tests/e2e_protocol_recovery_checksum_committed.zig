@@ -23,7 +23,7 @@ test "protocol recovery checksum + committed_txns" {
     // Create a valid snapshot then corrupt it.
     graph_store.setDataDirOverride(allocator, base_path);
     defer graph_store.setDataDirOverride(allocator, null);
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     var labels = [_][]const u8{"Seed"};
     _ = try store.createNode(&labels);

@@ -422,7 +422,7 @@ test "User Manager integration" {
     var rls_engine = try rls.RLSEngine.init(allocator);
     defer rls_engine.deinit();
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     // Create user storage backend using GraphStore

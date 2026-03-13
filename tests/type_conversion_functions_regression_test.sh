@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # Type Conversion Functions Regression Test
 # Tests toString, toInteger, toReal functions added to fix geodetestlab failures

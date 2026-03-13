@@ -19,7 +19,7 @@ test "backup and restore basic operations" {
     defer backup_mgr.deinit();
 
     // Create some test data
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add nodes
@@ -90,7 +90,7 @@ test "backup with indexes" {
     try index_mgr.insertIntoPropertyIndex("age_idx", "25", 2);
 
     // Backup with indexes
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     try backup_mgr.backupWithIndexes(&graph, &index_mgr, backup_path);
@@ -120,7 +120,7 @@ test "incremental backup" {
     var backup_mgr = geode.backup.BackupManager.init(allocator);
     defer backup_mgr.deinit();
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Initial data
@@ -164,7 +164,7 @@ test "point-in-time recovery" {
     var backup_mgr = geode.backup.BackupManager.init(allocator);
     defer backup_mgr.deinit();
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create timeline of changes
@@ -221,7 +221,7 @@ test "backup compression" {
     var backup_mgr = geode.backup.BackupManager.init(allocator);
     defer backup_mgr.deinit();
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create repetitive data (good for compression)
@@ -275,7 +275,7 @@ test "REQ-GQL-BACKUP-RESTORE validation" {
     var backup_mgr = geode.backup.BackupManager.init(allocator);
     defer backup_mgr.deinit();
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     var index_mgr = geode.index.IndexManager.init(allocator);

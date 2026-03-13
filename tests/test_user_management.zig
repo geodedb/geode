@@ -9,7 +9,7 @@ const user_storage = @import("../src/storage/user_storage.zig");
 test "TestCANARY_REQ_GQL_202_UserManagement" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var backend = try user_storage.UserStorageBackend.init(allocator, &store);
@@ -33,7 +33,7 @@ test "TestCANARY_REQ_GQL_202_UserManagement" {
 test "user storage CRUD operations" {
     const allocator = testing.allocator;
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     var backend = try user_storage.UserStorageBackend.init(allocator, &store);

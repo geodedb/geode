@@ -936,7 +936,7 @@ test "blankUserRecord getHashAlgorithm returns empty for default" {
 }
 
 test "persistUserWithHmac stores hmac property on graph node" {
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     var backend = try UserStorageBackend.init(testing.allocator, &store);
@@ -965,12 +965,12 @@ test "persistUserWithHmac stores hmac property on graph node" {
 }
 
 test "persistUserWithHmac produces deterministic HMAC" {
-    var store1 = graph_store.GraphStore.init(testing.allocator);
+    var store1 = try graph_store.GraphStore.init(testing.allocator);
     defer store1.deinit();
     var backend1 = try UserStorageBackend.init(testing.allocator, &store1);
     defer backend1.deinit();
 
-    var store2 = graph_store.GraphStore.init(testing.allocator);
+    var store2 = try graph_store.GraphStore.init(testing.allocator);
     defer store2.deinit();
     var backend2 = try UserStorageBackend.init(testing.allocator, &store2);
     defer backend2.deinit();
@@ -990,7 +990,7 @@ test "persistUserWithHmac produces deterministic HMAC" {
 }
 
 test "loadChainRoot returns null when no chain root exists" {
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     var backend = try UserStorageBackend.init(testing.allocator, &store);
@@ -1001,7 +1001,7 @@ test "loadChainRoot returns null when no chain root exists" {
 }
 
 test "persistChainRoot creates and loadChainRoot retrieves" {
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     var backend = try UserStorageBackend.init(testing.allocator, &store);
@@ -1023,7 +1023,7 @@ test "persistChainRoot creates and loadChainRoot retrieves" {
 }
 
 test "persistChainRoot updates existing chain root" {
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     var backend = try UserStorageBackend.init(testing.allocator, &store);
@@ -1044,7 +1044,7 @@ test "persistChainRoot updates existing chain root" {
 }
 
 test "new UserRecord fields persist and reload from graph" {
-    var store = graph_store.GraphStore.init(testing.allocator);
+    var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
 
     var backend = try UserStorageBackend.init(testing.allocator, &store);

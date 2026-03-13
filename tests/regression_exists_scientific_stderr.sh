@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # Regression test for fixes applied to EXISTS parsing, scientific notation, and stderr patterns
 # This test verifies that all three critical fixes are working correctly

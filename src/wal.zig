@@ -265,15 +265,45 @@ pub const WriteAheadLog = struct {
 
             var len_prefix: [4]u8 = undefined;
             std.mem.writeInt(u32, &len_prefix, @intCast(encrypted.len), .little);
-            try file.writeAll(&len_prefix);
-            try file.writeAll(encrypted);
+
+            // #559: Single write for encrypted record
+            var enc_buf = std.ArrayList(u8).initCapacity(self.allocator, 4 + encrypted.len) catch {
+                try file.writeAll(&len_prefix);
+                try file.writeAll(encrypted);
+                self.bytes_since_checkpoint += 4 + encrypted.len;
+                return lsn;
+            };
+            defer enc_buf.deinit(self.allocator);
+            try enc_buf.appendSlice(self.allocator, &len_prefix);
+            try enc_buf.appendSlice(self.allocator, encrypted);
+            try file.writeAll(enc_buf.items);
 
             self.bytes_since_checkpoint += 4 + encrypted.len;
         } else {
-            // Plaintext: write header + payload + crc directly.
-            try file.writeAll(&header);
-            try file.writeAll(payload);
-            try file.writeAll(&crc_buf);
+            // #559: Buffer all record components for single syscall write
+            var record_buf: [RECORD_HEADER_SIZE + 65536 + CRC_SIZE]u8 = undefined;
+            const total_len = RECORD_HEADER_SIZE + payload.len + CRC_SIZE;
+            if (total_len <= record_buf.len) {
+                @memcpy(record_buf[0..RECORD_HEADER_SIZE], &header);
+                @memcpy(record_buf[RECORD_HEADER_SIZE..][0..payload.len], payload);
+                @memcpy(record_buf[RECORD_HEADER_SIZE + payload.len ..][0..CRC_SIZE], &crc_buf);
+                try file.writeAll(record_buf[0..total_len]);
+            } else {
+                // Fallback for very large payloads: use writev-style assembly
+                var large_buf = std.ArrayList(u8).initCapacity(self.allocator, total_len) catch {
+                    // Fallback to original multi-write path
+                    try file.writeAll(&header);
+                    try file.writeAll(payload);
+                    try file.writeAll(&crc_buf);
+                    self.bytes_since_checkpoint += RECORD_HEADER_SIZE + payload.len + CRC_SIZE;
+                    return lsn;
+                };
+                defer large_buf.deinit(self.allocator);
+                try large_buf.appendSlice(self.allocator, &header);
+                try large_buf.appendSlice(self.allocator, payload);
+                try large_buf.appendSlice(self.allocator, &crc_buf);
+                try file.writeAll(large_buf.items);
+            }
 
             self.bytes_since_checkpoint += RECORD_HEADER_SIZE + payload.len + CRC_SIZE;
         }
@@ -426,17 +456,24 @@ pub const WriteAheadLog = struct {
         self.lock.lock();
         defer self.lock.unlock();
 
+        if (up_to_lsn == 0) return; // Nothing to truncate
+
         const file = self.file orelse return;
 
+        const file_end = try file.getEndPos();
+        if (file_end == 0) return; // Empty WAL file
+
         try file.seekTo(0);
-        var kept = std.ArrayList(u8).initCapacity(self.allocator, 4096) catch return error.OutOfMemory;
-        defer kept.deinit(self.allocator);
 
         var kept_bytes: u64 = 0;
 
         if (self.tde_key) |key| {
             // Encrypted WAL truncation: read framed encrypted records, decrypt to check LSN,
             // then keep the encrypted bytes verbatim (no re-encryption needed).
+            // Pre-size buffer based on file size (cap at 4MB to avoid over-allocation).
+            var kept = std.ArrayList(u8).initCapacity(self.allocator, @intCast(@min(file_end, 4 * 1024 * 1024))) catch return error.OutOfMemory;
+            defer kept.deinit(self.allocator);
+
             while (true) {
                 var len_buf: [4]u8 = undefined;
                 const lr = file.readAll(&len_buf) catch break;
@@ -462,9 +499,23 @@ pub const WriteAheadLog = struct {
                     kept_bytes += 4 + enc_len;
                 }
             }
+
+            // Rewrite the file with only kept records
+            try file.seekTo(0);
+            if (kept.items.len > 0) {
+                try file.writeAll(kept.items);
+            }
+            try file.setEndPos(kept.items.len);
         } else {
-            // Plaintext WAL truncation (original logic)
+            // Plaintext WAL truncation: scan for first kept record, then bulk-copy remainder.
+            // LSNs are monotonically increasing, so once we find the first record with
+            // LSN > up_to_lsn, all subsequent records are also kept. This lets us avoid
+            // buffering the entire kept portion in memory -- just memmove it forward.
+            var first_kept_offset: ?u64 = null;
+
             while (true) {
+                const record_start = file.getPos() catch break;
+
                 var header_buf: [RECORD_HEADER_SIZE]u8 = undefined;
                 const header_read = file.readAll(&header_buf) catch break;
                 if (header_read < RECORD_HEADER_SIZE) break;
@@ -472,27 +523,48 @@ pub const WriteAheadLog = struct {
                 const lsn = std.mem.readInt(u64, header_buf[0..8], .little);
                 const payload_len = std.mem.readInt(u32, header_buf[17..21], .little);
 
-                const total_record_size = RECORD_HEADER_SIZE + payload_len + CRC_SIZE;
-                const record_data = self.allocator.alloc(u8, payload_len + CRC_SIZE) catch break;
-                defer self.allocator.free(record_data);
-                const data_read = file.readAll(record_data) catch break;
-                if (data_read < payload_len + CRC_SIZE) break;
+                // Skip past payload + CRC to next record
+                file.seekBy(@intCast(payload_len + CRC_SIZE)) catch break;
 
                 if (lsn > up_to_lsn) {
-                    try kept.appendSlice(self.allocator, &header_buf);
-                    try kept.appendSlice(self.allocator, record_data);
-                    kept_bytes += total_record_size;
+                    first_kept_offset = record_start;
+                    // All subsequent records also have LSN > up_to_lsn (monotonic),
+                    // so stop scanning and bulk-copy from this offset onward.
+                    break;
                 }
             }
-        }
 
-        // Rewrite the file with only kept records
-        try file.seekTo(0);
-        if (kept.items.len > 0) {
-            try file.writeAll(kept.items);
+            if (first_kept_offset) |offset| {
+                if (offset == 0) {
+                    // All records are kept; file is unchanged.
+                    kept_bytes = file_end;
+                } else {
+                    // Bulk-copy kept portion to the start of the file.
+                    const remaining = file_end - offset;
+                    const buf_size: usize = @intCast(@min(remaining, 64 * 1024));
+                    const buf = self.allocator.alloc(u8, buf_size) catch return error.OutOfMemory;
+                    defer self.allocator.free(buf);
+
+                    var read_pos: u64 = offset;
+                    var write_pos: u64 = 0;
+                    while (read_pos < file_end) {
+                        try file.seekTo(read_pos);
+                        const chunk_size: usize = @intCast(@min(buf_size, file_end - read_pos));
+                        const n = try file.readAll(buf[0..chunk_size]);
+                        if (n == 0) break;
+                        try file.seekTo(write_pos);
+                        try file.writeAll(buf[0..n]);
+                        read_pos += n;
+                        write_pos += n;
+                    }
+                    try file.setEndPos(remaining);
+                    kept_bytes = remaining;
+                }
+            } else {
+                // No records kept; truncate to empty.
+                try file.setEndPos(0);
+            }
         }
-        // Truncate the file to the new size
-        try file.setEndPos(kept.items.len);
 
         self.checkpoint_lsn = up_to_lsn;
         self.bytes_since_checkpoint = kept_bytes;

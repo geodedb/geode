@@ -49,7 +49,7 @@ test "BackupManager creates backup metadata and header" {
     graph_store.setDataDirOverride(allocator, data_dir);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     _ = try store.createNode(&.{ "ServerUnit" });
 
@@ -155,7 +155,7 @@ test "Restore without backups returns NoBackupFound" {
     graph_store.setDataDirOverride(allocator, data_dir);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     const backup_dir = try makeTempDir(allocator, "empty_backups");

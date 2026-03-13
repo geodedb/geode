@@ -1,4 +1,5 @@
 #!/bin/sh
+set -e
 # Post-removal script for Geode
 # This script runs after the package is uninstalled
 

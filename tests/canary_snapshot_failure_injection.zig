@@ -14,7 +14,7 @@ test "TestCANARY_REQ_GQL_028_SnapshotFailureInjection" {
     graph_store.setDataDirOverride(allocator, data_dir);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     const labels = [_][]const u8{ "Fail" };
@@ -38,7 +38,7 @@ test "TestCANARY_REQ_GQL_028_SnapshotFailureInjection" {
     buf[64] = buf[64] ^ 0xFF;
     _ = try file.pwriteAll(buf, 0);
 
-    var loaded = graph_store.GraphStore.init(allocator);
+    var loaded = try graph_store.GraphStore.init(allocator);
     defer loaded.deinit();
     const result = loaded.loadFromFile();
     try std.testing.expectError(error.ChecksumMismatch, result);

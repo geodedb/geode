@@ -12,7 +12,7 @@ const geode = @import("geode");
 test "Property storage with deep copy memory management" {
     const allocator = testing.allocator;
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Simulate AST memory that will be freed
@@ -43,7 +43,7 @@ test "Property storage with deep copy memory management" {
 test "UNION property access with persisted data simulation" {
     const allocator = testing.allocator;
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     const alice_id = try graph.createNode(&.{"Person"});
@@ -72,7 +72,7 @@ test "UNION property access with persisted data simulation" {
 test "TestCANARY_REQ_GQL_PROPERTY_001_MemoryManagement" {
     const allocator = testing.allocator;
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     var node_id: u64 = 0;

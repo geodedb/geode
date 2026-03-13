@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # Geode Debian Package Signing Setup
 # Generates GPG key and optionally stores in HashiCorp Vault
 #

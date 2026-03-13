@@ -18,7 +18,7 @@ test "TestCANARY_REQ_GQL_028_CorruptSnapshotRecovery" {
     graph_store.setDataDirOverride(allocator, tmp_path);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     _ = try store.createNode(&.{"Person"});
     try store.saveToFile();
@@ -35,7 +35,7 @@ test "TestCANARY_REQ_GQL_028_CorruptSnapshotRecovery" {
         try std.fs.cwd().writeFile(path, data);
     }
 
-    var store2 = graph_store.GraphStore.init(allocator);
+    var store2 = try graph_store.GraphStore.init(allocator);
     defer store2.deinit();
     const res = store2.loadFromFile();
     try std.testing.expect(res == error.ChecksumMismatch or res == error.InvalidMagic or res == error.InvalidHeader);

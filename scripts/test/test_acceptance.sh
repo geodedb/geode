@@ -1,4 +1,5 @@
 #!/bin/sh
+set -eu
 # Acceptance test runner
 
 echo "=== Running Acceptance Tests for Geode ==="

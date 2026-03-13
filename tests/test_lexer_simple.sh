@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Simple lexer test to debug double quote issue
 
 echo "Testing lexer with different inputs..."

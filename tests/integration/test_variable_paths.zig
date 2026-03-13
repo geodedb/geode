@@ -5,7 +5,7 @@ const testing = std.testing;
 test "variable-length path basic operations" {
     const allocator = std.testing.allocator;
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create a chain: A -> B -> C -> D -> E
@@ -43,7 +43,7 @@ test "variable-length path basic operations" {
 test "variable-length path with cycles" {
     const allocator = std.testing.allocator;
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create a cycle: A -> B -> C -> A
@@ -75,7 +75,7 @@ test "variable-length path with cycles" {
 test "shortest path algorithms" {
     const allocator = std.testing.allocator;
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create a graph with multiple paths
@@ -110,7 +110,7 @@ test "shortest path algorithms" {
 test "bidirectional variable paths" {
     const allocator = std.testing.allocator;
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create bidirectional edges
@@ -134,7 +134,7 @@ test "bidirectional variable paths" {
 test "path with property filters" {
     const allocator = std.testing.allocator;
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create nodes with properties
@@ -187,7 +187,7 @@ test "path with property filters" {
 test "k-shortest paths" {
     const allocator = std.testing.allocator;
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create graph with multiple paths of different lengths
@@ -228,7 +228,7 @@ test "k-shortest paths" {
 test "path expansion with depth limit" {
     const allocator = std.testing.allocator;
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create a deep tree structure
@@ -282,7 +282,7 @@ test "CANARY: REQ=REQ-GQL-VARIABLE-PATHS" {
     // CANARY: REQ=REQ-GQL-VARIABLE-PATHS; FEATURE="VariablePaths"; ASPECT=Core; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_VARIABLE_PATHS; OWNER=team; UPDATED=2025-10-02
     const allocator = std.testing.allocator;
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create test graph for variable paths

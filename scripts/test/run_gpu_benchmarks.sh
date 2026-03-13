@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # GPU Benchmark Runner - Performance Validation Phase
 # CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Benchmarks; STATUS=EXEMPT; OWNER=engine; UPDATED=2025-10-26
 

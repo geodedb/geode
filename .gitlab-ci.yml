@@ -603,6 +603,65 @@ test-performance-benchmarks:
     expire_in: 1 week
 
 # =============================================================================
+# Test Stage - Code Coverage Collection (GAP-0251)
+# CANARY: REQ=REQ-CI-COVERAGE-001; FEATURE="CodeCoverageCI"; ASPECT=Core; STATUS=IMPL; OWNER=ci; UPDATED=2026-03-13
+# GAP-0251: Collect line/branch coverage via kcov + Zig DWARF debug info
+# =============================================================================
+
+test-code-coverage:
+  stage: test
+  image: $ZIG_IMAGE
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+    COVERAGE_THRESHOLD: "50"  # Start conservative; raise as coverage improves
+  before_script:
+    - *zig-vendor-cache
+    - apt-get update -qq && apt-get install -y -qq kcov 2>/dev/null || apk add --no-cache kcov 2>/dev/null || echo "WARN: kcov not available, skipping instrumented coverage"
+  script:
+    - |
+      echo "=== Building Test Binary ==="
+      zig build test -Doptimize=Debug --summary all 2>&1 | tee test_output.log
+
+      # Count test pass rate as baseline metric
+      TOTAL_TESTS=$(grep -oP '\d+ passed' test_output.log | awk '{s+=$1} END {print s}')
+      echo "Total tests passed: ${TOTAL_TESTS:-0}"
+
+      # If kcov is available, run instrumented coverage
+      if command -v kcov >/dev/null 2>&1; then
+        echo "=== Running Coverage with kcov ==="
+        mkdir -p coverage_report
+        # Find compiled test binaries and run through kcov
+        find .zig-cache/o/ -maxdepth 2 -name "test" -type f -executable 2>/dev/null | head -5 | while read -r test_bin; do
+          kcov --include-path=src/ coverage_report "$test_bin" 2>/dev/null || true
+        done
+        # Extract coverage percentage
+        if [ -f coverage_report/index.json ]; then
+          COVERAGE=$(python3 -c "import json; d=json.load(open('coverage_report/index.json')); print(d.get('percent_covered','0'))" 2>/dev/null || echo "0")
+          echo "Line coverage: ${COVERAGE}%"
+          echo "coverage: ${COVERAGE}%" > metrics.txt
+        fi
+      else
+        echo "kcov not available — reporting test pass rate only"
+        echo "coverage: test-pass-rate" > metrics.txt
+      fi
+
+      echo "✓ GAP-0251: Coverage collection configured"
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  allow_failure: true  # Informational until kcov is reliably available in CI image
+  artifacts:
+    when: always
+    paths:
+      - coverage_report/
+      - metrics.txt
+      - test_output.log
+    reports:
+      coverage_report: coverage_report/
+    expire_in: 1 week
+  coverage: '/coverage: (\d+\.?\d*)%/'
+
+# =============================================================================
 # Test Stage - GQL Compliance Suite (geodetestlab)
 # CANARY: REQ=REQ-CI-COMPLIANCE-001; FEATURE="GQL Compliance CI"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_gql_compliance.yml; OWNER=ci; UPDATED=2026-01-14
 # GAP-0167: Execute geodetestlab GQL compliance specs in CI
@@ -886,7 +945,7 @@ build-release:
     - job: test-zig-unit
     - job: test-zig-release-safe
     - job: test-performance-benchmarks
-      optional: true  # Flaky SIMD benchmarks should not block releases
+      optional: false  # GAP-0252: Benchmarks required for release builds to detect regressions
     - job: security-secrets
     - job: security-trivy
   # Use GitLab hosted runners for Docker-in-Docker support

@@ -9,7 +9,7 @@ test "UNION basic operations" {
     defer exec.deinit();
 
     // Create test data
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     const node1 = try graph.createNode(&.{});
@@ -60,7 +60,7 @@ test "UNION ALL with duplicates" {
     var exec = geode.server.graph.Executor.init(allocator);
     defer exec.deinit();
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create nodes with duplicate values
@@ -132,7 +132,7 @@ test "INTERSECT operations" {
     var exec = geode.server.graph.Executor.init(allocator);
     defer exec.deinit();
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create nodes in different categories
@@ -189,7 +189,7 @@ test "EXCEPT operations" {
     var exec = geode.server.graph.Executor.init(allocator);
     defer exec.deinit();
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create employees and managers
@@ -257,7 +257,7 @@ test "Multiple set operations chained" {
     var exec = geode.server.graph.Executor.init(allocator);
     defer exec.deinit();
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create three sets of numbers
@@ -340,7 +340,7 @@ test "UNION with ORDER BY and LIMIT" {
     var exec = geode.server.graph.Executor.init(allocator);
     defer exec.deinit();
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create products in different categories
@@ -388,7 +388,7 @@ test "CANARY: REQ=REQ-GQL-SET-OPERATIONS" {
     var exec = geode.server.graph.Executor.init(allocator);
     defer exec.deinit();
 
-    var graph = geode.graph_store.GraphStore.init(allocator);
+    var graph = try geode.graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Create test data for comprehensive set operations test

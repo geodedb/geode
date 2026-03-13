@@ -22,7 +22,7 @@ test "protocol StoragePageChecksum diagnostic" {
     proto.progress("Creating and corrupting snapshot...", .{});
     graph_store.setDataDirOverride(allocator, base_path);
     defer graph_store.setDataDirOverride(allocator, null);
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     var labels = [_][]const u8{"Diag"};
     _ = try store.createNode(&labels);

@@ -269,31 +269,434 @@ pub const AuthResult = struct {
 };
 
 /// Extract identity from raw certificate DER bytes
-/// CANARY: REQ=REQ-AUTH-MTLS-004; FEATURE="CertificateIdentityExtraction"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_mtls_provider.zig; OWNER=security; UPDATED=2026-01-29
+/// GAP-0248: Implements ASN.1/DER X.509 parsing for subject CN, SAN, validity dates, serial number.
+/// CANARY: REQ=REQ-AUTH-MTLS-004; FEATURE="CertificateIdentityExtraction"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_mtls_provider.zig; OWNER=security; UPDATED=2026-03-13
 pub fn extractIdentity(allocator: Allocator, cert_der: []const u8) !CertificateIdentity {
     // Calculate SHA-256 fingerprint
     var fingerprint_bytes: [32]u8 = undefined;
     crypto.hash.sha2.Sha256.hash(cert_der, &fingerprint_bytes, .{});
-
-    // Convert to hex string using bytesToHex
     const fingerprint = std.fmt.bytesToHex(fingerprint_bytes, .lower);
 
-    // For now, return minimal identity with fingerprint
-    // Full X.509 parsing would require a proper ASN.1/X.509 library
-    _ = allocator;
-
-    return CertificateIdentity{
+    // Parse X.509 certificate structure using ASN.1 DER decoder
+    var identity = CertificateIdentity{
         .fingerprint = fingerprint,
-        .subject_cn = null, // Would need X.509 parsing
+        .subject_cn = null,
         .subject_dn = null,
         .san_email = null,
         .san_dns = null,
         .san_uri = null,
         .issuer_dn = null,
-        .not_before = 0, // Would need X.509 parsing
-        .not_after = std.math.maxInt(i64), // Default to far future
-        .serial_number = "", // Would need X.509 parsing
+        .not_before = 0,
+        .not_after = std.math.maxInt(i64),
+        .serial_number = "",
     };
+
+    // Parse the DER-encoded X.509 certificate
+    const tbs = parseTbsCertificate(cert_der) catch return identity;
+
+    // Extract serial number
+    if (tbs.serial_number.len > 0) {
+        // Format serial number as hex string
+        const hex_chars = "0123456789abcdef";
+        const hex_buf = try allocator.alloc(u8, tbs.serial_number.len * 2);
+        for (tbs.serial_number, 0..) |byte, i| {
+            hex_buf[i * 2] = hex_chars[byte >> 4];
+            hex_buf[i * 2 + 1] = hex_chars[byte & 0x0f];
+        }
+        identity.serial_number = hex_buf;
+    }
+
+    // Extract subject CN and DN
+    if (tbs.subject_cn) |cn| {
+        identity.subject_cn = try allocator.dupe(u8, cn);
+    }
+    if (tbs.subject_dn) |dn| {
+        identity.subject_dn = try allocator.dupe(u8, dn);
+    }
+
+    // Extract issuer DN
+    if (tbs.issuer_dn) |dn| {
+        identity.issuer_dn = try allocator.dupe(u8, dn);
+    }
+
+    // Extract validity dates
+    identity.not_before = tbs.not_before;
+    identity.not_after = tbs.not_after;
+
+    // Extract SAN extensions
+    if (tbs.san_dns) |dns| {
+        identity.san_dns = try allocator.dupe(u8, dns);
+    }
+    if (tbs.san_email) |email| {
+        identity.san_email = try allocator.dupe(u8, email);
+    }
+    if (tbs.san_uri) |uri| {
+        identity.san_uri = try allocator.dupe(u8, uri);
+    }
+
+    return identity;
+}
+
+// ==========================================================================
+// ASN.1/DER X.509 Certificate Parser (GAP-0248)
+// Minimal parser for extracting identity fields from X.509 certificates.
+// Handles: serial number, subject CN/DN, issuer DN, validity dates, SAN extension.
+// ==========================================================================
+
+const Asn1Tag = enum(u8) {
+    boolean = 0x01,
+    integer = 0x02,
+    bit_string = 0x03,
+    octet_string = 0x04,
+    null_tag = 0x05,
+    oid = 0x06,
+    utf8_string = 0x0C,
+    printable_string = 0x13,
+    t61_string = 0x14,
+    ia5_string = 0x16,
+    utc_time = 0x17,
+    generalized_time = 0x18,
+    sequence = 0x30,
+    set = 0x31,
+    _,
+};
+
+const Asn1Element = struct {
+    tag: u8,
+    data: []const u8,
+    header_len: usize,
+};
+
+const TbsFields = struct {
+    serial_number: []const u8,
+    subject_cn: ?[]const u8,
+    subject_dn: ?[]const u8,
+    issuer_dn: ?[]const u8,
+    not_before: i64,
+    not_after: i64,
+    san_dns: ?[]const u8,
+    san_email: ?[]const u8,
+    san_uri: ?[]const u8,
+};
+
+fn parseAsn1Element(data: []const u8) !Asn1Element {
+    if (data.len < 2) return error.TruncatedDer;
+    const tag = data[0];
+    var offset: usize = 1;
+    var length: usize = 0;
+
+    if (data[offset] & 0x80 == 0) {
+        // Short form length
+        length = data[offset];
+        offset += 1;
+    } else {
+        // Long form length
+        const num_bytes = data[offset] & 0x7F;
+        offset += 1;
+        if (num_bytes > 4 or offset + num_bytes > data.len) return error.InvalidLength;
+        for (0..num_bytes) |_| {
+            length = (length << 8) | data[offset];
+            offset += 1;
+        }
+    }
+
+    if (offset + length > data.len) return error.TruncatedDer;
+    return .{
+        .tag = tag,
+        .data = data[offset .. offset + length],
+        .header_len = offset,
+    };
+}
+
+fn parseAsn1String(data: []const u8) ?[]const u8 {
+    const elem = parseAsn1Element(data) catch return null;
+    const tag: Asn1Tag = @enumFromInt(elem.tag);
+    return switch (tag) {
+        .utf8_string, .printable_string, .ia5_string, .t61_string => elem.data,
+        else => null,
+    };
+}
+
+/// OID for Common Name (2.5.4.3)
+const oid_cn = [_]u8{ 0x55, 0x04, 0x03 };
+/// OID for Subject Alternative Name (2.5.29.17)
+const oid_san = [_]u8{ 0x55, 0x1D, 0x11 };
+
+fn parseName(name_data: []const u8) struct { cn: ?[]const u8, dn: ?[]const u8 } {
+    // Name is a SEQUENCE of RDNSequence (SET of AttributeTypeAndValue)
+    var cn: ?[]const u8 = null;
+    var dn_parts: [32]struct { key: []const u8, value: []const u8 } = undefined;
+    var dn_count: usize = 0;
+
+    var pos: usize = 0;
+    while (pos < name_data.len) {
+        const set_elem = parseAsn1Element(name_data[pos..]) catch break;
+        if (set_elem.tag != 0x31) break; // SET
+
+        // Parse SET contents (AttributeTypeAndValue SEQUENCE)
+        var set_pos: usize = 0;
+        while (set_pos < set_elem.data.len) {
+            const seq = parseAsn1Element(set_elem.data[set_pos..]) catch break;
+            if (seq.tag != 0x30) break; // SEQUENCE
+
+            // Parse OID + value
+            var attr_pos: usize = 0;
+            const oid_elem = parseAsn1Element(seq.data[attr_pos..]) catch break;
+            if (oid_elem.tag != 0x06) break;
+            attr_pos += oid_elem.header_len + oid_elem.data.len;
+
+            const value_str = parseAsn1String(seq.data[attr_pos..]);
+
+            // Check if this is CN
+            if (oid_elem.data.len == oid_cn.len and std.mem.eql(u8, oid_elem.data, &oid_cn)) {
+                cn = value_str;
+            }
+
+            // Collect for DN string
+            if (value_str) |v| {
+                if (dn_count < dn_parts.len) {
+                    dn_parts[dn_count] = .{ .key = oid_elem.data, .value = v };
+                    dn_count += 1;
+                }
+            }
+
+            set_pos += seq.header_len + seq.data.len;
+        }
+        pos += set_elem.header_len + set_elem.data.len;
+    }
+
+    // Build DN string (simplified: just CN= prefix for now)
+    var dn: ?[]const u8 = null;
+    if (cn) |cn_val| {
+        dn = cn_val; // Simplified DN = CN value
+    }
+
+    return .{ .cn = cn, .dn = dn };
+}
+
+fn parseUtcTime(data: []const u8) i64 {
+    // UTCTime format: YYMMDDHHMMSSZ
+    if (data.len < 13) return 0;
+
+    const year_offset: i64 = parseDigits(data[0..2]) catch return 0;
+    const year: i64 = if (year_offset >= 50) 1900 + year_offset else 2000 + year_offset;
+    const month: i64 = parseDigits(data[2..4]) catch return 0;
+    const day: i64 = parseDigits(data[4..6]) catch return 0;
+    const hour: i64 = parseDigits(data[6..8]) catch return 0;
+    const minute: i64 = parseDigits(data[8..10]) catch return 0;
+    const second: i64 = parseDigits(data[10..12]) catch return 0;
+
+    // Simplified conversion to Unix timestamp (approximate, ignores leap seconds)
+    const days_since_epoch = epochDays(year, month, day);
+    return days_since_epoch * 86400 + hour * 3600 + minute * 60 + second;
+}
+
+fn parseGeneralizedTime(data: []const u8) i64 {
+    // GeneralizedTime format: YYYYMMDDHHMMSSZ
+    if (data.len < 15) return 0;
+
+    const year: i64 = (parseDigits(data[0..2]) catch return 0) * 100 + (parseDigits(data[2..4]) catch return 0);
+    const month: i64 = parseDigits(data[4..6]) catch return 0;
+    const day: i64 = parseDigits(data[6..8]) catch return 0;
+    const hour: i64 = parseDigits(data[8..10]) catch return 0;
+    const minute: i64 = parseDigits(data[10..12]) catch return 0;
+    const second: i64 = parseDigits(data[12..14]) catch return 0;
+
+    const days_since_epoch = epochDays(year, month, day);
+    return days_since_epoch * 86400 + hour * 3600 + minute * 60 + second;
+}
+
+fn parseDigits(s: []const u8) !i64 {
+    var result: i64 = 0;
+    for (s) |c| {
+        if (c < '0' or c > '9') return error.InvalidDigit;
+        result = result * 10 + @as(i64, c - '0');
+    }
+    return result;
+}
+
+fn epochDays(year: i64, month: i64, day: i64) i64 {
+    // Days from 1970-01-01 (simplified, good enough for certificate validation)
+    const y = if (month <= 2) year - 1 else year;
+    const m = if (month <= 2) month + 12 else month;
+    const days = 365 * y + @divFloor(y, 4) - @divFloor(y, 100) + @divFloor(y, 400) + @divFloor(153 * (m - 3) + 2, 5) + day - 719469;
+    return days;
+}
+
+fn parseSanExtension(ext_data: []const u8) struct { dns: ?[]const u8, email: ?[]const u8, uri: ?[]const u8 } {
+    // SAN is a SEQUENCE of GeneralName
+    var dns: ?[]const u8 = null;
+    var email: ?[]const u8 = null;
+    var uri: ?[]const u8 = null;
+
+    var pos: usize = 0;
+    while (pos < ext_data.len) {
+        const elem = parseAsn1Element(ext_data[pos..]) catch break;
+        const tag_class = elem.tag & 0xC0; // context-specific class
+        const tag_num = elem.tag & 0x1F;
+
+        if (tag_class == 0x80) { // Context-specific
+            switch (tag_num) {
+                1 => { // rfc822Name (email)
+                    if (email == null) email = elem.data;
+                },
+                2 => { // dNSName
+                    if (dns == null) dns = elem.data;
+                },
+                6 => { // uniformResourceIdentifier
+                    if (uri == null) uri = elem.data;
+                },
+                else => {},
+            }
+        }
+        pos += elem.header_len + elem.data.len;
+    }
+    return .{ .dns = dns, .email = email, .uri = uri };
+}
+
+fn parseTbsCertificate(cert_der: []const u8) !TbsFields {
+    var result = TbsFields{
+        .serial_number = &.{},
+        .subject_cn = null,
+        .subject_dn = null,
+        .issuer_dn = null,
+        .not_before = 0,
+        .not_after = std.math.maxInt(i64),
+        .san_dns = null,
+        .san_email = null,
+        .san_uri = null,
+    };
+
+    // Certificate is a SEQUENCE { tbsCertificate, signatureAlgorithm, signatureValue }
+    const cert_seq = try parseAsn1Element(cert_der);
+    if (cert_seq.tag != 0x30) return error.InvalidCertificate;
+
+    // TBSCertificate is the first element
+    const tbs = try parseAsn1Element(cert_seq.data);
+    if (tbs.tag != 0x30) return error.InvalidCertificate;
+
+    var pos: usize = 0;
+    var field_idx: usize = 0;
+
+    // TBSCertificate fields:
+    // [0] version (optional, context-specific), serialNumber, signature,
+    // issuer, validity, subject, subjectPublicKeyInfo, [extensions]
+
+    while (pos < tbs.data.len and field_idx < 10) {
+        const elem = parseAsn1Element(tbs.data[pos..]) catch break;
+        const elem_total = elem.header_len + elem.data.len;
+
+        // Check for context-specific [0] version tag
+        if (elem.tag == 0xA0 and field_idx == 0) {
+            // Skip version field
+            pos += elem_total;
+            continue;
+        }
+
+        switch (field_idx) {
+            0 => {
+                // serialNumber (INTEGER)
+                if (elem.tag == 0x02) {
+                    result.serial_number = elem.data;
+                }
+            },
+            1 => {
+                // signature algorithm — skip
+            },
+            2 => {
+                // issuer (Name SEQUENCE)
+                if (elem.tag == 0x30) {
+                    const issuer = parseName(elem.data);
+                    result.issuer_dn = issuer.dn;
+                }
+            },
+            3 => {
+                // validity (SEQUENCE { notBefore, notAfter })
+                if (elem.tag == 0x30) {
+                    var vpos: usize = 0;
+                    // notBefore
+                    const nb = parseAsn1Element(elem.data[vpos..]) catch break;
+                    if (nb.tag == @intFromEnum(Asn1Tag.utc_time)) {
+                        result.not_before = parseUtcTime(nb.data);
+                    } else if (nb.tag == @intFromEnum(Asn1Tag.generalized_time)) {
+                        result.not_before = parseGeneralizedTime(nb.data);
+                    }
+                    vpos += nb.header_len + nb.data.len;
+                    // notAfter
+                    const na = parseAsn1Element(elem.data[vpos..]) catch break;
+                    if (na.tag == @intFromEnum(Asn1Tag.utc_time)) {
+                        result.not_after = parseUtcTime(na.data);
+                    } else if (na.tag == @intFromEnum(Asn1Tag.generalized_time)) {
+                        result.not_after = parseGeneralizedTime(na.data);
+                    }
+                }
+            },
+            4 => {
+                // subject (Name SEQUENCE)
+                if (elem.tag == 0x30) {
+                    const subject = parseName(elem.data);
+                    result.subject_cn = subject.cn;
+                    result.subject_dn = subject.dn;
+                }
+            },
+            5 => {
+                // subjectPublicKeyInfo — skip
+            },
+            else => {
+                // Extensions [3] (context-specific)
+                if (elem.tag == 0xA3) {
+                    // Parse extensions SEQUENCE
+                    const exts_seq = parseAsn1Element(elem.data) catch break;
+                    if (exts_seq.tag == 0x30) {
+                        var epos: usize = 0;
+                        while (epos < exts_seq.data.len) {
+                            const ext = parseAsn1Element(exts_seq.data[epos..]) catch break;
+                            if (ext.tag == 0x30) {
+                                // Extension = SEQUENCE { extnID, critical?, extnValue }
+                                var ext_pos: usize = 0;
+                                const ext_oid = parseAsn1Element(ext.data[ext_pos..]) catch break;
+                                if (ext_oid.tag != 0x06) {
+                                    epos += ext.header_len + ext.data.len;
+                                    continue;
+                                }
+                                ext_pos += ext_oid.header_len + ext_oid.data.len;
+
+                                // Check for SAN OID (2.5.29.17)
+                                if (ext_oid.data.len == oid_san.len and std.mem.eql(u8, ext_oid.data, &oid_san)) {
+                                    // Skip optional critical BOOLEAN
+                                    if (ext_pos < ext.data.len) {
+                                        const next = parseAsn1Element(ext.data[ext_pos..]) catch break;
+                                        if (next.tag == 0x01) { // BOOLEAN (critical)
+                                            ext_pos += next.header_len + next.data.len;
+                                        }
+                                    }
+                                    // extnValue is OCTET STRING wrapping SAN SEQUENCE
+                                    if (ext_pos < ext.data.len) {
+                                        const ext_val = parseAsn1Element(ext.data[ext_pos..]) catch break;
+                                        if (ext_val.tag == 0x04) { // OCTET STRING
+                                            const san_seq = parseAsn1Element(ext_val.data) catch break;
+                                            if (san_seq.tag == 0x30) {
+                                                const san = parseSanExtension(san_seq.data);
+                                                result.san_dns = san.dns;
+                                                result.san_email = san.email;
+                                                result.san_uri = san.uri;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            epos += ext.header_len + ext.data.len;
+                        }
+                    }
+                }
+            },
+        }
+
+        pos += elem_total;
+        field_idx += 1;
+    }
+
+    return result;
 }
 
 /// Create identity from known values (for testing or when cert is already parsed)
@@ -549,4 +952,70 @@ test "extractIdentity: computes fingerprint" {
     for (identity.fingerprint) |c| {
         try std.testing.expect((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f'));
     }
+}
+
+// GAP-0248: ASN.1/DER parser unit tests
+test "parseAsn1Element: short form length" {
+    // SEQUENCE tag (0x30) with 2-byte payload
+    const data = [_]u8{ 0x30, 0x02, 0xAA, 0xBB };
+    const elem = try parseAsn1Element(&data);
+    try std.testing.expectEqual(@as(u8, 0x30), elem.tag);
+    try std.testing.expectEqual(@as(usize, 2), elem.data.len);
+    try std.testing.expectEqual(@as(u8, 0xAA), elem.data[0]);
+}
+
+test "parseAsn1Element: long form length" {
+    // INTEGER tag (0x02), long form: 1 length byte indicating 130 bytes
+    var data: [134]u8 = undefined;
+    data[0] = 0x02; // INTEGER
+    data[1] = 0x81; // Long form, 1 byte length
+    data[2] = 0x80; // 128 bytes
+    @memset(data[3..], 0x42);
+    const elem = try parseAsn1Element(&data);
+    try std.testing.expectEqual(@as(u8, 0x02), elem.tag);
+    try std.testing.expectEqual(@as(usize, 128), elem.data.len);
+}
+
+test "parseUtcTime: valid UTC time" {
+    // 250101120000Z = 2025-01-01 12:00:00 UTC
+    const utc = "250101120000Z";
+    const ts = parseUtcTime(utc);
+    // Should be a positive timestamp in 2025
+    try std.testing.expect(ts > 1735689600); // 2025-01-01 00:00:00
+    try std.testing.expect(ts < 1735776000 + 86400); // within reasonable range
+}
+
+test "epochDays: known date" {
+    // 1970-01-01 should be day 0
+    const days = epochDays(1970, 1, 1);
+    try std.testing.expectEqual(@as(i64, 0), days);
+}
+
+test "epochDays: Y2K" {
+    // 2000-01-01 should be day 10957
+    const days = epochDays(2000, 1, 1);
+    try std.testing.expectEqual(@as(i64, 10957), days);
+}
+
+test "parseSanExtension: DNS name" {
+    // Context-specific [2] dNSName = "example.com"
+    const dns_name = "example.com";
+    var san_data: [2 + dns_name.len]u8 = undefined;
+    san_data[0] = 0x82; // context-specific [2] (dNSName)
+    san_data[1] = @intCast(dns_name.len);
+    @memcpy(san_data[2..], dns_name);
+    const san = parseSanExtension(&san_data);
+    try std.testing.expect(san.dns != null);
+    try std.testing.expectEqualStrings("example.com", san.dns.?);
+}
+
+test "extractIdentity: gracefully handles non-certificate data" {
+    const allocator = std.testing.allocator;
+    // Non-DER data should still return a valid identity with fingerprint only
+    const garbage = "not a certificate";
+    const identity = try extractIdentity(allocator, garbage);
+    try std.testing.expectEqual(@as(usize, 64), identity.fingerprint.len);
+    // All parsed fields should be null/default (graceful degradation)
+    try std.testing.expect(identity.subject_cn == null);
+    try std.testing.expect(identity.san_dns == null);
 }

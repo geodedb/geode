@@ -16,7 +16,7 @@ test "TestCANARY_REQ_GQL_083_CheckpointSelection" {
     graph_store.setDataDirOverride(allocator, tmp.dir_path);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     var pipe = pipeline_mod.Pipeline.init(allocator, &store, .{ .checkpoint_interval_override = 3 });
     // Initially should not checkpoint.
@@ -39,7 +39,7 @@ test "TestCANARY_REQ_GQL_083_CompactionJob" {
     graph_store.setDataDirOverride(allocator, tmp.dir_path);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     // Configure cadence: checkpoint every 2 commits, compact every 2 checkpoints.
     var pipe = pipeline_mod.Pipeline.init(allocator, &store, .{ .checkpoint_interval_override = 2, .compaction_interval = 2 });
@@ -62,7 +62,7 @@ test "TestCANARY_REQ_GQL_083_ArchivalHook" {
     graph_store.setDataDirOverride(allocator, tmp.dir_path);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     var pipe = pipeline_mod.Pipeline.init(allocator, &store, .{ .checkpoint_interval_override = 1, .archival_window = 2 });
     // Two commits -> two checkpoints, archival should fire on second tick (window=2)

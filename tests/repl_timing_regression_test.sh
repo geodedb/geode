@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # REPL Timing Regression Test Suite
 # Tests timing behavior and command handling to prevent regressions

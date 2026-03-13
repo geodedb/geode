@@ -1,4 +1,5 @@
 #!/bin/sh
+set -eu
 
 echo "===== Comprehensive JSON Matching Test ====="
 echo ""

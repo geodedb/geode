@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Backup and Restore Operations Regression Test Suite
 # Tests BACKUP TO and RESTORE FROM functionality

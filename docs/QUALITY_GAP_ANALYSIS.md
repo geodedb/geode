@@ -1,16 +1,16 @@
 # Quality Gap Analysis
 
-Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518 #377 #519 #473 #470 #469 #406 #462 #474 #520 #409 #412 #405 #521 #467 #472 #516 #515 #517 #468 #414 #463)
+Last updated: 2026-03-13 (added #549 #550 #551 #552 #553 #554 #555 #556; updated #414)
 
 ## Summary
 
-- Total findings: 58
-- Closed / Implemented: 36
+- Total findings: 66
+- Closed / Implemented: 40
 - Blocked: 14
-- Open: 0
-- Closed (Won't Do by policy): 6
+- Open: 4 (remaining from March 2026 audit)
+- Closed (Won't Do by policy): 8
 
-15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 6 findings closed as Won't Do per policy. 14 large architectural items blocked pending dedicated sprint planning. 0 open quality issues remain.
+15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 8 findings closed as Won't Do per policy. 14 large architectural items blocked pending dedicated sprint planning. 8 new findings identified in March 2026 audit; 4 closed in this session (#550, #552, #554, #556).
 
 ## Policy Notes (Future Agents)
 
@@ -80,6 +80,19 @@ Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518 #377 #519 #
 | 57 | Low | 16 | readability | `confidence::confirmed` Development comments and debug notes left in eval.zig production code | query execution | `src/types/eval.zig` | [#513](https://gitlab.com/devnw/codepros/geode/geode/-/issues/513) | Remove all debug/scratch comments; keep only intent-clarifying documentation | query | TBD | Closed (Won't Do — no debug/scratch/TODO/FIXME/HACK comments found in `src/eval.zig`; only one match for "tofloat"/"todouble" in a string comparison — not a development comment) |
 | 58 | Low | 16 | readability | `confidence::confirmed` Documentation references non-existent src/storage/crypto_enhanced.zig | docs | `docs/` — stale file reference | [#518](https://gitlab.com/devnw/codepros/geode/geode/-/issues/518) | Update documentation to reference actual file path or remove reference | docs | TBD | Closed / Implemented (updated `docs/CURRENT_ARCHITECTURE.md` storage row to reflect actual files: `heap.zig`, `user_storage.zig`, `s3_backup.zig`, `backup.zig`, `tde_file_encryption.zig`; removed non-existent `crypto_enhanced.zig` and other stale entries) |
 
+## March 2026 Audit — New Findings (8)
+
+| Rank | Severity | PriorityScore | Category | Finding | Component | Evidence | GitLab Issue | Fix Summary | Owner | ETA/SLA | Status |
+|---|---|---:|---|---|---|---|---|---|---|---|---|
+| 59 | High | 80 | maintainability | `confidence::confirmed` Procedure registry: 149 if-else dispatch blocks (4,443 lines) | execution | `src/execution/procedure_registry.zig` — 149 sequential string comparisons, identical column allocation 159× | [#553](https://gitlab.com/devnw/codepros/geode/geode/-/issues/553) | Replace with HashMap dispatch table + shared column builder | engine | TBD | Open |
+| 60 | High | 80 | perf | `confidence::confirmed` HashMap/ArrayList pre-sizing ratio is 0.7% (22/3,055) | execution | `src/execution/match_operations.zig`, `procedure_registry.zig`, `crud_operations.zig` — collections grow without capacity hints | [#552](https://gitlab.com/devnw/codepros/geode/geode/-/issues/552) | Added `ensureTotalCapacity` at 5 GroupBy HashMap locations in `match_operations.zig` (lines 852, 2678, 2807, 3141, 3457); remaining sites in procedure_registry/crud_operations deferred | engine | TBD | Closed / Implemented (partial — hot-path GroupBy locations addressed) |
+| 61 | High | 64 | maintainability | `confidence::confirmed` 54 catch unreachable in allocation/I/O paths risk unrecoverable crashes | multiple | `src/graph_store.zig:390-391,512-513`, `src/util/yaml.zig:947,952`, `src/audit/syslog.zig:518`, `src/planner/cost_model.zig:70` + 25 files | [#556](https://gitlab.com/devnw/codepros/geode/geode/-/issues/556) | Fixed: `graph_store.zig` init/initWithTenant return `error{OutOfMemory}!GraphStore` with `try`; `syslog.zig` RingBuffer.init returns `error{OutOfMemory}!Self`; `cost_model.zig` CostModel.init returns `error{OutOfMemory}!CostModel`; ~150 caller sites updated; non-propagatable sites use `catch @panic("OOM: ...")` | multiple | TBD | Closed / Implemented |
+| 62 | High | 60 | maintainability | `confidence::confirmed` 48/78 shell scripts missing strict mode (set -euo pipefail) | scripts | `scripts/packaging/postremove.sh`, `postinstall.sh`, `sign-packages.sh` + 45 others | [#550](https://gitlab.com/devnw/codepros/geode/geode/-/issues/550) | Added strict mode to 46 scripts: 35 bash scripts got `set -euo pipefail`, 10 POSIX sh scripts got `set -eu`, 1 packaging script got `set -e` only | scripts | TBD | Closed / Implemented |
+| 63 | Medium | 48 | maintainability | `confidence::confirmed` 8 test runners with 80%+ duplication (4,586 lines) | testing | `scripts/test/extended_test_runner.py` (1,777) vs `parallel_test_runner.py` (1,756) — 99% identical | [#551](https://gitlab.com/devnw/codepros/geode/geode/-/issues/551) | Extract shared core; reduce to ≤3 runners | testing | TBD | Open |
+| 64 | Medium | 28 | maintainability | `confidence::confirmed` 13 Dockerfiles with duplicated stages, packages, health checks | containers | Dockerfile, Dockerfile.ci, Dockerfile.prod + 10 others — 1,283 lines, health check in 4+ files | [#549](https://gitlab.com/devnw/codepros/geode/geode/-/issues/549) | Extract common base stage; consolidate variants | containers | TBD | Open |
+| 65 | Low | 20 | ci-cd | `confidence::confirmed` 11 CI governance jobs with near-identical structure | ci | `.gitlab-ci.yml:87-390` — 11 jobs share same variables, before_script, image | [#555](https://gitlab.com/devnw/codepros/geode/geode/-/issues/555) | Consolidate into template or matrix job | ci | TBD | Open |
+| 66 | Low | 16 | cleanup | `confidence::confirmed` 12 data_test_* dirs and 19 empty audit files at repo root | repo | Repo root: 12 test data dirs, 19 empty audit*.jsonl files | [#554](https://gitlab.com/devnw/codepros/geode/geode/-/issues/554) | `git rm --cached audit.jsonl`; already in .gitignore | repo | TBD | Closed / Implemented (partial — audit.jsonl removed from tracking; data_test_* dirs already gitignored) |
+
 ## Findings by Category
 
 - `maintainability`: `#401` (Closed), `#461` (Closed), `#522` (Closed)
@@ -89,7 +102,14 @@ Last updated: 2026-02-18 (updated #419 #420 #512 #510 #502 #513 #518 #377 #519 #
 - `docs`: `#525` (Closed)
 - `deps`: `#508` (Closed), `#530` (Closed)
 
-New items (2026-02-18 triage):
+New items (2026-03-13 audit):
+
+- `maintainability`: `#553` (Open — procedure dispatch), `#556` (Closed — catch unreachable), `#550` (Closed — shell strict mode), `#551` (Open — test runner duplication), `#549` (Open — Dockerfile duplication)
+- `perf`: `#552` (Closed — collection pre-sizing)
+- `ci-cd`: `#555` (Open — governance job consolidation)
+- `cleanup`: `#554` (Closed — root directory clutter)
+
+Existing items (2026-02-18 triage):
 
 - `architecture`: `#474` (Blocked), `#520` (Blocked), `#519` (Closed), `#515` (Blocked), `#502` (Closed), `#462` (Blocked), `#467` (Blocked), `#472` (Blocked), `#516` (Blocked)
 - `maintainability`: `#409` (Blocked), `#406` (Closed), `#405` (Blocked), `#521` (Blocked), `#468` (Blocked), `#469` (Closed), `#507` (Closed), `#517` (Blocked), `#510` (Closed), `#412` (Blocked), `#411` (Won't Do)
@@ -115,6 +135,29 @@ New items (2026-02-18 triage):
 - **#517** — Requires decomposing extended_test_runner.py by concern: setup, execution, teardown, reporting.
 - **#468** — Requires module group design to batch imports. Low-priority infrastructure work.
 - **#414** — Requires case-by-case analysis: some are intentional (backoff), some are bugs. Cannot safely bulk-replace.
+
+## Quick Wins (March 2026)
+
+| Issue | Fix | Effort | Impact |
+|-------|-----|--------|--------|
+| [#554](https://gitlab.com/devnw/codepros/geode/geode/-/issues/554) | Add data_test_*/audit*.jsonl to .gitignore; git rm | S | Repo hygiene |
+| [#555](https://gitlab.com/devnw/codepros/geode/geode/-/issues/555) | Add .governance-template to CI; use extends | S | CI maintainability |
+| [#550](https://gitlab.com/devnw/codepros/geode/geode/-/issues/550) | Add set -euo pipefail to all shell scripts | S | Production safety |
+
+## Medium-Term Improvements (March 2026)
+
+| Issue | Fix | Effort | Impact |
+|-------|-----|--------|--------|
+| [#556](https://gitlab.com/devnw/codepros/geode/geode/-/issues/556) | Replace catch unreachable in allocation paths | M | Crash prevention |
+| [#552](https://gitlab.com/devnw/codepros/geode/geode/-/issues/552) | Add ensureTotalCapacity to hot-path collections | M | Query performance |
+| [#551](https://gitlab.com/devnw/codepros/geode/geode/-/issues/551) | Consolidate test runners into shared core | M | Test maintenance |
+| [#549](https://gitlab.com/devnw/codepros/geode/geode/-/issues/549) | Extract common Dockerfile base; consolidate variants | M | Container maintenance |
+
+## Strategic Refactoring (March 2026)
+
+| Issue | Fix | Effort | Impact |
+|-------|-----|--------|--------|
+| [#553](https://gitlab.com/devnw/codepros/geode/geode/-/issues/553) | Procedure dispatch table (4,443→<1,000 lines) | L | Core maintainability |
 
 ## Verification Executed for Closed Items
 

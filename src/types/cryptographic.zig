@@ -132,7 +132,8 @@ pub const Signature = struct {
     }
 
     /// Verify signature against data using stdlib cryptography
-    // CANARY: REQ=REQ-M7-SIGNATURE-001; FEATURE="CodeQuality"; ASPECT=SignatureVerification; STATUS=TESTED; TEST=BuildAndSmoke; OWNER=security; UPDATED=2025-10-17
+    /// Supports Ed25519, ECDSA P256, and ECDSA P384. RSA is deferred (returns UnsupportedSignatureAlgorithm).
+    // CANARY: REQ=REQ-M7-SIGNATURE-001; FEATURE="CodeQuality"; ASPECT=SignatureVerification; STATUS=TESTED; TEST=TestCANARY_GAP_0253_ECDSA_SignVerify; OWNER=security; UPDATED=2026-03-13
     pub fn verify(self: Signature, data: []const u8) !bool {
         if (self.public_key == null) return error.PublicKeyRequired;
 
@@ -156,8 +157,50 @@ pub const Signature = struct {
                 };
                 return true;
             },
-            // Other algorithms not yet implemented - fail verification
-            .ECDSA_P256, .ECDSA_P384, .RSA_PSS_SHA256, .RSA_PSS_SHA512 => {
+            .ECDSA_P256 => {
+                // ECDSA P256 expects 64-byte signature (r + s) and 33-byte compressed public key
+                if (self.signature.len != 64) return false;
+                if (self.public_key.?.len != 33) return false;
+
+                const EcdsaP256 = std.crypto.sign.ecdsa.EcdsaP256Sha256;
+
+                // Reconstruct signature from raw bytes
+                const ecdsa_sig = EcdsaP256.Signature.fromBytes(self.signature[0..64].*);
+
+                // Reconstruct public key from compressed SEC1 format
+                const public_key = EcdsaP256.PublicKey.fromSec1(self.public_key.?) catch {
+                    return false;
+                };
+
+                // Verify the signature
+                ecdsa_sig.verify(data, public_key) catch {
+                    return false;
+                };
+                return true;
+            },
+            .ECDSA_P384 => {
+                // ECDSA P384 expects 96-byte signature (r + s) and 49-byte compressed public key
+                if (self.signature.len != 96) return false;
+                if (self.public_key.?.len != 49) return false;
+
+                const EcdsaP384 = std.crypto.sign.ecdsa.EcdsaP384Sha384;
+
+                // Reconstruct signature from raw bytes
+                const ecdsa_sig = EcdsaP384.Signature.fromBytes(self.signature[0..96].*);
+
+                // Reconstruct public key from compressed SEC1 format
+                const public_key = EcdsaP384.PublicKey.fromSec1(self.public_key.?) catch {
+                    return false;
+                };
+
+                // Verify the signature
+                ecdsa_sig.verify(data, public_key) catch {
+                    return false;
+                };
+                return true;
+            },
+            // RSA algorithms not supported in Zig stdlib — deferred to external library integration
+            .RSA_PSS_SHA256, .RSA_PSS_SHA512 => {
                 return error.UnsupportedSignatureAlgorithm;
             },
         }
@@ -289,7 +332,8 @@ pub const KeyPair = struct {
     }
 
     /// Sign data with this key pair using stdlib cryptography
-    // CANARY: REQ=REQ-M7-SIGNATURE-002; FEATURE="CodeQuality"; ASPECT=SignatureSigning; STATUS=TESTED; TEST=BuildAndSmoke; OWNER=security; UPDATED=2025-10-17
+    /// Supports Ed25519, ECDSA P256, and ECDSA P384. RSA is deferred (returns UnsupportedSignatureAlgorithm).
+    // CANARY: REQ=REQ-M7-SIGNATURE-002; FEATURE="CodeQuality"; ASPECT=SignatureSigning; STATUS=TESTED; TEST=TestCANARY_GAP_0253_ECDSA_SignVerify; OWNER=security; UPDATED=2026-03-13
     pub fn sign(self: KeyPair, data: []const u8, allocator: std.mem.Allocator) !Signature {
         // Perform actual cryptographic signing based on algorithm
         switch (self.alg) {
@@ -319,8 +363,74 @@ pub const KeyPair = struct {
                     .public_key = public_key_copy,
                 };
             },
-            // Other algorithms not yet implemented
-            .ECDSA_P256, .ECDSA_P384, .RSA_PSS_SHA256, .RSA_PSS_SHA512 => {
+            .ECDSA_P256 => {
+                // ECDSA P256 requires 32-byte private key and 33-byte compressed public key
+                if (self.private_key.len != 32) return error.InvalidPrivateKeySize;
+                if (self.public_key.len != 33) return error.InvalidPublicKeySize;
+
+                const EcdsaP256 = std.crypto.sign.ecdsa.EcdsaP256Sha256;
+
+                // Reconstruct secret key from raw bytes
+                const secret_key = EcdsaP256.SecretKey{ .bytes = self.private_key[0..32].* };
+
+                // Reconstruct key pair from secret key
+                const key_pair = EcdsaP256.KeyPair.fromSecretKey(secret_key) catch {
+                    return error.InvalidPrivateKeySize;
+                };
+
+                // Sign the data (deterministic: noise = null)
+                const ecdsa_sig = key_pair.sign(data, null) catch {
+                    return error.SigningFailed;
+                };
+
+                // Convert signature to raw bytes (r || s, 64 bytes)
+                const sig_raw = ecdsa_sig.toBytes();
+                const signature_bytes = try allocator.alloc(u8, 64);
+                @memcpy(signature_bytes, &sig_raw);
+
+                const public_key_copy = try allocator.dupe(u8, self.public_key);
+
+                return Signature{
+                    .alg = self.alg,
+                    .signature = signature_bytes,
+                    .public_key = public_key_copy,
+                };
+            },
+            .ECDSA_P384 => {
+                // ECDSA P384 requires 48-byte private key and 49-byte compressed public key
+                if (self.private_key.len != 48) return error.InvalidPrivateKeySize;
+                if (self.public_key.len != 49) return error.InvalidPublicKeySize;
+
+                const EcdsaP384 = std.crypto.sign.ecdsa.EcdsaP384Sha384;
+
+                // Reconstruct secret key from raw bytes
+                const secret_key = EcdsaP384.SecretKey{ .bytes = self.private_key[0..48].* };
+
+                // Reconstruct key pair from secret key
+                const key_pair = EcdsaP384.KeyPair.fromSecretKey(secret_key) catch {
+                    return error.InvalidPrivateKeySize;
+                };
+
+                // Sign the data (deterministic: noise = null)
+                const ecdsa_sig = key_pair.sign(data, null) catch {
+                    return error.SigningFailed;
+                };
+
+                // Convert signature to raw bytes (r || s, 96 bytes)
+                const sig_raw = ecdsa_sig.toBytes();
+                const signature_bytes = try allocator.alloc(u8, 96);
+                @memcpy(signature_bytes, &sig_raw);
+
+                const public_key_copy = try allocator.dupe(u8, self.public_key);
+
+                return Signature{
+                    .alg = self.alg,
+                    .signature = signature_bytes,
+                    .public_key = public_key_copy,
+                };
+            },
+            // RSA algorithms not supported in Zig stdlib — deferred to external library integration
+            .RSA_PSS_SHA256, .RSA_PSS_SHA512 => {
                 return error.UnsupportedSignatureAlgorithm;
             },
         }
@@ -584,4 +694,229 @@ test "GAP-0222: Supported algorithms generate valid key pairs" {
     try testing.expectEqual(Signature.SignatureAlg.ECDSA_P384, p384_key.alg);
     try testing.expectEqual(@as(usize, 48), p384_key.private_key.len);
     try testing.expectEqual(@as(usize, 49), p384_key.public_key.len); // Compressed format
+}
+
+// CANARY: REQ=REQ-GQL-CRYPTO-ECDSA-001; FEATURE="ECDSA P256/P384 Sign/Verify"; ASPECT=DigitalSignatures; STATUS=TESTED; TEST=TestCANARY_GAP_0253_ECDSA_SignVerify; OWNER=security; UPDATED=2026-03-13
+test "GAP-0253: ECDSA P256 sign and verify" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Generate a P256 key pair
+    const keypair = try KeyPair.generate(.ECDSA_P256, allocator);
+    defer keypair.deinit(allocator);
+
+    try testing.expectEqual(Signature.SignatureAlg.ECDSA_P256, keypair.alg);
+    try testing.expectEqual(@as(usize, 32), keypair.private_key.len);
+    try testing.expectEqual(@as(usize, 33), keypair.public_key.len);
+
+    // Sign a message
+    const message = "GAP-0253 ECDSA P256 test message";
+    const signature = try keypair.sign(message, allocator);
+    defer signature.deinit(allocator);
+
+    try testing.expectEqual(Signature.SignatureAlg.ECDSA_P256, signature.alg);
+    try testing.expectEqual(@as(usize, 64), signature.signature.len);
+    try testing.expect(signature.public_key != null);
+    try testing.expectEqual(@as(usize, 33), signature.public_key.?.len);
+
+    // Verify the signature
+    const is_valid = try signature.verify(message);
+    try testing.expect(is_valid);
+
+    // Verify fails with wrong message
+    const is_invalid = try signature.verify("wrong message");
+    try testing.expect(!is_invalid);
+}
+
+test "GAP-0253: ECDSA P384 sign and verify" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Generate a P384 key pair
+    const keypair = try KeyPair.generate(.ECDSA_P384, allocator);
+    defer keypair.deinit(allocator);
+
+    try testing.expectEqual(Signature.SignatureAlg.ECDSA_P384, keypair.alg);
+    try testing.expectEqual(@as(usize, 48), keypair.private_key.len);
+    try testing.expectEqual(@as(usize, 49), keypair.public_key.len);
+
+    // Sign a message
+    const message = "GAP-0253 ECDSA P384 test message";
+    const signature = try keypair.sign(message, allocator);
+    defer signature.deinit(allocator);
+
+    try testing.expectEqual(Signature.SignatureAlg.ECDSA_P384, signature.alg);
+    try testing.expectEqual(@as(usize, 96), signature.signature.len);
+    try testing.expect(signature.public_key != null);
+    try testing.expectEqual(@as(usize, 49), signature.public_key.?.len);
+
+    // Verify the signature
+    const is_valid = try signature.verify(message);
+    try testing.expect(is_valid);
+
+    // Verify fails with wrong message
+    const is_invalid = try signature.verify("wrong message");
+    try testing.expect(!is_invalid);
+}
+
+test "GAP-0253: ECDSA P256 signature encoding roundtrip" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Generate, sign, encode, decode, and verify
+    const keypair = try KeyPair.generate(.ECDSA_P256, allocator);
+    defer keypair.deinit(allocator);
+
+    const message = "encoding roundtrip test";
+    const signature = try keypair.sign(message, allocator);
+    defer signature.deinit(allocator);
+
+    // Encode to binary
+    var buffer: [512]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try signature.encode(fbs.writer());
+
+    // Decode from binary
+    fbs.pos = 0;
+    const decoded = try Signature.decode(fbs.reader(), allocator);
+    defer decoded.deinit(allocator);
+
+    try testing.expectEqual(signature.alg, decoded.alg);
+    try testing.expectEqualSlices(u8, signature.signature, decoded.signature);
+    try testing.expectEqualSlices(u8, signature.public_key.?, decoded.public_key.?);
+
+    // Verify decoded signature
+    const is_valid = try decoded.verify(message);
+    try testing.expect(is_valid);
+}
+
+test "GAP-0253: ECDSA P384 signature encoding roundtrip" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Generate, sign, encode, decode, and verify
+    const keypair = try KeyPair.generate(.ECDSA_P384, allocator);
+    defer keypair.deinit(allocator);
+
+    const message = "encoding roundtrip test P384";
+    const signature = try keypair.sign(message, allocator);
+    defer signature.deinit(allocator);
+
+    // Encode to binary
+    var buffer: [512]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try signature.encode(fbs.writer());
+
+    // Decode from binary
+    fbs.pos = 0;
+    const decoded = try Signature.decode(fbs.reader(), allocator);
+    defer decoded.deinit(allocator);
+
+    try testing.expectEqual(signature.alg, decoded.alg);
+    try testing.expectEqualSlices(u8, signature.signature, decoded.signature);
+    try testing.expectEqualSlices(u8, signature.public_key.?, decoded.public_key.?);
+
+    // Verify decoded signature
+    const is_valid = try decoded.verify(message);
+    try testing.expect(is_valid);
+}
+
+test "GAP-0253: ECDSA sign with invalid key sizes returns error" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // P256 with wrong private key size
+    const bad_p256 = KeyPair{
+        .alg = .ECDSA_P256,
+        .private_key = &[_]u8{ 1, 2, 3 }, // Too short
+        .public_key = &[_]u8{0} ** 33,
+    };
+    try testing.expectError(error.InvalidPrivateKeySize, bad_p256.sign("test", allocator));
+
+    // P256 with wrong public key size
+    const bad_p256_pub = KeyPair{
+        .alg = .ECDSA_P256,
+        .private_key = &[_]u8{0} ** 32,
+        .public_key = &[_]u8{ 1, 2, 3 }, // Too short
+    };
+    try testing.expectError(error.InvalidPublicKeySize, bad_p256_pub.sign("test", allocator));
+
+    // P384 with wrong private key size
+    const bad_p384 = KeyPair{
+        .alg = .ECDSA_P384,
+        .private_key = &[_]u8{ 1, 2, 3 }, // Too short
+        .public_key = &[_]u8{0} ** 49,
+    };
+    try testing.expectError(error.InvalidPrivateKeySize, bad_p384.sign("test", allocator));
+
+    // P384 with wrong public key size
+    const bad_p384_pub = KeyPair{
+        .alg = .ECDSA_P384,
+        .private_key = &[_]u8{0} ** 48,
+        .public_key = &[_]u8{ 1, 2, 3 }, // Too short
+    };
+    try testing.expectError(error.InvalidPublicKeySize, bad_p384_pub.sign("test", allocator));
+}
+
+test "GAP-0253: ECDSA verify with no public key returns error" {
+    const testing = std.testing;
+
+    // Signature without public key should fail verification
+    const sig_no_key = Signature{
+        .alg = .ECDSA_P256,
+        .signature = &[_]u8{0} ** 64,
+        .public_key = null,
+    };
+    try testing.expectError(error.PublicKeyRequired, sig_no_key.verify("test"));
+}
+
+test "GAP-0253: ECDSA P256 toString roundtrip" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const keypair = try KeyPair.generate(.ECDSA_P256, allocator);
+    defer keypair.deinit(allocator);
+
+    const signature = try keypair.sign("string roundtrip", allocator);
+    defer signature.deinit(allocator);
+
+    // Convert to string
+    const sig_str = try signature.toString(allocator);
+    defer allocator.free(sig_str);
+
+    // Should start with algorithm prefix
+    try testing.expect(std.mem.startsWith(u8, sig_str, "ECDSA-P256:"));
+
+    // Parse back from string
+    const parsed = try Signature.fromString(sig_str, allocator);
+    defer parsed.deinit(allocator);
+
+    try testing.expectEqual(Signature.SignatureAlg.ECDSA_P256, parsed.alg);
+    try testing.expectEqualSlices(u8, signature.signature, parsed.signature);
+    try testing.expectEqualSlices(u8, signature.public_key.?, parsed.public_key.?);
+
+    // Verify the parsed signature still works
+    const is_valid = try parsed.verify("string roundtrip");
+    try testing.expect(is_valid);
+}
+
+test "GAP-0253: RSA sign returns UnsupportedSignatureAlgorithm" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // RSA signing should return UnsupportedSignatureAlgorithm
+    const rsa_kp = KeyPair{
+        .alg = .RSA_PSS_SHA256,
+        .private_key = &[_]u8{0} ** 256,
+        .public_key = &[_]u8{0} ** 256,
+    };
+    try testing.expectError(error.UnsupportedSignatureAlgorithm, rsa_kp.sign("test", allocator));
+
+    // RSA verification should also return UnsupportedSignatureAlgorithm
+    const rsa_sig = Signature{
+        .alg = .RSA_PSS_SHA256,
+        .signature = &[_]u8{0} ** 256,
+        .public_key = &[_]u8{0} ** 256,
+    };
+    try testing.expectError(error.UnsupportedSignatureAlgorithm, rsa_sig.verify("test"));
 }

@@ -1,4 +1,5 @@
 #!/bin/sh
+set -eu
 
 echo "Testing Geode UDP reception"
 pkill -KILL geode 2>/dev/null || true

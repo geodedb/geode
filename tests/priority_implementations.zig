@@ -35,7 +35,7 @@ test "priority implementations integration" {
     mgr.commit(&t2);
 
     // Test 3: GraphStore Snapshot Compaction Cadence
-    var store = graph_store.GraphStore.init(ally);
+    var store = try graph_store.GraphStore.init(ally);
     defer store.deinit();
     var pipeline = snapshot_pipeline.Pipeline.init(ally, &store, .{
         .checkpoint_interval_override = 5,

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # Regression tests for fixes applied on 2025-10-04
 # These tests ensure that previously fixed issues don't regress

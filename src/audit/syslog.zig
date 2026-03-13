@@ -91,7 +91,7 @@ pub const SyslogSender = struct {
             .service = service_config,
             .identity = identity_config,
             .clock = clock,
-            .queue = RingBuffer([]const u8).init(allocator, QUEUE_SIZE),
+            .queue = try RingBuffer([]const u8).init(allocator, QUEUE_SIZE),
             .mutex = std.Thread.Mutex{},
             .should_stop = std.atomic.Value(bool).init(false),
             .thread = null,
@@ -513,9 +513,9 @@ fn RingBuffer(comptime T: type) type {
         count: usize,
         allocator: std.mem.Allocator,
 
-        pub fn init(allocator: std.mem.Allocator, capacity: usize) Self {
+        pub fn init(allocator: std.mem.Allocator, capacity: usize) error{OutOfMemory}!Self {
             return Self{
-                .items = allocator.alloc(T, capacity) catch unreachable,
+                .items = try allocator.alloc(T, capacity),
                 .head = 0,
                 .tail = 0,
                 .count = 0,
@@ -682,7 +682,7 @@ test "Certificate pinning: invalid characters detected" {
 
 test "RingBuffer: basic push and pop" {
     const allocator = std.testing.allocator;
-    var rb = RingBuffer(u32).init(allocator, 4);
+    var rb = try RingBuffer(u32).init(allocator, 4);
     defer rb.deinit();
 
     try std.testing.expect(rb.isEmpty());

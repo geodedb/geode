@@ -9,14 +9,14 @@ test "graphstore: mixed inserts and deletes" {
     graph_store.setDataDirOverride(allocator, tmp.dir_path);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     const id_a = try store.createNode(&.{ "alpha" });
     const id_b = try store.createNode(&.{ "beta" });
     store.deleteNode(id_b);
     try store.saveToFile();
 
-    var store2 = graph_store.GraphStore.init(allocator);
+    var store2 = try graph_store.GraphStore.init(allocator);
     defer store2.deinit();
     try store2.loadFromFile();
     try std.testing.expectEqual(@as(usize, 1), store2.getNodeCount());
@@ -32,7 +32,7 @@ test "graphstore: truncation tolerance" {
     graph_store.setDataDirOverride(allocator, tmp.dir_path);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     _ = try store.createNode(&.{ "gamma" });
     try store.saveToFile();
@@ -44,7 +44,7 @@ test "graphstore: truncation tolerance" {
     try f.setEndPos(sz - 5);
     f.close();
 
-    var store2 = graph_store.GraphStore.init(allocator);
+    var store2 = try graph_store.GraphStore.init(allocator);
     defer store2.deinit();
     const res = store2.loadFromFile();
     if (res) |_| {} else |err| switch (err) {
@@ -62,12 +62,12 @@ test "graphstore: idempotent load" {
     graph_store.setDataDirOverride(allocator, tmp.dir_path);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     _ = try store.createNode(&.{ "delta" });
     try store.saveToFile();
 
-    var store2 = graph_store.GraphStore.init(allocator);
+    var store2 = try graph_store.GraphStore.init(allocator);
     defer store2.deinit();
     try store2.loadFromFile();
     const count_first = store2.getNodeCount();

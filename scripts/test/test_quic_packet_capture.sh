@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Start packet capture
 timeout 15 tcpdump -i lo -n udp port 3141 2>&1 &

@@ -73,7 +73,7 @@ test "TestCANARY_REQ_VECTOR_DOCS_INTEGRATION_003_IndexPopulation" {
     const allocator = testing.allocator;
 
     // Create mock graph storage with existing vector data
-    var mock_storage = MockGraphStore.init(allocator);
+    var mock_storage = try MockGraphStore.init(allocator);
     defer mock_storage.deinit();
 
     // Add existing nodes with vector properties as would exist before index creation

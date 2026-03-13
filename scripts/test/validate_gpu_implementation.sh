@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # GPU Implementation Validation Script
 # CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=Validation; STATUS=EXEMPT; OWNER=engine; UPDATED=2025-10-26
 

@@ -850,8 +850,11 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
             // First, we need the raw bindings, not the evaluated RETURN expressions
             // Re-collect bindings by iterating through matches again
             var binding_groups = std.StringHashMap(std.ArrayList(Env)).init(allocator);
+            // #552: Pre-size GROUP BY hash map based on result set size (heuristic: ~25% distinct groups)
+            const estimated_groups: u32 = @intCast(@max(rows.items.len / 4, 16));
+            try binding_groups.ensureTotalCapacity(estimated_groups);
             // GAP-0220 FIX: Use try for proper error propagation
-            var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, estimated_groups);
             defer {
                 var giter = binding_groups.iterator();
                 while (giter.next()) |entry| {
@@ -1184,7 +1187,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         }
 
         fn clone(self: *const @This()) !@This() {
+            // #557: Pre-size the cloned HashMap to avoid rehashing
             var new_binding = @This().init(self.alloc);
+            try new_binding.vars.ensureTotalCapacity(@intCast(self.vars.count() + 2));
             var iter = self.vars.iterator();
             while (iter.next()) |entry| {
                 try new_binding.vars.put(entry.key_ptr.*, entry.value_ptr.*);
@@ -1261,8 +1266,72 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     }
                 }
             }
+        } else if (right_labels.len > 0) {
+            // #558: No left labels but right labels present — use right label index, traverse edges backwards
+            var label_node_ids = try store.getNodesByLabels(filter_graph, right_labels);
+            defer label_node_ids.deinit(store.allocator);
+
+            for (label_node_ids.items) |node_id| {
+                const right_node = store.nodes.getPtr(node_id) orelse continue;
+
+                // Find edges TO this right node (for outgoing/right direction from left)
+                const incoming_to_right = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesTo(right_node.id) else &[_]graph_store.Edge{};
+                const outgoing_from_right = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesFrom(right_node.id) else &[_]graph_store.Edge{};
+
+                for (incoming_to_right) |edge| {
+                    if (rel_type) |rt| {
+                        if (!std.mem.eql(u8, edge.label, rt)) continue;
+                    }
+                    if (store.nodes.getPtr(edge.from_id)) |left_node| {
+                        if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
+                        var binding = MatchBinding.init(allocator);
+                        if (hop.left.name) |v| try binding.vars.put(v, left_node);
+                        if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        try bindings.append(allocator, binding);
+                    }
+                }
+
+                for (outgoing_from_right) |edge| {
+                    if (rel_type) |rt| {
+                        if (!std.mem.eql(u8, edge.label, rt)) continue;
+                    }
+                    if (store.nodes.getPtr(edge.to_id)) |left_node| {
+                        if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
+                        var binding = MatchBinding.init(allocator);
+                        if (hop.left.name) |v| try binding.vars.put(v, left_node);
+                        if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        try bindings.append(allocator, binding);
+                    }
+                }
+            }
+        } else if (rel_type) |rt| {
+            // #558: No labels at all but relationship type present — use edge type scan
+            const typed_edges = store.getEdgesByType(rt);
+            defer if (typed_edges.len > 0) store.allocator.free(typed_edges);
+
+            for (typed_edges) |edge| {
+                const from_node = store.nodes.getPtr(edge.from_id) orelse continue;
+                const to_node = store.nodes.getPtr(edge.to_id) orelse continue;
+
+                if (rel_dir == .right or rel_dir == .undirected) {
+                    if (std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph)) {
+                        var binding = MatchBinding.init(allocator);
+                        if (hop.left.name) |v| try binding.vars.put(v, from_node);
+                        if (hop.right.name) |v| try binding.vars.put(v, to_node);
+                        try bindings.append(allocator, binding);
+                    }
+                }
+                if (rel_dir == .left or rel_dir == .undirected) {
+                    if (std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph)) {
+                        var binding = MatchBinding.init(allocator);
+                        if (hop.left.name) |v| try binding.vars.put(v, to_node);
+                        if (hop.right.name) |v| try binding.vars.put(v, from_node);
+                        try bindings.append(allocator, binding);
+                    }
+                }
+            }
         } else {
-            // No left labels - fall back to full scan
+            // No labels and no relationship type — true full scan fallback (unavoidable)
             var node_iter = store.nodes.iterator();
             while (node_iter.next()) |entry| {
                 const left_node = entry.value_ptr;
@@ -1272,12 +1341,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
 
                 for (outgoing_edges) |edge| {
-                    if (rel_type) |rt| {
-                        if (!std.mem.eql(u8, edge.label, rt)) continue;
-                    }
                     if (store.nodes.getPtr(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
-                        if (!matchesLabels(right_node, right_labels)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -1286,12 +1351,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 }
 
                 for (incoming_edges) |edge| {
-                    if (rel_type) |rt| {
-                        if (!std.mem.eql(u8, edge.label, rt)) continue;
-                    }
                     if (store.nodes.getPtr(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
-                        if (!matchesLabels(right_node, right_labels)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -1338,7 +1399,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
         // For each existing binding, try to extend with this chain
         // GAP-0220 FIX: Use try for proper error propagation
-        var new_bindings = try std.ArrayList(MatchBinding).initCapacity(allocator, 0);
+        // #557: Pre-size new_bindings based on current bindings count to reduce allocation churn
+        var new_bindings = try std.ArrayList(MatchBinding).initCapacity(allocator, @max(bindings.items.len, 8));
 
         for (bindings.items) |*existing| {
             // Get the node bound to left_var (if it exists in this binding)
@@ -1359,7 +1421,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!matchesLabels(right_node, right_labels)) continue;
 
-                        // Clone existing binding and add new variable
+                        // #557: clone() now pre-sizes HashMap to avoid rehash
                         var new_binding = try existing.clone();
                         if (right_var) |rv| try new_binding.vars.put(rv, right_node);
                         try new_bindings.append(allocator, new_binding);
@@ -1376,7 +1438,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!matchesLabels(right_node, right_labels)) continue;
 
-                        // Clone existing binding and add new variable
+                        // #557: clone() now pre-sizes HashMap to avoid rehash
                         var new_binding = try existing.clone();
                         if (right_var) |rv| try new_binding.vars.put(rv, right_node);
                         try new_bindings.append(allocator, new_binding);
@@ -1448,17 +1510,20 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     const columns = try generateUniqueColumnNames(allocator, items);
 
     // Evaluate RETURN expressions for each binding
-    // GAP-0220 FIX: Use try for proper error propagation
-    var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+    // #560: Pre-size rows based on bindings count; reuse env ArrayLists across iterations
+    var rows = try std.ArrayList([]Value).initCapacity(allocator, bindings.items.len);
+
+    // #560: Allocate env lists once, reuse per binding (avoid per-row alloc/dealloc)
+    const max_vars: u32 = if (bindings.items.len > 0) @intCast(bindings.items[0].vars.count() + 4) else 8;
+    var env_names = try std.ArrayList([]const u8).initCapacity(allocator, max_vars);
+    defer env_names.deinit(allocator);
+    var env_values = try std.ArrayList(Value).initCapacity(allocator, max_vars);
+    defer env_values.deinit(allocator);
 
     for (bindings.items) |*binding| {
-        // Build environment from binding
-        // GAP-0220 FIX: Use try for proper error propagation
-        var env_names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-        defer env_names.deinit(allocator);
-        // GAP-0220 FIX: Use try for proper error propagation
-        var env_values = try std.ArrayList(Value).initCapacity(allocator, 0);
-        defer env_values.deinit(allocator);
+        // Build environment from binding — reuse pre-allocated lists
+        env_names.clearRetainingCapacity();
+        env_values.clearRetainingCapacity();
 
         var var_iter = binding.vars.iterator();
         while (var_iter.next()) |entry| {
@@ -1554,23 +1619,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
 
         // Filter by labels if specified
-        if (required_labels.len > 0) {
-            var has_all_labels = true;
-            for (required_labels) |required_label| {
-                var found = false;
-                for (node.labels) |node_label| {
-                    if (std.mem.eql(u8, required_label, node_label)) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    has_all_labels = false;
-                    break;
-                }
-            }
-            if (!has_all_labels) continue;
-        }
+        // #561: Use matchesLabels helper (includes pointer equality fast-path)
+        if (required_labels.len > 0 and !matchesLabels(node, required_labels)) continue;
 
         // CANARY: REQ=REQ-GQL-OPTIONAL-REQUIRED-PROPS-001; FEATURE="OptionalMatchRequiredProps"; ASPECT=RequiredNodePropertyFilter; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
         // Filter by property pattern on required chain (e.g., MATCH (d:Department {name: 'NewDept'}))
@@ -2673,6 +2723,10 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             // Group by non-aggregation expressions
             // For OPTIONAL MATCH with count, we typically need to group by the base node
             var groups = std.StringHashMap(std.ArrayList([]Value)).init(allocator);
+            // #552: Pre-size based on intermediate result row count
+            if (intermediate_result.rows.len > 0) {
+                try groups.ensureTotalCapacity(@intCast(@max(intermediate_result.rows.len / 4, 8)));
+            }
             defer {
                 var iter = groups.iterator();
                 while (iter.next()) |entry| {
@@ -2798,8 +2852,12 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
         // Group intermediate rows by GROUP BY key values
         var groups = std.StringHashMap(std.ArrayList([]Value)).init(allocator);
+        // #552: Pre-size GROUP BY map based on intermediate result size
+        if (intermediate_result.rows.len > 0) {
+            try groups.ensureTotalCapacity(@intCast(@max(intermediate_result.rows.len / 4, 8)));
+        }
         // GAP-0220 FIX: Use try for proper error propagation
-        var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+        var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, @intCast(@max(intermediate_result.rows.len / 4, 8)));
         defer {
             var iter = groups.iterator();
             while (iter.next()) |entry| {
@@ -3128,8 +3186,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     };
 
                     var binding_groups_mh = std.StringHashMap(std.ArrayList(MultiHopBinding)).init(allocator);
+                    // #552: Pre-size multi-hop GROUP BY map
+                    try binding_groups_mh.ensureTotalCapacity(16);
                     // GAP-0220 FIX: Use try for proper error propagation
-                    var group_keys_list_mh = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                    var group_keys_list_mh = try std.ArrayList([]const u8).initCapacity(allocator, 16);
                     defer {
                         var giter_mh = binding_groups_mh.iterator();
                         while (giter_mh.next()) |entry| {
@@ -3442,8 +3502,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 };
 
                 var binding_groups = std.StringHashMap(std.ArrayList(BindingRow)).init(allocator);
+                // #552: Pre-size single-hop GROUP BY map
+                try binding_groups.ensureTotalCapacity(16);
                 // GAP-0220 FIX: Use try for proper error propagation
-                var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, 16);
                 defer {
                     var giter = binding_groups.iterator();
                     while (giter.next()) |entry| {

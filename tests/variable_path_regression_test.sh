@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Variable-Length Path Pattern Regression Test Suite
 # Tests path patterns with variable lengths: *, *k, *k..m, *..m, *k..

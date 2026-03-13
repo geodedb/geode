@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # Test PageRank threshold dispatch logic without requiring GPU
 
 echo "=== PageRank Threshold Dispatch Verification ==="

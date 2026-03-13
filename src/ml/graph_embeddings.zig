@@ -869,7 +869,7 @@ test "Random walk generation" {
     const allocator = std.testing.allocator;
 
     // Create a simple test graph
-    var graph = geode.graph_common.GraphStore.init(allocator);
+    var graph = try geode.graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add nodes and edges for testing

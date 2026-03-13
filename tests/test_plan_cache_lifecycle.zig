@@ -175,7 +175,7 @@ test "OptimizerHints: default values" {
 
 test "StoreStats: graph_store integration" {
     const allocator = testing.allocator;
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     const labels: []const []const u8 = &.{"Person"};

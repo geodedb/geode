@@ -28,7 +28,7 @@ test "graphstore encryption round trip save+load" {
     try std.os.setenvZ("GEODE_TDE_KEY", &hex);
     defer std.os.unsetenv("GEODE_TDE_KEY") catch {};
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     _ = try store.createNode(&.{ "hello" });
     try store.saveToFile();
@@ -40,7 +40,7 @@ test "graphstore encryption round trip save+load" {
     try std.testing.expect(tde_file.isEncrypted(data));
     try std.testing.expect(std.mem.indexOf(u8, data, "hello") == null);
 
-    var store2 = graph_store.GraphStore.init(allocator);
+    var store2 = try graph_store.GraphStore.init(allocator);
     defer store2.deinit();
     try store2.loadFromFile();
     try std.testing.expectEqual(@as(usize, 1), store2.getNodeCount());

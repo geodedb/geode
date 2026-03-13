@@ -9,7 +9,7 @@ const varcfg = @import("geode").benchmarks.variance_config;
 const NODE_COUNT: usize = 50_000;
 
 fn buildSnapshot(allocator: std.mem.Allocator) !void {
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
     try store.reserve(NODE_COUNT, 0);
@@ -25,13 +25,13 @@ fn buildSnapshot(allocator: std.mem.Allocator) !void {
 }
 
 fn sampleDelta(allocator: std.mem.Allocator) !struct { baseline: u64, optimized: u64 } {
-    var base = graph_store.GraphStore.init(allocator);
+    var base = try graph_store.GraphStore.init(allocator);
     defer base.deinit();
     const t0 = std.time.nanoTimestamp();
     try base.loadFromFile();
     const t1 = std.time.nanoTimestamp();
 
-    var opt = graph_store.GraphStore.init(allocator);
+    var opt = try graph_store.GraphStore.init(allocator);
     defer opt.deinit();
     try opt.reserve(NODE_COUNT, 0);
     const t2 = std.time.nanoTimestamp();

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # Regression test for EXISTS function vs predicate parsing conflict fix
 # Verifies that both EXISTS { pattern } and exists(args) syntax work correctly

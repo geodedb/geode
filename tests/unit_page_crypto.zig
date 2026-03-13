@@ -22,7 +22,7 @@ test "graph_store encryption: persist encrypted and decrypts on load" {
     graph_store.setDataDirOverride(allocator, base);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    var store = graph_store.GraphStore.init(allocator);
+    var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
     const node_id = try store.createNode(&.{"Secret"});
     try store.setNodeProperty(node_id, "payload", .{ .String = "secret" });
@@ -37,7 +37,7 @@ test "graph_store encryption: persist encrypted and decrypts on load" {
     try std.testing.expect(std.mem.indexOf(u8, raw, "GEODGST1") == null);
 
     // Load via API (which decrypts) and verify content
-    var store2 = graph_store.GraphStore.init(allocator);
+    var store2 = try graph_store.GraphStore.init(allocator);
     defer store2.deinit();
     try store2.loadFromFile();
     const prop = store2.getNodeProperty(node_id, "payload") orelse return error.MissingProperty;

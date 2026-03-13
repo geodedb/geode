@@ -1,5 +1,6 @@
 #!/usr/bin/env nix-shell
 #! nix-shell -i bash -p bash -p coreutils
+set -euo pipefail
 # Regression test for string literal support in Geode
 # Tests both single and double quote string literals
 

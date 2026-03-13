@@ -11,7 +11,7 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_001_EndToEndWorkflow" 
     const allocator = testing.allocator;
 
     // Create graph storage
-    var graph = geode.graph_common.GraphStore.init(allocator);
+    var graph = try geode.graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Add nodes with properties
@@ -165,7 +165,7 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_003_GraphStoreIntegrat
     const allocator = testing.allocator;
 
     // Create graph storage instance
-    var graph = geode.graph_common.GraphStore.init(allocator);
+    var graph = try geode.graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Test complex graph creation
@@ -308,7 +308,7 @@ test "Cross-module dependency resolution validation" {
     var mv_manager = geode.materialized_views.MaterializedViewManager.init(allocator);
     defer mv_manager.deinit();
 
-    var graph = geode.graph_common.GraphStore.init(allocator);
+    var graph = try geode.graph_common.GraphStore.init(allocator);
     defer graph.deinit();
 
     // Test 2: Column type is accessible from multiple modules
@@ -420,7 +420,7 @@ test "Build system stability under load" {
     }
 
     for (0..num_instances) |i| {
-        var graph = geode.graph_common.GraphStore.init(allocator);
+        var graph = try geode.graph_common.GraphStore.init(allocator);
 
         // Add nodes to each graph
         var labels = [_][]const u8{"TestNode"};

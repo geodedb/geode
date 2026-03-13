@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Property Access in Functions Regression Test
 # Tests that property access within function calls works correctly

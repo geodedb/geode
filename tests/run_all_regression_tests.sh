@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Master regression test runner for Geode
 # Runs all regression test suites
