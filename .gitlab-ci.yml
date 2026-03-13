@@ -616,7 +616,7 @@ test-code-coverage:
     COVERAGE_THRESHOLD: "50"  # Start conservative; raise as coverage improves
   before_script:
     - *zig-vendor-cache
-    - apt-get update -qq && apt-get install -y -qq kcov 2>/dev/null || apk add --no-cache kcov 2>/dev/null || echo "WARN: kcov not available, skipping instrumented coverage"
+    - 'apt-get update -qq && apt-get install -y -qq kcov 2>/dev/null || apk add --no-cache kcov 2>/dev/null || echo "WARN: kcov not available, skipping instrumented coverage"'
   script:
     - |
       echo "=== Building Test Binary ==="
@@ -657,7 +657,9 @@ test-code-coverage:
       - metrics.txt
       - test_output.log
     reports:
-      coverage_report: coverage_report/
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage_report/cobertura.xml
     expire_in: 1 week
   coverage: '/coverage: (\d+\.?\d*)%/'
 
