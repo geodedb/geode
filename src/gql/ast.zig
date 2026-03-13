@@ -82,6 +82,8 @@ pub const Query = struct {
     order_by: ?OrderBy,
     limit: ?usize,
     offset: ?usize,
+    limit_param: ?[]const u8 = null,
+    offset_param: ?[]const u8 = null,
     // Path variable assignment: MATCH path_var = pattern
     path_variable: ?[]const u8 = null,
     // Indicates this query is part of a WITH RECURSIVE CTE block (parser recognition only for now)
@@ -112,6 +114,8 @@ pub const UnionQuery = struct {
     order_by: ?*OrderBy = null,
     limit: ?u64 = null,
     offset: ?u64 = null,
+    limit_param: ?[]const u8 = null,
+    offset_param: ?[]const u8 = null,
 };
 
 pub const SetOperation = enum {
@@ -194,6 +198,8 @@ pub const WithClause = struct {
     order_by: ?*OrderBy = null,
     limit: ?u64 = null,
     offset: ?u64 = null,
+    limit_param: ?[]const u8 = null,
+    offset_param: ?[]const u8 = null,
 };
 
 /// GAP-0082: Common Table Expression (CTE) for WITH [RECURSIVE] clauses
@@ -373,6 +379,8 @@ pub const CallProcedure = struct {
     order_by: ?OrderBy = null, // ORDER BY clause
     limit: ?usize = null, // LIMIT clause
     offset: ?usize = null, // OFFSET clause
+    limit_param: ?[]const u8 = null,
+    offset_param: ?[]const u8 = null,
 };
 
 pub const CallSubquery = struct {
@@ -643,6 +651,8 @@ pub const ForStatement = struct {
     order_by: ?OrderBy = null,
     limit: ?usize = null,
     offset: ?usize = null,
+    limit_param: ?[]const u8 = null,
+    offset_param: ?[]const u8 = null,
 };
 
 pub const ValuesStatement = struct {

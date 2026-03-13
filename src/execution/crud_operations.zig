@@ -1485,11 +1485,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
 
             // Set properties on left node if present and not already set
             if (hop.left.props) |props| {
-                const env = Env{
-                    .allocator = allocator,
-                    .names = &.{},
-                    .values = &.{},
-                };
+                const env = envFromContext(allocator, context);
 
                 for (props) |prop| {
                     const value = try eval.evalExpr(allocator, prop.value.*, env);
@@ -1539,11 +1535,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
 
             // Set properties on right node if present and not already set
             if (hop.right.props) |props| {
-                const env = Env{
-                    .allocator = allocator,
-                    .names = &.{},
-                    .values = &.{},
-                };
+                const env = envFromContext(allocator, context);
 
                 for (props) |prop| {
                     const value = try eval.evalExpr(allocator, prop.value.*, env);
@@ -1586,11 +1578,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
 
             // Set edge properties if present
             if (hop.rel.props) |props| {
-                const env = Env{
-                    .allocator = allocator,
-                    .names = &.{},
-                    .values = &.{},
-                };
+                const env = envFromContext(allocator, context);
 
                 for (props) |prop| {
                     const value = try eval.evalExpr(allocator, prop.value.*, env);

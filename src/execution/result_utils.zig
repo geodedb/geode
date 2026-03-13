@@ -107,6 +107,98 @@ pub fn generateUniqueColumnNames(allocator: std.mem.Allocator, items: []const as
 }
 
 // ============================================================================
+// Value Hash Helpers for DISTINCT
+// ============================================================================
+
+/// Write a hash representation of a Value (non-error version for applyDistinct)
+fn writeValueHash(writer: anytype, val: Value) void {
+    switch (val) {
+        .Null => writer.writeAll("NULL") catch {},
+        .Bool => |b| writer.print("{}", .{b}) catch {},
+        .Int => |n| writer.print("{}", .{n}) catch {},
+        .Str => |s| writer.writeAll(s) catch {},
+        .Decimal => |d| writer.print("{}.{}", .{ d.coeff, d.scale }) catch {},
+        .Node => |node| writer.print("Node:{}", .{node.id}) catch {},
+        .Edge => |e| writer.print("Edge:{}", .{e.id}) catch {},
+        .List => |list| {
+            writer.writeAll("List[") catch {};
+            for (list, 0..) |elem, j| {
+                if (j > 0) writer.writeAll(",") catch {};
+                writeValueHash(writer, elem);
+            }
+            writer.writeAll("]") catch {};
+        },
+        .Map => |map| {
+            writer.writeAll("Map{") catch {};
+            var map_iter = map.iterator();
+            var first = true;
+            while (map_iter.next()) |entry| {
+                if (!first) writer.writeAll(",") catch {};
+                first = false;
+                writer.writeAll(entry.key_ptr.*) catch {};
+                writer.writeAll(":") catch {};
+                writeValueHash(writer, entry.value_ptr.*);
+            }
+            writer.writeAll("}") catch {};
+        },
+        .Path => |path| {
+            writer.writeAll("Path[") catch {};
+            for (path.nodes, 0..) |node, j| {
+                if (j > 0) writer.writeAll(",") catch {};
+                writer.print("Node:{}", .{node.id}) catch {};
+            }
+            writer.writeAll("]") catch {};
+        },
+        .ExtValue => writer.writeAll("ExtValue") catch {},
+        else => writer.writeAll("Other") catch {},
+    }
+}
+
+/// Write a hash representation of a Value (error-returning version for createRowHashKey)
+fn writeValueHashChecked(writer: anytype, val: Value) !void {
+    switch (val) {
+        .Null => try writer.writeAll("NULL"),
+        .Bool => |b| try writer.print("{}", .{b}),
+        .Int => |n| try writer.print("{}", .{n}),
+        .Str => |s| try writer.writeAll(s),
+        .Decimal => |d| try writer.print("{}.{}", .{ d.coeff, d.scale }),
+        .Node => |node| try writer.print("Node:{}", .{node.id}),
+        .Edge => |e| try writer.print("Edge:{}", .{e.id}),
+        .List => |list| {
+            try writer.writeAll("List[");
+            for (list, 0..) |elem, j| {
+                if (j > 0) try writer.writeAll(",");
+                try writeValueHashChecked(writer, elem);
+            }
+            try writer.writeAll("]");
+        },
+        .Map => |map| {
+            try writer.writeAll("Map{");
+            var map_iter = map.iterator();
+            var first = true;
+            while (map_iter.next()) |entry| {
+                if (!first) try writer.writeAll(",");
+                first = false;
+                try writer.writeAll(entry.key_ptr.*);
+                try writer.writeAll(":");
+                try writeValueHashChecked(writer, entry.value_ptr.*);
+            }
+            try writer.writeAll("}");
+        },
+        .Path => |path| {
+            try writer.writeAll("Path[");
+            for (path.nodes, 0..) |node, j| {
+                if (j > 0) try writer.writeAll(",");
+                try writer.print("Node:{}", .{node.id});
+            }
+            try writer.writeAll("]");
+        },
+        .ExtValue => try writer.writeAll("ExtValue"),
+        else => try writer.writeAll("Other"),
+    }
+}
+
+// ============================================================================
 // DISTINCT Deduplication
 // ============================================================================
 
@@ -145,9 +237,35 @@ pub fn applyDistinct(allocator: std.mem.Allocator, result: *ExecutionResult) !vo
                 .Decimal => |d| writer.print("{}.{}", .{ d.coeff, d.scale }) catch {},
                 .Node => |node| writer.print("Node:{}", .{node.id}) catch {},
                 .Edge => |e| writer.print("Edge:{}", .{e.id}) catch {},
-                .List => writer.writeAll("List") catch {},
-                .Map => writer.writeAll("Map") catch {},
-                .Path => writer.writeAll("Path") catch {},
+                .List => |list| {
+                    writer.writeAll("List[") catch {};
+                    for (list, 0..) |elem, j| {
+                        if (j > 0) writer.writeAll(",") catch {};
+                        writeValueHash(writer, elem);
+                    }
+                    writer.writeAll("]") catch {};
+                },
+                .Map => |map| {
+                    writer.writeAll("Map{") catch {};
+                    var map_iter = map.iterator();
+                    var first = true;
+                    while (map_iter.next()) |entry| {
+                        if (!first) writer.writeAll(",") catch {};
+                        first = false;
+                        writer.writeAll(entry.key_ptr.*) catch {};
+                        writer.writeAll(":") catch {};
+                        writeValueHash(writer, entry.value_ptr.*);
+                    }
+                    writer.writeAll("}") catch {};
+                },
+                .Path => |path| {
+                    writer.writeAll("Path[") catch {};
+                    for (path.nodes, 0..) |node, j| {
+                        if (j > 0) writer.writeAll(",") catch {};
+                        writer.print("Node:{}", .{node.id}) catch {};
+                    }
+                    writer.writeAll("]") catch {};
+                },
                 .ExtValue => writer.writeAll("ExtValue") catch {},
                 else => writer.writeAll("Other") catch {},
             }
@@ -198,9 +316,35 @@ pub fn createRowHashKey(allocator: std.mem.Allocator, row: []const Value) ![]u8 
             .Decimal => |d| try writer.print("{}.{}", .{ d.coeff, d.scale }),
             .Node => |node| try writer.print("Node:{}", .{node.id}),
             .Edge => |e| try writer.print("Edge:{}", .{e.id}),
-            .List => try writer.writeAll("List"),
-            .Map => try writer.writeAll("Map"),
-            .Path => try writer.writeAll("Path"),
+            .List => |list| {
+                try writer.writeAll("List[");
+                for (list, 0..) |elem, j| {
+                    if (j > 0) try writer.writeAll(",");
+                    try writeValueHashChecked(writer, elem);
+                }
+                try writer.writeAll("]");
+            },
+            .Map => |map| {
+                try writer.writeAll("Map{");
+                var map_iter = map.iterator();
+                var first = true;
+                while (map_iter.next()) |entry| {
+                    if (!first) try writer.writeAll(",");
+                    first = false;
+                    try writer.writeAll(entry.key_ptr.*);
+                    try writer.writeAll(":");
+                    try writeValueHashChecked(writer, entry.value_ptr.*);
+                }
+                try writer.writeAll("}");
+            },
+            .Path => |path| {
+                try writer.writeAll("Path[");
+                for (path.nodes, 0..) |node, j| {
+                    if (j > 0) try writer.writeAll(",");
+                    try writer.print("Node:{}", .{node.id});
+                }
+                try writer.writeAll("]");
+            },
             .ExtValue => try writer.writeAll("ExtValue"),
             else => try writer.writeAll("Other"),
         }

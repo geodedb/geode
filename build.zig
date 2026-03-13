@@ -812,6 +812,19 @@ pub fn build(b: *std.Build) void {
     const limit_pushdown_step = b.step("test-limit-pushdown", "Run LIMIT pushdown optimization tests");
     limit_pushdown_step.dependOn(&run_limit_pushdown_tests.step);
 
+    // Bug limitation fixes unit tests
+    const limitations_fixes_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_limitations_fixes.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    limitations_fixes_tests.root_module.addImport("geode", root_mod);
+    const run_limitations_fixes_tests = b.addRunArtifact(limitations_fixes_tests);
+    const limitations_fixes_step = b.step("test-limitations-fixes", "Run bug limitation fixes tests");
+    limitations_fixes_step.dependOn(&run_limitations_fixes_tests.step);
+
     // GAP-0401: MATCH refactor staged benchmark campaign
     const match_bench_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -932,6 +945,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_binary_persist_tests.step);
     test_step.dependOn(&run_match_parity_tests.step);
     test_step.dependOn(&run_limit_pushdown_tests.step);
+    test_step.dependOn(&run_limitations_fixes_tests.step);
     test_step.dependOn(&run_cli_transport_parity_tests.step);
     test_step.dependOn(&run_auth_security_tests.step);
     test_step.dependOn(&run_random_security_tests.step);

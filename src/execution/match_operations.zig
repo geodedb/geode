@@ -53,6 +53,22 @@ const applyDistinct = result_utils.applyDistinct;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
+/// Resolve a LIMIT or OFFSET value from either a literal or a $param reference.
+fn resolveLimitParam(literal: ?usize, param_name: ?[]const u8, param_names_arr: []const []const u8, param_values_arr: []const Value) ?usize {
+    if (literal) |v| return v;
+    if (param_name) |name| {
+        for (param_names_arr, param_values_arr) |pn, pv| {
+            if (std.mem.eql(u8, pn, name)) {
+                return switch (pv) {
+                    .Int => |i| if (i >= 0) @as(usize, @intCast(i)) else null,
+                    else => null,
+                };
+            }
+        }
+    }
+    return null;
+}
+
 /// Extract variable name and property name from a property access expression.
 /// Handles both PropertyAccess (object.property) and Member (Ident.field) forms.
 fn extractVarProperty(expr: ast.Expr) ?struct { variable: []const u8, property: []const u8 } {
@@ -225,9 +241,9 @@ pub fn handleShortestPathAssignment(
 // Extracted MATCH operations from execution.zig for better modularity (M1 Phase 6)
 
 // CANARY: REQ=REQ-MULTI-GRAPH-013; FEATURE="MultiGraphIsolation"; ASPECT=MatchCreate; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, current_graph: ?[]const u8) !ExecutionResult {
+pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param_names_arg: []const []const u8, param_values_arg: []const Value, current_graph: ?[]const u8) !ExecutionResult {
     // First execute MATCH to get bindings - use full MATCH path to handle all cases (multi-node, etc)
-    const match_result = try executeMatchQueryWithParams(allocator, q, &.{}, &.{}, q.inline_let_bindings, current_graph);
+    const match_result = try executeMatchQueryWithParams(allocator, q, param_names_arg, param_values_arg, q.inline_let_bindings, current_graph);
     defer {
         // Clean up match_result to prevent memory leak
         for (match_result.columns) |col| {
@@ -538,8 +554,8 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
             }
         }
 
-        // Apply LIMIT if present
-        if (q.limit) |limit_count| {
+        // Apply LIMIT if present (supports both literal and $param)
+        if (resolveLimitParam(q.limit, q.limit_param, context.query_param_names, context.query_param_values)) |limit_count| {
             if (limit_count < result.rows.len) {
                 // Truncate to limit
                 const new_rows = try allocator.alloc([]Value, limit_count);
@@ -586,14 +602,16 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
         }
         break :blk false;
     };
-    const can_push_limit = q.limit != null and
+    const resolved_limit = resolveLimitParam(q.limit, q.limit_param, param_names, param_values);
+    const resolved_offset = resolveLimitParam(q.offset, q.offset_param, param_names, param_values);
+    const can_push_limit = resolved_limit != null and
         q.order_by == null and
         !q.ret.distinct and
         q.group_by == null and
         !has_aggregation_items;
     // When pushable, compute effective scan cap (limit + offset)
     const scan_cap: ?usize = if (can_push_limit)
-        (q.limit.? + (q.offset orelse 0))
+        (resolved_limit.? + (resolved_offset orelse 0))
     else
         null;
 
@@ -3140,8 +3158,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     }
 
     // CANARY: REQ=REQ-GQL-LIMIT-OPTIONAL-001; FEATURE="LimitOptionalMatch"; ASPECT=Pagination; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
-    // D04 Fix: Apply LIMIT for optional match results - was missing
-    if (q.limit) |limit_count| {
+    // D04 Fix: Apply LIMIT for optional match results - was missing (supports $param)
+    if (resolveLimitParam(q.limit, q.limit_param, param_names, param_values)) |limit_count| {
         if (limit_count < final_result.rows.len) {
             const new_rows = try allocator.alloc([]Value, limit_count);
             for (final_result.rows[0..limit_count], 0..) |row, i| {
@@ -3268,8 +3286,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                     if (node.properties.get(prop.key)) |node_prop_val| {
                                         const node_val = propertyValueToValue(node_prop_val);
                                         const prop_env = eval.Env{
-                                            .names = p_names,
-                                            .values = p_values,
+                                            .names = &.{},
+                                            .values = &.{},
+                                            .param_names = p_names,
+                                            .param_values = p_values,
                                             .allocator = alloc,
                                         };
                                         const prop_val = eval.evalExpr(alloc, prop.value.*, prop_env) catch return;
@@ -5355,25 +5375,29 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             try sortRows(allocator, &result, order);
                         }
 
-                        // Apply LIMIT and OFFSET
-                        if (q.limit != null or q.offset != null) {
-                            const offset_count = q.offset orelse 0;
-                            const limit_count = q.limit orelse result.rows.len;
-                            const actual_limit = @min(limit_count, if (result.rows.len > offset_count) result.rows.len - offset_count else 0);
-                            if (offset_count > 0 or actual_limit < result.rows.len) {
-                                var limited_rows = try allocator.alloc([]Value, actual_limit);
-                                for (0..actual_limit) |i| {
-                                    limited_rows[i] = result.rows[offset_count + i];
+                        // Apply LIMIT and OFFSET (supports $param)
+                        {
+                            const rl = resolveLimitParam(q.limit, q.limit_param, param_names, param_values);
+                            const ro = resolveLimitParam(q.offset, q.offset_param, param_names, param_values);
+                            if (rl != null or ro != null) {
+                                const offset_count = ro orelse 0;
+                                const limit_count = rl orelse result.rows.len;
+                                const actual_limit = @min(limit_count, if (result.rows.len > offset_count) result.rows.len - offset_count else 0);
+                                if (offset_count > 0 or actual_limit < result.rows.len) {
+                                    var limited_rows = try allocator.alloc([]Value, actual_limit);
+                                    for (0..actual_limit) |i| {
+                                        limited_rows[i] = result.rows[offset_count + i];
+                                    }
+                                    // Free skipped and excess rows
+                                    for (0..offset_count) |i| {
+                                        allocator.free(result.rows[i]);
+                                    }
+                                    for (offset_count + actual_limit..result.rows.len) |i| {
+                                        allocator.free(result.rows[i]);
+                                    }
+                                    allocator.free(result.rows);
+                                    result.rows = limited_rows;
                                 }
-                                // Free skipped and excess rows
-                                for (0..offset_count) |i| {
-                                    allocator.free(result.rows[i]);
-                                }
-                                for (offset_count + actual_limit..result.rows.len) |i| {
-                                    allocator.free(result.rows[i]);
-                                }
-                                allocator.free(result.rows);
-                                result.rows = limited_rows;
                             }
                         }
 
@@ -5398,25 +5422,29 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     try sortRows(allocator, &result, order);
                 }
 
-                // Apply LIMIT and OFFSET
-                if (q.limit != null or q.offset != null) {
-                    const offset_count = q.offset orelse 0;
-                    const limit_count = q.limit orelse result.rows.len;
-                    const actual_limit = @min(limit_count, if (result.rows.len > offset_count) result.rows.len - offset_count else 0);
-                    if (offset_count > 0 or actual_limit < result.rows.len) {
-                        var limited_rows = try allocator.alloc([]Value, actual_limit);
-                        for (0..actual_limit) |i| {
-                            limited_rows[i] = result.rows[offset_count + i];
+                // Apply LIMIT and OFFSET (supports $param)
+                {
+                    const rl = resolveLimitParam(q.limit, q.limit_param, param_names, param_values);
+                    const ro = resolveLimitParam(q.offset, q.offset_param, param_names, param_values);
+                    if (rl != null or ro != null) {
+                        const offset_count = ro orelse 0;
+                        const limit_count = rl orelse result.rows.len;
+                        const actual_limit = @min(limit_count, if (result.rows.len > offset_count) result.rows.len - offset_count else 0);
+                        if (offset_count > 0 or actual_limit < result.rows.len) {
+                            var limited_rows = try allocator.alloc([]Value, actual_limit);
+                            for (0..actual_limit) |i| {
+                                limited_rows[i] = result.rows[offset_count + i];
+                            }
+                            // Free skipped and excess rows
+                            for (0..offset_count) |i| {
+                                allocator.free(result.rows[i]);
+                            }
+                            for (offset_count + actual_limit..result.rows.len) |i| {
+                                allocator.free(result.rows[i]);
+                            }
+                            allocator.free(result.rows);
+                            result.rows = limited_rows;
                         }
-                        // Free skipped and excess rows
-                        for (0..offset_count) |i| {
-                            allocator.free(result.rows[i]);
-                        }
-                        for (offset_count + actual_limit..result.rows.len) |i| {
-                            allocator.free(result.rows[i]);
-                        }
-                        allocator.free(result.rows);
-                        result.rows = limited_rows;
                     }
                 }
 

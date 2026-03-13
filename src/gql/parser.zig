@@ -268,6 +268,18 @@ pub const Parser = struct {
         return error.UnexpectedToken;
     }
 
+    /// Parse a LIMIT or OFFSET value: accepts either an integer literal or a $param reference.
+    /// Returns .{ literal_value_or_null, param_name_or_null }.
+    fn parseLimitValue(self: *Parser) !struct { value: ?usize, param: ?[]const u8 } {
+        if (self.cur.kind == .dollar) {
+            self.advance();
+            const name = try self.expectIdentifierOrKeyword();
+            return .{ .value = null, .param = name.lexeme };
+        }
+        const lim_tok = try self.expect(.integer_lit);
+        return .{ .value = try std.fmt.parseInt(u64, lim_tok.lexeme, 10), .param = null };
+    }
+
     fn unescapeString(self: *Parser, raw: []const u8) ![]const u8 {
         // Check if we need to unescape (contains '' or \)
         var needs_unescape = false;
@@ -777,9 +789,13 @@ pub const Parser = struct {
                     }
                     var limit_val: ?u64 = if (first.limit) |l| @as(u64, @intCast(l)) else null;
                     var offset_val: ?u64 = if (first.offset) |o| @as(u64, @intCast(o)) else null;
+                    var limit_param: ?[]const u8 = first.limit_param;
+                    var offset_param: ?[]const u8 = first.offset_param;
                     first.order_by = null;
                     first.limit = null;
                     first.offset = null;
+                    first.limit_param = null;
+                    first.offset_param = null;
 
                     var parts = std.ArrayList(ast.UnionQuery.Part).empty;
                     while (self.cur.kind == .UNION) {
@@ -804,11 +820,15 @@ pub const Parser = struct {
                             }
                             if (q2.limit) |lim| limit_val = @intCast(lim);
                             if (q2.offset) |off| offset_val = @intCast(off);
+                            if (q2.limit_param) |p| limit_param = p;
+                            if (q2.offset_param) |p| offset_param = p;
                         }
                         // Strip ORDER BY/LIMIT/OFFSET from tail queries
                         q2.order_by = null;
                         q2.limit = null;
                         q2.offset = null;
+                        q2.limit_param = null;
+                        q2.offset_param = null;
                         try parts.append(self.arena.allocator(), .{ .all = all, .distinct = distinct, .query = q2 });
                     }
 
@@ -850,6 +870,8 @@ pub const Parser = struct {
                         .order_by = order_by,
                         .limit = limit_val,
                         .offset = offset_val,
+                        .limit_param = limit_param,
+                        .offset_param = offset_param,
                     } };
                 }
                 break :blk_with self.handleQueryResult(first);
@@ -900,9 +922,13 @@ pub const Parser = struct {
                     }
                     var limit_val: ?u64 = if (first.limit) |l| @as(u64, @intCast(l)) else null;
                     var offset_val: ?u64 = if (first.offset) |o| @as(u64, @intCast(o)) else null;
+                    var limit_param: ?[]const u8 = first.limit_param;
+                    var offset_param: ?[]const u8 = first.offset_param;
                     first.order_by = null;
                     first.limit = null;
                     first.offset = null;
+                    first.limit_param = null;
+                    first.offset_param = null;
 
                     var parts = std.ArrayList(ast.UnionQuery.Part).empty;
                     while (self.cur.kind == .UNION) {
@@ -927,11 +953,15 @@ pub const Parser = struct {
                             }
                             if (q2.limit) |lim| limit_val = @intCast(lim);
                             if (q2.offset) |off| offset_val = @intCast(off);
+                            if (q2.limit_param) |p| limit_param = p;
+                            if (q2.offset_param) |p| offset_param = p;
                         }
                         // Strip ORDER BY/LIMIT/OFFSET from tail queries
                         q2.order_by = null;
                         q2.limit = null;
                         q2.offset = null;
+                        q2.limit_param = null;
+                        q2.offset_param = null;
                         try parts.append(self.arena.allocator(), .{ .all = all, .distinct = distinct, .query = q2 });
                     }
 
@@ -955,14 +985,16 @@ pub const Parser = struct {
 
                     if (self.cur.kind == .LIMIT) {
                         self.advance();
-                        const lim_tok = try self.expect(.integer_lit);
-                        limit_val = try std.fmt.parseInt(u64, lim_tok.lexeme, 10);
+                        const lim = try self.parseLimitValue();
+                        limit_val = lim.value;
+                        limit_param = lim.param;
                     }
 
                     if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
                         self.advance();
-                        const off_tok = try self.expect(.integer_lit);
-                        offset_val = try std.fmt.parseInt(u64, off_tok.lexeme, 10);
+                        const off = try self.parseLimitValue();
+                        offset_val = off.value;
+                        offset_param = off.param;
                     }
 
                     break :blk_r .{ .Union = .{
@@ -971,6 +1003,8 @@ pub const Parser = struct {
                         .order_by = order_by,
                         .limit = limit_val,
                         .offset = offset_val,
+                        .limit_param = limit_param,
+                        .offset_param = offset_param,
                     } };
                 }
                 if (self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
@@ -1320,22 +1354,22 @@ pub const Parser = struct {
 
                     // Optional LIMIT clause
                     var limit: ?usize = null;
+                    var limit_param: ?[]const u8 = null;
                     if (self.cur.kind == .LIMIT) {
                         self.advance();
-                        if (self.cur.kind != .integer_lit) return error.UnexpectedToken;
-                        const lim_val = std.fmt.parseInt(usize, self.cur.lexeme, 10) catch return error.UnexpectedToken;
-                        limit = lim_val;
-                        self.advance();
+                        const lim = try self.parseLimitValue();
+                        limit = lim.value;
+                        limit_param = lim.param;
                     }
 
                     // Optional OFFSET/SKIP clause
                     var offset: ?usize = null;
+                    var offset_param: ?[]const u8 = null;
                     if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
                         self.advance();
-                        if (self.cur.kind != .integer_lit) return error.UnexpectedToken;
-                        const off_val = std.fmt.parseInt(usize, self.cur.lexeme, 10) catch return error.UnexpectedToken;
-                        offset = off_val;
-                        self.advance();
+                        const off = try self.parseLimitValue();
+                        offset = off.value;
+                        offset_param = off.param;
                     }
 
                     break :blk_call .{ .Call = .{ .Procedure = .{
@@ -1345,6 +1379,8 @@ pub const Parser = struct {
                         .order_by = order_by,
                         .limit = limit,
                         .offset = offset,
+                        .limit_param = limit_param,
+                        .offset_param = offset_param,
                     } } };
                 }
             },
@@ -1431,9 +1467,13 @@ pub const Parser = struct {
             }
             var limit_val: ?u64 = if (first.limit) |l| @as(u64, @intCast(l)) else null;
             var offset_val: ?u64 = if (first.offset) |o| @as(u64, @intCast(o)) else null;
+            var limit_param: ?[]const u8 = first.limit_param;
+            var offset_param: ?[]const u8 = first.offset_param;
             first_query.order_by = null;
             first_query.limit = null;
             first_query.offset = null;
+            first_query.limit_param = null;
+            first_query.offset_param = null;
 
             var parts = std.ArrayList(ast.UnionQuery.Part).empty;
             while (self.cur.kind == .UNION or self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
@@ -1465,11 +1505,15 @@ pub const Parser = struct {
                     }
                     if (q.limit) |lim| limit_val = @intCast(lim);
                     if (q.offset) |off| offset_val = @intCast(off);
+                    if (q.limit_param) |p| limit_param = p;
+                    if (q.offset_param) |p| offset_param = p;
                 }
                 // Strip ORDER BY/LIMIT/OFFSET from tail queries - they apply at set operation level
                 q.order_by = null;
                 q.limit = null;
                 q.offset = null;
+                q.limit_param = null;
+                q.offset_param = null;
                 try parts.append(self.arena.allocator(), .{ .operation = operation, .all = all, .distinct = distinct, .query = q });
             }
 
@@ -1493,14 +1537,16 @@ pub const Parser = struct {
 
             if (self.cur.kind == .LIMIT) {
                 self.advance();
-                const lim_tok = try self.expect(.integer_lit);
-                limit_val = try std.fmt.parseInt(u64, lim_tok.lexeme, 10);
+                const lim = try self.parseLimitValue();
+                limit_val = lim.value;
+                limit_param = lim.param;
             }
 
             if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
                 self.advance();
-                const off_tok = try self.expect(.integer_lit);
-                offset_val = try std.fmt.parseInt(u64, off_tok.lexeme, 10);
+                const off = try self.parseLimitValue();
+                offset_val = off.value;
+                offset_param = off.param;
             }
 
             return .{ .Union = .{
@@ -1509,6 +1555,8 @@ pub const Parser = struct {
                 .order_by = order_by,
                 .limit = limit_val,
                 .offset = offset_val,
+                .limit_param = limit_param,
+                .offset_param = offset_param,
             } };
         }
         return .{ .Query = first };
@@ -1543,6 +1591,7 @@ pub const Parser = struct {
         var have_match = false;
         var have_create = false;
         var create_pattern: ?ast.GraphPattern = null;
+        var merge_statement: ?*ast.MergeStatement = null;
 
         // Check for WITH at the beginning (for queries like: WITH 5 AS x RETURN x)
         // Parse WITH clause first if present, before MATCH/CREATE
@@ -1562,6 +1611,8 @@ pub const Parser = struct {
             var with_order_by: ?*ast.OrderBy = null;
             var with_limit: ?u64 = null;
             var with_offset: ?u64 = null;
+            var with_limit_param: ?[]const u8 = null;
+            var with_offset_param: ?[]const u8 = null;
 
             if (self.cur.kind == .ORDER) {
                 self.advance();
@@ -1581,14 +1632,16 @@ pub const Parser = struct {
 
             if (self.cur.kind == .LIMIT) {
                 self.advance();
-                const lim_tok = try self.expect(.integer_lit);
-                with_limit = try std.fmt.parseInt(u64, lim_tok.lexeme, 10);
+                const lim = try self.parseLimitValue();
+                with_limit = lim.value;
+                with_limit_param = lim.param;
             }
 
             if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
                 self.advance();
-                const off_tok = try self.expect(.integer_lit);
-                with_offset = try std.fmt.parseInt(u64, off_tok.lexeme, 10);
+                const off = try self.parseLimitValue();
+                with_offset = off.value;
+                with_offset_param = off.param;
             }
 
             initial_with_clause = .{
@@ -1597,6 +1650,8 @@ pub const Parser = struct {
                 .order_by = with_order_by,
                 .limit = with_limit,
                 .offset = with_offset,
+                .limit_param = with_limit_param,
+                .offset_param = with_offset_param,
             };
 
             // CANARY: REQ=REQ-GQL-WITH-WHERE-003; FEATURE="InitialWithWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
@@ -1999,6 +2054,14 @@ pub const Parser = struct {
                 combined_gp = .{ .chains = try post_where_chains.toOwnedSlice(self.arena.allocator()) };
             }
 
+            // After MATCH ... WHERE, check for MERGE - support MATCH ... MERGE pattern
+            if (self.cur.kind == .MERGE) {
+                const merge_stmt = try self.parseMergeStatement();
+                const merge_ptr = try self.arena.allocator().create(ast.MergeStatement);
+                merge_ptr.* = merge_stmt.Merge;
+                merge_statement = merge_ptr;
+            }
+
             // After MATCH ... WHERE, check for CREATE - support multiple CREATE clauses
             // e.g., MATCH (a), (b), (c) CREATE (a)-[:R]->(b) CREATE (a)-[:R]->(c)
             if (self.cur.kind == .CREATE) {
@@ -2082,6 +2145,8 @@ pub const Parser = struct {
             var with_order_by: ?*ast.OrderBy = null;
             var with_limit: ?u64 = null;
             var with_offset: ?u64 = null;
+            var with_limit_param: ?[]const u8 = null;
+            var with_offset_param: ?[]const u8 = null;
 
             if (self.cur.kind == .ORDER) {
                 self.advance();
@@ -2101,14 +2166,16 @@ pub const Parser = struct {
 
             if (self.cur.kind == .LIMIT) {
                 self.advance();
-                const lim_tok = try self.expect(.integer_lit);
-                with_limit = try std.fmt.parseInt(u64, lim_tok.lexeme, 10);
+                const lim = try self.parseLimitValue();
+                with_limit = lim.value;
+                with_limit_param = lim.param;
             }
 
             if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
                 self.advance();
-                const off_tok = try self.expect(.integer_lit);
-                with_offset = try std.fmt.parseInt(u64, off_tok.lexeme, 10);
+                const off = try self.parseLimitValue();
+                with_offset = off.value;
+                with_offset_param = off.param;
             }
 
             with_clause = .{
@@ -2117,6 +2184,8 @@ pub const Parser = struct {
                 .order_by = with_order_by,
                 .limit = with_limit,
                 .offset = with_offset,
+                .limit_param = with_limit_param,
+                .offset_param = with_offset_param,
             };
             // Allow an additional WHERE after WITH to filter the projected bindings
             if (self.cur.kind == .WHERE) {
@@ -2307,6 +2376,13 @@ pub const Parser = struct {
                     having_expr = try self.parseOrExpr();
                 }
             }
+        } else if (merge_statement != null) {
+            // MERGE with optional RETURN from merge_statement
+            if (merge_statement.?.return_clause) |rc| {
+                return_clause = rc;
+            } else {
+                return_clause = .{ .items = &.{}, .distinct = false };
+            }
         } else if (set_clauses.len > 0 or remove_clauses.len > 0 or delete_items.len > 0 or create_pattern != null) {
             // SET/REMOVE/DELETE/CREATE without RETURN - create empty return clause
             return_clause = .{ .items = &.{}, .distinct = false };
@@ -2370,6 +2446,8 @@ pub const Parser = struct {
 
         var limit: ?usize = null;
         var offset: ?usize = null;
+        var limit_param: ?[]const u8 = null;
+        var offset_param: ?[]const u8 = null;
 
         // Additional legality enforcement: when ident_order_only policy active, reject any ORDER BY key that is not a bare identifier.
         if (ord) |ob| {
@@ -2393,20 +2471,23 @@ pub const Parser = struct {
         // First check for LIMIT
         if (self.cur.kind == .LIMIT) {
             self.advance();
-            const n = try self.expect(.integer_lit);
-            limit = try std.fmt.parseInt(usize, n.lexeme, 10);
+            const lim = try self.parseLimitValue();
+            limit = lim.value;
+            limit_param = lim.param;
         }
         // Check for OFFSET/SKIP
         if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
             self.advance();
-            const n = try self.expect(.integer_lit);
-            offset = try std.fmt.parseInt(usize, n.lexeme, 10);
+            const off = try self.parseLimitValue();
+            offset = off.value;
+            offset_param = off.param;
         }
         // Check for LIMIT again (in case it comes after OFFSET)
-        if (limit == null and self.cur.kind == .LIMIT) {
+        if (limit == null and limit_param == null and self.cur.kind == .LIMIT) {
             self.advance();
-            const n = try self.expect(.integer_lit);
-            limit = try std.fmt.parseInt(usize, n.lexeme, 10);
+            const lim = try self.parseLimitValue();
+            limit = lim.value;
+            limit_param = lim.param;
         }
 
         // Keep let_bindings and inline_let_bindings separate for proper evaluation timing
@@ -2432,11 +2513,14 @@ pub const Parser = struct {
             .order_by = ord,
             .limit = limit,
             .offset = offset,
+            .limit_param = limit_param,
+            .offset_param = offset_param,
             .path_variable = path_variable,
             .call_clause = call_clause,
             .next_query = next_query_ptr, // Query chaining support
             .initial_call_subquery = initial_call_subquery,
             .unwind_clause = unwind_clause,
+            .merge_statement = merge_statement,
         };
     }
     fn isValidOrdinal(self: *Parser, n: i64, items_len: usize) bool {
@@ -4174,6 +4258,8 @@ pub const Parser = struct {
                 var with_order_by: ?*ast.OrderBy = null;
                 var with_limit: ?u64 = null;
                 var with_offset: ?u64 = null;
+                var with_limit_param: ?[]const u8 = null;
+                var with_offset_param: ?[]const u8 = null;
 
                 if (self.cur.kind == .ORDER) {
                     self.advance();
@@ -4193,14 +4279,16 @@ pub const Parser = struct {
 
                 if (self.cur.kind == .LIMIT) {
                     self.advance();
-                    const lim_tok = try self.expect(.integer_lit);
-                    with_limit = try std.fmt.parseInt(u64, lim_tok.lexeme, 10);
+                    const lim = try self.parseLimitValue();
+                    with_limit = lim.value;
+                    with_limit_param = lim.param;
                 }
 
                 if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
                     self.advance();
-                    const off_tok = try self.expect(.integer_lit);
-                    with_offset = try std.fmt.parseInt(u64, off_tok.lexeme, 10);
+                    const off = try self.parseLimitValue();
+                    with_offset = off.value;
+                    with_offset_param = off.param;
                 }
 
                 with_clause = .{
@@ -4208,6 +4296,8 @@ pub const Parser = struct {
                     .order_by = with_order_by,
                     .limit = with_limit,
                     .offset = with_offset,
+                    .limit_param = with_limit_param,
+                    .offset_param = with_offset_param,
                 };
 
                 // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Parser; STATUS=TESTED; TEST=graph_algorithms; OWNER=parser; UPDATED=2026-01-17
@@ -5364,18 +5454,22 @@ pub const Parser = struct {
 
         // Optional LIMIT
         var limit: ?usize = null;
+        var limit_param: ?[]const u8 = null;
         if (self.cur.kind == .LIMIT) {
             self.advance();
-            const lim_tok = try self.expect(.integer_lit);
-            limit = std.fmt.parseInt(usize, lim_tok.lexeme, 10) catch return error.Overflow;
+            const lim = try self.parseLimitValue();
+            limit = lim.value;
+            limit_param = lim.param;
         }
 
         // Optional OFFSET
         var offset: ?usize = null;
+        var offset_param: ?[]const u8 = null;
         if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
             self.advance();
-            const off_tok = try self.expect(.integer_lit);
-            offset = std.fmt.parseInt(usize, off_tok.lexeme, 10) catch return error.Overflow;
+            const off = try self.parseLimitValue();
+            offset = off.value;
+            offset_param = off.param;
         }
 
         return .{ .For = .{
@@ -5387,6 +5481,8 @@ pub const Parser = struct {
             .order_by = order_by,
             .limit = limit,
             .offset = offset,
+            .limit_param = limit_param,
+            .offset_param = offset_param,
         } };
     }
 

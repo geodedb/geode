@@ -40,6 +40,23 @@ const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
+/// Resolve a LIMIT or OFFSET value that may come from a literal or a $param reference.
+/// Returns the resolved usize value, or null if neither literal nor param is set.
+fn resolveLimitParam(literal: ?usize, param_name: ?[]const u8, param_names: []const []const u8, param_values: []const Value) ?usize {
+    if (literal) |v| return v;
+    if (param_name) |name| {
+        for (param_names, param_values) |pn, pv| {
+            if (std.mem.eql(u8, pn, name)) {
+                return switch (pv) {
+                    .Int => |i| if (i >= 0) @as(usize, @intCast(i)) else null,
+                    else => null,
+                };
+            }
+        }
+    }
+    return null;
+}
+
 // CANARY: REQ=REQ-EXEC-REFACTOR-011; FEATURE="FileModularization"; ASPECT=QueryExecution; STATUS=EXEMPT; OWNER=refactoring; UPDATED=2025-10-17
 // CANARY: REQ=REQ-0003; FEATURE="Engine Contract Requirements"; ASPECT=Execution; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=execution; UPDATED=2026-01-15
 pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, next_query_ptr: *ast.Query, context: ExecutionContext) anyerror!ExecutionResult {
@@ -1427,7 +1444,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     // Check if there's BOTH a MATCH and CREATE pattern (MATCH ... CREATE)
     if (q.match.chains.len > 0 and q.create_pattern != null) {
         const create_graph = if (context.session_state) |session| session.graph else null;
-        return executeMatchCreateQuery(allocator, q, create_graph);
+        return executeMatchCreateQuery(allocator, q, param_names.items, param_values.items, create_graph);
     }
 
     // Check if there's a CREATE pattern (CREATE ... WITH ... SET ... RETURN)
@@ -1440,12 +1457,54 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     if (q.merge_statement) |merge_stmt| {
         const merge_graph = if (context.session_state) |session| session.graph else null;
         const crud = @import("crud_operations.zig");
-        const merge_result = try crud.executeMerge(allocator, merge_stmt.*, merge_graph, context);
-        // If there's a return clause on the query (not the merge), apply it
-        // Otherwise return the merge result directly
-        if (q.ret.items.len > 0 and merge_result.rows.len > 0) {
-            return merge_result;
+
+        // If MATCH is present, execute MATCH first and pass bindings to MERGE context
+        if (q.match.chains.len > 0) {
+            const match_result = try executeMatchQueryWithParams(allocator, q, param_names.items, param_values.items, q.inline_let_bindings, merge_graph);
+            defer {
+                for (match_result.columns) |col| allocator.free(col);
+                allocator.free(match_result.columns);
+                for (match_result.rows) |row| allocator.free(row);
+                allocator.free(match_result.rows);
+            }
+
+            // Build enriched context with MATCH bindings as params
+            var merge_param_names = try std.ArrayList([]const u8).initCapacity(allocator, param_names.items.len + match_result.columns.len);
+            defer merge_param_names.deinit(allocator);
+            var merge_param_values = try std.ArrayList(Value).initCapacity(allocator, param_values.items.len + match_result.columns.len);
+            defer merge_param_values.deinit(allocator);
+
+            for (param_names.items) |pn| try merge_param_names.append(allocator, pn);
+            for (param_values.items) |pv| try merge_param_values.append(allocator, pv);
+
+            // Execute MERGE for each MATCH row
+            var last_result: ?ExecutionResult = null;
+            for (match_result.rows) |row| {
+                // Reset bindings to base params
+                merge_param_names.shrinkRetainingCapacity(param_names.items.len);
+                merge_param_values.shrinkRetainingCapacity(param_values.items.len);
+
+                // Add this row's MATCH bindings
+                for (match_result.columns, 0..) |col, i| {
+                    if (i < row.len) {
+                        try merge_param_names.append(allocator, col);
+                        try merge_param_values.append(allocator, row[i]);
+                    }
+                }
+
+                var merge_ctx = context;
+                merge_ctx.query_param_names = merge_param_names.items;
+                merge_ctx.query_param_values = merge_param_values.items;
+                last_result = try crud.executeMerge(allocator, merge_stmt.*, merge_graph, merge_ctx);
+            }
+            return last_result orelse ExecutionResult{
+                .columns = try allocator.alloc([]const u8, 0),
+                .rows = try allocator.alloc([]Value, 0),
+                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            };
         }
+
+        const merge_result = try crud.executeMerge(allocator, merge_stmt.*, merge_graph, context);
         return merge_result;
     }
 
@@ -1553,8 +1612,8 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
                 try sortRows(allocator, &result, order);
             }
 
-            // Apply LIMIT if present
-            if (q.limit) |lim| {
+            // Apply LIMIT if present (supports both literal and $param)
+            if (resolveLimitParam(q.limit, q.limit_param, param_names.items, param_values.items)) |lim| {
                 const end = @min(result.rows.len, lim);
                 if (end != result.rows.len) {
                     try execution.applyRowWindow(allocator, &result, 0, end);
@@ -1645,8 +1704,8 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
                 try sortRows(allocator, &result, order);
             }
 
-            // Apply LIMIT if present
-            if (q.limit) |lim| {
+            // Apply LIMIT if present (supports both literal and $param)
+            if (resolveLimitParam(q.limit, q.limit_param, param_names.items, param_values.items)) |lim| {
                 const end = @min(result.rows.len, lim);
                 if (end != result.rows.len) {
                     try execution.applyRowWindow(allocator, &result, 0, end);
@@ -1812,8 +1871,8 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
             try sortRows(allocator, &result, order);
         }
 
-        // Apply LIMIT if present
-        if (q.limit) |lim| {
+        // Apply LIMIT if present (supports both literal and $param)
+        if (resolveLimitParam(q.limit, q.limit_param, param_names.items, param_values.items)) |lim| {
             const end = @min(result.rows.len, lim);
             if (end != result.rows.len) {
                 try execution.applyRowWindow(allocator, &result, 0, end);

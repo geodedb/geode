@@ -37,6 +37,22 @@ const executeDelete = execution.executeDelete;
 
 // Local type aliases
 const Value = value_types.Value;
+
+/// Resolve a LIMIT or OFFSET value from either a literal or a $param reference.
+fn resolveLimitParam(literal: ?usize, param_name: ?[]const u8, pnames: []const []const u8, pvalues: []const Value) ?usize {
+    if (literal) |v| return v;
+    if (param_name) |name| {
+        for (pnames, pvalues) |pn, pv| {
+            if (std.mem.eql(u8, pn, name)) {
+                return switch (pv) {
+                    .Int => |i| if (i >= 0) @as(usize, @intCast(i)) else null,
+                    else => null,
+                };
+            }
+        }
+    }
+    return null;
+}
 const executeMatchQuery = execution.executeMatchQuery;
 const executeMatchCreateQuery = execution.executeMatchCreateQuery;
 const executeMatchCallQuery = execution.executeMatchCallQuery;
@@ -86,8 +102,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 }
             }
 
-            // Apply LIMIT if present
-            if (q.limit) |limit_count| {
+            // Apply LIMIT if present (supports $param)
+            if (resolveLimitParam(q.limit, q.limit_param, context.query_param_names, context.query_param_values)) |limit_count| {
                 if (limit_count < result.rows.len) {
                     // Truncate to limit
                     const new_rows = try allocator.alloc([]Value, limit_count);
