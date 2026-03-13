@@ -576,6 +576,27 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     const store = graph_store.getGlobalStore(allocator);
     const filter_graph = current_graph orelse "default";
 
+    // CANARY: REQ=REQ-PERF-LIMIT-PUSHDOWN-001; FEATURE="LimitPushdown"; ASPECT=MultiNodeMatch; STATUS=IMPL; OWNER=engine; UPDATED=2026-03-13
+    // Determine if we can push LIMIT down into the scan phase.
+    // Safe when: no ORDER BY, no DISTINCT, no GROUP BY, no aggregation, and no OFFSET
+    // (ORDER BY needs all rows to sort; GROUP BY/aggregation need full set to compute)
+    const has_aggregation_items = blk: {
+        for (q.ret.items) |item| {
+            if (isAggregationExpr(item.expr)) break :blk true;
+        }
+        break :blk false;
+    };
+    const can_push_limit = q.limit != null and
+        q.order_by == null and
+        !q.ret.distinct and
+        q.group_by == null and
+        !has_aggregation_items;
+    // When pushable, compute effective scan cap (limit + offset)
+    const scan_cap: ?usize = if (can_push_limit)
+        (q.limit.? + (q.offset orelse 0))
+    else
+        null;
+
     // Collect matching nodes for each chain
     var chain_matches = try std.ArrayList(std.ArrayList(*graph_store.Node)).initCapacity(allocator, q.match.chains.len);
     defer {
@@ -646,6 +667,10 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 if (matches_pattern) {
                     try matches.append(allocator, node);
+                    // LIMIT pushdown: stop collecting once we have enough for single-chain queries
+                    if (scan_cap) |cap| {
+                        if (q.match.chains.len == 1 and matches.items.len >= cap) break;
+                    }
                 }
             }
         } else {
@@ -688,6 +713,10 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 if (matches_pattern) {
                     try matches.append(allocator, node);
+                    // LIMIT pushdown: stop full scan once we have enough for single-chain queries
+                    if (scan_cap) |cap| {
+                        if (q.match.chains.len == 1 and matches.items.len >= cap) break;
+                    }
                 }
             }
         }
@@ -731,8 +760,13 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
         q: ast.Query,
         param_names: []const []const u8,
         param_values: []const Value,
+        row_cap: ?usize, // LIMIT pushdown: max rows to collect
 
         fn generateCombinations(self: @This(), current_combo: *std.ArrayList(*graph_store.Node), chain_idx: usize) !void {
+            // LIMIT pushdown: stop recursion when enough rows collected
+            if (self.row_cap) |cap| {
+                if (self.rows.items.len >= cap) return;
+            }
             if (chain_idx >= self.chain_matches.items.len) {
                 // We have a complete combination, evaluate it
                 var env_names = try self.allocator.alloc([]const u8, current_combo.items.len);
@@ -809,6 +843,10 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
             // Try each node from current chain
             for (self.chain_matches.items[chain_idx].items) |node| {
+                // LIMIT pushdown: stop iterating when enough rows collected
+                if (self.row_cap) |cap| {
+                    if (self.rows.items.len >= cap) break;
+                }
                 try current_combo.append(self.allocator, node);
                 try self.generateCombinations(current_combo, chain_idx + 1);
                 _ = current_combo.pop();
@@ -825,6 +863,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
         .q = q,
         .param_names = param_names,
         .param_values = param_values,
+        .row_cap = scan_cap,
     };
 
     // GAP-0220 FIX: Use try for proper error propagation

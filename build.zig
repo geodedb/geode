@@ -799,6 +799,19 @@ pub fn build(b: *std.Build) void {
     const match_parity_step = b.step("test-match-parity", "Run MATCH staged parity golden tests");
     match_parity_step.dependOn(&run_match_parity_tests.step);
 
+    // LIMIT pushdown unit tests
+    const limit_pushdown_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_limit_pushdown.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    limit_pushdown_tests.root_module.addImport("geode", root_mod);
+    const run_limit_pushdown_tests = b.addRunArtifact(limit_pushdown_tests);
+    const limit_pushdown_step = b.step("test-limit-pushdown", "Run LIMIT pushdown optimization tests");
+    limit_pushdown_step.dependOn(&run_limit_pushdown_tests.step);
+
     // GAP-0401: MATCH refactor staged benchmark campaign
     const match_bench_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -918,6 +931,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_graph_persist_tests.step);
     test_step.dependOn(&run_binary_persist_tests.step);
     test_step.dependOn(&run_match_parity_tests.step);
+    test_step.dependOn(&run_limit_pushdown_tests.step);
     test_step.dependOn(&run_cli_transport_parity_tests.step);
     test_step.dependOn(&run_auth_security_tests.step);
     test_step.dependOn(&run_random_security_tests.step);

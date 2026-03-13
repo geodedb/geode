@@ -3212,6 +3212,8 @@ REQ-PERF-LABEL-INDEX-003,LabelBasedIndex,NodeLookup,IMPL,,,perf,2026-01-28,src/g
 REQ-PERF-LABEL-INDEX-004,LabelBasedIndex,MergeOptimization,IMPL,,,perf,2026-01-28,src/execution/crud_operations.zig
 REQ-PERF-LABEL-INDEX-005,LabelBasedIndex,UnitTests,TESTED,,,perf,2026-01-28,src/graph_store.zig
 REQ-PERF-LAZY-001,Performance,LazyEvaluation,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
+REQ-PERF-LIMIT-PUSHDOWN-001,LimitPushdown,MultiNodeMatch,IMPL,,,engine,2026-03-13,src/execution/match_operations.zig
+REQ-PERF-LIMIT-PUSHDOWN-001,LimitPushdown,UnitTest,TESTED,,,engine,2026-03-13,tests/test_limit_pushdown.zig
 REQ-PERF-LOG-GATE-001,HotPathLogGating,DebugLogControl,IMPL,,,perf,2026-01-27,src/cli/main.zig
 REQ-PERF-LRU-O1-001,O1LRUEviction,CacheEviction,TESTED,,,engine,2026-02-17,src/server/query_ast_cache.zig
 REQ-PERF-LRU-O1-002,O1LRUEviction,PlanCacheEviction,TESTED,,,engine,2026-02-17,src/server/query_plan_cache.zig
