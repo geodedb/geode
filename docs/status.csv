@@ -3136,6 +3136,8 @@ REQ-PARSER-PATTERN-001,ParserSupport,Patterns,TESTED,,,parser,2026-01-16,tests/t
 REQ-PARSER-PATTERN-001,ParserSupport,Patterns,TESTED,,,parser,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-PARSER-PATTERN-ADV-001,ParserSupport,AdvancedPatterns,TESTED,,,parser,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-PARSER-SUBQUERY-001,ParserSupport,SubqueryParsing,TESTED,,,parser,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
+REQ-PER-GRAPH-PERSIST-001,PerGraphFilePersistence,SaveGraphHandle,IMPL,,,storage,2026-03-16,src/graph_store.zig
+REQ-PER-GRAPH-PERSIST-002,PerGraphFilePersistence,LoadGraphHandle,IMPL,,,storage,2026-03-16,src/graph_store.zig
 REQ-PERF-001,Perf,Bench,BENCHED,,,perf,2026-01-17',tools/test_canary_lint.py
 REQ-PERF-001,Perf,Bench,BENCHED,,,perf,2026-01-17',tools/test_canary_lint.py
 REQ-PERF-001,Performance,QueryOptimization,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig

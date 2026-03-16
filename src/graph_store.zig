@@ -14,6 +14,13 @@ const crc = std.hash.crc;
 const PERSIST_VERSION: u32 = 3;
 const HEADER_LEN: usize = 60; // magic(8) + version(4) + reserved(4) + ids/counts(40) + checksum(4)
 
+// Per-graph file format constants
+const PER_GRAPH_MAGIC = "GEODGRF1";
+const PER_GRAPH_VERSION: u32 = 1;
+const PER_GRAPH_HEADER_LEN: usize = 36; // magic(8) + version(4) + reserved(4) + node_count(8) + edge_count(8) + CRC(4)
+
+const GraphHandle = @import("graph_handle.zig").GraphHandle;
+
 var last_checksum_error: bool = false;
 
 pub fn lastLoadHadChecksumError() bool {
@@ -3422,6 +3429,359 @@ pub const GraphStore = struct {
             }
         }
     }
+
+    // CANARY: REQ=REQ-PER-GRAPH-PERSIST-001; FEATURE="PerGraphFilePersistence"; ASPECT=SaveGraphHandle; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
+
+    /// Save a single GraphHandle's nodes and edges to a per-graph file.
+    /// The file format uses PER_GRAPH_MAGIC ("GEODGRF1") and excludes
+    /// graph_name fields (implicit from file identity).
+    pub fn saveGraphHandleToFile(self: *GraphStore, handle: *const GraphHandle, path: []const u8) !void {
+        const tmp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{path});
+        defer self.allocator.free(tmp_path);
+
+        const file = std.fs.cwd().createFile(tmp_path, .{}) catch |err| {
+            log.err("failed to create temp file for per-graph serialization", &.{
+                Attr.string("path", tmp_path),
+                Attr.string("error", @errorName(err)),
+            });
+            return err;
+        };
+        errdefer file.close();
+
+        var hasher = crc.Crc32.init();
+        var writer = file.deprecatedWriter();
+
+        // Write header placeholder (CRC patched after payload)
+        var header: [PER_GRAPH_HEADER_LEN]u8 = [_]u8{0} ** PER_GRAPH_HEADER_LEN;
+        @memcpy(header[0..8], PER_GRAPH_MAGIC);
+        std.mem.writeInt(u32, header[8..12], PER_GRAPH_VERSION, .little);
+        std.mem.writeInt(u32, header[12..16], 0, .little); // reserved
+        std.mem.writeInt(u64, header[16..24], handle.nodes.count(), .little);
+        std.mem.writeInt(u64, header[24..32], handle.edges.count(), .little);
+        // CRC placeholder at [32..36] — will be patched
+        try writer.writeAll(&header);
+
+        // Feed header[0..32] into CRC
+        hasher.update(header[0..32]);
+
+        // Write nodes (without graph_name)
+        var node_iter = handle.nodes.iterator();
+        while (node_iter.next()) |entry| {
+            const node = entry.value_ptr;
+
+            // Node ID
+            var id_buf: [8]u8 = undefined;
+            std.mem.writeInt(u64, &id_buf, node.id, .little);
+            hasher.update(&id_buf);
+            try writer.writeAll(&id_buf);
+
+            // Label count
+            var label_count_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &label_count_buf, @intCast(node.labels.len), .little);
+            hasher.update(&label_count_buf);
+            try writer.writeAll(&label_count_buf);
+
+            // Each label
+            for (node.labels) |label| {
+                if (label.len > std.math.maxInt(u32)) return error.LabelTooLong;
+                var len_buf: [4]u8 = undefined;
+                std.mem.writeInt(u32, &len_buf, @as(u32, @intCast(label.len)), .little);
+                hasher.update(&len_buf);
+                try writer.writeAll(&len_buf);
+                hasher.update(label);
+                try writer.writeAll(label);
+            }
+
+            // Property count
+            var prop_count_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &prop_count_buf, @intCast(node.properties.count()), .little);
+            hasher.update(&prop_count_buf);
+            try writer.writeAll(&prop_count_buf);
+
+            // Each property
+            var prop_iter = node.properties.iterator();
+            while (prop_iter.next()) |prop| {
+                try writePropertyToWriter(self, writer, &hasher, prop.key_ptr.*, prop.value_ptr.*);
+            }
+            // NOTE: no graph_name written — implicit from file
+        }
+
+        // Write edges (without graph_name)
+        var edge_iter = handle.edges.iterator();
+        while (edge_iter.next()) |entry| {
+            const edge = entry.value_ptr;
+
+            // Edge ID, from_id, to_id
+            var edge_buf: [24]u8 = undefined;
+            std.mem.writeInt(u64, edge_buf[0..8], edge.id, .little);
+            std.mem.writeInt(u64, edge_buf[8..16], edge.from_id, .little);
+            std.mem.writeInt(u64, edge_buf[16..24], edge.to_id, .little);
+            hasher.update(&edge_buf);
+            try writer.writeAll(&edge_buf);
+
+            // Label
+            var label_len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &label_len_buf, @intCast(edge.label.len), .little);
+            hasher.update(&label_len_buf);
+            try writer.writeAll(&label_len_buf);
+            hasher.update(edge.label);
+            try writer.writeAll(edge.label);
+
+            // Property count
+            var prop_count_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &prop_count_buf, @intCast(edge.properties.count()), .little);
+            hasher.update(&prop_count_buf);
+            try writer.writeAll(&prop_count_buf);
+
+            // Each property
+            var prop_iter = edge.properties.iterator();
+            while (prop_iter.next()) |prop| {
+                try writePropertyToWriter(self, writer, &hasher, prop.key_ptr.*, prop.value_ptr.*);
+            }
+            // NOTE: no graph_name written — implicit from file
+        }
+
+        // Patch CRC at offset 32
+        const checksum = hasher.final();
+        try file.seekTo(32);
+        var crc_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &crc_buf, checksum, .little);
+        try file.writeAll(&crc_buf);
+
+        // Close file before finalize (defer will also close, but close is idempotent on Zig File)
+        file.close();
+
+        // Finalize: TDE encrypt if needed, atomic rename
+        try finalizeTempFile(self.allocator, tmp_path, path);
+    }
+
+    // CANARY: REQ=REQ-PER-GRAPH-PERSIST-002; FEATURE="PerGraphFilePersistence"; ASPECT=LoadGraphHandle; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
+
+    /// Load per-graph file data into a GraphHandle.
+    /// If the file does not exist, returns silently (no error).
+    pub fn loadGraphHandleFromFile(self: *GraphStore, handle: *GraphHandle, path: []const u8) !void {
+        // Check if file exists
+        std.fs.cwd().access(path, .{}) catch |err| {
+            if (err == error.FileNotFound) return;
+            return err;
+        };
+
+        // Read and decrypt file using TDE
+        const data = try tde.readDecryptedFile(self.allocator, path);
+        defer self.allocator.free(data);
+
+        if (data.len < PER_GRAPH_HEADER_LEN) return error.InvalidHeader;
+
+        // Validate magic
+        if (!std.mem.eql(u8, data[0..8], PER_GRAPH_MAGIC)) return error.InvalidMagic;
+
+        // Validate version
+        const version = std.mem.readInt(u32, data[8..12], .little);
+        if (version != PER_GRAPH_VERSION) return error.UnsupportedVersion;
+
+        // Read counts from header
+        const node_count = std.mem.readInt(u64, data[16..24], .little);
+        const edge_count = std.mem.readInt(u64, data[24..32], .little);
+
+        // Verify CRC: covers header[0..32] + all payload bytes
+        const checksum_stored = std.mem.readInt(u32, data[32..36], .little);
+        var crc_hasher = crc.Crc32.init();
+        crc_hasher.update(data[0..32]);
+        crc_hasher.update(data[PER_GRAPH_HEADER_LEN..]);
+        const checksum_actual = crc_hasher.final();
+        if (checksum_actual != checksum_stored) return error.ChecksumMismatch;
+
+        // Parse payload
+        var stream = std.io.fixedBufferStream(data);
+        stream.pos = PER_GRAPH_HEADER_LEN;
+        var reader = stream.reader();
+
+        const allocator = self.allocator;
+
+        // Read nodes
+        var nodes_read: u64 = 0;
+        while (nodes_read < node_count) : (nodes_read += 1) {
+            // Read node ID
+            var id_buf: [8]u8 = undefined;
+            if ((try reader.readAll(&id_buf)) < 8) break;
+            const node_id = std.mem.readInt(u64, &id_buf, .little);
+
+            // Read label count
+            var label_count_buf: [4]u8 = undefined;
+            if ((try reader.readAll(&label_count_buf)) < 4) break;
+            const label_count = std.mem.readInt(u32, &label_count_buf, .little);
+
+            // Read labels
+            var labels = try allocator.alloc([]const u8, label_count);
+            for (0..label_count) |i| {
+                var len_buf: [4]u8 = undefined;
+                if ((try reader.readAll(&len_buf)) < 4) break;
+                const label_len = std.mem.readInt(u32, &len_buf, .little);
+                const label_data = try allocator.alloc(u8, label_len);
+                if ((try reader.readAll(label_data)) < label_len) break;
+                labels[i] = label_data;
+            }
+
+            // Read property count
+            var prop_count_buf: [4]u8 = undefined;
+            if ((try reader.readAll(&prop_count_buf)) < 4) break;
+            const prop_count = std.mem.readInt(u32, &prop_count_buf, .little);
+
+            // Create node with graph_name from handle
+            var node = Node{
+                .id = node_id,
+                .labels = labels,
+                .properties = std.StringHashMap(PropertyValue).init(allocator),
+                .graph_name = try allocator.dupe(u8, handle.name),
+            };
+
+            // Read properties
+            var props_read: u32 = 0;
+            while (props_read < prop_count) : (props_read += 1) {
+                var key_len_buf: [4]u8 = undefined;
+                if ((try reader.readAll(&key_len_buf)) < 4) break;
+                const key_len = std.mem.readInt(u32, &key_len_buf, .little);
+                const key_data = try allocator.alloc(u8, key_len);
+                if ((try reader.readAll(key_data)) < key_len) break;
+
+                var val_type_buf: [1]u8 = undefined;
+                if ((try reader.readAll(&val_type_buf)) < 1) break;
+                const val_type = val_type_buf[0];
+
+                const value = switch (val_type) {
+                    0 => blk: { // String
+                        var len_buf: [4]u8 = undefined;
+                        if ((try reader.readAll(&len_buf)) < 4) break :blk PropertyValue{ .String = "" };
+                        const str_len = std.mem.readInt(u32, &len_buf, .little);
+                        const str_data = try allocator.alloc(u8, str_len);
+                        if ((try reader.readAll(str_data)) < str_len) break :blk PropertyValue{ .String = "" };
+                        break :blk PropertyValue{ .String = str_data };
+                    },
+                    1 => blk: { // Int
+                        var int_buf: [8]u8 = undefined;
+                        if ((try reader.readAll(&int_buf)) < 8) break :blk PropertyValue{ .Int = 0 };
+                        break :blk PropertyValue{ .Int = std.mem.readInt(i64, &int_buf, .little) };
+                    },
+                    2 => blk: { // Float
+                        var float_buf: [8]u8 = undefined;
+                        if ((try reader.readAll(&float_buf)) < 8) break :blk PropertyValue{ .Float = 0.0 };
+                        const bits = std.mem.readInt(u64, &float_buf, .little);
+                        break :blk PropertyValue{ .Float = @bitCast(bits) };
+                    },
+                    3 => blk: { // Bool
+                        var bool_buf: [1]u8 = undefined;
+                        if ((try reader.readAll(&bool_buf)) < 1) break :blk PropertyValue{ .Bool = false };
+                        break :blk PropertyValue{ .Bool = bool_buf[0] != 0 };
+                    },
+                    4 => PropertyValue{ .Null = {} },
+                    5 => PropertyValue{ .ExtValue = try self.readExtValue(reader) },
+                    6 => blk: { // Decimal
+                        var buf: [17]u8 = undefined;
+                        if ((try reader.readAll(&buf)) < 17) break :blk PropertyValue{ .Decimal = .{ .coeff = 0, .scale = 0 } };
+                        const coeff = std.mem.readInt(i128, buf[0..16], .little);
+                        const scale = buf[16];
+                        break :blk PropertyValue{ .Decimal = .{ .coeff = coeff, .scale = scale } };
+                    },
+                    else => PropertyValue{ .String = "" },
+                };
+
+                try node.properties.put(key_data, value);
+            }
+
+            try handle.nodes.put(node_id, node);
+        }
+
+        // Read edges
+        var edges_read: u64 = 0;
+        while (edges_read < edge_count) : (edges_read += 1) {
+            var edge_buf: [24]u8 = undefined;
+            if ((try reader.readAll(&edge_buf)) < 24) break;
+            const edge_id = std.mem.readInt(u64, edge_buf[0..8], .little);
+            const from_id = std.mem.readInt(u64, edge_buf[8..16], .little);
+            const to_id = std.mem.readInt(u64, edge_buf[16..24], .little);
+
+            // Read label
+            var label_len_buf: [4]u8 = undefined;
+            if ((try reader.readAll(&label_len_buf)) < 4) break;
+            const label_len = std.mem.readInt(u32, &label_len_buf, .little);
+            const label_data = try allocator.alloc(u8, label_len);
+            if ((try reader.readAll(label_data)) < label_len) break;
+
+            // Read property count
+            var prop_count_buf: [4]u8 = undefined;
+            if ((try reader.readAll(&prop_count_buf)) < 4) break;
+            const prop_count = std.mem.readInt(u32, &prop_count_buf, .little);
+
+            var properties = std.StringHashMap(PropertyValue).init(allocator);
+
+            // Read each property
+            var props_read: u32 = 0;
+            while (props_read < prop_count) : (props_read += 1) {
+                var key_len_buf: [4]u8 = undefined;
+                if ((try reader.readAll(&key_len_buf)) < 4) break;
+                const key_len = std.mem.readInt(u32, &key_len_buf, .little);
+                const key_data = try allocator.alloc(u8, key_len);
+                if ((try reader.readAll(key_data)) < key_len) break;
+
+                var val_type_buf: [1]u8 = undefined;
+                if ((try reader.readAll(&val_type_buf)) < 1) break;
+                const val_type = val_type_buf[0];
+
+                const value = switch (val_type) {
+                    0 => blk: { // String
+                        var len_buf: [4]u8 = undefined;
+                        if ((try reader.readAll(&len_buf)) < 4) break :blk PropertyValue{ .String = "" };
+                        const str_len = std.mem.readInt(u32, &len_buf, .little);
+                        const str_data = try allocator.alloc(u8, str_len);
+                        if ((try reader.readAll(str_data)) < str_len) break :blk PropertyValue{ .String = "" };
+                        break :blk PropertyValue{ .String = str_data };
+                    },
+                    1 => blk: { // Int
+                        var int_buf: [8]u8 = undefined;
+                        if ((try reader.readAll(&int_buf)) < 8) break :blk PropertyValue{ .Int = 0 };
+                        break :blk PropertyValue{ .Int = std.mem.readInt(i64, &int_buf, .little) };
+                    },
+                    2 => blk: { // Float
+                        var float_buf: [8]u8 = undefined;
+                        if ((try reader.readAll(&float_buf)) < 8) break :blk PropertyValue{ .Float = 0.0 };
+                        const bits = std.mem.readInt(u64, &float_buf, .little);
+                        break :blk PropertyValue{ .Float = @bitCast(bits) };
+                    },
+                    3 => blk: { // Bool
+                        var bool_buf: [1]u8 = undefined;
+                        if ((try reader.readAll(&bool_buf)) < 1) break :blk PropertyValue{ .Bool = false };
+                        break :blk PropertyValue{ .Bool = bool_buf[0] != 0 };
+                    },
+                    4 => PropertyValue{ .Null = {} },
+                    5 => PropertyValue{ .ExtValue = try self.readExtValue(reader) },
+                    6 => blk: { // Decimal
+                        var buf: [17]u8 = undefined;
+                        if ((try reader.readAll(&buf)) < 17) break :blk PropertyValue{ .Decimal = .{ .coeff = 0, .scale = 0 } };
+                        const coeff = std.mem.readInt(i128, buf[0..16], .little);
+                        const scale = buf[16];
+                        break :blk PropertyValue{ .Decimal = .{ .coeff = coeff, .scale = scale } };
+                    },
+                    else => PropertyValue{ .String = "" },
+                };
+
+                try properties.put(key_data, value);
+            }
+
+            const edge = Edge{
+                .id = edge_id,
+                .from_id = from_id,
+                .to_id = to_id,
+                .label = label_data,
+                .properties = properties,
+                .graph_name = try allocator.dupe(u8, handle.name),
+            };
+
+            try handle.edges.put(edge_id, edge);
+        }
+
+        // Rebuild indexes from loaded data
+        try handle.rebuildIndexes();
+    }
 };
 
 // Global instance that persists across queries
@@ -4093,4 +4453,120 @@ test "streaming serialization large graph bounded memory" {
     try store2.loadFromFile();
     try std.testing.expectEqual(@as(usize, 1000), store2.nodes.count());
     try std.testing.expectEqual(@as(usize, 999), store2.edges.count());
+}
+
+test "per-graph file round trip" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    const test_uuid = [_]u8{5} ** 16;
+    var handle = try GraphHandle.init(allocator, "test_graph", test_uuid);
+    defer handle.deinit();
+
+    // Create a node with a label and property
+    const label = try allocator.dupe(u8, "Person");
+    var labels = try allocator.alloc([]const u8, 1);
+    labels[0] = label;
+    var props = std.StringHashMap(PropertyValue).init(allocator);
+    try props.put(try allocator.dupe(u8, "name"), PropertyValue{ .String = try allocator.dupe(u8, "Alice") });
+    try handle.nodes.put(1, Node{
+        .id = 1,
+        .labels = labels,
+        .properties = props,
+        .graph_name = try allocator.dupe(u8, "test_graph"),
+    });
+
+    // Create an edge
+    const edge_label = try allocator.dupe(u8, "KNOWS");
+    var edge_props = std.StringHashMap(PropertyValue).init(allocator);
+    try edge_props.put(try allocator.dupe(u8, "since"), PropertyValue{ .Int = 2020 });
+    try handle.edges.put(100, Edge{
+        .id = 100,
+        .from_id = 1,
+        .to_id = 1,
+        .label = edge_label,
+        .properties = edge_props,
+        .graph_name = try allocator.dupe(u8, "test_graph"),
+    });
+
+    // Save to a temp file
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+    const path = try std.fmt.allocPrint(allocator, "{s}/test_per_graph.dat", .{dir_path});
+    defer allocator.free(path);
+
+    try store.saveGraphHandleToFile(handle, path);
+
+    // Load into fresh handle
+    var handle2 = try GraphHandle.init(allocator, "test_graph", test_uuid);
+    defer handle2.deinit();
+    try store.loadGraphHandleFromFile(handle2, path);
+
+    // Verify nodes
+    try std.testing.expectEqual(@as(u64, 1), handle2.nodeCount());
+    const loaded_node = handle2.nodes.get(1).?;
+    try std.testing.expectEqualStrings("test_graph", loaded_node.graph_name);
+    try std.testing.expectEqual(@as(usize, 1), loaded_node.labels.len);
+    try std.testing.expectEqualStrings("Person", loaded_node.labels[0]);
+    const name_val = loaded_node.properties.get("name").?;
+    try std.testing.expectEqualStrings("Alice", name_val.String);
+
+    // Verify edges
+    try std.testing.expectEqual(@as(u64, 1), handle2.edgeCount());
+    const loaded_edge = handle2.edges.get(100).?;
+    try std.testing.expectEqualStrings("KNOWS", loaded_edge.label);
+    try std.testing.expectEqualStrings("test_graph", loaded_edge.graph_name);
+    const since_val = loaded_edge.properties.get("since").?;
+    try std.testing.expectEqual(@as(i64, 2020), since_val.Int);
+
+    // Verify indexes were rebuilt
+    const person_nodes = handle2.getNodesByLabel("Person").?;
+    try std.testing.expectEqual(@as(usize, 1), person_nodes.len);
+    try std.testing.expectEqual(@as(u64, 1), person_nodes[0]);
+}
+
+test "per-graph file load missing file returns silently" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    const test_uuid = [_]u8{0} ** 16;
+    var handle = try GraphHandle.init(allocator, "empty", test_uuid);
+    defer handle.deinit();
+
+    // Loading a non-existent file should not error
+    try store.loadGraphHandleFromFile(handle, "/tmp/nonexistent_geode_per_graph_test.dat");
+    try std.testing.expectEqual(@as(u64, 0), handle.nodeCount());
+    try std.testing.expectEqual(@as(u64, 0), handle.edgeCount());
+}
+
+test "per-graph file empty graph round trip" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    const test_uuid = [_]u8{1} ** 16;
+    var handle = try GraphHandle.init(allocator, "empty_graph", test_uuid);
+    defer handle.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+    const path = try std.fmt.allocPrint(allocator, "{s}/empty_graph.dat", .{dir_path});
+    defer allocator.free(path);
+
+    // Save empty graph
+    try store.saveGraphHandleToFile(handle, path);
+
+    // Load into fresh handle
+    var handle2 = try GraphHandle.init(allocator, "empty_graph", test_uuid);
+    defer handle2.deinit();
+    try store.loadGraphHandleFromFile(handle2, path);
+
+    try std.testing.expectEqual(@as(u64, 0), handle2.nodeCount());
+    try std.testing.expectEqual(@as(u64, 0), handle2.edgeCount());
 }
