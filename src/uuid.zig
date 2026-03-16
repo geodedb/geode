@@ -178,7 +178,7 @@ test "UUIDv7 string conversion" {
 test "UUIDv7 ordering" {
     // Generate UUIDs with slight delay to ensure different timestamps
     const uuid1 = UuidV7.new();
-    std.time.sleep(1_000_000); // 1ms
+    std.Thread.sleep(1_000_000); // 1ms
     const uuid2 = UuidV7.new();
 
     // uuid2 should be greater than uuid1 due to later timestamp
