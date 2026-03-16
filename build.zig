@@ -641,6 +641,16 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("fle_blind_index", fle_blind_index_mod);
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
 
+    // Per-graph data container (graph_handle) unit tests
+    const graph_handle_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/graph_handle.zig"), .target = target, .optimize = optimize }) });
+    graph_handle_unit_tests.root_module.addImport("logging", logging_mod);
+    graph_handle_unit_tests.root_module.addImport("json", json_mod);
+    graph_handle_unit_tests.root_module.addImport("fle_aead", fle_aead_mod);
+    graph_handle_unit_tests.root_module.addImport("fle_key_manager", fle_key_manager_mod);
+    graph_handle_unit_tests.root_module.addImport("fle_key_types", fle_key_types_mod);
+    graph_handle_unit_tests.root_module.addImport("fle_blind_index", fle_blind_index_mod);
+    const run_graph_handle_unit_tests = b.addRunArtifact(graph_handle_unit_tests);
+
     const match_call_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_match_call_integration.zig"), .target = target, .optimize = optimize }) });
     match_call_tests.root_module.addImport("geode", root_mod);
     match_call_tests.root_module.addImport("json", json_mod);
@@ -934,6 +944,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_string_func_tests.step);
     test_step.dependOn(&run_graph_algo_tests.step);
     test_step.dependOn(&run_graph_store_unit_tests.step);
+    test_step.dependOn(&run_graph_handle_unit_tests.step);
     test_step.dependOn(&run_match_call_tests.step);
     test_step.dependOn(&run_multihop_tests.step);
     test_step.dependOn(&run_init_ctx_tests.step);
