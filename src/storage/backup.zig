@@ -169,7 +169,10 @@ pub const BackupManager = struct {
 
         // Persist GraphStore and read the snapshot payload.
         try self.store.saveToFile();
-        const payload = try readGraphStorePayload(self.allocator);
+        const payload = if (self.store.use_per_graph_storage)
+            try readPerGraphStoragePayload(self.allocator, self.store.data_dir)
+        else
+            try readGraphStorePayload(self.allocator);
         defer self.allocator.free(payload);
 
         const compressed = try compressData(payload, self.config.compression, self.allocator);
@@ -277,7 +280,10 @@ pub const BackupManager = struct {
         const restore_path = try graph_store.getPersistenceFilePath(self.allocator);
         defer self.allocator.free(restore_path);
 
-        {
+        // Check if this is a per-graph archive or legacy monolithic format.
+        if (decompressed.len >= 8 and std.mem.eql(u8, decompressed[0..8], "GEODBAK1")) {
+            try restorePerGraphPayload(self.allocator, restore_dir, decompressed);
+        } else {
             const out = try std.fs.cwd().createFile(restore_path, .{});
             defer out.close();
             try out.writeAll(decompressed);
@@ -391,6 +397,137 @@ fn readGraphStorePayload(allocator: std.mem.Allocator) ![]u8 {
     const stat = try file.stat();
     const size: usize = @intCast(stat.size);
     return try file.readToEndAlloc(allocator, size);
+}
+
+/// Append a single file entry (name + data) into the archive buffer.
+fn appendFileEntry(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, file_path: []const u8, archive_name: []const u8) !void {
+    const file = try std.fs.cwd().openFile(file_path, .{ .mode = .read_only });
+    defer file.close();
+    const stat = try file.stat();
+    const data = try file.readToEndAlloc(allocator, @intCast(stat.size));
+    defer allocator.free(data);
+
+    // name_len (u32) + name + data_len (u64) + data
+    try buffer.appendSlice(allocator, &std.mem.toBytes(@as(u32, @intCast(archive_name.len))));
+    try buffer.appendSlice(allocator, archive_name);
+    try buffer.appendSlice(allocator, &std.mem.toBytes(@as(u64, @intCast(data.len))));
+    try buffer.appendSlice(allocator, data);
+}
+
+/// Read all per-graph storage files (graph_registry.dat + graphs/*.dat) into
+/// a simple archive payload:
+///   magic "GEODBAK1" (8 bytes) | version u32 | file_count u32 |
+///   (name_len u32 | name [name_len]u8 | data_len u64 | data [data_len]u8)*
+// CANARY: REQ=REQ-BACKUP-PER-GRAPH-001; FEATURE="PerGraphBackup"; ASPECT=Storage; STATUS=TESTED; OWNER=storage; UPDATED=2026-03-16
+fn readPerGraphStoragePayload(allocator: std.mem.Allocator, data_dir: []const u8) ![]u8 {
+    var buffer: std.ArrayList(u8) = .{};
+    errdefer buffer.deinit(allocator);
+
+    // Archive header: magic + version placeholder + file_count placeholder.
+    // We will overwrite file_count once we know it.
+    try buffer.appendSlice(allocator, "GEODBAK1");
+    try buffer.appendSlice(allocator, &std.mem.toBytes(@as(u32, 1))); // version = 1
+
+    // Reserve space for file_count; we'll patch it after collecting files.
+    const file_count_offset = buffer.items.len;
+    try buffer.appendSlice(allocator, &std.mem.toBytes(@as(u32, 0)));
+
+    var file_count: u32 = 0;
+
+    // Include graph_registry.dat if it exists.
+    const reg_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{data_dir});
+    defer allocator.free(reg_path);
+    const has_registry = if (std.fs.cwd().access(reg_path, .{})) |_| true else |_| false;
+    if (has_registry) {
+        try appendFileEntry(&buffer, allocator, reg_path, "graph_registry.dat");
+        file_count += 1;
+    }
+
+    // Include all *.dat files from graphs/ subdirectory.
+    const graphs_dir_path = try std.fmt.allocPrint(allocator, "{s}/graphs", .{data_dir});
+    defer allocator.free(graphs_dir_path);
+
+    var graph_names: std.ArrayList([]u8) = .{};
+    defer {
+        for (graph_names.items) |name| allocator.free(name);
+        graph_names.deinit(allocator);
+    }
+
+    if (std.fs.cwd().openDir(graphs_dir_path, .{ .iterate = true })) |graphs_dir| {
+        var dir = graphs_dir;
+        defer dir.close();
+        var iter = dir.iterate();
+        while (try iter.next()) |entry| {
+            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".dat")) {
+                try graph_names.append(allocator, try allocator.dupe(u8, entry.name));
+            }
+        }
+    } else |_| {}
+
+    for (graph_names.items) |name| {
+        const full_path = try std.fmt.allocPrint(allocator, "{s}/graphs/{s}", .{ data_dir, name });
+        defer allocator.free(full_path);
+        const archive_name = try std.fmt.allocPrint(allocator, "graphs/{s}", .{name});
+        defer allocator.free(archive_name);
+        try appendFileEntry(&buffer, allocator, full_path, archive_name);
+        file_count += 1;
+    }
+
+    // Patch file_count into the header.
+    const count_bytes = std.mem.toBytes(file_count);
+    @memcpy(buffer.items[file_count_offset .. file_count_offset + 4], &count_bytes);
+
+    return buffer.toOwnedSlice(allocator);
+}
+
+/// Restore a per-graph archive payload into restore_dir, recreating
+/// graph_registry.dat and graphs/*.dat files.
+// CANARY: REQ=REQ-BACKUP-PER-GRAPH-002; FEATURE="PerGraphRestore"; ASPECT=Storage; STATUS=TESTED; OWNER=storage; UPDATED=2026-03-16
+fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8, payload: []const u8) !void {
+    if (payload.len < 16) return error.InvalidBackupFile;
+
+    var offset: usize = 0;
+
+    // Validate magic.
+    if (!std.mem.eql(u8, payload[0..8], "GEODBAK1")) return error.InvalidBackupFile;
+    offset += 8;
+
+    // version (u32) — currently ignored.
+    offset += 4;
+
+    const file_count = std.mem.readInt(u32, payload[offset..][0..4], .little);
+    offset += 4;
+
+    for (0..file_count) |_| {
+        if (offset + 4 > payload.len) return error.InvalidBackupFile;
+        const name_len = std.mem.readInt(u32, payload[offset..][0..4], .little);
+        offset += 4;
+
+        if (offset + name_len > payload.len) return error.InvalidBackupFile;
+        const name = payload[offset .. offset + name_len];
+        offset += name_len;
+
+        if (offset + 8 > payload.len) return error.InvalidBackupFile;
+        const data_len = std.mem.readInt(u64, payload[offset..][0..8], .little);
+        offset += 8;
+
+        const data_size: usize = @intCast(data_len);
+        if (offset + data_size > payload.len) return error.InvalidBackupFile;
+        const data = payload[offset .. offset + data_size];
+        offset += data_size;
+
+        // Build the destination path and ensure parent directories exist.
+        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ restore_dir, name });
+        defer allocator.free(full_path);
+
+        if (std.mem.lastIndexOfScalar(u8, full_path, '/')) |last_slash| {
+            std.fs.cwd().makePath(full_path[0..last_slash]) catch {};
+        }
+
+        const out = try std.fs.cwd().createFile(full_path, .{});
+        defer out.close();
+        try out.writeAll(data);
+    }
 }
 
 fn compressData(data: []const u8, compression: CompressionType, allocator: std.mem.Allocator) ![]u8 {
