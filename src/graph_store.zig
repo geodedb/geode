@@ -616,6 +616,27 @@ pub const GraphStore = struct {
         if (self.graphs.contains(graph_name)) return;
         const name_copy = try self.allocator.dupe(u8, graph_name);
         try self.graphs.put(name_copy, {});
+        // Per-graph storage: also create a GraphHandle if one doesn't exist yet.
+        // This is critical for WAL replay where createNodeWithId calls ensureGraph
+        // for graphs that weren't in the registry (created after last migration).
+        if (self.use_per_graph_storage) {
+            if (self.getHandle(graph_name) == null) {
+                const graph_uuid = uuid.UuidV7.new().bytes;
+                const handle = GraphHandle.init(self.allocator, graph_name, graph_uuid) catch return;
+                const handle_name = self.allocator.dupe(u8, graph_name) catch {
+                    handle.deinit();
+                    return;
+                };
+                self.graph_handles_mutex.lock();
+                self.graph_handles.put(handle_name, handle) catch {
+                    self.graph_handles_mutex.unlock();
+                    handle.deinit();
+                    self.allocator.free(handle_name);
+                    return;
+                };
+                self.graph_handles_mutex.unlock();
+            }
+        }
     }
 
     /// Look up a per-graph handle by name. Returns null if per-graph storage
@@ -624,6 +645,25 @@ pub const GraphStore = struct {
         self.graph_handles_mutex.lock();
         defer self.graph_handles_mutex.unlock();
         return self.graph_handles.get(graph_name);
+    }
+
+    /// Sync a property value into a target property map (used for per-graph handle mirroring).
+    /// Silently ignores allocation failures since the flat map is the source of truth.
+    fn syncPropertyToMap(self: *GraphStore, target: *std.StringHashMap(PropertyValue), key: []const u8, value: PropertyValue) void {
+        const value_copy = copyPropertyValue(self, value) catch return;
+        const result = target.getOrPut(key) catch {
+            freePropertyValue(self, value_copy);
+            return;
+        };
+        if (!result.found_existing) {
+            result.key_ptr.* = self.allocator.dupe(u8, key) catch {
+                freePropertyValue(self, value_copy);
+                return;
+            };
+        } else {
+            freePropertyValue(self, result.value_ptr.*);
+        }
+        result.value_ptr.* = value_copy;
     }
 
     pub fn graphExists(self: *const GraphStore, graph_name: []const u8) bool {
@@ -1028,9 +1068,12 @@ pub const GraphStore = struct {
             }
             result.value_ptr.* = value_copy;
 
-            // Per-graph storage: mark the corresponding GraphHandle dirty
+            // Per-graph storage: also set the property on the handle's copy of the node
             if (self.use_per_graph_storage) {
                 if (self.getHandle(node.graph_name)) |handle| {
+                    if (handle.nodes.getPtr(node_id)) |handle_node| {
+                        self.syncPropertyToMap(&handle_node.properties, key, value);
+                    }
                     handle.markDirty();
                 }
             }
@@ -1094,9 +1137,15 @@ pub const GraphStore = struct {
                 self.allocator.free(kv.key);
                 freePropertyValue(self, kv.value);
             }
-            // Per-graph storage: mark the corresponding GraphHandle dirty
+            // Per-graph storage: also remove from handle's copy
             if (self.use_per_graph_storage) {
                 if (self.getHandle(node.graph_name)) |handle| {
+                    if (handle.nodes.getPtr(node_id)) |handle_node| {
+                        if (handle_node.properties.fetchRemove(key)) |hkv| {
+                            self.allocator.free(hkv.key);
+                            freePropertyValue(self, hkv.value);
+                        }
+                    }
                     handle.markDirty();
                 }
             }
@@ -1923,9 +1972,12 @@ pub const GraphStore = struct {
             }
             result.value_ptr.* = value_copy;
 
-            // Per-graph storage: mark the corresponding GraphHandle dirty
+            // Per-graph storage: also set the property on the handle's copy of the edge
             if (self.use_per_graph_storage) {
                 if (self.getHandle(edge.graph_name)) |handle| {
+                    if (handle.edges.getPtr(edge_id)) |handle_edge| {
+                        self.syncPropertyToMap(&handle_edge.properties, key, value);
+                    }
                     handle.markDirty();
                 }
             }
@@ -1944,9 +1996,15 @@ pub const GraphStore = struct {
                 self.allocator.free(kv.key);
                 freePropertyValue(self, kv.value);
             }
-            // Per-graph storage: mark the corresponding GraphHandle dirty
+            // Per-graph storage: also remove from handle's copy
             if (self.use_per_graph_storage) {
                 if (self.getHandle(edge.graph_name)) |handle| {
+                    if (handle.edges.getPtr(edge_id)) |handle_edge| {
+                        if (handle_edge.properties.fetchRemove(key)) |hkv| {
+                            self.allocator.free(hkv.key);
+                            freePropertyValue(self, hkv.value);
+                        }
+                    }
                     handle.markDirty();
                 }
             }
