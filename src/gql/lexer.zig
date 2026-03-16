@@ -796,3 +796,31 @@ test "lexer - scientific notation float literals" {
     try std.testing.expectEqual(t.TokenKind.float_lit, tok4.kind);
     try std.testing.expectEqualStrings("4.85e-33", tok4.lexeme);
 }
+
+test "lexer - != operator tokenized as ne" {
+    var lx = Lexer{ .src = "1 != 2" };
+    const tok1 = lx.next();
+    try std.testing.expectEqual(t.TokenKind.int_lit, tok1.kind);
+    const tok2 = lx.next();
+    try std.testing.expectEqual(t.TokenKind.ne, tok2.kind);
+    try std.testing.expectEqualStrings("!=", tok2.lexeme);
+    const tok3 = lx.next();
+    try std.testing.expectEqual(t.TokenKind.int_lit, tok3.kind);
+}
+
+test "lexer - != in WHERE clause context" {
+    var lx = Lexer{ .src = "WHERE n.x != 'hello'" };
+    const tok1 = lx.next();
+    try std.testing.expectEqual(t.TokenKind.WHERE, tok1.kind);
+    const tok2 = lx.next(); // n
+    try std.testing.expectEqual(t.TokenKind.identifier, tok2.kind);
+    const tok3 = lx.next(); // .
+    try std.testing.expectEqual(t.TokenKind.dot, tok3.kind);
+    const tok4 = lx.next(); // x
+    try std.testing.expectEqual(t.TokenKind.identifier, tok4.kind);
+    const tok5 = lx.next(); // !=
+    try std.testing.expectEqual(t.TokenKind.ne, tok5.kind);
+    try std.testing.expectEqualStrings("!=", tok5.lexeme);
+    const tok6 = lx.next(); // 'hello'
+    try std.testing.expectEqual(t.TokenKind.string_lit, tok6.kind);
+}

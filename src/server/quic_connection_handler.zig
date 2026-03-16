@@ -748,6 +748,27 @@ fn handleAlterUserSetPassword(
         }
     }
 
+    // Validate password against SecurityManager policy BEFORE updating the
+    // in-memory store.  Previously, user_mgmt accepted any password (no policy
+    // validation), then sm.updatePassword silently failed when the password
+    // didn't meet policy — so the change never persisted and reverted on restart.
+    if (state.security_manager) |sm| {
+        sm.validatePassword(new_password) catch |err| {
+            const msg = switch (err) {
+                error.PasswordTooShort => "Password too short (minimum 20 characters)",
+                error.PasswordTooLong => "Password too long (maximum 256 characters)",
+                error.PasswordMissingUppercase => "Password must contain at least one uppercase letter",
+                error.PasswordMissingLowercase => "Password must contain at least one lowercase letter",
+                error.PasswordMissingDigit => "Password must contain at least one digit",
+                error.PasswordContainsSpaces => "Password must not contain spaces",
+                error.PasswordNotPassphrase => "Password must be a passphrase with at least 3 words",
+                else => "Password does not meet security policy requirements",
+            };
+            try sendExecuteError(gpa, stream, "28P01", msg, &.{}, &.{});
+            return;
+        };
+    }
+
     user_mgmt.updateUserPassword(gpa, username, new_password) catch |err| {
         const msg = switch (err) {
             error.PasswordReuse => "New password must not match the current password",

@@ -6574,3 +6574,42 @@ pub const Parser = struct {
         } };
     }
 };
+
+test "parser - != operator in RETURN expression" {
+    const allocator = std.testing.allocator;
+    var arena = try std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var lx = Lexer{ .src = "RETURN 1 != 2 AS x" };
+    var parser = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const program = parser.parseProgram() catch |err| {
+        std.debug.print("Parse error: {s}\n", .{@errorName(err)});
+        return err;
+    };
+    try std.testing.expect(program.statements.len > 0);
+}
+
+test "parser - != operator in WHERE clause" {
+    const allocator = std.testing.allocator;
+    var arena = try std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var lx = Lexer{ .src = "MATCH (n:Group) WHERE n.trust_level != 'unknown' RETURN n" };
+    var parser = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const program = parser.parseProgram() catch |err| {
+        std.debug.print("Parse error: {s}\n", .{@errorName(err)});
+        return err;
+    };
+    try std.testing.expect(program.statements.len > 0);
+}
+
+test "parser - <> operator works" {
+    const allocator = std.testing.allocator;
+    var arena = try std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var lx = Lexer{ .src = "RETURN 1 <> 2 AS x" };
+    var parser = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const program = parser.parseProgram() catch |err| {
+        std.debug.print("Parse error: {s}\n", .{@errorName(err)});
+        return err;
+    };
+    try std.testing.expect(program.statements.len > 0);
+}

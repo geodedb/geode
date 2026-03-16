@@ -653,10 +653,22 @@ pub const QuicStream = struct {
 
     pub fn writeAll(self: *QuicStream, data: []const u8) !void {
         var written: usize = 0;
+        var blocked_retries: usize = 0;
+        const max_blocked_retries: usize = 2000; // ~10s at 5ms sleep
         while (written < data.len) {
-            const n = try self.write(data[written..]);
+            const n = self.write(data[written..]) catch |err| {
+                if (err == error.FlowControlBlocked) {
+                    blocked_retries += 1;
+                    if (blocked_retries > max_blocked_retries) return QuicError.WriteError;
+                    // Sleep to allow poll loop to process incoming ACKs/MAX_STREAM_DATA
+                    std.Thread.sleep(5 * std.time.ns_per_ms);
+                    continue;
+                }
+                return err;
+            };
             if (n == 0) return QuicError.WriteError;
             written += n;
+            blocked_retries = 0;
         }
     }
 
@@ -988,10 +1000,23 @@ pub const QuicClientStream = struct {
 
     pub fn writeAll(self: *QuicClientStream, data: []const u8) !void {
         var written: usize = 0;
+        var blocked_retries: usize = 0;
+        const max_blocked_retries: usize = 2000; // ~10s at 5ms sleep
         while (written < data.len) {
-            const n = try self.write(data[written..]);
+            const n = self.write(data[written..]) catch |err| {
+                if (err == error.FlowControlBlocked) {
+                    blocked_retries += 1;
+                    if (blocked_retries > max_blocked_retries) return QuicError.WriteError;
+                    // Poll to process incoming frames, then retry
+                    api.poll(self.endpoint, 5) catch {};
+                    std.Thread.sleep(5 * std.time.ns_per_ms);
+                    continue;
+                }
+                return err;
+            };
             if (n == 0) return QuicError.WriteError;
             written += n;
+            blocked_retries = 0;
         }
     }
 
