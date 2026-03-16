@@ -549,3 +549,92 @@ test "GraphHandle rebuildIndexes builds adjacency lists" {
     try std.testing.expectEqual(@as(u64, 2), handle.nodeCount());
     try std.testing.expectEqual(@as(u64, 1), handle.edgeCount());
 }
+
+test "GraphHandle addNode sets dirty flag" {
+    const allocator = std.testing.allocator;
+    const test_uuid = [_]u8{0} ** 16;
+    const handle = try GraphHandle.init(allocator, "dirty_test", test_uuid);
+    defer handle.deinit();
+
+    try std.testing.expect(!handle.dirty);
+
+    // Build a minimal node
+    const labels = try allocator.alloc([]const u8, 1);
+    labels[0] = try allocator.dupe(u8, "TestLabel");
+    var props = std.StringHashMap(PropertyValue).init(allocator);
+    const key = try allocator.dupe(u8, "k");
+    try props.put(key, PropertyValue{ .String = try allocator.dupe(u8, "v") });
+    const gn = try allocator.dupe(u8, "dirty_test");
+
+    var node = Node{ .id = 1, .labels = labels, .properties = props, .graph_name = gn };
+    try handle.addNode(&node);
+
+    try std.testing.expect(handle.dirty);
+    try std.testing.expectEqual(@as(u64, 1), handle.nodeCount());
+
+    // Free the source node data (handle made copies)
+    allocator.free(gn);
+    allocator.free(key);
+    allocator.free(labels[0]);
+    allocator.free(labels);
+    var it = props.iterator();
+    while (it.next()) |e| freeVal(allocator, e.value_ptr.*);
+    props.deinit();
+}
+
+test "GraphHandle removeNode sets dirty flag" {
+    const allocator = std.testing.allocator;
+    const test_uuid = [_]u8{0} ** 16;
+    const handle = try GraphHandle.init(allocator, "remove_test", test_uuid);
+    defer handle.deinit();
+
+    // Add a node via addNode
+    const labels = try allocator.alloc([]const u8, 0);
+    var props = std.StringHashMap(PropertyValue).init(allocator);
+    const gn = try allocator.dupe(u8, "remove_test");
+    var node = Node{ .id = 42, .labels = labels, .properties = props, .graph_name = gn };
+    try handle.addNode(&node);
+    allocator.free(gn);
+    allocator.free(labels);
+    props.deinit();
+
+    // Clear dirty to test that removeNode sets it again
+    handle.dirty = false;
+
+    handle.removeNode(42);
+    try std.testing.expect(handle.dirty);
+    try std.testing.expectEqual(@as(u64, 0), handle.nodeCount());
+}
+
+test "GraphHandle addEdge and removeEdge track dirty" {
+    const allocator = std.testing.allocator;
+    const test_uuid = [_]u8{0} ** 16;
+    const handle = try GraphHandle.init(allocator, "edge_dirty", test_uuid);
+    defer handle.deinit();
+
+    try std.testing.expect(!handle.dirty);
+
+    const label = try allocator.dupe(u8, "REL");
+    const gn = try allocator.dupe(u8, "edge_dirty");
+    var props = std.StringHashMap(PropertyValue).init(allocator);
+    var edge = Edge{ .id = 1, .from_id = 10, .to_id = 20, .label = label, .properties = props, .graph_name = gn };
+    try handle.addEdge(&edge);
+    allocator.free(label);
+    allocator.free(gn);
+    props.deinit();
+
+    try std.testing.expect(handle.dirty);
+    try std.testing.expectEqual(@as(u64, 1), handle.edgeCount());
+
+    handle.dirty = false;
+    handle.removeEdge(1);
+    try std.testing.expect(handle.dirty);
+    try std.testing.expectEqual(@as(u64, 0), handle.edgeCount());
+}
+
+fn freeVal(allocator: std.mem.Allocator, val: PropertyValue) void {
+    switch (val) {
+        .String => |s| allocator.free(s),
+        else => {},
+    }
+}

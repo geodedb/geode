@@ -16,8 +16,9 @@ const HEADER_LEN: usize = 60; // magic(8) + version(4) + reserved(4) + ids/count
 
 // Per-graph file format constants
 const PER_GRAPH_MAGIC = "GEODGRF1";
-const PER_GRAPH_VERSION: u32 = 1;
-const PER_GRAPH_HEADER_LEN: usize = 36; // magic(8) + version(4) + reserved(4) + node_count(8) + edge_count(8) + CRC(4)
+const PER_GRAPH_VERSION: u32 = 2;
+// Header v2: magic(8) + version(4) + graph_uuid(16) + node_count(8) + edge_count(8) + CRC(4) = 48
+const PER_GRAPH_HEADER_LEN: usize = 48;
 
 const GraphHandle = @import("graph_handle.zig").GraphHandle;
 
@@ -2772,6 +2773,8 @@ pub const GraphStore = struct {
 
     // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-003; FEATURE="PerGraphStorage"; ASPECT=SavePerGraph; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
     /// Save all dirty GraphHandles to individual files and write the graph registry.
+    /// Returns error if ANY per-graph save fails — this prevents WAL truncation from
+    /// discarding records for graphs that were not successfully checkpointed.
     pub fn savePerGraphFiles(self: *GraphStore) !void {
         const GraphRegistry = @import("graph_registry.zig").GraphRegistry;
         const UuidV7 = @import("uuid.zig").UuidV7;
@@ -2789,6 +2792,8 @@ pub const GraphStore = struct {
         self.graph_handles_mutex.lock();
         defer self.graph_handles_mutex.unlock();
 
+        var save_failed = false;
+
         var it = self.graph_handles.iterator();
         while (it.next()) |entry| {
             const handle = entry.value_ptr.*;
@@ -2805,21 +2810,26 @@ pub const GraphStore = struct {
             if (handle.dirty) {
                 var uuid_str_buf: [36]u8 = undefined;
                 const uuid_v7 = UuidV7.fromBytes(handle.uuid);
-                const uuid_str = uuid_v7.toStringBuf(&uuid_str_buf) catch continue;
+                const uuid_str = uuid_v7.toStringBuf(&uuid_str_buf) catch {
+                    save_failed = true;
+                    continue;
+                };
                 const file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}.dat", .{ graphs_dir, uuid_str });
                 defer self.allocator.free(file_path);
                 self.saveGraphHandleToFile(handle, file_path) catch |err| {
-                    log.err("Failed to save graph handle", &.{
+                    log.err("Failed to save graph handle — WAL truncation blocked", &.{
                         Attr.string("graph", handle.name),
                         Attr.string("error", @errorName(err)),
                     });
+                    save_failed = true;
                     continue;
                 };
                 handle.dirty = false;
             }
         }
 
-        // Save registry
+        // Save registry (always, even if some graph saves failed — registry
+        // reflects in-memory state which is canonical)
         const reg_path = try std.fmt.allocPrint(self.allocator, "{s}/graph_registry.dat", .{self.data_dir});
         defer self.allocator.free(reg_path);
         reg.saveToFile(reg_path) catch |err| {
@@ -2828,6 +2838,12 @@ pub const GraphStore = struct {
             });
             return err;
         };
+
+        // If any per-graph save failed, return error so WAL checkpoint does NOT
+        // truncate records that may be needed for replay on those failed graphs.
+        if (save_failed) {
+            return error.PartialCheckpointFailure;
+        }
 
         self.dirty = false;
     }
@@ -3864,17 +3880,18 @@ pub const GraphStore = struct {
         var writer = file.deprecatedWriter();
 
         // Write header placeholder (CRC patched after payload)
+        // v2 header: magic(8) + version(4) + graph_uuid(16) + node_count(8) + edge_count(8) + CRC(4) = 48
         var header: [PER_GRAPH_HEADER_LEN]u8 = [_]u8{0} ** PER_GRAPH_HEADER_LEN;
         @memcpy(header[0..8], PER_GRAPH_MAGIC);
         std.mem.writeInt(u32, header[8..12], PER_GRAPH_VERSION, .little);
-        std.mem.writeInt(u32, header[12..16], 0, .little); // reserved
-        std.mem.writeInt(u64, header[16..24], handle.nodes.count(), .little);
-        std.mem.writeInt(u64, header[24..32], handle.edges.count(), .little);
-        // CRC placeholder at [32..36] — will be patched
+        @memcpy(header[12..28], &handle.uuid); // graph UUID for identity binding
+        std.mem.writeInt(u64, header[28..36], handle.nodes.count(), .little);
+        std.mem.writeInt(u64, header[36..44], handle.edges.count(), .little);
+        // CRC placeholder at [44..48] — will be patched
         try writer.writeAll(&header);
 
-        // Feed header[0..32] into CRC
-        hasher.update(header[0..32]);
+        // Feed header[0..44] into CRC (everything except CRC field itself)
+        hasher.update(header[0..44]);
 
         // Write nodes (without graph_name)
         var node_iter = handle.nodes.iterator();
@@ -3953,9 +3970,9 @@ pub const GraphStore = struct {
             // NOTE: no graph_name written — implicit from file
         }
 
-        // Patch CRC at offset 32
+        // Patch CRC at offset 44 (after magic + version + uuid + node_count + edge_count)
         const checksum = hasher.final();
-        try file.seekTo(32);
+        try file.seekTo(44);
         var crc_buf: [4]u8 = undefined;
         std.mem.writeInt(u32, &crc_buf, checksum, .little);
         try file.writeAll(&crc_buf);
@@ -3982,30 +3999,56 @@ pub const GraphStore = struct {
         const data = try tde.readDecryptedFile(self.allocator, path);
         defer self.allocator.free(data);
 
-        if (data.len < PER_GRAPH_HEADER_LEN) return error.InvalidHeader;
+        // Minimum header: v1 = 36 bytes, need at least 12 to read magic + version
+        if (data.len < 12) return error.InvalidHeader;
 
         // Validate magic
         if (!std.mem.eql(u8, data[0..8], PER_GRAPH_MAGIC)) return error.InvalidMagic;
 
         // Validate version
         const version = std.mem.readInt(u32, data[8..12], .little);
-        if (version != PER_GRAPH_VERSION) return error.UnsupportedVersion;
+        if (version != PER_GRAPH_VERSION and version != 1) return error.UnsupportedVersion;
 
-        // Read counts from header
-        const node_count = std.mem.readInt(u64, data[16..24], .little);
-        const edge_count = std.mem.readInt(u64, data[24..32], .little);
+        // Check full header length based on version
+        const min_header: usize = if (version >= 2) 48 else 36;
+        if (data.len < min_header) return error.InvalidHeader;
 
-        // Verify CRC: covers header[0..32] + all payload bytes
-        const checksum_stored = std.mem.readInt(u32, data[32..36], .little);
+        // v2 adds graph_uuid at offset 12..28; v1 had reserved(4) at 12..16
+        if (version >= 2) {
+            // Validate graph UUID matches the handle's UUID (prevents file swap attacks)
+            var file_uuid: [16]u8 = undefined;
+            @memcpy(&file_uuid, data[12..28]);
+            if (!std.mem.eql(u8, &file_uuid, &handle.uuid)) {
+                log.err("Per-graph file UUID mismatch — possible file swap", &.{
+                    Attr.string("graph", handle.name),
+                });
+                return error.GraphUuidMismatch;
+            }
+        }
+
+        // Read counts from header (offsets differ by version)
+        const node_count_offset: usize = if (version >= 2) 28 else 16;
+        const edge_count_offset: usize = if (version >= 2) 36 else 24;
+        const crc_offset: usize = if (version >= 2) 44 else 32;
+        const header_data_end: usize = crc_offset; // everything before CRC is covered
+
+        const node_count = std.mem.readInt(u64, data[node_count_offset..][0..8], .little);
+        const edge_count = std.mem.readInt(u64, data[edge_count_offset..][0..8], .little);
+
+        // Header length depends on version: v1=36, v2+=48
+        const actual_header_len: usize = if (version >= 2) 48 else 36;
+
+        // Verify CRC: covers header[0..crc_offset] + all payload bytes
+        const checksum_stored = std.mem.readInt(u32, data[crc_offset..][0..4], .little);
         var crc_hasher = crc.Crc32.init();
-        crc_hasher.update(data[0..32]);
-        crc_hasher.update(data[PER_GRAPH_HEADER_LEN..]);
+        crc_hasher.update(data[0..header_data_end]);
+        crc_hasher.update(data[actual_header_len..]);
         const checksum_actual = crc_hasher.final();
         if (checksum_actual != checksum_stored) return error.ChecksumMismatch;
 
         // Parse payload
         var stream = std.io.fixedBufferStream(data);
-        stream.pos = PER_GRAPH_HEADER_LEN;
+        stream.pos = actual_header_len;
         var reader = stream.reader();
 
         const allocator = self.allocator;
@@ -4985,4 +5028,141 @@ test "per-graph file empty graph round trip" {
 
     try std.testing.expectEqual(@as(u64, 0), handle2.nodeCount());
     try std.testing.expectEqual(@as(u64, 0), handle2.edgeCount());
+}
+
+test "per-graph file CRC validation rejects corrupt data" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    const test_uuid = [_]u8{ 0xAA, 0xBB, 0xCC, 0xDD } ++ [_]u8{0} ** 12;
+    var handle = try GraphHandle.init(allocator, "crc_test", test_uuid);
+    defer handle.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+    const path = try std.fmt.allocPrint(allocator, "{s}/crc_corrupt.dat", .{dir_path});
+    defer allocator.free(path);
+
+    try store.saveGraphHandleToFile(handle, path);
+
+    // Corrupt a byte in the node_count field (offset 28, after UUID)
+    {
+        const file = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
+        defer file.close();
+        try file.seekTo(30);
+        try file.writeAll("X");
+    }
+
+    var handle2 = try GraphHandle.init(allocator, "crc_test", test_uuid);
+    defer handle2.deinit();
+    const result = store.loadGraphHandleFromFile(handle2, path);
+    try std.testing.expectError(error.ChecksumMismatch, result);
+}
+
+test "per-graph file UUID mismatch rejects file swap" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    const uuid_a = [_]u8{ 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10 };
+    const uuid_b = [_]u8{ 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xB0 };
+
+    // Create and save graph A
+    var handle_a = try GraphHandle.init(allocator, "graph_a", uuid_a);
+    defer handle_a.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+    const path_a = try std.fmt.allocPrint(allocator, "{s}/graph_a.dat", .{dir_path});
+    defer allocator.free(path_a);
+    try store.saveGraphHandleToFile(handle_a, path_a);
+
+    // Try to load graph A's file into a handle with graph B's UUID
+    var handle_b = try GraphHandle.init(allocator, "graph_b", uuid_b);
+    defer handle_b.deinit();
+
+    // This must fail because the file contains uuid_a but handle expects uuid_b
+    const result = store.loadGraphHandleFromFile(handle_b, path_a);
+    try std.testing.expectError(error.GraphUuidMismatch, result);
+}
+
+test "per-graph file corrupt single graph leaves others loadable" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    const uuid_good = [_]u8{ 0x01, 0x02, 0x03, 0x04 } ++ [_]u8{0} ** 12;
+    const uuid_bad = [_]u8{ 0x0A, 0x0B, 0x0C, 0x0D } ++ [_]u8{0} ** 12;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+
+    // Save a good graph file
+    var handle_good = try GraphHandle.init(allocator, "good_graph", uuid_good);
+    defer handle_good.deinit();
+    const path_good = try std.fmt.allocPrint(allocator, "{s}/good.dat", .{dir_path});
+    defer allocator.free(path_good);
+    try store.saveGraphHandleToFile(handle_good, path_good);
+
+    // Save a bad graph file then corrupt it
+    var handle_bad = try GraphHandle.init(allocator, "bad_graph", uuid_bad);
+    defer handle_bad.deinit();
+    const path_bad = try std.fmt.allocPrint(allocator, "{s}/bad.dat", .{dir_path});
+    defer allocator.free(path_bad);
+    try store.saveGraphHandleToFile(handle_bad, path_bad);
+
+    {
+        const file = try std.fs.cwd().openFile(path_bad, .{ .mode = .read_write });
+        defer file.close();
+        // Corrupt the node_count field (offset 28) — changes data but UUID still matches
+        try file.seekTo(28);
+        try file.writeAll("CORRUPT!");
+    }
+
+    // Load the good graph — should succeed
+    var loaded_good = try GraphHandle.init(allocator, "good_graph", uuid_good);
+    defer loaded_good.deinit();
+    try store.loadGraphHandleFromFile(loaded_good, path_good);
+    try std.testing.expectEqual(true, loaded_good.available);
+
+    // Load the corrupt graph — should fail with checksum error
+    var loaded_bad = try GraphHandle.init(allocator, "bad_graph", uuid_bad);
+    defer loaded_bad.deinit();
+    const result = store.loadGraphHandleFromFile(loaded_bad, path_bad);
+    try std.testing.expectError(error.ChecksumMismatch, result);
+}
+
+test "per-graph file rejects invalid magic" {
+    const allocator = std.testing.allocator;
+    var store = try GraphStore.init(allocator);
+    defer store.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+    const path = try std.fmt.allocPrint(allocator, "{s}/bad_magic.dat", .{dir_path});
+    defer allocator.free(path);
+
+    // Write a file with wrong magic but valid length
+    {
+        const file = try std.fs.cwd().createFile(path, .{});
+        defer file.close();
+        var header: [48]u8 = [_]u8{0} ** 48;
+        @memcpy(header[0..8], "NOTGEODE");
+        try file.writeAll(&header);
+    }
+
+    const test_uuid = [_]u8{0} ** 16;
+    var handle = try GraphHandle.init(allocator, "test", test_uuid);
+    defer handle.deinit();
+    const result = store.loadGraphHandleFromFile(handle, path);
+    try std.testing.expectError(error.InvalidMagic, result);
 }
