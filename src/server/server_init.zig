@@ -219,6 +219,41 @@ pub fn initialize(
     // direct configuration via graph_store.setDataDirOverride() is preferred
     // Set data directory for GraphStore persistence (canonical configuration for isolation)
     graph_store.setDataDirOverride(allocator, data_dir);
+
+    // Per-graph storage migration detection
+    // CANARY: REQ=REQ-STORAGE-MIGRATION-002; FEATURE="PerGraphStorageMigration"; ASPECT=ServerInit; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
+    if (data_dir) |dir| {
+        const migration = @import("../storage/migration.zig");
+        const storage_state = migration.detectStorageState(dir, allocator) catch |err| blk: {
+            log.warn("Storage state detection failed, proceeding normally", &.{
+                Attr.string("error", @errorName(err)),
+            });
+            break :blk migration.StorageState.fresh;
+        };
+        switch (storage_state) {
+            .legacy_monolithic => {
+                log.info("Detected monolithic graph store, migrating to per-graph storage", &.{});
+                _ = migration.migrateToPerGraph(dir, allocator) catch |err| {
+                    log.err("Migration failed, falling back to monolithic mode", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
+            },
+            .interrupted => {
+                log.warn("Detected interrupted migration, recovering", &.{});
+                _ = migration.recoverInterruptedMigration(dir, allocator) catch |err| {
+                    log.err("Migration recovery failed", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
+            },
+            .per_graph => {
+                log.info("Per-graph storage detected, loading normally", &.{});
+            },
+            .fresh => {},
+        }
+    }
+
     // Initialize GraphStore so we can surface checksum diagnostics if needed.
     const store = graph_store.getGlobalStore(allocator);
     if (graph_store.lastLoadHadChecksumError()) {

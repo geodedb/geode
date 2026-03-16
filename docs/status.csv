@@ -3067,6 +3067,7 @@ REQ-MULTI-GRAPH-HANDLE-001,PerGraphDataIsolation,GraphHandle,IMPL,,,storage,2026
 REQ-MULTI-GRAPH-HANDLE-002,PerGraphStorage,GraphStoreRouting,IMPL,,,storage,2026-03-16,src/graph_store.zig
 REQ-MULTI-GRAPH-HANDLE-003,PerGraphStorage,SavePerGraph,IMPL,,,storage,2026-03-16,src/graph_store.zig
 REQ-MULTI-GRAPH-HANDLE-004,PerGraphStorage,LoadPerGraph,IMPL,,,storage,2026-03-16,src/graph_store.zig
+REQ-MULTI-GRAPH-HANDLE-EXPORT-001,PerGraphStorage,LibExport,IMPL,,,storage,2026-03-16,src/lib.zig
 REQ-MULTI-GRAPH-REGISTRY-001,PerGraphFileMapping,GraphRegistry,IMPL,,,storage,2026-03-16,src/graph_registry.zig
 REQ-MULTI-GRAPH-SECURITY-001,MultiGraphSecurity,RBACGraphScope,TESTED,,,security,2025-12-20,src/security/multi_graph_security.zig
 REQ-MULTI-GRAPH-SECURITY-TEST,MultiGraphSecurityTests,Security,IMPL,,,testing,2025-12-20,tests/e2e_multi_graph_security.zig
@@ -3754,6 +3755,8 @@ REQ-STORAGE-EDGE-001,Storage,EdgeStorage,TESTED,,,storage,2026-01-16,tests/test_
 REQ-STORAGE-FLUSH-001,Storage,FlushStorage,TESTED,,,storage,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-STORAGE-GRAPHSTORE-001,Storage,GraphStore,TESTED,,,storage,2026-02-04,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-STORAGE-INDEX-001,Storage,IndexStorage,TESTED,,,storage,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
+REQ-STORAGE-MIGRATION-001,PerGraphStorageMigration,DetectAndMigrate,IMPL,,,storage,2026-03-16,src/storage/migration.zig
+REQ-STORAGE-MIGRATION-002,PerGraphStorageMigration,ServerInit,IMPL,,,storage,2026-03-16,src/server/server_init.zig
 REQ-STORAGE-MVCC-001,Storage,MVCCStorage,TESTED,,,storage,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-STORAGE-NODE-001,Storage,NodeStorage,TESTED,,,storage,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-STORAGE-NODE-001,Storage,NodeStorage,TESTED,,,storage,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
