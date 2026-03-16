@@ -371,6 +371,12 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
     // Track if store has unsaved changes - avoids O(n²) persistence during batch operations
     dirty: bool = false,
+    // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-002; FEATURE="PerGraphStorage"; ASPECT=GraphStoreRouting; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
+    // Per-graph storage support
+    graph_handles: std.StringHashMap(*GraphHandle),
+    graph_handles_mutex: std.Thread.Mutex = .{},
+    data_dir: []const u8 = "",
+    use_per_graph_storage: bool = false,
 
     /// Initialize GraphStore with default tenant
     pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}!GraphStore {
@@ -392,6 +398,7 @@ pub const GraphStore = struct {
             .label_index = std.StringHashMap(std.ArrayList(u64)).init(allocator),
             .outgoing_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
             .incoming_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
+            .graph_handles = std.StringHashMap(*GraphHandle).init(allocator),
         };
         // Register default graph name
         const default_name = try allocator.dupe(u8, "default");
@@ -457,6 +464,16 @@ pub const GraphStore = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.incoming_edges.deinit();
+
+        // Clean up per-graph handles
+        {
+            var gh_iter = self.graph_handles.iterator();
+            while (gh_iter.next()) |entry| {
+                entry.value_ptr.*.deinit();
+                self.allocator.free(entry.key_ptr.*);
+            }
+            self.graph_handles.deinit();
+        }
     }
 
     pub fn clearNodes(self: *GraphStore) void {
@@ -599,6 +616,14 @@ pub const GraphStore = struct {
         if (self.graphs.contains(graph_name)) return;
         const name_copy = try self.allocator.dupe(u8, graph_name);
         try self.graphs.put(name_copy, {});
+    }
+
+    /// Look up a per-graph handle by name. Returns null if per-graph storage
+    /// is not active or the graph is not registered.
+    pub fn getHandle(self: *GraphStore, graph_name: []const u8) ?*GraphHandle {
+        self.graph_handles_mutex.lock();
+        defer self.graph_handles_mutex.unlock();
+        return self.graph_handles.get(graph_name);
     }
 
     pub fn graphExists(self: *const GraphStore, graph_name: []const u8) bool {
@@ -2515,12 +2540,144 @@ pub const GraphStore = struct {
         };
     }
 
+    // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-003; FEATURE="PerGraphStorage"; ASPECT=SavePerGraph; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
+    /// Save all dirty GraphHandles to individual files and write the graph registry.
+    pub fn savePerGraphFiles(self: *GraphStore) !void {
+        const GraphRegistry = @import("graph_registry.zig").GraphRegistry;
+        const UuidV7 = @import("uuid.zig").UuidV7;
+
+        const graphs_dir = try std.fmt.allocPrint(self.allocator, "{s}/graphs", .{self.data_dir});
+        defer self.allocator.free(graphs_dir);
+        std.fs.cwd().makePath(graphs_dir) catch {};
+
+        // Build registry from current graph handles
+        var reg = GraphRegistry.init(self.allocator);
+        defer reg.deinit();
+        reg.next_node_id = self.next_node_id;
+        reg.next_edge_id = self.next_edge_id;
+
+        self.graph_handles_mutex.lock();
+        defer self.graph_handles_mutex.unlock();
+
+        var it = self.graph_handles.iterator();
+        while (it.next()) |entry| {
+            const handle = entry.value_ptr.*;
+
+            // Add entry to registry
+            try reg.entries.append(self.allocator, .{
+                .name = try self.allocator.dupe(u8, handle.name),
+                .uuid = handle.uuid,
+                .node_count = handle.nodeCount(),
+                .edge_count = handle.edgeCount(),
+            });
+
+            // Save if dirty
+            if (handle.dirty) {
+                var uuid_str_buf: [36]u8 = undefined;
+                const uuid_v7 = UuidV7.fromBytes(handle.uuid);
+                const uuid_str = uuid_v7.toStringBuf(&uuid_str_buf) catch continue;
+                const file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}.dat", .{ graphs_dir, uuid_str });
+                defer self.allocator.free(file_path);
+                self.saveGraphHandleToFile(handle, file_path) catch |err| {
+                    log.err("Failed to save graph handle", &.{
+                        Attr.string("graph", handle.name),
+                        Attr.string("error", @errorName(err)),
+                    });
+                    continue;
+                };
+                handle.dirty = false;
+            }
+        }
+
+        // Save registry
+        const reg_path = try std.fmt.allocPrint(self.allocator, "{s}/graph_registry.dat", .{self.data_dir});
+        defer self.allocator.free(reg_path);
+        reg.saveToFile(reg_path) catch |err| {
+            log.err("Failed to save graph registry", &.{
+                Attr.string("error", @errorName(err)),
+            });
+            return err;
+        };
+
+        self.dirty = false;
+    }
+
+    // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-004; FEATURE="PerGraphStorage"; ASPECT=LoadPerGraph; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
+    /// Load graph registry and all per-graph data files, populating both
+    /// graph_handles and the legacy flat maps for backward compatibility.
+    pub fn loadPerGraphFiles(self: *GraphStore) !void {
+        const GraphRegistry = @import("graph_registry.zig").GraphRegistry;
+        const UuidV7 = @import("uuid.zig").UuidV7;
+
+        const reg_path = try std.fmt.allocPrint(self.allocator, "{s}/graph_registry.dat", .{self.data_dir});
+        defer self.allocator.free(reg_path);
+
+        var reg = GraphRegistry.init(self.allocator);
+        defer reg.deinit();
+        try reg.loadFromFile(reg_path);
+
+        self.next_node_id = reg.next_node_id;
+        self.next_edge_id = reg.next_edge_id;
+
+        const graphs_dir = try std.fmt.allocPrint(self.allocator, "{s}/graphs", .{self.data_dir});
+        defer self.allocator.free(graphs_dir);
+
+        for (reg.entries.items) |entry| {
+            const handle = try GraphHandle.init(self.allocator, entry.name, entry.uuid);
+
+            var uuid_str_buf: [36]u8 = undefined;
+            const uuid_v7 = UuidV7.fromBytes(entry.uuid);
+            const uuid_str = uuid_v7.toStringBuf(&uuid_str_buf) catch {
+                handle.available = false;
+                const name_key = try self.allocator.dupe(u8, entry.name);
+                self.graph_handles_mutex.lock();
+                defer self.graph_handles_mutex.unlock();
+                try self.graph_handles.put(name_key, handle);
+                continue;
+            };
+            const file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}.dat", .{ graphs_dir, uuid_str });
+            defer self.allocator.free(file_path);
+
+            self.loadGraphHandleFromFile(handle, file_path) catch |err| {
+                log.err("Failed to load graph file", &.{
+                    Attr.string("graph", entry.name),
+                    Attr.string("error", @errorName(err)),
+                });
+                handle.available = false;
+            };
+
+            // Populate the legacy flat maps for backward compatibility
+            // so existing callers that access store.nodes/edges still work.
+            var ni = handle.nodes.iterator();
+            while (ni.next()) |n| {
+                try self.nodes.put(n.key_ptr.*, n.value_ptr.*);
+            }
+            var ei = handle.edges.iterator();
+            while (ei.next()) |e| {
+                try self.edges.put(e.key_ptr.*, e.value_ptr.*);
+            }
+
+            const name_key = try self.allocator.dupe(u8, entry.name);
+            self.graph_handles_mutex.lock();
+            try self.graph_handles.put(name_key, handle);
+            self.graph_handles_mutex.unlock();
+            try self.ensureGraphNoDirty(entry.name);
+        }
+
+        self.use_per_graph_storage = true;
+        try self.rebuildIndexes();
+    }
+
     // CANARY: REQ=REQ-TDE-GRAPHSTORE-002; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStoreSave; STATUS=TESTED; OWNER=security; UPDATED=2026-02-25
     // CANARY: REQ=REQ-STREAM-SERIALIZE-001; FEATURE="StreamingSerialization"; ASPECT=SaveToFile; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-25
     // Streaming file-based persistence — serializes directly to a temp file,
     // then applies CRC + optional TDE encryption + atomic rename.
     // Eliminates the in-memory serialization buffer that caused OOM on large graphs (#538).
     pub fn saveToFile(self: *GraphStore) !void {
+        // Per-graph storage: save individual graph files + registry
+        if (self.use_per_graph_storage) {
+            return self.savePerGraphFiles();
+        }
         const file_path = try getPersistenceFilePath(self.allocator);
         defer self.allocator.free(file_path);
 
@@ -2862,6 +3019,15 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-TDE-GRAPHSTORE-003; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStoreLoad; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
     // CANARY: REQ=REQ-BINARY-PERSIST-LOAD-001; FEATURE="BinaryPersistence"; ASPECT=LoadFromFile; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-02
     pub fn loadFromFile(self: *GraphStore) !void {
+        // Check for per-graph storage first
+        if (self.data_dir.len > 0) {
+            const reg_path = try std.fmt.allocPrint(self.allocator, "{s}/graph_registry.dat", .{self.data_dir});
+            defer self.allocator.free(reg_path);
+            if (std.fs.cwd().access(reg_path, .{})) |_| {
+                return self.loadPerGraphFiles();
+            } else |_| {}
+        }
+
         const file_path = try getPersistenceFilePath(self.allocator);
         defer self.allocator.free(file_path);
 
@@ -4128,6 +4294,10 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
         // P2-3: Use global allocator instead of page_allocator
         global_arena = std.heap.ArenaAllocator.init(global_gpa.allocator());
         global_store = GraphStore.init(global_arena.?.allocator()) catch @panic("OOM: failed to initialize global graph store");
+        // Set data_dir for per-graph storage
+        if (last_data_dir) |dir| {
+            global_store.?.data_dir = dir;
+        }
         // Try to load existing data from the new location
         global_store.?.loadFromFile() catch |err| {
             log.warn("Failed to load graph store from file (starting fresh)", &.{
