@@ -3066,7 +3066,12 @@ REQ-MULTI-GRAPH-DELETE-002,MultiGraphIsolation,DeleteGraphContext,TESTED,,,engin
 REQ-MULTI-GRAPH-HANDLE-001,PerGraphDataIsolation,GraphHandle,IMPL,,,storage,2026-03-16,src/graph_handle.zig
 REQ-MULTI-GRAPH-HANDLE-002,PerGraphStorage,GraphStoreRouting,IMPL,,,storage,2026-03-16,src/graph_store.zig
 REQ-MULTI-GRAPH-HANDLE-003,PerGraphStorage,SavePerGraph,IMPL,,,storage,2026-03-16,src/graph_store.zig
+REQ-MULTI-GRAPH-HANDLE-004,PerGraphMutations,EdgeMutation,IMPL,,,storage,2026-03-16,src/graph_store.zig
+REQ-MULTI-GRAPH-HANDLE-004,PerGraphMutations,NodeMutation,IMPL,,,storage,2026-03-16,src/graph_handle.zig
+REQ-MULTI-GRAPH-HANDLE-004,PerGraphMutations,NodeMutation,IMPL,,,storage,2026-03-16,src/graph_store.zig
 REQ-MULTI-GRAPH-HANDLE-004,PerGraphStorage,LoadPerGraph,IMPL,,,storage,2026-03-16,src/graph_store.zig
+REQ-MULTI-GRAPH-HANDLE-005,PerGraphStorage,CreateGraph,IMPL,,,storage,2026-03-16,src/graph_store.zig
+REQ-MULTI-GRAPH-HANDLE-006,PerGraphStorage,DropGraph,IMPL,,,storage,2026-03-16,src/graph_store.zig
 REQ-MULTI-GRAPH-HANDLE-EXPORT-001,PerGraphStorage,LibExport,IMPL,,,storage,2026-03-16,src/lib.zig
 REQ-MULTI-GRAPH-REGISTRY-001,PerGraphFileMapping,GraphRegistry,IMPL,,,storage,2026-03-16,src/graph_registry.zig
 REQ-MULTI-GRAPH-SECURITY-001,MultiGraphSecurity,RBACGraphScope,TESTED,,,security,2025-12-20,src/security/multi_graph_security.zig

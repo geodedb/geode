@@ -153,6 +153,147 @@ pub const GraphHandle = struct {
         return null;
     }
 
+    // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-004; FEATURE="PerGraphMutations"; ASPECT=NodeMutation; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
+
+    /// Add a node to this handle (makes independent copies of all owned data).
+    /// Updates label index and marks handle dirty.
+    pub fn addNode(self: *GraphHandle, node: *const Node) !void {
+        // Copy labels
+        const labels_copy = try self.allocator.alloc([]const u8, node.labels.len);
+        for (node.labels, 0..) |label, i| {
+            labels_copy[i] = try self.allocator.dupe(u8, label);
+        }
+        errdefer {
+            for (labels_copy) |l| self.allocator.free(l);
+            self.allocator.free(labels_copy);
+        }
+
+        // Copy graph_name
+        const graph_name_copy = if (node.graph_name.ptr != graph_store.DEFAULT_GRAPH_NAME.ptr)
+            try self.allocator.dupe(u8, node.graph_name)
+        else
+            node.graph_name;
+        errdefer if (graph_name_copy.ptr != graph_store.DEFAULT_GRAPH_NAME.ptr) {
+            self.allocator.free(graph_name_copy);
+        };
+
+        // Copy properties
+        var props_copy = std.StringHashMap(PropertyValue).init(self.allocator);
+        errdefer {
+            var it = props_copy.iterator();
+            while (it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                freePropertyValuePartial(self.allocator, entry.value_ptr.*);
+            }
+            props_copy.deinit();
+        }
+        var prop_it = node.properties.iterator();
+        while (prop_it.next()) |entry| {
+            const key_copy = try self.allocator.dupe(u8, entry.key_ptr.*);
+            errdefer self.allocator.free(key_copy);
+            const val_copy = try copyPropertyValueForHandle(self.allocator, entry.value_ptr.*);
+            errdefer freePropertyValuePartial(self.allocator, val_copy);
+            try props_copy.put(key_copy, val_copy);
+        }
+
+        const handle_node = Node{
+            .id = node.id,
+            .labels = labels_copy,
+            .properties = props_copy,
+            .graph_name = graph_name_copy,
+        };
+
+        try self.nodes.put(node.id, handle_node);
+
+        // Update label index
+        for (labels_copy) |label| {
+            try self.addToLabelIndex(label, node.id);
+        }
+
+        self.dirty = true;
+    }
+
+    /// Remove a node from this handle (frees owned copies, updates indexes).
+    pub fn removeNode(self: *GraphHandle, node_id: u64) void {
+        if (self.nodes.fetchRemove(node_id)) |kv| {
+            var node = kv.value;
+            // Update label index
+            for (node.labels) |label| {
+                self.removeFromLabelIndex(label, node_id);
+            }
+            freeNode(self.allocator, &node);
+        }
+        self.dirty = true;
+    }
+
+    /// Add an edge to this handle (makes independent copies of owned data).
+    /// Updates adjacency indexes and marks handle dirty.
+    pub fn addEdge(self: *GraphHandle, edge: *const Edge) !void {
+        const label_copy = try self.allocator.dupe(u8, edge.label);
+        errdefer self.allocator.free(label_copy);
+
+        const graph_name_copy = if (edge.graph_name.ptr != graph_store.DEFAULT_GRAPH_NAME.ptr)
+            try self.allocator.dupe(u8, edge.graph_name)
+        else
+            edge.graph_name;
+        errdefer if (graph_name_copy.ptr != graph_store.DEFAULT_GRAPH_NAME.ptr) {
+            self.allocator.free(graph_name_copy);
+        };
+
+        // Copy properties
+        var props_copy = std.StringHashMap(PropertyValue).init(self.allocator);
+        errdefer {
+            var it = props_copy.iterator();
+            while (it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                freePropertyValuePartial(self.allocator, entry.value_ptr.*);
+            }
+            props_copy.deinit();
+        }
+        var prop_it = edge.properties.iterator();
+        while (prop_it.next()) |entry| {
+            const key_copy = try self.allocator.dupe(u8, entry.key_ptr.*);
+            errdefer self.allocator.free(key_copy);
+            const val_copy = try copyPropertyValueForHandle(self.allocator, entry.value_ptr.*);
+            errdefer freePropertyValuePartial(self.allocator, val_copy);
+            try props_copy.put(key_copy, val_copy);
+        }
+
+        const handle_edge = Edge{
+            .id = edge.id,
+            .from_id = edge.from_id,
+            .to_id = edge.to_id,
+            .label = label_copy,
+            .properties = props_copy,
+            .graph_name = graph_name_copy,
+        };
+
+        try self.edges.put(edge.id, handle_edge);
+
+        // Update adjacency indexes
+        try self.addToAdjacencyIndex(&self.outgoing_edges, edge.from_id, edge.id);
+        try self.addToAdjacencyIndex(&self.incoming_edges, edge.to_id, edge.id);
+
+        self.dirty = true;
+    }
+
+    /// Remove an edge from this handle (frees owned copies, updates adjacency indexes).
+    pub fn removeEdge(self: *GraphHandle, edge_id: u64) void {
+        if (self.edges.fetchRemove(edge_id)) |kv| {
+            var edge = kv.value;
+            // Update adjacency indexes
+            self.removeFromAdjacencyIndex(edge.from_id, edge.to_id, edge_id);
+            freeEdge(self.allocator, &edge);
+        }
+        self.dirty = true;
+    }
+
+    /// Mark the handle dirty when a property is mutated in-place on the flat map.
+    /// Called by GraphStore when node/edge properties are set or removed.
+    pub fn markDirty(self: *GraphHandle) void {
+        self.dirty = true;
+    }
+
     // --- Internal helpers ---
 
     fn addToLabelIndex(self: *GraphHandle, label: []const u8, node_id: u64) !void {
@@ -171,6 +312,49 @@ pub const GraphHandle = struct {
             result.value_ptr.* = std.ArrayList(u64).empty;
         }
         try result.value_ptr.append(self.allocator, edge_id);
+    }
+
+    fn removeFromLabelIndex(self: *GraphHandle, label: []const u8, node_id: u64) void {
+        if (self.label_index.getPtr(label)) |list| {
+            var i: usize = 0;
+            while (i < list.items.len) {
+                if (list.items[i] == node_id) {
+                    _ = list.orderedRemove(i);
+                    break;
+                }
+                i += 1;
+            }
+            if (list.items.len == 0) {
+                if (self.label_index.fetchRemove(label)) |kv| {
+                    self.allocator.free(kv.key);
+                    var list_copy = kv.value;
+                    list_copy.deinit(self.allocator);
+                }
+            }
+        }
+    }
+
+    fn removeFromAdjacencyIndex(self: *GraphHandle, from_id: u64, to_id: u64, edge_id: u64) void {
+        if (self.outgoing_edges.getPtr(from_id)) |list| {
+            var i: usize = 0;
+            while (i < list.items.len) {
+                if (list.items[i] == edge_id) {
+                    _ = list.swapRemove(i);
+                    break;
+                }
+                i += 1;
+            }
+        }
+        if (self.incoming_edges.getPtr(to_id)) |list| {
+            var i: usize = 0;
+            while (i < list.items.len) {
+                if (list.items[i] == edge_id) {
+                    _ = list.swapRemove(i);
+                    break;
+                }
+                i += 1;
+            }
+        }
     }
 
     fn freeNode(allocator: std.mem.Allocator, node: *Node) void {
@@ -227,6 +411,16 @@ pub const GraphHandle = struct {
         }
     }
 };
+
+/// Copy a PropertyValue for storage in a GraphHandle.
+/// Handles String (heap-allocated) and non-string (value-type) variants.
+/// ExtValue copy is deferred — treated as value type for now.
+fn copyPropertyValueForHandle(allocator: std.mem.Allocator, value: PropertyValue) !PropertyValue {
+    return switch (value) {
+        .String => |s| PropertyValue{ .String = try allocator.dupe(u8, s) },
+        else => value,
+    };
+}
 
 // =============================================================================
 // Tests

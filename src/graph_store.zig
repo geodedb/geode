@@ -647,6 +647,48 @@ pub const GraphStore = struct {
         }
         const name_copy = try self.allocator.dupe(u8, graph_name);
         try self.graphs.put(name_copy, {});
+
+        // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-005; FEATURE="PerGraphStorage"; ASPECT=CreateGraph; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
+        // Per-graph storage: create a GraphHandle for the new graph and persist registry
+        if (self.use_per_graph_storage) {
+            const graph_uuid = uuid.UuidV7.new().bytes;
+            const handle = GraphHandle.init(self.allocator, graph_name, graph_uuid) catch |err| {
+                log.warn("Failed to create GraphHandle for new graph", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+                self.dirty = true;
+                return;
+            };
+            const handle_name = self.allocator.dupe(u8, graph_name) catch |err| {
+                handle.deinit();
+                log.warn("Failed to dupe graph_name for handle map", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+                self.dirty = true;
+                return;
+            };
+            self.graph_handles_mutex.lock();
+            self.graph_handles.put(handle_name, handle) catch |err| {
+                self.graph_handles_mutex.unlock();
+                handle.deinit();
+                self.allocator.free(handle_name);
+                log.warn("Failed to insert GraphHandle into map", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+                self.dirty = true;
+                return;
+            };
+            self.graph_handles_mutex.unlock();
+            // Save registry and empty graph file
+            self.savePerGraphFiles() catch |err| {
+                log.warn("Failed to save per-graph files after CREATE GRAPH", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+        }
+
         self.dirty = true;
     }
 
@@ -657,6 +699,38 @@ pub const GraphStore = struct {
         if (!self.graphs.contains(graph_name)) {
             return error.GraphNotFound;
         }
+
+        // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-006; FEATURE="PerGraphStorage"; ASPECT=DropGraph; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
+        // Per-graph storage: delete the per-graph file and remove the GraphHandle
+        if (self.use_per_graph_storage) {
+            self.graph_handles_mutex.lock();
+            if (self.graph_handles.fetchRemove(graph_name)) |kv| {
+                self.graph_handles_mutex.unlock();
+                const handle = kv.value;
+                // Delete the per-graph file
+                var uuid_str_buf: [36]u8 = undefined;
+                const uuid_v7 = uuid.UuidV7.fromBytes(handle.uuid);
+                if (uuid_v7.toStringBuf(&uuid_str_buf)) |uuid_str| {
+                    const file_path = std.fmt.allocPrint(self.allocator, "{s}/graphs/{s}.dat", .{ self.data_dir, uuid_str }) catch null;
+                    if (file_path) |path| {
+                        defer self.allocator.free(path);
+                        std.fs.cwd().deleteFile(path) catch {};
+                    }
+                } else |_| {}
+                self.allocator.free(kv.key);
+                handle.deinit();
+            } else {
+                self.graph_handles_mutex.unlock();
+            }
+            // Save updated registry
+            self.savePerGraphFiles() catch |err| {
+                log.warn("Failed to save registry after DROP GRAPH", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+        }
+
         self.clearNodesForGraph(graph_name);
         if (self.graphs.fetchRemove(graph_name)) |kv| {
             self.allocator.free(kv.key);
@@ -691,6 +765,21 @@ pub const GraphStore = struct {
         // Issue #391: Maintain label index for fast MERGE lookups
         for (labels) |label| {
             try self.addToLabelIndex(graph_name, label, id);
+        }
+
+        // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-004; FEATURE="PerGraphMutations"; ASPECT=NodeMutation; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
+        // Per-graph storage: mirror node into the corresponding GraphHandle
+        if (self.use_per_graph_storage) {
+            if (self.getHandle(graph_name)) |handle| {
+                if (self.nodes.getPtr(id)) |node_ptr| {
+                    handle.addNode(node_ptr) catch |err| {
+                        log.warn("Failed to mirror node into GraphHandle", &.{
+                            Attr.string("graph", graph_name),
+                            Attr.string("error", @errorName(err)),
+                        });
+                    };
+                }
+            }
         }
 
         // CANARY: REQ=REQ-BINARY-PERSIST-NODE-002; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
@@ -730,6 +819,20 @@ pub const GraphStore = struct {
 
         for (labels) |label| {
             try self.addToLabelIndex(graph_name, label, node_id);
+        }
+
+        // Per-graph storage: mirror node into the corresponding GraphHandle
+        if (self.use_per_graph_storage) {
+            if (self.getHandle(graph_name)) |handle| {
+                if (self.nodes.getPtr(node_id)) |node_ptr| {
+                    handle.addNode(node_ptr) catch |err| {
+                        log.warn("Failed to mirror node into GraphHandle", &.{
+                            Attr.string("graph", graph_name),
+                            Attr.string("error", @errorName(err)),
+                        });
+                    };
+                }
+            }
         }
 
         if (node_id >= self.next_node_id) {
@@ -925,6 +1028,13 @@ pub const GraphStore = struct {
             }
             result.value_ptr.* = value_copy;
 
+            // Per-graph storage: mark the corresponding GraphHandle dirty
+            if (self.use_per_graph_storage) {
+                if (self.getHandle(node.graph_name)) |handle| {
+                    handle.markDirty();
+                }
+            }
+
             // Mark as dirty - persistence happens at query completion
             self.dirty = true;
 
@@ -984,6 +1094,12 @@ pub const GraphStore = struct {
                 self.allocator.free(kv.key);
                 freePropertyValue(self, kv.value);
             }
+            // Per-graph storage: mark the corresponding GraphHandle dirty
+            if (self.use_per_graph_storage) {
+                if (self.getHandle(node.graph_name)) |handle| {
+                    handle.markDirty();
+                }
+            }
             // Mark as dirty - persistence happens at query completion
             self.dirty = true;
 
@@ -1016,6 +1132,13 @@ pub const GraphStore = struct {
 
             // Maintain label index
             try self.addToLabelIndex(node.graph_name, label, node_id);
+
+            // Per-graph storage: mark the corresponding GraphHandle dirty
+            if (self.use_per_graph_storage) {
+                if (self.getHandle(node.graph_name)) |handle| {
+                    handle.markDirty();
+                }
+            }
 
             // Mark as dirty - persistence happens at query completion
             self.dirty = true;
@@ -1058,6 +1181,13 @@ pub const GraphStore = struct {
                 // Remove label from index and free label memory
                 self.removeFromLabelIndex(node.graph_name, label, node_id);
                 self.allocator.free(removed_label);
+
+                // Per-graph storage: mark the corresponding GraphHandle dirty
+                if (self.use_per_graph_storage) {
+                    if (self.getHandle(node.graph_name)) |handle| {
+                        handle.markDirty();
+                    }
+                }
 
                 // Mark as dirty - persistence happens at query completion
                 self.dirty = true;
@@ -1589,6 +1719,21 @@ pub const GraphStore = struct {
         // Issue #392: Maintain adjacency indexes for fast DELETE DETACH
         try self.addToAdjacencyIndex(from_id, to_id, id);
 
+        // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-004; FEATURE="PerGraphMutations"; ASPECT=EdgeMutation; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
+        // Per-graph storage: mirror edge into the corresponding GraphHandle
+        if (self.use_per_graph_storage) {
+            if (self.getHandle(graph_name)) |handle| {
+                if (self.edges.getPtr(id)) |edge_ptr| {
+                    handle.addEdge(edge_ptr) catch |err| {
+                        log.warn("Failed to mirror edge into GraphHandle", &.{
+                            Attr.string("graph", graph_name),
+                            Attr.string("error", @errorName(err)),
+                        });
+                    };
+                }
+            }
+        }
+
         // CANARY: REQ=REQ-BINARY-PERSIST-EDGE-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
         // Mark store as dirty - persistence happens at query completion, not per-edge
         self.dirty = true;
@@ -1625,6 +1770,20 @@ pub const GraphStore = struct {
 
         try self.edges.put(edge_id, edge);
         try self.addToAdjacencyIndex(from_id, to_id, edge_id);
+
+        // Per-graph storage: mirror edge into the corresponding GraphHandle
+        if (self.use_per_graph_storage) {
+            if (self.getHandle(graph_name)) |handle| {
+                if (self.edges.getPtr(edge_id)) |edge_ptr| {
+                    handle.addEdge(edge_ptr) catch |err| {
+                        log.warn("Failed to mirror edge into GraphHandle", &.{
+                            Attr.string("graph", graph_name),
+                            Attr.string("error", @errorName(err)),
+                        });
+                    };
+                }
+            }
+        }
 
         if (edge_id >= self.next_edge_id) {
             self.next_edge_id = edge_id + 1;
@@ -1764,6 +1923,13 @@ pub const GraphStore = struct {
             }
             result.value_ptr.* = value_copy;
 
+            // Per-graph storage: mark the corresponding GraphHandle dirty
+            if (self.use_per_graph_storage) {
+                if (self.getHandle(edge.graph_name)) |handle| {
+                    handle.markDirty();
+                }
+            }
+
             // Mark as dirty - persistence happens at query completion
             self.dirty = true;
 
@@ -1777,6 +1943,12 @@ pub const GraphStore = struct {
             if (edge.properties.fetchRemove(key)) |kv| {
                 self.allocator.free(kv.key);
                 freePropertyValue(self, kv.value);
+            }
+            // Per-graph storage: mark the corresponding GraphHandle dirty
+            if (self.use_per_graph_storage) {
+                if (self.getHandle(edge.graph_name)) |handle| {
+                    handle.markDirty();
+                }
             }
             self.dirty = true;
 
@@ -3421,8 +3593,16 @@ pub const GraphStore = struct {
 
     /// Delete a node and mark store dirty
     pub fn deleteNode(self: *GraphStore, node_id: u64) void {
-        // Capture graph_name before deletion for WAL notification
+        // Capture graph_name before deletion for WAL notification and handle routing
         const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "";
+
+        // Per-graph storage: remove node from GraphHandle before flat-map deletion
+        if (self.use_per_graph_storage and gn.len > 0) {
+            if (self.getHandle(gn)) |handle| {
+                handle.removeNode(node_id);
+            }
+        }
+
         self.deleteNodeNoSave(node_id);
         self.dirty = true;
         // WAL notification: DeleteNode
@@ -3431,8 +3611,16 @@ pub const GraphStore = struct {
 
     /// Delete an edge and mark store dirty
     pub fn deleteEdge(self: *GraphStore, edge_id: u64) void {
-        // Capture graph_name before deletion for WAL notification
+        // Capture graph_name before deletion for WAL notification and handle routing
         const gn = if (self.edges.get(edge_id)) |e| e.graph_name else "";
+
+        // Per-graph storage: remove edge from GraphHandle before flat-map deletion
+        if (self.use_per_graph_storage and gn.len > 0) {
+            if (self.getHandle(gn)) |handle| {
+                handle.removeEdge(edge_id);
+            }
+        }
+
         self.deleteEdgeNoSave(edge_id);
         self.dirty = true;
         // WAL notification: DeleteEdge
