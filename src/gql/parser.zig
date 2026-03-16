@@ -270,7 +270,7 @@ pub const Parser = struct {
 
     /// Parse a LIMIT or OFFSET value: accepts either an integer literal or a $param reference.
     /// Returns .{ literal_value_or_null, param_name_or_null }.
-    fn parseLimitValue(self: *Parser) !struct { value: ?usize, param: ?[]const u8 } {
+    fn parseLimitValue(self: *Parser) !struct { value: ?u64, param: ?[]const u8 } {
         if (self.cur.kind == .dollar) {
             self.advance();
             const name = try self.expectIdentifierOrKeyword();
@@ -1358,7 +1358,7 @@ pub const Parser = struct {
                     if (self.cur.kind == .LIMIT) {
                         self.advance();
                         const lim = try self.parseLimitValue();
-                        limit = lim.value;
+                        limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
                         limit_param = lim.param;
                     }
 
@@ -1368,7 +1368,7 @@ pub const Parser = struct {
                     if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
                         self.advance();
                         const off = try self.parseLimitValue();
-                        offset = off.value;
+                        offset = if (off.value) |v| @as(usize, @intCast(v)) else null;
                         offset_param = off.param;
                     }
 
@@ -2472,21 +2472,21 @@ pub const Parser = struct {
         if (self.cur.kind == .LIMIT) {
             self.advance();
             const lim = try self.parseLimitValue();
-            limit = lim.value;
+            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
             limit_param = lim.param;
         }
         // Check for OFFSET/SKIP
         if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
             self.advance();
             const off = try self.parseLimitValue();
-            offset = off.value;
+            offset = if (off.value) |v| @as(usize, @intCast(v)) else null;
             offset_param = off.param;
         }
         // Check for LIMIT again (in case it comes after OFFSET)
         if (limit == null and limit_param == null and self.cur.kind == .LIMIT) {
             self.advance();
             const lim = try self.parseLimitValue();
-            limit = lim.value;
+            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
             limit_param = lim.param;
         }
 
@@ -5458,7 +5458,7 @@ pub const Parser = struct {
         if (self.cur.kind == .LIMIT) {
             self.advance();
             const lim = try self.parseLimitValue();
-            limit = lim.value;
+            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
             limit_param = lim.param;
         }
 
@@ -5468,7 +5468,7 @@ pub const Parser = struct {
         if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
             self.advance();
             const off = try self.parseLimitValue();
-            offset = off.value;
+            offset = if (off.value) |v| @as(usize, @intCast(v)) else null;
             offset_param = off.param;
         }
 
