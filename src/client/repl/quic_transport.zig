@@ -26,6 +26,33 @@ const QuicTransportConnection = struct {
     client: *quic.QuicClient,
     stream: *quic.QuicClientStream,
     owns_client: bool,
+    // Background keepalive thread that polls the QUIC client periodically
+    // to respond to server PINGs and prevent idle timeout disconnections.
+    keepalive_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    keepalive_thread: ?std.Thread = null,
+
+    fn startKeepalive(self: *QuicTransportConnection) void {
+        self.keepalive_thread = std.Thread.spawn(.{}, keepaliveWorker, .{ self.client, &self.keepalive_stop }) catch null;
+    }
+
+    fn stopKeepalive(self: *QuicTransportConnection) void {
+        self.keepalive_stop.store(true, .release);
+        if (self.keepalive_thread) |t| {
+            t.join();
+            self.keepalive_thread = null;
+        }
+    }
+
+    fn keepaliveWorker(client: *quic.QuicClient, stop: *std.atomic.Value(bool)) void {
+        while (!stop.load(.acquire)) {
+            // Poll with 0ms timeout to process incoming frames (PINGs, ACKs)
+            // without blocking. This keeps the QUIC connection alive.
+            client.poll(0) catch {};
+            // Sleep 500ms between polls — frequent enough to respond to
+            // server keepalives, rare enough to avoid CPU waste.
+            std.Thread.sleep(500 * std.time.ns_per_ms);
+        }
+    }
 };
 
 // Write pre-encoded length-prefixed protobuf message bytes to QUIC stream.
@@ -108,6 +135,8 @@ fn quicDeinit(self: *repl_dispatch.TransportConnection) void {
         return;
     };
     const impl: *QuicTransportConnection = @ptrCast(@alignCast(ctx));
+    // Stop keepalive thread before closing stream/client
+    impl.stopKeepalive();
     impl.stream.deinit();
     if (impl.owns_client) {
         impl.client.deinit();
@@ -163,7 +192,7 @@ fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.T
     };
     errdefer stream.deinit();
 
-    // Create transport connection wrapper.
+    // Create transport connection wrapper with keepalive polling.
     const impl = try allocator.create(QuicTransportConnection);
     impl.* = .{
         .allocator = allocator,
@@ -171,6 +200,8 @@ fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.T
         .stream = stream,
         .owns_client = true,
     };
+    // Start background keepalive polling to prevent QUIC idle timeout
+    impl.startKeepalive();
 
     const transport_conn = try allocator.create(repl_dispatch.TransportConnection);
     transport_conn.* = .{
