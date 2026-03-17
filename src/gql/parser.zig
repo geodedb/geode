@@ -273,6 +273,12 @@ pub const Parser = struct {
     fn parseLimitValue(self: *Parser) !struct { value: ?u64, param: ?[]const u8 } {
         if (self.cur.kind == .dollar) {
             self.advance();
+            // Accept both named ($param) and positional ($1) parameters
+            if (self.cur.kind == .integer_lit) {
+                const name = self.cur;
+                self.advance();
+                return .{ .value = null, .param = name.lexeme };
+            }
             const name = try self.expectIdentifierOrKeyword();
             return .{ .value = null, .param = name.lexeme };
         }
@@ -3597,8 +3603,15 @@ pub const Parser = struct {
     fn parsePrimaryExpr(self: *Parser) ParserError!ast.Expr {
         return switch (self.cur.kind) {
             .dollar => blk_param: {
-                // Parameter: $identifier (allow keywords as parameter names)
+                // Parameter: $identifier or $N (positional)
+                // Named: $param_name, $count, $name (identifier or keyword after $)
+                // Positional: $1, $2, $3 (integer literal after $, used by Go client)
                 self.advance();
+                if (self.cur.kind == .integer_lit) {
+                    const name = self.cur;
+                    self.advance();
+                    break :blk_param .{ .Param = name.lexeme };
+                }
                 const name = try self.expectIdentifierOrKeyword();
                 break :blk_param .{ .Param = name.lexeme };
             },
