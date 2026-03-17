@@ -22,20 +22,14 @@ pub const UuidV7 = struct {
         uuid.bytes[4] = @truncate(timestamp_ms >> 8);
         uuid.bytes[5] = @truncate(timestamp_ms);
 
-        // Generate random bytes for the rest
-        const seed: u64 = @as(u64, @intCast(std.time.nanoTimestamp()));
-        var prng = std.Random.DefaultPrng.init(seed);
-        const random = prng.random();
+        // Fill bytes 6-15 with cryptographic randomness
+        std.crypto.random.bytes(uuid.bytes[6..16]);
 
-        // Bytes 6-7: version (0111) and random
-        uuid.bytes[6] = 0x70 | (random.int(u8) & 0x0F); // Version 7
-        uuid.bytes[7] = random.int(u8);
+        // Bytes 6-7: set version 7 (0111 in high nibble of byte 6)
+        uuid.bytes[6] = 0x70 | (uuid.bytes[6] & 0x0F);
 
-        // Byte 8: variant (10) and random
-        uuid.bytes[8] = 0x80 | (random.int(u8) & 0x3F); // Variant 10
-
-        // Bytes 9-15: random
-        random.bytes(uuid.bytes[9..16]);
+        // Byte 8: set variant 10 (10 in high 2 bits)
+        uuid.bytes[8] = 0x80 | (uuid.bytes[8] & 0x3F);
 
         return uuid;
     }
