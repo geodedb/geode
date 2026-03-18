@@ -214,19 +214,16 @@ pub const QuicTransport = struct {
         defer self.pending_destroy_mutex.unlock();
         if (self.pending_destroy.items.len == 0) return;
 
-        // Wait for handler threads to finish I/O before destroying connections
-        self.poll_sync.enterPoll();
-        defer self.poll_sync.leavePoll();
-
-        for (self.pending_destroy.items) |inner_conn| {
-            if (self.endpoint) |ep| {
-                // Use vendor API to properly remove from all endpoint tracking
-                // tables (conns, accepted, retired, timers) before freeing.
+        // api.destroy() modifies endpoint internal maps (conns, accepted, retired)
+        // without acquiring ep.mu. Acquire it here to prevent racing with poll().
+        if (self.endpoint) |ep| {
+            ep.mu.lock();
+            defer ep.mu.unlock();
+            for (self.pending_destroy.items) |inner_conn| {
                 api.destroy(ep, inner_conn);
-            } else {
-                // No endpoint (already shut down) - just deinit internal state.
-                // The Connection struct was allocated by the endpoint so we
-                // cannot free it here without the endpoint's allocator.
+            }
+        } else {
+            for (self.pending_destroy.items) |inner_conn| {
                 inner_conn.deinit();
             }
         }
@@ -348,9 +345,12 @@ pub const QuicTransport = struct {
                 std.math.maxInt(i32)
             else
                 @intCast(timeout_ms);
-            self.poll_sync.enterPoll();
-            defer self.poll_sync.leavePoll();
+            // QUIC library v0.1.10: poll() is internally thread-safe with
+            // fine-grained per-phase locking. No external PollSync needed
+            // for the poll call itself. We still signal poll_cv so handlers
+            // waiting for data delivery wake up promptly.
             try api.poll(ep, timeout_i32);
+            self.poll_sync.poll_cv.broadcast();
         }
     }
 
@@ -359,15 +359,12 @@ pub const QuicTransport = struct {
             // GAP-0203: Drain deferred connection cleanups before polling.
             self.drainPendingDestroy();
 
-            // Non-blocking poll: process already-received packets without waiting.
-            // This minimizes PollSync hold time to ~100μs (just frame processing,
-            // no socket blocking). Handler threads can resume I/O almost immediately.
-            self.poll_sync.enterPoll();
+            // QUIC library v0.1.10: poll() is internally thread-safe.
+            // No PollSync needed — handlers can do concurrent I/O during poll.
             ep.poll(0) catch |err| {
-                self.poll_sync.leavePoll();
                 return err;
             };
-            self.poll_sync.leavePoll();
+            self.poll_sync.poll_cv.broadcast(); // Wake handlers waiting for data
 
             // Non-blocking check for completed handshakes
             const conn = api.tryAccept(ep) orelse return QuicError.WouldBlock;
@@ -399,13 +396,11 @@ pub const QuicTransport = struct {
 
     pub fn tryAccept(self: *QuicTransport) ?*QuicConnection {
         if (self.endpoint) |ep| {
-            // Non-blocking poll for tryAccept
-            self.poll_sync.enterPoll();
+            // QUIC library v0.1.10: poll() is internally thread-safe
             ep.poll(0) catch {
-                self.poll_sync.leavePoll();
                 return null;
             };
-            self.poll_sync.leavePoll();
+            self.poll_sync.poll_cv.broadcast();
             const conn = api.tryAccept(ep) orelse return null;
             const wrapper = self.allocator.create(QuicConnection) catch return null;
             wrapper.* = QuicConnection{
@@ -454,14 +449,14 @@ pub const QuicTransport = struct {
         // may still deliver packets to it. Freeing it here causes a
         // use-after-free crash (GAP-0203).
         // Use poll_sync to ensure poll() doesn't race with connection teardown.
-        self.poll_sync.enterIo();
+        // Close streams and connection. The QUIC library's closeStream/
+        // closeConnection are thread-safe (per-connection mutex).
         for (conn.streams.items) |stream| {
             conn.inner.closeStream(stream.stream_id, 0) catch {};
             conn.allocator.destroy(stream);
         }
         conn.streams.deinit(conn.allocator);
         api.closeConnection(conn.inner, 0) catch {};
-        self.poll_sync.leaveIo();
 
         // Queue the inner connection for deferred destruction on the main thread.
         // drainPendingDestroy() will use api.destroy() to properly remove it
@@ -530,10 +525,6 @@ pub const QuicConnection = struct {
     poll_sync: ?*PollSync = null,
 
     pub fn openStream(self: *QuicConnection, bidirectional: bool) !*QuicStream {
-        if (self.poll_sync) |ps| ps.enterIo();
-        defer {
-            if (self.poll_sync) |ps| ps.leaveIo();
-        }
         const qc = self.quic_connection orelse return QuicError.Closed;
         const stream_id = try api.openStream(qc, bidirectional);
 
@@ -550,10 +541,6 @@ pub const QuicConnection = struct {
     }
 
     pub fn acceptStream(self: *QuicConnection) !*QuicStream {
-        if (self.poll_sync) |ps| ps.enterIo();
-        defer {
-            if (self.poll_sync) |ps| ps.leaveIo();
-        }
         const qc = self.quic_connection orelse return QuicError.Closed;
         const stream_id = try api.acceptStream(qc);
         // GAP-0200: Debug print removed from hot path for performance
@@ -643,20 +630,12 @@ pub const QuicStream = struct {
     tracking_index: usize = 0,
 
     pub fn write(self: *QuicStream, data: []const u8) !usize {
-        if (self.poll_sync) |ps| ps.enterIo();
-        defer {
-            if (self.poll_sync) |ps| ps.leaveIo();
-        }
+        // QUIC library v0.1.10: writeStream is internally thread-safe
+        // (per-connection mutex protects stream state). No PollSync needed.
         return self.connection.writeStream(self.stream_id, data, false);
     }
 
     pub fn writeAll(self: *QuicStream, data: []const u8) !void {
-        // Hold PollSync for the entire write to avoid per-chunk lock overhead.
-        // This reduces lock acquisitions from O(chunks) to O(1) per response.
-        if (self.poll_sync) |ps| ps.enterIo();
-        defer {
-            if (self.poll_sync) |ps| ps.leaveIo();
-        }
         var written: usize = 0;
         var blocked_retries: usize = 0;
         const max_blocked_retries: usize = 2000; // ~10s at 5ms sleep
@@ -665,10 +644,7 @@ pub const QuicStream = struct {
                 if (err == error.FlowControlBlocked) {
                     blocked_retries += 1;
                     if (blocked_retries > max_blocked_retries) return QuicError.WriteError;
-                    // Release lock during sleep so poll can process ACKs
-                    if (self.poll_sync) |ps| ps.leaveIo();
                     std.Thread.sleep(5 * std.time.ns_per_ms);
-                    if (self.poll_sync) |ps| ps.enterIo();
                     continue;
                 }
                 return err;
@@ -680,11 +656,8 @@ pub const QuicStream = struct {
     }
 
     pub fn read(self: *QuicStream, buffer: []u8) !usize {
-        // GAP-0200: Debug print removed from hot path for performance
-        if (self.poll_sync) |ps| ps.enterIo();
-        defer {
-            if (self.poll_sync) |ps| ps.leaveIo();
-        }
+        // QUIC library v0.1.10: readStream is internally thread-safe
+        // (per-connection mutex protects stream reassembly buffers).
         return self.connection.readStream(self.stream_id, buffer);
     }
 
