@@ -21,18 +21,23 @@ pub fn getTlsConfig() TlsConfig {
 }
 
 // QUIC Transport for REPL - proper QUIC/UDP connection.
+//
+// Thread safety: the QUIC C library is NOT safe for concurrent poll() calls.
+// We use a mutex to ensure only one thread polls at a time. The keepalive
+// thread only polls when no I/O operation is in progress.
 const QuicTransportConnection = struct {
     allocator: std.mem.Allocator,
     client: *quic.QuicClient,
     stream: *quic.QuicClientStream,
     owns_client: bool,
-    // Background keepalive thread that polls the QUIC client periodically
-    // to respond to server PINGs and prevent idle timeout disconnections.
+    // Mutex protecting client.poll() calls — only one thread may poll at a time.
+    poll_mutex: std.Thread.Mutex = .{},
+    // Background keepalive thread state
     keepalive_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     keepalive_thread: ?std.Thread = null,
 
     fn startKeepalive(self: *QuicTransportConnection) void {
-        self.keepalive_thread = std.Thread.spawn(.{}, keepaliveWorker, .{ self.client, &self.keepalive_stop }) catch null;
+        self.keepalive_thread = std.Thread.spawn(.{}, keepaliveWorker, .{self}) catch null;
     }
 
     fn stopKeepalive(self: *QuicTransportConnection) void {
@@ -43,13 +48,26 @@ const QuicTransportConnection = struct {
         }
     }
 
-    fn keepaliveWorker(client: *quic.QuicClient, stop: *std.atomic.Value(bool)) void {
-        while (!stop.load(.acquire)) {
-            // Poll with 0ms timeout to process incoming frames (PINGs, ACKs)
-            // without blocking. This keeps the QUIC connection alive.
-            client.poll(0) catch {};
-            // Sleep 500ms between polls — frequent enough to respond to
-            // server keepalives, rare enough to avoid CPU waste.
+    /// Thread-safe poll: acquires mutex before calling into QUIC C library.
+    fn safePoll(self: *QuicTransportConnection, timeout_ms: u32) void {
+        self.poll_mutex.lock();
+        defer self.poll_mutex.unlock();
+        self.client.poll(timeout_ms) catch {};
+    }
+
+    /// Try to poll if no other thread is polling. Returns immediately if busy.
+    fn tryPoll(self: *QuicTransportConnection) void {
+        if (self.poll_mutex.tryLock()) {
+            defer self.poll_mutex.unlock();
+            self.client.poll(0) catch {};
+        }
+    }
+
+    fn keepaliveWorker(self: *QuicTransportConnection) void {
+        while (!self.keepalive_stop.load(.acquire)) {
+            // Non-blocking tryPoll: if I/O is active (poll_mutex held),
+            // skip this cycle. This prevents concurrent poll() calls.
+            self.tryPoll();
             std.Thread.sleep(500 * std.time.ns_per_ms);
         }
     }
@@ -81,7 +99,7 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
         const n = impl.stream.read(len_buf[len_read..]) catch |err| {
             if (err == error.WouldBlock) {
                 if (std.time.milliTimestamp() - start >= timeout_ms) return error.WouldBlock;
-                impl.client.poll(5) catch {};
+                impl.safePoll(5);
                 std.Thread.sleep(5 * std.time.ns_per_ms);
                 continue;
             }
@@ -112,7 +130,7 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
                     allocator.free(body);
                     return error.WouldBlock;
                 }
-                impl.client.poll(5) catch {};
+                impl.safePoll(5);
                 std.Thread.sleep(5 * std.time.ns_per_ms);
                 continue;
             }
@@ -192,7 +210,7 @@ fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.T
     };
     errdefer stream.deinit();
 
-    // Create transport connection wrapper with keepalive polling.
+    // Create transport connection wrapper with mutex-guarded keepalive polling.
     const impl = try allocator.create(QuicTransportConnection);
     impl.* = .{
         .allocator = allocator,
@@ -200,7 +218,8 @@ fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.T
         .stream = stream,
         .owns_client = true,
     };
-    // Start background keepalive polling to prevent QUIC idle timeout
+    // Start background keepalive polling to prevent QUIC idle timeout.
+    // Uses tryPoll() to avoid racing with I/O path's safePoll().
     impl.startKeepalive();
 
     const transport_conn = try allocator.create(repl_dispatch.TransportConnection);
