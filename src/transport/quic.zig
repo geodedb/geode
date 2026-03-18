@@ -359,21 +359,15 @@ pub const QuicTransport = struct {
             // GAP-0203: Drain deferred connection cleanups before polling.
             self.drainPendingDestroy();
 
-            // Minimize PollSync hold time: poll for just 1ms to receive packets
-            // and process handshakes, then release immediately. Handler threads
-            // blocked on I/O get the lock back within ~1ms.
+            // Non-blocking poll: process already-received packets without waiting.
+            // This minimizes PollSync hold time to ~100μs (just frame processing,
+            // no socket blocking). Handler threads can resume I/O almost immediately.
             self.poll_sync.enterPoll();
-            ep.poll(1) catch |err| {
+            ep.poll(0) catch |err| {
                 self.poll_sync.leavePoll();
                 return err;
             };
             self.poll_sync.leavePoll();
-
-            // Yield to handler threads BEFORE checking accept queue.
-            // This gap lets handlers complete in-flight I/O that was blocked
-            // during the poll() exclusive lock window. 500μs is enough for
-            // a handler to do enterIo + readStream + leaveIo (~50μs each).
-            std.Thread.sleep(500 * std.time.ns_per_us);
 
             // Non-blocking check for completed handshakes
             const conn = api.tryAccept(ep) orelse return QuicError.WouldBlock;
@@ -405,9 +399,9 @@ pub const QuicTransport = struct {
 
     pub fn tryAccept(self: *QuicTransport) ?*QuicConnection {
         if (self.endpoint) |ep| {
-            // Wait for handler threads then poll
+            // Non-blocking poll for tryAccept
             self.poll_sync.enterPoll();
-            ep.poll(1) catch {
+            ep.poll(0) catch {
                 self.poll_sync.leavePoll();
                 return null;
             };

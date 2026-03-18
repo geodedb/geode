@@ -570,13 +570,12 @@ pub fn main() !void {
                         Attr.string("error", @errorName(err)),
                     });
                 }
-                // Yield to handler I/O threads when no new connections are pending.
-                // Scale sleep with active connection count: more connections = more
-                // time needed for I/O between poll() cycles. Base 2ms + 1ms per
-                // active connection (capped at 10ms).
-                const conn_count = transport.getConnectionCount();
-                const sleep_ms: u64 = @min(2 + conn_count, 10);
-                std.Thread.sleep(sleep_ms * std.time.ns_per_ms);
+                // Brief yield then loop back to poll() quickly.
+                // Handlers depend on poll() to process incoming QUIC packets —
+                // longer delays here mean handlers wait longer for data.
+                // 500μs gives handlers time to complete in-flight reads
+                // while keeping poll frequency at ~2000/sec for responsiveness.
+                std.Thread.sleep(500 * std.time.ns_per_us);
                 continue;
             };
 

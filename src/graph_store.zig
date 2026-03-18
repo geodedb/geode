@@ -375,7 +375,7 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-002; FEATURE="PerGraphStorage"; ASPECT=GraphStoreRouting; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
     // Per-graph storage support
     graph_handles: std.StringHashMap(*GraphHandle),
-    graph_handles_mutex: std.Thread.Mutex = .{},
+    graph_handles_rwlock: std.Thread.RwLock = .{},
     data_dir: []const u8 = "",
     use_per_graph_storage: bool = false,
 
@@ -628,14 +628,14 @@ pub const GraphStore = struct {
                     handle.deinit();
                     return;
                 };
-                self.graph_handles_mutex.lock();
+                self.graph_handles_rwlock.lock();
                 self.graph_handles.put(handle_name, handle) catch {
-                    self.graph_handles_mutex.unlock();
+                    self.graph_handles_rwlock.unlock();
                     handle.deinit();
                     self.allocator.free(handle_name);
                     return;
                 };
-                self.graph_handles_mutex.unlock();
+                self.graph_handles_rwlock.unlock();
             }
         }
     }
@@ -643,8 +643,8 @@ pub const GraphStore = struct {
     /// Look up a per-graph handle by name. Returns null if per-graph storage
     /// is not active or the graph is not registered.
     pub fn getHandle(self: *GraphStore, graph_name: []const u8) ?*GraphHandle {
-        self.graph_handles_mutex.lock();
-        defer self.graph_handles_mutex.unlock();
+        self.graph_handles_rwlock.lockShared();
+        defer self.graph_handles_rwlock.unlockShared();
         return self.graph_handles.get(graph_name);
     }
 
@@ -709,9 +709,9 @@ pub const GraphStore = struct {
                 self.dirty = true;
                 return;
             };
-            self.graph_handles_mutex.lock();
+            self.graph_handles_rwlock.lock();
             self.graph_handles.put(handle_name, handle) catch |err| {
-                self.graph_handles_mutex.unlock();
+                self.graph_handles_rwlock.unlock();
                 handle.deinit();
                 self.allocator.free(handle_name);
                 log.warn("Failed to insert GraphHandle into map", &.{
@@ -720,7 +720,7 @@ pub const GraphStore = struct {
                 self.dirty = true;
                 return;
             };
-            self.graph_handles_mutex.unlock();
+            self.graph_handles_rwlock.unlock();
             // Save registry and empty graph file
             self.savePerGraphFiles() catch |err| {
                 log.warn("Failed to save per-graph files after CREATE GRAPH", &.{
@@ -744,9 +744,9 @@ pub const GraphStore = struct {
         // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-006; FEATURE="PerGraphStorage"; ASPECT=DropGraph; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
         // Per-graph storage: delete the per-graph file and remove the GraphHandle
         if (self.use_per_graph_storage) {
-            self.graph_handles_mutex.lock();
+            self.graph_handles_rwlock.lock();
             if (self.graph_handles.fetchRemove(graph_name)) |kv| {
-                self.graph_handles_mutex.unlock();
+                self.graph_handles_rwlock.unlock();
                 const handle = kv.value;
                 // Delete the per-graph file
                 var uuid_str_buf: [36]u8 = undefined;
@@ -761,7 +761,7 @@ pub const GraphStore = struct {
                 self.allocator.free(kv.key);
                 handle.deinit();
             } else {
-                self.graph_handles_mutex.unlock();
+                self.graph_handles_rwlock.unlock();
             }
             // Save updated registry
             self.savePerGraphFiles() catch |err| {
@@ -2789,8 +2789,8 @@ pub const GraphStore = struct {
         reg.next_node_id = self.next_node_id;
         reg.next_edge_id = self.next_edge_id;
 
-        self.graph_handles_mutex.lock();
-        defer self.graph_handles_mutex.unlock();
+        self.graph_handles_rwlock.lockShared();
+        defer self.graph_handles_rwlock.unlockShared();
 
         var save_failed = false;
 
@@ -2876,8 +2876,8 @@ pub const GraphStore = struct {
             const uuid_str = uuid_v7.toStringBuf(&uuid_str_buf) catch {
                 handle.available = false;
                 const name_key = try self.allocator.dupe(u8, entry.name);
-                self.graph_handles_mutex.lock();
-                defer self.graph_handles_mutex.unlock();
+                self.graph_handles_rwlock.lock();
+                defer self.graph_handles_rwlock.unlock();
                 try self.graph_handles.put(name_key, handle);
                 continue;
             };
@@ -2904,9 +2904,9 @@ pub const GraphStore = struct {
             }
 
             const name_key = try self.allocator.dupe(u8, entry.name);
-            self.graph_handles_mutex.lock();
+            self.graph_handles_rwlock.lock();
             try self.graph_handles.put(name_key, handle);
-            self.graph_handles_mutex.unlock();
+            self.graph_handles_rwlock.unlock();
             try self.ensureGraphNoDirty(entry.name);
         }
 
