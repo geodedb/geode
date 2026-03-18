@@ -651,16 +651,24 @@ pub const QuicStream = struct {
     }
 
     pub fn writeAll(self: *QuicStream, data: []const u8) !void {
+        // Hold PollSync for the entire write to avoid per-chunk lock overhead.
+        // This reduces lock acquisitions from O(chunks) to O(1) per response.
+        if (self.poll_sync) |ps| ps.enterIo();
+        defer {
+            if (self.poll_sync) |ps| ps.leaveIo();
+        }
         var written: usize = 0;
         var blocked_retries: usize = 0;
         const max_blocked_retries: usize = 2000; // ~10s at 5ms sleep
         while (written < data.len) {
-            const n = self.write(data[written..]) catch |err| {
+            const n = self.connection.writeStream(self.stream_id, data[written..], false) catch |err| {
                 if (err == error.FlowControlBlocked) {
                     blocked_retries += 1;
                     if (blocked_retries > max_blocked_retries) return QuicError.WriteError;
-                    // Sleep to allow poll loop to process incoming ACKs/MAX_STREAM_DATA
+                    // Release lock during sleep so poll can process ACKs
+                    if (self.poll_sync) |ps| ps.leaveIo();
                     std.Thread.sleep(5 * std.time.ns_per_ms);
+                    if (self.poll_sync) |ps| ps.enterIo();
                     continue;
                 }
                 return err;

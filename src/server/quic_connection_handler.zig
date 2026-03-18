@@ -215,9 +215,15 @@ const BufferedProtoReader = struct {
                     if (would_block_attempts >= max_would_block_attempts) {
                         return error.Timeout;
                     }
-                    // #60: Use Thread.sleep instead of waitForPoll to avoid
-                    // PollSync mutex contention that blocks QUIC handshake completion.
-                    std.Thread.sleep(100 * std.time.ns_per_us);
+                    // Wait for the next poll() cycle to deliver packets instead
+                    // of blind-sleeping. waitForPoll blocks until leavePoll()
+                    // signals new data is available, reducing thundering herd
+                    // from 8 handlers all retrying simultaneously every 100μs.
+                    if (self.stream.poll_sync) |ps| {
+                        ps.waitForPoll(2 * std.time.ns_per_ms);
+                    } else {
+                        std.Thread.sleep(100 * std.time.ns_per_us);
+                    }
                     continue;
                 }
                 return err;
@@ -577,9 +583,12 @@ pub fn handleQuicConnection(
         const packet_opt = line_reader.nextMessage() catch |err| {
             if (err == error.EndOfStream) return;
             if (err == error.WouldBlock) {
-                // #60: Use Thread.sleep instead of waitForPoll to avoid
-                // PollSync mutex contention that blocks QUIC handshake completion.
-                std.Thread.sleep(100 * std.time.ns_per_us);
+                // Wait for poll() to deliver new QUIC packets
+                if (stream.poll_sync) |ps| {
+                    ps.waitForPoll(2 * std.time.ns_per_ms);
+                } else {
+                    std.Thread.sleep(100 * std.time.ns_per_us);
+                }
                 continue;
             }
             log.err("Protobuf read error", &.{Attr.string("error", @errorName(err))});
