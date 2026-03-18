@@ -359,16 +359,21 @@ pub const QuicTransport = struct {
             // GAP-0203: Drain deferred connection cleanups before polling.
             self.drainPendingDestroy();
 
-            // #47: Single poll: 1ms exclusive access instead of 300ms.
-            // The old 300-iteration loop monopolized PollSync for up to 300ms
-            // per connection, blocking all handler I/O. Now we poll once and
-            // return immediately — the handler thread waits for streams via poll_cv.
+            // Minimize PollSync hold time: poll for just 1ms to receive packets
+            // and process handshakes, then release immediately. Handler threads
+            // blocked on I/O get the lock back within ~1ms.
             self.poll_sync.enterPoll();
             ep.poll(1) catch |err| {
                 self.poll_sync.leavePoll();
                 return err;
             };
             self.poll_sync.leavePoll();
+
+            // Yield to handler threads BEFORE checking accept queue.
+            // This gap lets handlers complete in-flight I/O that was blocked
+            // during the poll() exclusive lock window. 500μs is enough for
+            // a handler to do enterIo + readStream + leaveIo (~50μs each).
+            std.Thread.sleep(500 * std.time.ns_per_us);
 
             // Non-blocking check for completed handshakes
             const conn = api.tryAccept(ep) orelse return QuicError.WouldBlock;

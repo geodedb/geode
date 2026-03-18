@@ -570,9 +570,13 @@ pub fn main() !void {
                         Attr.string("error", @errorName(err)),
                     });
                 }
-                // GAP-0200-FIX: Add small sleep when no connections to prevent tight spin loop
-                // This also gives other threads a chance to process and reduces CPU usage
-                std.Thread.sleep(1 * std.time.ns_per_ms);
+                // Yield to handler I/O threads when no new connections are pending.
+                // Scale sleep with active connection count: more connections = more
+                // time needed for I/O between poll() cycles. Base 2ms + 1ms per
+                // active connection (capped at 10ms).
+                const conn_count = transport.getConnectionCount();
+                const sleep_ms: u64 = @min(2 + conn_count, 10);
+                std.Thread.sleep(sleep_ms * std.time.ns_per_ms);
                 continue;
             };
 
