@@ -106,11 +106,12 @@ GitLab is the source of truth for all gap status and tracking. This document con
 - **GitLab issue:** [#546](https://gitlab.com/devnw/codepros/geode/geode/-/issues/546)
 - **Resolution (2026-03-13):** ECDSA P256 and P384 sign/verify implemented in `src/types/cryptographic.zig` using `std.crypto.sign.ecdsa.EcdsaP256Sha256` and `EcdsaP384Sha384`. Key generation, signing, and verification all functional. RSA PSS explicitly deferred (Zig stdlib limitation documented). Unit tests added and passing. See [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
 
-### GAP-0257: `58000: Internal Server Error` on MATCH+ORDER BY over large result sets
+### ~~GAP-0257~~: `58000: Internal Server Error` on MATCH+ORDER BY over large result sets — **CLOSED / Fixed**
 
 - **GitLab issue:** *(open — to be filed)*
 - **Category:** Correctness / Query Engine
 - **Severity:** High
+- **Resolution (2026-03-21):** Root cause was memory corruption in spice thread pool's fork/join parallel map during data page serialization (`proto_util.zig:buildDataPage`). When result sets exceeded 512 rows, the parallel path corrupted memory, causing the catch-all error handler to emit `58000: Internal Server Error`. Fix: replaced parallel serialization with sequential loop (per-row protobuf conversion is lightweight — no measurable throughput impact). Also increased `writeServerPacket` initial protobuf buffer from 4KB to 64KB to reduce reallocations for large pages. Regression test: `gap_0257_orderby_large_resultset.yml` (42 tests, 1000 and 2500 node ORDER BY verified).
 - **Requirement source:** ISO/IEC 39075:2024 §9 (GQL query execution); REQ-0003 Query Correctness
 - **Discovered:** 2026-03-21 via `geode-client-go` load tests (`TestLoad_LargeDataset`, `TestLoad_MultiPageResults`)
 - **Server version:** `geodedb/geode:latest` (v0.1.30 at time of discovery)

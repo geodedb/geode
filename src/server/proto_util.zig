@@ -1,7 +1,6 @@
 // CANARY: REQ=REQ-PERF-PROTO-ARENA-001; FEATURE="ArenaProtoSerialization"; ASPECT=DataPageSerialization; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
 const std = @import("std");
 const schema = @import("schema");
-const spice_wrapper = @import("parallel/spice");
 // Use relative imports since this file is part of the geode module
 const value_types = @import("../value_types.zig");
 const execution = @import("../execution.zig");
@@ -230,76 +229,20 @@ pub fn buildDataPage(
     var rows = std.ArrayList(schema.Row).initCapacity(allocator, row_count) catch return error.OutOfMemory;
     try rows.resize(allocator, row_count);
 
-    // Use a higher threshold for data page serialization to avoid fork/join
-    // overhead for typical result sets. The spice thread pool has memory
-    // corruption issues with small workloads (< 512 rows) where fork/join
-    // synchronization overhead exceeds the parallelism benefit anyway.
-    const data_page_parallel_threshold: usize = 512;
-    if (spice_wrapper.shouldUseParallelism(row_count, data_page_parallel_threshold)) {
-        var pool = spice_wrapper.SpicePool.init(allocator, null);
-        pool.start();
-        defer pool.deinit();
-
-        var ts_alloc = std.heap.ThreadSafeAllocator{ .child_allocator = allocator };
-        const safe_alloc = ts_alloc.allocator();
-
-        const RowInput = struct {
-            row: []const value_types.Value,
-            allocator: std.mem.Allocator,
-        };
-
-        const RowResult = struct {
-            row: schema.Row,
-            err: ?anyerror,
-        };
-
-        const items = try allocator.alloc(RowInput, row_count);
-        defer allocator.free(items);
-        for (start..end, 0..) |row_idx, i| {
-            items[i] = .{ .row = result.rows[row_idx], .allocator = safe_alloc };
+    // GAP-0257 fix: Use sequential serialization for all data page sizes.
+    // The spice thread pool fork/join path caused memory corruption on large
+    // result sets (1000+ rows), producing "58000: Internal Server Error".
+    // Sequential serialization is safe and fast enough — per-row protobuf
+    // conversion is lightweight (mostly string duplication), and the cost of
+    // creating/destroying a thread pool per data page exceeds any parallelism
+    // benefit for typical workloads.
+    for (start..end, 0..) |row_idx, i| {
+        var values = std.ArrayList(schema.Value).initCapacity(allocator, result.rows[row_idx].len) catch return error.OutOfMemory;
+        for (result.rows[row_idx]) |val| {
+            const proto_val = try valueToProto(allocator, val);
+            try values.append(allocator, proto_val);
         }
-
-        const mapFn = struct {
-            fn map(_: *spice_wrapper.Task, input: RowInput) RowResult {
-                var values = std.ArrayList(schema.Value).initCapacity(input.allocator, input.row.len) catch {
-                    return .{ .row = .{ .values = std.ArrayList(schema.Value){} }, .err = error.OutOfMemory };
-                };
-                for (input.row) |val| {
-                    const proto_val = valueToProto(input.allocator, val) catch |err| {
-                        values.deinit(input.allocator);
-                        return .{ .row = .{ .values = std.ArrayList(schema.Value){} }, .err = err };
-                    };
-                    values.append(input.allocator, proto_val) catch |err| {
-                        values.deinit(input.allocator);
-                        return .{ .row = .{ .values = std.ArrayList(schema.Value){} }, .err = err };
-                    };
-                }
-                return .{ .row = .{ .values = values }, .err = null };
-            }
-        }.map;
-
-        const results = try spice_wrapper.parallelMap(RowInput, RowResult, &pool, items, mapFn, data_page_parallel_threshold);
-        defer allocator.free(results);
-
-        for (results, 0..) |res, i| {
-            if (res.err) |err| {
-                for (results[0..i]) |prev| {
-                    var vals = prev.row.values;
-                    vals.deinit(allocator);
-                }
-                return err;
-            }
-            rows.items[i] = res.row;
-        }
-    } else {
-        for (start..end, 0..) |row_idx, i| {
-            var values = std.ArrayList(schema.Value).initCapacity(allocator, result.rows[row_idx].len) catch return error.OutOfMemory;
-            for (result.rows[row_idx]) |val| {
-                const proto_val = try valueToProto(allocator, val);
-                try values.append(allocator, proto_val);
-            }
-            rows.items[i] = .{ .values = values };
-        }
+        rows.items[i] = .{ .values = values };
     }
 
     return schema.DataPage{

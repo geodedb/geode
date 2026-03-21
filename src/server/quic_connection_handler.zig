@@ -129,8 +129,10 @@ fn buildErrorResponse(
 
 /// Write a length-prefixed protobuf ServerPacket to the stream
 fn writeServerPacket(allocator: std.mem.Allocator, stream: *quic_transport.QuicStream, packet: schema.ServerPacket) !void {
-    // Encode the packet to protobuf bytes
-    var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 4096) catch return error.OutOfMemory;
+    // Encode the packet to protobuf bytes.
+    // GAP-0257: Use 64KB initial capacity to reduce reallocations for large
+    // data pages (1000+ row result sets produce 100KB+ encoded protobuf).
+    var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 65536) catch return error.OutOfMemory;
     defer aw.deinit();
 
     try protobuf.encode(&aw.writer, allocator, packet);
