@@ -5,11 +5,12 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 
 ## Summary
 
-- **Total open gaps:** 6
+- **Total open gaps:** 5
 - **Critical:** 1
-- **High:** 3
+- **High:** 2
 - **Medium:** 2
 - **Blocked (external dependency):** 3 (GAP-0246, GAP-0247, GAP-0256)
+- **Won't Do:** 1 (GAP-0258)
 - **Closed this session (2026-03-13):** GAP-0248, GAP-0249, GAP-0250, GAP-0251, GAP-0252, GAP-0253
 
 GitLab is the source of truth for all gap status and tracking. This document contains **OPEN gaps only**. Resolved items are in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
@@ -222,11 +223,13 @@ The error code `58000` is ISO/IEC 9075 "system_error" / IO error.  Likely candid
 
 ---
 
-### GAP-0258: QUIC UDP receive buffer too small — throughput degradation under load
+### ~~GAP-0258~~: QUIC UDP receive buffer too small — **Won't Do (consumer responsibility)**
 
-- **GitLab issue:** *(open — to be filed)*
+- **GitLab issue:** *(not filed)*
 - **Category:** Performance / Transport
 - **Severity:** High
+- **Status:** **Won't Do** — UDP socket buffer tuning is an OS-level deployment concern handled by
+  the consumer (operator/infrastructure team), not the server binary.
 - **Requirement source:** REQ-0009 Performance; QUIC RFC 9000 §21.5 (buffer sizing)
 - **Discovered:** 2026-03-21 via `geode-client-go` load tests
 - **Server version:** `geodedb/geode:latest` (v0.1.30 at time of discovery)
