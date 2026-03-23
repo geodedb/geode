@@ -262,6 +262,31 @@ pub fn build(b: *std.Build) void {
     });
     const spice_mod = spice_dep.module("spice");
 
+    // ==========================================================================
+    // Phase 6 External Library Dependencies (Extracted Core Libraries)
+    // ==========================================================================
+
+    // UUID - RFC 9562 compliant (V1-V8), k-sortable V7, injectable generator
+    const uuid_dep = b.dependency("uuid", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const uuid_ext_mod = uuid_dep.module("uuid");
+
+    // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
+    const wal_dep = b.dependency("wal", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const wal_ext_mod = wal_dep.module("wal");
+
+    // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
+    const raft_dep = b.dependency("raft", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const raft_ext_mod = raft_dep.module("raft");
+
     // Modules - Level 0 (No dependencies on other internal modules)
 
     // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-004; FEATURE="Centralized Structured Logging"; ASPECT=BuildConfig; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
@@ -349,6 +374,11 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("spice", spice_mod);
     root_mod.addImport("parallel/spice", spice_wrapper_mod);
 
+    // Phase 6 External Library Imports (extracted core libraries)
+    root_mod.addImport("uuid", uuid_ext_mod);
+    root_mod.addImport("wal", wal_ext_mod);
+    root_mod.addImport("raft", raft_ext_mod);
+
     // Main unified CLI binary with server and client capabilities
     // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedEntry; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
     // Uses unified_entry.zig as root to allow both cli/main.zig and server/main.zig imports
@@ -390,6 +420,11 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("grpc_client", grpc_client_mod);
     geode_exe.root_module.addImport("spice", spice_mod);
     geode_exe.root_module.addImport("parallel/spice", spice_wrapper_mod);
+
+    // Phase 6 External Library Imports for CLI (extracted core libraries)
+    geode_exe.root_module.addImport("uuid", uuid_ext_mod);
+    geode_exe.root_module.addImport("wal", wal_ext_mod);
+    geode_exe.root_module.addImport("raft", raft_ext_mod);
 
     // Add centralized logging module for CLI
     geode_exe.root_module.addImport("logging", logging_mod);
@@ -583,6 +618,7 @@ pub fn build(b: *std.Build) void {
 
     // Extended type built-in functions tests (new module)
     const ext_builtins_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/types/extended_functions.zig"), .target = target, .optimize = optimize }) });
+    ext_builtins_tests.root_module.addImport("uuid", uuid_ext_mod);
     const run_ext_builtins_tests = b.addRunArtifact(ext_builtins_tests);
 
     const exe_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize }) });
@@ -614,9 +650,11 @@ pub fn build(b: *std.Build) void {
     // and tests/storage -> src/storage. Do NOT add geode import here — it would conflict with the
     // symlinked files which are already part of the geode module tree.
     const math_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_math_functions.zig"), .target = target, .optimize = optimize }) });
+    math_func_tests.root_module.addImport("uuid", uuid_ext_mod);
     const run_math_func_tests = b.addRunArtifact(math_func_tests);
 
     const string_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_string_functions.zig"), .target = target, .optimize = optimize }) });
+    string_func_tests.root_module.addImport("uuid", uuid_ext_mod);
     const run_string_func_tests = b.addRunArtifact(string_func_tests);
 
     // graph_algo tests use @import("graph_store") which is wired as a named module rooted at
@@ -625,6 +663,7 @@ pub fn build(b: *std.Build) void {
     // it as a separate named module would cause "file exists in multiple modules" conflicts.
     const graph_store_mod = b.createModule(.{ .root_source_file = b.path("src/graph_store.zig"), .target = target, .optimize = optimize });
     graph_store_mod.addImport("logging", logging_mod);
+    graph_store_mod.addImport("uuid", uuid_ext_mod);
     const graph_algo_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_graph_algorithms.zig"), .target = target, .optimize = optimize }) });
     graph_algo_tests.root_module.addImport("graph_store", graph_store_mod);
     const run_graph_algo_tests = b.addRunArtifact(graph_algo_tests);
@@ -639,6 +678,8 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("fle_key_manager", fle_key_manager_mod);
     graph_store_unit_tests.root_module.addImport("fle_key_types", fle_key_types_mod);
     graph_store_unit_tests.root_module.addImport("fle_blind_index", fle_blind_index_mod);
+    graph_store_unit_tests.root_module.addImport("uuid", uuid_ext_mod);
+    graph_store_unit_tests.root_module.addImport("wal", wal_ext_mod);
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
 
     // Per-graph data container (graph_handle) unit tests
@@ -649,11 +690,13 @@ pub fn build(b: *std.Build) void {
     graph_handle_unit_tests.root_module.addImport("fle_key_manager", fle_key_manager_mod);
     graph_handle_unit_tests.root_module.addImport("fle_key_types", fle_key_types_mod);
     graph_handle_unit_tests.root_module.addImport("fle_blind_index", fle_blind_index_mod);
+    graph_handle_unit_tests.root_module.addImport("uuid", uuid_ext_mod);
     const run_graph_handle_unit_tests = b.addRunArtifact(graph_handle_unit_tests);
 
     // Per-graph UUID registry (graph_registry) unit tests
     const graph_registry_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/graph_registry.zig"), .target = target, .optimize = optimize }) });
     graph_registry_unit_tests.root_module.addImport("logging", logging_mod);
+    graph_registry_unit_tests.root_module.addImport("uuid", uuid_ext_mod);
     const run_graph_registry_unit_tests = b.addRunArtifact(graph_registry_unit_tests);
 
     // Storage migration unit tests (detectStorageState, migrateToPerGraph)

@@ -1,4 +1,5 @@
 const std = @import("std");
+const uuid_lib = @import("uuid");
 
 // CANARY: REQ=REQ-GQL-083; FEATURE="ExtendedDecimalFormatting"; ASPECT=FORMATTER; STATUS=TESTED; TEST=extended.decimal parse/format; OWNER=engine; UPDATED=2025-09-26
 
@@ -53,40 +54,24 @@ pub const Value = union(enum) {
 };
 
 pub fn uuidV4(rng: *std.rand.DefaultPrng) Uuid {
-    var u: Uuid = undefined;
-    rng.random().bytes(&u.bytes);
-    // Set version (4) and variant (RFC 4122)
-    u.bytes[6] = (u.bytes[6] & 0x0F) | 0x40;
-    u.bytes[8] = (u.bytes[8] & 0x3F) | 0x80;
-    return u;
+    _ = rng; // No longer needed; external library uses crypto random
+    return .{ .bytes = (uuid_lib.newV4() catch unreachable).bytes };
 }
 
 pub fn formatUuid(u: Uuid, writer: anytype) !void {
-    try writer.print("{x:0>2}{x:0>2}{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{
-        u.bytes[0],  u.bytes[1],  u.bytes[2],  u.bytes[3],
-        u.bytes[4],  u.bytes[5],  u.bytes[6],  u.bytes[7],
-        u.bytes[8],  u.bytes[9],  u.bytes[10], u.bytes[11],
-        u.bytes[12], u.bytes[13], u.bytes[14], u.bytes[15],
-    });
+    var buf: [36]u8 = undefined;
+    _ = (uuid_lib.UUID{ .bytes = u.bytes }).toString(&buf);
+    try writer.writeAll(&buf);
 }
 
 pub fn parseUuid(text: []const u8) !Uuid {
-    if (text.len != 36) return error.InvalidLength;
-    var hex: [32]u8 = undefined;
-    var hi: usize = 0;
-    for (text) |c| {
-        if (c == '-') continue;
-        if (hi >= 32) return error.InvalidFormat;
-        hex[hi] = c;
-        hi += 1;
-    }
-    if (hi != 32) return error.InvalidFormat;
-    var u: Uuid = undefined;
-    var i: usize = 0;
-    while (i < 16) : (i += 1) {
-        u.bytes[i] = try std.fmt.parseInt(u8, hex[i * 2 .. i * 2 + 2], 16);
-    }
-    return u;
+    const u = uuid_lib.UUID.fromString(text) catch |err| {
+        return switch (err) {
+            uuid_lib.Error.InvalidLength => error.InvalidLength,
+            else => error.InvalidFormat,
+        };
+    };
+    return Uuid{ .bytes = u.bytes };
 }
 
 pub fn decimalFromString(text: []const u8) !Decimal {
