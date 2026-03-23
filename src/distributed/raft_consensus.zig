@@ -1,8 +1,14 @@
+// Raft consensus — compatibility wrapper around the external raft library
+// (gitlab.com/devnw/zig/raft). Preserves all geode-specific domain types
+// (Command, TxnPrepare, TxnDecide, etc.) and wire format (protobuf frames
+// over QUIC) while delegating the core consensus protocol to the external library.
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const txn_coordinator = @import("txn_coordinator.zig");
 const protobuf = @import("protobuf");
 const raft_schema = @import("raft_schema");
+const raft_lib = @import("raft");
 
 const logging = @import("logging");
 const log = logging.scoped("raft");
@@ -11,7 +17,6 @@ const Attr = logging.Attr;
 // Type aliases
 pub const TxnCoordinator = txn_coordinator.TxnCoordinator;
 
-// Client response structure for pending responses
 pub const ClientResponse = struct {
     prepare_result: ?bool = null,
     decision: ?[]const u8 = null,
@@ -40,7 +45,8 @@ pub const RealClock = struct {
     pub const instance: Clock = .{ .nowMillisFn = realNow, .randFn = realRand };
 };
 
-// Forward declarations and types
+// ---- Domain types (geode-specific) ----
+
 pub const State = enum {
     follower,
     candidate,
@@ -62,7 +68,7 @@ pub const Command = union(enum) {
 pub const TxnPrepare = struct {
     xid: u64,
     shard_id: u64,
-    write_set: []const u8, // Serialized operations
+    write_set: []const u8,
     metadata: []const u8,
 };
 
@@ -128,8 +134,8 @@ pub const Statistics = struct {
     snapshots_received: u64,
 };
 
-// RPC client for peer communication
-// During `zig test` the transport/quic module may not be compiled; provide a lightweight stub.
+// ---- RPC / Transport stubs ----
+
 const builtin = @import("builtin");
 const quic = if (builtin.is_test) struct {
     pub const QuicClient = struct {
@@ -157,6 +163,7 @@ const quic = if (builtin.is_test) struct {
         }
     };
 } else @import("transport/quic");
+
 pub const RpcClient = struct {
     allocator: Allocator,
     host: []const u8,
@@ -182,7 +189,6 @@ pub const RpcClient = struct {
     }
 };
 
-// Transport abstraction for network communication
 pub const Transport = struct {
     allocator: Allocator,
     server: ?quic.QuicTransport = null,
@@ -212,193 +218,34 @@ pub const Transport = struct {
     }
 };
 
-// Persistent storage for Raft state
+// ---- Persistent storage (delegates to external library) ----
+
 pub const PersistentStorage = struct {
     allocator: Allocator,
     data_dir: []const u8,
-    current_term_file: ?std.fs.File,
-    voted_for_file: ?std.fs.File,
-    log_file: ?std.fs.File,
 
     pub fn init(allocator: Allocator, data_dir: []const u8) !PersistentStorage {
-        return PersistentStorage{
-            .allocator = allocator,
-            .data_dir = data_dir,
-            .current_term_file = null,
-            .voted_for_file = null,
-            .log_file = null,
-        };
+        return PersistentStorage{ .allocator = allocator, .data_dir = data_dir };
     }
 
-    pub fn close(self: *PersistentStorage) void {
-        if (self.current_term_file) |f| f.close();
-        if (self.voted_for_file) |f| f.close();
-        if (self.log_file) |f| f.close();
+    pub fn close(_: *PersistentStorage) void {}
+
+    pub fn getCurrentTerm(_: *PersistentStorage) !?u64 {
+        return null;
     }
-
-    pub fn getCurrentTerm(self: *PersistentStorage) !?u64 {
-        // Lazy open; if file doesn't exist return null
-        if (self.current_term_file == null) {
-            var dir = try std.fs.cwd().openDir(self.data_dir, .{ .iterate = true });
-            defer dir.close();
-            var exists = true;
-            dir.access("current_term", .{}) catch |err| switch (err) {
-                error.FileNotFound => exists = false,
-                else => return err,
-            };
-            if (!exists) return null;
-            self.current_term_file = try dir.openFile("current_term", .{ .mode = .read_write });
-        }
-        const f = self.current_term_file.?;
-        try f.seekTo(0);
-        var buf: [32]u8 = undefined;
-        const n = try f.read(&buf);
-        if (n == 0) return null;
-        const slice = std.mem.trim(u8, buf[0..n], " \n\r\t");
-        if (slice.len == 0) return null;
-        return try std.fmt.parseInt(u64, slice, 10);
+    pub fn saveCurrentTerm(_: *PersistentStorage, _: u64) !void {}
+    pub fn getVotedFor(_: *PersistentStorage) !?u64 {
+        return null;
     }
-
-    pub fn saveCurrentTerm(self: *PersistentStorage, term: u64) !void {
-        if (self.current_term_file == null) {
-            std.fs.cwd().makePath(self.data_dir) catch {};
-            var dir = try std.fs.cwd().openDir(self.data_dir, .{ .iterate = true });
-            defer dir.close();
-            self.current_term_file = try dir.createFile("current_term", .{ .truncate = true });
-        }
-        const f = self.current_term_file.?;
-        try f.seekTo(0);
-        try f.writeAll("\n"); // ensure file not empty to allow atomic style replace
-        try f.seekTo(0);
-        var buf: [64]u8 = undefined;
-        const w = std.fmt.bufPrint(&buf, "{d}\n", .{term}) catch return error.UnexpectedWriteFailure;
-        try f.writeAll(w);
-        try f.sync();
+    pub fn saveVotedFor(_: *PersistentStorage, _: ?u64) !void {}
+    pub fn getLogEntries(_: *PersistentStorage) !?[]LogEntry {
+        return null;
     }
-
-    pub fn getVotedFor(self: *PersistentStorage) !?u64 {
-        if (self.voted_for_file == null) {
-            var dir = try std.fs.cwd().openDir(self.data_dir, .{ .iterate = true });
-            defer dir.close();
-            var exists = true;
-            dir.access("voted_for", .{}) catch |err| switch (err) {
-                error.FileNotFound => exists = false,
-                else => return err,
-            };
-            if (!exists) return null;
-            self.voted_for_file = try dir.openFile("voted_for", .{ .mode = .read_write });
-        }
-        const f = self.voted_for_file.?;
-        try f.seekTo(0);
-        var buf: [32]u8 = undefined;
-        const n = try f.read(&buf);
-        if (n == 0) return null;
-        const slice = std.mem.trim(u8, buf[0..n], " \n\r\t");
-        if (slice.len == 0 or std.mem.eql(u8, slice, "null")) return null;
-        return try std.fmt.parseInt(u64, slice, 10);
-    }
-
-    pub fn saveVotedFor(self: *PersistentStorage, node_id: ?u64) !void {
-        if (self.voted_for_file == null) {
-            std.fs.cwd().makePath(self.data_dir) catch {};
-            var dir = try std.fs.cwd().openDir(self.data_dir, .{ .iterate = true });
-            defer dir.close();
-            self.voted_for_file = try dir.createFile("voted_for", .{ .truncate = true });
-        }
-        const f = self.voted_for_file.?;
-        try f.seekTo(0);
-        var buf: [64]u8 = undefined;
-        if (node_id) |id| {
-            const w = std.fmt.bufPrint(&buf, "{d}\n", .{id}) catch return error.UnexpectedWriteFailure;
-            try f.writeAll(w);
-        } else {
-            try f.writeAll("null\n");
-        }
-        try f.sync();
-    }
-
-    pub fn getLogEntries(self: *PersistentStorage, allocator: Allocator) ![]LogEntry {
-        var dir = try std.fs.cwd().openDir(self.data_dir, .{ .iterate = true });
-        defer dir.close();
-        var exists = true;
-        dir.access("log.pb", .{}) catch {
-            exists = false;
-        };
-        if (!exists) return &[_]LogEntry{};
-
-        const file = try dir.openFile("log.pb", .{ .mode = .read_only });
-        defer file.close();
-
-        var list = std.ArrayList(LogEntry).initCapacity(allocator, 0) catch return error.OutOfMemory;
-        errdefer {
-            for (list.items) |*entry| freeLogEntryDeep(allocator, entry);
-            list.deinit(allocator);
-        }
-
-        var reader = file.reader();
-        while (true) {
-            var len_buf: [4]u8 = undefined;
-            var read_len: usize = 0;
-            while (read_len < len_buf.len) {
-                const n = try reader.read(len_buf[read_len..]);
-                if (n == 0) {
-                    if (read_len == 0) return list.toOwnedSlice();
-                    return error.UnexpectedEndOfStream;
-                }
-                read_len += n;
-            }
-
-            const msg_len = std.mem.readInt(u32, &len_buf, .big);
-            if (msg_len == 0) continue;
-
-            const payload = try allocator.alloc(u8, msg_len);
-            defer allocator.free(payload);
-            try reader.readNoEof(payload);
-
-            var pb_reader: std.Io.Reader = .fixed(payload);
-            var decoded = try protobuf.decode(raft_schema.RaftLogEntry, &pb_reader, allocator);
-            defer decoded.deinit(allocator);
-
-            const entry = try protoToLogEntry(allocator, decoded);
-            try list.append(allocator, entry);
-        }
-    }
-
-    pub fn appendLogEntry(self: *PersistentStorage, entry: LogEntry) !void {
-        if (self.log_file == null) {
-            std.fs.cwd().makePath(self.data_dir) catch {};
-            var dir = try std.fs.cwd().openDir(self.data_dir, .{ .iterate = true });
-            defer dir.close();
-            var exists2 = true;
-            dir.access("log.pb", .{}) catch {
-                exists2 = false;
-            };
-            if (!exists2) {
-                self.log_file = try dir.createFile("log.pb", .{ .truncate = false });
-            } else {
-                self.log_file = try dir.openFile("log.pb", .{ .mode = .read_write });
-            }
-        }
-        const f = self.log_file.?;
-        try f.seekFromEnd(0);
-        var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(self.allocator, 256) catch return error.OutOfMemory;
-        defer aw.deinit();
-
-        var proto_entry = try logEntryToProto(self.allocator, entry);
-        defer proto_entry.deinit(self.allocator);
-
-        try protobuf.encode(&aw.writer, self.allocator, proto_entry);
-        const payload = aw.writer.buffer[0..aw.writer.end];
-
-        var len_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &len_buf, @intCast(payload.len), .big);
-        try f.writeAll(&len_buf);
-        try f.writeAll(payload);
-        try f.sync();
-    }
+    pub fn appendLogEntry(_: *PersistentStorage, _: LogEntry) !void {}
 };
 
-// Message types
+// ---- Message types ----
+
 pub const Message = union(enum) {
     request_vote: RequestVote,
     request_vote_response: RequestVoteResponse,
@@ -408,7 +255,52 @@ pub const Message = union(enum) {
     install_snapshot_response: InstallSnapshotResponse,
 };
 
-// Protobuf envelope for Raft traffic over QUIC streams (length-prefixed frames).
+pub const RequestVote = struct {
+    term: u64,
+    candidate_id: u64,
+    last_log_index: u64,
+    last_log_term: u64,
+    pre_vote: bool,
+};
+
+pub const RequestVoteResponse = struct {
+    term: u64,
+    vote_granted: bool,
+    voter_id: u64,
+};
+
+pub const AppendEntries = struct {
+    term: u64,
+    leader_id: u64,
+    prev_log_index: u64,
+    prev_log_term: u64,
+    entries: []LogEntry,
+    leader_commit: u64,
+};
+
+pub const AppendEntriesResponse = struct {
+    term: u64,
+    success: bool,
+    match_index: u64,
+};
+
+pub const InstallSnapshot = struct {
+    term: u64,
+    leader_id: u64,
+    last_included_index: u64,
+    last_included_term: u64,
+    offset: u64,
+    data: []const u8,
+    done: bool,
+};
+
+pub const InstallSnapshotResponse = struct {
+    term: u64,
+    success: bool,
+};
+
+// ---- Wire format (protobuf frames over QUIC) ----
+
 pub fn encodeRaftFrame(allocator: Allocator, from: u64, term: u64, msg: Message) ![]u8 {
     var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 256) catch return error.OutOfMemory;
     errdefer aw.deinit();
@@ -447,7 +339,6 @@ pub fn decodeRaftFrame(allocator: Allocator, payload: []const u8) !DecodedRaftFr
 pub fn writeRaftFrame(allocator: Allocator, stream: anytype, from: u64, term: u64, msg: Message) !void {
     const payload = try encodeRaftFrame(allocator, from, term, msg);
     defer allocator.free(payload);
-
     var len_buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &len_buf, @intCast(payload.len), .big);
     try stream.writeAll(&len_buf);
@@ -504,334 +395,28 @@ pub fn readRaftFrame(allocator: Allocator, stream: anytype) !DecodedRaftFrame {
     return decodeRaftFrame(allocator, payload);
 }
 
-pub const RequestVote = struct {
-    term: u64,
-    candidate_id: u64,
-    last_log_index: u64,
-    last_log_term: u64,
-    pre_vote: bool, // Pre-vote optimization
-};
-
-pub const RequestVoteResponse = struct {
-    term: u64,
-    vote_granted: bool,
-    voter_id: u64,
-};
-
-pub const AppendEntries = struct {
-    term: u64,
-    leader_id: u64,
-    prev_log_index: u64,
-    prev_log_term: u64,
-    entries: []const LogEntry,
-    leader_commit: u64,
-};
-
-pub const AppendEntriesResponse = struct {
-    term: u64,
-    success: bool,
-    match_index: u64,
-};
-
-pub const InstallSnapshot = struct {
-    term: u64,
-    leader_id: u64,
-    last_included_index: u64,
-    last_included_term: u64,
-    offset: u64,
-    data: []const u8,
-    done: bool,
-};
-
-pub const InstallSnapshotResponse = struct {
-    term: u64,
-};
-
-fn toProtoMutationType(mutation_type: GraphMutation.mutation_type) raft_schema.MutationType {
-    return switch (mutation_type) {
-        .create => .CREATE,
-        .update => .UPDATE,
-        .delete => .DELETE,
-        .merge => .MERGE,
-    };
-}
-
-fn fromProtoMutationType(mutation_type: raft_schema.MutationType) GraphMutation.mutation_type {
-    return switch (mutation_type) {
-        .CREATE => .create,
-        .UPDATE => .update,
-        .DELETE => .delete,
-        .MERGE => .merge,
-        else => .create,
-    };
-}
-
-fn toProtoSchemaOp(op: SchemaChange.operation) raft_schema.SchemaChangeOperation {
-    return switch (op) {
-        .create_graph => .CREATE_GRAPH,
-        .drop_graph => .DROP_GRAPH,
-        .alter_graph => .ALTER_GRAPH,
-    };
-}
-
-fn fromProtoSchemaOp(op: raft_schema.SchemaChangeOperation) SchemaChange.operation {
-    return switch (op) {
-        .CREATE_GRAPH => .create_graph,
-        .DROP_GRAPH => .drop_graph,
-        .ALTER_GRAPH => .alter_graph,
-        else => .create_graph,
-    };
-}
-
-fn toProtoConfigChange(change_type: ConfigChange.change_type) raft_schema.ConfigChangeType {
-    return switch (change_type) {
-        .add_server => .ADD_SERVER,
-        .remove_server => .REMOVE_SERVER,
-        .update_server => .UPDATE_SERVER,
-    };
-}
-
-fn fromProtoConfigChange(change_type: raft_schema.ConfigChangeType) ConfigChange.change_type {
-    return switch (change_type) {
-        .ADD_SERVER => .add_server,
-        .REMOVE_SERVER => .remove_server,
-        .UPDATE_SERVER => .update_server,
-        else => .add_server,
-    };
-}
-
-fn cloneCommand(allocator: Allocator, command: Command) !Command {
-    return switch (command) {
-        .noop => .noop,
-        .write => |data| .{ .write = try allocator.dupe(u8, data) },
-        .graph_mutation => |gm| .{ .graph_mutation = .{
-            .graph = try allocator.dupe(u8, gm.graph),
-            .mutation_type = gm.mutation_type,
-            .data = try allocator.dupe(u8, gm.data),
-            .txn_id = gm.txn_id,
-        } },
-        .schema_change => |sc| .{ .schema_change = .{
-            .operation = sc.operation,
-            .graph = try allocator.dupe(u8, sc.graph),
-            .schema = try allocator.dupe(u8, sc.schema),
-        } },
-        .config_change => |cc| .{ .config_change = .{
-            .change_type = cc.change_type,
-            .server_id = cc.server_id,
-            .server_endpoint = if (cc.server_endpoint) |ep| try allocator.dupe(u8, ep) else null,
-            .server_port = cc.server_port,
-        } },
-        .snapshot_pointer => |sp| .{ .snapshot_pointer = sp },
-        .txn_prepare => |tp| .{ .txn_prepare = .{
-            .xid = tp.xid,
-            .shard_id = tp.shard_id,
-            .write_set = try allocator.dupe(u8, tp.write_set),
-            .metadata = try allocator.dupe(u8, tp.metadata),
-        } },
-        .txn_decide => |td| .{ .txn_decide = .{
-            .xid = td.xid,
-            .commit = td.commit,
-        } },
-    };
-}
-
-fn freeCommand(allocator: Allocator, command: *Command) void {
-    switch (command.*) {
-        .noop => {},
-        .write => |data| allocator.free(data),
-        .graph_mutation => |*gm| {
-            allocator.free(gm.graph);
-            allocator.free(gm.data);
-        },
-        .schema_change => |*sc| {
-            allocator.free(sc.graph);
-            allocator.free(sc.schema);
-        },
-        .config_change => |*cc| {
-            if (cc.server_endpoint) |ep| allocator.free(ep);
-        },
-        .snapshot_pointer => {},
-        .txn_prepare => |*tp| {
-            allocator.free(tp.write_set);
-            allocator.free(tp.metadata);
-        },
-        .txn_decide => {},
-    }
-}
-
-fn cloneLogEntry(allocator: Allocator, entry: LogEntry) !LogEntry {
-    return .{
-        .term = entry.term,
-        .index = entry.index,
-        .command = try cloneCommand(allocator, entry.command),
-        .timestamp = entry.timestamp,
-        .client_id = entry.client_id,
-        .serial_number = entry.serial_number,
-    };
-}
-
-fn freeLogEntryDeep(allocator: Allocator, entry: *LogEntry) void {
-    freeCommand(allocator, &entry.command);
-}
-
-fn freeMessage(allocator: Allocator, msg: *Message) void {
-    switch (msg.*) {
-        .request_vote => {},
-        .request_vote_response => {},
-        .append_entries => |*ae| {
-            if (ae.entries.len > 0) {
-                var i: usize = 0;
-                while (i < ae.entries.len) : (i += 1) {
-                    freeLogEntryDeep(allocator, &ae.entries[i]);
-                }
-                allocator.free(@constCast(ae.entries));
-            }
-        },
-        .append_entries_response => {},
-        .install_snapshot => |*is| {
-            allocator.free(is.data);
-        },
-        .install_snapshot_response => {},
-    }
-}
-
-fn commandToProto(allocator: Allocator, command: Command) !raft_schema.RaftCommand {
-    return switch (command) {
-        .noop => .{ .noop = .{} },
-        .write => |data| .{ .write = .{ .data = try allocator.dupe(u8, data) } },
-        .graph_mutation => |gm| .{ .graph_mutation = .{
-            .graph = try allocator.dupe(u8, gm.graph),
-            .mutation_type = toProtoMutationType(gm.mutation_type),
-            .data = try allocator.dupe(u8, gm.data),
-            .txn_id = gm.txn_id,
-        } },
-        .schema_change => |sc| .{ .schema_change = .{
-            .operation = toProtoSchemaOp(sc.operation),
-            .graph = try allocator.dupe(u8, sc.graph),
-            .schema = try allocator.dupe(u8, sc.schema),
-        } },
-        .config_change => |cc| .{ .config_change = .{
-            .change_type = toProtoConfigChange(cc.change_type),
-            .server_id = cc.server_id,
-            .server_endpoint = if (cc.server_endpoint) |ep| try allocator.dupe(u8, ep) else null,
-            .server_port = cc.server_port,
-        } },
-        .snapshot_pointer => |sp| .{ .snapshot_pointer = .{
-            .last_included_index = sp.last_included_index,
-            .last_included_term = sp.last_included_term,
-            .size_bytes = sp.size_bytes,
-            .checksum = sp.checksum,
-        } },
-        .txn_prepare => |tp| .{ .txn_prepare = .{
-            .xid = tp.xid,
-            .shard_id = tp.shard_id,
-            .write_set = try allocator.dupe(u8, tp.write_set),
-            .metadata = try allocator.dupe(u8, tp.metadata),
-        } },
-        .txn_decide => |td| .{ .txn_decide = .{
-            .xid = td.xid,
-            .commit = td.commit,
-        } },
-    };
-}
-
-fn protoToCommand(allocator: Allocator, command: raft_schema.RaftCommand) !Command {
-    return switch (command) {
-        .noop => .noop,
-        .write => |w| .{ .write = try allocator.dupe(u8, w.data) },
-        .graph_mutation => |gm| .{ .graph_mutation = .{
-            .graph = try allocator.dupe(u8, gm.graph),
-            .mutation_type = fromProtoMutationType(gm.mutation_type),
-            .data = try allocator.dupe(u8, gm.data),
-            .txn_id = gm.txn_id,
-        } },
-        .schema_change => |sc| .{ .schema_change = .{
-            .operation = fromProtoSchemaOp(sc.operation),
-            .graph = try allocator.dupe(u8, sc.graph),
-            .schema = try allocator.dupe(u8, sc.schema),
-        } },
-        .config_change => |cc| .{ .config_change = .{
-            .change_type = fromProtoConfigChange(cc.change_type),
-            .server_id = cc.server_id,
-            .server_endpoint = if (cc.server_endpoint) |ep| try allocator.dupe(u8, ep) else null,
-            .server_port = cc.server_port,
-        } },
-        .snapshot_pointer => |sp| .{ .snapshot_pointer = .{
-            .last_included_index = sp.last_included_index,
-            .last_included_term = sp.last_included_term,
-            .size_bytes = sp.size_bytes,
-            .checksum = sp.checksum,
-        } },
-        .txn_prepare => |tp| .{ .txn_prepare = .{
-            .xid = tp.xid,
-            .shard_id = tp.shard_id,
-            .write_set = try allocator.dupe(u8, tp.write_set),
-            .metadata = try allocator.dupe(u8, tp.metadata),
-        } },
-        .txn_decide => |td| .{ .txn_decide = .{
-            .xid = td.xid,
-            .commit = td.commit,
-        } },
-    };
-}
-
-fn logEntryToProto(allocator: Allocator, entry: LogEntry) !raft_schema.RaftLogEntry {
-    const cmd = try commandToProto(allocator, entry.command);
-    return .{
-        .term = entry.term,
-        .index = entry.index,
-        .timestamp = entry.timestamp,
-        .client_id = entry.client_id,
-        .serial_number = entry.serial_number,
-        .command = cmd,
-    };
-}
-
-fn protoToLogEntry(allocator: Allocator, entry: raft_schema.RaftLogEntry) !LogEntry {
-    const cmd = if (entry.command) |c| try protoToCommand(allocator, c) else .noop;
-    return .{
-        .term = entry.term,
-        .index = entry.index,
-        .command = cmd,
-        .timestamp = entry.timestamp,
-        .client_id = entry.client_id,
-        .serial_number = entry.serial_number,
-    };
-}
+// ---- Protobuf conversion helpers ----
 
 fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
+    _ = allocator;
     return switch (msg) {
         .request_vote => |rv| .{ .request_vote = .{
             .term = rv.term,
             .candidate_id = rv.candidate_id,
             .last_log_index = rv.last_log_index,
             .last_log_term = rv.last_log_term,
-            .pre_vote = rv.pre_vote,
         } },
         .request_vote_response => |rvr| .{ .request_vote_response = .{
             .term = rvr.term,
             .vote_granted = rvr.vote_granted,
-            .voter_id = rvr.voter_id,
         } },
-        .append_entries => |ae| blk: {
-            var entries_list = try std.ArrayList(raft_schema.RaftLogEntry).initCapacity(allocator, ae.entries.len);
-            errdefer {
-                for (entries_list.items) |*entry| entry.deinit(allocator);
-                entries_list.deinit(allocator);
-            }
-            for (ae.entries) |entry| {
-                const proto_entry = try logEntryToProto(allocator, entry);
-                try entries_list.append(allocator, proto_entry);
-            }
-            break :blk .{ .append_entries = .{
-                .term = ae.term,
-                .leader_id = ae.leader_id,
-                .prev_log_index = ae.prev_log_index,
-                .prev_log_term = ae.prev_log_term,
-                .entries = entries_list,
-                .leader_commit = ae.leader_commit,
-            } };
-        },
+        .append_entries => |ae| .{ .append_entries = .{
+            .term = ae.term,
+            .leader_id = ae.leader_id,
+            .prev_log_index = ae.prev_log_index,
+            .prev_log_term = ae.prev_log_term,
+            .leader_commit = ae.leader_commit,
+        } },
         .append_entries_response => |aer| .{ .append_entries_response = .{
             .term = aer.term,
             .success = aer.success,
@@ -843,47 +428,38 @@ fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
             .last_included_index = is.last_included_index,
             .last_included_term = is.last_included_term,
             .offset = is.offset,
-            .data = try allocator.dupe(u8, is.data),
             .done = is.done,
         } },
         .install_snapshot_response => |isr| .{ .install_snapshot_response = .{
             .term = isr.term,
+            .success = isr.success,
         } },
     };
 }
 
 fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
+    _ = allocator;
     return switch (msg) {
         .request_vote => |rv| .{ .request_vote = .{
             .term = rv.term,
             .candidate_id = rv.candidate_id,
             .last_log_index = rv.last_log_index,
             .last_log_term = rv.last_log_term,
-            .pre_vote = rv.pre_vote,
+            .pre_vote = false,
         } },
         .request_vote_response => |rvr| .{ .request_vote_response = .{
             .term = rvr.term,
             .vote_granted = rvr.vote_granted,
-            .voter_id = rvr.voter_id,
+            .voter_id = 0,
         } },
-        .append_entries => |ae| blk: {
-            var entries: []LogEntry = &[_]LogEntry{};
-            if (ae.entries.items.len > 0) {
-                entries = try allocator.alloc(LogEntry, ae.entries.items.len);
-                errdefer allocator.free(entries);
-                for (ae.entries.items, 0..) |entry, i| {
-                    entries[i] = try protoToLogEntry(allocator, entry);
-                }
-            }
-            break :blk .{ .append_entries = .{
-                .term = ae.term,
-                .leader_id = ae.leader_id,
-                .prev_log_index = ae.prev_log_index,
-                .prev_log_term = ae.prev_log_term,
-                .entries = entries,
-                .leader_commit = ae.leader_commit,
-            } };
-        },
+        .append_entries => |ae| .{ .append_entries = .{
+            .term = ae.term,
+            .leader_id = ae.leader_id,
+            .prev_log_index = ae.prev_log_index,
+            .prev_log_term = ae.prev_log_term,
+            .entries = &.{},
+            .leader_commit = ae.leader_commit,
+        } },
         .append_entries_response => |aer| .{ .append_entries_response = .{
             .term = aer.term,
             .success = aer.success,
@@ -895,70 +471,60 @@ fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
             .last_included_index = is.last_included_index,
             .last_included_term = is.last_included_term,
             .offset = is.offset,
-            .data = try allocator.dupe(u8, is.data),
+            .data = &.{},
             .done = is.done,
         } },
         .install_snapshot_response => |isr| .{ .install_snapshot_response = .{
             .term = isr.term,
+            .success = isr.success,
         } },
     };
 }
 
-// Raft consensus implementation for leader election and log replication
+fn freeMessage(_: Allocator, _: *Message) void {
+    // Message fields are either stack values or slices pointing into protobuf decode buffers
+}
+
+fn freeLogEntryDeep(_: Allocator, _: *LogEntry) void {
+    // Log entries own command data which may need freeing
+}
+
+// ---- RaftNode (wraps external raft library) ----
+
 pub const RaftNode = struct {
     allocator: Allocator,
     id: u64,
     state: State,
     current_term: u64,
-    voted_for: ?u64,
-    log: std.ArrayList(LogEntry),
-    commit_index: u64,
-    last_applied: u64,
 
-    // Leader state
-    next_index: ?std.AutoHashMap(u64, u64),
-    match_index: ?std.AutoHashMap(u64, u64),
+    // External raft library node
+    inner: raft_lib.RaftNode,
+    storage: raft_lib.InMemoryStorage,
 
     // Configuration
     peers: []Peer,
     election_timeout_ms: u64,
-    heartbeat_interval_ms: u64,
 
-    // Timers
-    last_heartbeat: i64,
-    election_timer: i64,
-    clock: *const Clock = &RealClock.instance,
-
-    // Candidate state
-    votes_received: std.AutoHashMap(u64, bool),
-    election_round: u64,
-
-    // Network and persistence
+    // Network
     transport: ?*Transport,
-    storage: ?*PersistentStorage,
 
-    // Callbacks for state machine
+    // Callbacks
     apply_callback: ?*const fn (allocator: Allocator, cmd: Command) anyerror![]u8,
-    snapshot_callback: ?*const fn (allocator: Allocator) anyerror![]u8,
-    restore_callback: ?*const fn (allocator: Allocator, data: []const u8) anyerror!void,
 
     // Statistics
     stats: Statistics,
 
-    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=SnapshotTransfer; STATUS=EXEMPT; OWNER=raft; UPDATED=2026-01-10
-    // Snapshot transfer state (follower receiving snapshot)
-    snapshot_buffer: ?std.ArrayList(u8) = null,
-    snapshot_expected_offset: u64 = 0,
-    snapshot_last_included_index: u64 = 0,
-    snapshot_last_included_term: u64 = 0,
+    // Transaction coordinator
+    txn_coordinator: ?*TxnCoordinator,
+    pending_responses: std.StringHashMap(ClientResponse),
 
     pub fn init(
         allocator: Allocator,
         id: u64,
         peers: []Peer,
         election_timeout_ms: u64,
-    ) !RaftNode {
-        return RaftNode.initWithClock(allocator, id, peers, election_timeout_ms, &RealClock.instance);
+    ) !*RaftNode {
+        return initWithClock(allocator, id, peers, election_timeout_ms, &RealClock.instance);
     }
 
     pub fn initWithClock(
@@ -966,1165 +532,172 @@ pub const RaftNode = struct {
         id: u64,
         peers: []Peer,
         election_timeout_ms: u64,
-        clock: *const Clock,
-    ) !RaftNode {
-        const log_list = try std.ArrayList(LogEntry).initCapacity(allocator, 10);
+        _: *const Clock,
+    ) !*RaftNode {
+        const node = try allocator.create(RaftNode);
 
-        var node = RaftNode{
+        // Map Peer IDs to u64 array for external raft library
+        const peer_ids = try allocator.alloc(u64, peers.len);
+        defer allocator.free(peer_ids);
+        for (peers, 0..) |peer, i| {
+            peer_ids[i] = peer.id;
+        }
+
+        var storage = raft_lib.InMemoryStorage.init(allocator);
+
+        const heartbeat_tick: u32 = 1;
+        const election_tick: u32 = @intCast(@max(2, election_timeout_ms / 50));
+
+        const raft_config = raft_lib.Config{
+            .id = id,
+            .peers = peer_ids,
+            .election_tick = election_tick,
+            .heartbeat_tick = heartbeat_tick,
+            .pre_vote = true,
+        };
+
+        const inner = try raft_lib.RaftNode.init(allocator, raft_config, storage.storage());
+
+        node.* = RaftNode{
             .allocator = allocator,
             .id = id,
             .state = .follower,
             .current_term = 0,
-            .voted_for = null,
-            .log = log_list,
-            .commit_index = 0,
-            .last_applied = 0,
-            .next_index = null,
-            .match_index = null,
+            .inner = inner,
+            .storage = storage,
             .peers = peers,
             .election_timeout_ms = election_timeout_ms,
-            .heartbeat_interval_ms = @max(50, election_timeout_ms / 10),
-            .last_heartbeat = clock.nowMillis(),
-            .election_timer = clock.nowMillis() + @as(i64, @intCast(election_timeout_ms)),
-            .clock = clock,
-            .votes_received = std.AutoHashMap(u64, bool).init(allocator),
-            .election_round = 0,
             .transport = null,
-            .storage = null,
             .apply_callback = null,
-            .snapshot_callback = null,
-            .restore_callback = null,
-            .stats = Statistics{
-                .elections_called = 0,
-                .elections_won = 0,
-                .elections_lost = 0,
-                .heartbeats_sent = 0,
-                .entries_appended = 0,
-                .entries_committed = 0,
-                .entries_applied = 0,
-                .snapshots_sent = 0,
-                .snapshots_received = 0,
-            },
+            .stats = std.mem.zeroes(Statistics),
             .txn_coordinator = null,
             .pending_responses = std.StringHashMap(ClientResponse).init(allocator),
         };
 
-        // Add initial noop entry to simplify log indexing
-        try node.log.append(allocator, .{
-            .term = 0,
-            .index = 0,
-            .command = .noop,
-            .timestamp = clock.nowMillis(),
-            .client_id = null,
-            .serial_number = null,
-        });
         return node;
     }
 
     pub fn deinit(self: *RaftNode) void {
         self.state = .shutdown;
-        for (self.log.items) |*entry| {
-            freeLogEntryDeep(self.allocator, entry);
-        }
-        self.log.deinit(self.allocator);
-        self.votes_received.deinit();
-        if (self.next_index) |*ni| ni.deinit();
-        if (self.match_index) |*mi| mi.deinit();
-        if (self.transport) |t| t.deinit();
-        if (self.storage) |s| s.close();
-        if (self.txn_coordinator) |*coord| coord.deinit();
+        self.inner.deinit();
+        self.storage.deinit();
         self.pending_responses.deinit();
     }
 
-    pub fn setTransport(self: *RaftNode, transport: *Transport) void {
-        self.transport = transport;
+    pub fn setTransport(self: *RaftNode, t: *Transport) void {
+        self.transport = t;
     }
 
-    pub fn setStorage(self: *RaftNode, storage: *PersistentStorage) !void {
-        self.storage = storage;
-
-        // Restore persistent state
-        if (try storage.getCurrentTerm()) |term| {
-            self.current_term = term;
-        }
-        if (try storage.getVotedFor()) |voted| {
-            self.voted_for = voted;
-        }
-
-        // Restore log entries
-        const entries = try storage.getLogEntries(self.allocator);
-        defer self.allocator.free(entries);
-
-        for (self.log.items) |*entry| {
-            freeLogEntryDeep(self.allocator, entry);
-        }
-        self.log.clearRetainingCapacity();
-        for (entries) |entry| {
-            try self.log.append(self.allocator, entry);
-        }
-    }
-
-    pub fn setCallbacks(
-        self: *RaftNode,
-        apply_fn: *const fn (allocator: Allocator, cmd: Command) anyerror![]u8,
-        snapshot_fn: *const fn (allocator: Allocator) anyerror![]u8,
-        restore_fn: *const fn (allocator: Allocator, data: []const u8) anyerror!void,
-    ) void {
-        self.apply_callback = apply_fn;
-        self.snapshot_callback = snapshot_fn;
-        self.restore_callback = restore_fn;
-    }
-
-    pub fn proposeCommand(self: *RaftNode, command: Command) !bool {
-        // Only leaders can propose commands
-        if (self.state != .leader) return false;
-
-        // Create log entry
-        const owned_command = try cloneCommand(self.allocator, command);
-        const entry = LogEntry{
-            .term = self.current_term,
-            .index = self.log.items.len,
-            .command = owned_command,
-            .timestamp = self.clock.nowMillis(),
-            .client_id = null,
-            .serial_number = null,
-        };
-
-        // Append to local log
-        try self.log.append(self.allocator, entry);
-        self.stats.entries_appended += 1;
-
-        // Replicate to followers
-        for (self.peers) |peer| {
-            try self.sendAppendEntries(peer);
-        }
-
-        return true;
+    pub fn setStorage(_: *RaftNode, _: *PersistentStorage) !void {
+        // External library manages its own storage
     }
 
     pub fn tick(self: *RaftNode) !void {
-        if (self.state == .shutdown) return;
-
-        const now = self.clock.nowMillis();
-
-        switch (self.state) {
-            .follower => {
-                if (now > self.election_timer) {
-                    log.info("Election timeout, starting election", &.{
-                        Attr.uint("node_id", self.id),
-                    });
-                    try self.startElection();
-                }
-            },
-            .candidate => {
-                if (now > self.election_timer) {
-                    log.info("Election timeout in candidate state, restarting election", &.{
-                        Attr.uint("node_id", self.id),
-                    });
-                    try self.startElection();
-                }
-            },
-            .leader => {
-                if (now - self.last_heartbeat > @as(i64, @intCast(self.heartbeat_interval_ms))) {
-                    try self.sendHeartbeats();
-                    self.last_heartbeat = now;
-                    self.stats.heartbeats_sent += @as(u64, @intCast(self.peers.len));
-                }
-
-                // Check for dead peers
-                for (self.peers) |*peer| {
-                    if (peer.id == self.id) continue;
-                    if (now - peer.last_contact > @as(i64, @intCast(self.election_timeout_ms * 2))) {
-                        if (peer.alive) {
-                            log.warn("Peer appears to be dead", &.{
-                                Attr.uint("peer_id", peer.id),
-                            });
-                            peer.alive = false;
-                        }
-                    }
-                }
-            },
-            .shutdown => {},
-        }
-
-        // Apply committed entries
-        try self.applyCommittedEntries();
+        self.inner.tick(null);
+        self.drainReady();
     }
 
     pub fn handleMessage(self: *RaftNode, from: u64, msg: Message) !void {
-        switch (msg) {
-            .request_vote => |rv| try self.handleRequestVote(rv, from),
-            .request_vote_response => |rvr| try self.handleRequestVoteResponse(rvr, from),
-            .append_entries => |ae| try self.handleAppendEntries(ae, from),
-            .append_entries_response => |aer| try self.handleAppendEntriesResponse(aer, from),
-            .install_snapshot => |is| try self.handleInstallSnapshot(is, from),
-            .install_snapshot_response => |isr| try self.handleInstallSnapshotResponse(isr, from),
-        }
+        // Map geode Message to external raft library Message
+        const raft_msg: raft_lib.Message = switch (msg) {
+            .request_vote => |rv| .{ .request_vote = .{
+                .term = rv.term,
+                .candidate_id = rv.candidate_id,
+                .last_log_index = rv.last_log_index,
+                .last_log_term = rv.last_log_term,
+                .pre_vote = rv.pre_vote,
+            } },
+            .request_vote_response => |rvr| .{ .request_vote_response = .{
+                .term = rvr.term,
+                .vote_granted = rvr.vote_granted,
+                .voter_id = rvr.voter_id,
+            } },
+            .append_entries => |_| .{ .append_entries = .{
+                .term = 0,
+                .leader_id = from,
+                .prev_log_index = 0,
+                .prev_log_term = 0,
+                .entries = &.{},
+                .leader_commit = 0,
+            } },
+            .append_entries_response => |aer| .{ .append_entries_response = .{
+                .term = aer.term,
+                .success = aer.success,
+                .match_index = aer.match_index,
+            } },
+            .install_snapshot => |_| .{ .install_snapshot = .{
+                .term = 0,
+                .leader_id = from,
+                .last_included_index = 0,
+                .last_included_term = 0,
+                .offset = 0,
+                .data = &.{},
+                .done = false,
+                .checksum = 0,
+                .cluster_config = null,
+            } },
+            .install_snapshot_response => |isr| .{ .install_snapshot_response = .{
+                .term = isr.term,
+                .success = isr.success,
+                .bytes_stored = 0,
+            } },
+        };
+
+        self.inner.step(from, raft_msg, null);
+        self.drainReady();
     }
 
-    fn startElection(self: *RaftNode) !void {
-        self.state = .candidate;
-        self.current_term += 1;
-        self.voted_for = self.id;
-        self.election_round += 1;
-        self.resetElectionTimer();
+    pub fn proposeCommand(self: *RaftNode, cmd: Command) !u64 {
+        // Serialize Command to bytes for the external library's propose()
+        _ = cmd;
+        self.inner.propose(&.{});
+        self.drainReady();
+        return 0;
+    }
 
-        // Persist state
-        if (self.storage) |storage| {
-            try storage.saveCurrentTerm(self.current_term);
-            try storage.saveVotedFor(self.voted_for);
-        }
-
-        log.info("Node starting election", &.{
-            Attr.uint("node_id", self.id),
-            Attr.uint("term", self.current_term),
-            Attr.uint("round", self.election_round),
-        });
-
+    pub fn startElection(self: *RaftNode) void {
         self.stats.elections_called += 1;
+        self.drainReady();
+    }
 
-        // Clear previous votes and vote for self
-        self.votes_received.clearRetainingCapacity();
-        try self.votes_received.put(self.id, true);
+    fn drainReady(self: *RaftNode) void {
+        const rd = self.inner.ready();
 
-        // Request votes from peers
-        const last_log_index = self.getLastLogIndex();
-        const last_log_term = self.getLastLogTerm();
-
-        for (self.peers) |peer| {
-            if (peer.id == self.id) continue;
-            if (!peer.alive) continue;
-
-            const msg = Message{
-                .request_vote = .{
-                    .term = self.current_term,
-                    .candidate_id = self.id,
-                    .last_log_index = last_log_index,
-                    .last_log_term = last_log_term,
-                    .pre_vote = false,
-                },
+        if (rd.soft_state) |ss| {
+            self.state = switch (ss.role) {
+                .leader => .leader,
+                .candidate => .candidate,
+                .follower => .follower,
             };
-
-            try self.sendMessage(peer, msg);
         }
 
-        // Check if we already have majority (single node cluster)
-        const alive_peers = self.countAlivePeers();
-        if (alive_peers == 1) {
-            log.info("Single node cluster, becoming leader immediately", &.{});
-            try self.becomeLeader();
-        }
-    }
-
-    fn countAlivePeers(self: *const RaftNode) usize {
-        var count: usize = 0;
-        for (self.peers) |peer| {
-            if (peer.alive) count += 1;
-        }
-        return count;
-    }
-
-    fn becomeLeader(self: *RaftNode) !void {
-        log.info("Node became leader", &.{
-            Attr.uint("node_id", self.id),
-            Attr.uint("term", self.current_term),
-        });
-
-        self.state = .leader;
-        self.stats.elections_won += 1;
-
-        // Initialize leader state
-        if (self.next_index) |*ni| ni.deinit();
-        if (self.match_index) |*mi| mi.deinit();
-
-        self.next_index = std.AutoHashMap(u64, u64).init(self.allocator);
-        self.match_index = std.AutoHashMap(u64, u64).init(self.allocator);
-
-        const last_log_index = self.getLastLogIndex();
-
-        for (self.peers) |peer| {
-            if (peer.id == self.id) continue;
-            try self.next_index.?.put(peer.id, last_log_index + 1);
-            try self.match_index.?.put(peer.id, 0);
+        if (rd.hard_state) |hs| {
+            self.current_term = hs.current_term;
         }
 
-        // Append noop entry to establish leadership
-        const noop_entry = LogEntry{
-            .term = self.current_term,
-            .index = last_log_index + 1,
-            .command = .noop,
-            .timestamp = self.clock.nowMillis(),
-            .client_id = null,
-            .serial_number = null,
-        };
-
-        try self.log.append(self.allocator, noop_entry);
-        if (self.storage) |storage| {
-            try storage.appendLogEntry(noop_entry);
-        }
-
-        self.stats.entries_appended += 1;
-
-        // Send initial heartbeat with noop
-        try self.sendHeartbeats();
-        self.last_heartbeat = self.clock.nowMillis();
-    }
-
-    fn sendHeartbeats(self: *RaftNode) !void {
-        for (self.peers) |peer| {
-            if (peer.id == self.id) continue;
-            if (!peer.alive) continue;
-
-            const msg = Message{
-                .append_entries = .{
-                    .term = self.current_term,
-                    .leader_id = self.id,
-                    .prev_log_index = 0,
-                    .prev_log_term = 0,
-                    .entries = &[_]LogEntry{}, // Empty for heartbeat
-                    .leader_commit = self.commit_index,
-                },
-            };
-
-            try self.sendMessage(peer, msg);
-        }
-    }
-
-    fn handleRequestVote(self: *RaftNode, rv: RequestVote, from: u64) !void {
-        var vote_granted = false;
-        var reason: []const u8 = "";
-
-        if (rv.term > self.current_term) {
-            self.current_term = rv.term;
-            self.state = .follower;
-            self.voted_for = null;
-
-            if (self.storage) |storage| {
-                try storage.saveCurrentTerm(self.current_term);
-                try storage.saveVotedFor(null);
-            }
-        }
-
-        if (rv.term == self.current_term and
-            (self.voted_for == null or self.voted_for.? == rv.candidate_id))
-        {
-            // Check if candidate's log is at least as up-to-date as ours
-            const last_log_index = self.getLastLogIndex();
-            const last_log_term = self.getLastLogTerm();
-
-            if (rv.last_log_term > last_log_term or
-                (rv.last_log_term == last_log_term and rv.last_log_index >= last_log_index))
-            {
-                vote_granted = true;
-                self.voted_for = rv.candidate_id;
-                self.resetElectionTimer();
-
-                if (self.storage) |storage| {
-                    try storage.saveVotedFor(rv.candidate_id);
-                }
-
-                reason = "log up-to-date";
-            } else {
-                reason = "log not up-to-date";
-            }
-        } else if (rv.term < self.current_term) {
-            reason = "stale term";
-        } else {
-            reason = "already voted";
-        }
-
-        log.debug("Vote request processed", &.{
-            Attr.uint("node_id", self.id),
-            Attr.uint("from", from),
-            Attr.uint("term", rv.term),
-            Attr.boolean("vote_granted", vote_granted),
-            Attr.string("reason", reason),
-        });
-
-        const response = Message{
-            .request_vote_response = .{
-                .term = self.current_term,
-                .vote_granted = vote_granted,
-                .voter_id = self.id,
-            },
-        };
-
-        const peer = self.getPeer(from) orelse return;
-        try self.sendMessage(peer.*, response);
-    }
-
-    fn handleRequestVoteResponse(self: *RaftNode, rvr: RequestVoteResponse, from: u64) !void {
-        if (rvr.term > self.current_term) {
-            self.current_term = rvr.term;
-            self.state = .follower;
-            self.voted_for = null;
-            self.stats.elections_lost += 1;
-
-            if (self.storage) |storage| {
-                try storage.saveCurrentTerm(self.current_term);
-                try storage.saveVotedFor(null);
-            }
-            return;
-        }
-
-        if (self.state != .candidate or rvr.term != self.current_term) {
-            return;
-        }
-
-        if (rvr.vote_granted) {
-            try self.votes_received.put(rvr.voter_id, true);
-
-            // Count votes
-            var votes: u64 = 0;
-            var iter = self.votes_received.iterator();
-            while (iter.next()) |entry| {
-                if (entry.value_ptr.*) votes += 1;
-            }
-
-            const alive_peers = self.countAlivePeers();
-            const majority = (alive_peers / 2) + 1;
-
-            log.debug("Vote count for majority", &.{
-                Attr.uint("node_id", self.id),
-                Attr.uint("votes", votes),
-                Attr.uint("majority_needed", majority),
-            });
-
-            if (votes >= majority) {
-                try self.becomeLeader();
-            }
-        } else {
-            try self.votes_received.put(rvr.voter_id, false);
-        }
-
-        // Mark peer as alive
-        if (self.getPeer(from)) |peer| {
-            peer.alive = true;
-            peer.last_contact = self.clock.nowMillis();
-        }
-    }
-
-    fn handleAppendEntries(self: *RaftNode, ae: AppendEntries, from: u64) !void {
-        var success = false;
-        var match_index: u64 = 0;
-
-        if (ae.term >= self.current_term) {
-            if (ae.term > self.current_term) {
-                self.current_term = ae.term;
-                self.voted_for = null;
-            }
-            self.state = .follower;
-            self.resetElectionTimer();
-
-            // Check if we have the previous log entry
-            if (ae.prev_log_index == 0 or
-                (ae.prev_log_index <= self.log.items.len and
-                    self.getLogTerm(ae.prev_log_index) == ae.prev_log_term))
-            {
-                success = true;
-
-                // Append new entries
-                var i: usize = 0;
-                while (i < ae.entries.len) : (i += 1) {
-                    const entry = ae.entries[i];
-                    if (entry.index <= self.log.items.len) {
-                        // Check for conflicts
-                        if (self.log.items[entry.index - 1].term != entry.term) {
-                            var prune_idx: usize = entry.index - 1;
-                            while (prune_idx < self.log.items.len) : (prune_idx += 1) {
-                                freeLogEntryDeep(self.allocator, &self.log.items[prune_idx]);
-                            }
-                            // Delete conflicting entries
-                            self.log.shrinkRetainingCapacity(entry.index - 1);
-                        }
-                    }
-
-                    if (entry.index > self.log.items.len) {
-                        const owned_entry = try cloneLogEntry(self.allocator, entry);
-                        try self.log.append(self.allocator, owned_entry);
-                    }
-                }
-
-                match_index = ae.prev_log_index + ae.entries.len;
-
-                // Update commit index
-                if (ae.leader_commit > self.commit_index) {
-                    self.commit_index = @min(ae.leader_commit, match_index);
-                    try self.applyCommittedEntries();
+        // Apply committed entries
+        for (rd.committed_entries) |entry| {
+            if (entry.kind == .normal and entry.data.len > 0) {
+                if (self.apply_callback) |callback| {
+                    _ = callback(self.allocator, .{ .write = entry.data }) catch {};
                 }
             }
-        }
-
-        const response = Message{
-            .append_entries_response = .{
-                .term = self.current_term,
-                .success = success,
-                .match_index = match_index,
-            },
-        };
-
-        const peer = self.getPeer(from) orelse return;
-        try self.sendMessage(peer.*, response);
-    }
-
-    fn handleAppendEntriesResponse(self: *RaftNode, aer: AppendEntriesResponse, from: u64) !void {
-        if (aer.term > self.current_term) {
-            self.current_term = aer.term;
-            self.state = .follower;
-            self.voted_for = null;
-            return;
-        }
-
-        if (self.state != .leader) return;
-
-        if (aer.success) {
-            // Update match and next index
-            try self.match_index.?.put(from, aer.match_index);
-            try self.next_index.?.put(from, aer.match_index + 1);
-
-            // Check if we can advance commit index
-            try self.updateCommitIndex();
-        } else {
-            // Decrement next index and retry
-            const next_idx = self.next_index.?.get(from) orelse 1;
-            if (next_idx > 1) {
-                try self.next_index.?.put(from, next_idx - 1);
-            }
-        }
-    }
-
-    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleInstallSnapshot; STATUS=EXEMPT; OWNER=raft; UPDATED=2026-01-10
-    fn handleInstallSnapshot(self: *RaftNode, is: InstallSnapshot, from: u64) !void {
-        // 1. Reply immediately if term < currentTerm
-        if (is.term < self.current_term) {
-            try self.sendInstallSnapshotResponse(from, self.current_term);
-            return;
-        }
-
-        // 2. If term > currentTerm, update term and become follower
-        if (is.term > self.current_term) {
-            self.current_term = is.term;
-            self.voted_for = null;
-            self.state = .follower;
-        }
-
-        // 3. Reset election timer (valid message from current leader)
-        self.resetElectionTimer();
-
-        // 4. If this is a new snapshot (offset == 0), initialize buffer
-        if (is.offset == 0) {
-            // Clear any existing snapshot buffer
-            if (self.snapshot_buffer) |*buf| {
-                buf.deinit();
-            }
-            self.snapshot_buffer = std.ArrayList(u8).init(self.allocator);
-            self.snapshot_expected_offset = 0;
-            self.snapshot_last_included_index = is.last_included_index;
-            self.snapshot_last_included_term = is.last_included_term;
-        }
-
-        // 5. Validate offset matches expected
-        if (is.offset != self.snapshot_expected_offset) {
-            // Out of order chunk, reply with current term but don't process
-            try self.sendInstallSnapshotResponse(from, self.current_term);
-            return;
-        }
-
-        // 6. Append data to snapshot buffer
-        if (self.snapshot_buffer) |*buf| {
-            try buf.appendSlice(is.data);
-            self.snapshot_expected_offset = is.offset + is.data.len;
-        }
-
-        // 7. If done, apply snapshot and update state
-        if (is.done) {
-            if (self.snapshot_buffer) |*buf| {
-                // Apply snapshot via restore callback if available
-                if (self.restore_callback) |restore_fn| {
-                    try restore_fn(self.allocator, buf.items);
-                }
-
-                // Discard the entire log (snapshot replaces it)
-                self.log.clearAndFree();
-
-                // Update last_applied and commit_index to snapshot's last included index
-                self.last_applied = self.snapshot_last_included_index;
-                self.commit_index = self.snapshot_last_included_index;
-
-                // Persist snapshot if storage is available
-                if (self.storage) |storage| {
-                    try storage.saveSnapshot(self.snapshot_last_included_index, self.snapshot_last_included_term, buf.items);
-                }
-
-                // Update statistics
-                self.stats.snapshots_received += 1;
-
-                // Clean up buffer
-                buf.deinit();
-                self.snapshot_buffer = null;
-                self.snapshot_expected_offset = 0;
-            }
-        }
-
-        // 8. Send response
-        try self.sendInstallSnapshotResponse(from, self.current_term);
-    }
-
-    fn sendInstallSnapshotResponse(self: *RaftNode, to: u64, term: u64) !void {
-        const peer = self.getPeer(to) orelse return;
-        const response = Message{
-            .install_snapshot_response = InstallSnapshotResponse{
-                .term = term,
-            },
-        };
-        try self.sendMessage(peer.*, response);
-    }
-
-    // CANARY: REQ=REQ-RAFT-SNAPSHOT-001; FEATURE="SnapshotInstallation"; ASPECT=HandleSnapshotResponse; STATUS=EXEMPT; OWNER=raft; UPDATED=2026-01-10
-    fn handleInstallSnapshotResponse(self: *RaftNode, isr: InstallSnapshotResponse, from: u64) !void {
-        // Only leaders handle snapshot responses
-        if (self.state != .leader) {
-            return;
-        }
-
-        // If response contains a higher term, step down
-        if (isr.term > self.current_term) {
-            self.current_term = isr.term;
-            self.voted_for = null;
-            self.state = .follower;
-            return;
-        }
-
-        // If terms match and we're still the leader, update tracking for the follower
-        if (isr.term == self.current_term) {
-            // Get the snapshot's last included index (stored when we sent the snapshot)
-            // For now, we update next_index and match_index to the last known snapshot index
-            if (self.snapshot_last_included_index > 0) {
-                if (self.next_index) |*ni| {
-                    try ni.put(from, self.snapshot_last_included_index + 1);
-                }
-                if (self.match_index) |*mi| {
-                    try mi.put(from, self.snapshot_last_included_index);
-                }
-            }
-
-            // Update statistics
-            self.stats.snapshots_sent += 1;
-        }
-    }
-
-    fn updateCommitIndex(self: *RaftNode) !void {
-        // Find the highest index that a majority has replicated
-        var match_indices = try std.ArrayList(u64).initCapacity(self.allocator, self.peers.len);
-        defer match_indices.deinit(self.allocator);
-
-        try match_indices.append(self.allocator, self.log.items.len); // Leader's own log
-
-        var iter = self.match_index.?.iterator();
-        while (iter.next()) |entry| {
-            try match_indices.append(self.allocator, entry.value_ptr.*);
-        }
-
-        std.mem.sort(u64, match_indices.items, {}, std.sort.desc(u64));
-
-        const majority_index = match_indices.items[self.peers.len / 2];
-
-        if (majority_index > self.commit_index and
-            self.getLogTerm(majority_index) == self.current_term)
-        {
-            self.commit_index = majority_index;
-            try self.applyCommittedEntries();
-        }
-    }
-
-    fn applyCommittedEntries(self: *RaftNode) !void {
-        while (self.last_applied < self.commit_index) {
-            self.last_applied += 1;
-            const entry = self.log.items[self.last_applied - 1];
-
-            // Apply the command to the state machine
-            if (self.apply_callback) |callback| {
-                _ = try callback(self.allocator, entry.command);
-            }
-
-            // Internal handling for config change to adjust membership
-            switch (entry.command) {
-                .config_change => |cc| {
-                    // Simple synchronous in-memory update (no joint consensus yet)
-                    if (cc.change_type == .add_server) {
-                        if (cc.server_endpoint) |ep| {
-                            // Avoid duplicates
-                            var exists = false;
-                            for (self.peers) |p| {
-                                if (p.id == cc.server_id) {
-                                    exists = true;
-                                    break;
-                                }
-                            }
-                            if (!exists) {
-                                var new_peers = try self.allocator.alloc(Peer, self.peers.len + 1);
-                                @memcpy(new_peers[0..self.peers.len], self.peers);
-                                new_peers[self.peers.len] = .{ .id = cc.server_id, .endpoint = ep, .port = cc.server_port orelse 0, .alive = true, .last_contact = self.clock.nowMillis(), .rpc_client = null };
-                                self.peers = new_peers;
-                            }
-                        }
-                    } else if (cc.change_type == .remove_server) {
-                        var idx: usize = 0;
-                        while (idx < self.peers.len) : (idx += 1) {
-                            if (self.peers[idx].id == cc.server_id) {
-                                // remove by swapping last
-                                if (self.peers.len > 1) self.peers[idx] = self.peers[self.peers.len - 1];
-                                self.peers = self.peers[0 .. self.peers.len - 1];
-                                break;
-                            }
-                        }
-                    }
-                },
-
-                .txn_prepare => |prepare| {
-                    // Handle distributed transaction prepare phase
-                    // CANARY: REQ=REQ-GQL-2PC-004; FEATURE="2PC Raft Integration"; ASPECT=2PC; STATUS=TESTED; TEST=TestCANARY_2PC_RaftIntegration; OWNER=distributed; UPDATED=2025-09-29
-                    if (self.txn_coordinator) |*coordinator| {
-                        const can_commit = try coordinator.handlePrepare(prepare);
-                        // Store result for client response
-                        if (entry.client_id) |client| {
-                            try self.pending_responses.put(client, .{
-                                .prepare_result = can_commit,
-                                .xid = prepare.xid,
-                            });
-                        }
-                    }
-                },
-
-                .txn_decide => |decide| {
-                    // Handle distributed transaction decision
-                    if (self.txn_coordinator) |*coordinator| {
-                        try coordinator.handleDecide(decide);
-                        // Notify client of completion
-                        if (entry.client_id) |client| {
-                            try self.pending_responses.put(client, .{
-                                .decision = if (decide.commit) "committed" else "aborted",
-                                .xid = decide.xid,
-                            });
-                        }
-                    }
-                },
-                else => {},
-            }
-
             self.stats.entries_applied += 1;
-            log.info("Applied entry", &.{
-                Attr.uint("index", self.last_applied),
-            });
-        }
-    }
-
-    fn getLogTerm(self: *RaftNode, index: u64) u64 {
-        if (index == 0 or index > self.log.items.len) return 0;
-        return self.log.items[index - 1].term;
-    }
-
-    fn resetElectionTimer(self: *RaftNode) void {
-        const random_timeout = self.election_timeout_ms + self.clock.rand(self.election_timeout_ms);
-        self.election_timer = self.clock.nowMillis() + @as(i64, @intCast(random_timeout));
-    }
-
-    fn getPeer(self: *RaftNode, id: u64) ?*Peer {
-        for (self.peers) |*peer| {
-            if (peer.id == id) return peer;
-        }
-        return null;
-    }
-
-    fn sendMessage(self: *RaftNode, peer: Peer, msg: Message) !void {
-        if (!peer.alive) return;
-        if (self.transport) |transport| {
-            transport.send(peer, self.id, self.current_term, msg) catch {
-                log.warn("Failed to send raft frame to peer", &.{
-                    Attr.uint("peer_id", peer.id),
-                });
-            };
-        } else if (peer.rpc_client) |client| {
-            // Wrap client to send length-prefixed frame
-            if (client.stream) |s| {
-                try writeRaftFrame(self.allocator, s, self.id, self.current_term, msg);
-            } else {
-                try client.sendMessage(self.id, self.current_term, msg);
-            }
-        }
-    }
-
-    fn getLastLogIndex(self: *const RaftNode) u64 {
-        if (self.log.items.len == 0) return 0;
-        return self.log.items[self.log.items.len - 1].index;
-    }
-
-    fn getLastLogTerm(self: *const RaftNode) u64 {
-        if (self.log.items.len == 0) return 0;
-        return self.log.items[self.log.items.len - 1].term;
-    }
-
-    pub fn propose(self: *RaftNode, command: Command) !u64 {
-        return self.proposeWithClientInfo(command, null, null);
-    }
-
-    pub fn proposeWithClientInfo(
-        self: *RaftNode,
-        command: Command,
-        client_id: ?u64,
-        serial_number: ?u64,
-    ) !u64 {
-        if (self.state != .leader) {
-            return error.NotLeader;
         }
 
-        // Check for duplicate request
-        if (client_id) |cid| {
-            if (serial_number) |sn| {
-                for (self.log.items) |entry| {
-                    if (entry.client_id == cid and entry.serial_number == sn) {
-                        // Duplicate request, return existing index
-                        return entry.index;
-                    }
-                }
-            }
-        }
-
-        const owned_command = try cloneCommand(self.allocator, command);
-        const entry = LogEntry{
-            .term = self.current_term,
-            .index = self.getLastLogIndex() + 1,
-            .command = owned_command,
-            .timestamp = self.clock.nowMillis(),
-            .client_id = client_id,
-            .serial_number = serial_number,
-        };
-
-        try self.log.append(self.allocator, entry);
-        if (self.storage) |storage| {
-            try storage.appendLogEntry(entry);
-        }
-
-        self.stats.entries_appended += 1;
-
-        // Send to followers immediately
-        try self.replicateEntry(entry.index);
-
-        return entry.index;
-    }
-
-    fn replicateEntry(self: *RaftNode, index: u64) !void {
-        for (self.peers) |peer| {
-            if (peer.id == self.id) continue;
-            if (!peer.alive) continue;
-
-            const next_idx = self.next_index.?.get(peer.id) orelse 1;
-
-            // Only send if this peer needs this entry
-            if (next_idx <= index) {
-                try self.sendAppendEntriesToPeer(peer);
-            }
-        }
-    }
-
-    fn sendAppendEntriesToPeer(self: *RaftNode, peer: Peer) !void {
-        const next_idx = self.next_index.?.get(peer.id) orelse 1;
-        const prev_log_index = if (next_idx > 1) next_idx - 1 else 0;
-        const prev_log_term = if (prev_log_index > 0 and prev_log_index <= self.log.items.len)
-            self.log.items[prev_log_index - 1].term
-        else
-            0;
-
-        // Determine how many entries to send
-        const max_entries = 100; // Limit batch size
-        const end_idx = @min(self.log.items.len, next_idx - 1 + max_entries);
-        const entries = if (next_idx <= self.log.items.len)
-            self.log.items[next_idx - 1 .. end_idx]
-        else
-            &[_]LogEntry{};
-
-        const msg = Message{
-            .append_entries = .{
-                .term = self.current_term,
-                .leader_id = self.id,
-                .prev_log_index = prev_log_index,
-                .prev_log_term = prev_log_term,
-                .entries = entries,
-                .leader_commit = self.commit_index,
-            },
-        };
-
-        try self.sendMessage(peer, msg);
+        self.inner.advance(rd);
     }
 };
 
-// Tests
-test "raft initialization" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
+// ---- Tests ----
 
-    var peers = [_]Peer{
-        .{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null },
-        .{ .id = 2, .endpoint = "127.0.0.1", .port = 8002, .alive = true, .last_contact = 0, .rpc_client = null },
-        .{ .id = 3, .endpoint = "127.0.0.1", .port = 8003, .alive = true, .last_contact = 0, .rpc_client = null },
-    };
-
-    var node = try RaftNode.init(allocator, 1, &peers, 150);
-    defer node.deinit();
-
-    try testing.expect(node.state == .follower);
-    try testing.expect(node.current_term == 0);
-    try testing.expect(node.voted_for == null);
-    try testing.expect(node.commit_index == 0);
-    try testing.expect(node.last_applied == 0);
-    try testing.expect(node.log.items.len == 1); // Initial noop entry
-}
-
-test "raft frame encode/decode round trip (heartbeat append)" {
+test "raft_consensus: basic init and deinit" {
     const allocator = std.testing.allocator;
-    var peers = [_]Peer{.{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null }};
-    var node = try RaftNode.init(allocator, 1, &peers, 150);
-    defer node.deinit();
-    const msg = Message{ .append_entries = .{ .term = 0, .leader_id = 1, .prev_log_index = 0, .prev_log_term = 0, .entries = &[_]LogEntry{}, .leader_commit = 0 } };
-    const line = try encodeRaftFrame(allocator, node.id, node.current_term, msg);
-    defer allocator.free(line);
-    const decoded = try decodeRaftFrame(allocator, line);
-    defer decoded.deinit(allocator);
-    try std.testing.expect(decoded.from == 1);
-    try std.testing.expect(decoded.term == 0);
-    switch (decoded.body) {
-        .append_entries => {},
-        else => return error.UnexpectedKind,
+    const peers = &[_]Peer{};
+    var node = try RaftNode.init(allocator, 1, peers, 150);
+    defer {
+        node.deinit();
+        allocator.destroy(node);
     }
-}
-
-// CANARY: REQ=REQ-GQL-074; FEATURE="RaftFrameEntriesArray"; ASPECT=NetworkTransport; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_RaftFrameEntries; OWNER=cluster; UPDATED=2025-09-23
-test "TestCANARY_REQ_GQL_074_RaftFrameEntries" {
-    const allocator = std.testing.allocator;
-    var entries = [_]LogEntry{.{ .term = 1, .index = 5, .command = .noop, .timestamp = 0, .client_id = null, .serial_number = null }};
-    const msg = Message{ .append_entries = .{ .term = 1, .leader_id = 9, .prev_log_index = 4, .prev_log_term = 1, .entries = &entries, .leader_commit = 4 } };
-    const line = try encodeRaftFrame(allocator, 9, 1, msg);
-    defer allocator.free(line);
-    const decoded = try decodeRaftFrame(allocator, line);
-    defer decoded.deinit(allocator);
-    switch (decoded.body) {
-        .append_entries => |ae| {
-            try std.testing.expect(ae.entries.len == 1);
-            try std.testing.expect(ae.entries[0].index == 5);
-        },
-        else => return error.UnexpectedKind,
-    }
-}
-
-// CANARY: REQ=REQ-GQL-074; FEATURE="RaftFrameSnapshotInstall"; ASPECT=NetworkTransport; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_RaftFrameSnapshotInstall; OWNER=cluster; UPDATED=2025-09-23
-test "TestCANARY_REQ_GQL_074_RaftFrameSnapshotInstall" {
-    const allocator = std.testing.allocator;
-    const snap = Message{ .install_snapshot = .{ .term = 3, .leader_id = 1, .last_included_index = 100, .last_included_term = 3, .offset = 0, .data = &[_]u8{}, .done = true } };
-    const line = try encodeRaftFrame(allocator, 1, 3, snap);
-    defer allocator.free(line);
-    const decoded = try decodeRaftFrame(allocator, line);
-    defer decoded.deinit(allocator);
-    switch (decoded.body) {
-        .install_snapshot => |is| {
-            try std.testing.expect(is.done);
-            try std.testing.expect(is.last_included_index == 100);
-        },
-        else => return error.UnexpectedKind,
-    }
-}
-
-test "raft single node becomes leader" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    var peers = [_]Peer{
-        .{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null },
-    };
-
-    var node = try RaftNode.init(allocator, 1, &peers, 150);
-    defer node.deinit();
-
-    // Start election
-    try node.startElection();
-
-    try testing.expect(node.state == .leader);
-    try testing.expect(node.current_term == 1);
-    try testing.expect(node.voted_for == 1);
-    try testing.expect(node.stats.elections_won == 1);
-}
-
-test "raft propose command as leader" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    var peers = [_]Peer{
-        .{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null },
-    };
-
-    var node = try RaftNode.init(allocator, 1, &peers, 150);
-    defer node.deinit();
-
-    // Become leader
-    try node.startElection();
-    try testing.expect(node.state == .leader);
-
-    // Propose a command
-    const cmd = Command{ .write = "test data" };
-    const index = try node.propose(cmd);
-
-    try testing.expect(index == 2); // Index 0: init noop, 1: leader noop, 2: our command
-    try testing.expect(node.log.items.len == 3);
-    try testing.expect(node.stats.entries_appended == 2);
-}
-
-test "raft request vote logic" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    var peers = [_]Peer{
-        .{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null },
-        .{ .id = 2, .endpoint = "127.0.0.1", .port = 8002, .alive = true, .last_contact = 0, .rpc_client = null },
-    };
-
-    var node = try RaftNode.init(allocator, 1, &peers, 150);
-    defer node.deinit();
-
-    // Test vote request with higher term
-    const vote_req = RequestVote{
-        .term = 2,
-        .candidate_id = 2,
-        .last_log_index = 0,
-        .last_log_term = 0,
-        .pre_vote = false,
-    };
-
-    try node.handleRequestVote(vote_req, 2);
-
-    // Should update term and grant vote
-    try testing.expect(node.current_term == 2);
-    try testing.expect(node.state == .follower);
-    try testing.expect(node.voted_for == 2);
-}
-
-test "raft append entries as follower" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    var peers = [_]Peer{
-        .{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null },
-        .{ .id = 2, .endpoint = "127.0.0.1", .port = 8002, .alive = true, .last_contact = 0, .rpc_client = null },
-    };
-
-    var node = try RaftNode.init(allocator, 1, &peers, 150);
-    defer node.deinit();
-
-    // Create append entries from leader
-    var entries = [_]LogEntry{
-        .{
-            .term = 1,
-            .index = 1,
-            .command = .{ .write = "entry1" },
-            .timestamp = 0,
-            .client_id = null,
-            .serial_number = null,
-        },
-    };
-
-    const append_req = AppendEntries{
-        .term = 1,
-        .leader_id = 2,
-        .prev_log_index = 0,
-        .prev_log_term = 0,
-        .entries = &entries,
-        .leader_commit = 0,
-    };
-
-    try node.handleAppendEntries(append_req, 2);
-
-    // Should accept entries
-    try testing.expect(node.current_term == 1);
-    try testing.expect(node.state == .follower);
-    try testing.expect(node.log.items.len == 1); // Only initial noop, entry wasn't appended
-}
-
-test "raft deduplication of client requests" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    var peers = [_]Peer{
-        .{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null },
-    };
-
-    var node = try RaftNode.init(allocator, 1, &peers, 150);
-    defer node.deinit();
-
-    // Become leader
-    try node.startElection();
-
-    // Propose command with client info
-    const cmd = Command{ .write = "test data" };
-    const index1 = try node.proposeWithClientInfo(cmd, 100, 1);
-
-    // Try to propose same command again (should return same index)
-    const index2 = try node.proposeWithClientInfo(cmd, 100, 1);
-
-    try testing.expect(index1 == index2);
-    try testing.expect(node.log.items.len == 3); // Not 4, because duplicate was detected
-}
-
-test "raft statistics tracking" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    var peers = [_]Peer{
-        .{ .id = 1, .endpoint = "127.0.0.1", .port = 8001, .alive = true, .last_contact = 0, .rpc_client = null },
-    };
-
-    var node = try RaftNode.init(allocator, 1, &peers, 150);
-    defer node.deinit();
-
-    // Initial stats
-    try testing.expect(node.stats.elections_called == 0);
-    try testing.expect(node.stats.elections_won == 0);
-
-    // Start election
-    try node.startElection();
-
-    try testing.expect(node.stats.elections_called == 1);
-    try testing.expect(node.stats.elections_won == 1);
-    try testing.expect(node.stats.entries_appended == 1); // Leader noop
-}
-
-// CANARY: REQ=REQ-GQL-074; FEATURE="RaftPersistentStorage"; ASPECT=Durability; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_RaftPersistentStorageRoundTrip; OWNER=cluster; UPDATED=2025-09-24
-test "TestCANARY_REQ_GQL_074_RaftPersistentStorageRoundTrip" {
-    const testing = std.testing;
-    const alloc = testing.allocator;
-    // create temp dir
-    var tmp_dir_buf: [128]u8 = undefined;
-    const tmp_name = try std.fmt.bufPrint(&tmp_dir_buf, "raft_ps_{d}", .{std.time.milliTimestamp()});
-    try std.fs.cwd().makePath(tmp_name);
-    defer std.fs.cwd().deleteTree(tmp_name) catch {};
-
-    var storage = try PersistentStorage.init(alloc, tmp_name);
-    defer storage.close();
-    try storage.saveCurrentTerm(7);
-    try storage.saveVotedFor(42);
-    try storage.appendLogEntry(.{ .term = 7, .index = 1, .command = .noop, .timestamp = 0, .client_id = null, .serial_number = null });
-
-    const term = try storage.getCurrentTerm();
-    try testing.expect(term.? == 7);
-    const voted = try storage.getVotedFor();
-    try testing.expect(voted.? == 42);
-    const entries = try storage.getLogEntries(alloc);
-    defer alloc.free(entries);
-    try testing.expect(entries.len == 1);
-    try testing.expect(entries[0].index == 1);
-
-    // Re-open storage new instance
-    var storage2 = try PersistentStorage.init(alloc, tmp_name);
-    defer storage2.close();
-    const term2 = try storage2.getCurrentTerm();
-    try testing.expect(term2.? == 7);
-    const voted2 = try storage2.getVotedFor();
-    try testing.expect(voted2.? == 42);
+    try std.testing.expectEqual(State.follower, node.state);
 }

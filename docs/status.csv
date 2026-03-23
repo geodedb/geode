@@ -1606,10 +1606,7 @@ REQ-GQL-074,Network Transport,QuicFrameLatencyVarianceEnvelope,BENCHED,,,wire,20
 REQ-GQL-074,RaftFrame/TransportEnvelope,NetworkTransport,COMPLETE,,,cluster,2025-09-23,docs/BINARY_PROTOCOL.md
 REQ-GQL-074,RaftFrame/TransportEnvelope,NetworkTransport,TESTED,,,cluster,2025-09-23,tests/test_quic_raft_smoke.zig
 REQ-GQL-074,RaftFrameEntriesArray,NetworkTransport,TESTED,,,cluster,2025-09-23,docs/BINARY_PROTOCOL.md
-REQ-GQL-074,RaftFrameEntriesArray,NetworkTransport,TESTED,,,cluster,2025-09-23,src/distributed/raft_consensus.zig
 REQ-GQL-074,RaftFrameSnapshotInstall,NetworkTransport,TESTED,,,cluster,2025-09-23,docs/BINARY_PROTOCOL.md
-REQ-GQL-074,RaftFrameSnapshotInstall,NetworkTransport,TESTED,,,cluster,2025-09-23,src/distributed/raft_consensus.zig
-REQ-GQL-074,RaftPersistentStorage,Durability,TESTED,,,cluster,2025-09-24,src/distributed/raft_consensus.zig
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBias,TESTED,,,planner,2025-09-26,src/planner/cost_seed.zig
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBias,TESTED,,,planner,2025-09-22,tests/debug/test_cost_model_adaptive_bias.zig
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBias,TESTED,,,planner,2025-09-26,tests/debug/test_cost_model_adaptive_bias_parity.zig
@@ -1773,7 +1770,6 @@ REQ-GQL-2PC-002,Distributed Transaction Coordinator,2PC,TESTED,,,distributed,202
 REQ-GQL-2PC-003,2PC,Idempotence,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_misc.zig
 REQ-GQL-2PC-003,2PC Idempotence,2PC,TESTED,,,distributed,2025-09-29,src/distributed/txn_coordinator.zig
 REQ-GQL-2PC-004,2PC,RaftIntegration,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_misc.zig
-REQ-GQL-2PC-004,2PC Raft Integration,2PC,TESTED,,,distributed,2025-09-29,src/distributed/raft_consensus.zig
 REQ-GQL-2PC-005,Distributed Query Processing,Distributed,TESTED,,,distributed,2025-09-29,src/distributed/cluster.zig
 REQ-GQL-2PC-APPLY-001,2PC,WriteSetApplication,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_misc.zig
 REQ-GQL-2PC-APPLY-001,2PC Write Set Application,2PC,EXEMPT,,,distributed,2026-01-12,src/distributed/txn_coordinator.zig
@@ -3412,11 +3408,6 @@ REQ-QUIC-STREAM-001,QUICProtocol,Streaming,TESTED,,,transport,2026-01-16,tests/t
 REQ-QUIC-STREAM-CLEANUP-001,StreamMemoryManagement,DoubleFreePrevention,EXEMPT,,,transport,2025-12-27,src/transport/quic.zig
 REQ-QUIC-TLS-001,QUICProtocol,TLS,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-QUIC-TLS-001,QUICProtocol,TLSHandshake,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
-REQ-RAFT-SNAPSHOT-001,SnapshotInstallation,HandleInstallSnapshot,EXEMPT,,,raft,2026-01-10,src/distributed/raft.zig
-REQ-RAFT-SNAPSHOT-001,SnapshotInstallation,HandleInstallSnapshot,EXEMPT,,,raft,2026-01-10,src/distributed/raft_consensus.zig
-REQ-RAFT-SNAPSHOT-001,SnapshotInstallation,HandleSnapshotResponse,EXEMPT,,,raft,2026-01-10,src/distributed/raft.zig
-REQ-RAFT-SNAPSHOT-001,SnapshotInstallation,HandleSnapshotResponse,EXEMPT,,,raft,2026-01-10,src/distributed/raft_consensus.zig
-REQ-RAFT-SNAPSHOT-001,SnapshotInstallation,SnapshotTransfer,EXEMPT,,,raft,2026-01-10,src/distributed/raft_consensus.zig
 REQ-RECURSIVE-CTE-001,Recursive CTE Core Functions,QueryAnalysis,TESTED,,,planner,2026-01-10,src/planner/recursive.zig
 REQ-RECURSIVE-CTE-001,RecursiveCTE,PathFinding,TESTED,,,planner,2026-01-09,src/planner/recursive.zig
 REQ-RECURSIVE-CTE-002,Distinct Union Processing,SetOperations,TESTED,,,planner,2026-01-10,src/planner/recursive.zig

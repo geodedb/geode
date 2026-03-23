@@ -2,13 +2,14 @@ const std = @import("std");
 const graph_store = @import("graph_store.zig");
 const txn_undo_log = @import("txn_undo_log.zig");
 const tde = @import("storage/tde_file_encryption.zig");
+const wal_lib = @import("wal");
 
 // CANARY: REQ=REQ-PERF-WAL-001; FEATURE="WriteAheadLog"; ASPECT=DeltaPersistence; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
 // CANARY: REQ=REQ-TDE-ENFORCE-002; FEATURE=TDEEnforcement; ASPECT=WALEncryption; STATUS=TESTED; OWNER=security; UPDATED=2026-02-19
 // Issue #445: Write-Ahead Log for delta persistence.
-// Instead of serializing the entire graph on every commit, mutations are appended as
-// WAL records. Full snapshots (checkpoints) happen periodically. On recovery, the last
-// checkpoint is loaded and WAL records after that LSN are replayed.
+// Delegates to the external wal library (gitlab.com/devnw/zig/wal) for crash-safe
+// append-only storage. This module provides the geode-specific serialization layer
+// (WalRecord types, mutation callbacks, persistence hooks, global instance management).
 
 const logging = @import("logging");
 const log = logging.scoped("wal");
@@ -78,14 +79,9 @@ pub const WalRecord = union(WalOpType) {
     },
 };
 
-/// On-disk WAL record header:
-///   [u64: LSN][u64: txn_id][u8: op_type][u32: payload_len][payload...][u32: CRC32]
-const RECORD_HEADER_SIZE = 8 + 8 + 1 + 4; // 21 bytes
-const CRC_SIZE = 4;
-
 /// Load the WAL encryption key. Checks GEODE_WAL_KEY first (WAL-specific key),
 /// then falls back to GEODE_TDE_KEY. Returns null if neither is set.
-fn loadWalKey(allocator: std.mem.Allocator) !?[tde.KEY_BYTES]u8 {
+fn loadWalKey(allocator: std.mem.Allocator) !?[32]u8 {
     // Try WAL-specific key first
     const wal_hex = std.process.getEnvVarOwned(allocator, "GEODE_WAL_KEY") catch |e| switch (e) {
         error.EnvironmentVariableNotFound => null,
@@ -94,10 +90,9 @@ fn loadWalKey(allocator: std.mem.Allocator) !?[tde.KEY_BYTES]u8 {
     if (wal_hex) |hex| {
         defer allocator.free(hex);
         if (hex.len == 64) {
-            // Parse the 64-char hex string into 32 bytes
-            var key: [tde.KEY_BYTES]u8 = undefined;
+            var key: [32]u8 = undefined;
             var i: usize = 0;
-            while (i < tde.KEY_BYTES) : (i += 1) {
+            while (i < 32) : (i += 1) {
                 const hi = std.fmt.charToDigit(hex[i * 2], 16) catch return tde.TdeError.InvalidKey;
                 const lo = std.fmt.charToDigit(hex[i * 2 + 1], 16) catch return tde.TdeError.InvalidKey;
                 key[i] = @as(u8, @intCast(hi * 16 + lo));
@@ -109,334 +104,117 @@ fn loadWalKey(allocator: std.mem.Allocator) !?[tde.KEY_BYTES]u8 {
     return try tde.loadKey(allocator);
 }
 
+/// Geode WriteAheadLog — wraps the external wal library with graph-specific
+/// record types, serialization, and integration with graph_store.
 pub const WriteAheadLog = struct {
     allocator: std.mem.Allocator,
-    file: ?std.fs.File,
-    current_lsn: u64,
+    inner: wal_lib.WriteAheadLog,
     checkpoint_lsn: u64,
-    bytes_since_checkpoint: u64,
     last_checkpoint_ms: i64,
-    lock: std.Thread.Mutex,
-    file_path: []const u8,
-    /// Non-null when WAL encryption is active (GEODE_WAL_KEY or GEODE_TDE_KEY set).
-    tde_key: ?[tde.KEY_BYTES]u8,
+
+    /// Current LSN (read-only accessor for tests and diagnostics).
+    pub fn currentLsn(self: *WriteAheadLog) u64 {
+        return self.inner.currentLsn();
+    }
+
+    /// Bytes written since last checkpoint/compaction.
+    pub fn bytesSinceCheckpoint(self: *WriteAheadLog) u64 {
+        return self.inner.bytesSinceCompact();
+    }
 
     pub fn init(allocator: std.mem.Allocator, path: []const u8) !WriteAheadLog {
-        const owned_path = try allocator.dupe(u8, path);
-        errdefer allocator.free(owned_path);
-
         // Load WAL encryption key: GEODE_WAL_KEY takes precedence, then GEODE_TDE_KEY.
         const wal_key = try loadWalKey(allocator);
 
-        // Open or create the WAL file for append
-        const file = std.fs.cwd().openFile(path, .{ .mode = .read_write }) catch |err| {
+        // Split path into directory and filename for the external WAL library.
+        const sep = std.mem.lastIndexOfScalar(u8, path, '/');
+        const dir_path = if (sep) |s| path[0..s] else ".";
+        const filename = if (sep) |s| path[s + 1 ..] else path;
+
+        const dir = std.fs.cwd().openDir(dir_path, .{}) catch |err| {
             if (err == error.FileNotFound) {
-                // Create new WAL file
-                const new_file = try std.fs.cwd().createFile(path, .{ .read = true });
-                return WriteAheadLog{
-                    .allocator = allocator,
-                    .file = new_file,
-                    .current_lsn = 0,
-                    .checkpoint_lsn = 0,
-                    .bytes_since_checkpoint = 0,
-                    .last_checkpoint_ms = std.time.milliTimestamp(),
-                    .lock = .{},
-                    .file_path = owned_path,
-                    .tde_key = wal_key,
-                };
+                try std.fs.cwd().makePath(dir_path);
+                return init(allocator, path);
             }
             return err;
         };
 
-        // Scan to find the last LSN, handling encrypted or plaintext format.
-        var last_lsn: u64 = 0;
-        var bytes_count: u64 = 0;
-
-        if (wal_key) |key| {
-            // Encrypted WAL: [u32: enc_len][GEOTDEFL_magic + nonce + tag + ciphertext]
-            while (true) {
-                var len_buf: [4]u8 = undefined;
-                const lr = file.readAll(&len_buf) catch break;
-                if (lr < 4) break;
-                const enc_len = std.mem.readInt(u32, &len_buf, .little);
-                if (enc_len == 0 or enc_len > 16 * 1024 * 1024) break;
-
-                const encrypted = allocator.alloc(u8, enc_len) catch break;
-                defer allocator.free(encrypted);
-                const er = file.readAll(encrypted) catch break;
-                if (er < enc_len) break;
-
-                const decrypted = tde.decryptWithKey(allocator, encrypted, key) catch break;
-                defer allocator.free(decrypted);
-
-                if (decrypted.len < RECORD_HEADER_SIZE) break;
-                const lsn = std.mem.readInt(u64, decrypted[0..8], .little);
-                const payload_len = std.mem.readInt(u32, decrypted[17..21], .little);
-                if (decrypted.len != RECORD_HEADER_SIZE + payload_len + CRC_SIZE) break;
-
-                last_lsn = lsn;
-                bytes_count += 4 + enc_len;
-            }
-        } else {
-            // Plaintext WAL (original format)
-            while (true) {
-                var header_buf: [RECORD_HEADER_SIZE]u8 = undefined;
-                const header_read = file.readAll(&header_buf) catch break;
-                if (header_read < RECORD_HEADER_SIZE) break;
-
-                const lsn = std.mem.readInt(u64, header_buf[0..8], .little);
-                const payload_len = std.mem.readInt(u32, header_buf[17..21], .little);
-
-                file.seekBy(@intCast(payload_len + CRC_SIZE)) catch break;
-
-                last_lsn = lsn;
-                bytes_count += RECORD_HEADER_SIZE + payload_len + CRC_SIZE;
-            }
-        }
-
-        // Seek to end for appending
-        file.seekFromEnd(0) catch {};
+        const inner = try wal_lib.WriteAheadLog.init(allocator, dir, filename, .{
+            .encryption_key = wal_key,
+            .manual_sync = true, // Geode manages sync via persistence hooks
+            .checkpoint = true,
+        });
 
         return WriteAheadLog{
             .allocator = allocator,
-            .file = file,
-            .current_lsn = last_lsn,
+            .inner = inner,
             .checkpoint_lsn = 0,
-            .bytes_since_checkpoint = bytes_count,
             .last_checkpoint_ms = std.time.milliTimestamp(),
-            .lock = .{},
-            .file_path = owned_path,
-            .tde_key = wal_key,
         };
     }
 
     pub fn deinit(self: *WriteAheadLog) void {
-        if (self.file) |f| {
-            f.close();
-            self.file = null;
-        }
-        self.allocator.free(self.file_path);
+        self.inner.deinit();
     }
 
     /// Append a WAL record and return the assigned LSN.
-    /// Thread-safe: acquires internal mutex.
+    /// Thread-safe: the external WAL library handles locking internally.
     pub fn appendRecord(self: *WriteAheadLog, txn_id: u64, record: WalRecord) !u64 {
-        self.lock.lock();
-        defer self.lock.unlock();
-
-        const file = self.file orelse return error.NotOpenReading;
-        self.current_lsn += 1;
-        const lsn = self.current_lsn;
-
-        // Serialize payload
+        // Serialize the geode-specific payload: [u64: txn_id][u8: op_type][payload...]
         var payload_buf = std.ArrayList(u8).initCapacity(self.allocator, 256) catch return error.OutOfMemory;
         defer payload_buf.deinit(self.allocator);
 
+        // Prepend txn_id and op_type to the serialized payload
+        try appendU64(&payload_buf, self.allocator, txn_id);
+        try payload_buf.append(self.allocator, @intFromEnum(std.meta.activeTag(record)));
         try serializePayload(self.allocator, &payload_buf, record);
 
-        const payload = payload_buf.items;
-
-        // Build header
-        var header: [RECORD_HEADER_SIZE]u8 = undefined;
-        std.mem.writeInt(u64, header[0..8], lsn, .little);
-        std.mem.writeInt(u64, header[8..16], txn_id, .little);
-        header[16] = @intFromEnum(std.meta.activeTag(record));
-        std.mem.writeInt(u32, header[17..21], @intCast(payload.len), .little);
-
-        // Compute CRC32 over header + payload
-        var crc32 = std.hash.crc.Crc32IsoHdlc.init();
-        crc32.update(&header);
-        crc32.update(payload);
-        const checksum = crc32.final();
-        var crc_buf: [CRC_SIZE]u8 = undefined;
-        std.mem.writeInt(u32, &crc_buf, checksum, .little);
-
-        if (self.tde_key) |key| {
-            // TDE enabled: assemble header+payload+crc, encrypt, write with 4-byte length prefix.
-            // Format: [u32: enc_len][GEOTDEFL_magic][nonce][tag][ciphertext]
-            var rec_buf = std.ArrayList(u8).initCapacity(self.allocator, RECORD_HEADER_SIZE + payload.len + CRC_SIZE) catch return error.OutOfMemory;
-            defer rec_buf.deinit(self.allocator);
-            try rec_buf.appendSlice(self.allocator, &header);
-            try rec_buf.appendSlice(self.allocator, payload);
-            try rec_buf.appendSlice(self.allocator, &crc_buf);
-
-            const encrypted = try tde.encryptWithKey(self.allocator, rec_buf.items, key);
-            defer self.allocator.free(encrypted);
-
-            var len_prefix: [4]u8 = undefined;
-            std.mem.writeInt(u32, &len_prefix, @intCast(encrypted.len), .little);
-
-            // #559: Single write for encrypted record
-            var enc_buf = std.ArrayList(u8).initCapacity(self.allocator, 4 + encrypted.len) catch {
-                try file.writeAll(&len_prefix);
-                try file.writeAll(encrypted);
-                self.bytes_since_checkpoint += 4 + encrypted.len;
-                return lsn;
-            };
-            defer enc_buf.deinit(self.allocator);
-            try enc_buf.appendSlice(self.allocator, &len_prefix);
-            try enc_buf.appendSlice(self.allocator, encrypted);
-            try file.writeAll(enc_buf.items);
-
-            self.bytes_since_checkpoint += 4 + encrypted.len;
-        } else {
-            // #559: Buffer all record components for single syscall write
-            var record_buf: [RECORD_HEADER_SIZE + 65536 + CRC_SIZE]u8 = undefined;
-            const total_len = RECORD_HEADER_SIZE + payload.len + CRC_SIZE;
-            if (total_len <= record_buf.len) {
-                @memcpy(record_buf[0..RECORD_HEADER_SIZE], &header);
-                @memcpy(record_buf[RECORD_HEADER_SIZE..][0..payload.len], payload);
-                @memcpy(record_buf[RECORD_HEADER_SIZE + payload.len ..][0..CRC_SIZE], &crc_buf);
-                try file.writeAll(record_buf[0..total_len]);
-            } else {
-                // Fallback for very large payloads: use writev-style assembly
-                var large_buf = std.ArrayList(u8).initCapacity(self.allocator, total_len) catch {
-                    // Fallback to original multi-write path
-                    try file.writeAll(&header);
-                    try file.writeAll(payload);
-                    try file.writeAll(&crc_buf);
-                    self.bytes_since_checkpoint += RECORD_HEADER_SIZE + payload.len + CRC_SIZE;
-                    return lsn;
-                };
-                defer large_buf.deinit(self.allocator);
-                try large_buf.appendSlice(self.allocator, &header);
-                try large_buf.appendSlice(self.allocator, payload);
-                try large_buf.appendSlice(self.allocator, &crc_buf);
-                try file.writeAll(large_buf.items);
-            }
-
-            self.bytes_since_checkpoint += RECORD_HEADER_SIZE + payload.len + CRC_SIZE;
-        }
-
-        return lsn;
+        return self.inner.append(payload_buf.items);
     }
 
     /// Flush WAL to disk (fsync)
     pub fn sync(self: *WriteAheadLog) !void {
-        self.lock.lock();
-        defer self.lock.unlock();
-        if (self.file) |f| {
-            try f.sync();
-        }
+        self.inner.sync() catch {};
     }
 
     /// Replay WAL records from checkpoint_lsn onto the given store.
     /// Returns the last replayed LSN.
     pub fn replay(self: *WriteAheadLog, store: *graph_store.GraphStore) !u64 {
-        self.lock.lock();
-        defer self.lock.unlock();
-
         // Inhibit mutation callbacks during replay to prevent re-emitting WAL records
         graph_store.setMutationNotifyInhibit(true);
         defer graph_store.setMutationNotifyInhibit(false);
 
-        const file = self.file orelse return 0;
+        var iter = try self.inner.iterator(self.checkpoint_lsn);
+        defer iter.deinit();
 
-        // Seek to beginning
-        try file.seekTo(0);
         var last_lsn: u64 = 0;
         var replayed: u64 = 0;
 
-        if (self.tde_key) |key| {
-            // Encrypted WAL replay: [u32: enc_len][encrypted record]
-            while (true) {
-                var len_buf: [4]u8 = undefined;
-                const lr = file.readAll(&len_buf) catch break;
-                if (lr < 4) break;
-                const enc_len = std.mem.readInt(u32, &len_buf, .little);
-                if (enc_len == 0 or enc_len > 16 * 1024 * 1024) break;
+        while (try iter.next()) |entry_val| {
+            var entry = entry_val;
+            defer entry.deinit();
 
-                const encrypted = self.allocator.alloc(u8, enc_len) catch break;
-                defer self.allocator.free(encrypted);
-                const er = file.readAll(encrypted) catch break;
-                if (er < enc_len) break;
+            if (entry.lsn <= self.checkpoint_lsn) continue;
 
-                const rec = tde.decryptWithKey(self.allocator, encrypted, key) catch {
-                    log.warn("WAL: decryption failed, stopping replay", &.{});
-                    break;
-                };
-                defer self.allocator.free(rec);
+            // Parse the geode-specific payload: [u64: txn_id][u8: op_type][payload...]
+            const payload = entry.payload;
+            if (payload.len < 9) continue; // Need at least txn_id (8) + op_type (1)
 
-                if (rec.len < RECORD_HEADER_SIZE + CRC_SIZE) break;
-                const lsn = std.mem.readInt(u64, rec[0..8], .little);
-                const op_type_byte = rec[16];
-                const payload_len = std.mem.readInt(u32, rec[17..21], .little);
-                if (rec.len < RECORD_HEADER_SIZE + payload_len + CRC_SIZE) break;
+            // Skip txn_id (8 bytes), read op_type
+            const op_type_byte = payload[8];
+            const record_payload = payload[9..];
 
-                const payload = rec[RECORD_HEADER_SIZE .. RECORD_HEADER_SIZE + payload_len];
+            const op_type: WalOpType = @enumFromInt(op_type_byte);
+            applyRecord(store, op_type, record_payload) catch |err| {
+                log.warn("WAL replay failed for record", &.{
+                    Attr.int("lsn", @intCast(entry.lsn)),
+                    Attr.string("error", @errorName(err)),
+                });
+                continue;
+            };
 
-                var crc32 = std.hash.crc.Crc32IsoHdlc.init();
-                crc32.update(rec[0..RECORD_HEADER_SIZE]);
-                crc32.update(payload);
-                const computed_crc = crc32.final();
-                const stored_crc = std.mem.readInt(u32, rec[RECORD_HEADER_SIZE + payload_len ..][0..4], .little);
-                if (computed_crc != stored_crc) {
-                    log.warn("WAL CRC mismatch at LSN, stopping replay", &.{
-                        Attr.int("lsn", @intCast(lsn)),
-                    });
-                    break;
-                }
-
-                if (lsn <= self.checkpoint_lsn) continue;
-
-                const op_type: WalOpType = @enumFromInt(op_type_byte);
-                applyRecord(store, op_type, payload) catch |err| {
-                    log.warn("WAL replay failed for record", &.{
-                        Attr.int("lsn", @intCast(lsn)),
-                        Attr.string("error", @errorName(err)),
-                    });
-                    continue;
-                };
-
-                last_lsn = lsn;
-                replayed += 1;
-            }
-        } else {
-            // Plaintext WAL replay (original format)
-            while (true) {
-                var header_buf: [RECORD_HEADER_SIZE]u8 = undefined;
-                const header_read = file.readAll(&header_buf) catch break;
-                if (header_read < RECORD_HEADER_SIZE) break;
-
-                const lsn = std.mem.readInt(u64, header_buf[0..8], .little);
-                const op_type_byte = header_buf[16];
-                const payload_len = std.mem.readInt(u32, header_buf[17..21], .little);
-
-                const payload = self.allocator.alloc(u8, payload_len) catch break;
-                defer self.allocator.free(payload);
-                const payload_read = file.readAll(payload) catch break;
-                if (payload_read < payload_len) break;
-
-                var crc_buf: [CRC_SIZE]u8 = undefined;
-                const crc_read = file.readAll(&crc_buf) catch break;
-                if (crc_read < CRC_SIZE) break;
-
-                var crc32 = std.hash.crc.Crc32IsoHdlc.init();
-                crc32.update(&header_buf);
-                crc32.update(payload);
-                const computed_crc = crc32.final();
-                const stored_crc = std.mem.readInt(u32, &crc_buf, .little);
-                if (computed_crc != stored_crc) {
-                    log.warn("WAL CRC mismatch at LSN, stopping replay", &.{
-                        Attr.int("lsn", @intCast(lsn)),
-                    });
-                    break;
-                }
-
-                if (lsn <= self.checkpoint_lsn) continue;
-
-                const op_type: WalOpType = @enumFromInt(op_type_byte);
-                applyRecord(store, op_type, payload) catch |err| {
-                    log.warn("WAL replay failed for record", &.{
-                        Attr.int("lsn", @intCast(lsn)),
-                        Attr.string("error", @errorName(err)),
-                    });
-                    continue;
-                };
-
-                last_lsn = lsn;
-                replayed += 1;
-            }
+            last_lsn = entry.lsn;
+            replayed += 1;
         }
 
         if (replayed > 0) {
@@ -446,154 +224,29 @@ pub const WriteAheadLog = struct {
             });
         }
 
-        self.current_lsn = last_lsn;
         return last_lsn;
     }
 
     /// Truncate WAL records up to the given LSN (after a successful checkpoint).
-    /// Rewrites the file keeping only records with LSN > up_to_lsn.
     pub fn truncate(self: *WriteAheadLog, up_to_lsn: u64) !void {
-        self.lock.lock();
-        defer self.lock.unlock();
-
-        if (up_to_lsn == 0) return; // Nothing to truncate
-
-        const file = self.file orelse return;
-
-        const file_end = try file.getEndPos();
-        if (file_end == 0) return; // Empty WAL file
-
-        try file.seekTo(0);
-
-        var kept_bytes: u64 = 0;
-
-        if (self.tde_key) |key| {
-            // Encrypted WAL truncation: read framed encrypted records, decrypt to check LSN,
-            // then keep the encrypted bytes verbatim (no re-encryption needed).
-            // Pre-size buffer based on file size (cap at 4MB to avoid over-allocation).
-            var kept = std.ArrayList(u8).initCapacity(self.allocator, @intCast(@min(file_end, 4 * 1024 * 1024))) catch return error.OutOfMemory;
-            defer kept.deinit(self.allocator);
-
-            while (true) {
-                var len_buf: [4]u8 = undefined;
-                const lr = file.readAll(&len_buf) catch break;
-                if (lr < 4) break;
-                const enc_len = std.mem.readInt(u32, &len_buf, .little);
-                if (enc_len == 0 or enc_len > 16 * 1024 * 1024) break;
-
-                const encrypted = self.allocator.alloc(u8, enc_len) catch break;
-                defer self.allocator.free(encrypted);
-                const er = file.readAll(encrypted) catch break;
-                if (er < enc_len) break;
-
-                const rec = tde.decryptWithKey(self.allocator, encrypted, key) catch break;
-                defer self.allocator.free(rec);
-
-                if (rec.len < RECORD_HEADER_SIZE) break;
-                const lsn = std.mem.readInt(u64, rec[0..8], .little);
-
-                if (lsn > up_to_lsn) {
-                    // Keep: write the original framed encrypted bytes
-                    try kept.appendSlice(self.allocator, &len_buf);
-                    try kept.appendSlice(self.allocator, encrypted);
-                    kept_bytes += 4 + enc_len;
-                }
-            }
-
-            // Rewrite the file with only kept records
-            try file.seekTo(0);
-            if (kept.items.len > 0) {
-                try file.writeAll(kept.items);
-            }
-            try file.setEndPos(kept.items.len);
-        } else {
-            // Plaintext WAL truncation: scan for first kept record, then bulk-copy remainder.
-            // LSNs are monotonically increasing, so once we find the first record with
-            // LSN > up_to_lsn, all subsequent records are also kept. This lets us avoid
-            // buffering the entire kept portion in memory -- just memmove it forward.
-            var first_kept_offset: ?u64 = null;
-
-            while (true) {
-                const record_start = file.getPos() catch break;
-
-                var header_buf: [RECORD_HEADER_SIZE]u8 = undefined;
-                const header_read = file.readAll(&header_buf) catch break;
-                if (header_read < RECORD_HEADER_SIZE) break;
-
-                const lsn = std.mem.readInt(u64, header_buf[0..8], .little);
-                const payload_len = std.mem.readInt(u32, header_buf[17..21], .little);
-
-                // Skip past payload + CRC to next record
-                file.seekBy(@intCast(payload_len + CRC_SIZE)) catch break;
-
-                if (lsn > up_to_lsn) {
-                    first_kept_offset = record_start;
-                    // All subsequent records also have LSN > up_to_lsn (monotonic),
-                    // so stop scanning and bulk-copy from this offset onward.
-                    break;
-                }
-            }
-
-            if (first_kept_offset) |offset| {
-                if (offset == 0) {
-                    // All records are kept; file is unchanged.
-                    kept_bytes = file_end;
-                } else {
-                    // Bulk-copy kept portion to the start of the file.
-                    const remaining = file_end - offset;
-                    const buf_size: usize = @intCast(@min(remaining, 64 * 1024));
-                    const buf = self.allocator.alloc(u8, buf_size) catch return error.OutOfMemory;
-                    defer self.allocator.free(buf);
-
-                    var read_pos: u64 = offset;
-                    var write_pos: u64 = 0;
-                    while (read_pos < file_end) {
-                        try file.seekTo(read_pos);
-                        const chunk_size: usize = @intCast(@min(buf_size, file_end - read_pos));
-                        const n = try file.readAll(buf[0..chunk_size]);
-                        if (n == 0) break;
-                        try file.seekTo(write_pos);
-                        try file.writeAll(buf[0..n]);
-                        read_pos += n;
-                        write_pos += n;
-                    }
-                    try file.setEndPos(remaining);
-                    kept_bytes = remaining;
-                }
-            } else {
-                // No records kept; truncate to empty.
-                try file.setEndPos(0);
-            }
-        }
-
+        if (up_to_lsn == 0) return;
+        try self.inner.compact(up_to_lsn);
         self.checkpoint_lsn = up_to_lsn;
-        self.bytes_since_checkpoint = kept_bytes;
         self.last_checkpoint_ms = std.time.milliTimestamp();
     }
 
     /// Perform a checkpoint: save full snapshot via store.saveToFile(), then truncate WAL.
     pub fn checkpoint(self: *WriteAheadLog, store: *graph_store.GraphStore) !void {
-        // Save the full snapshot first (caller should hold appropriate locks)
         try store.saveToFile();
-
-        // Truncate WAL records that are now covered by the snapshot
-        const checkpoint_at = blk: {
-            self.lock.lock();
-            defer self.lock.unlock();
-            break :blk self.current_lsn;
-        };
-
+        const checkpoint_at = self.inner.currentLsn();
         try self.truncate(checkpoint_at);
     }
 
     /// Check if a checkpoint is needed based on byte or time thresholds.
-    /// Returns true if bytes since last checkpoint exceed byte_threshold,
-    /// or if time since last checkpoint exceeds time_threshold_ms (when > 0).
     pub fn needsCheckpoint(self: *WriteAheadLog, byte_threshold: u64, time_threshold_ms: u64) bool {
-        self.lock.lock();
-        defer self.lock.unlock();
-        if (self.bytes_since_checkpoint >= byte_threshold) return true;
-        if (time_threshold_ms > 0 and self.bytes_since_checkpoint > 0) {
+        const bytes = self.inner.bytesSinceCompact();
+        if (bytes >= byte_threshold) return true;
+        if (time_threshold_ms > 0 and bytes > 0) {
             const now = std.time.milliTimestamp();
             const elapsed: u64 = @intCast(@max(0, now - self.last_checkpoint_ms));
             return elapsed >= time_threshold_ms;
@@ -746,9 +399,7 @@ fn applyRecord(store: *graph_store.GraphStore, op_type: WalOpType, payload: []co
             for (0..label_count) |i| {
                 labels[i] = try readString(payload, &offset);
             }
-            store.createNodeWithId(node_id, labels, graph_name) catch {
-                // Node might already exist if replaying after partial recovery
-            };
+            store.createNodeWithId(node_id, labels, graph_name) catch {};
         },
         .CreateEdge => {
             const edge_id = try readU64(payload, &offset);
@@ -756,9 +407,7 @@ fn applyRecord(store: *graph_store.GraphStore, op_type: WalOpType, payload: []co
             const to_id = try readU64(payload, &offset);
             const label = try readString(payload, &offset);
             const graph_name = try readString(payload, &offset);
-            store.createEdgeWithId(edge_id, from_id, to_id, label, graph_name) catch {
-                // Edge might already exist
-            };
+            store.createEdgeWithId(edge_id, from_id, to_id, label, graph_name) catch {};
         },
         .SetNodeProperty => {
             const node_id = try readU64(payload, &offset);
@@ -850,8 +499,8 @@ pub fn getGlobalWal() ?*WriteAheadLog {
 
 /// Deinitialize the global WAL
 pub fn deinitGlobalWal() void {
-    if (g_wal_storage) |*wal| {
-        wal.deinit();
+    if (g_wal_storage) |*w| {
+        w.deinit();
         g_wal_storage = null;
         g_wal = null;
     }
@@ -872,9 +521,7 @@ fn propertyValueToSerialized(prop_key: []const u8, value: graph_store.PropertyVa
     };
 }
 
-/// Mutation callback installed in graph_store. Receives notifications of all store
-/// mutations and emits corresponding WAL records. The graph_store inhibits this
-/// callback during WAL replay to prevent re-emission.
+/// Mutation callback installed in graph_store.
 fn mutationCallback(
     op: graph_store.MutationOp,
     id1: u64,
@@ -938,7 +585,6 @@ fn mutationCallback(
 }
 
 /// Install the WAL mutation callback in graph_store.
-/// Call after initGlobalWal() to start capturing mutations.
 pub fn installMutationCallback() void {
     graph_store.setMutationNotify(&mutationCallback);
 }
@@ -954,41 +600,33 @@ pub fn removeMutationCallback() void {
 pub const CHECKPOINT_BYTE_THRESHOLD: u64 = 16 * 1024 * 1024; // 16MB
 pub const CHECKPOINT_INTERVAL_MS: u64 = 60_000; // 60 seconds
 
-// Persistence hook implementations for graph_store.persistenceLoop()
-
-/// Sync the global WAL (fsync). Called by persistence loop on every wake.
 fn walSyncHook() void {
     if (g_wal) |w| {
         w.sync() catch {};
     }
 }
 
-/// Check if a full checkpoint is needed based on WAL byte or time threshold.
 fn walNeedsCheckpointHook() bool {
     if (g_wal) |w| {
         return w.needsCheckpoint(CHECKPOINT_BYTE_THRESHOLD, CHECKPOINT_INTERVAL_MS);
     }
-    return true; // If WAL not available, always checkpoint (legacy behavior)
+    return true;
 }
 
-/// Perform a full checkpoint: saveToFile() + truncate WAL.
 fn walCheckpointHook(store: *graph_store.GraphStore) void {
     if (g_wal) |w| {
         w.checkpoint(store) catch |err| {
             log.err("WAL checkpoint failed", &.{
                 Attr.string("error", @errorName(err)),
             });
-            // Fall back to direct save on checkpoint failure
             store.saveToFile() catch {};
         };
     } else {
-        // No WAL — fall back to direct save
         store.saveToFile() catch {};
     }
 }
 
 /// Install WAL persistence hooks in graph_store's persistence loop.
-/// Call after initGlobalWal() and installMutationCallback().
 pub fn installPersistenceHooks() void {
     graph_store.setWalPersistenceHooks(
         &walSyncHook,
