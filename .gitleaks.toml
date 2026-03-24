@@ -17,4 +17,7 @@ paths = [
   '''^src/security/test_.*\.zig$''',
   '''^src/tests/test_.*\.zig$''',
   '''^src/audit_demo\.zig$''',
+  '''^\.env$''',
+  '''^source-test-.*''',
+  '''^src/crypto/''',
 ]

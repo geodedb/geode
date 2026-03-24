@@ -160,8 +160,8 @@
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
         .wal = .{
-            .url = "git+https://gitlab.com/devnw/zig/wal.git#36ad0338d68f62478e10693864814bd0af7c6dba",
-            .hash = "wal-0.1.0-EqPqpolbAwBCIh1oBszguHasZdk0nApn5h_YgBHXE0lT",
+            .url = "git+https://gitlab.com/devnw/zig/wal.git#789619b7bfa54e0dbb5e51dc5282b6b7a2b2e9e4",
+            .hash = "wal-0.1.0-EqPqps5bAwDOHEK3FnHbVJcazN726E759W4LnmmqWPdc",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
