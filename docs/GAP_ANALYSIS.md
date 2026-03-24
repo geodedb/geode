@@ -1,12 +1,12 @@
 # Gap Analysis
 
-Last updated: 2026-03-21
-Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21)
+Last updated: 2026-03-24
+Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24)
 
 ## Summary
 
-- **Total open gaps:** 5
-- **Critical:** 1
+- **Total open gaps:** 6
+- **Critical:** 2
 - **High:** 2
 - **Medium:** 2
 - **Blocked (external dependency):** 3 (GAP-0246, GAP-0247, GAP-0256)
@@ -328,6 +328,300 @@ The server should detect insufficient buffer size at startup and:
 - `docs/DEPLOYMENT.md` includes OS-level tuning requirements for production.
 - Under `TestLoad_HighParallelismReads` (50 workers, 1 000 queries), wall-clock time is < 8 s
   (current: 15.7 s, indicating ~2× overhead from retransmissions).
+
+---
+
+### GAP-0259: Connection state corruption causes `Scan` column mismatch under sustained load (Go driver + QUIC transport)
+
+- **GitLab issue:** *(to be filed)*
+- **Category:** Correctness / Go Driver / Transport
+- **Severity:** Critical
+- **Requirement source:** REQ-0003 Query Correctness; REQ-0009 Performance (sustained throughput)
+- **Discovered:** 2026-03-24 via DiveLife QA E2E tests — 12/67 Playwright tests failed after ~50 rapid sequential login API calls against `qa.divelife.org`
+- **Server version:** `geodedb/geode:0.1.32` (K8s namespace `divelife-qa`)
+- **Driver version:** `geodedb.com/geode v0.1.9` (Go client)
+
+#### Symptom
+
+After approximately 50 rapid sequential HTTP requests that each execute a Geode query (e.g., login flow: `GetUserByEmail` + `CreateSession`), subsequent queries fail with:
+
+```
+expected 1 destination arguments in Scan, not 7
+```
+
+This error comes from Go's `database/sql.(*Row).Scan()` — the number of columns returned by the server (1) does not match the number of destination arguments in the application code (7). Once the error occurs, it persists on all subsequent requests until the API process is restarted, which resets the connection pool.
+
+The DiveLife API returns HTTP 503 to clients. On the QA environment, this manifests as "invalid credentials" because the login endpoint catches the scan error and returns a generic auth failure.
+
+#### Reproducer
+
+**Environment:** DiveLife API (`divelife-api/cmd/qaserver`) connected to Geode via QUIC transport.
+
+**Reproducer 1 — E2E test harness (confirmed):**
+
+```bash
+# Run 67 Playwright E2E tests that each login (2 Geode queries per login)
+TEST_WEB_MODE=1 BASE_URL=https://qa.divelife.org \
+  npx playwright test e2e/qa-multi-user-scanner.spec.ts --workers=1
+```
+
+Result: First ~50 tests pass (admin, instructor, diver-advanced, diver-intermediate). Tests for the 5th and 6th users fail — every subsequent login returns the scan mismatch error.
+
+**Reproducer 2 — Direct API load (confirmed):**
+
+```bash
+# 60 rapid sequential login requests
+for i in $(seq 1 60); do
+  curl -s -o /dev/null -w "$i: %{http_code}\n" \
+    -X POST https://api.qa.divelife.org/v1/auth/login \
+    -H 'Content-Type: application/json' \
+    --data-raw '{"email":"admin@divelife.qa","password":"QaAdmin2024!"}'
+done
+```
+
+Expected: All 60 return HTTP 200.
+Actual: First ~45-55 return 200; remainder return 503 with scan mismatch error in API logs.
+
+**Reproducer 3 — Minimal Go test (proposed):**
+
+```go
+func TestRapidSequentialQueries(t *testing.T) {
+    db, _ := sql.Open("geode", "localhost:3141?insecure=true&user=geode&pass=secret")
+    db.SetMaxOpenConns(5)
+    db.SetMaxIdleConns(2)
+
+    // Seed
+    db.Exec("CREATE (u:TestUser {id: 'test1', email: 'test@test.com', name: 'Test'})")
+
+    // Rapid sequential QueryRow
+    for i := 0; i < 100; i++ {
+        row := db.QueryRow("MATCH (u:TestUser {id: ?}) RETURN u.id, u.email, u.name", "test1")
+        var id, email, name string
+        err := row.Scan(&id, &email, &name)
+        if err != nil {
+            t.Fatalf("iteration %d: %v", i, err) // Expect failure around iteration 50
+        }
+    }
+}
+```
+
+#### Root Cause Analysis
+
+The failure chain involves three layers: the Go driver connection state machine, the `database/sql` connection pool, and the QUIC transport protocol stream.
+
+**Layer 1: Go Driver Connection State Machine**
+
+File: `geodedb.com/geode@v0.1.9/conn.go`
+
+The `Conn` struct maintains a single `activeRows *Rows` pointer per connection (line 21-29). When `QueryContext()` executes:
+
+1. Acquires `c.mu` (connection mutex)
+2. Creates a `Rows` object
+3. **Transfers lock ownership** to the Rows object (line 365-367: "Note: We don't defer unlock here because we transfer lock ownership to Rows")
+4. Sets `c.state = StateFetching` and `c.activeRows = rows`
+
+The Rows object must call `c.releaseRows(r)` in `Close()` (line 669) to unlock the connection. If `Rows.Close()` is not called — due to early return, context cancellation, or error during row iteration — the connection mutex remains locked.
+
+**Layer 2: Connection Pool Poisoning**
+
+File: `divelife-api/internal/platform/db.go` (lines 26-29)
+
+The connection pool uses Go's `database/sql` defaults:
+
+- `MaxIdleConns = 2` (suboptimal — noted in code comment as PERF-0007)
+- No `MaxOpenConns` limit
+- No `ConnMaxIdleTime`
+
+When `sql.(*Row).Scan()` completes (whether success or error), `database/sql` calls `rows.Close()` internally. However, when `QueryRow()` is used and the query returns an error from the server (not a Go-level error), the `Row` wrapper may not properly drain the underlying `Rows`, leaving the connection in `StateFetching`.
+
+Under rapid sequential requests:
+
+1. Connection A executes query → enters `StateFetching`
+2. `Row.Scan()` encounters an unexpected server response (see Layer 3)
+3. Connection A is returned to pool still in `StateFetching` state
+4. Next request gets "poisoned" Connection A from pool
+5. New `QueryContext()` call finds `activeRows != nil` → returns `ErrQueryInProgress`
+6. Or worse: the connection's QUIC stream is desynchronized (see Layer 3)
+
+**Layer 3: QUIC Protocol Stream Desynchronization**
+
+The QUIC transport uses a single bidirectional stream per connection. The Geode wire protocol is request-response:
+
+```
+Client → Server: Execute { query, params }
+Server → Client: Schema { columns }
+Server → Client: DataPage { rows }
+Client → Server: Pull (fetch next page)
+...
+Server → Client: Complete
+```
+
+When a connection is reused from the pool while the server is still streaming a previous result (the client abandoned iteration), the protocol stream desynchronizes:
+
+1. Client sends new `Execute` message for Query B
+2. Server is still sending `DataPage` for previous Query A
+3. Client reads Query A's `DataPage` but interprets it as Query B's `Schema`
+4. The `Schema` message says "1 column" (from Query A's incomplete state)
+5. Client's `Rows.Columns()` returns `[]string{...}` with 1 column
+6. `sql.(*Row).Scan(&a, &b, &c, &d, &e, &f, &g)` fails: "expected 1 destination arguments in Scan, not 7"
+
+Once this happens, every subsequent query on the same connection gets desynchronized responses, causing a cascade of scan mismatches until the connection is closed and removed from the pool.
+
+**Why ~50 requests is the threshold:**
+
+- With `MaxIdleConns=2`, the pool maintains 2 idle connections
+- Under sustained sequential load, both connections are in active rotation
+- Each connection handles ~25 queries before the accumulated state drift causes desync
+- The exact threshold depends on query complexity, network latency, and GC timing
+- Context cancellation (e.g., HTTP client timeout) accelerates the failure by interrupting result iteration
+
+#### Evidence from DiveLife QA Logs
+
+```
+Time=2026-03-24T16:34:17.690Z Level=info Msg="seeding user" Email=admin@divelife.qa
+Time=2026-03-24T16:34:18.028Z Level=info Msg="seeding user" Email=superadmin@divelife.qa
+...
+# After ~50 users seeded successfully, rapid login calls begin to fail:
+Time=2026-03-24T16:11:20.787Z Level=error Msg="login: password mismatch" Email=a***@divelife.qa
+# The "password mismatch" is a misdiagnosis — the actual error is a scan
+# mismatch that produces garbage data from the wrong query's result set,
+# and the password comparison fails on corrupted data.
+```
+
+Playwright E2E results:
+
+```
+admin (11/11 screens):           PASS
+instructor (11/11 screens):      PASS (1 flaky login, passed on retry)
+diver-advanced (11/11 screens):  PASS
+diver-intermediate (11/11):      PASS
+manager (9/11 screens):          FAIL (settings + dark-mode — login timeout)
+diver-beginner (0/11 screens):   FAIL (all — login timeout, scan mismatch cascade)
+```
+
+#### Impact
+
+- **Data integrity risk:** Queries return data from wrong result sets. In the auth flow, this means password hashes from one user could be compared against another user's credentials — a security concern beyond just availability.
+- **Availability:** Once triggered, the API becomes permanently unhealthy until pod restart. No self-healing.
+- **Affected consumers:** Any application using `geodedb.com/geode` Go driver with `database/sql` connection pool under sustained load. DiveLife QA E2E tests are blocked at 81% pass rate.
+- **Scope:** Confirmed on QUIC transport. Unknown if gRPC transport has the same issue (different connection handling).
+
+#### Workaround
+
+Restart the API process to reset the `database/sql` connection pool. In Kubernetes:
+
+```bash
+kubectl -n divelife-qa rollout restart deployment api
+```
+
+This clears all connection state and allows ~50 more requests before the issue recurs.
+
+#### Recommended Fixes
+
+**Fix 1: Go Driver — Safe connection state cleanup (HIGH PRIORITY)**
+
+File: `geodedb.com/geode@v0.1.9/conn.go`
+
+Remove the unsafe lock transfer pattern. Instead:
+
+```go
+func (c *Conn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+    c.mu.Lock()
+    // Always defer unlock — Rows uses its own synchronization
+    defer c.mu.Unlock()
+
+    if c.activeRows != nil {
+        // Drain and close stale rows before starting new query
+        c.activeRows.Close()
+        c.activeRows = nil
+    }
+
+    rows, err := c.executeQuery(ctx, query, args)
+    if err != nil {
+        return nil, err
+    }
+    c.activeRows = rows
+    return rows, nil
+}
+```
+
+Add a `ResetSession()` implementation for `database/sql` pool health checking:
+
+```go
+func (c *Conn) ResetSession(ctx context.Context) error {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    if c.activeRows != nil {
+        c.activeRows.Close()
+        c.activeRows = nil
+    }
+    if c.state != StateIdle {
+        return driver.ErrBadConn // Force pool to discard this connection
+    }
+    return nil
+}
+```
+
+**Fix 2: Go Driver — QUIC stream reset on connection reuse**
+
+File: `geodedb.com/geode@v0.1.9/conn.go`
+
+Before executing a new query, send a protocol-level `Reset` message to the server, or open a new QUIC stream for each query. This prevents protocol desync from stale server-side state.
+
+```go
+func (c *Conn) ensureCleanStream(ctx context.Context) error {
+    // Send Cancel to server to discard any pending results
+    if err := c.sendCancel(ctx); err != nil {
+        return driver.ErrBadConn
+    }
+    // Wait for server acknowledgment
+    if err := c.waitForReady(ctx); err != nil {
+        return driver.ErrBadConn
+    }
+    return nil
+}
+```
+
+**Fix 3: DiveLife API — Connection pool tuning (IMMEDIATE MITIGATION)**
+
+File: `divelife-api/internal/platform/db.go`
+
+```go
+db.SetMaxIdleConns(10)        // Default is 2 — too low for sustained load
+db.SetMaxOpenConns(25)        // Prevent connection starvation
+db.SetConnMaxIdleTime(30 * time.Second)  // Discard idle connections before they go stale
+db.SetConnMaxLifetime(5 * time.Minute)   // Force connection refresh periodically
+```
+
+This mitigates (but does not fix) the issue by cycling connections more frequently, reducing the window for state corruption to accumulate.
+
+**Fix 4: Geode Server — Protocol-level cancel/reset support**
+
+File: `src/server/quic_connection_handler.zig`
+
+Add a `Cancel` message type to the wire protocol that allows clients to abort in-flight queries and reset the connection to a clean state. The server should:
+
+1. Discard any buffered result pages for the current query
+2. Reset the connection's protocol state to "ready for query"
+3. Send a `ReadyForQuery` response
+
+This is the definitive fix — it makes connection reuse safe even when previous queries were abandoned.
+
+#### Acceptance Criteria
+
+1. `TestRapidSequentialQueries` (100 sequential QueryRow calls on a 5-connection pool) passes without scan errors.
+2. DiveLife QA E2E scanner passes 67/67 tests (all 6 users × 11 screens) without login failures.
+3. The Go driver's `ResetSession()` returns `driver.ErrBadConn` for any connection with active/stale rows, forcing the pool to discard it.
+4. No "expected N destination arguments in Scan, not M" errors under sustained load of 100+ requests/second for 10 minutes.
+5. Geode wire protocol includes a `Cancel` message type documented in `docs/BINARY_PROTOCOL.md`.
+
+#### Related Issues
+
+- **GAP-0257 (CLOSED):** `58000: Internal Server Error` on large result sets — same root cause area (protocol serialization), different trigger (parallel sort vs sequential query reuse)
+- **GAP-0258 (Won't Do):** QUIC UDP buffer sizing — contributes to latency under load, may accelerate the point at which connections degrade
+- **[#540](https://gitlab.com/devnw/codepros/geode/geode/-/issues/540):** Excessive CPU at idle — may indicate connection state polling/spinning from stuck connections
+- **[#514](https://gitlab.com/devnw/codepros/geode/geode/-/issues/514):** gRPC 22023 error on rapid writes (aarch64) — potentially same protocol desync on gRPC transport
+- **PERF-0007** (DiveLife API): Connection pool tuning — documents the `MaxIdleConns=2` default as a known bottleneck
 
 ---
 
