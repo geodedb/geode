@@ -822,7 +822,7 @@ pub const QuicProtoClient = struct {
             defer packet.deinit(allocator);
 
             const msg = packet.quic orelse return error.InvalidMessage;
-            if (msg != .execute) return error.InvalidMessage;
+            if (msg != .execute) continue; // Skip non-execute messages (ping, hello, etc.)
             const exec_resp = msg.execute;
             const status = try copyStatus(allocator, exec_resp.status.?);
             allocator.free(status_class);
@@ -871,7 +871,7 @@ pub const QuicProtoClient = struct {
                 const exec_resp = switch (msg) {
                     .pull => |p| p.response orelse return error.InvalidMessage,
                     .execute => |e| e,
-                    else => return error.InvalidMessage,
+                    else => continue, // Skip non-execute/pull messages (ping, hello, etc.)
                 };
 
                 if (exec_resp.payload) |payload| switch (payload) {
