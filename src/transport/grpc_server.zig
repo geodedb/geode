@@ -1179,6 +1179,29 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 try appendFlagIfMissing(allocator, &flags, "GB03:DoubleSolidusComment");
             }
 
+            // #564: Acquire the appropriate store lock based on query type.
+            // Without this, gRPC queries ran with no synchronization, allowing
+            // concurrent mutations to corrupt shared HashMaps and ArrayLists.
+            const needs_store_lock = analysis.kind != .explain;
+            const is_mutation = needs_store_lock and query_traits.isMutatingProgram(&parse_result.program);
+            if (needs_store_lock) {
+                if (is_mutation) {
+                    graph_store.acquireStoreWriteLock();
+                } else {
+                    graph_store.acquireStoreLock();
+                }
+            }
+            var lock_released = false;
+            defer {
+                if (!lock_released and needs_store_lock) {
+                    if (is_mutation) {
+                        graph_store.releaseStoreWriteLock();
+                    } else {
+                        graph_store.releaseStoreLock();
+                    }
+                }
+            }
+
             switch (analysis.kind) {
                 .explain => {
                     const explain_msg = try explain_payload.buildExplainPayload(
@@ -1209,6 +1232,12 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                         return encodeMessage(allocator, resp);
                     };
                     defer exec_result.deinit(allocator);
+
+                    // #564: Release lock after execution, before serialization/network I/O
+                    if (needs_store_lock) {
+                        if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
+                        lock_released = true;
+                    }
 
                     for (flags.items) |flag| {
                         try appendFlagToResult(allocator, &exec_result, flag);
@@ -1250,6 +1279,12 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                     };
                     var store_result = false;
                     defer if (!store_result) exec_result.deinit(allocator);
+
+                    // #564: Release lock after execution, before serialization/network I/O
+                    if (needs_store_lock) {
+                        if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
+                        lock_released = true;
+                    }
 
                     for (flags.items) |flag| {
                         try appendFlagToResult(allocator, &exec_result, flag);
