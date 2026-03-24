@@ -285,7 +285,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                             }
                             if (has_float) {
                                 // Return as Decimal with 2 decimal places
-                                return Value{ .Decimal = .{ .coeff = @intFromFloat(sum_float * 100), .scale = 2, .orig_scale = 2, .orig_repr = null } };
+                                return Value{ .Double = sum_float };
                             }
                             return Value{ .Int = sum_int };
                         } else {
@@ -335,7 +335,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                 }
 
                                 if (has_float) {
-                                    return Value{ .Decimal = .{ .coeff = @intFromFloat(sum_float * 100), .scale = 2, .orig_scale = 2, .orig_repr = null } };
+                                    return Value{ .Double = sum_float };
                                 }
                                 return Value{ .Int = sum_int };
                             }
@@ -361,7 +361,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                             }
                             if (count > 0) {
                                 const avg = sum / count;
-                                return Value{ .Decimal = .{ .coeff = @intFromFloat(avg * 10), .scale = 1 } };
+                                return Value{ .Double = avg };
                             }
                             return Value{ .Null = {} };
                         }
@@ -846,7 +846,7 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                             }
                             if (has_float) {
                                 // Return as Decimal with 2 decimal places
-                                return Value{ .Decimal = .{ .coeff = @intFromFloat(sum_float * 100), .scale = 2, .orig_scale = 2, .orig_repr = null } };
+                                return Value{ .Double = sum_float };
                             }
                             return Value{ .Int = sum_int };
                         }
@@ -897,9 +897,8 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                 }
                             }
                             if (count > 0) {
-                                // Return as decimal with 1 decimal place for test
                                 const avg = sum / count;
-                                return Value{ .Decimal = .{ .coeff = @intFromFloat(avg * 10), .scale = 1 } };
+                                return Value{ .Double = avg };
                             }
                             return Value{ .Null = {} };
                         }
@@ -1173,7 +1172,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                             }
                         }
                         if (has_float) {
-                            return Value{ .Decimal = .{ .coeff = @intFromFloat(sum_float * 100), .scale = 2, .orig_scale = 2, .orig_repr = null } };
+                            return Value{ .Double = sum_float };
                         }
                         return Value{ .Int = sum_int };
                     }
@@ -1205,7 +1204,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                         }
                         if (count > 0) {
                             const avg = sum / count;
-                            return Value{ .Decimal = .{ .coeff = @intFromFloat(avg * 10), .scale = 1, .orig_scale = 1, .orig_repr = null } };
+                            return Value{ .Double = avg };
                         }
                         return Value{ .Null = {} };
                     }

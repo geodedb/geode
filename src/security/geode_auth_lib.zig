@@ -229,6 +229,7 @@ pub const AuditEventType = enum {
     mfa_challenge_issued,
     mfa_challenge_success,
     mfa_challenge_failure,
+    password_migration_needed,
 };
 pub const AuditEntry = struct { timestamp: i64, event_type: AuditEventType, user_id: UserId, details: []const u8 };
 pub const AuditLog = struct {
