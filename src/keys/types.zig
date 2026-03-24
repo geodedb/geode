@@ -1,17 +1,14 @@
 const std = @import("std");
+const fle = @import("fle_lib");
 
-// Key Management Types
+// Key Management Types — thin compatibility layer over external fle library
 // CANARY: REQ=REQ-FLE-KEY-001; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
 
-/// Key identifiers for hierarchical key management
-pub const KeyIds = struct {
-    tenant: []const u8,
-    schema: []const u8,
-    field: []const u8,
-    version: u16,
-};
+/// Key identifiers for hierarchical key management (re-exported from fle library)
+pub const KeyIds = fle.key_types.KeyIds;
 
 /// Key metadata stored with wrapped keys
+/// (Geode-specific — not part of the external fle library)
 pub const KeyMetadata = struct {
     key_id: []const u8,
     version: u16,
@@ -30,6 +27,7 @@ pub const KeyMetadata = struct {
 };
 
 /// Wrapped key envelope for storage
+/// (Geode-specific — not part of the external fle library)
 pub const WrappedKeyEnvelope = struct {
     metadata: KeyMetadata,
     wrapped_key: []u8, // Encrypted key material
@@ -42,6 +40,7 @@ pub const WrappedKeyEnvelope = struct {
 };
 
 /// Key version for rotation tracking
+/// (Geode-specific — not part of the external fle library)
 pub const KeyVersion = struct {
     version: u16,
     created_at: i64,
@@ -49,6 +48,7 @@ pub const KeyVersion = struct {
 };
 
 /// Rotation statistics
+/// (Geode-specific — not part of the external fle library)
 pub const RotationStats = struct {
     total_records: u64,
     migrated_records: u64,

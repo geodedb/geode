@@ -214,19 +214,12 @@ fn constructIpAddr(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args[0] != .Str) return error.TypeMismatch;
 
     const text = args[0].Str;
-    const addr = network.IpAddr.fromString(text) catch return error.InvalidIpAddress;
+    const addr = network.IpAddr.parse(text) catch return error.InvalidIpAddress;
 
     // Convert to heap.IpAddr format
     const heap_addr = switch (addr) {
         .v4 => |ipv4| heap.IpAddr{ .v4 = ipv4.octets },
-        .v6 => |ipv6| blk: {
-            var bytes: [16]u8 = undefined;
-            for (ipv6.segments, 0..) |segment, i| {
-                bytes[i * 2] = @intCast((segment >> 8) & 0xFF);
-                bytes[i * 2 + 1] = @intCast(segment & 0xFF);
-            }
-            break :blk heap.IpAddr{ .v6 = bytes };
-        },
+        .v6 => |ipv6| heap.IpAddr{ .v6 = ipv6.octets },
     };
 
     return .{ .IpAddr = heap_addr };
@@ -237,27 +230,15 @@ fn constructSubnet(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args[0] != .Str) return error.TypeMismatch;
 
     const text = args[0].Str;
-    const subnet = network.Subnet.fromString(text) catch return error.InvalidSubnet;
+    const subnet = network.Subnet.parse(text) catch return error.InvalidSubnet;
 
     // Convert to heap.Subnet format
-    const heap_addr = switch (subnet) {
-        .v4 => |ipv4_subnet| heap.IpAddr{ .v4 = ipv4_subnet.network },
-        .v6 => |ipv6_subnet| blk: {
-            var bytes: [16]u8 = undefined;
-            for (ipv6_subnet.network, 0..) |segment, i| {
-                bytes[i * 2] = @intCast((segment >> 8) & 0xFF);
-                bytes[i * 2 + 1] = @intCast(segment & 0xFF);
-            }
-            break :blk heap.IpAddr{ .v6 = bytes };
-        },
+    const heap_addr = switch (subnet.network) {
+        .v4 => |ipv4| heap.IpAddr{ .v4 = ipv4.octets },
+        .v6 => |ipv6| heap.IpAddr{ .v6 = ipv6.octets },
     };
 
-    const prefix_len = switch (subnet) {
-        .v4 => |ipv4_subnet| ipv4_subnet.prefix_len,
-        .v6 => |ipv6_subnet| ipv6_subnet.prefix_len,
-    };
-
-    return .{ .Subnet = .{ .addr = heap_addr, .prefix_len = prefix_len } };
+    return .{ .Subnet = .{ .addr = heap_addr, .prefix_len = subnet.prefix_len } };
 }
 
 fn constructMac(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
@@ -265,7 +246,7 @@ fn constructMac(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     if (args[0] != .Str) return error.TypeMismatch;
 
     const text = args[0].Str;
-    const mac = network.Mac.fromString(text) catch return error.InvalidMac;
+    const mac = network.Mac.parse(text) catch return error.InvalidMac;
 
     return .{ .Mac = .{ .bytes = mac.octets } };
 }

@@ -1,156 +1,74 @@
 // CANARY: REQ=REQ-AUTH-HMAC-001; FEATURE="AuthHmacChain"; ASPECT=Core; STATUS=TESTED; OWNER=security; UPDATED=2026-02-24
 //! HMAC chain integrity module for internal auth storage.
 //!
-//! Provides deterministic HMAC-SHA256 computation over key-value properties,
-//! HKDF-based key derivation from TDE master keys, chain hashing for tamper
-//! detection, and constant-time verification primitives.
-//!
-//! This module is a pure crypto + serialization layer with no dependency on
-//! SecurityManager, CLI, or any I/O subsystem.
+//! Thin compatibility wrapper over the external `auth` library's HMAC module.
+//! Preserves the original public API so that consumers (auth_graph_manager,
+//! user_storage, lib.zig) require no changes.
 
 const std = @import("std");
-const HmacSha256 = std.crypto.auth.hmac.sha2.HmacSha256;
-const HkdfSha256 = std.crypto.kdf.hkdf.HkdfSha256;
-const timing_safe = std.crypto.timing_safe;
+const auth_hmac = @import("auth_lib").hmac;
 
 /// Length of an HMAC-SHA256 output in bytes.
-pub const HMAC_LEN: usize = 32;
+pub const HMAC_LEN: usize = auth_hmac.HMAC_LEN;
 
 /// Length of an HMAC key in bytes.
-pub const KEY_LEN: usize = 32;
+pub const KEY_LEN: usize = auth_hmac.KEY_LEN;
 
 /// A key-value pair used as input to `computeRecordHmac`.
-pub const KeyValue = struct {
-    key: []const u8,
-    value: []const u8,
+pub const KeyValue = auth_hmac.KeyValue;
+
+/// Geode-specific HKDF salt for deriving HMAC keys from TDE master keys.
+const geode_hkdf_config = auth_hmac.HkdfConfig{
+    .salt = "geode-auth-hmac-v1",
+    .info = "auth-chain-integrity",
 };
-
-/// Domain-separation salt for HKDF extract step.
-const hkdf_salt = "geode-auth-hmac-v1";
-
-/// Domain-separation info for HKDF expand step.
-const hkdf_info = "auth-chain-integrity";
 
 /// Derive an HMAC signing key from a TDE master key using HKDF-SHA256.
 ///
-/// The derivation uses a fixed salt ("geode-auth-hmac-v1") and info
-/// ("auth-chain-integrity") so the output is domain-separated from
-/// both the raw TDE key and any other HKDF-derived keys.
+/// Uses the Geode-specific salt ("geode-auth-hmac-v1") and info
+/// ("auth-chain-integrity") for domain separation.
 pub fn deriveHmacKeyFromTde(tde_key: *const [32]u8) [32]u8 {
-    const prk = HkdfSha256.extract(hkdf_salt, tde_key);
-    var okm: [32]u8 = undefined;
-    HkdfSha256.expand(&okm, hkdf_info, prk);
-    return okm;
+    return auth_hmac.deriveHmacKey(tde_key, geode_hkdf_config);
 }
 
 /// Compute HMAC-SHA256 over a set of key-value properties.
 ///
 /// Properties are sorted by key name (lexicographic, ascending) before
 /// hashing to guarantee deterministic output regardless of input order.
-/// Each property is serialized as:
 ///
-///     key_len (u32 LE) || key || value_len (u32 LE) || value
-///
-/// This length-prefixed format is unambiguous: no combination of different
-/// key/value contents can produce the same byte stream.
+/// Panics if the property count exceeds the internal stack limit (128),
+/// preserving the original behaviour for auth records which typically
+/// have ~15 properties.
 pub fn computeRecordHmac(key: *const [32]u8, props: []const KeyValue) [32]u8 {
-    // Build an index array so we can sort without mutating the caller's slice.
-    // Use a bounded stack buffer for typical cases; fall back to a heap
-    // allocation only for very large property sets.
-    const max_stack = 128;
-
-    if (props.len <= max_stack) {
-        var indices: [max_stack]usize = undefined;
-        return computeRecordHmacWithBuf(key, props, indices[0..props.len]);
-    } else {
-        // Auth records have ~15 properties at most; hitting this path means
-        // something is seriously wrong.  Panic rather than silently computing
-        // an unsorted (non-deterministic) HMAC.
-        @panic("auth_hmac: property count exceeds stack limit — this should never happen for auth records");
-    }
-}
-
-fn computeRecordHmacWithBuf(key: *const [32]u8, props: []const KeyValue, indices: []usize) [32]u8 {
-    // Initialise index array.
-    for (indices, 0..) |*idx, i| {
-        idx.* = i;
-    }
-
-    // Sort indices by the corresponding key name (lexicographic).
-    const Ctx = struct {
-        kv: []const KeyValue,
-
-        pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-            return std.mem.lessThan(u8, ctx.kv[a].key, ctx.kv[b].key);
-        }
+    return auth_hmac.computeRecordHmac(key, props) catch |err| switch (err) {
+        error.TooManyProperties => @panic("auth_hmac: property count exceeds stack limit — this should never happen for auth records"),
     };
-
-    std.mem.sortUnstable(usize, indices, Ctx{ .kv = props }, Ctx.lessThan);
-
-    // Feed sorted properties into the HMAC.
-    var hmac = HmacSha256.init(key);
-    for (indices) |idx| {
-        feedKv(&hmac, props[idx]);
-    }
-    var out: [32]u8 = undefined;
-    hmac.final(&out);
-    return out;
-}
-
-/// Serialize one key-value pair into the HMAC state.
-fn feedKv(hmac: *HmacSha256, kv: KeyValue) void {
-    // key_len as u32 LE
-    const klen: u32 = @intCast(kv.key.len);
-    hmac.update(std.mem.asBytes(&std.mem.nativeToLittle(u32, klen)));
-    hmac.update(kv.key);
-
-    // value_len as u32 LE
-    const vlen: u32 = @intCast(kv.value.len);
-    hmac.update(std.mem.asBytes(&std.mem.nativeToLittle(u32, vlen)));
-    hmac.update(kv.value);
 }
 
 /// Compute a chain hash over a sequence of record HMACs and a record count.
-///
-/// The chain hash is:
-///
-///     HMAC-SHA256(key, record_hmac[0] || record_hmac[1] || ... || count_le64)
 ///
 /// Including the record count prevents truncation attacks where an attacker
 /// removes trailing records while keeping the prefix valid.
 pub fn computeChainHash(key: *const [32]u8, record_hmacs: []const [32]u8, record_count: u64) [32]u8 {
     std.debug.assert(record_hmacs.len == record_count);
-    var hmac = HmacSha256.init(key);
-    for (record_hmacs) |rec| {
-        hmac.update(&rec);
-    }
-    // Append record count as little-endian u64.
-    hmac.update(std.mem.asBytes(&std.mem.nativeToLittle(u64, record_count)));
-    var out: [32]u8 = undefined;
-    hmac.final(&out);
-    return out;
+    return auth_hmac.computeChainHash(key, record_hmacs, record_count) catch |err| switch (err) {
+        error.RecordCountMismatch => unreachable, // guarded by assert above
+    };
 }
 
 /// Constant-time comparison of two 32-byte HMACs.
-///
-/// Returns `true` if and only if every byte matches. The comparison time
-/// does not depend on the position of the first differing byte.
 pub fn verifyHmac(expected: *const [32]u8, actual: *const [32]u8) bool {
-    return timing_safe.eql([32]u8, expected.*, actual.*);
+    return auth_hmac.verifyHmac(expected, actual);
 }
 
 /// Encode a 32-byte HMAC as a 64-character lowercase hex string.
 pub fn hmacToHex(hmac: *const [32]u8) [64]u8 {
-    return std.fmt.bytesToHex(hmac.*, .lower);
+    return auth_hmac.hmacToHex(hmac);
 }
 
 /// Decode a 64-character hex string (any case) into a 32-byte HMAC.
-///
-/// Returns `error.InvalidCharacter` if any character is not a valid hex digit.
 pub fn hexToHmac(hex: *const [64]u8) ![32]u8 {
-    var out: [32]u8 = undefined;
-    _ = try std.fmt.hexToBytes(&out, hex);
-    return out;
+    return auth_hmac.hexToHmac(hex);
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────

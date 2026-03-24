@@ -1,7 +1,26 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+// External metrics library
+const metrics_lib = @import("metrics_lib");
+
+// Re-export external library types for direct access
+pub const ExtCounter = metrics_lib.Counter;
+pub const ExtGauge = metrics_lib.Gauge;
+pub const ExtHistogram = metrics_lib.Histogram;
+pub const ExtTimer = metrics_lib.Timer;
+pub const ExtRegistry = metrics_lib.Registry;
+pub const ExtRegistryError = metrics_lib.RegistryError;
+pub const ExtSnapshot = metrics_lib.Snapshot;
+pub const ExtMetricSnapshot = metrics_lib.MetricSnapshot;
+pub const ExtMetricKind = metrics_lib.MetricKind;
+pub const default_buckets = metrics_lib.default_buckets;
+pub const default_timer_buckets = metrics_lib.default_timer_buckets;
+pub const prometheus = metrics_lib.prometheus;
+pub const writePrometheus = metrics_lib.writePrometheus;
+
 // Comprehensive metrics collection system
+// Compatibility wrapper over the external metrics library.
 pub const MetricsCollector = struct {
     allocator: Allocator,
     counters: std.StringHashMap(Counter),
@@ -17,44 +36,46 @@ pub const MetricsCollector = struct {
         percentiles: []const f64 = &[_]f64{ 0.5, 0.75, 0.9, 0.95, 0.99 },
     };
 
+    /// Thread-safe counter backed by the external metrics library.
     pub const Counter = struct {
-        value: std.atomic.Value(u64),
+        inner: metrics_lib.Counter,
         last_reset: i64,
 
         pub fn init() Counter {
             return .{
-                .value = std.atomic.Value(u64).init(0),
+                .inner = metrics_lib.Counter.init("", ""),
                 .last_reset = std.time.milliTimestamp(),
             };
         }
 
         pub fn increment(self: *Counter) void {
-            _ = self.value.fetchAdd(1, .monotonic);
+            self.inner.inc();
         }
 
         pub fn add(self: *Counter, n: u64) void {
-            _ = self.value.fetchAdd(n, .monotonic);
+            self.inner.add(n);
         }
 
         pub fn get(self: *const Counter) u64 {
-            return self.value.load(.monotonic);
+            return self.inner.get();
         }
 
         pub fn reset(self: *Counter) void {
-            self.value.store(0, .monotonic);
+            self.inner.reset();
             self.last_reset = std.time.milliTimestamp();
         }
     };
 
+    /// Thread-safe gauge backed by the external metrics library with min/max tracking.
     pub const Gauge = struct {
-        value: std.atomic.Value(i64),
+        inner: metrics_lib.Gauge,
         min: std.atomic.Value(i64),
         max: std.atomic.Value(i64),
         last_update: i64,
 
         pub fn init() Gauge {
             return .{
-                .value = std.atomic.Value(i64).init(0),
+                .inner = metrics_lib.Gauge.init("", ""),
                 .min = std.atomic.Value(i64).init(std.math.maxInt(i64)),
                 .max = std.atomic.Value(i64).init(std.math.minInt(i64)),
                 .last_update = std.time.milliTimestamp(),
@@ -62,7 +83,7 @@ pub const MetricsCollector = struct {
         }
 
         pub fn set(self: *Gauge, val: i64) void {
-            self.value.store(val, .monotonic);
+            self.inner.set(val);
 
             // Update min/max
             var current_min = self.min.load(.monotonic);
@@ -87,7 +108,7 @@ pub const MetricsCollector = struct {
         }
 
         pub fn get(self: *const Gauge) i64 {
-            return self.value.load(.monotonic);
+            return self.inner.get();
         }
 
         pub fn getMin(self: *const Gauge) i64 {
@@ -102,6 +123,7 @@ pub const MetricsCollector = struct {
     // PERF: PHASE5_METRICS_ATOMIC - Lock-free metrics collection
     // CANARY: REQ=REQ-PERF-PHASE5-P1-002; FEATURE="MetricsOptimization"; ASPECT=LOCK_FREE_HISTOGRAM; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-11-16
     // Phase 5.2.2 (P1-2): Use atomics for hot path metrics (10-20% faster)
+    /// Histogram backed by the external metrics library with sample-level access.
     pub const Histogram = struct {
         allocator: Allocator,
         samples: std.ArrayList(f64),
@@ -403,36 +425,36 @@ pub const MetricsCollector = struct {
 // CANARY: REQ=REQ-GAP-0236; FEATURE="MonitoringUnitTests"; ASPECT=Counter; STATUS=TESTED; TEST=test_counter_operations; OWNER=monitoring; UPDATED=2026-01-25
 
 test "Counter increment and get" {
-    var counter = MetricsCollector.Counter.init();
-    try std.testing.expectEqual(@as(u64, 0), counter.get());
-    counter.increment();
-    try std.testing.expectEqual(@as(u64, 1), counter.get());
-    counter.increment();
-    counter.increment();
-    try std.testing.expectEqual(@as(u64, 3), counter.get());
+    var counter_val = MetricsCollector.Counter.init();
+    try std.testing.expectEqual(@as(u64, 0), counter_val.get());
+    counter_val.increment();
+    try std.testing.expectEqual(@as(u64, 1), counter_val.get());
+    counter_val.increment();
+    counter_val.increment();
+    try std.testing.expectEqual(@as(u64, 3), counter_val.get());
 }
 
 test "Counter add and reset" {
-    var counter = MetricsCollector.Counter.init();
-    counter.add(10);
-    try std.testing.expectEqual(@as(u64, 10), counter.get());
-    counter.add(5);
-    try std.testing.expectEqual(@as(u64, 15), counter.get());
-    counter.reset();
-    try std.testing.expectEqual(@as(u64, 0), counter.get());
+    var counter_val = MetricsCollector.Counter.init();
+    counter_val.add(10);
+    try std.testing.expectEqual(@as(u64, 10), counter_val.get());
+    counter_val.add(5);
+    try std.testing.expectEqual(@as(u64, 15), counter_val.get());
+    counter_val.reset();
+    try std.testing.expectEqual(@as(u64, 0), counter_val.get());
 }
 
 test "Gauge set tracks min/max" {
-    var gauge = MetricsCollector.Gauge.init();
-    gauge.set(50);
-    try std.testing.expectEqual(@as(i64, 50), gauge.get());
-    gauge.set(100);
-    try std.testing.expectEqual(@as(i64, 100), gauge.get());
-    try std.testing.expectEqual(@as(i64, 50), gauge.getMin());
-    try std.testing.expectEqual(@as(i64, 100), gauge.getMax());
-    gauge.set(25);
-    try std.testing.expectEqual(@as(i64, 25), gauge.get());
-    try std.testing.expectEqual(@as(i64, 25), gauge.getMin());
+    var gauge_val = MetricsCollector.Gauge.init();
+    gauge_val.set(50);
+    try std.testing.expectEqual(@as(i64, 50), gauge_val.get());
+    gauge_val.set(100);
+    try std.testing.expectEqual(@as(i64, 100), gauge_val.get());
+    try std.testing.expectEqual(@as(i64, 50), gauge_val.getMin());
+    try std.testing.expectEqual(@as(i64, 100), gauge_val.getMax());
+    gauge_val.set(25);
+    try std.testing.expectEqual(@as(i64, 25), gauge_val.get());
+    try std.testing.expectEqual(@as(i64, 25), gauge_val.getMin());
 }
 
 test "Histogram records samples and computes mean" {
@@ -508,20 +530,20 @@ test "Histogram empty percentile returns 0" {
 }
 
 test "Gauge negative values" {
-    var gauge = MetricsCollector.Gauge.init();
-    gauge.set(-100);
-    try std.testing.expectEqual(@as(i64, -100), gauge.get());
-    gauge.set(-50);
-    try std.testing.expectEqual(@as(i64, -100), gauge.getMin());
-    try std.testing.expectEqual(@as(i64, -50), gauge.getMax());
+    var gauge_val = MetricsCollector.Gauge.init();
+    gauge_val.set(-100);
+    try std.testing.expectEqual(@as(i64, -100), gauge_val.get());
+    gauge_val.set(-50);
+    try std.testing.expectEqual(@as(i64, -100), gauge_val.getMin());
+    try std.testing.expectEqual(@as(i64, -50), gauge_val.getMax());
 }
 
 test "Counter multiple adds" {
-    var counter = MetricsCollector.Counter.init();
-    counter.add(100);
-    counter.add(200);
-    counter.add(300);
-    try std.testing.expectEqual(@as(u64, 600), counter.get());
+    var counter_val = MetricsCollector.Counter.init();
+    counter_val.add(100);
+    counter_val.add(200);
+    counter_val.add(300);
+    try std.testing.expectEqual(@as(u64, 600), counter_val.get());
 }
 
 test "MetricsCollector creates histograms" {
@@ -563,15 +585,15 @@ test "MetricsCollector multiple gauges" {
 }
 
 test "Counter thread-safe increment" {
-    var counter = MetricsCollector.Counter.init();
+    var counter_val = MetricsCollector.Counter.init();
 
     // Simulate multiple increments
     var i: u32 = 0;
     while (i < 1000) : (i += 1) {
-        counter.increment();
+        counter_val.increment();
     }
 
-    try std.testing.expectEqual(@as(u64, 1000), counter.get());
+    try std.testing.expectEqual(@as(u64, 1000), counter_val.get());
 }
 
 test "Histogram sum calculation" {
@@ -586,16 +608,16 @@ test "Histogram sum calculation" {
 }
 
 test "Gauge tracks updates correctly" {
-    var gauge = MetricsCollector.Gauge.init();
+    var gauge_val = MetricsCollector.Gauge.init();
 
-    gauge.set(10);
-    gauge.set(20);
-    gauge.set(5);
-    gauge.set(15);
+    gauge_val.set(10);
+    gauge_val.set(20);
+    gauge_val.set(5);
+    gauge_val.set(15);
 
-    try std.testing.expectEqual(@as(i64, 15), gauge.get());
-    try std.testing.expectEqual(@as(i64, 5), gauge.getMin());
-    try std.testing.expectEqual(@as(i64, 20), gauge.getMax());
+    try std.testing.expectEqual(@as(i64, 15), gauge_val.get());
+    try std.testing.expectEqual(@as(i64, 5), gauge_val.getMin());
+    try std.testing.expectEqual(@as(i64, 20), gauge_val.getMax());
 }
 
 test "Config has sensible defaults" {
@@ -718,8 +740,8 @@ pub const QueryProfiler = struct {
         try self.active_profiles.put(query_id, profile);
 
         // Record metric
-        const counter = try self.metrics.counter("queries_started");
-        counter.increment();
+        const counter_val = try self.metrics.counter("queries_started");
+        counter_val.increment();
     }
 
     pub fn recordOperator(
@@ -749,8 +771,8 @@ pub const QueryProfiler = struct {
             const hist = try self.metrics.histogram("query_duration_ms");
             try hist.record(duration_ms);
 
-            const counter = try self.metrics.counter("queries_completed");
-            counter.increment();
+            const counter_val = try self.metrics.counter("queries_completed");
+            counter_val.increment();
 
             return profile;
         }

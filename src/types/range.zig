@@ -1,5 +1,38 @@
 const std = @import("std");
 
+// =============================================================================
+// Re-export range types from the external advanced_types library.
+//
+// The external library provides Range(T) with inclusive bounds [lower, upper],
+// containment checks, overlap detection, intersection, union, formatting, and
+// parsing. Geode's legacy Range(T) additionally supports:
+//   - Optional lower/upper bounds (unbounded ranges)
+//   - Bounds enum (inclusive_inclusive, inclusive_exclusive, etc.)
+//   - DateRange alias
+//
+// The external library's Range is re-exported here alongside the Geode-specific
+// Range for backward compatibility with existing consumers that use optional
+// bounds and bound types.
+// =============================================================================
+const advanced_types = @import("advanced_types_lib");
+
+/// External library's Range generic — inclusive [lower, upper] with required bounds.
+/// Provides: init, contains, containsRange, overlaps, intersection, union_, span,
+/// isPoint, eql, format, parse.
+pub const ExtRange = advanced_types.Range;
+
+/// External library convenience aliases
+pub const ExtIntRange = advanced_types.IntRange;
+pub const ExtUintRange = advanced_types.UintRange;
+pub const ExtFloatRange = advanced_types.FloatRange;
+
+/// External library error type
+pub const RangeError = advanced_types.range.RangeError;
+
+// =============================================================================
+// Geode's Range(T) with optional bounds and bound types (preserve existing API)
+// =============================================================================
+
 pub fn Range(comptime T: type) type {
     return struct {
         const Self = @This();

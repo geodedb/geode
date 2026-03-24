@@ -1,112 +1,35 @@
 const std = @import("std");
+const fle = @import("fle_lib");
 
-// HKDF Key Derivation
+// HKDF Key Derivation — thin compatibility layer over external fle library
 // CANARY: REQ=REQ-FLE-HKDF-001; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=src/crypto/hkdf.zig; OWNER=security; UPDATED=2026-01-15
 
-/// HKDF-SHA256 key derivation
-/// Based on RFC 5869
-pub fn hkdfSha256(
-    out: []u8,
-    ikm: []const u8, // Input Keying Material
-    salt: []const u8,
-    info: []const u8,
-) !void {
-    const Hmac = std.crypto.auth.hmac.sha2.HmacSha256;
+/// Default salt used in the FLE key hierarchy
+pub const default_salt = fle.hkdf.default_salt;
 
-    // Extract: PRK = HMAC-SHA256(salt, IKM)
-    var prk: [32]u8 = undefined;
-    var extract_hmac = Hmac.init(salt);
-    extract_hmac.update(ikm);
-    extract_hmac.final(&prk);
-    defer std.crypto.secureZero(u8, &prk);
+/// HKDF-SHA256 key derivation (RFC 5869) — re-exported from fle library
+pub const hkdfSha256 = fle.hkdf.hkdfSha256;
 
-    // Expand: OKM = T(1) || T(2) || ... || T(N)
-    // T(0) = empty string (zero length)
-    // T(1) = HMAC-Hash(PRK, T(0) || info || 0x01)
-    // T(2) = HMAC-Hash(PRK, T(1) || info || 0x02)
-    // ...
-    var okm_pos: usize = 0;
-    var counter: u8 = 1;
-    var t_prev: [32]u8 = undefined;
-    var t_prev_len: usize = 0;
+/// Derive a 32-byte key from master with context info — re-exported from fle library
+pub const deriveKey32 = fle.hkdf.deriveKey32;
 
-    while (okm_pos < out.len) {
-        var expand_hmac = Hmac.init(&prk);
+/// Derive TRK (Tenant Root Key) from master — re-exported from fle library
+pub const deriveTRK = fle.hkdf.deriveTRK;
 
-        if (counter > 1) {
-            expand_hmac.update(t_prev[0..t_prev_len]);
-        }
+/// Derive SK (Schema Key) from TRK — re-exported from fle library
+pub const deriveSK = fle.hkdf.deriveSK;
 
-        expand_hmac.update(info);
-        expand_hmac.update(&[_]u8{counter});
+/// Derive FEK (Field Encryption Key) from SK — re-exported from fle library
+pub const deriveFEK = fle.hkdf.deriveFEK;
 
-        var t: [32]u8 = undefined;
-        expand_hmac.final(&t);
+/// Derive FEK with version for key rotation support — re-exported from fle library
+pub const deriveFEKVersioned = fle.hkdf.deriveFEKVersioned;
 
-        const copy_len = @min(32, out.len - okm_pos);
-        @memcpy(out[okm_pos .. okm_pos + copy_len], t[0..copy_len]);
+/// Derive BIK (Blind Index Key) from SK — re-exported from fle library
+pub const deriveBIK = fle.hkdf.deriveBIK;
 
-        @memcpy(&t_prev, &t);
-        t_prev_len = 32;
-        okm_pos += copy_len;
-        counter += 1;
-
-        if (counter == 0) return error.HkdfOutputTooLong; // Wrapped after 255
-    }
-}
-
-/// Derive a 32-byte key from master with context info
-pub fn deriveKey32(
-    master: []const u8,
-    salt: []const u8,
-    context: []const u8,
-) ![32]u8 {
-    var out: [32]u8 = undefined;
-    try hkdfSha256(&out, master, salt, context);
-    return out;
-}
-
-/// Derive TRK (Tenant Root Key) from master
-pub fn deriveTRK(master: []const u8, tenant_id: []const u8) ![32]u8 {
-    var context_buf: [256]u8 = undefined;
-    const context = try std.fmt.bufPrint(&context_buf, "geode/trk/{s}", .{tenant_id});
-    return deriveKey32(master, "geode-fle-salt", context);
-}
-
-/// Derive SK (Schema Key) from TRK
-pub fn deriveSK(trk: []const u8, schema: []const u8) ![32]u8 {
-    var context_buf: [256]u8 = undefined;
-    const context = try std.fmt.bufPrint(&context_buf, "geode/sk/{s}", .{schema});
-    return deriveKey32(trk, "geode-fle-salt", context);
-}
-
-/// Derive FEK (Field Encryption Key) from SK
-pub fn deriveFEK(sk: []const u8, field: []const u8) ![32]u8 {
-    var context_buf: [256]u8 = undefined;
-    const context = try std.fmt.bufPrint(&context_buf, "geode/fek/{s}", .{field});
-    return deriveKey32(sk, "geode-fle-salt", context);
-}
-
-/// Derive FEK with version for key rotation support
-pub fn deriveFEKVersioned(sk: []const u8, field: []const u8, version: u16) ![32]u8 {
-    var context_buf: [256]u8 = undefined;
-    const context = try std.fmt.bufPrint(&context_buf, "geode/fek/{s}/v{d}", .{ field, version });
-    return deriveKey32(sk, "geode-fle-salt", context);
-}
-
-/// Derive BIK (Blind Index Key) from SK
-pub fn deriveBIK(sk: []const u8, field: []const u8) ![32]u8 {
-    var context_buf: [256]u8 = undefined;
-    const context = try std.fmt.bufPrint(&context_buf, "geode/bi/{s}", .{field});
-    return deriveKey32(sk, "geode-fle-salt", context);
-}
-
-/// Derive BIK with version for key rotation support
-pub fn deriveBIKVersioned(sk: []const u8, field: []const u8, version: u16) ![32]u8 {
-    var context_buf: [256]u8 = undefined;
-    const context = try std.fmt.bufPrint(&context_buf, "geode/bi/{s}/v{d}", .{ field, version });
-    return deriveKey32(sk, "geode-fle-salt", context);
-}
+/// Derive BIK with version for key rotation support — re-exported from fle library
+pub const deriveBIKVersioned = fle.hkdf.deriveBIKVersioned;
 
 test "HKDF-SHA256 derivation" {
     const testing = std.testing;

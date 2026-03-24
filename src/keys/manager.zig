@@ -1,80 +1,32 @@
 const std = @import("std");
+const fle = @import("fle_lib");
 const types = @import("fle_key_types");
 const fle_aead = @import("fle_aead");
 const hkdf = @import("fle_hkdf");
 
 // Hierarchical Key Manager with Cache and Rotation
+// Compatibility wrapper over external fle library KeyManager, preserving Geode's
+// environment-variable-based init and rewrap methods.
 // CANARY: REQ=REQ-FLE-KEY-002; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-28
 // CANARY: REQ=REQ-FLE-FAILSECURE-006; FEATURE="FLEFailSecure"; ASPECT=MasterKeyRequired; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 
-pub const Error = error{
-    KeyNotFound,
-    InvalidKeyVersion,
-    RotationInProgress,
-    OutOfMemory,
-    /// SECURITY: Master key is required but not configured
-    MasterKeyRequired,
-};
-
-/// Key cache entry
-const CacheEntry = struct {
-    key: [32]u8,
-    version: u16,
-    last_accessed: i64,
-};
-
-/// Key cache for performance
-const KeyCache = struct {
-    map: std.StringHashMap(CacheEntry),
-    hits: u64 = 0,
-    misses: u64 = 0,
-
-    pub fn init(allocator: std.mem.Allocator) KeyCache {
-        return .{
-            .map = std.StringHashMap(CacheEntry).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *KeyCache) void {
-        // Securely zero all cached keys and free key strings before freeing
-        const allocator = self.map.allocator;
-        var it = self.map.iterator();
-        while (it.next()) |entry| {
-            std.crypto.secureZero(u8, &entry.value_ptr.key);
-            allocator.free(entry.key_ptr.*);
-        }
-        self.map.deinit();
-    }
-
-    pub fn get(self: *KeyCache, key: []const u8) ?CacheEntry {
-        if (self.map.get(key)) |entry| {
-            self.hits += 1;
-            return entry;
-        }
-        self.misses += 1;
-        return null;
-    }
-
-    pub fn put(self: *KeyCache, key: []const u8, entry: CacheEntry) !void {
-        try self.map.put(key, entry);
-    }
-};
+pub const Error = fle.key_manager.Error;
 
 /// Hierarchical Key Manager
-/// TRK (Tenant Root Key) → SK (Schema Key) → FEK (Field Encryption Key) / BIK (Blind Index Key)
+/// TRK (Tenant Root Key) -> SK (Schema Key) -> FEK (Field Encryption Key) / BIK (Blind Index Key)
+///
+/// This wrapper preserves Geode's convention of loading the master key from the
+/// GEODE_MASTER_KEY environment variable. The underlying fle library KeyManager
+/// handles caching, derivation, and rotation.
 pub const KeyManager = struct {
     allocator: std.mem.Allocator,
-    master_key: [32]u8, // Master key for deriving TRKs
-    fek_cache: KeyCache,
-    bik_cache: KeyCache,
-    key_versions: std.StringHashMap(u16),
+    inner: *fle.KeyManager,
+    /// Retained so rewrap methods can access it.
+    master_key: [32]u8,
 
-    /// Initialize the key manager
+    /// Initialize the key manager.
     /// SECURITY: GEODE_MASTER_KEY MUST be set. Returns error.MasterKeyRequired if missing.
     pub fn init(allocator: std.mem.Allocator) !*KeyManager {
-        const manager = try allocator.create(KeyManager);
-        errdefer allocator.destroy(manager);
-
         // Load master key from environment variable
         var master_key: [32]u8 = undefined;
         if (std.process.getEnvVarOwned(allocator, "GEODE_MASTER_KEY")) |env_key| {
@@ -95,106 +47,46 @@ pub const KeyManager = struct {
             return Error.MasterKeyRequired;
         }
 
-        manager.* = .{
+        return initWithMasterKey(allocator, master_key);
+    }
+
+    /// Initialize the key manager with an explicitly provided master key.
+    /// Useful for testing or when the caller has already sourced the key.
+    pub fn initWithMasterKey(allocator: std.mem.Allocator, master_key: [32]u8) !*KeyManager {
+        const inner = try fle.KeyManager.init(allocator, master_key);
+        errdefer inner.deinit();
+
+        const self = try allocator.create(KeyManager);
+        self.* = .{
             .allocator = allocator,
+            .inner = inner,
             .master_key = master_key,
-            .fek_cache = KeyCache.init(allocator),
-            .bik_cache = KeyCache.init(allocator),
-            .key_versions = std.StringHashMap(u16).init(allocator),
         };
 
-        return manager;
+        return self;
     }
 
     pub fn deinit(self: *KeyManager) void {
         std.crypto.secureZero(u8, &self.master_key);
-        self.fek_cache.deinit();
-        self.bik_cache.deinit();
-        self.key_versions.deinit();
+        self.inner.deinit();
         self.allocator.destroy(self);
     }
 
-    /// Get current key version for a field (default 1)
-    fn getKeyVersion(self: *KeyManager, key_path: []const u8) u16 {
-        return self.key_versions.get(key_path) orelse 1;
-    }
-
-    /// Set key version for a field
-    fn setKeyVersion(self: *KeyManager, key_path: []const u8, version: u16) !void {
-        try self.key_versions.put(key_path, version);
-    }
-
-    /// Build cache key for FEK/BIK lookup
-    fn buildCacheKey(allocator: std.mem.Allocator, ids: types.KeyIds) ![]u8 {
-        return std.fmt.allocPrint(allocator, "{s}:{s}:{s}:v{d}", .{
-            ids.tenant,
-            ids.schema,
-            ids.field,
-            ids.version,
-        });
-    }
-
     /// Get Field Encryption Key (FEK)
-    /// Derives TRK → SK → FEK using HKDF
+    /// Derives TRK -> SK -> FEK using HKDF
     pub fn getFEK(self: *KeyManager, ids: types.KeyIds) ![32]u8 {
-        const cache_key = try buildCacheKey(self.allocator, ids);
-
-        // Check cache first
-        if (self.fek_cache.get(cache_key)) |entry| {
-            // Cache hit - free the key we just built since we don't need it
-            self.allocator.free(cache_key);
-            return entry.key;
-        }
-
-        // Derive key hierarchy
-        var trk = try hkdf.deriveTRK(&self.master_key, ids.tenant);
-        defer std.crypto.secureZero(u8, &trk);
-
-        var sk = try hkdf.deriveSK(&trk, ids.schema);
-        defer std.crypto.secureZero(u8, &sk);
-
-        const fek = try hkdf.deriveFEKVersioned(&sk, ids.field, ids.version);
-
-        // Cache the result - cache takes ownership of cache_key
-        const now = std.time.timestamp();
-        try self.fek_cache.put(cache_key, .{
-            .key = fek,
-            .version = ids.version,
-            .last_accessed = now,
-        });
-
-        return fek;
+        return self.inner.getFEK(ids);
     }
 
     /// Get Blind Index Key (BIK)
     pub fn getBIK(self: *KeyManager, ids: types.KeyIds) ![32]u8 {
-        const cache_key = try buildCacheKey(self.allocator, ids);
+        return self.inner.getBIK(ids);
+    }
 
-        // Check cache first
-        if (self.bik_cache.get(cache_key)) |entry| {
-            // Cache hit - free the key we just built since we don't need it
-            self.allocator.free(cache_key);
-            return entry.key;
-        }
-
-        // Derive key hierarchy
-        var trk = try hkdf.deriveTRK(&self.master_key, ids.tenant);
-        defer std.crypto.secureZero(u8, &trk);
-
-        var sk = try hkdf.deriveSK(&trk, ids.schema);
-        defer std.crypto.secureZero(u8, &sk);
-
-        const bik = try hkdf.deriveBIKVersioned(&sk, ids.field, ids.version);
-
-        // Cache the result - cache takes ownership of cache_key
-        const now = std.time.timestamp();
-        try self.bik_cache.put(cache_key, .{
-            .key = bik,
-            .version = ids.version,
-            .last_accessed = now,
-        });
-
-        return bik;
+    /// Get the current key version for a given key path (defaults to 1).
+    /// Callers should build the key path as "tenant:schema:field".
+    pub fn getKeyVersion(self: *KeyManager, key_path: []const u8) u16 {
+        return self.inner.key_versions.get(key_path) orelse 1;
     }
 
     /// Rotate FEK to new version
@@ -206,19 +98,7 @@ pub const KeyManager = struct {
         schema: []const u8,
         field: []const u8,
     ) !u16 {
-        const key_path = try std.fmt.allocPrint(self.allocator, "{s}:{s}:{s}", .{
-            tenant,
-            schema,
-            field,
-        });
-        defer self.allocator.free(key_path);
-
-        const current_version = self.getKeyVersion(key_path);
-        const new_version = current_version + 1;
-
-        try self.setKeyVersion(key_path, new_version);
-
-        return new_version;
+        return self.inner.rotateFEK(tenant, schema, field);
     }
 
     /// Wrap a key (encrypt it) using a wrapping key
@@ -227,7 +107,6 @@ pub const KeyManager = struct {
         const aad = try fle_aead.makeAAD(self.allocator, "system", "sys", "key_wrap", "0", 1);
         defer self.allocator.free(aad);
 
-        // Encryption of keys uses AES-256-GCM
         return fle_aead.encryptField(self.allocator, .aes256_gcm, wrapping_key, aad, key_to_wrap, null);
     }
 
@@ -246,17 +125,6 @@ pub const KeyManager = struct {
         tenant: []const u8,
         schema: []const u8,
     ) !void {
-        // Clear cache first to force re-derivation/re-fetch
-        // In a database-backed implementation, this would:
-        // 1. Fetch wrapped SK from DB (wrapped with OLD TRK)
-        // 2. Unwrap with OLD TRK
-        // 3. Wrap with NEW TRK
-        // 4. Store back to DB
-        //
-        // Since this Alpha implementation uses HKDF derivation on-the-fly,
-        // "Rotation" of TRK implicitly changes SK unless we store it.
-        // For now, we simulate the *capability* of rewrapping:
-
         // 1. Derive current (Old) TRK and SK
         var old_trk = try hkdf.deriveTRK(&self.master_key, tenant);
         defer std.crypto.secureZero(u8, &old_trk);
@@ -264,7 +132,7 @@ pub const KeyManager = struct {
         var sk = try hkdf.deriveSK(&old_trk, schema);
         defer std.crypto.secureZero(u8, &sk);
 
-        // 2. Simulate wrapping SK with Old TRK (as if we just read it from DB)
+        // 2. Wrap SK with Old TRK (as if we just read it from DB)
         var wrapped_sk = try self.wrapKey(&sk, &old_trk);
         defer wrapped_sk.deinit(self.allocator);
 
@@ -276,7 +144,6 @@ pub const KeyManager = struct {
         }
 
         // 4. Generate NEW TRK (Simulated - in real app Master Key would have rotated)
-        // Here we just use a dummy new key for verification
         var new_trk: [32]u8 = undefined;
         std.crypto.random.bytes(&new_trk);
 
@@ -284,10 +151,8 @@ pub const KeyManager = struct {
         var rewrapped_sk = try self.wrapKey(unwrapped_sk, &new_trk);
         defer rewrapped_sk.deinit(self.allocator);
 
-        // 6. Clearing cache ensures subsequent getFEK calls will re-run derivation
-        // (In pure HKDF mode, this means they get new keys if Master changed)
-        self.fek_cache.map.clearRetainingCapacity();
-        self.bik_cache.map.clearRetainingCapacity();
+        // 6. Clear cache to force re-derivation
+        self.inner.clearCache();
     }
 
     /// Rewrap TRK (Tenant Root Key) - updates master without re-encrypting data
@@ -296,8 +161,6 @@ pub const KeyManager = struct {
         self: *KeyManager,
         tenant: []const u8,
     ) !void {
-        // Similar logic to rewrapSK
-
         // 1. Derive Old TRK
         var trk = try hkdf.deriveTRK(&self.master_key, tenant);
         defer std.crypto.secureZero(u8, &trk);
@@ -322,16 +185,12 @@ pub const KeyManager = struct {
         defer rewrapped_trk.deinit(self.allocator);
 
         // 6. Clear cache
-        self.fek_cache.map.clearRetainingCapacity();
-        self.bik_cache.map.clearRetainingCapacity();
+        self.inner.clearCache();
     }
 
     /// Get cache statistics
     pub fn cacheStats(self: *KeyManager) struct { hits: u64, misses: u64 } {
-        return .{
-            .hits = self.fek_cache.hits + self.bik_cache.hits,
-            .misses = self.fek_cache.misses + self.bik_cache.misses,
-        };
+        return self.inner.cacheStats();
     }
 };
 

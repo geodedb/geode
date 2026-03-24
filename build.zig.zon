@@ -169,6 +169,70 @@
             .url = "git+https://gitlab.com/devnw/zig/raft.git#c83d61ab976f2c932e8806c388e7ab44334d6de1",
             .hash = "raft-0.1.0-PqJyviS9BAAVBzzSLHKZM35j_fNcSmUm7tUhT1Xde3rO",
         },
+
+        // =======================================================================
+        // Phase 7: Extracted Domain Libraries
+        // =======================================================================
+
+        // Audit - Event modeling, filtering, CEF formatting, syslog/file sinks
+        .audit = .{
+            .url = "git+https://gitlab.com/devnw/zig/audit.git#d39835b163cc1d1a278dad8b5667d075631d5cb7",
+            .hash = "audit-0.1.0-J9TtCJVFAgCJ_FH3zOW75BWipls6mIj9trapcC-Xda0j",
+        },
+
+        // HNSW - Approximate nearest-neighbor index with configurable distance metrics
+        .hnsw = .{
+            .url = "git+https://gitlab.com/devnw/zig/hnsw.git#cee0938ec7c724dbbf844839c5636a798075d9b1",
+            .hash = "hnsw-0.1.0-wYzByzHnAACXSO9Xy-08qU8ifBWY8VHHrtrOYM9HrtC-",
+        },
+
+        // R-tree - Spatial index with bounding-box search
+        .rtree = .{
+            .url = "git+https://gitlab.com/devnw/zig/rtree.git#b3b795346e3a64acb56fbce6e0b9094360f9072d",
+            .hash = "rtree-0.1.0-kIpcHy-1AABSBpjL0F_LQbvs2h7tB39ann_jTpCEfEuh",
+        },
+
+        // Concurrency - Thread pool and bounded MPMC queue
+        .concurrency = .{
+            .url = "git+https://gitlab.com/devnw/zig/concurrency.git#fb0aa99f05edca429c02e39cc69905f1a59d97f7",
+            .hash = "concurrency-0.1.0-MDWSwkvAAABjTnaUeUKLgjhjT3tpcmxY0XNWKzBDZutH",
+        },
+
+        // Advanced Types - Network, vector, geographic, URL, range value types
+        .advanced_types = .{
+            .url = "git+https://gitlab.com/devnw/zig/advanced-types.git#c7e8b3ce3fb947e631e60832f570f43180de725a",
+            .hash = "advanced_types-0.1.0-pbHnCtw-AgDAdsufaeR7F6-jj8PERUbCIvO_O8zHX7VX",
+        },
+
+        // FLE - Field-level encryption with AEAD, HKDF, blind indices
+        .fle = .{
+            .url = "git+https://gitlab.com/devnw/zig/fle.git#b99ddd1b5f3778fa4383142fffd7eeb89d5df25e",
+            .hash = "fle-0.1.0-1CfwlRtJAQCWR5DkJpmPvXZTZGfL0pufl40-yxv24uGK",
+        },
+
+        // GQL - ISO/IEC 39075:2024 Graph Query Language front-end (lexer, parser, AST)
+        .gql = .{
+            .url = "git+https://gitlab.com/devnw/zig/gql.git#2d26491c14d677694c7c6273f2df4cd2ad83e623",
+            .hash = "gql-0.1.0-T1ANDSpCCADgAzBT9hd8r00U0lpMbvZ2TmuFfgllEF26",
+        },
+
+        // Timeseries - Pattern matching, DTW, matrix profile, PELT change-point detection
+        .timeseries = .{
+            .url = "git+https://gitlab.com/devnw/zig/timeseries.git#9499af0a473049ffbcf9b4cef26bad762761cc83",
+            .hash = "timeseries-0.1.0-iAEwOlA3AwB0QmX0WcYWUljO4_aG4Q2Q8ot-WW919ch7",
+        },
+
+        // Metrics - Counters, gauges, histograms, Prometheus export
+        .metrics = .{
+            .url = "git+https://gitlab.com/devnw/zig/metrics.git#c583bf47b8325bdd961687e95e4cb54505a5dc45",
+            .hash = "metrics-0.1.0-uPGXFkQsAQARWdyIIeww-eHO0Y0G1DHOAFDM-4Ju8j8-",
+        },
+
+        // Auth - HMAC chain, API keys, TOTP/MFA primitives
+        .@"auth" = .{
+            .url = "git+https://gitlab.com/devnw/zig/auth.git#0c0d858d95922cda5cdb66ad01d7c7ed7ad62554",
+            .hash = "auth-0.1.0-W76ZZ2D9AAAe7QW8998qeZ4dfo-bIYI4f_sVkaf_0igh",
+        },
     },
 
     .paths = .{

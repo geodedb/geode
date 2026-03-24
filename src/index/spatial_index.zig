@@ -115,7 +115,7 @@ pub const SpatialIndex = struct {
     pub fn insertGeoPoint(self: *SpatialIndex, geopoint: geographic_types.GeoPoint, node_id: ?u64) !u64 {
         const id = node_id orelse self.getNextId();
 
-        const coord = Coordinate{ .lat = geopoint.lat, .lon = geopoint.lon, .alt = geopoint.alt };
+        const coord = Coordinate{ .lat = geopoint.lat(), .lon = geopoint.lon(), .alt = geopoint.alt() orelse 0.0 };
         const mbr = coord.toMBR();
 
         // Insert into R-tree

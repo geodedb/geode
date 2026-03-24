@@ -1,5 +1,29 @@
 const std = @import("std");
 
+// =============================================================================
+// Re-export core URL/Domain types from the external advanced_types library.
+//
+// The external library provides zero-allocation URL and Domain parsing that
+// stores slices into the original input string. Geode's legacy API uses
+// allocating fromString/toString methods — compatibility wrappers below
+// bridge the two interfaces.
+// =============================================================================
+const advanced_types = @import("advanced_types_lib");
+
+/// External library URL type (zero-allocation, slices into input).
+/// Use for new code that does not need to own the parsed components.
+pub const ExtUrl = advanced_types.Url;
+
+/// External library Domain type (zero-allocation, slice into input).
+pub const ExtDomain = advanced_types.Domain;
+
+/// External library Domain label iterator.
+pub const DomainLabelIterator = advanced_types.url.DomainLabelIterator;
+
+// =============================================================================
+// Geode's allocating URL type (preserves existing public API)
+// =============================================================================
+
 pub const Url = struct {
     scheme: []const u8,
     host: []const u8,

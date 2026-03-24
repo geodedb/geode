@@ -1,75 +1,33 @@
+// CANARY: REQ=REQ-SPATIAL-RTREE-001; FEATURE="RTreeSpatialIndex"; ASPECT=Wrapper; STATUS=TESTED; OWNER=index; UPDATED=2026-03-24
+
+//! Thin compatibility wrapper around the external `rtree` library.
+//!
+//! Re-exports `MBR`, `RTreeEntry`, and `RTreeNode` directly and provides
+//! a `RTree` shim that preserves the legacy API surface (non-failable
+//! `init`, two-argument `search`, `bool`-returning `remove`) so that
+//! existing consumers compile without modification.
+
 const std = @import("std");
-const heap = @import("../storage/heap.zig");
+const rtree_lib = @import("rtree_lib");
 
-pub const MBR = struct {
-    min_x: f64,
-    min_y: f64,
-    max_x: f64,
-    max_y: f64,
+// ---------------------------------------------------------------------------
+// Direct re-exports — identical struct layout, fully compatible.
+// ---------------------------------------------------------------------------
 
-    pub fn contains(self: MBR, other: MBR) bool {
-        return self.min_x <= other.min_x and self.min_y <= other.min_y and
-            self.max_x >= other.max_x and self.max_y >= other.max_y;
-    }
+pub const MBR = rtree_lib.MBR;
+pub const RTreeEntry = rtree_lib.RTreeEntry;
+pub const RTreeNode = rtree_lib.RTreeNode;
 
-    pub fn intersects(self: MBR, other: MBR) bool {
-        return !(self.max_x < other.min_x or self.min_x > other.max_x or
-            self.max_y < other.min_y or self.min_y > other.max_y);
-    }
+// ---------------------------------------------------------------------------
+// RTree compatibility wrapper
+// ---------------------------------------------------------------------------
 
-    pub fn area(self: MBR) f64 {
-        return (self.max_x - self.min_x) * (self.max_y - self.min_y);
-    }
-
-    pub fn union_mbr(self: MBR, other: MBR) MBR {
-        return .{
-            .min_x = @min(self.min_x, other.min_x),
-            .min_y = @min(self.min_y, other.min_y),
-            .max_x = @max(self.max_x, other.max_x),
-            .max_y = @max(self.max_y, other.max_y),
-        };
-    }
-
-    pub fn enlargement(self: MBR, other: MBR) f64 {
-        const combined = self.union_mbr(other);
-        return combined.area() - self.area();
-    }
-};
-
-pub const RTreeEntry = struct {
-    mbr: MBR,
-    id: u64,
-    child: ?*RTreeNode = null,
-};
-
-pub const RTreeNode = struct {
-    entries: std.ArrayList(RTreeEntry),
-    is_leaf: bool,
-    level: u16,
-
-    pub fn init(allocator: std.mem.Allocator, is_leaf: bool, level: u16) RTreeNode {
-        return .{
-            .entries = std.ArrayList(RTreeEntry).init(allocator),
-            .is_leaf = is_leaf,
-            .level = level,
-        };
-    }
-
-    pub fn deinit(self: *RTreeNode, allocator: std.mem.Allocator) void {
-        self.entries.deinit(allocator);
-    }
-
-    pub fn computeMBR(self: *const RTreeNode) ?MBR {
-        if (self.entries.items.len == 0) return null;
-
-        var mbr = self.entries.items[0].mbr;
-        for (self.entries.items[1..]) |entry| {
-            mbr = mbr.union_mbr(entry.mbr);
-        }
-        return mbr;
-    }
-};
-
+/// Drop-in replacement for the old hand-rolled `RTree`.
+///
+/// Field layout is identical to `rtree_lib.RTree` so that consumers
+/// which read `.root`, `.count`, `.height`, `.M`, or `.allocator`
+/// directly continue to work.  Methods that changed signature in
+/// the external library are shimmed here.
 pub const RTree = struct {
     allocator: std.mem.Allocator,
     root: ?*RTreeNode,
@@ -77,174 +35,272 @@ pub const RTree = struct {
     height: u16,
     count: u64,
 
+    // -- Construction / destruction ----------------------------------------
+
+    /// Create a new R-tree.  Unlike the external library this never
+    /// returns an error — callers historically did not handle one.
+    /// `M` must be >= 2; values below 2 are silently clamped.
     pub fn init(allocator: std.mem.Allocator, M: u16) RTree {
-        return .{
-            .allocator = allocator,
-            .root = null,
-            .M = M,
-            .height = 0,
-            .count = 0,
-        };
+        const safe_M = if (M < 2) 2 else M;
+        const inner = rtree_lib.RTree.init(allocator, safe_M) catch unreachable;
+        return fromInner(inner);
     }
 
     pub fn deinit(self: *RTree) void {
-        if (self.root) |root| {
-            self.deinitNode(root);
-        }
+        self.asInner().deinit();
     }
 
-    fn deinitNode(self: *RTree, node: *RTreeNode) void {
-        if (!node.is_leaf) {
-            for (node.entries.items) |entry| {
-                if (entry.child) |child| {
-                    self.deinitNode(child);
-                }
-            }
-        }
-        node.deinit(self.allocator);
-        self.allocator.destroy(node);
-    }
+    // -- Insertion ----------------------------------------------------------
 
     pub fn insert(self: *RTree, mbr: MBR, id: u64) !void {
-        if (self.root == null) {
-            self.root = try self.allocator.create(RTreeNode);
-            self.root.?.* = RTreeNode.init(self.allocator, true, 0);
-            self.height = 1;
-        }
-
-        const entry = RTreeEntry{ .mbr = mbr, .id = id };
-
-        if (try self.insertEntry(self.root.?, entry)) |split_entry| {
-            var new_root = try self.allocator.create(RTreeNode);
-            new_root.* = RTreeNode.init(self.allocator, false, self.root.?.level + 1);
-
-            const old_root_mbr = self.root.?.computeMBR() orelse mbr;
-            try new_root.entries.append(.{ .mbr = old_root_mbr, .id = 0, .child = self.root });
-            try new_root.entries.append(split_entry);
-
-            self.root = new_root;
-            self.height += 1;
-        }
-
-        self.count += 1;
+        try self.asInner().insert(mbr, id);
     }
 
-    fn insertEntry(self: *RTree, node: *RTreeNode, entry: RTreeEntry) !?RTreeEntry {
-        if (node.is_leaf) {
-            try node.entries.append(entry);
+    // -- Search -------------------------------------------------------------
 
-            if (node.entries.items.len > self.M) {
-                return try self.splitNode(node);
-            }
-            return null;
-        }
-
-        var best_idx: usize = 0;
-        var best_enlargement = std.math.inf(f64);
-
-        for (node.entries.items, 0..) |e, i| {
-            const enlargement = e.mbr.enlargement(entry.mbr);
-            if (enlargement < best_enlargement) {
-                best_enlargement = enlargement;
-                best_idx = i;
-            }
-        }
-
-        var chosen = &node.entries.items[best_idx];
-
-        if (try self.insertEntry(chosen.child.?, entry)) |split_entry| {
-            chosen.mbr = chosen.child.?.computeMBR() orelse entry.mbr;
-            try node.entries.append(split_entry);
-
-            if (node.entries.items.len > self.M) {
-                return try self.splitNode(node);
-            }
-        } else {
-            chosen.mbr = chosen.mbr.union_mbr(entry.mbr);
-        }
-
-        return null;
-    }
-
-    fn splitNode(self: *RTree, node: *RTreeNode) !RTreeEntry {
-        const m = node.entries.items.len / 2;
-
-        var new_node = try self.allocator.create(RTreeNode);
-        new_node.* = RTreeNode.init(self.allocator, node.is_leaf, node.level);
-
-        while (node.entries.items.len > m) {
-            try new_node.entries.append(node.entries.pop());
-        }
-
-        const new_mbr = new_node.computeMBR() orelse MBR{ .min_x = 0, .min_y = 0, .max_x = 0, .max_y = 0 };
-        return RTreeEntry{ .mbr = new_mbr, .id = 0, .child = new_node };
-    }
-
+    /// Search for entries whose bounding box intersects `query_mbr`.
+    ///
+    /// Uses the tree's own allocator for growing the results list, which
+    /// matches the old behaviour where the tree owned the allocator used
+    /// for result storage.
     pub fn search(self: *const RTree, query_mbr: MBR, results: *std.ArrayList(u64)) !void {
-        if (self.root) |root| {
-            try self.searchNode(root, query_mbr, results);
-        }
+        try self.asInnerConst().search(query_mbr, self.allocator, results);
     }
 
-    fn searchNode(self: *const RTree, node: *RTreeNode, query_mbr: MBR, results: *std.ArrayList(u64)) !void {
-        for (node.entries.items) |entry| {
-            if (entry.mbr.intersects(query_mbr)) {
-                if (node.is_leaf) {
-                    try results.append(entry.id);
-                } else if (entry.child) |child| {
-                    try self.searchNode(child, query_mbr, results);
-                }
-            }
-        }
-    }
+    // -- Removal ------------------------------------------------------------
 
+    /// Legacy `remove` returns a plain `bool`.  The external library's
+    /// version can also fail with `OutOfMemory` during orphan reinsertion
+    /// after node condensation; we surface that as `false` to match the
+    /// old contract.
     pub fn remove(self: *RTree, mbr: MBR, id: u64) bool {
-        if (self.root == null) return false;
-
-        if (self.removeFromNode(self.root.?, mbr, id)) {
-            self.count -= 1;
-
-            if (self.root.?.entries.items.len == 0) {
-                self.root.?.deinit();
-                self.allocator.destroy(self.root.?);
-                self.root = null;
-                self.height = 0;
-            }
-
-            return true;
-        }
-
-        return false;
+        return self.asInner().remove(mbr, id) catch false;
     }
 
-    fn removeFromNode(self: *RTree, node: *RTreeNode, mbr: MBR, id: u64) bool {
-        if (node.is_leaf) {
-            for (node.entries.items, 0..) |entry, i| {
-                if (entry.id == id and entry.mbr.intersects(mbr)) {
-                    _ = node.entries.swapRemove(i);
-                    return true;
-                }
-            }
-            return false;
-        }
+    // -- Internal casting ---------------------------------------------------
 
-        for (node.entries.items, 0..) |entry, i| {
-            if (entry.mbr.intersects(mbr)) {
-                if (entry.child) |child| {
-                    if (self.removeFromNode(child, mbr, id)) {
-                        if (child.entries.items.len == 0) {
-                            child.deinit();
-                            self.allocator.destroy(child);
-                            _ = node.entries.swapRemove(i);
-                        } else {
-                            node.entries.items[i].mbr = child.computeMBR() orelse mbr;
-                        }
-                        return true;
-                    }
-                }
-            }
-        }
+    /// Interpret `*RTree` as `*rtree_lib.RTree`.  Safe because the two
+    /// structs have identical field layout (verified by comptime assert
+    /// below).
+    inline fn asInner(self: *RTree) *rtree_lib.RTree {
+        return @ptrCast(self);
+    }
 
-        return false;
+    inline fn asInnerConst(self: *const RTree) *const rtree_lib.RTree {
+        return @ptrCast(self);
+    }
+
+    inline fn fromInner(inner: rtree_lib.RTree) RTree {
+        return @bitCast(inner);
     }
 };
+
+// Compile-time check: wrapper and library structs must have the same memory
+// layout so that the pointer casts above are sound.
+comptime {
+    if (@sizeOf(RTree) != @sizeOf(rtree_lib.RTree))
+        @compileError("RTree wrapper size mismatch — update wrapper fields");
+    if (@alignOf(RTree) != @alignOf(rtree_lib.RTree))
+        @compileError("RTree wrapper alignment mismatch — update wrapper fields");
+    // Verify every field has the same offset in both structs.
+    if (@offsetOf(RTree, "allocator") != @offsetOf(rtree_lib.RTree, "allocator"))
+        @compileError("RTree field offset mismatch: allocator");
+    if (@offsetOf(RTree, "root") != @offsetOf(rtree_lib.RTree, "root"))
+        @compileError("RTree field offset mismatch: root");
+    if (@offsetOf(RTree, "M") != @offsetOf(rtree_lib.RTree, "M"))
+        @compileError("RTree field offset mismatch: M");
+    if (@offsetOf(RTree, "height") != @offsetOf(rtree_lib.RTree, "height"))
+        @compileError("RTree field offset mismatch: height");
+    if (@offsetOf(RTree, "count") != @offsetOf(rtree_lib.RTree, "count"))
+        @compileError("RTree field offset mismatch: count");
+}
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+
+test "MBR contains" {
+    const outer = MBR{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 };
+    const inner = MBR{ .min_x = 2, .min_y = 2, .max_x = 8, .max_y = 8 };
+    const outside = MBR{ .min_x = 11, .min_y = 11, .max_x = 20, .max_y = 20 };
+
+    try std.testing.expect(outer.contains(inner));
+    try std.testing.expect(!inner.contains(outer));
+    try std.testing.expect(!outer.contains(outside));
+}
+
+test "MBR intersects" {
+    const a = MBR{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 };
+    const overlapping = MBR{ .min_x = 5, .min_y = 5, .max_x = 15, .max_y = 15 };
+    const disjoint = MBR{ .min_x = 20, .min_y = 20, .max_x = 30, .max_y = 30 };
+
+    try std.testing.expect(a.intersects(overlapping));
+    try std.testing.expect(!a.intersects(disjoint));
+}
+
+test "MBR area" {
+    const mbr = MBR{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 };
+    try std.testing.expectEqual(@as(f64, 100.0), mbr.area());
+
+    const point = MBR{ .min_x = 5, .min_y = 5, .max_x = 5, .max_y = 5 };
+    try std.testing.expectEqual(@as(f64, 0.0), point.area());
+}
+
+test "MBR unionMbr" {
+    const a = MBR{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 };
+    const b = MBR{ .min_x = 5, .min_y = 5, .max_x = 15, .max_y = 15 };
+    const u = a.unionMbr(b);
+
+    try std.testing.expectEqual(@as(f64, 0.0), u.min_x);
+    try std.testing.expectEqual(@as(f64, 0.0), u.min_y);
+    try std.testing.expectEqual(@as(f64, 15.0), u.max_x);
+    try std.testing.expectEqual(@as(f64, 15.0), u.max_y);
+}
+
+test "MBR enlargement" {
+    const a = MBR{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 };
+    const b = MBR{ .min_x = 5, .min_y = 5, .max_x = 15, .max_y = 15 };
+    const enl = a.enlargement(b);
+    try std.testing.expectEqual(@as(f64, 125.0), enl);
+}
+
+test "RTree init and deinit empty" {
+    var tree = RTree.init(std.testing.allocator, 4);
+    defer tree.deinit();
+
+    try std.testing.expectEqual(@as(?*RTreeNode, null), tree.root);
+    try std.testing.expectEqual(@as(u64, 0), tree.count);
+    try std.testing.expectEqual(@as(u16, 0), tree.height);
+}
+
+test "RTree insert single" {
+    var tree = RTree.init(std.testing.allocator, 4);
+    defer tree.deinit();
+
+    try tree.insert(.{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 }, 1);
+
+    try std.testing.expectEqual(@as(u64, 1), tree.count);
+    try std.testing.expect(tree.root != null);
+}
+
+test "RTree insert and search" {
+    var tree = RTree.init(std.testing.allocator, 4);
+    defer tree.deinit();
+
+    try tree.insert(.{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 }, 1);
+    try tree.insert(.{ .min_x = 5, .min_y = 5, .max_x = 15, .max_y = 15 }, 2);
+    try tree.insert(.{ .min_x = 20, .min_y = 20, .max_x = 30, .max_y = 30 }, 3);
+
+    var results: std.ArrayList(u64) = .empty;
+    defer results.deinit(std.testing.allocator);
+
+    try tree.search(.{ .min_x = 7, .min_y = 7, .max_x = 12, .max_y = 12 }, &results);
+    try std.testing.expectEqual(@as(usize, 2), results.items.len);
+}
+
+test "RTree search no results" {
+    var tree = RTree.init(std.testing.allocator, 4);
+    defer tree.deinit();
+
+    try tree.insert(.{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 }, 1);
+
+    var results: std.ArrayList(u64) = .empty;
+    defer results.deinit(std.testing.allocator);
+
+    try tree.search(.{ .min_x = 50, .min_y = 50, .max_x = 60, .max_y = 60 }, &results);
+    try std.testing.expectEqual(@as(usize, 0), results.items.len);
+}
+
+test "RTree search on empty tree" {
+    var tree = RTree.init(std.testing.allocator, 4);
+    defer tree.deinit();
+
+    var results: std.ArrayList(u64) = .empty;
+    defer results.deinit(std.testing.allocator);
+
+    try tree.search(.{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 }, &results);
+    try std.testing.expectEqual(@as(usize, 0), results.items.len);
+}
+
+test "RTree remove" {
+    var tree = RTree.init(std.testing.allocator, 4);
+    defer tree.deinit();
+
+    const mbr = MBR{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 };
+    try tree.insert(mbr, 1);
+    try std.testing.expectEqual(@as(u64, 1), tree.count);
+
+    const removed = tree.remove(mbr, 1);
+    try std.testing.expect(removed);
+    try std.testing.expectEqual(@as(u64, 0), tree.count);
+    try std.testing.expectEqual(@as(?*RTreeNode, null), tree.root);
+}
+
+test "RTree remove nonexistent" {
+    var tree = RTree.init(std.testing.allocator, 4);
+    defer tree.deinit();
+
+    try tree.insert(.{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 }, 1);
+
+    const removed = tree.remove(.{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 }, 99);
+    try std.testing.expect(!removed);
+    try std.testing.expectEqual(@as(u64, 1), tree.count);
+}
+
+test "RTree remove from empty" {
+    var tree = RTree.init(std.testing.allocator, 4);
+    defer tree.deinit();
+
+    const removed = tree.remove(.{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 }, 1);
+    try std.testing.expect(!removed);
+}
+
+test "RTree split on overflow" {
+    var tree = RTree.init(std.testing.allocator, 2);
+    defer tree.deinit();
+
+    try tree.insert(.{ .min_x = 0, .min_y = 0, .max_x = 1, .max_y = 1 }, 1);
+    try tree.insert(.{ .min_x = 2, .min_y = 2, .max_x = 3, .max_y = 3 }, 2);
+    try tree.insert(.{ .min_x = 4, .min_y = 4, .max_x = 5, .max_y = 5 }, 3);
+
+    try std.testing.expectEqual(@as(u64, 3), tree.count);
+    try std.testing.expect(tree.height >= 2);
+
+    var results: std.ArrayList(u64) = .empty;
+    defer results.deinit(std.testing.allocator);
+
+    try tree.search(.{ .min_x = -1, .min_y = -1, .max_x = 6, .max_y = 6 }, &results);
+    try std.testing.expectEqual(@as(usize, 3), results.items.len);
+}
+
+test "RTree many inserts and searches" {
+    var tree = RTree.init(std.testing.allocator, 4);
+    defer tree.deinit();
+
+    var i: u64 = 0;
+    while (i < 100) : (i += 1) {
+        const x: f64 = @floatFromInt(i % 10);
+        const y: f64 = @floatFromInt(i / 10);
+        try tree.insert(.{
+            .min_x = x,
+            .min_y = y,
+            .max_x = x + 0.5,
+            .max_y = y + 0.5,
+        }, i);
+    }
+
+    try std.testing.expectEqual(@as(u64, 100), tree.count);
+
+    var results: std.ArrayList(u64) = .empty;
+    defer results.deinit(std.testing.allocator);
+
+    try tree.search(.{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 }, &results);
+    try std.testing.expect(results.items.len > 0);
+    try std.testing.expect(results.items.len <= 100);
+}
+
+test "RTree wrapper layout matches library" {
+    // Verify the comptime assertions hold at test time as well.
+    try std.testing.expectEqual(@sizeOf(rtree_lib.RTree), @sizeOf(RTree));
+    try std.testing.expectEqual(@alignOf(rtree_lib.RTree), @alignOf(RTree));
+}

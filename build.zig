@@ -287,6 +287,40 @@ pub fn build(b: *std.Build) void {
     });
     const raft_ext_mod = raft_dep.module("raft");
 
+    // ==========================================================================
+    // Phase 7 External Library Dependencies (Extracted Domain Libraries)
+    // ==========================================================================
+
+    const audit_dep = b.dependency("audit", .{ .target = target, .optimize = optimize });
+    const audit_ext_mod = audit_dep.module("audit");
+
+    const hnsw_dep = b.dependency("hnsw", .{ .target = target, .optimize = optimize });
+    const hnsw_ext_mod = hnsw_dep.module("hnsw");
+
+    const rtree_dep = b.dependency("rtree", .{ .target = target, .optimize = optimize });
+    const rtree_ext_mod = rtree_dep.module("rtree");
+
+    const concurrency_dep = b.dependency("concurrency", .{ .target = target, .optimize = optimize });
+    const concurrency_ext_mod = concurrency_dep.module("concurrency");
+
+    const advanced_types_dep = b.dependency("advanced_types", .{ .target = target, .optimize = optimize });
+    const advanced_types_ext_mod = advanced_types_dep.module("advanced_types");
+
+    const fle_dep = b.dependency("fle", .{ .target = target, .optimize = optimize });
+    const fle_ext_mod = fle_dep.module("fle");
+
+    const gql_dep = b.dependency("gql", .{ .target = target, .optimize = optimize });
+    const gql_ext_mod = gql_dep.module("gql");
+
+    const timeseries_dep = b.dependency("timeseries", .{ .target = target, .optimize = optimize });
+    const timeseries_ext_mod = timeseries_dep.module("timeseries");
+
+    const metrics_dep = b.dependency("metrics", .{ .target = target, .optimize = optimize });
+    const metrics_ext_mod = metrics_dep.module("metrics");
+
+    const auth_dep = b.dependency("auth", .{ .target = target, .optimize = optimize });
+    const auth_ext_mod = auth_dep.module("auth");
+
     // Modules - Level 0 (No dependencies on other internal modules)
 
     // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-004; FEATURE="Centralized Structured Logging"; ASPECT=BuildConfig; STATUS=IMPL; OWNER=core; UPDATED=2026-01-24
@@ -304,6 +338,7 @@ pub fn build(b: *std.Build) void {
     // Thread Pool Module - High-performance worker threads for query execution (GAP-0201)
     // CANARY: REQ=REQ-PERF-THREAD-POOL-BUILD-001; FEATURE="ThreadPool"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
     const thread_pool_mod = b.createModule(.{ .root_source_file = b.path("src/transport/thread_pool.zig"), .target = target, .optimize = optimize });
+    thread_pool_mod.addImport("concurrency_lib", concurrency_ext_mod);
 
     // Stream Scheduler Module - DRR-based fair stream scheduling (GAP-0201)
     // CANARY: REQ=REQ-PERF-DRR-BUILD-001; FEATURE="DRRScheduler"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
@@ -379,6 +414,18 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("wal", wal_ext_mod);
     root_mod.addImport("raft", raft_ext_mod);
 
+    // Phase 7 External Library Imports (extracted domain libraries)
+    root_mod.addImport("audit_lib", audit_ext_mod);
+    root_mod.addImport("hnsw_lib", hnsw_ext_mod);
+    root_mod.addImport("rtree_lib", rtree_ext_mod);
+    root_mod.addImport("concurrency_lib", concurrency_ext_mod);
+    root_mod.addImport("advanced_types_lib", advanced_types_ext_mod);
+    root_mod.addImport("fle_lib", fle_ext_mod);
+    root_mod.addImport("gql_lib", gql_ext_mod);
+    root_mod.addImport("timeseries_lib", timeseries_ext_mod);
+    root_mod.addImport("metrics_lib", metrics_ext_mod);
+    root_mod.addImport("auth_lib", auth_ext_mod);
+
     // Main unified CLI binary with server and client capabilities
     // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedEntry; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
     // Uses unified_entry.zig as root to allow both cli/main.zig and server/main.zig imports
@@ -425,6 +472,18 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("uuid", uuid_ext_mod);
     geode_exe.root_module.addImport("wal", wal_ext_mod);
     geode_exe.root_module.addImport("raft", raft_ext_mod);
+
+    // Phase 7 External Library Imports for CLI (extracted domain libraries)
+    geode_exe.root_module.addImport("audit_lib", audit_ext_mod);
+    geode_exe.root_module.addImport("hnsw_lib", hnsw_ext_mod);
+    geode_exe.root_module.addImport("rtree_lib", rtree_ext_mod);
+    geode_exe.root_module.addImport("concurrency_lib", concurrency_ext_mod);
+    geode_exe.root_module.addImport("advanced_types_lib", advanced_types_ext_mod);
+    geode_exe.root_module.addImport("fle_lib", fle_ext_mod);
+    geode_exe.root_module.addImport("gql_lib", gql_ext_mod);
+    geode_exe.root_module.addImport("timeseries_lib", timeseries_ext_mod);
+    geode_exe.root_module.addImport("metrics_lib", metrics_ext_mod);
+    geode_exe.root_module.addImport("auth_lib", auth_ext_mod);
 
     // Add centralized logging module for CLI
     geode_exe.root_module.addImport("logging", logging_mod);
@@ -551,7 +610,15 @@ pub fn build(b: *std.Build) void {
     const fle_annotations_mod = b.createModule(.{ .root_source_file = b.path("src/schema/annotations.zig"), .target = target, .optimize = optimize });
     const fle_catalog_mod = b.createModule(.{ .root_source_file = b.path("src/schema/catalog.zig"), .target = target, .optimize = optimize });
 
-    // Add dependencies for FLE modules
+    // Add fle_lib (external library) to each wrapper module
+    fle_aead_mod.addImport("fle_lib", fle_ext_mod);
+    fle_hkdf_mod.addImport("fle_lib", fle_ext_mod);
+    fle_hmac_mod.addImport("fle_lib", fle_ext_mod);
+    fle_key_types_mod.addImport("fle_lib", fle_ext_mod);
+    fle_key_manager_mod.addImport("fle_lib", fle_ext_mod);
+    fle_blind_index_mod.addImport("fle_lib", fle_ext_mod);
+
+    // Add inter-module dependencies for FLE wrapper modules
     fle_key_manager_mod.addImport("fle_hkdf", fle_hkdf_mod);
     fle_key_manager_mod.addImport("fle_key_types", fle_key_types_mod);
     fle_key_manager_mod.addImport("fle_aead", fle_aead_mod);
@@ -1508,6 +1575,7 @@ pub fn build(b: *std.Build) void {
     const runtime_flags_mod = b.createModule(.{ .root_source_file = b.path("src/util/feature_flags.zig"), .target = target, .optimize = optimize });
     const mfa_mod = b.createModule(.{ .root_source_file = b.path("src/security/mfa.zig"), .target = target, .optimize = optimize });
     mfa_mod.addImport("feature_flags", runtime_flags_mod);
+    mfa_mod.addImport("auth_lib", auth_ext_mod);
     const auth_mod = b.createModule(.{ .root_source_file = b.path("src/security/geode_auth_lib.zig"), .target = target, .optimize = optimize });
     auth_mod.addImport("mfa", mfa_mod);
     auth_mod.addImport("logging", logging_mod);
@@ -2056,6 +2124,7 @@ pub fn build(b: *std.Build) void {
     // GAP-413: Create audit bundle module for test imports
     // Uses mod.zig to bundle all audit components into a single module
     const audit_bundle_mod = b.createModule(.{ .root_source_file = b.path("src/audit/mod.zig"), .target = target, .optimize = optimize });
+    audit_bundle_mod.addImport("audit_lib", audit_ext_mod);
 
     // GAP-413 FIXED: test_filters.zig (10 tests) - audit filter tests
     const test_filters_mod = b.createModule(.{ .root_source_file = b.path("tests/test_filters.zig"), .target = target, .optimize = optimize });
