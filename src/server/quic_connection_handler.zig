@@ -56,54 +56,12 @@ pub fn getMtlsProvider() ?*mtls_provider.MtlsProvider {
     return g_mtls_provider;
 }
 
-/// GAP-0001: Check whether a single AST statement mutates the graph store.
-/// Used to decide between shared (read) and exclusive (write) locking for
-/// concurrent QUIC query execution.  Conservative: unknown / ambiguous
-/// statement types (e.g. CALL) are treated as mutations.
-fn isMutatingStatement(stmt: *const gql_ast.Statement) bool {
-    return switch (stmt.*) {
-        // DML mutations
-        .Create, .Insert, .InsertValue, .Merge, .Delete => true,
-        // DDL mutations
-        .CreateIndex, .DropIndex => true,
-        .CreateConstraint, .DropConstraint => true,
-        .CreateSchema, .DropSchema => true,
-        .CreateGraph, .DropGraph => true,
-        .CreateGraphType, .DropGraphType => true,
-        // Backup/restore mutate on-disk state
-        .Backup, .Restore => true,
-        // CALL may invoke mutating procedures / subqueries
-        .Call => |c| switch (c) {
-            .Procedure => true,
-            .Subquery => |sq| isMutatingStatement(sq.statement),
-        },
-        // PROFILE executes its inner statement — check it
-        .Profile => |prof| isMutatingStatement(prof.query),
-        // EXPLAIN never executes
-        .Explain => false,
-        // START TRANSACTION with a body can contain mutations
-        .StartTransaction => |txn| blk: {
-            if (txn.body) |body| {
-                for (body) |*body_stmt| {
-                    if (isMutatingStatement(body_stmt)) break :blk true;
-                }
-            }
-            break :blk false;
-        },
-        // Everything else (Query, Union, For, Show, etc.) is read-only
-        else => false,
-    };
-}
+/// GAP-0001 / #564: Delegate to shared mutation classification in query_traits.
+/// These detect inline mutations inside Query nodes (MATCH...CREATE, etc.)
+/// that previously only took a shared read lock, causing data races.
+const isMutatingStatement = query_traits.isMutatingStatement;
 
-/// GAP-0001: Check whether any statement in a parsed program mutates the
-/// graph store.  When true the caller must hold the exclusive write lock
-/// instead of the shared read lock.
-fn isMutatingProgram(program: *const gql_ast.Program) bool {
-    for (program.statements) |*stmt| {
-        if (isMutatingStatement(stmt)) return true;
-    }
-    return false;
-}
+const isMutatingProgram = query_traits.isMutatingProgram;
 
 /// Build a protobuf error response with status and error payload
 fn buildErrorResponse(

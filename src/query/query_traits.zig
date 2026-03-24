@@ -183,6 +183,77 @@ fn containsEq(expr: *const ast.Expr) bool {
     };
 }
 
+// #564: Mutation classification — used by both QUIC and gRPC transport handlers
+// to decide whether a query needs an exclusive write lock or a shared read lock.
+
+/// Check whether any statement in a parsed program mutates the graph store.
+/// When true the caller must hold the exclusive write lock instead of the
+/// shared read lock.
+pub fn isMutatingProgram(program: *const ast.Program) bool {
+    for (program.statements) |*stmt| {
+        if (isMutatingStatement(stmt)) return true;
+    }
+    return false;
+}
+
+/// Check if a single statement is a mutation (DML write, DDL, or a Query
+/// containing inline CREATE/SET/REMOVE/DELETE clauses).
+pub fn isMutatingStatement(stmt: *const ast.Statement) bool {
+    return switch (stmt.*) {
+        // DML mutations
+        .Create, .Insert, .InsertValue, .Merge, .Delete => true,
+        // DDL mutations
+        .CreateIndex, .DropIndex => true,
+        .CreateConstraint, .DropConstraint => true,
+        .CreateSchema, .DropSchema => true,
+        .CreateGraph, .DropGraph => true,
+        .CreateGraphType, .DropGraphType => true,
+        // Backup/restore mutate on-disk state
+        .Backup, .Restore => true,
+        // CALL may invoke mutating procedures / subqueries
+        .Call => |c| switch (c) {
+            .Procedure => true,
+            .Subquery => |sq| isMutatingStatement(sq.statement),
+        },
+        // PROFILE executes its inner statement — check it
+        .Profile => |prof| isMutatingStatement(prof.query),
+        // EXPLAIN never executes
+        .Explain => false,
+        // START TRANSACTION with a body can contain mutations
+        .StartTransaction => |txn| blk: {
+            if (txn.body) |body| {
+                for (body) |*body_stmt| {
+                    if (isMutatingStatement(body_stmt)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        // #564: Query nodes can contain inline mutations (MATCH...CREATE,
+        // MATCH...SET, MATCH...REMOVE, MATCH...DELETE). These must take
+        // the exclusive write lock to prevent concurrent HashMap/ArrayList
+        // corruption under high parallelism.
+        .Query => |q| isQueryMutating(&q),
+        // Union/Intersect/Except contain sub-queries that may mutate
+        .Union => |u| isQueryMutating(&u.first) or blk: {
+            for (u.tails) |*tail| {
+                if (isQueryMutating(&tail.query)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Intersect, .Except => |bs| isQueryMutating(&bs.left) or isQueryMutating(&bs.right),
+        // Everything else (For, Show, etc.) is read-only
+        else => false,
+    };
+}
+
+/// Check if a Query struct contains mutation clauses.
+pub fn isQueryMutating(q: *const ast.Query) bool {
+    return q.create_pattern != null or
+        q.set_clauses.len > 0 or
+        q.remove_clauses.len > 0 or
+        q.delete_items.len > 0;
+}
+
 fn startsWithKeyword(hay: []const u8, needle: []const u8) bool {
     if (hay.len < needle.len) return false;
     return std.ascii.eqlIgnoreCase(hay[0..needle.len], needle);
@@ -192,4 +263,62 @@ fn skipWhitespace(s: []const u8, start: usize) usize {
     var idx = start;
     while (idx < s.len and std.ascii.isWhitespace(s[idx])) idx += 1;
     return idx;
+}
+
+// --- #564 regression tests: mutation classification ---
+
+const Parser = @import("../gql/parser.zig").Parser;
+const Lexer = @import("../gql/lexer.zig").Lexer;
+
+fn parseProgram(src: []const u8) !struct { ast.Program, std.heap.ArenaAllocator } {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    errdefer arena.deinit();
+    var lx = Lexer{ .src = src };
+    var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
+    const program = try p.parseProgram();
+    return .{ program, arena };
+}
+
+// #564: MATCH...CREATE was incorrectly classified as read-only, causing
+// concurrent shared-lock access and @memcpy alias / HashMap corruption panics.
+test "isMutatingProgram: MATCH...CREATE is a mutation" {
+    const prog, var arena = try parseProgram("MATCH (n:Person) CREATE (m:Person {name: 'test'})-[:KNOWS]->(n) RETURN m");
+    defer arena.deinit();
+    try std.testing.expect(isMutatingProgram(&prog));
+}
+
+test "isMutatingProgram: MATCH...SET is a mutation" {
+    const prog, var arena = try parseProgram("MATCH (n:Person) SET n.age = 30 RETURN n");
+    defer arena.deinit();
+    try std.testing.expect(isMutatingProgram(&prog));
+}
+
+test "isMutatingProgram: MATCH...DELETE is a mutation" {
+    const prog, var arena = try parseProgram("MATCH (n:Person) DELETE n");
+    defer arena.deinit();
+    try std.testing.expect(isMutatingProgram(&prog));
+}
+
+test "isMutatingProgram: MATCH...REMOVE is a mutation" {
+    const prog, var arena = try parseProgram("MATCH (n:Person) REMOVE n.age RETURN n");
+    defer arena.deinit();
+    try std.testing.expect(isMutatingProgram(&prog));
+}
+
+test "isMutatingProgram: pure MATCH is read-only" {
+    const prog, var arena = try parseProgram("MATCH (n:Person) RETURN n");
+    defer arena.deinit();
+    try std.testing.expect(!isMutatingProgram(&prog));
+}
+
+test "isMutatingProgram: standalone CREATE is a mutation" {
+    const prog, var arena = try parseProgram("CREATE (n:Person {name: 'test'})");
+    defer arena.deinit();
+    try std.testing.expect(isMutatingProgram(&prog));
+}
+
+test "isMutatingProgram: EXPLAIN is not a mutation" {
+    const prog, var arena = try parseProgram("EXPLAIN MATCH (n:Person) RETURN n");
+    defer arena.deinit();
+    try std.testing.expect(!isMutatingProgram(&prog));
 }
