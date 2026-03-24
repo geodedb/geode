@@ -2,9 +2,21 @@ const std = @import("std");
 
 // CANARY: REQ=REQ-GQL-VECTOR-TYPES-001; FEATURE="Vector Types Implementation"; ASPECT=Types; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_VECTOR_TYPES_001_All; OWNER=types; UPDATED=2025-01-03
 
-/// Vector types for machine learning and scientific computing
-/// Supports both f32 and i32 vectors with efficient operations
-/// Single-precision floating-point vector
+// =============================================================================
+// Re-export the generic Vector type from the external advanced_types library.
+// The external library provides compile-time fixed-size vectors; Geode's
+// VectorF32/VectorI32 remain dynamically-sized because graph-database vector
+// dimensions are determined at runtime (e.g., HNSW index dimensions).
+// =============================================================================
+const advanced_types = @import("advanced_types_lib");
+
+/// Generic fixed-size vector from the external library (compile-time N).
+/// Useful for known-dimension contexts (e.g., spatial 3D coordinates).
+pub const Vector = advanced_types.Vector;
+
+/// Single-precision floating-point vector with runtime dimensions.
+/// This is the primary vector type used by Geode's HNSW index, ML embeddings,
+/// and GQL vector operations.
 pub const VectorF32 = struct {
     dim: u16,
     data: []const f32,
@@ -536,14 +548,14 @@ test "VectorF32 operations" {
     const vec2 = try VectorF32.fromString("[4.0, 5.0, 6.0]", allocator);
     defer vec2.deinit(allocator);
 
-    const distance = try vec1.distance(vec2);
-    try testing.expect(distance > 5.0 and distance < 6.0);
+    const dist = try vec1.distance(vec2);
+    try testing.expect(dist > 5.0 and dist < 6.0);
 
     const dot = try vec1.dotProduct(vec2);
     try testing.expectEqual(@as(f32, 32.0), dot);
 
-    const norm = vec1.norm();
-    try testing.expect(norm > 3.7 and norm < 3.8);
+    const n = vec1.norm();
+    try testing.expect(n > 3.7 and n < 3.8);
 }
 
 test "VectorI32 operations" {

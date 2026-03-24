@@ -120,7 +120,7 @@ pub fn getCurrentKeyVersion(ctx: EncryptionContext, field_name: []const u8) !u16
     defer ctx.allocator.free(key_path);
 
     // Get version from key manager (defaults to 1 if not set)
-    return key_manager.key_versions.get(key_path) orelse 1;
+    return key_manager.getKeyVersion(key_path);
 }
 
 /// Rotate the FLE key for a field to a new version

@@ -38,7 +38,7 @@ test "syslog RFC5424 formatting" {
         },
     };
 
-    var mock_sender = syslog.MockSyslogSender.init(allocator);
+    var mock_sender = try syslog.MockSyslogSender.init(allocator);
     defer mock_sender.deinit();
 
     const event = events.AuditEvent{

@@ -597,7 +597,7 @@ pub const SpatialIndexWrapper = struct {
             };
 
             // Calculate actual distance using the real coordinates
-            const distance = center.distanceKm(candidate_point);
+            const distance = center.haversineDistance(candidate_point) / 1000.0;
 
             // Only include results within the radius (precise filtering after bounding box query)
             if (distance <= radius_km) {
@@ -945,14 +945,14 @@ test "SpatialIndexWrapper operations" {
     defer index.deinit();
 
     // Test point insertion
-    const point1 = try geographic.LatLon.fromCoords(40.7128, -74.0060); // New York
-    const point2 = try geographic.LatLon.fromCoords(40.7589, -73.9851); // Manhattan
+    const point1 = try geographic.latLonFromCoords(40.7128, -74.0060); // New York
+    const point2 = try geographic.latLonFromCoords(40.7589, -73.9851); // Manhattan
 
     try index.insert(1, point1);
     try index.insert(2, point2);
 
     // Test radius search
-    const center = try geographic.LatLon.fromCoords(40.7128, -74.0060);
+    const center = try geographic.latLonFromCoords(40.7128, -74.0060);
     const results = try index.searchWithinRadius(center, 50.0, allocator); // 50km radius
     defer allocator.free(results);
 
@@ -982,7 +982,7 @@ test "AdvancedIndexManager integration" {
     // Test spatial index creation and usage
     try manager.createSpatialIndex("locations");
 
-    const point = try geographic.LatLon.fromCoords(40.7128, -74.0060);
+    const point = try geographic.latLonFromCoords(40.7128, -74.0060);
     try manager.insertGeographic("locations", 1, point);
 
     const spatial_results = try manager.searchWithinRadius("locations", point, 10.0, allocator);

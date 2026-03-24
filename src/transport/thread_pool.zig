@@ -1,287 +1,111 @@
 const std = @import("std");
+const concurrency = @import("concurrency_lib");
 
 // CANARY: REQ=REQ-PERF-THREAD-POOL-001; FEATURE="ThreadPool"; ASPECT=QueryExecution; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=transport; UPDATED=2026-01-30
 // GAP-0201: High-performance thread pool for parallel query execution
 // Designed to decouple network I/O from query processing for 10-50x throughput improvement
+//
+// This module is a thin compatibility wrapper around the external concurrency
+// library. It re-exports the core types under their original names so that
+// consumers do not need to change.
 
-/// Work item representing a task to be executed by the thread pool
-pub const WorkItem = struct {
-    /// User data pointer for the task context
-    context: *anyopaque,
-    /// Callback function to execute the work
-    callback: *const fn (context: *anyopaque) void,
-    /// Optional completion callback (called after work is done)
-    completion: ?*const fn (context: *anyopaque) void = null,
-};
+/// Work item representing a task to be executed by the thread pool.
+pub const WorkItem = concurrency.WorkItem;
 
-/// Lock-free bounded multi-producer multi-consumer queue
-/// Uses atomic operations for high-performance concurrent access
-pub fn BoundedQueue(comptime T: type, comptime capacity: usize) type {
-    return struct {
-        const Self = @This();
+/// Lock-free bounded multi-producer multi-consumer queue (Vyukov algorithm).
+pub const BoundedQueue = concurrency.BoundedQueue;
 
-        items: [capacity]?T = [_]?T{null} ** capacity,
-        head: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-        tail: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-        size: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-
-        pub fn init() Self {
-            return Self{};
-        }
-
-        /// Try to push an item to the queue (non-blocking)
-        /// Returns true if successful, false if queue is full
-        pub fn tryPush(self: *Self, item: T) bool {
-            const current_size = self.size.load(.acquire);
-            if (current_size >= capacity) {
-                return false;
-            }
-
-            // Try to claim a slot
-            const tail = self.tail.fetchAdd(1, .acq_rel) % capacity;
-            self.items[tail] = item;
-
-            // Increment size after item is placed
-            _ = self.size.fetchAdd(1, .release);
-            return true;
-        }
-
-        /// Try to pop an item from the queue (non-blocking)
-        /// Returns the item if available, null if queue is empty
-        pub fn tryPop(self: *Self) ?T {
-            const current_size = self.size.load(.acquire);
-            if (current_size == 0) {
-                return null;
-            }
-
-            // Try to claim an item
-            const head = self.head.fetchAdd(1, .acq_rel) % capacity;
-            const item = self.items[head];
-
-            if (item != null) {
-                self.items[head] = null;
-                _ = self.size.fetchSub(1, .release);
-            }
-
-            return item;
-        }
-
-        /// Get current queue size (approximate, may change immediately)
-        pub fn len(self: *Self) usize {
-            return self.size.load(.acquire);
-        }
-
-        /// Check if queue is empty (approximate)
-        pub fn isEmpty(self: *Self) bool {
-            return self.len() == 0;
-        }
-
-        /// Check if queue is full (approximate)
-        pub fn isFull(self: *Self) bool {
-            return self.len() >= capacity;
-        }
-    };
-}
-
-/// Thread pool configuration
+/// Thread pool configuration.
+///
+/// The external library's `ThreadPoolConfig` only exposes `num_threads` and
+/// `stack_size`.  The former geode-local fields `queue_capacity` and
+/// `name_prefix` are accepted here for source compatibility but are no longer
+/// used (the external pool hard-codes a 4096-slot queue).
 pub const ThreadPoolConfig = struct {
-    /// Number of worker threads (0 = auto-detect based on CPU count)
+    /// Number of worker threads (0 = auto-detect based on CPU count).
     num_threads: usize = 0,
-    /// Work queue capacity per thread
+    /// Work queue capacity per thread (ignored — retained for source compat).
     queue_capacity: usize = 1024,
-    /// Thread stack size (0 = default)
+    /// Thread stack size (0 = default).
     stack_size: usize = 0,
-    /// Name prefix for worker threads (for debugging)
+    /// Name prefix for worker threads (ignored — retained for source compat).
     name_prefix: []const u8 = "geode-worker",
+
+    /// Convert to the external library's config type.
+    fn toExternal(self: ThreadPoolConfig) concurrency.ThreadPoolConfig {
+        return .{
+            .num_threads = self.num_threads,
+            .stack_size = self.stack_size,
+        };
+    }
 };
 
-/// High-performance thread pool for query execution
+/// Thread pool statistics.
+pub const Stats = concurrency.Stats;
+
+/// High-performance thread pool for query execution.
 /// CANARY: REQ=REQ-PERF-THREAD-POOL-002; FEATURE="ThreadPool"; ASPECT=WorkerManagement; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=transport; UPDATED=2026-01-30
+///
+/// Wraps `concurrency.ThreadPool` and preserves the original public API.
 pub const ThreadPool = struct {
     const Self = @This();
-    const QueueType = BoundedQueue(WorkItem, 4096);
 
-    allocator: std.mem.Allocator,
-    config: ThreadPoolConfig,
+    inner: *concurrency.ThreadPool,
+
+    /// Exposed so callers can read `pool.workers.len` for observability.
     workers: []std.Thread,
-    work_queue: QueueType,
-    wait_mutex: std.Thread.Mutex,
-    wait_cond: std.Thread.Condition,
-    shutdown: std.atomic.Value(bool),
-    active_workers: std.atomic.Value(usize),
-    total_tasks_submitted: std.atomic.Value(usize),
-    total_tasks_completed: std.atomic.Value(usize),
 
-    /// Initialize the thread pool
+    /// Initialize the thread pool.
     pub fn init(allocator: std.mem.Allocator, config: ThreadPoolConfig) !*Self {
+        const inner = try concurrency.ThreadPool.init(allocator, config.toExternal());
+        errdefer inner.deinit();
+
         const self = try allocator.create(Self);
-        errdefer allocator.destroy(self);
-
-        // Auto-detect thread count if not specified
-        const num_threads = if (config.num_threads == 0)
-            @max(std.Thread.getCpuCount() catch 4, 2)
-        else
-            config.num_threads;
-
-        self.* = Self{
-            .allocator = allocator,
-            .config = config,
-            .workers = try allocator.alloc(std.Thread, num_threads),
-            .work_queue = QueueType.init(),
-            .wait_mutex = .{},
-            .wait_cond = .{},
-            .shutdown = std.atomic.Value(bool).init(false),
-            .active_workers = std.atomic.Value(usize).init(0),
-            .total_tasks_submitted = std.atomic.Value(usize).init(0),
-            .total_tasks_completed = std.atomic.Value(usize).init(0),
-        };
-
-        // Start worker threads
-        for (self.workers, 0..) |*worker, i| {
-            var spawn_config = std.Thread.SpawnConfig{};
-            if (config.stack_size > 0) {
-                spawn_config.stack_size = config.stack_size;
-            }
-            worker.* = try std.Thread.spawn(spawn_config, workerMain, .{ self, i });
-        }
-
+        self.* = .{ .inner = inner, .workers = inner.workers };
         return self;
     }
 
-    /// Shutdown the thread pool and wait for all workers to finish
+    /// Shutdown the thread pool and wait for all workers to finish.
     pub fn deinit(self: *Self) void {
-        // Signal shutdown
-        self.shutdown.store(true, .release);
-        self.wait_mutex.lock();
-        self.wait_cond.broadcast();
-        self.wait_mutex.unlock();
-
-        // Wait for all workers to finish
-        for (self.workers) |worker| {
-            worker.join();
-        }
-
-        self.allocator.free(self.workers);
-        self.allocator.destroy(self);
+        const inner = self.inner;
+        // Recover the allocator before the inner pool frees itself.
+        const allocator = inner.allocator;
+        inner.deinit();
+        allocator.destroy(self);
     }
 
-    /// Submit a work item to the thread pool
-    /// Returns true if submitted, false if queue is full
+    /// Submit a work item to the thread pool.
+    /// Returns true if submitted, false if queue is full.
     pub fn submit(self: *Self, item: WorkItem) bool {
-        if (self.shutdown.load(.acquire)) {
-            return false;
-        }
-
-        if (self.work_queue.tryPush(item)) {
-            _ = self.total_tasks_submitted.fetchAdd(1, .release);
-            self.wait_mutex.lock();
-            self.wait_cond.signal();
-            self.wait_mutex.unlock();
-            return true;
-        }
-        return false;
+        return self.inner.submit(item);
     }
 
-    /// Submit a work item, blocking if queue is full
+    /// Submit a work item, blocking if queue is full.
+    /// Preserves the original signature (no timeout).
     pub fn submitBlocking(self: *Self, item: WorkItem) !void {
-        if (self.shutdown.load(.acquire)) {
-            return error.PoolShutdown;
-        }
-
-        // Spin-wait with backoff
-        var backoff: u32 = 1;
-        while (!self.work_queue.tryPush(item)) {
-            if (self.shutdown.load(.acquire)) {
-                return error.PoolShutdown;
-            }
-            self.wait_mutex.lock();
-            self.wait_cond.timedWait(&self.wait_mutex, @as(u64, backoff) * std.time.ns_per_us) catch {};
-            self.wait_mutex.unlock();
-            backoff = @min(backoff * 2, 1000); // Cap at 1ms
-        }
-        _ = self.total_tasks_submitted.fetchAdd(1, .release);
-        self.wait_mutex.lock();
-        self.wait_cond.signal();
-        self.wait_mutex.unlock();
-    }
-
-    /// Get the number of pending tasks in the queue
-    pub fn pendingTasks(self: *Self) usize {
-        return self.work_queue.len();
-    }
-
-    /// Get the number of active workers currently processing tasks
-    pub fn activeWorkers(self: *Self) usize {
-        return self.active_workers.load(.acquire);
-    }
-
-    /// Get statistics about the thread pool
-    pub fn getStats(self: *Self) Stats {
-        return Stats{
-            .num_workers = self.workers.len,
-            .active_workers = self.active_workers.load(.acquire),
-            .pending_tasks = self.work_queue.len(),
-            .total_submitted = @intCast(self.total_tasks_submitted.load(.acquire)),
-            .total_completed = @intCast(self.total_tasks_completed.load(.acquire)),
+        self.inner.submitBlocking(item, null) catch |err| switch (err) {
+            error.PoolShutdown => return error.PoolShutdown,
+            error.Timeout => unreachable, // timeout_ns is null
         };
     }
 
-    pub const Stats = struct {
-        num_workers: usize,
-        active_workers: usize,
-        pending_tasks: usize,
-        total_submitted: u64,
-        total_completed: u64,
-    };
+    /// Get the number of pending tasks in the queue.
+    pub fn pendingTasks(self: *Self) usize {
+        return self.inner.pendingTasks();
+    }
 
-    /// Worker thread main function
-    fn workerMain(self: *Self, worker_id: usize) void {
-        _ = worker_id;
-        var idle_count: u32 = 0;
-        const max_spin_before_wait: u32 = 64;
-        const idle_wait_ns: u64 = 5 * std.time.ns_per_ms;
+    /// Get the number of active workers currently processing tasks.
+    pub fn activeWorkers(self: *Self) usize {
+        return self.inner.activeWorkers();
+    }
 
-        while (!self.shutdown.load(.acquire)) {
-            if (self.work_queue.tryPop()) |item| {
-                // Mark worker as active
-                _ = self.active_workers.fetchAdd(1, .release);
-                idle_count = 0;
-
-                // Execute the work
-                item.callback(item.context);
-
-                // Call completion callback if provided
-                if (item.completion) |completion| {
-                    completion(item.context);
-                }
-
-                // Mark worker as idle and increment completion count
-                _ = self.active_workers.fetchSub(1, .release);
-                _ = self.total_tasks_completed.fetchAdd(1, .release);
-
-                // Wake blocked submitters waiting for queue capacity.
-                self.wait_mutex.lock();
-                self.wait_cond.signal();
-                self.wait_mutex.unlock();
-            } else {
-                // No work available: brief cooperative yields, then block on condition.
-                idle_count += 1;
-                if (idle_count <= max_spin_before_wait) {
-                    std.Thread.yield() catch {};
-                    continue;
-                }
-
-                self.wait_mutex.lock();
-                if (!self.shutdown.load(.acquire) and self.work_queue.isEmpty()) {
-                    self.wait_cond.timedWait(&self.wait_mutex, idle_wait_ns) catch {};
-                }
-                self.wait_mutex.unlock();
-            }
-        }
+    /// Get statistics about the thread pool.
+    pub fn getStats(self: *Self) Stats {
+        return self.inner.getStats();
     }
 };
 
-/// Query work item for use with the thread pool
+/// Query work item for use with the thread pool.
 /// CANARY: REQ=REQ-PERF-THREAD-POOL-003; FEATURE="ThreadPool"; ASPECT=QueryWorkItem; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=transport; UPDATED=2026-01-30
 pub const QueryWorkItem = struct {
     allocator: std.mem.Allocator,
@@ -326,7 +150,10 @@ pub const QueryWorkItem = struct {
     }
 };
 
+// ============================================================================
 // Unit tests
+// ============================================================================
+
 test "BoundedQueue: basic operations" {
     var queue = BoundedQueue(u32, 8).init();
 

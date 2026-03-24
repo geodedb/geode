@@ -1,68 +1,20 @@
 const std = @import("std");
+const fle = @import("fle_lib");
 
-// HMAC for Blind Index Tokens
+// HMAC for Blind Index Tokens — thin compatibility layer over external fle library
 // CANARY: REQ=REQ-FLE-BI-001; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=src/crypto/hmac.zig; OWNER=security; UPDATED=2026-01-15
 
-/// Compute HMAC-SHA256 blind index token
-pub fn blindIndexHmac256(out: *[32]u8, bik: []const u8, normalized: []const u8) void {
-    const Hmac = std.crypto.auth.hmac.sha2.HmacSha256;
-    var mac = Hmac.init(bik);
-    mac.update(normalized);
-    mac.final(out);
-}
+/// Compute HMAC-SHA256 blind index token — re-exported from fle library
+pub const blindIndexHmac256 = fle.hmac.blindIndexHmac256;
 
-/// Normalize value for blind index: ASCII lowercase + trim
-/// This provides deterministic matching while maintaining some consistency
-pub fn normalizeForBlindIndex(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
-    // Trim whitespace
-    var start: usize = 0;
-    var end: usize = value.len;
+/// Normalize value for blind index: ASCII lowercase + trim — re-exported from fle library
+pub const normalizeForBlindIndex = fle.hmac.normalizeForBlindIndex;
 
-    while (start < end and std.ascii.isWhitespace(value[start])) {
-        start += 1;
-    }
+/// Convert blind index token to hex string (64 chars, lowercase) — re-exported from fle library
+pub const tokenToHex = fle.hmac.tokenToHex;
 
-    while (end > start and std.ascii.isWhitespace(value[end - 1])) {
-        end -= 1;
-    }
-
-    const trimmed = value[start..end];
-
-    // Convert to lowercase
-    const normalized = try allocator.alloc(u8, trimmed.len);
-    for (trimmed, 0..) |c, i| {
-        normalized[i] = std.ascii.toLower(c);
-    }
-
-    return normalized;
-}
-
-/// Convert blind index token to hex string (64 chars, lowercase)
-pub fn tokenToHex(allocator: std.mem.Allocator, token: [32]u8) ![]u8 {
-    const hex_digits = "0123456789abcdef";
-    var hex = try allocator.alloc(u8, 64);
-
-    for (token, 0..) |byte, i| {
-        hex[i * 2] = hex_digits[byte >> 4];
-        hex[i * 2 + 1] = hex_digits[byte & 0x0F];
-    }
-
-    return hex;
-}
-
-/// Parse hex string back to token
-pub fn hexToToken(hex: []const u8) ![32]u8 {
-    if (hex.len != 64) return error.InvalidHexLength;
-
-    var token: [32]u8 = undefined;
-    for (0..32) |i| {
-        const hi = try std.fmt.charToDigit(hex[i * 2], 16);
-        const lo = try std.fmt.charToDigit(hex[i * 2 + 1], 16);
-        token[i] = @as(u8, hi) * 16 + @as(u8, lo);
-    }
-
-    return token;
-}
+/// Parse hex string back to token — re-exported from fle library
+pub const hexToToken = fle.hmac.hexToToken;
 
 test "HMAC-SHA256 RFC 4231 test vector - Jefe" {
     const testing = std.testing;
