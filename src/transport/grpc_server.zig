@@ -110,6 +110,7 @@ const SessionStore = struct {
         password: []const u8,
         role: ?user_mgmt.Role,
         tenant_id: ?[]const u8,
+        graph: ?[]const u8,
     ) ![]const u8 {
         const session_id = try generateSessionId(self.allocator);
         const state = try initServerState(self.allocator, self.config);
@@ -125,6 +126,17 @@ const SessionStore = struct {
         if (tenant_id) |tenant| {
             state.session_config = server_state.SessionConfiguration.init(self.allocator);
             state.session_config.?.tenant_id = try self.allocator.dupe(u8, tenant);
+        }
+
+        // CANARY: REQ=REQ-DSN-GRAPH-BIND-004; FEATURE="DSNGraphBinding"; ASPECT=GrpcSessionGraph; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
+        if (graph) |g| {
+            if (g.len > 0) {
+                if (state.exec_session) |*sess| {
+                    if (sess.graph) |old| self.allocator.free(old);
+                    sess.graph = try self.allocator.dupe(u8, g);
+                }
+                state.graph_bound = true;
+            }
         }
 
         const entry = try self.allocator.create(SessionEntry);
@@ -990,23 +1002,103 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
             };
             return encodeMessage(allocator, resp);
         };
-        const session_id = try store.createSession(req.username, req.password, auth_result.role, req.tenant_id);
+        // CANARY: REQ=REQ-DSN-GRAPH-BIND-005; FEATURE="DSNGraphBinding"; ASPECT=GrpcGraphResolution; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
+        // Resolve graph from HELLO request — validate, auto-create, bind session
+        var resolved_graph: ?[]const u8 = null;
+        if (req.graph) |requested_graph| {
+            if (requested_graph.len > 0) {
+                const gstore = graph_store.getGlobalStore(allocator);
+                const cat = try execution.ensureCatalogInstance(allocator);
+
+                const in_store = gstore.graphExists(requested_graph);
+                const in_catalog = cat.hasGraph(requested_graph);
+
+                if (in_store or in_catalog) {
+                    resolved_graph = requested_graph;
+                } else {
+                    // Graph does not exist — check if user can create it
+                    const can_create = auth_result.role == .Admin or auth_result.role == .ReadWrite;
+
+                    if (can_create) {
+                        cat.addGraph(requested_graph) catch |err| {
+                            if (err != error.GraphAlreadyExists) {
+                                log.err("Failed to add graph to catalog", &.{
+                                    Attr.string("graph", requested_graph),
+                                    Attr.string("error", @errorName(err)),
+                                });
+                            }
+                        };
+                        _ = gstore.createGraph(requested_graph) catch |err| {
+                            log.debug("Graph storage creation failed", &.{
+                                Attr.string("graph", requested_graph),
+                                Attr.string("error", @errorName(err)),
+                            });
+                        };
+                        resolved_graph = requested_graph;
+                    } else {
+                        const resp = schema.HelloResponse{
+                            .success = false,
+                            .session_id = "",
+                            .error_message = "Graph does not exist and user lacks permission to create it",
+                            .capabilities = caps,
+                        };
+                        return encodeMessage(allocator, resp);
+                    }
+                }
+            }
+        }
+
+        const session_id = try store.createSession(req.username, req.password, auth_result.role, req.tenant_id, resolved_graph);
         const resp = schema.HelloResponse{
             .success = true,
             .session_id = try allocator.dupe(u8, session_id),
             .error_message = "",
             .capabilities = caps,
             .password_reset_required = auth_result.password_reset_required,
+            .graph = if (resolved_graph) |g| try allocator.dupe(u8, g) else null,
         };
         return encodeMessage(allocator, resp);
     }
 
-    const session_id = try store.createSession("", "", null, req.tenant_id);
+    // CANARY: REQ=REQ-DSN-GRAPH-BIND-006; FEATURE="DSNGraphBinding"; ASPECT=GrpcNoAuthGraph; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
+    // No-auth path: auto-create graph if needed
+    var noauth_resolved_graph: ?[]const u8 = null;
+    if (req.graph) |requested_graph| {
+        if (requested_graph.len > 0) {
+            const gstore = graph_store.getGlobalStore(allocator);
+            const cat = try execution.ensureCatalogInstance(allocator);
+
+            const in_store = gstore.graphExists(requested_graph);
+            const in_catalog = cat.hasGraph(requested_graph);
+
+            if (!in_store and !in_catalog) {
+                // No auth = always allow auto-create
+                cat.addGraph(requested_graph) catch |err| {
+                    if (err != error.GraphAlreadyExists) {
+                        log.err("Failed to add graph to catalog (no-auth)", &.{
+                            Attr.string("graph", requested_graph),
+                            Attr.string("error", @errorName(err)),
+                        });
+                    }
+                };
+                _ = gstore.createGraph(requested_graph) catch |err| {
+                    log.debug("Graph storage creation failed (no-auth)", &.{
+                        Attr.string("graph", requested_graph),
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
+            }
+            noauth_resolved_graph = requested_graph;
+        }
+    }
+
+    const session_id = try store.createSession("", "", null, req.tenant_id, noauth_resolved_graph);
     const resp = schema.HelloResponse{
         .success = true,
         .session_id = try allocator.dupe(u8, session_id),
         .error_message = "",
         .capabilities = caps,
+        .graph = if (noauth_resolved_graph) |g| try allocator.dupe(u8, g) else null,
     };
     return encodeMessage(allocator, resp);
 }
@@ -1161,6 +1253,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 .transaction_state = if (state.in_txn) .Active else .None,
                 .query_param_names = bindings.names,
                 .query_param_values = bindings.values,
+                .graph_bound = state.graph_bound,
             };
 
             var flags = std.ArrayList([]const u8).initCapacity(allocator, 8) catch return error.OutOfMemory;
