@@ -668,6 +668,10 @@ pub const GraphStore = struct {
     }
 
     pub fn graphExists(self: *const GraphStore, graph_name: []const u8) bool {
+        // Dual-read: check adapter first, then fall back to local HashMap
+        if (global_vtable) |vt| {
+            if (vt.graphExistsFn(vt.ctx, graph_name)) return true;
+        }
         return self.graphs.contains(graph_name);
     }
 
@@ -683,6 +687,10 @@ pub const GraphStore = struct {
     }
 
     pub fn createGraph(self: *GraphStore, graph_name: []const u8) !void {
+        // Dual-write: create in adapter, then fall through to local HashMap
+        if (global_vtable) |vt| {
+            _ = vt.getOrCreateGraphFn(vt.ctx, graph_name) catch {};
+        }
         if (self.graphs.contains(graph_name)) {
             return error.GraphAlreadyExists;
         }
@@ -734,6 +742,10 @@ pub const GraphStore = struct {
     }
 
     pub fn dropGraph(self: *GraphStore, graph_name: []const u8) !void {
+        // Dual-write: drop from adapter, then fall through to local cleanup
+        if (global_vtable) |vt| {
+            vt.dropGraphFn(vt.ctx, graph_name);
+        }
         if (std.mem.eql(u8, graph_name, "default")) {
             return error.CannotDropDefaultGraph;
         }
@@ -782,6 +794,10 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Create node with optional graph name for per-graph data isolation
     pub fn createNodeWithGraph(self: *GraphStore, labels: [][]const u8, graph_name: []const u8) !u64 {
+        // Dual-write: create in adapter (independent ID space), then fall through to local HashMap
+        if (global_vtable) |vt| {
+            _ = vt.createNodeFn(vt.ctx, graph_name, labels) catch {};
+        }
         try self.ensureGraph(graph_name);
         // Generate UUIDv7-style time-based unique ID
         const id = generateTimeBasedId();
@@ -1052,6 +1068,11 @@ pub const GraphStore = struct {
     }
 
     pub fn setNodeProperty(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) !void {
+        // Dual-write: set property in adapter, then fall through to local HashMap
+        if (global_vtable) |vt| {
+            const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "default";
+            vt.setNodePropertyFn(vt.ctx, gn, node_id, key, value) catch {};
+        }
         if (self.nodes.getPtr(node_id)) |node| {
             // Note: Encryption is now handled by the caller (execution.zig) before calling setNodeProperty
             // This ensures consistent parameters (schema, record_id) between encryption and decryption
@@ -1133,6 +1154,11 @@ pub const GraphStore = struct {
     }
 
     pub fn removeNodeProperty(self: *GraphStore, node_id: u64, key: []const u8) void {
+        // Dual-write: remove property in adapter, then fall through to local HashMap
+        if (global_vtable) |vt| {
+            const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "default";
+            vt.removeNodePropertyFn(vt.ctx, gn, node_id, key) catch {};
+        }
         if (self.nodes.getPtr(node_id)) |node| {
             if (node.properties.fetchRemove(key)) |kv| {
                 self.allocator.free(kv.key);
@@ -1747,6 +1773,10 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphIsolation"; ASPECT=CreateEdge; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Create edge with optional graph name for per-graph data isolation
     pub fn createEdgeWithGraph(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8) !u64 {
+        // Dual-write: create in adapter (independent ID space), then fall through to local HashMap
+        if (global_vtable) |vt| {
+            _ = vt.createEdgeFn(vt.ctx, graph_name, from_id, to_id, edge_type) catch {};
+        }
         try self.ensureGraph(graph_name);
         // Generate UUIDv7-style time-based unique ID
         const id = generateTimeBasedId();
@@ -3670,6 +3700,12 @@ pub const GraphStore = struct {
         // Capture graph_name before deletion for WAL notification and handle routing
         const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "";
 
+        // Dual-write: delete from adapter, then fall through to local HashMap
+        if (global_vtable) |vt| {
+            const adapter_gn = if (gn.len > 0) gn else "default";
+            vt.deleteNodeFn(vt.ctx, adapter_gn, node_id) catch {};
+        }
+
         // Per-graph storage: remove node from GraphHandle before flat-map deletion
         if (self.use_per_graph_storage and gn.len > 0) {
             if (self.getHandle(gn)) |handle| {
@@ -3687,6 +3723,13 @@ pub const GraphStore = struct {
     pub fn deleteEdge(self: *GraphStore, edge_id: u64) void {
         // Capture graph_name before deletion for WAL notification and handle routing
         const gn = if (self.edges.get(edge_id)) |e| e.graph_name else "";
+
+        // Dual-write: delete from adapter, then fall through to local HashMap
+        if (global_vtable) |vt| {
+            if (self.edges.get(edge_id)) |edge| {
+                vt.deleteEdgeFn(vt.ctx, edge.graph_name, edge.from_id, edge.to_id, edge_id) catch {};
+            }
+        }
 
         // Per-graph storage: remove edge from GraphHandle before flat-map deletion
         if (self.use_per_graph_storage and gn.len > 0) {
@@ -4241,7 +4284,26 @@ pub const GraphStore = struct {
 
 const graph_storage_adapter = @import("storage/graph_storage_adapter.zig");
 
+/// Type-erased vtable for StorageAdapter dual-write delegation.
+/// Function pointers are set at init time so that GraphStore methods can
+/// call through them without forcing compile-time resolution of the
+/// graph_storage module in test targets that lack that dependency.
+const AdapterVTable = struct {
+    ctx: *anyopaque,
+    graphExistsFn: *const fn (*anyopaque, []const u8) bool,
+    getOrCreateGraphFn: *const fn (*anyopaque, []const u8) anyerror!*anyopaque,
+    dropGraphFn: *const fn (*anyopaque, []const u8) void,
+    createNodeFn: *const fn (*anyopaque, []const u8, []const []const u8) anyerror!u64,
+    createEdgeFn: *const fn (*anyopaque, []const u8, u64, u64, []const u8) anyerror!u64,
+    deleteNodeFn: *const fn (*anyopaque, []const u8, u64) anyerror!void,
+    deleteEdgeFn: *const fn (*anyopaque, []const u8, u64, u64, u64) anyerror!void,
+    setNodePropertyFn: *const fn (*anyopaque, []const u8, u64, []const u8, PropertyValue) anyerror!void,
+    removeNodePropertyFn: *const fn (*anyopaque, []const u8, u64, []const u8) anyerror!void,
+    deinitFn: *const fn (*anyopaque) void,
+};
+
 var global_adapter: ?*graph_storage_adapter.StorageAdapter = null;
+var global_vtable: ?AdapterVTable = null;
 
 pub fn getGlobalAdapter() ?*graph_storage_adapter.StorageAdapter {
     return global_adapter;
@@ -4255,11 +4317,68 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
         .data_dir = data_dir,
     });
     global_adapter = adapter;
+
+    // Build vtable with type-erased function pointers
+    const Dispatch = struct {
+        fn castAdapter(ptr: *anyopaque) *graph_storage_adapter.StorageAdapter {
+            return @ptrCast(@alignCast(ptr));
+        }
+        fn graphExists(ctx: *anyopaque, name: []const u8) bool {
+            return castAdapter(ctx).graphExists(name);
+        }
+        fn getOrCreateGraph(ctx: *anyopaque, name: []const u8) anyerror!*anyopaque {
+            const mg = try castAdapter(ctx).getOrCreateGraph(name);
+            return @ptrCast(mg);
+        }
+        fn dropGraph(ctx: *anyopaque, name: []const u8) void {
+            castAdapter(ctx).dropGraph(name);
+        }
+        fn createNode(ctx: *anyopaque, graph_name: []const u8, labels: []const []const u8) anyerror!u64 {
+            return castAdapter(ctx).createNode(graph_name, labels);
+        }
+        fn createEdge(ctx: *anyopaque, graph_name: []const u8, from_id: u64, to_id: u64, label: []const u8) anyerror!u64 {
+            return castAdapter(ctx).createEdge(graph_name, from_id, to_id, label);
+        }
+        fn deleteNode(ctx: *anyopaque, graph_name: []const u8, node_id: u64) anyerror!void {
+            return castAdapter(ctx).deleteNode(graph_name, node_id);
+        }
+        fn deleteEdge(ctx: *anyopaque, graph_name: []const u8, from_id: u64, to_id: u64, edge_id: u64) anyerror!void {
+            return castAdapter(ctx).deleteEdge(graph_name, from_id, to_id, edge_id);
+        }
+        fn setNodeProperty(ctx: *anyopaque, graph_name: []const u8, node_id: u64, key: []const u8, value: PropertyValue) anyerror!void {
+            return castAdapter(ctx).setNodeProperty(graph_name, node_id, key, value);
+        }
+        fn removeNodeProperty(ctx: *anyopaque, graph_name: []const u8, node_id: u64, key: []const u8) anyerror!void {
+            return castAdapter(ctx).removeNodeProperty(graph_name, node_id, key);
+        }
+        fn deinitAdapter(ctx: *anyopaque) void {
+            castAdapter(ctx).deinit();
+        }
+    };
+
+    global_vtable = AdapterVTable{
+        .ctx = @ptrCast(adapter),
+        .graphExistsFn = &Dispatch.graphExists,
+        .getOrCreateGraphFn = &Dispatch.getOrCreateGraph,
+        .dropGraphFn = &Dispatch.dropGraph,
+        .createNodeFn = &Dispatch.createNode,
+        .createEdgeFn = &Dispatch.createEdge,
+        .deleteNodeFn = &Dispatch.deleteNode,
+        .deleteEdgeFn = &Dispatch.deleteEdge,
+        .setNodePropertyFn = &Dispatch.setNodeProperty,
+        .removeNodePropertyFn = &Dispatch.removeNodeProperty,
+        .deinitFn = &Dispatch.deinitAdapter,
+    };
+
     return adapter;
 }
 
 pub fn deinitGlobalAdapter() void {
-    if (global_adapter) |adapter| {
+    if (global_vtable) |vt| {
+        vt.deinitFn(vt.ctx);
+        global_vtable = null;
+        global_adapter = null;
+    } else if (global_adapter) |adapter| {
         adapter.deinit();
         global_adapter = null;
     }

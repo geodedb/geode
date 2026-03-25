@@ -141,7 +141,7 @@ pub const ManagedGraph = struct {
     }
 
     fn deinit(self: *ManagedGraph, allocator: Allocator) void {
-        self.engine.close();
+        self.engine.close() catch {};
         self.label_dict.deinit();
         allocator.free(self.name);
         allocator.destroy(self);
@@ -423,6 +423,19 @@ pub const StorageAdapter = struct {
         try mg.engine.putNode(node_id, rec);
     }
 
+    /// Remove a property from a node by writing a null tombstone.
+    pub fn removeNodeProperty(self: *StorageAdapter, graph_name: []const u8, node_id: u64, key: []const u8) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
+
+        const new_prop_head = try mg.engine.putProperty(rec.prop_head, key, .null);
+        rec.prop_head = new_prop_head;
+        try mg.engine.putNode(node_id, rec);
+    }
+
     /// Get a property from a node, returned in graph-storage representation.
     pub fn getNodeProperty(self: *StorageAdapter, graph_name: []const u8, node_id: u64, key: []const u8, allocator: Allocator) !?gs.PropertyValue {
         self.mutex.lock();
@@ -528,7 +541,7 @@ pub const StorageAdapter = struct {
             log.err("failed to create GraphEngine for graph '{s}': {}", .{ name, err });
             return err;
         };
-        errdefer engine.close();
+        errdefer engine.close() catch {};
 
         const mg = try self.allocator.create(ManagedGraph);
         errdefer self.allocator.destroy(mg);
