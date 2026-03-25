@@ -663,3 +663,124 @@ test "fromStorageProperty round-trip for scalars" {
 test {
     std.testing.refAllDecls(@This());
 }
+
+// ============================================================================
+// Integration Tests — StorageAdapter with real GraphEngine instances
+// ============================================================================
+
+/// Minimal GraphConfig suitable for in-process integration tests.
+fn testConfig() gs.GraphConfig {
+    return .{
+        .page_size = 4096,
+        .buffer_pool_pages = 64,
+    };
+}
+
+test "StorageAdapter: create and query graph" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const adapter = try StorageAdapter.init(allocator, path, testConfig());
+    defer adapter.deinit();
+
+    _ = try adapter.getOrCreateGraph("test_graph");
+
+    try std.testing.expect(adapter.graphExists("test_graph"));
+    try std.testing.expect(!adapter.graphExists("nonexistent"));
+}
+
+test "StorageAdapter: create node with labels" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const adapter = try StorageAdapter.init(allocator, path, testConfig());
+    defer adapter.deinit();
+
+    const labels = &[_][]const u8{ "Person", "Employee" };
+    const node_id = try adapter.createNode("test_graph", labels);
+    try std.testing.expect(node_id > 0);
+
+    const got_labels = try adapter.getNodeLabels("test_graph", node_id, allocator);
+    defer {
+        for (got_labels) |s| allocator.free(s);
+        allocator.free(got_labels);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), got_labels.len);
+}
+
+test "StorageAdapter: create and traverse edge" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const adapter = try StorageAdapter.init(allocator, path, testConfig());
+    defer adapter.deinit();
+
+    const node_a = try adapter.createNode("test_graph", &[_][]const u8{});
+    const node_b = try adapter.createNode("test_graph", &[_][]const u8{});
+
+    _ = try adapter.createEdge("test_graph", node_a, node_b, "KNOWS");
+
+    const edges = try adapter.getOutgoingEdges("test_graph", node_a, allocator);
+    defer allocator.free(edges);
+
+    try std.testing.expectEqual(@as(usize, 1), edges.len);
+    try std.testing.expectEqual(node_b, edges[0].neighbor);
+}
+
+test "StorageAdapter: drop graph" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const adapter = try StorageAdapter.init(allocator, path, testConfig());
+    defer adapter.deinit();
+
+    _ = try adapter.getOrCreateGraph("drop_me");
+    try std.testing.expect(adapter.graphExists("drop_me"));
+
+    adapter.dropGraph("drop_me");
+    try std.testing.expect(!adapter.graphExists("drop_me"));
+}
+
+test "StorageAdapter: node and edge counts" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const adapter = try StorageAdapter.init(allocator, path, testConfig());
+    defer adapter.deinit();
+
+    const graph = "count_graph";
+    const n1 = try adapter.createNode(graph, &[_][]const u8{});
+    const n2 = try adapter.createNode(graph, &[_][]const u8{});
+    const n3 = try adapter.createNode(graph, &[_][]const u8{});
+    _ = try adapter.createEdge(graph, n1, n2, "REL");
+    _ = try adapter.createEdge(graph, n2, n3, "REL");
+
+    try std.testing.expectEqual(@as(u64, 3), try adapter.nodeCount(graph));
+    try std.testing.expectEqual(@as(u64, 2), try adapter.edgeCount(graph));
+}
