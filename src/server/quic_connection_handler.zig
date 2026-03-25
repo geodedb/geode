@@ -848,6 +848,71 @@ fn handleClientMessage(
                 state.session_config.?.tenant_id = try gpa.dupe(u8, tenant);
             }
 
+            // CANARY: REQ=REQ-DSN-GRAPH-BIND-003; FEATURE="DSNGraphBinding"; ASPECT=QuicGraphResolution; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
+            // Resolve graph from HELLO request — validate, auto-create, bind session
+            var resolved_graph: ?[]const u8 = null;
+            if (hello_req.graph) |requested_graph| {
+                if (requested_graph.len > 0) {
+                    const store = graph_store.getGlobalStore(gpa);
+                    const cat = try execution.ensureCatalogInstance(gpa);
+
+                    const in_store = store.graphExists(requested_graph);
+                    const in_catalog = cat.hasGraph(requested_graph);
+
+                    if (in_store or in_catalog) {
+                        // Graph exists — bind session to it
+                        if (state.exec_session) |*sess| {
+                            if (sess.graph) |old| gpa.free(old);
+                            sess.graph = try gpa.dupe(u8, requested_graph);
+                        }
+                        state.graph_bound = true;
+                        resolved_graph = requested_graph;
+                    } else {
+                        // Graph does not exist — check if user can create it
+                        const role_val = state.authenticated_role;
+                        const can_create = if (role_val) |r| blk: {
+                            const role = @as(user_mgmt.Role, @enumFromInt(r));
+                            break :blk role == .Admin or role == .ReadWrite;
+                        } else !user_mgmt.isAuthEnabled(); // No auth = allow
+
+                        if (can_create) {
+                            // Auto-create the graph
+                            cat.addGraph(requested_graph) catch |err| {
+                                if (err != error.GraphAlreadyExists) {
+                                    log.err("Failed to add graph to catalog", &.{
+                                        Attr.string("graph", requested_graph),
+                                        Attr.string("error", @errorName(err)),
+                                    });
+                                }
+                            };
+                            _ = store.createGraph(requested_graph) catch |err| {
+                                log.debug("Graph storage creation failed", &.{
+                                    Attr.string("graph", requested_graph),
+                                    Attr.string("error", @errorName(err)),
+                                });
+                            };
+
+                            if (state.exec_session) |*sess| {
+                                if (sess.graph) |old| gpa.free(old);
+                                sess.graph = try gpa.dupe(u8, requested_graph);
+                            }
+                            state.graph_bound = true;
+                            resolved_graph = requested_graph;
+                        } else {
+                            // User lacks permission to create graph
+                            const resp = schema.QuicServerMessage{ .hello = .{
+                                .success = false,
+                                .session_id = try gpa.dupe(u8, ""),
+                                .error_message = try gpa.dupe(u8, "Graph does not exist and user lacks permission to create it"),
+                                .capabilities = caps,
+                            } };
+                            try sendQuicMessage(gpa, stream, resp);
+                            return;
+                        }
+                    }
+                }
+            }
+
             const session_id = try generateSessionId(gpa);
             const resp = schema.QuicServerMessage{ .hello = .{
                 .success = true,
@@ -855,6 +920,7 @@ fn handleClientMessage(
                 .error_message = try gpa.dupe(u8, ""),
                 .capabilities = caps,
                 .password_reset_required = state.password_reset_required,
+                .graph = if (resolved_graph) |g| try gpa.dupe(u8, g) else null,
             } };
             try sendQuicMessage(gpa, stream, resp);
         },
@@ -1046,6 +1112,7 @@ fn handleClientMessage(
                 .query_param_names = bindings.names,
                 .query_param_values = bindings.values,
                 .optimizer_hints = if (plan_handle != null) &optimizer_hints_storage else null,
+                .graph_bound = state.graph_bound,
             };
 
             var flags = std.ArrayList([]const u8).initCapacity(gpa, 8) catch return error.OutOfMemory;

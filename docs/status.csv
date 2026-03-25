@@ -739,6 +739,7 @@ REQ-DSN-GRAPH-BIND-002,DSNGraphBinding,UseGraphRejection,IMPL,,,engine,2026-03-2
 REQ-DSN-GRAPH-BIND-002,DSNGraphBinding,UseGraphRejection,IMPL,,,engine,2026-03-25,src/execution.zig
 REQ-DSN-GRAPH-BIND-002,DSNGraphBinding,UseGraphRejection,IMPL,,,engine,2026-03-25,src/execution/statement_dispatcher.zig
 REQ-DSN-GRAPH-BIND-003,DSNGraphBinding,QuicGraphResolution,IMPL,,,transport,2026-03-25,docs/superpowers/plans/2026-03-25-dsn-graph-binding.md
+REQ-DSN-GRAPH-BIND-003,DSNGraphBinding,QuicGraphResolution,IMPL,,,transport,2026-03-25,src/server/quic_connection_handler.zig
 REQ-DSN-GRAPH-BIND-004,DSNGraphBinding,GrpcGraphResolution,IMPL,,,transport,2026-03-25,docs/superpowers/plans/2026-03-25-dsn-graph-binding.md
 REQ-DSN-GRAPH-BIND-005,DSNGraphBinding,GraphBoundError,IMPL,,,transport,2026-03-25,docs/superpowers/plans/2026-03-25-dsn-graph-binding.md
 REQ-ENGINE-001,Engine,QueryExecution,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
