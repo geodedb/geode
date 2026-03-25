@@ -28,6 +28,8 @@ pub const ReplLoop = struct {
         // Issue #387: Optional credentials for authenticated servers
         username: ?[]const u8 = null,
         password: ?[]const u8 = null,
+        // Graph name from DSN path for HELLO handshake
+        graph: ?[]const u8 = null,
         // CANARY: REQ=REQ-SHELL-PLAIN-001; FEATURE="ShellPlainMode"; ASPECT=OptionsField; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
         // Plain mode disables terminal control sequences for automated testing
         plain_mode: bool = false,
@@ -77,6 +79,7 @@ pub const ReplLoop = struct {
         // Use dependency injection for transport - will be provided by CLI layer
         var session = try repl_dispatch.ClientSession.init(opts.allocator, opts.server, opts.transport);
         defer session.deinit();
+        session.graph = opts.graph;
         try session.connect();
 
         // Print connected message after successful connection (we're in raw mode so use stderr writeAll)
@@ -166,6 +169,7 @@ pub const ReplLoop = struct {
         // Initialize session
         var session = try repl_dispatch.ClientSession.init(opts.allocator, opts.server, opts.transport);
         defer session.deinit();
+        session.graph = opts.graph;
         try session.connect();
         try stdout_file.writeAll("Connected!\n");
 

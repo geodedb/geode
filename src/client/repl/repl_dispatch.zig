@@ -496,6 +496,8 @@ pub const ClientSession = struct {
     /// Cached credentials for re-authentication after reconnect
     cached_username: ?[]const u8 = null,
     cached_password: ?[]const u8 = null,
+    /// Graph name for HELLO handshake (from DSN path)
+    graph: ?[]const u8 = null,
     /// Count of successful reconnections (for diagnostics)
     reconnect_count: u32 = 0,
     /// Last reconnection error (for diagnostics)
@@ -833,6 +835,7 @@ pub const ClientSession = struct {
             .client_name = "geode-repl",
             .client_version = @import("build_options").version,
             .wanted_conformance = "min",
+            .graph = self.graph,
         };
 
         const msg = try encodeClientPacket(self.allocator, .{ .hello = hello_req });
@@ -898,6 +901,7 @@ pub const ClientSession = struct {
             .client_name = "geode-cli",
             .client_version = @import("build_options").version,
             .wanted_conformance = "min",
+            .graph = self.graph,
         };
 
         const msg = try encodeClientPacket(self.allocator, .{ .hello = hello_req });

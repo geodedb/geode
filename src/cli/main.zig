@@ -724,6 +724,7 @@ const DsnParseResult = struct {
     use_grpc: bool, // true if grpc:// scheme
     username: ?[]const u8, // embedded credentials
     password: ?[]const u8, // embedded credentials
+    graph: ?[]const u8 = null, // graph name from URL path
 };
 
 fn parseDsnArg(dsn: []const u8) ?DsnParseResult {
@@ -775,13 +776,25 @@ fn parseDsnArg(dsn: []const u8) ?DsnParseResult {
         return null;
     }
 
+    // Extract graph name from URL path (e.g. host:3141/mygraph -> graph = "mygraph")
+    var graph: ?[]const u8 = null;
+    var host_port = rest;
+    if (std.mem.indexOf(u8, rest, "/")) |slash_idx| {
+        host_port = rest[0..slash_idx];
+        const path = rest[slash_idx + 1 ..];
+        if (path.len > 0) {
+            graph = path;
+        }
+    }
+
     // Validate host:port - at minimum there should be content
     // The host_port is passed directly to --server logic which expects "host:port"
     return DsnParseResult{
-        .host_port = rest,
+        .host_port = host_port,
         .use_grpc = use_grpc,
         .username = username,
         .password = password,
+        .graph = graph,
     };
 }
 
@@ -1245,6 +1258,8 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         // DSN credentials override -U/-P flags
         if (parsed.username) |u| user = u;
         if (parsed.password) |p| password = p;
+        // DSN graph path overrides --graph flag
+        if (parsed.graph) |g| graph = g;
     }
 
     // Determine execution mode based on --server flag
@@ -1782,6 +1797,7 @@ fn executeQueryOnGrpc(
         .username = username orelse "",
         .password = password orelse "",
         .tenant_id = null,
+        .graph = graph,
     };
     const hello_bytes = try grpcEncodeMessage(allocator, hello_req);
     defer allocator.free(hello_bytes);
@@ -2500,6 +2516,7 @@ fn executeQueryOnConnection(
         .username = username orelse "",
         .password = password orelse "",
         .tenant_id = null,
+        .graph = graph,
     };
 
     log.debug("Client sending HELLO (Protobuf)", &.{});
@@ -3471,6 +3488,8 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var password: ?[]const u8 = null;
     // Issue #417: DSN connection string
     var dsn: ?[]const u8 = null;
+    // Graph name from DSN path for HELLO handshake
+    var graph: ?[]const u8 = null;
 
     const stdin_handle = getStdinHandle() catch |err| {
         std.debug.print("Error: Cannot get stdin handle: {}\n", .{err});
@@ -3618,6 +3637,8 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         // DSN credentials override -U/-P flags
         if (parsed.username) |u| username = u;
         if (parsed.password) |p| password = p;
+        // DSN graph path for HELLO handshake
+        if (parsed.graph) |g| graph = g;
     }
 
     // Issue #387: Validate that if one of username/password is provided, both must be
@@ -3681,6 +3702,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         // Issue #387: Pass authentication credentials to REPL
         .username = username,
         .password = password,
+        .graph = graph,
     };
 
     repl_loop.ReplLoop.run(options) catch |err| {
