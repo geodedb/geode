@@ -370,6 +370,10 @@ pub const ExecutionContext = struct {
     // CANARY: REQ=REQ-PERF-PLAN-LIFECYCLE-004; FEATURE="PlanCacheLifecycle"; ASPECT=ExecutionHints; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
     // Issue #452: Optimizer hints from shared plan cache for advisory index/scan selection
     optimizer_hints: ?*const @import("server/query_plan_cache.zig").OptimizerHints = null,
+    // CANARY: REQ=REQ-DSN-GRAPH-BIND-001; FEATURE="DSNGraphBinding"; ASPECT=ContextFlag; STATUS=IMPL; OWNER=engine; UPDATED=2026-03-25
+    // When true, the session is bound to a specific graph via the DSN graph name field;
+    // USE GRAPH commands must be rejected to preserve connection-level graph isolation.
+    graph_bound: bool = false,
 };
 
 threadlocal var g_active_context: ?*const ExecutionContext = null;
@@ -1434,6 +1438,11 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .UseGraph => |ug| {
+            // CANARY: REQ=REQ-DSN-GRAPH-BIND-002; FEATURE="DSNGraphBinding"; ASPECT=UseGraphRejection; STATUS=IMPL; OWNER=engine; UPDATED=2026-03-25
+            // Reject USE GRAPH when session is bound to a graph via DSN
+            if (context.graph_bound) {
+                return error.GraphBound;
+            }
             // CANARY: REQ=REQ-MULTI-GRAPH-032; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphValidation; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-27
             // USE GRAPH implementation - switch active graph context
             // Must validate graph exists before switching

@@ -1027,6 +1027,11 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .UseGraph => |ug| {
+            // CANARY: REQ=REQ-DSN-GRAPH-BIND-002; FEATURE="DSNGraphBinding"; ASPECT=UseGraphRejection; STATUS=IMPL; OWNER=engine; UPDATED=2026-03-25
+            // Reject USE GRAPH when session is bound to a graph via DSN
+            if (context.graph_bound) {
+                return error.GraphBound;
+            }
             // CANARY: REQ=REQ-MULTI-GRAPH-001; FEATURE="MultiGraphSupport"; ASPECT=UseGraph; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-20
             // USE GRAPH implementation - switch active graph context
             const graph_name = ug.graph_name;
