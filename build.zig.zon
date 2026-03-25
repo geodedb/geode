@@ -164,6 +164,12 @@
             .hash = "wal-0.1.0-EqPqps5bAwDOHEK3FnHbVJcazN726E759W4LnmmqWPdc",
         },
 
+        // Page-based graph storage engine
+        .graph_storage = .{
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#564d6c23bdbdddf68378463bb9b9cfbf4b71c272",
+            .hash = "graph_storage-0.1.0-9UyJS02yBgAZAnGoGn3Tgd84iA9279YdrrffarBOP-x8",
+        },
+
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
         .raft = .{
             .url = "git+https://gitlab.com/devnw/zig/raft.git#7eba8b7016d681d8626eef79910e5ad81ce47246",

@@ -280,6 +280,10 @@ pub fn build(b: *std.Build) void {
     });
     const wal_ext_mod = wal_dep.module("wal");
 
+    // Graph Storage - Page-based graph storage engine
+    const graph_storage_dep = b.dependency("graph_storage", .{ .target = target, .optimize = optimize });
+    const graph_storage_mod = graph_storage_dep.module("graph_storage");
+
     // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
     const raft_dep = b.dependency("raft", .{
         .target = target,
@@ -412,6 +416,7 @@ pub fn build(b: *std.Build) void {
     // Phase 6 External Library Imports (extracted core libraries)
     root_mod.addImport("uuid", uuid_ext_mod);
     root_mod.addImport("wal", wal_ext_mod);
+    root_mod.addImport("graph_storage", graph_storage_mod);
     root_mod.addImport("raft", raft_ext_mod);
 
     // Phase 7 External Library Imports (extracted domain libraries)
@@ -471,6 +476,7 @@ pub fn build(b: *std.Build) void {
     // Phase 6 External Library Imports for CLI (extracted core libraries)
     geode_exe.root_module.addImport("uuid", uuid_ext_mod);
     geode_exe.root_module.addImport("wal", wal_ext_mod);
+    geode_exe.root_module.addImport("graph_storage", graph_storage_mod);
     geode_exe.root_module.addImport("raft", raft_ext_mod);
 
     // Phase 7 External Library Imports for CLI (extracted domain libraries)
