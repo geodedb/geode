@@ -853,6 +853,29 @@ fn handleClientMessage(
             var resolved_graph: ?[]const u8 = null;
             if (hello_req.graph) |requested_graph| {
                 if (requested_graph.len > 0) {
+                    // Validate graph name: max 128 chars, alphanumeric + underscore only
+                    if (requested_graph.len > 128) {
+                        const resp = schema.QuicServerMessage{ .hello = .{
+                            .success = false,
+                            .session_id = try gpa.dupe(u8, ""),
+                            .error_message = try gpa.dupe(u8, "Invalid graph name: too long (max 128 characters)"),
+                            .capabilities = caps,
+                        } };
+                        try sendQuicMessage(gpa, stream, resp);
+                        return;
+                    }
+                    for (requested_graph) |c| {
+                        if (!std.ascii.isAlphanumeric(c) and c != '_') {
+                            const resp = schema.QuicServerMessage{ .hello = .{
+                                .success = false,
+                                .session_id = try gpa.dupe(u8, ""),
+                                .error_message = try gpa.dupe(u8, "Invalid graph name: must contain only alphanumeric characters and underscores"),
+                                .capabilities = caps,
+                            } };
+                            try sendQuicMessage(gpa, stream, resp);
+                            return;
+                        }
+                    }
                     const store = graph_store.getGlobalStore(gpa);
                     const cat = try execution.ensureCatalogInstance(gpa);
 
@@ -886,10 +909,18 @@ fn handleClientMessage(
                                 }
                             };
                             _ = store.createGraph(requested_graph) catch |err| {
-                                log.debug("Graph storage creation failed", &.{
+                                log.err("Graph auto-creation failed", &.{
                                     Attr.string("graph", requested_graph),
                                     Attr.string("error", @errorName(err)),
                                 });
+                                const resp = schema.QuicServerMessage{ .hello = .{
+                                    .success = false,
+                                    .session_id = try gpa.dupe(u8, ""),
+                                    .error_message = try gpa.dupe(u8, "Failed to create graph"),
+                                    .capabilities = caps,
+                                } };
+                                try sendQuicMessage(gpa, stream, resp);
+                                return;
                             };
 
                             if (state.exec_session) |*sess| {

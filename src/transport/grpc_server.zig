@@ -1007,6 +1007,27 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
         var resolved_graph: ?[]const u8 = null;
         if (req.graph) |requested_graph| {
             if (requested_graph.len > 0) {
+                // Validate graph name: max 128 chars, alphanumeric + underscore only
+                if (requested_graph.len > 128) {
+                    const resp = schema.HelloResponse{
+                        .success = false,
+                        .session_id = "",
+                        .error_message = "Invalid graph name: too long (max 128 characters)",
+                        .capabilities = caps,
+                    };
+                    return encodeMessage(allocator, resp);
+                }
+                for (requested_graph) |c| {
+                    if (!std.ascii.isAlphanumeric(c) and c != '_') {
+                        const resp = schema.HelloResponse{
+                            .success = false,
+                            .session_id = "",
+                            .error_message = "Invalid graph name: must contain only alphanumeric characters and underscores",
+                            .capabilities = caps,
+                        };
+                        return encodeMessage(allocator, resp);
+                    }
+                }
                 const gstore = graph_store.getGlobalStore(allocator);
                 const cat = try execution.ensureCatalogInstance(allocator);
 
@@ -1029,10 +1050,17 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
                             }
                         };
                         _ = gstore.createGraph(requested_graph) catch |err| {
-                            log.debug("Graph storage creation failed", &.{
+                            log.err("Graph auto-creation failed", &.{
                                 Attr.string("graph", requested_graph),
                                 Attr.string("error", @errorName(err)),
                             });
+                            const resp = schema.HelloResponse{
+                                .success = false,
+                                .session_id = "",
+                                .error_message = "Failed to create graph",
+                                .capabilities = caps,
+                            };
+                            return encodeMessage(allocator, resp);
                         };
                         resolved_graph = requested_graph;
                     } else {
@@ -1065,6 +1093,27 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
     var noauth_resolved_graph: ?[]const u8 = null;
     if (req.graph) |requested_graph| {
         if (requested_graph.len > 0) {
+            // Validate graph name: max 128 chars, alphanumeric + underscore only
+            if (requested_graph.len > 128) {
+                const resp = schema.HelloResponse{
+                    .success = false,
+                    .session_id = "",
+                    .error_message = "Invalid graph name: too long (max 128 characters)",
+                    .capabilities = caps,
+                };
+                return encodeMessage(allocator, resp);
+            }
+            for (requested_graph) |c| {
+                if (!std.ascii.isAlphanumeric(c) and c != '_') {
+                    const resp = schema.HelloResponse{
+                        .success = false,
+                        .session_id = "",
+                        .error_message = "Invalid graph name: must contain only alphanumeric characters and underscores",
+                        .capabilities = caps,
+                    };
+                    return encodeMessage(allocator, resp);
+                }
+            }
             const gstore = graph_store.getGlobalStore(allocator);
             const cat = try execution.ensureCatalogInstance(allocator);
 
@@ -1082,10 +1131,17 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
                     }
                 };
                 _ = gstore.createGraph(requested_graph) catch |err| {
-                    log.debug("Graph storage creation failed (no-auth)", &.{
+                    log.err("Graph auto-creation failed (no-auth)", &.{
                         Attr.string("graph", requested_graph),
                         Attr.string("error", @errorName(err)),
                     });
+                    const resp = schema.HelloResponse{
+                        .success = false,
+                        .session_id = "",
+                        .error_message = "Failed to create graph",
+                        .capabilities = caps,
+                    };
+                    return encodeMessage(allocator, resp);
                 };
             }
             noauth_resolved_graph = requested_graph;
