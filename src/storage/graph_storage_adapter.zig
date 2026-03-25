@@ -11,9 +11,13 @@
 const std = @import("std");
 const gs = @import("graph_storage");
 const uuid_mod = @import("../uuid.zig");
+const graph_store = @import("../graph_store.zig");
 
 const Allocator = std.mem.Allocator;
 const log = std.log.scoped(.graph_storage_adapter);
+
+// Re-export edge type for callers that need EdgeEntry from scan results.
+pub const EdgeEntry = gs.edge.EdgeEntry;
 
 // ============================================================================
 // LabelStringDict — bidirectional label string ↔ LabelId mapping
@@ -81,6 +85,42 @@ pub const LabelStringDict = struct {
         return @intCast(self.str_to_id.count());
     }
 };
+
+// ============================================================================
+// Property Value Translation
+// ============================================================================
+
+/// Convert a geode `PropertyValue` to a graph-storage `PropertyValue`.
+///
+/// String data is passed through as a slice reference (no copy). The caller
+/// must ensure the source value outlives the returned storage value.
+pub fn toStorageProperty(val: graph_store.PropertyValue) gs.PropertyValue {
+    return switch (val) {
+        .String => |s| .{ .string = s },
+        .Int => |i| .{ .int = i },
+        .Float => |f| .{ .float = f },
+        .Bool => |b| .{ .bool = b },
+        .Null => .null,
+        .Decimal => |d| .{ .decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        .ExtValue => .{ .ext = .{ .type_tag = 0, .data = "" } },
+    };
+}
+
+/// Convert a graph-storage `PropertyValue` to a geode `PropertyValue`.
+///
+/// String data is duplicated into `allocator` so the returned value is
+/// independently owned.
+pub fn fromStorageProperty(allocator: Allocator, val: gs.PropertyValue) !graph_store.PropertyValue {
+    return switch (val) {
+        .string => |s| .{ .String = try allocator.dupe(u8, s) },
+        .int => |i| .{ .Int = i },
+        .float => |f| .{ .Float = f },
+        .bool => |b| .{ .Bool = b },
+        .null => .Null,
+        .decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        .ext => .Null, // ExtValue round-trip is lossy; no geode ExtValue representation for raw ext
+    };
+}
 
 // ============================================================================
 // ManagedGraph — one engine instance + its label dictionary
@@ -242,6 +282,234 @@ pub const StorageAdapter = struct {
     }
 
     // ------------------------------------------------------------------
+    // Node CRUD
+    // ------------------------------------------------------------------
+
+    /// Create a node with the given string labels in the named graph.
+    /// The graph is created on-demand if it does not exist. Returns the
+    /// new node ID.
+    pub fn createNode(self: *StorageAdapter, graph_name: []const u8, labels: []const []const u8) !u64 {
+        const mg = try self.getOrCreateGraph(graph_name);
+        const node_id = try mg.engine.allocNode();
+
+        // Write an initial (empty) node record so the node store knows this
+        // slot is occupied.
+        const rec = gs.node.NodeRec{
+            .out_head = 0,
+            .in_head = 0,
+            .prop_head = 0,
+            .label_set = 0,
+            .flags = 0,
+            ._pad = 0,
+            .txn_stamp = 0,
+        };
+        try mg.engine.putNode(node_id, rec);
+
+        // Attach each label via the engine (updates label_set bitmap and
+        // label index).
+        for (labels) |lbl| {
+            const label_id = try mg.label_dict.getOrCreate(lbl);
+            try mg.engine.addLabel(node_id, label_id);
+        }
+
+        return node_id;
+    }
+
+    /// Delete a node by ID in the named graph.
+    pub fn deleteNode(self: *StorageAdapter, graph_name: []const u8, node_id: u64) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        try mg.engine.deleteNode(node_id);
+    }
+
+    /// Retrieve the string labels for a node. Caller owns the returned
+    /// slice and must free both the slice and each string inside it.
+    pub fn getNodeLabels(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![][]const u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
+
+        // Walk bits in label_set; each set bit corresponds to a LabelId.
+        var result = std.ArrayList([]const u8).init(allocator);
+        errdefer {
+            for (result.items) |s| allocator.free(s);
+            result.deinit();
+        }
+
+        var bits = rec.label_set;
+        var bit_pos: u5 = 0;
+        while (bits != 0) : (bit_pos += 1) {
+            if (bits & 1 != 0) {
+                // The engine stores label_id % 32 in the bitmap, so we need
+                // to find which LabelId mapped to this bit position. Walk the
+                // dictionary to find labels whose id % 32 == bit_pos.
+                var dict_it = mg.label_dict.id_to_str.iterator();
+                while (dict_it.next()) |entry| {
+                    if (entry.key_ptr.* % 32 == bit_pos) {
+                        try result.append(try allocator.dupe(u8, entry.value_ptr.*));
+                    }
+                }
+            }
+            bits >>= 1;
+            if (bit_pos == 31) break;
+        }
+
+        return result.toOwnedSlice();
+    }
+
+    // ------------------------------------------------------------------
+    // Edge CRUD
+    // ------------------------------------------------------------------
+
+    /// Create an edge between two nodes. Returns the edge ID.
+    pub fn createEdge(self: *StorageAdapter, graph_name: []const u8, from_id: u64, to_id: u64, label: []const u8) !u64 {
+        const mg = try self.getOrCreateGraph(graph_name);
+        const rel_type = try mg.label_dict.getOrCreate(label);
+        return mg.engine.addEdge(from_id, to_id, rel_type);
+    }
+
+    /// Delete an edge by its endpoints and edge ID.
+    pub fn deleteEdge(self: *StorageAdapter, graph_name: []const u8, from_id: u64, to_id: u64, edge_id: u64) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        try mg.engine.removeEdge(from_id, to_id, edge_id);
+    }
+
+    /// Get all outgoing edges from a node.
+    pub fn getOutgoingEdges(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![]gs.edge.EdgeEntry {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        return mg.engine.expandOut(node_id, null, allocator);
+    }
+
+    /// Get all incoming edges to a node.
+    pub fn getIncomingEdges(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![]gs.edge.EdgeEntry {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        return mg.engine.expandIn(node_id, null, allocator);
+    }
+
+    // ------------------------------------------------------------------
+    // Property operations
+    // ------------------------------------------------------------------
+
+    /// Set a property on a node. The value is converted from a geode
+    /// `PropertyValue` to the storage engine's representation.
+    ///
+    /// The engine's `putProperty` returns a (potentially new) `prop_head`
+    /// that must be written back to the node record.
+    pub fn setNodeProperty(self: *StorageAdapter, graph_name: []const u8, node_id: u64, key: []const u8, value: graph_store.PropertyValue) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
+
+        const storage_val = toStorageProperty(value);
+        const new_prop_head = try mg.engine.putProperty(rec.prop_head, key, storage_val);
+
+        // Update the node record with the (possibly changed) prop_head.
+        rec.prop_head = new_prop_head;
+        try mg.engine.putNode(node_id, rec);
+    }
+
+    /// Get a property from a node, returned in graph-storage representation.
+    pub fn getNodeProperty(self: *StorageAdapter, graph_name: []const u8, node_id: u64, key: []const u8, allocator: Allocator) !?gs.PropertyValue {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
+
+        if (rec.prop_head == 0) return null;
+        return mg.engine.getProperty(rec.prop_head, key, allocator);
+    }
+
+    /// Find all node IDs with the given label in a graph.
+    pub fn getNodesByLabel(self: *StorageAdapter, graph_name: []const u8, label: []const u8, allocator: Allocator) ![]u64 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const label_id = mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
+        return mg.engine.scanLabel(label_id, allocator);
+    }
+
+    // ------------------------------------------------------------------
+    // Transaction operations
+    // ------------------------------------------------------------------
+
+    /// Begin a new transaction in the named graph.
+    pub fn beginTransaction(self: *StorageAdapter, graph_name: []const u8) !u64 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        return mg.engine.beginTxn();
+    }
+
+    /// Commit a transaction.
+    pub fn commitTransaction(self: *StorageAdapter, graph_name: []const u8, txn_id: u64) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        try mg.engine.commitTxn(txn_id);
+    }
+
+    /// Abort (rollback) a transaction.
+    pub fn abortTransaction(self: *StorageAdapter, graph_name: []const u8, txn_id: u64) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        try mg.engine.abortTxn(txn_id);
+    }
+
+    /// Run a checkpoint on every loaded graph engine.
+    pub fn checkpointAll(self: *StorageAdapter) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var it = self.engines.iterator();
+        while (it.next()) |entry| {
+            try entry.value_ptr.*.engine.checkpoint();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Statistics
+    // ------------------------------------------------------------------
+
+    /// Return the number of nodes in the named graph.
+    pub fn nodeCount(self: *StorageAdapter, graph_name: []const u8) !u64 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        return mg.engine.nodeCount();
+    }
+
+    /// Return the number of edges in the named graph.
+    pub fn edgeCount(self: *StorageAdapter, graph_name: []const u8) !u64 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        return mg.engine.edgeCount();
+    }
+
+    // ------------------------------------------------------------------
     // Internal helpers (must be called with mutex held)
     // ------------------------------------------------------------------
 
@@ -333,6 +601,63 @@ test "LabelStringDict starts at id 1" {
 
     const first = try dict.getOrCreate("A");
     try std.testing.expectEqual(@as(gs.LabelId, 1), first);
+}
+
+test "toStorageProperty round-trip for scalars" {
+    // Int
+    const gs_int = toStorageProperty(.{ .Int = 42 });
+    try std.testing.expectEqual(@as(i64, 42), gs_int.int);
+
+    // Float
+    const gs_float = toStorageProperty(.{ .Float = 3.14 });
+    try std.testing.expectApproxEqAbs(@as(f64, 3.14), gs_float.float, 0.001);
+
+    // Bool
+    const gs_bool = toStorageProperty(.{ .Bool = true });
+    try std.testing.expect(gs_bool.bool);
+
+    // Null
+    const gs_null = toStorageProperty(.Null);
+    try std.testing.expectEqual(gs.PropertyValue.null, gs_null);
+
+    // String
+    const gs_str = toStorageProperty(.{ .String = "hello" });
+    try std.testing.expectEqualStrings("hello", gs_str.string);
+
+    // Decimal
+    const gs_dec = toStorageProperty(.{ .Decimal = .{ .coeff = 12345, .scale = 2 } });
+    try std.testing.expectEqual(@as(i128, 12345), gs_dec.decimal.coeff);
+    try std.testing.expectEqual(@as(u8, 2), gs_dec.decimal.scale);
+}
+
+test "fromStorageProperty round-trip for scalars" {
+    const allocator = std.testing.allocator;
+
+    // Int
+    const geode_int = try fromStorageProperty(allocator, .{ .int = -7 });
+    try std.testing.expectEqual(@as(i64, -7), geode_int.Int);
+
+    // Float
+    const geode_float = try fromStorageProperty(allocator, .{ .float = 2.72 });
+    try std.testing.expectApproxEqAbs(@as(f64, 2.72), geode_float.Float, 0.001);
+
+    // Bool
+    const geode_bool = try fromStorageProperty(allocator, .{ .bool = false });
+    try std.testing.expect(!geode_bool.Bool);
+
+    // Null
+    const geode_null = try fromStorageProperty(allocator, .null);
+    try std.testing.expectEqual(graph_store.PropertyValue.Null, geode_null);
+
+    // String (must free)
+    const geode_str = try fromStorageProperty(allocator, .{ .string = "world" });
+    defer allocator.free(geode_str.String);
+    try std.testing.expectEqualStrings("world", geode_str.String);
+
+    // Decimal
+    const geode_dec = try fromStorageProperty(allocator, .{ .decimal = .{ .coeff = 99, .scale = 3 } });
+    try std.testing.expectEqual(@as(i128, 99), geode_dec.Decimal.coeff);
+    try std.testing.expectEqual(@as(u8, 3), geode_dec.Decimal.scale);
 }
 
 test {
