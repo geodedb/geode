@@ -144,6 +144,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.UnionColumnCountMismatch => .{ .code = "42601", .message = "UNION column count mismatch" },
         error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
+        // CANARY: REQ=REQ-DSN-GRAPH-BIND-005; FEATURE="DSNGraphBinding"; ASPECT=GraphBoundError; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
+        error.GraphBound => .{ .code = "42000", .message = "USE GRAPH not allowed: session is bound to a graph via DSN connection string" },
         error.DuplicateSchema => .{ .code = "42P07", .message = "Duplicate schema name" },
         error.SchemaNotFound => .{ .code = "3F000", .message = "Schema does not exist" },
         error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name" },
