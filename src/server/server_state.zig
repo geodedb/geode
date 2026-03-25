@@ -352,6 +352,10 @@ pub const ServerState = struct {
     // Current graph for this session (set by USE GRAPH command)
     current_graph: ?[]const u8 = null,
 
+    // CANARY: REQ=REQ-DSN-GRAPH-BIND-001; FEATURE="DSNGraphBinding"; ASPECT=SessionGraphBound; STATUS=IMPL; OWNER=engine; UPDATED=2026-03-25
+    // When true, this session was bound to a graph via DSN/HELLO and USE GRAPH is rejected
+    graph_bound: bool = false,
+
     pub fn resetResult(self: *ServerState) void {
         if (self.active_result_values) |*res| {
             res.deinit(self.allocator);

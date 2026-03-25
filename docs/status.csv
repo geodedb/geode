@@ -733,6 +733,7 @@ REQ-DOCUMENTATION-STRUCTURE-001,DocStructure,StructureTests,TESTED,,,claude,2026
 REQ-DOCUMENTATION-STRUCTURE-001,Documentation Structure Tests,UnitTests,EXEMPT,,,claude,2025-10-05,tests/test_documentation_structure.zig
 REQ-DOCUMENTATION-SYSTEM-INTEGRATION-001,Documentation System Integration Tests,IntegrationTests,EXEMPT,,,claude,2025-10-05,tests/test_documentation_system_integration.zig
 REQ-DSN-GRAPH-BIND-001,DSNGraphBinding,SessionGraphBound,IMPL,,,engine,2026-03-25,docs/superpowers/plans/2026-03-25-dsn-graph-binding.md
+REQ-DSN-GRAPH-BIND-001,DSNGraphBinding,SessionGraphBound,IMPL,,,engine,2026-03-25,src/server/server_state.zig
 REQ-DSN-GRAPH-BIND-002,DSNGraphBinding,UseGraphRejection,IMPL,,,engine,2026-03-25,docs/superpowers/plans/2026-03-25-dsn-graph-binding.md
 REQ-DSN-GRAPH-BIND-003,DSNGraphBinding,QuicGraphResolution,IMPL,,,transport,2026-03-25,docs/superpowers/plans/2026-03-25-dsn-graph-binding.md
 REQ-DSN-GRAPH-BIND-004,DSNGraphBinding,GrpcGraphResolution,IMPL,,,transport,2026-03-25,docs/superpowers/plans/2026-03-25-dsn-graph-binding.md
