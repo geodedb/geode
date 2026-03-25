@@ -834,6 +834,8 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // CANARY: REQ=REQ-CLI-GRAPH-FLAG-001; FEATURE="GraphFlag"; ASPECT=QueryCommand; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
     // Issue #393: Add --graph flag to specify which graph to query against
     var graph: ?[]const u8 = null;
+    // When graph comes from DSN, server handles it via HELLO — don't prepend USE GRAPH
+    var graph_for_prepend: ?[]const u8 = null;
     // GAP-0113: TLS certificate verification options
     var ca_cert_path: ?[]const u8 = null;
     var client_cert_path: ?[]const u8 = null;
@@ -862,6 +864,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             graph = argv[i + 1];
+            graph_for_prepend = argv[i + 1]; // --graph flag: prepend USE GRAPH
             i += 1;
         } else if (std.mem.eql(u8, arg, "--file") or std.mem.eql(u8, arg, "-f")) {
             // CANARY: REQ=REQ-CLI-FILE-FLAG-002; FEATURE="QueryFileFlag"; ASPECT=FlagParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-31
@@ -1258,8 +1261,11 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         // DSN credentials override -U/-P flags
         if (parsed.username) |u| user = u;
         if (parsed.password) |p| password = p;
-        // DSN graph path overrides --graph flag
-        if (parsed.graph) |g| graph = g;
+        // DSN graph path overrides --graph flag; server handles via HELLO (no USE GRAPH prepend)
+        if (parsed.graph) |g| {
+            graph = g;
+            graph_for_prepend = null; // DSN graph handled by HELLO, not USE GRAPH prepend
+        }
     }
 
     // Determine execution mode based on --server flag
@@ -1291,7 +1297,8 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .ca_cert_path = ca_cert_path,
             .client_cert_path = client_cert_path,
             .client_key_path = client_key_path,
-            .graph = graph,
+            .graph = graph_for_prepend,
+            .graph_for_hello = graph,
             .use_grpc = use_grpc,
         });
         return;
@@ -1311,7 +1318,8 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .retry_count = retry_count,
             .username = user,
             .password = password,
-            .graph = graph,
+            .graph = graph_for_prepend,
+            .graph_for_hello = graph,
             .page_size = page_size,
             .params = params,
         });
@@ -1330,7 +1338,8 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .ca_cert_path = ca_cert_path,
             .client_cert_path = client_cert_path,
             .client_key_path = client_key_path,
-            .graph = graph,
+            .graph = graph_for_prepend,
+            .graph_for_hello = graph,
             .page_size = page_size,
             .params = params,
         }) catch |err| {
@@ -1453,7 +1462,8 @@ const QuicQueryOptions = struct {
     ca_cert_path: ?[]const u8 = null,
     client_cert_path: ?[]const u8 = null,
     client_key_path: ?[]const u8 = null,
-    graph: ?[]const u8 = null,
+    graph: ?[]const u8 = null, // For USE GRAPH prepending (null when graph from DSN)
+    graph_for_hello: ?[]const u8 = null, // For HELLO handshake (set from both --graph and DSN)
     page_size: u32 = 1000,
     params: std.ArrayList(schema.Param),
 };
@@ -1466,7 +1476,8 @@ const GrpcQueryOptions = struct {
     retry_count: u32 = 0,
     username: ?[]const u8 = null,
     password: ?[]const u8 = null,
-    graph: ?[]const u8 = null,
+    graph: ?[]const u8 = null, // For USE GRAPH prepending (null when graph from DSN)
+    graph_for_hello: ?[]const u8 = null, // For HELLO handshake
     page_size: u32 = 1000,
     params: std.ArrayList(schema.Param),
 };
@@ -1497,6 +1508,7 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
     const username = opts.username;
     const password = opts.password;
     const graph = opts.graph;
+    const graph_for_hello = opts.graph_for_hello;
     const page_size = opts.page_size;
     var params = opts.params;
     var params_transferred = false;
@@ -1551,7 +1563,7 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
 
         // Execute query on the gRPC connection
         params_transferred = true;
-        return executeQueryOnGrpc(allocator, tcp_stream, query_text, format, username, password, graph, params, page_size, timeout_secs) catch |err| {
+        return executeQueryOnGrpc(allocator, tcp_stream, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs) catch |err| {
             last_error = @errorName(err);
             params_transferred = false;
             continue;
@@ -1780,6 +1792,7 @@ fn executeQueryOnGrpc(
     username: ?[]const u8,
     password: ?[]const u8,
     graph: ?[]const u8,
+    graph_for_hello: ?[]const u8,
     params: std.ArrayList(schema.Param),
     page_size: u32,
     timeout_secs: u32,
@@ -1797,7 +1810,7 @@ fn executeQueryOnGrpc(
         .username = username orelse "",
         .password = password orelse "",
         .tenant_id = null,
-        .graph = graph,
+        .graph = graph_for_hello,
     };
     const hello_bytes = try grpcEncodeMessage(allocator, hello_req);
     defer allocator.free(hello_bytes);
@@ -1844,7 +1857,8 @@ fn executeQueryOnGrpc(
 
     // 2. Execute query — send ExecuteRequest, read streaming ExecutionResponses
 
-    // If a graph is specified, prepend "USE GRAPH graphname;"
+    // If a graph is specified via --graph flag, prepend "USE GRAPH graphname;"
+    // When graph came from DSN, graph_for_prepend is null (server handles via HELLO)
     var final_query: []const u8 = query_text;
     var allocated_query: ?[]u8 = null;
     defer if (allocated_query) |q| allocator.free(q);
@@ -2142,6 +2156,7 @@ const ChunkedQueryOptions = struct {
     client_cert_path: ?[]const u8 = null,
     client_key_path: ?[]const u8 = null,
     graph: ?[]const u8 = null,
+    graph_for_hello: ?[]const u8 = null,
     use_grpc: bool = false,
 };
 
@@ -2246,6 +2261,7 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 .username = opts.username,
                 .password = opts.password,
                 .graph = opts.graph,
+                .graph_for_hello = opts.graph_for_hello,
                 .page_size = 1000,
                 .params = empty_params,
             }) catch |err| {
@@ -2266,6 +2282,7 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 .client_cert_path = opts.client_cert_path,
                 .client_key_path = opts.client_key_path,
                 .graph = opts.graph,
+                .graph_for_hello = opts.graph_for_hello,
                 .page_size = 1000,
                 .params = empty_params,
             }) catch |err| {
@@ -2330,6 +2347,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     const client_cert_path = opts.client_cert_path;
     const client_key_path = opts.client_key_path;
     const graph = opts.graph;
+    const graph_for_hello = opts.graph_for_hello;
     const page_size = opts.page_size;
     var params = opts.params;
     var params_transferred = false;
@@ -2384,7 +2402,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
             if (handshake_err) |_| {
                 // Handshake successful, proceed with query execution
                 params_transferred = true;
-                return try executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph, params, page_size, timeout_secs);
+                return try executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs);
             } else |_| {
                 last_error = "connection timeout";
             }
@@ -2494,6 +2512,7 @@ fn executeQueryOnConnection(
     username: ?[]const u8,
     password: ?[]const u8,
     graph: ?[]const u8,
+    graph_for_hello: ?[]const u8,
     params: std.ArrayList(schema.Param),
     page_size: u32,
     timeout_secs: u32,
@@ -2516,7 +2535,7 @@ fn executeQueryOnConnection(
         .username = username orelse "",
         .password = password orelse "",
         .tenant_id = null,
-        .graph = graph,
+        .graph = graph_for_hello,
     };
 
     log.debug("Client sending HELLO (Protobuf)", &.{});
@@ -2560,7 +2579,8 @@ fn executeQueryOnConnection(
     defer if (session_id_owned) |sid| allocator.free(sid);
 
     // CANARY: REQ=REQ-CLI-GRAPH-FLAG-006; FEATURE="GraphFlag"; ASPECT=PrependUseGraph; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-    // If a graph is specified, prepend "USE GRAPH graphname;" to the query
+    // If a graph is specified via --graph flag, prepend "USE GRAPH graphname;" to the query
+    // When graph came from DSN, caller passes null (server handles via HELLO)
     var final_query: []const u8 = query_text;
     var allocated_query: ?[]u8 = null;
     defer if (allocated_query) |q| allocator.free(q);
