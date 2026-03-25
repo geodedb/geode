@@ -80,8 +80,11 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
     const ctx = self.context orelse return error.NotConnected;
     const impl: *QuicTransportConnection = @ptrCast(@alignCast(ctx));
 
-    const start = std.time.milliTimestamp();
-    const timeout_ms: i64 = 30000; // 30 second timeout for REPL.
+    // Rolling idle timeout: resets on every successful byte read.
+    // This prevents aborting mid-message while still timing out when
+    // no data arrives at all.
+    var last_progress = std.time.milliTimestamp();
+    const idle_timeout_ms: i64 = 30000; // 30 second idle timeout for REPL.
 
     // Hold client_mu for entire read operation. This prevents the keepalive
     // thread from calling poll() while we're reading from the stream, which
@@ -93,13 +96,21 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
     var len_buf: [4]u8 = undefined;
     var len_read: usize = 0;
     while (len_read < 4) {
-        if (repl_dispatch.checkForInterrupt()) {
+        // Only check for interrupt before any bytes have been read.
+        // Once we've started reading a message frame, we must finish the
+        // header to keep the stream synchronized.
+        if (len_read == 0 and repl_dispatch.checkForInterrupt()) {
             return error.Interrupted;
         }
 
         const n = impl.stream.read(len_buf[len_read..]) catch |err| {
             if (err == error.WouldBlock) {
-                if (std.time.milliTimestamp() - start >= timeout_ms) return error.WouldBlock;
+                if (std.time.milliTimestamp() - last_progress >= idle_timeout_ms) {
+                    // Only return WouldBlock when no bytes have been read.
+                    // A partial header read means the connection is broken.
+                    if (len_read == 0) return error.WouldBlock;
+                    return error.ConnectionResetByPeer;
+                }
                 impl.client.poll(5) catch {};
                 std.Thread.sleep(5 * std.time.ns_per_ms);
                 continue;
@@ -108,6 +119,7 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
         };
         if (n == 0) return error.EndOfStream;
         len_read += n;
+        last_progress = std.time.milliTimestamp();
     }
 
     const msg_len = std.mem.readInt(u32, &len_buf, .big);
@@ -115,34 +127,37 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
     if (max_size > 0 and msg_len > max_size) return error.MessageTooLarge;
 
     // Read message body.
+    // Once the header is read, we MUST read the full body to keep the stream
+    // synchronized. Aborting mid-body would leave the stream at an unknown
+    // offset, causing subsequent reads to interpret body bytes as a length
+    // prefix — producing garbage msg_len values and eventual segfaults.
     const body = try allocator.alloc(u8, msg_len);
     errdefer allocator.free(body);
 
     var body_read: usize = 0;
     while (body_read < msg_len) {
-        if (repl_dispatch.checkForInterrupt()) {
-            allocator.free(body);
-            return error.Interrupted;
-        }
+        // No interrupt check here — we must finish the message to keep
+        // the stream aligned. Interrupts are checked between messages.
 
         const n = impl.stream.read(body[body_read..]) catch |err| {
             if (err == error.WouldBlock) {
-                if (std.time.milliTimestamp() - start >= timeout_ms) {
-                    allocator.free(body);
-                    return error.WouldBlock;
+                if (std.time.milliTimestamp() - last_progress >= idle_timeout_ms) {
+                    // Timed out mid-body: the stream is now desynchronized.
+                    // Return a connection error (not WouldBlock) so callers
+                    // know the connection must be re-established.
+                    return error.ConnectionResetByPeer;
                 }
                 impl.client.poll(5) catch {};
                 std.Thread.sleep(5 * std.time.ns_per_ms);
                 continue;
             }
-            allocator.free(body);
             return err;
         };
         if (n == 0) {
-            allocator.free(body);
             return error.EndOfStream;
         }
         body_read += n;
+        last_progress = std.time.milliTimestamp();
     }
 
     return body;
