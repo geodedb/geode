@@ -1101,7 +1101,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
         // Calculate total size to determine if chunking is needed
         // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-003; FEATURE="ChunkedExecution"; ASPECT=SizeDetection; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-        const max_single_query_size: usize = 32 * 1024; // 32KB threshold for chunking
+        const max_single_query_size: usize = 16 * 1024; // 16KB threshold for chunking
         var total_size: usize = 0;
         for (statements.items) |stmt| {
             total_size += stmt.len + 1; // +1 for separator
