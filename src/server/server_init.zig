@@ -297,6 +297,13 @@ pub fn initialize(
         log.info("WAL initialized with crash recovery", &.{});
     }
 
+    // Initialize new graph-storage adapter alongside existing store
+    if (data_dir) |dir| {
+        _ = graph_store.initGlobalAdapter(allocator, dir) catch |err| {
+            log.warn("Failed to initialize graph-storage adapter: {s}", .{@errorName(err)});
+        };
+    }
+
     // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-007; FEATURE="AuthGraphManager Integration"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
     // Initialize AuthGraphManager: resolve HMAC key, verify or bootstrap auth chain
     const hmac_key_result: ?auth_graph_manager.HmacKeyResult = hmac_blk: {

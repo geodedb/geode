@@ -4239,6 +4239,32 @@ pub const GraphStore = struct {
     }
 };
 
+const graph_storage_adapter = @import("storage/graph_storage_adapter.zig");
+
+var global_adapter: ?*graph_storage_adapter.StorageAdapter = null;
+
+pub fn getGlobalAdapter() ?*graph_storage_adapter.StorageAdapter {
+    return global_adapter;
+}
+
+pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*graph_storage_adapter.StorageAdapter {
+    if (global_adapter) |existing| return existing;
+
+    const gs = @import("graph_storage");
+    const adapter = try graph_storage_adapter.StorageAdapter.init(allocator, data_dir, gs.GraphConfig{
+        .data_dir = data_dir,
+    });
+    global_adapter = adapter;
+    return adapter;
+}
+
+pub fn deinitGlobalAdapter() void {
+    if (global_adapter) |adapter| {
+        adapter.deinit();
+        global_adapter = null;
+    }
+}
+
 // Global instance that persists across queries
 var global_store: ?GraphStore = null;
 var global_arena: ?std.heap.ArenaAllocator = null;
