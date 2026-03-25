@@ -300,7 +300,9 @@ pub fn initialize(
     // Initialize new graph-storage adapter alongside existing store
     if (data_dir) |dir| {
         _ = graph_store.initGlobalAdapter(allocator, dir) catch |err| {
-            log.warn("Failed to initialize graph-storage adapter: {s}", .{@errorName(err)});
+            log.warn("Failed to initialize graph-storage adapter", &.{
+                Attr.string("error", @errorName(err)),
+            });
         };
     }
 
