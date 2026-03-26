@@ -1413,10 +1413,6 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                     };
                     defer resp.deinit(allocator);
 
-                    // GAP-0260: Signal persistence for auto-committed mutations
-                    if (!state.in_txn) {
-                        graph_store.signalPersistence();
-                    }
                     return encodeMessage(allocator, resp);
                 },
                 .rows => {
@@ -1470,11 +1466,6 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                     state.result_order_keys = order_keys;
 
                     updateTxnStateFromProgram(state, &parse_result.program);
-                    // GAP-0260: Signal persistence for auto-committed mutations
-                    if (!state.in_txn) {
-                        graph_store.signalPersistence();
-                    }
-
                     return encodeMessage(allocator, schema_resp);
                 },
             }
@@ -1631,8 +1622,6 @@ fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
         state.global_commit_ts += 1;
         state.in_txn = false;
         state.txn_id = 0;
-        // GAP-0259/0260: Signal async persistence instead of blocking save
-        graph_store.signalPersistence();
         const resp = schema.CommitResponse{ .success = true };
         return encodeMessage(allocator, resp);
     }
@@ -1675,8 +1664,6 @@ fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
         };
         state.in_txn = false;
         state.txn_id = 0;
-        // GAP-0259/0260: Signal async persistence instead of blocking save
-        graph_store.signalPersistence();
         const resp = schema.RollbackResponse{ .success = true };
         return encodeMessage(allocator, resp);
     }

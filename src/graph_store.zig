@@ -47,15 +47,20 @@ fn generateTimeBasedId() u64 {
 // Real implementation would use proper storage engine
 
 // Global data directory override (set via API, takes precedence over env var)
-// Use a fixed-size buffer to avoid allocator issues across module boundaries
+// Use a fixed-size buffer to avoid allocator issues across module boundaries.
+// Protected by g_data_dir_mutex to prevent torn reads between writer (startup/backup)
+// and reader (persistence loop).
 var g_override_data_dir_buf: [512]u8 = undefined;
 var g_override_data_dir_len: usize = 0;
 var g_override_data_dir_set: bool = false;
+var g_data_dir_mutex: std.Thread.Mutex = .{};
 
 /// Set the data directory override (takes precedence over GEODE_DATA_DIR env var)
 /// Pass null to clear the override and revert to env var behavior
 pub fn setDataDirOverride(allocator: std.mem.Allocator, dir: ?[]const u8) void {
     _ = allocator; // Not needed with fixed buffer
+    g_data_dir_mutex.lock();
+    defer g_data_dir_mutex.unlock();
     if (dir) |path| {
         const copy_len = @min(path.len, g_override_data_dir_buf.len);
         @memcpy(g_override_data_dir_buf[0..copy_len], path[0..copy_len]);
@@ -69,6 +74,8 @@ pub fn setDataDirOverride(allocator: std.mem.Allocator, dir: ?[]const u8) void {
 
 /// Get the current data directory override (or null if using env var)
 pub fn getDataDirOverride() ?[]const u8 {
+    g_data_dir_mutex.lock();
+    defer g_data_dir_mutex.unlock();
     if (g_override_data_dir_set and g_override_data_dir_len > 0) {
         return g_override_data_dir_buf[0..g_override_data_dir_len];
     }
@@ -3722,12 +3729,11 @@ pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
         t.join();
         g_persist_thread = null;
     }
-}
-
-/// Wake the persistence thread to flush immediately.
-pub fn signalPersistence() void {
-    // Direct flush — no condition variable needed with the short poll interval.
+    // Final flush under lock — no worker threads should be running at this point
+    // but take the lock for safety.
     if (global_store != null) {
+        g_store_rwlock.lockShared();
+        defer g_store_rwlock.unlockShared();
         global_store.?.saveIfDirty();
     }
 }
@@ -3739,16 +3745,19 @@ fn persistenceLoop() void {
         std.Thread.sleep(poll_ms * std.time.ns_per_ms);
         if (g_persist_shutdown.load(.acquire)) break;
         if (global_store != null) {
+            // Acquire shared lock to prevent races with mutation threads.
+            // serialization iterates graphs/nodes/edges hash maps — concurrent
+            // modification causes alignment panics and corrupted output.
+            g_store_rwlock.lockShared();
+            defer g_store_rwlock.unlockShared();
             global_store.?.saveIfDirty();
         }
     }
 }
 
-/// GAP-0259/0260: Persistence loop uses condition variable instead of sleep-polling.
-/// Wakes on signalPersistence() or every g_persist_interval_ms (fallback).
-/// Uses tryLock to avoid blocking query handlers — if the write lock can't be
-/// acquired (queries are in progress), retries briefly since signalPersistence()
-/// is typically called just before the shared lock is released.
+/// GAP-0259/0260: Persistence is handled solely by the background loop (1s poll).
+/// Worker threads no longer call saveIfDirty() directly — the dirty flag set by
+/// mutations under the write lock is sufficient for the loop to detect changes.
 ///
 /// CANARY: REQ=REQ-PERF-WAL-004; FEATURE="WriteAheadLog"; ASPECT=PersistenceLoop; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
 /// Issue #445: When WAL is enabled, the persistence loop syncs the WAL (fsync) on every

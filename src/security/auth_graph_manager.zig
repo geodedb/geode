@@ -433,7 +433,6 @@ pub const AuthGraphManager = struct {
 
             try hmac_list.append(self.allocator, computed);
         }
-        self.storage.store.saveIfDirty();
     }
 
     fn sealRoleRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
@@ -456,7 +455,6 @@ pub const AuthGraphManager = struct {
 
             try hmac_list.append(self.allocator, computed);
         }
-        self.storage.store.saveIfDirty();
     }
 
     fn sealPermissionRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
@@ -479,7 +477,6 @@ pub const AuthGraphManager = struct {
 
             try hmac_list.append(self.allocator, computed);
         }
-        self.storage.store.saveIfDirty();
     }
 
     fn sealPolicyRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
@@ -502,7 +499,6 @@ pub const AuthGraphManager = struct {
 
             try hmac_list.append(self.allocator, computed);
         }
-        self.storage.store.saveIfDirty();
     }
 
     // -- Bootstrap Default Admin --
@@ -637,7 +633,6 @@ pub const AuthGraphManager = struct {
         const computed_hex = auth_hmac.hmacToHex(&computed);
         const node_id = self.storage.user_nodes.get(user_id) orelse return error.UserNotFound;
         try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
-        self.storage.store.saveIfDirty();
     }
 
     fn recomputeAndStoreRoleHmac(self: *Self, role_id: u64, hmac_key: *const [32]u8) !void {
@@ -646,7 +641,6 @@ pub const AuthGraphManager = struct {
         const computed_hex = auth_hmac.hmacToHex(&computed);
         const node_id = self.storage.role_nodes.get(role_id) orelse return error.RoleNotFound;
         try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
-        self.storage.store.saveIfDirty();
     }
 
     // -- Runtime Mutation Persistence (called via SecurityManager callbacks) --

@@ -1269,8 +1269,8 @@ fn handleClientMessage(
 
                     // #52: Release lock immediately after execution completes.
                     // exec_result is a thread-local copy (owned data, freed by connection allocator).
-                    // Everything below (flags, ordering, serialization, send, txn state update,
-                    // signalPersistence) does not access the store and does not need the lock.
+                    // Everything below (flags, ordering, serialization, send, txn state update)
+                    // does not access the store and does not need the lock.
                     if (needs_store_lock) {
                         if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
                         lock_released = true;
@@ -1335,11 +1335,6 @@ fn handleClientMessage(
                     }
 
                     updateTxnStateFromProgram(state, &parse_result.program);
-
-                    // GAP-0260: Signal persistence for auto-committed mutations
-                    if (!state.in_txn) {
-                        graph_store.signalPersistence();
-                    }
                 },
             }
         },
@@ -1410,8 +1405,6 @@ fn handleClientMessage(
                 state.global_commit_ts += 1;
                 state.in_txn = false;
                 state.txn_id = 0;
-                // GAP-0259/0260: Signal async persistence instead of blocking save
-                graph_store.signalPersistence();
                 try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = true } });
             } else {
                 try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false } });
@@ -1428,8 +1421,6 @@ fn handleClientMessage(
                 };
                 state.in_txn = false;
                 state.txn_id = 0;
-                // GAP-0259/0260: Signal async persistence instead of blocking save
-                graph_store.signalPersistence();
                 try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = true } });
             } else {
                 try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false } });

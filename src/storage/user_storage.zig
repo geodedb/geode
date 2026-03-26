@@ -396,7 +396,6 @@ pub const UserStorageBackend = struct {
         _ = self.user_cache.remove(user_id);
         if (self.user_nodes.fetchRemove(user_id)) |kv| {
             self.store.deleteNode(kv.value);
-            self.store.saveIfDirty();
         }
     }
 
@@ -467,7 +466,6 @@ pub const UserStorageBackend = struct {
         // Store the HMAC hex string as a node property
         const node_id = self.user_nodes.get(user_id) orelse return error.UserNotFound;
         try self.store.setNodeProperty(node_id, "hmac", .{ .String = &hmac_hex });
-        self.store.saveIfDirty();
     }
 
     // ChainRootRecord for HMAC chain integrity
@@ -526,8 +524,6 @@ pub const UserStorageBackend = struct {
         try self.store.setNodeProperty(node_id, "record_count", .{ .Int = safeI64(record_count) });
         try self.store.setNodeProperty(node_id, "last_verified", .{ .Int = std.time.milliTimestamp() });
         try self.store.setNodeProperty(node_id, "hmac_key_id", .{ .String = hmac_key_id });
-
-        self.store.saveIfDirty();
     }
 
     // Role operations
@@ -553,7 +549,6 @@ pub const UserStorageBackend = struct {
         _ = self.role_cache.remove(role_id);
         if (self.role_nodes.fetchRemove(role_id)) |kv| {
             self.store.deleteNode(kv.value);
-            self.store.saveIfDirty();
         }
     }
 
@@ -595,7 +590,6 @@ pub const UserStorageBackend = struct {
         _ = self.permission_cache.remove(permission_id);
         if (self.permission_nodes.fetchRemove(permission_id)) |kv| {
             self.store.deleteNode(kv.value);
-            self.store.saveIfDirty();
         }
     }
 
@@ -653,7 +647,6 @@ pub const UserStorageBackend = struct {
         _ = self.policy_cache.remove(policy_id);
         if (self.policy_nodes.fetchRemove(policy_id)) |kv| {
             self.store.deleteNode(kv.value);
-            self.store.saveIfDirty();
         }
     }
 
@@ -823,8 +816,6 @@ pub const UserStorageBackend = struct {
         try self.store.setNodeProperty(node_id, "is_default_user", .{ .Bool = record.is_default_user });
         try self.store.setNodeProperty(node_id, "password_reset_required", .{ .Bool = record.password_reset_required });
         try self.store.setNodeProperty(node_id, "password_changed_at", .{ .Int = record.password_changed_at });
-
-        self.store.saveIfDirty();
     }
 
     fn upsertRoleNode(self: *Self, record: RoleRecord) !void {
@@ -839,8 +830,6 @@ pub const UserStorageBackend = struct {
         try self.store.setNodeProperty(node_id, "is_system", .{ .Bool = record.is_system });
         try self.store.setNodeProperty(node_id, "created_at", .{ .Int = record.created_at });
         try self.store.setNodeProperty(node_id, "updated_at", .{ .Int = record.updated_at });
-
-        self.store.saveIfDirty();
     }
 
     fn upsertPermissionNode(self: *Self, record: PermissionRecord) !void {
@@ -855,8 +844,6 @@ pub const UserStorageBackend = struct {
             try self.store.setNodeProperty(node_id, "conditions", .{ .String = cond });
         }
         try self.store.setNodeProperty(node_id, "created_at", .{ .Int = record.created_at });
-
-        self.store.saveIfDirty();
     }
 
     fn upsertPolicyNode(self: *Self, record: PolicyRecord) !void {
@@ -881,8 +868,6 @@ pub const UserStorageBackend = struct {
         try self.store.setNodeProperty(node_id, "created_at", .{ .Int = record.created_at });
         try self.store.setNodeProperty(node_id, "updated_at", .{ .Int = record.updated_at });
         try self.store.setNodeProperty(node_id, "created_by", .{ .Int = safeI64(record.created_by) });
-
-        self.store.saveIfDirty();
     }
 
     fn createEntityNode(self: *Self, label: []const u8) !u64 {
