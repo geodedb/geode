@@ -709,12 +709,18 @@ fn handleAlterUserSetPassword(
     username: []const u8,
     new_password: []const u8,
 ) !void {
-    // Verify the user is changing their own password
+    // Verify the user is changing their own password.
+    // SECURITY (S9): When authenticated_user is null (auth disabled or session
+    // not authenticated), reject password changes -- callers must authenticate
+    // before altering any user's password.
     if (state.authenticated_user) |auth_user| {
         if (!std.mem.eql(u8, auth_user, username)) {
             try sendExecuteError(gpa, stream, "42501", "You can only change your own password", &.{}, &.{});
             return;
         }
+    } else {
+        try sendExecuteError(gpa, stream, "42501", "Authentication required to change passwords", &.{}, &.{});
+        return;
     }
 
     // Validate password against SecurityManager policy BEFORE updating the
