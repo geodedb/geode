@@ -72,16 +72,16 @@
         // TLS 1.3 library for QUIC
         // Updated 2026-03: HRR state reset, mTLS with OpenSSL/BoringSSL interop
         .tls = .{
-            .url = "git+https://gitlab.com/devnw/zig/tls.git#4c1fc27f7ee5febb468e7ed2d20f0df59258dfe7",
-            .hash = "tls-0.1.0-mtEaLJC5EQCIZghvCX-omrrsaaJLnampWxZ_Ajt3Tpak",
+            .url = "git+https://gitlab.com/devnw/zig/tls.git#7ec244af7357d75b6eb8a5957e1f044169c5d28e",
+            .hash = "tls-0.1.0-mtEaLF-5EQCBqsJLDUY5YcwiZA1Kqlf76uV_6WSGJYXg",
         },
 
         // QUIC v1/v2 protocol implementation
         // Updated 2026-03: v0.1.11 split endpoint mutex (mu + timer_mu),
         // thread-safe poll with spice, eliminates c=8 contention bottleneck.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#48c2aee54c1a3d417a8295334cd48ba3ea73587d",
-            .hash = "quic-0.1.10-gBIqUe1-NQCDCNyLJK4jyzVD6mWY5nCnVFv98k5y3ASO",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#0372e39f707d7e2b6005b53dbf1b83eb4eb42b1f",
+            .hash = "quic-0.1.10-gBIqUe1-NQBsyT8q-mPOlgKWtRNkW3zme8erx-rQ4SlR",
         },
 
         // =======================================================================
