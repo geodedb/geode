@@ -382,21 +382,39 @@ pub const StorageAdapter = struct {
     }
 
     /// Get all outgoing edges from a node.
+    /// Materializes the iterator into a caller-owned slice.
     pub fn getOutgoingEdges(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![]gs.edge.EdgeEntry {
         self.mutex.lock();
         defer self.mutex.unlock();
 
         const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
-        return mg.engine.expandOut(node_id, null, allocator);
+        var iter = try mg.engine.expandOut(node_id, null);
+        defer iter.deinit();
+
+        var result: std.ArrayList(gs.edge.EdgeEntry) = .{};
+        errdefer result.deinit(allocator);
+        while (try iter.next()) |entry| {
+            try result.append(allocator, entry);
+        }
+        return result.toOwnedSlice(allocator);
     }
 
     /// Get all incoming edges to a node.
+    /// Materializes the iterator into a caller-owned slice.
     pub fn getIncomingEdges(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![]gs.edge.EdgeEntry {
         self.mutex.lock();
         defer self.mutex.unlock();
 
         const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
-        return mg.engine.expandIn(node_id, null, allocator);
+        var iter = try mg.engine.expandIn(node_id, null);
+        defer iter.deinit();
+
+        var result: std.ArrayList(gs.edge.EdgeEntry) = .{};
+        errdefer result.deinit(allocator);
+        while (try iter.next()) |entry| {
+            try result.append(allocator, entry);
+        }
+        return result.toOwnedSlice(allocator);
     }
 
     // ------------------------------------------------------------------
