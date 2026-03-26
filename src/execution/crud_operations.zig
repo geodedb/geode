@@ -2661,12 +2661,8 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
             }
         }
 
-        // Save changes to persistent storage
-        store.saveToFile() catch |err| {
-            log.err("CRITICAL: Failed to persist graph store after deletion", &.{
-                Attr.string("error", @errorName(err)),
-            });
-        };
+        // Persistence is handled by the background persistence loop (graph_store.zig)
+        // which saves dirty graphs every second. No synchronous save needed here.
     } else if (d.items.len > 0) {
         // GAP #56: Delete specific items by variable name.
         // Without a MATCH clause, items refer to variables bound in a preceding
@@ -2709,12 +2705,8 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                     }
                 }
             }
-            // Persist changes
-            store.saveToFile() catch |err| {
-                log.err("CRITICAL: Failed to persist after targeted delete", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-            };
+            // Persistence is handled by the background persistence loop (graph_store.zig)
+            // which saves dirty graphs every second. No synchronous save needed here.
         }
     }
 
