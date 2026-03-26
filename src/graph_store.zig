@@ -3668,20 +3668,26 @@ inline fn notifyMutation(op: MutationOp, id1: u64, id2: u64, id3: u64, label: ?[
     }
 }
 
-// WAL persistence hooks — kept as no-op stubs for API compatibility.
+// GAP-0268: WAL persistence hooks — stored and invoked by the persistence loop
+// to sync the WAL and checkpoint/truncate when thresholds are reached.
 pub const WalSyncFn = *const fn () void;
 pub const WalNeedsCheckpointFn = *const fn () bool;
 pub const WalCheckpointFn = *const fn (*GraphStore) void;
 
-/// No-op: WAL persistence hooks removed — adapter handles storage.
+var g_wal_sync_fn: ?WalSyncFn = null;
+var g_wal_needs_checkpoint_fn: ?WalNeedsCheckpointFn = null;
+var g_wal_checkpoint_fn: ?WalCheckpointFn = null;
+
+/// Install WAL persistence hooks invoked by the background persistence loop.
+/// Pass null to uninstall (e.g., during shutdown).
 pub fn setWalPersistenceHooks(
     sync_fn: ?WalSyncFn,
     needs_checkpoint_fn: ?WalNeedsCheckpointFn,
     checkpoint_fn: ?WalCheckpointFn,
 ) void {
-    _ = sync_fn;
-    _ = needs_checkpoint_fn;
-    _ = checkpoint_fn;
+    g_wal_sync_fn = sync_fn;
+    g_wal_needs_checkpoint_fn = needs_checkpoint_fn;
+    g_wal_checkpoint_fn = checkpoint_fn;
 }
 
 /// Acquire the global store lock (shared — for read-only query handlers).
@@ -3732,9 +3738,19 @@ pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
     // Final flush under lock — no worker threads should be running at this point
     // but take the lock for safety.
     if (global_store != null) {
+        const store_ptr: *GraphStore = &(global_store.?);
+        // GAP-0268: Final WAL sync + checkpoint to ensure all mutations are persisted
+        // and the WAL is truncated before shutdown.
+        if (g_wal_sync_fn) |sync_fn| {
+            sync_fn();
+        }
         g_store_rwlock.lockShared();
         defer g_store_rwlock.unlockShared();
-        global_store.?.saveIfDirty();
+        if (g_wal_checkpoint_fn) |checkpoint_fn| {
+            checkpoint_fn(store_ptr);
+        } else {
+            store_ptr.saveIfDirty();
+        }
     }
 }
 
@@ -3745,12 +3761,31 @@ fn persistenceLoop() void {
         std.Thread.sleep(poll_ms * std.time.ns_per_ms);
         if (g_persist_shutdown.load(.acquire)) break;
         if (global_store != null) {
+            const store_ptr: *GraphStore = &(global_store.?);
+
+            // GAP-0268: Sync the WAL (fsync) on every persistence loop tick
+            // so that committed mutations reach stable storage promptly.
+            if (g_wal_sync_fn) |sync_fn| {
+                sync_fn();
+            }
+
             // Acquire shared lock to prevent races with mutation threads.
             // serialization iterates graphs/nodes/edges hash maps — concurrent
             // modification causes alignment panics and corrupted output.
             g_store_rwlock.lockShared();
             defer g_store_rwlock.unlockShared();
-            global_store.?.saveIfDirty();
+
+            // GAP-0268: When WAL hooks are installed and a checkpoint is needed,
+            // checkpoint (which truncates the WAL) instead of the plain save.
+            // This prevents unbounded WAL growth.
+            const needs_checkpoint = if (g_wal_needs_checkpoint_fn) |needs_fn| needs_fn() else false;
+            if (needs_checkpoint) {
+                if (g_wal_checkpoint_fn) |checkpoint_fn| {
+                    checkpoint_fn(store_ptr);
+                }
+            } else {
+                store_ptr.saveIfDirty();
+            }
         }
     }
 }
