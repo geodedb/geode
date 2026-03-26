@@ -703,6 +703,72 @@ fn parseAlterUserSetPassword(query: []const u8) ?struct { username: []const u8, 
     return .{ .username = username, .new_password = new_password };
 }
 
+/// Validate a password against the default geodeSecure policy without requiring
+/// a SecurityManager instance.  Returns an error message string if the password
+/// fails validation, or null if it passes.
+/// SECURITY (S4): Fallback policy enforcement when SecurityManager is null.
+fn validatePasswordFallback(password: []const u8) ?[]const u8 {
+    const policy = geode_auth.PasswordPolicy.geodeSecure();
+
+    if (password.len < policy.min_length) return "Password too short (minimum 20 characters)";
+    if (password.len > policy.max_length) return "Password too long (maximum 256 characters)";
+
+    if (policy.require_uppercase) {
+        var found = false;
+        for (password) |c| {
+            if (std.ascii.isUpper(c)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return "Password must contain at least one uppercase letter";
+    }
+
+    if (policy.require_lowercase) {
+        var found = false;
+        for (password) |c| {
+            if (std.ascii.isLower(c)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return "Password must contain at least one lowercase letter";
+    }
+
+    if (policy.require_digit) {
+        var found = false;
+        for (password) |c| {
+            if (std.ascii.isDigit(c)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return "Password must contain at least one digit";
+    }
+
+    if (!policy.allow_spaces) {
+        for (password) |c| {
+            if (c == ' ') return "Password must not contain spaces";
+        }
+    }
+
+    if (policy.require_passphrase) {
+        var word_count: usize = 0;
+        var in_word = false;
+        for (password) |c| {
+            if (c == ' ') {
+                in_word = false;
+            } else {
+                if (!in_word) word_count += 1;
+                in_word = true;
+            }
+        }
+        if (word_count < policy.min_words) return "Password must be a passphrase with at least 3 words";
+    }
+
+    return null;
+}
+
 /// Handle ALTER USER SET PASSWORD when password reset is required.
 /// Updates the user's password, clears the reset flag, and sends a success response.
 fn handleAlterUserSetPassword(
@@ -745,6 +811,13 @@ fn handleAlterUserSetPassword(
             try sendExecuteError(gpa, stream, "28P01", msg, &.{}, &.{});
             return;
         };
+    } else {
+        // SECURITY (S4): When SecurityManager is null, enforce the same password
+        // policy as geodeSecure() to prevent bypassing password requirements.
+        if (validatePasswordFallback(new_password)) |msg| {
+            try sendExecuteError(gpa, stream, "28P01", msg, &.{}, &.{});
+            return;
+        }
     }
 
     user_mgmt.updateUserPassword(gpa, username, new_password) catch |err| {
