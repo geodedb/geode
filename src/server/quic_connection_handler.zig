@@ -46,6 +46,11 @@ const protobuf = @import("protobuf");
 // CANARY: REQ=REQ-AUTH-MTLS-QUIC-004; FEATURE="mTLS over QUIC"; ASPECT=GlobalProvider; STATUS=IMPL; OWNER=security; UPDATED=2026-02-13
 var g_mtls_provider: ?*mtls_provider.MtlsProvider = null;
 
+// S6: Per-IP authentication rate limiter — prevents brute-force attacks on QUIC HELLO.
+// CANARY: REQ=REQ-SEC-RATE-LIMIT-003; FEATURE="AuthRateLimiting"; ASPECT=GlobalInstance; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+const auth_rate_limiter = @import("auth_rate_limiter.zig");
+var g_auth_rate_limiter: ?*auth_rate_limiter.AuthRateLimiter = null;
+
 /// Set the global mTLS provider (called from server/main.zig during startup)
 pub fn setMtlsProvider(provider: ?*mtls_provider.MtlsProvider) void {
     g_mtls_provider = provider;
@@ -54,6 +59,17 @@ pub fn setMtlsProvider(provider: ?*mtls_provider.MtlsProvider) void {
 /// Get the current global mTLS provider
 pub fn getMtlsProvider() ?*mtls_provider.MtlsProvider {
     return g_mtls_provider;
+}
+
+/// Set the global authentication rate limiter (called from server/main.zig during startup).
+/// CANARY: REQ=REQ-SEC-RATE-LIMIT-004; FEATURE="AuthRateLimiting"; ASPECT=GlobalSetter; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+pub fn setAuthRateLimiter(limiter: ?*auth_rate_limiter.AuthRateLimiter) void {
+    g_auth_rate_limiter = limiter;
+}
+
+/// Get the current global authentication rate limiter.
+pub fn getAuthRateLimiter() ?*auth_rate_limiter.AuthRateLimiter {
+    return g_auth_rate_limiter;
 }
 
 /// GAP-0001 / #564: Delegate to shared mutation classification in query_traits.
@@ -538,6 +554,12 @@ pub fn handleQuicConnection(
         return error.CertificateError;
     }
 
+    // S6: Extract peer IP for rate limiting before the message loop.
+    // CANARY: REQ=REQ-SEC-RATE-LIMIT-005; FEATURE="AuthRateLimiting"; ASPECT=PeerIPExtraction; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+    const peer_ip = conn.getPeerAddressString(gpa);
+    const peer_ip_allocated = !std.mem.eql(u8, peer_ip, "unknown");
+    defer if (peer_ip_allocated) gpa.free(peer_ip);
+
     // Protobuf protocol only - use protobuf reader
     var line_reader = try BufferedProtoReader.init(gpa, transport, stream);
     defer line_reader.deinit();
@@ -572,7 +594,7 @@ pub fn handleQuicConnection(
         // Lock acquisition moved inside handleClientMessage so that mutations
         // acquire the exclusive write lock while reads use the shared lock.
         // (GAP-0001: fixes data race on concurrent MERGE/CREATE/DELETE)
-        handleClientMessage(gpa, &state, stream, msg, disable_estimates, compact_profile, memcurve_profile) catch |err| {
+        handleClientMessage(gpa, &state, stream, msg, disable_estimates, compact_profile, memcurve_profile, peer_ip) catch |err| {
             log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
             // Best-effort error response — stream may already be closed
             sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch |send_err| {
@@ -864,6 +886,7 @@ fn handleClientMessage(
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
+    peer_ip: []const u8,
 ) !void {
     switch (msg) {
         .hello => |hello_req| {
@@ -871,6 +894,24 @@ fn handleClientMessage(
             try caps.append(gpa, try gpa.dupe(u8, "QUIC"));
             try caps.append(gpa, try gpa.dupe(u8, "TLS1.3"));
             try caps.append(gpa, try gpa.dupe(u8, "PROTOBUF"));
+
+            // S6: Per-IP rate limiting — reject locked-out IPs before attempting authentication.
+            // CANARY: REQ=REQ-SEC-RATE-LIMIT-006; FEATURE="AuthRateLimiting"; ASPECT=HelloCheck; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+            if (g_auth_rate_limiter) |limiter| {
+                if (limiter.isLocked(peer_ip)) {
+                    log.warn("Authentication rate limit exceeded", &.{
+                        Attr.string("peer_ip", peer_ip),
+                    });
+                    const resp = schema.QuicServerMessage{ .hello = .{
+                        .success = false,
+                        .session_id = try gpa.dupe(u8, ""),
+                        .error_message = try gpa.dupe(u8, "Too many failed authentication attempts. Please try again later."),
+                        .capabilities = caps,
+                    } };
+                    try sendQuicMessage(gpa, stream, resp);
+                    return;
+                }
+            }
 
             // GAP-0490: Federation inter-node authentication via cluster token — fast-path
             // Must be checked BEFORE normal user auth to allow federation when auth is enabled.
@@ -894,6 +935,8 @@ fn handleClientMessage(
                 }
             } else if (user_mgmt.isAuthEnabled()) {
                 if (hello_req.username.len == 0 or hello_req.password.len == 0) {
+                    // S6: Record failure for empty credentials (still counts as a failed attempt).
+                    if (g_auth_rate_limiter) |limiter| limiter.recordFailure(peer_ip);
                     const resp = schema.QuicServerMessage{ .hello = .{
                         .success = false,
                         .session_id = try gpa.dupe(u8, ""),
@@ -905,6 +948,8 @@ fn handleClientMessage(
                 }
 
                 const auth_result = user_mgmt.authenticate(hello_req.username, hello_req.password) catch {
+                    // S6: Record failure for bad credentials.
+                    if (g_auth_rate_limiter) |limiter| limiter.recordFailure(peer_ip);
                     const resp = schema.QuicServerMessage{ .hello = .{
                         .success = false,
                         .session_id = try gpa.dupe(u8, ""),
@@ -914,6 +959,9 @@ fn handleClientMessage(
                     try sendQuicMessage(gpa, stream, resp);
                     return;
                 };
+
+                // S6: Successful authentication — reset failure counter for this IP.
+                if (g_auth_rate_limiter) |limiter| limiter.recordSuccess(peer_ip);
 
                 if (state.authenticated_user) |u| gpa.free(u);
                 if (state.authenticated_password) |p| {

@@ -3496,6 +3496,11 @@ REQ-SEC-NETWORK-001,Security,NetworkSecurity,TESTED,,,security,2026-01-16,tests/
 REQ-SEC-PERMISSION-CHECK-001,Security,PermissionCheck,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-POLICY-EVAL-001,Security,PolicyEvaluation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-RATE-LIMIT-001,AuthRateLimiting,PerIPRateLimit,TESTED,,,security,2026-03-26,src/server/auth_rate_limiter.zig
+REQ-SEC-RATE-LIMIT-002,AuthRateLimiting,PeerIPExtraction,IMPL,,,transport,2026-03-26,src/transport/quic.zig
+REQ-SEC-RATE-LIMIT-003,AuthRateLimiting,GlobalInstance,IMPL,,,security,2026-03-26,src/server/quic_connection_handler.zig
+REQ-SEC-RATE-LIMIT-004,AuthRateLimiting,GlobalSetter,IMPL,,,security,2026-03-26,src/server/quic_connection_handler.zig
+REQ-SEC-RATE-LIMIT-005,AuthRateLimiting,PeerIPExtraction,IMPL,,,security,2026-03-26,src/server/quic_connection_handler.zig
+REQ-SEC-RATE-LIMIT-006,AuthRateLimiting,HelloCheck,IMPL,,,security,2026-03-26,src/server/quic_connection_handler.zig
 REQ-SEC-RATE-LIMIT-007,AuthRateLimiting,ServerInit,IMPL,,,security,2026-03-26,src/server/main.zig
 REQ-SEC-RBAC-001,Security,RBAC,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-RLS-POLICY-001,Security,RLSPolicy,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig

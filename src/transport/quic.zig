@@ -577,6 +577,35 @@ pub const QuicConnection = struct {
         return chain[0];
     }
 
+    /// Return a human-readable IP string for the peer (e.g. "192.168.1.1").
+    /// Falls back to "unknown" when the underlying connection is closed or the
+    /// address family is unrecognised.
+    /// CANARY: REQ=REQ-SEC-RATE-LIMIT-002; FEATURE="AuthRateLimiting"; ASPECT=PeerIPExtraction; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-26
+    pub fn getPeerAddressString(self: *QuicConnection, allocator: std.mem.Allocator) []const u8 {
+        const qc = self.quic_connection orelse return "unknown";
+        const peer = &qc.peer;
+        const fam = peer.family();
+        if (fam == std.posix.AF.INET) {
+            const ip_bytes = peer.getIpBytes();
+            if (ip_bytes.len == 4) {
+                return std.fmt.allocPrint(allocator, "{d}.{d}.{d}.{d}", .{
+                    ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3],
+                }) catch "unknown";
+            }
+        } else if (fam == std.posix.AF.INET6) {
+            const ip_bytes = peer.getIpBytes();
+            if (ip_bytes.len == 16) {
+                return std.fmt.allocPrint(allocator, "{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}", .{
+                    ip_bytes[0],  ip_bytes[1],  ip_bytes[2],  ip_bytes[3],
+                    ip_bytes[4],  ip_bytes[5],  ip_bytes[6],  ip_bytes[7],
+                    ip_bytes[8],  ip_bytes[9],  ip_bytes[10], ip_bytes[11],
+                    ip_bytes[12], ip_bytes[13], ip_bytes[14], ip_bytes[15],
+                }) catch "unknown";
+            }
+        }
+        return "unknown";
+    }
+
     /// Remove a stream from tracking and destroy it
     /// CANARY: REQ=REQ-QUIC-STREAM-CLEANUP-001; FEATURE="StreamMemoryManagement"; ASPECT=DoubleFreePrevention; STATUS=EXEMPT; OWNER=transport; UPDATED=2025-12-27
     /// GAP-0201: Use swapRemove for O(1) removal instead of O(n) orderedRemove
