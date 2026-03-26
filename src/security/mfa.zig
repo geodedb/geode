@@ -17,16 +17,16 @@ pub fn globallyEnabled() bool {
 
 pub const Enrollment = ext_mfa.Enrollment;
 
-/// Geode-specific MFA configuration: deterministic secrets derived from
-/// username + salt for reproducible enrollment, 6-digit TOTP codes,
+/// Geode-specific MFA configuration: cryptographically random secrets via
+/// crypto.random.bytes for TOTP enrollment, 6-digit codes,
 /// 30-second time step, +/-1 window for clock skew.
 const geode_mfa_config = ext_mfa.MfaConfig{
     .digits = 6,
     .step_seconds = 30,
     .window = 1,
     .scratch_code_count = 2,
-    .deterministic = true,
-    .salt = "geode-mfa-salt-v1",
+    .deterministic = false,
+    .salt = "",
 };
 
 pub fn enroll(allocator: std.mem.Allocator, username: []const u8) !Enrollment {
@@ -41,8 +41,8 @@ pub fn generateCodeFromBase32(allocator: std.mem.Allocator, secret_base32: []con
         .step_seconds = step_seconds,
         .window = 1,
         .scratch_code_count = 2,
-        .deterministic = true,
-        .salt = "geode-mfa-salt-v1",
+        .deterministic = false,
+        .salt = "",
     });
 }
 
@@ -53,7 +53,7 @@ pub fn verifyCode(allocator: std.mem.Allocator, secret_base32: []const u8, times
         .step_seconds = step_seconds,
         .window = window,
         .scratch_code_count = 2,
-        .deterministic = true,
-        .salt = "geode-mfa-salt-v1",
+        .deterministic = false,
+        .salt = "",
     });
 }
