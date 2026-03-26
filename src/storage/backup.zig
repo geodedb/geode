@@ -167,12 +167,9 @@ pub const BackupManager = struct {
         const backup_id = generateBackupId();
         const timestamp = std.time.milliTimestamp();
 
-        // Persist GraphStore and read the snapshot payload.
+        // Persist via adapter checkpoint, then read the snapshot payload.
         try self.store.saveToFile();
-        const payload = if (self.store.use_per_graph_storage)
-            try readPerGraphStoragePayload(self.allocator, self.store.data_dir)
-        else
-            try readGraphStorePayload(self.allocator);
+        const payload = try readGraphStorePayload(self.allocator);
         defer self.allocator.free(payload);
 
         const compressed = try compressData(payload, self.config.compression, self.allocator);
