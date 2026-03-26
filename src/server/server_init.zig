@@ -6,9 +6,6 @@ const graph_store = geode.graph_store;
 const index_catalog = @import("index_catalog.zig");
 const query_ast_cache = @import("query_ast_cache.zig");
 const query_plan_cache = geode.query_plan_cache;
-// CANARY: REQ=REQ-PERF-WAL-005; FEATURE="WriteAheadLog"; ASPECT=ServerInit; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
-// Issue #445: Import WAL for initialization and recovery at server startup
-const wal = geode.wal;
 // CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager initialization at server startup
 const geode_auth = @import("geode_auth");
@@ -124,10 +121,7 @@ pub const InitContext = struct {
             self.auth_graph_mgr = null;
             self.auth_graph_mgr_storage = null;
         }
-        // Issue #445: Clean up WAL on server shutdown
-        wal.removeMutationCallback();
-        wal.removePersistenceHooks();
-        wal.deinitGlobalWal();
+        // WAL lifecycle is handled internally by the graph-storage adapter.
     }
 };
 
@@ -254,56 +248,19 @@ pub fn initialize(
         }
     }
 
-    // Initialize GraphStore so we can surface checksum diagnostics if needed.
-    const store = graph_store.getGlobalStore(allocator);
-    if (graph_store.lastLoadHadChecksumError()) {
-        env_config.storage_checksum_error = true;
-    }
-
-    // Issue #445: Initialize WAL and perform crash recovery (replay WAL after checkpoint)
-    wal.initGlobalWal(allocator, data_dir) catch |err| {
-        log.warn("WAL initialization failed, falling back to legacy persistence", &.{
-            Attr.string("error", @errorName(err)),
-        });
-    };
-    if (wal.getGlobalWal()) |w| {
-        // Replay any WAL records written after the last checkpoint
-        const last_lsn = w.replay(store) catch |err| blk: {
-            log.warn("WAL replay failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            break :blk @as(u64, 0);
-        };
-
-        // Issue #539: End-of-recovery checkpoint.
-        // After replay, immediately snapshot graph_store.dat and truncate the WAL.
-        // Without this, the WAL grows unboundedly across restarts and startup RSS
-        // scales with total historical mutations rather than current graph size.
-        if (last_lsn > 0) {
-            log.info("Writing end-of-recovery checkpoint after WAL replay", &.{
-                Attr.int("last_lsn", @intCast(last_lsn)),
-            });
-            w.checkpoint(store) catch |err| {
-                log.warn("End-of-recovery checkpoint failed, WAL will be replayed again on next restart", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-            };
-        }
-
-        // Install mutation callback to capture future mutations in WAL
-        wal.installMutationCallback();
-        // Install persistence hooks for WAL-aware checkpoint behavior
-        wal.installPersistenceHooks();
-        log.info("WAL initialized with crash recovery", &.{});
-    }
-
-    // Initialize new graph-storage adapter alongside existing store
+    // Initialize graph-storage adapter as primary storage (handles WAL replay internally)
     if (data_dir) |dir| {
         _ = graph_store.initGlobalAdapter(allocator, dir) catch |err| {
             log.warn("Failed to initialize graph-storage adapter", &.{
                 Attr.string("error", @errorName(err)),
             });
         };
+    }
+
+    // Initialize GraphStore so we can surface checksum diagnostics if needed.
+    const store = graph_store.getGlobalStore(allocator);
+    if (graph_store.lastLoadHadChecksumError()) {
+        env_config.storage_checksum_error = true;
     }
 
     // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-007; FEATURE="AuthGraphManager Integration"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
