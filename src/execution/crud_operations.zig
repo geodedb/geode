@@ -2556,17 +2556,33 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
             // Delete the collected nodes
             for (nodes_to_delete.items) |node_id| {
                 if (d.detach) {
+                    // P8: Use adjacency indexes instead of full edge scan.
+                    // Collect edge IDs first since deleteEdgeNoSave mutates the
+                    // adjacency lists whose slices we are reading.
                     var edges_to_delete = std.ArrayList(u64).empty;
                     defer edges_to_delete.deinit(allocator);
-                    var edge_iter = store.edges.iterator();
-                    while (edge_iter.next()) |edge_entry| {
-                        const edge = edge_entry.value_ptr;
-                        if (edge.from_id == node_id or edge.to_id == node_id) {
-                            try edges_to_delete.append(allocator, edge.id);
+                    if (store.getOutgoingEdgeIds(node_id)) |out_ids| {
+                        for (out_ids) |eid| {
+                            try edges_to_delete.append(allocator, eid);
+                        }
+                    }
+                    if (store.getIncomingEdgeIds(node_id)) |in_ids| {
+                        for (in_ids) |eid| {
+                            // Avoid duplicating self-loop edges already collected above
+                            var already = false;
+                            for (edges_to_delete.items) |existing| {
+                                if (existing == eid) {
+                                    already = true;
+                                    break;
+                                }
+                            }
+                            if (!already) {
+                                try edges_to_delete.append(allocator, eid);
+                            }
                         }
                     }
                     for (edges_to_delete.items) |edge_id| {
-                        _ = store.edges.remove(edge_id);
+                        store.deleteEdgeNoSave(edge_id);
                     }
                 }
                 if (store.nodes.fetchRemove(node_id)) |_| {
@@ -2651,9 +2667,10 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                         try edges_to_delete.append(allocator, edge_entry.key_ptr.*);
                     }
 
-                    // Delete the collected edges
+                    // Delete the collected edges (with adjacency index cleanup)
                     for (edges_to_delete.items) |edge_id| {
-                        if (store.edges.remove(edge_id)) {
+                        if (store.edges.get(edge_id) != null) {
+                            store.deleteEdgeNoSave(edge_id);
                             deleted_count += 1;
                         }
                     }
@@ -2679,18 +2696,32 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                     switch (binding) {
                         .node_id => |nid| {
                             if (d.detach) {
-                                // DETACH: delete connected edges first
+                                // P8: DETACH — use adjacency indexes instead of full edge scan.
+                                // Collect edge IDs first since deleteEdgeNoSave mutates the
+                                // adjacency lists whose slices we are reading.
                                 var edges_to_remove = std.ArrayList(u64).empty;
                                 defer edges_to_remove.deinit(allocator);
-                                var edge_it = store.edges.iterator();
-                                while (edge_it.next()) |edge_entry| {
-                                    const edge = edge_entry.value_ptr;
-                                    if (edge.from_id == nid or edge.to_id == nid) {
-                                        try edges_to_remove.append(allocator, edge.id);
+                                if (store.getOutgoingEdgeIds(nid)) |out_ids| {
+                                    for (out_ids) |eid| {
+                                        try edges_to_remove.append(allocator, eid);
+                                    }
+                                }
+                                if (store.getIncomingEdgeIds(nid)) |in_ids| {
+                                    for (in_ids) |eid| {
+                                        var already = false;
+                                        for (edges_to_remove.items) |existing| {
+                                            if (existing == eid) {
+                                                already = true;
+                                                break;
+                                            }
+                                        }
+                                        if (!already) {
+                                            try edges_to_remove.append(allocator, eid);
+                                        }
                                     }
                                 }
                                 for (edges_to_remove.items) |eid| {
-                                    _ = store.edges.remove(eid);
+                                    store.deleteEdgeNoSave(eid);
                                 }
                             }
                             if (store.nodes.fetchRemove(nid)) |_| {
@@ -2698,7 +2729,8 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                             }
                         },
                         .edge_id => |eid| {
-                            if (store.edges.remove(eid)) {
+                            if (store.edges.get(eid) != null) {
+                                store.deleteEdgeNoSave(eid);
                                 deleted_count += 1;
                             }
                         },
