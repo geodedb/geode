@@ -595,21 +595,24 @@ def run_test(
                                 spec_server_enabled_for_setup = server_config.get("enabled", False)
                                 if server_config.get("port"):
                                     server_port_for_setup = str(server_config.get("port"))
-                    # If spec has server enabled, inject --server, --insecure, and auth for setup commands
+                    # If spec has server enabled, inject --server, --ca-cert, and auth for setup commands
                     if spec_server_enabled_for_setup and not has_server:
                         server_address = f"127.0.0.1:{server_port_for_setup}"
                         # Insert --server with actual address after the command
                         setup_processed.insert(1, "--server")
                         setup_processed.insert(2, server_address)
-                        # Add --insecure flag (test servers use self-signed certs)
-                        setup_processed.insert(3, "--insecure-tls-skip-verify")
+                        # Use server's self-signed CA cert (--insecure-tls-skip-verify is
+                        # forbidden in ReleaseSafe builds used by CI)
+                        _sdd = (spec_config or {}).get("_server_data_dir", "/tmp/geodetestlab_server_default")
+                        setup_processed.insert(3, "--ca-cert")
+                        setup_processed.insert(4, f"{_sdd}/server.crt")
                         # Inject auth credentials if not already present
                         has_user = any(str(arg) == "-U" or str(arg) == "--user" for arg in setup_processed)
                         if not has_user:
                             _secrets = resolved_secrets or {}
-                            setup_processed.insert(4, "-U")
-                            setup_processed.insert(5, "geode")
-                            setup_processed.insert(6, "-P")
+                            setup_processed.insert(5, "-U")
+                            setup_processed.insert(6, "geode")
+                            setup_processed.insert(7, "-P")
                             setup_processed.insert(7, _secrets.get("admin_password", "geode-test-password"))
 
                 # Add --non-interactive for shell commands when stdin is used
@@ -723,7 +726,7 @@ def run_test(
         has_server = any("--server" in arg for arg in args)
 
         # If spec enables server mode and test doesn't already have --server,
-        # inject --server, --insecure, and auth flags to connect to the running server
+        # inject --server, --ca-cert, and auth flags to connect to the running server
         if spec_server_enabled and not has_server:
             # Get server port from spec_config
             server_port = "8443"  # Default port
@@ -738,16 +741,19 @@ def run_test(
             # Insert --server with actual address after the command
             modified_args.insert(1, "--server")
             modified_args.insert(2, server_address)
-            # Add --insecure flag (test servers use self-signed certs)
-            modified_args.insert(3, "--insecure-tls-skip-verify")
+            # Use server's self-signed CA cert (--insecure-tls-skip-verify is
+            # forbidden in ReleaseSafe builds used by CI)
+            _sdd = (spec_config or {}).get("_server_data_dir", "/tmp/geodetestlab_server_default")
+            modified_args.insert(3, "--ca-cert")
+            modified_args.insert(4, f"{_sdd}/server.crt")
             # Inject auth credentials if not already present
             has_user = any(str(arg) == "-U" or str(arg) == "--user" for arg in modified_args)
             if not has_user:
                 _secrets = resolved_secrets or {}
-                modified_args.insert(4, "-U")
-                modified_args.insert(5, "geode")
-                modified_args.insert(6, "-P")
-                modified_args.insert(7, _secrets.get("admin_password", "geode-test-password"))
+                modified_args.insert(5, "-U")
+                modified_args.insert(6, "geode")
+                modified_args.insert(7, "-P")
+                modified_args.insert(8, _secrets.get("admin_password", "geode-test-password"))
             # Inject --timeout so the CLI's internal watchdog matches the test runner's
             # subprocess timeout. Without this, the CLI's default 10s watchdog may kill
             # the process before the test runner's timeout expires, causing false failures.
@@ -1283,7 +1289,8 @@ def start_server(binary, data_dir, port, args, timeout_ms=30000, env_overrides=N
                     "query",
                     "--server",
                     f"127.0.0.1:{port}",
-                    "--insecure-tls-skip-verify",
+                    "--ca-cert",
+                    f"{data_dir}/server.crt",
                     "-U",
                     username,
                     "-P",
@@ -1643,7 +1650,8 @@ def main():
                                 "query",
                                 "--server",
                                 f"127.0.0.1:{server_port}",
-                                "--insecure-tls-skip-verify",
+                                "--ca-cert",
+                                f"{server_data_dir}/server.crt",
                                 "-U",
                                 username,
                                 "-P",

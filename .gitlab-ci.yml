@@ -691,8 +691,12 @@ test-gql-compliance:
       echo "Pinned geode-test-harness ref: $(git -C ../geode-test-harness rev-parse HEAD)"
   script:
     - |
-      echo "=== Building Geode (ReleaseSafe for QUIC stability) ==="
-      zig build -Doptimize=ReleaseSafe --summary all
+      echo "=== Building Geode (Debug for compliance testing) ==="
+      # Use Debug build for compliance tests: ReleaseSafe disables
+      # --insecure-tls-skip-verify which is needed by the test runner to
+      # connect to per-spec self-signed servers. Compliance tests validate
+      # query correctness, not performance — Debug is appropriate here.
+      zig build --summary all
 
       echo "=== Running GQL Compliance Tests ==="
       source /opt/venv/bin/activate
@@ -740,8 +744,10 @@ test-geodetestlab-comprehensive:
       echo "Pinned geode-test-harness ref: $(git -C ../geode-test-harness rev-parse HEAD)"
   script:
     - |
-      echo "=== Building Geode (ReleaseSafe for QUIC stability) ==="
-      zig build -Doptimize=ReleaseSafe --summary all
+      echo "=== Building Geode (Debug for comprehensive testing) ==="
+      # Use Debug build: ReleaseSafe disables --insecure-tls-skip-verify
+      # which is needed to connect to per-spec self-signed servers.
+      zig build --summary all
 
       echo "=== Running Comprehensive geodetestlab Tests ==="
       source /opt/venv/bin/activate
