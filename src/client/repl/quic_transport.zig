@@ -203,14 +203,14 @@ fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.T
             return err;
         };
     } else if (tls_config.ca_cert_path != null or tls_config.client_cert_path != null) {
-        std.debug.print("Using TLS with custom certificates\r\n", .{});
+        if (tls_config.client_cert_path) |cert| {
+            std.debug.print("Using TLS with custom certificates\r\n", .{});
+            std.debug.print("  Client certificate: {s}\r\n", .{cert});
+        }
         if (tls_config.ca_cert_path) |ca| {
             std.debug.print("  CA certificate: {s}\r\n", .{ca});
         }
-        if (tls_config.client_cert_path) |cert| {
-            std.debug.print("  Client certificate: {s}\r\n", .{cert});
-        }
-        _ = client.connectInsecure(host, port, false) catch |err| {
+        _ = client.connectEx(host, port, tls_config.ca_cert_path, tls_config.client_cert_path, tls_config.client_key_path) catch |err| {
             return err;
         };
     } else {
