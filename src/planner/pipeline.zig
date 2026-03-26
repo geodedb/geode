@@ -108,23 +108,29 @@ pub fn runPipeline(
     const deviation_ppm: u64 = signature_hash % 200_000; // up to 20%
     const actual_rows = expected_rows + (expected_rows * deviation_ppm) / 1_000_000;
     adaptive.observe(expected_rows, actual_rows);
-    // Light spin to provide measurable time
-    var spin2: u64 = @min(actual_rows, 5_000);
-    while (spin2 > 0) : (spin2 -= 1) std.mem.doNotOptimizeAway(spin2);
+    // Light spin to provide measurable time (benchmarking only, gated to avoid wasting CPU in production)
+    if (comptime @import("builtin").mode == .Debug) {
+        var spin2: u64 = @min(actual_rows, 5_000);
+        while (spin2 > 0) : (spin2 -= 1) std.mem.doNotOptimizeAway(spin2);
+    }
     timer.end(.cardinality);
     const sub_group_end = std.time.nanoTimestamp();
     const group_validation_ns: u64 = @intCast(sub_group_end - sub_group_start);
 
     // Projection prune phase (synthetic) - simulate pruning unused projections.
     timer.begin(.projection_prune);
-    var prune_spin: u64 = (signature_hash & 0x3FF) + 256;
-    while (prune_spin > 0) : (prune_spin -= 1) std.mem.doNotOptimizeAway(prune_spin);
+    if (comptime @import("builtin").mode == .Debug) {
+        var prune_spin: u64 = (signature_hash & 0x3FF) + 256;
+        while (prune_spin > 0) : (prune_spin -= 1) std.mem.doNotOptimizeAway(prune_spin);
+    }
     timer.end(.projection_prune);
 
     // Cost evaluation phase
     timer.begin(.cost_eval);
-    var spin3: u64 = (expected_rows ^ actual_rows) & 0x1FFF;
-    while (spin3 > 0) : (spin3 -= 1) std.mem.doNotOptimizeAway(spin3);
+    if (comptime @import("builtin").mode == .Debug) {
+        var spin3: u64 = (expected_rows ^ actual_rows) & 0x1FFF;
+        while (spin3 > 0) : (spin3 -= 1) std.mem.doNotOptimizeAway(spin3);
+    }
     timer.end(.cost_eval);
 
     const snap = timer.snapshot();
