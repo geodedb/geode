@@ -13,16 +13,24 @@ const Value = value_types.Value;
 // CANARY: REQ=REQ-EXEC-REFACTOR-003; FEATURE="ExecutionRefactoring"; ASPECT=CENTRALITY_ALGORITHMS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
 // Extracted centrality and community detection algorithms from execution.zig for better modularity (M1 Phase 3)
 
-/// Get neighbors of a node (helper function)
+/// Get neighbors of a node using adjacency indexes (O(degree) instead of O(E)).
+/// Returns a caller-owned slice of neighbor node IDs.
 pub fn getNeighbors(store: *graph_store.GraphStore, node_id: u64, allocator: std.mem.Allocator) ![]u64 {
     var neighbors = try std.ArrayList(u64).initCapacity(allocator, 0);
-    var edge_iter = store.edges.iterator();
-    while (edge_iter.next()) |entry| {
-        const edge = entry.value_ptr.*;
-        if (edge.from_id == node_id) {
-            try neighbors.append(allocator, edge.to_id);
-        } else if (edge.to_id == node_id) {
-            try neighbors.append(allocator, edge.from_id);
+
+    // Use adjacency indexes for O(degree) lookup instead of full edge scan
+    if (store.getOutgoingEdgeIds(node_id)) |out_edge_ids| {
+        for (out_edge_ids) |edge_id| {
+            if (store.edges.get(edge_id)) |edge| {
+                try neighbors.append(allocator, edge.to_id);
+            }
+        }
+    }
+    if (store.getIncomingEdgeIds(node_id)) |in_edge_ids| {
+        for (in_edge_ids) |edge_id| {
+            if (store.edges.get(edge_id)) |edge| {
+                try neighbors.append(allocator, edge.from_id);
+            }
         }
     }
     return try neighbors.toOwnedSlice(allocator);
@@ -40,13 +48,10 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
 
     var rows = try allocator.alloc([]Value, node_list.items.len);
     for (node_list.items, 0..) |node_id, i| {
-        var degree: u64 = 0;
-        var edge_iter = store.edges.iterator();
-        while (edge_iter.next()) |edge_entry| {
-            if (edge_entry.value_ptr.*.from_id == node_id or edge_entry.value_ptr.*.to_id == node_id) {
-                degree += 1;
-            }
-        }
+        // Use adjacency indexes for O(1) degree lookup instead of O(E) edge scan
+        const out_degree: u64 = if (store.getOutgoingEdgeIds(node_id)) |ids| ids.len else 0;
+        const in_degree: u64 = if (store.getIncomingEdgeIds(node_id)) |ids| ids.len else 0;
+        const degree = out_degree + in_degree;
 
         var row = try allocator.alloc(Value, 2);
         row[0] = Value{ .Int = @intCast(node_id) };
@@ -367,20 +372,18 @@ pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphSt
         for (node_list.items) |node| {
             var rank_sum: f64 = 0;
 
-            // Find nodes that link to this node
-            var linking_iter = store.nodes.iterator();
-            while (linking_iter.next()) |linking_entry| {
-                const linking_node = linking_entry.key_ptr.*;
-                const neighbors = try getNeighbors(store, linking_node, allocator);
-                defer allocator.free(neighbors);
-
-                for (neighbors) |neighbor| {
-                    if (neighbor == node) {
-                        const out_degree = @as(f64, @floatFromInt(neighbors.len));
+            // Use incoming_edges adjacency index to find predecessors in O(in_degree)
+            // instead of iterating all nodes * all edges O(V*E)
+            if (store.getIncomingEdgeIds(node)) |in_edge_ids| {
+                for (in_edge_ids) |edge_id| {
+                    if (store.edges.get(edge_id)) |edge| {
+                        const linking_node = edge.from_id;
+                        // Out-degree of the linking node via adjacency index
+                        const out_degree_count = if (store.getOutgoingEdgeIds(linking_node)) |ids| ids.len else 0;
+                        const out_degree = @as(f64, @floatFromInt(out_degree_count));
                         if (out_degree > 0) {
                             rank_sum += (pagerank.get(linking_node) orelse initial_rank) / out_degree;
                         }
-                        break;
                     }
                 }
             }
