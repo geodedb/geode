@@ -4,6 +4,8 @@
 *.tar.gz
 *.tar.xz
 
+.observer.lock
+
 # Root-level generated directories and files
 /core
 core
