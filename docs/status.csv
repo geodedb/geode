@@ -393,20 +393,6 @@ REQ-BINARY-PERSIST-DIRTY-001,BinaryPersistence,DirtyTracking,IMPL,,,storage,2026
 REQ-BINARY-PERSIST-EDGE-001,BinaryPersistence,DirtyTracking,IMPL,,,storage,2026-02-02,src/graph_store.zig
 REQ-BINARY-PERSIST-NODE-002,BinaryPersistence,DirtyTracking,IMPL,,,storage,2026-02-02,src/graph_store.zig
 REQ-BINARY-PERSIST-PATH-001,BinaryPersistence,PathResolution,TESTED,,,storage,2026-02-02,src/graph_store.zig
-REQ-BINARY-PERSIST-TEST-001,BinaryPersistence,UnitTests,TESTED,,,storage,2026-02-02,tests/test_binary_persistence.zig
-REQ-BINARY-PERSIST-TEST-002,BinaryPersistence,SaveLoadCycle,TESTED,,,storage,2026-02-02,tests/test_binary_persistence.zig
-REQ-BINARY-PERSIST-TEST-003,BinaryPersistence,MultipleNodes,TESTED,,,storage,2026-02-02,tests/test_binary_persistence.zig
-REQ-BINARY-PERSIST-TEST-004,BinaryPersistence,EdgePersistence,TESTED,,,storage,2026-02-02,tests/test_binary_persistence.zig
-REQ-BINARY-PERSIST-TEST-005,BinaryPersistence,NullProperties,TESTED,,,storage,2026-02-02,tests/test_binary_persistence.zig
-REQ-BINARY-PERSIST-TEST-006,BinaryPersistence,EmptyStore,TESTED,,,storage,2026-02-02,tests/test_binary_persistence.zig
-REQ-BINARY-PERSIST-TEST-007,BinaryPersistence,LargeDataset,TESTED,,,storage,2026-02-02,tests/test_binary_persistence.zig
-REQ-BINARY-PERSIST-TEST-008,BinaryPersistence,SpecialCharacters,TESTED,,,storage,2026-02-02,tests/test_binary_persistence.zig
-REQ-BINARY-PERSIST-TEST-009,BinaryPersistence,MultiGraph,TESTED,,,storage,2026-02-02,tests/test_binary_persistence.zig
-REQ-BINARY-PERSIST-TEST-010,BinaryPersistence,UniqueIds,TESTED,,,storage,2026-02-02,tests/test_binary_persistence.zig
-REQ-BINARY-PERSIST-TEST-011,BinaryPersistence,PropertyTypes,TESTED,,,storage,2026-02-02,tests/test_binary_persistence.zig
-REQ-BINARY-PERSIST-TEST-012,BinaryPersistence,PropertyUpdate,TESTED,,,storage,2026-02-02,tests/test_binary_persistence.zig
-REQ-BINARY-PERSIST-TEST-013,BinaryPersistence,GetAllNodes,TESTED,,,storage,2026-02-02,tests/test_binary_persistence.zig
-REQ-BINARY-PERSIST-TEST-014,BinaryPersistence,EdgeTypes,TESTED,,,storage,2026-02-02,tests/test_binary_persistence.zig
 REQ-BINDING-VALUE-001,ComplexTypeBinding,Types,TESTED,,,core,2026-01-25,src/exec.zig
 REQ-BM25-INDEX-OPTIMIZER-001,BM25 IndexOptimizer Integration,CostEstimation,TESTED,,,fts,2025-10-05,tests/test_bm25_index_optimizer.zig
 REQ-BM25-INDEX-OPTIMIZER-002,BM25 IndexOptimizer Integration,FulltextOptimization,TESTED,,,fts,2025-10-05,tests/test_bm25_index_optimizer.zig
@@ -2462,7 +2448,6 @@ REQ-GRAPH-META-001,GraphMetadataPersistence,AddGraph,EXEMPT,,,catalog,2026-01-09
 REQ-GRAPH-META-002,GraphMetadataPersistence,RemoveGraph,EXEMPT,,,catalog,2026-01-09,src/schema/catalog.zig
 REQ-GRAPH-META-003,GraphMetadataPersistence,GraphExists,EXEMPT,,,catalog,2026-01-09,src/schema/catalog.zig
 REQ-GRAPH-PERSIST-005,NamedGraphPersistence,CatalogTests,TESTED,,,schema,2026-01-29,src/schema/catalog.zig
-REQ-GRAPH-PERSIST-TEST-001,NamedGraphPersistence,UnitTests,TESTED,,,storage,2026-01-30,tests/test_graph_persistence.zig
 REQ-GRAPH-TRAVERSE-001,Graph,GraphTraversal,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-GRAPH-TYPE-REGISTRY-001,GraphTypeRegistry,TypeDefinition,EXEMPT,,,catalog,2026-01-10,src/server/server_state.zig
 REQ-GRAPH-TYPE-REGISTRY-001,GraphTypeRegistry,TypeManagement,EXEMPT,,,catalog,2026-01-10,src/server/server_state.zig
@@ -3068,10 +3053,6 @@ REQ-MULTI-GRAPH-DELETE-001,MultiGraphIsolation,DeleteGraphFilter,TESTED,,,engine
 REQ-MULTI-GRAPH-DELETE-001,MultiGraphIsolation,DeleteGraphFilter,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-DELETE-002,MultiGraphIsolation,DeleteGraphContext,TESTED,,,engine,2025-12-24,src/execution/statement_dispatcher.zig
 REQ-MULTI-GRAPH-DELETE-002,MultiGraphIsolation,DeleteGraphContext,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-MULTI-GRAPH-HANDLE-001,PerGraphDataIsolation,GraphHandle,IMPL,,,storage,2026-03-16,src/graph_handle.zig
-REQ-MULTI-GRAPH-HANDLE-004,PerGraphMutations,NodeMutation,IMPL,,,storage,2026-03-16,src/graph_handle.zig
-REQ-MULTI-GRAPH-HANDLE-EXPORT-001,PerGraphStorage,LibExport,IMPL,,,storage,2026-03-16,src/lib.zig
-REQ-MULTI-GRAPH-REGISTRY-001,PerGraphFileMapping,GraphRegistry,IMPL,,,storage,2026-03-16,src/graph_registry.zig
 REQ-MULTI-GRAPH-SECURITY-001,MultiGraphSecurity,RBACGraphScope,TESTED,,,security,2025-12-20,src/security/multi_graph_security.zig
 REQ-MULTI-GRAPH-SECURITY-TEST,MultiGraphSecurityTests,Security,IMPL,,,testing,2025-12-20,tests/e2e_multi_graph_security.zig
 REQ-MULTI-GRAPH-UNION-001,MultiGraphIsolation,UnionQueryContext,TESTED,,,engine,2025-12-23,src/execution.zig

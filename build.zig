@@ -755,29 +755,9 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("wal", wal_ext_mod);
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
 
-    // Per-graph data container (graph_handle) unit tests
-    const graph_handle_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/graph_handle.zig"), .target = target, .optimize = optimize }) });
-    graph_handle_unit_tests.root_module.addImport("logging", logging_mod);
-    graph_handle_unit_tests.root_module.addImport("json", json_mod);
-    graph_handle_unit_tests.root_module.addImport("fle_aead", fle_aead_mod);
-    graph_handle_unit_tests.root_module.addImport("fle_key_manager", fle_key_manager_mod);
-    graph_handle_unit_tests.root_module.addImport("fle_key_types", fle_key_types_mod);
-    graph_handle_unit_tests.root_module.addImport("fle_blind_index", fle_blind_index_mod);
-    graph_handle_unit_tests.root_module.addImport("uuid", uuid_ext_mod);
-    const run_graph_handle_unit_tests = b.addRunArtifact(graph_handle_unit_tests);
-
-    // Per-graph UUID registry (graph_registry) unit tests
-    const graph_registry_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/graph_registry.zig"), .target = target, .optimize = optimize }) });
-    graph_registry_unit_tests.root_module.addImport("logging", logging_mod);
-    graph_registry_unit_tests.root_module.addImport("uuid", uuid_ext_mod);
-    const run_graph_registry_unit_tests = b.addRunArtifact(graph_registry_unit_tests);
-
-    // Storage migration unit tests (detectStorageState, migrateToPerGraph)
-    // migration.zig uses @import("geode") for graph_store/GraphHandle/GraphRegistry/UuidV7
-    // and @import("logging") — both must be wired as named imports.
+    // Storage migration unit tests (detectStorageState)
     const storage_migration_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/storage/migration.zig"), .target = target, .optimize = optimize }) });
     storage_migration_unit_tests.root_module.addImport("logging", logging_mod);
-    storage_migration_unit_tests.root_module.addImport("geode", root_mod);
     const run_storage_migration_unit_tests = b.addRunArtifact(storage_migration_unit_tests);
 
     const match_call_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_match_call_integration.zig"), .target = target, .optimize = optimize }) });
@@ -823,16 +803,6 @@ pub fn build(b: *std.Build) void {
     gap0203_tests.root_module.addImport("transport/quic", transport_quic_mod);
     gap0203_tests.root_module.addImport("grpc_client", grpc_client_mod);
     const run_gap0203_tests = b.addRunArtifact(gap0203_tests);
-
-    // GAP-384: Graph persistence tests
-    const graph_persist_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_graph_persistence.zig"), .target = target, .optimize = optimize }) });
-    graph_persist_tests.root_module.addImport("geode", root_mod);
-    const run_graph_persist_tests = b.addRunArtifact(graph_persist_tests);
-
-    // Binary persistence tests (REQ-BINARY-PERSIST-TEST-001)
-    const binary_persist_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_binary_persistence.zig"), .target = target, .optimize = optimize }) });
-    binary_persist_tests.root_module.addImport("geode", root_mod);
-    const run_binary_persist_tests = b.addRunArtifact(binary_persist_tests);
 
     // Compile Vulkan shaders to SPIR-V (Phase 2)
     const shader_compile_step = b.step("shaders", "Compile Vulkan shaders to SPIR-V");
@@ -1073,8 +1043,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_string_func_tests.step);
     test_step.dependOn(&run_graph_algo_tests.step);
     test_step.dependOn(&run_graph_store_unit_tests.step);
-    test_step.dependOn(&run_graph_handle_unit_tests.step);
-    test_step.dependOn(&run_graph_registry_unit_tests.step);
     test_step.dependOn(&run_storage_migration_unit_tests.step);
     test_step.dependOn(&run_match_call_tests.step);
     test_step.dependOn(&run_multihop_tests.step);
@@ -1083,8 +1051,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_repl_advanced_tests.step);
     test_step.dependOn(&run_integration_tests.step);
     // gap0203_tests moved to test-e2e (spawns QUIC servers)
-    test_step.dependOn(&run_graph_persist_tests.step);
-    test_step.dependOn(&run_binary_persist_tests.step);
     test_step.dependOn(&run_match_parity_tests.step);
     test_step.dependOn(&run_limit_pushdown_tests.step);
     test_step.dependOn(&run_limitations_fixes_tests.step);

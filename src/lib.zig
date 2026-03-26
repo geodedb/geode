@@ -533,10 +533,6 @@ pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: Pars
 // Re-export execution and graph_store for integration tests
 pub const execution = @import("execution.zig");
 pub const graph_store = @import("graph_store.zig");
-// CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-EXPORT-001; FEATURE="PerGraphStorage"; ASPECT=LibExport; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
-/// Re-export per-graph storage types used by storage/migration.zig and server_init.zig
-pub const GraphHandle = @import("graph_handle.zig").GraphHandle;
-pub const GraphRegistry = @import("graph_registry.zig").GraphRegistry;
 pub const UuidV7 = @import("uuid.zig").UuidV7;
 // CANARY: REQ=REQ-PERF-WAL-006; FEATURE="WriteAheadLog"; ASPECT=LibExport; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
 // Re-export WAL for server initialization and tests
