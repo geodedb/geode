@@ -275,15 +275,23 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
     return config;
 }
 
-/// Resolve certificate paths based on configuration
-/// Returns struct with cert_path and key_path fields
+/// Resolve certificate paths based on configuration.
+/// Precedence: CLI flags > GEODE_CERT_DIR env > data_dir > /tmp fallback.
+/// Returns struct with cert_path and key_path fields.
 pub fn resolveCertPaths(allocator: std.mem.Allocator, config: *ServerConfig) !struct { cert_path: []const u8, key_path: []const u8 } {
     // If QUIC is enabled and no custom certs specified, use defaults
     if (config.listen_quic != null) {
         if (config.cert_path == null or config.key_path == null) {
-            // Use default paths or fallback to /tmp
+            // Check GEODE_CERT_DIR env var first (set by systemd unit).
+            // This puts certs in /etc/geode/certs/ (0755) so non-root
+            // processes can read the public cert for CA verification.
+            const cert_dir: ?[]const u8 = std.posix.getenv("GEODE_CERT_DIR");
+
             if (config.cert_path == null) {
-                if (config.data_dir) |dir| {
+                if (cert_dir) |dir| {
+                    config.cert_path = try std.fmt.allocPrint(allocator, "{s}/server.crt", .{dir});
+                    config._allocated_cert_path = true;
+                } else if (config.data_dir) |dir| {
                     config.cert_path = try std.fmt.allocPrint(allocator, "{s}/server.crt", .{dir});
                     config._allocated_cert_path = true;
                 } else {
@@ -292,7 +300,10 @@ pub fn resolveCertPaths(allocator: std.mem.Allocator, config: *ServerConfig) !st
             }
 
             if (config.key_path == null) {
-                if (config.data_dir) |dir| {
+                if (cert_dir) |dir| {
+                    config.key_path = try std.fmt.allocPrint(allocator, "{s}/server.key", .{dir});
+                    config._allocated_key_path = true;
+                } else if (config.data_dir) |dir| {
                     config.key_path = try std.fmt.allocPrint(allocator, "{s}/server.key", .{dir});
                     config._allocated_key_path = true;
                 } else {

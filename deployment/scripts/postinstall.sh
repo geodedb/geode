@@ -60,23 +60,34 @@ chmod 750 /var/lib/geode
 chmod 755 /var/log/geode
 chmod 755 /etc/geode/certs
 
-# Generate TLS certificates if they don't exist
+# Generate TLS certificates if they don't exist in /etc/geode/certs/
 if [ ! -f /etc/geode/certs/server.crt ] || [ ! -f /etc/geode/certs/server.key ]; then
-    echo "Generating self-signed TLS certificate..."
-    if command -v openssl >/dev/null 2>&1; then
-        openssl req -x509 -newkey rsa:4096 -nodes \
-            -keyout /etc/geode/certs/server.key \
-            -out /etc/geode/certs/server.crt \
-            -days 365 -subj "/CN=localhost" \
-            2>/dev/null || echo "Warning: Could not generate certificate"
-
-        if [ -f /etc/geode/certs/server.key ]; then
-            chown geode:geode /etc/geode/certs/server.key /etc/geode/certs/server.crt
-            chmod 600 /etc/geode/certs/server.key
-            chmod 644 /etc/geode/certs/server.crt
-        fi
+    # Migration: copy existing certs from data_dir if present
+    if [ -f /var/lib/geode/server.crt ] && [ -f /var/lib/geode/server.key ]; then
+        echo "Migrating existing certificates from /var/lib/geode/ to /etc/geode/certs/..."
+        cp /var/lib/geode/server.crt /etc/geode/certs/server.crt
+        cp /var/lib/geode/server.key /etc/geode/certs/server.key
+        chown geode:geode /etc/geode/certs/server.key /etc/geode/certs/server.crt
+        chmod 600 /etc/geode/certs/server.key
+        chmod 644 /etc/geode/certs/server.crt
     else
-        echo "Warning: OpenSSL not found. Please generate TLS certificates manually."
+        echo "Generating self-signed TLS certificate..."
+        if command -v openssl >/dev/null 2>&1; then
+            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+                -keyout /etc/geode/certs/server.key \
+                -out /etc/geode/certs/server.crt \
+                -days 365 -subj "/CN=localhost" \
+                -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1" \
+                2>/dev/null || echo "Warning: Could not generate certificate"
+
+            if [ -f /etc/geode/certs/server.key ]; then
+                chown geode:geode /etc/geode/certs/server.key /etc/geode/certs/server.crt
+                chmod 600 /etc/geode/certs/server.key
+                chmod 644 /etc/geode/certs/server.crt
+            fi
+        else
+            echo "Warning: OpenSSL not found. Please generate TLS certificates manually."
+        fi
     fi
 fi
 

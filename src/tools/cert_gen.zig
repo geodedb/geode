@@ -52,6 +52,21 @@ pub fn ensureCertificatesAtPath(allocator: std.mem.Allocator, cert_path: []const
     std.fs.cwd().access(cert_path, .{}) catch {
         // Generate new certificates
         try generateSelfSignedCert(allocator, "geode.local", cert_path, key_path);
+
+        // Harden file permissions:
+        //   server.key  → 0600 (owner-only read/write)
+        //   server.crt  → 0644 (world-readable public cert)
+        if (builtin.os.tag != .windows) {
+            if (std.fs.cwd().openFile(key_path, .{})) |f| {
+                defer f.close();
+                f.chmod(0o600) catch {};
+            } else |_| {}
+            if (std.fs.cwd().openFile(cert_path, .{})) |f| {
+                defer f.close();
+                f.chmod(0o644) catch {};
+            } else |_| {}
+        }
+
         std.debug.print("Generated self-signed certificates at {s} and {s}\n", .{ cert_path, key_path });
     };
 }
