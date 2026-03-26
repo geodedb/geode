@@ -68,7 +68,7 @@ fn printAuthInitUsage() void {
 pub fn cmdAuthInit(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     if (hasHelpFlag(argv, start_idx)) {
         printAuthInitUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     const data_dir = parseDataDirFlag(argv, start_idx);
@@ -77,7 +77,7 @@ pub fn cmdAuthInit(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
         std.debug.print("Error: Failed to initialize auth store: {s}\n", .{@errorName(err)});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer mgr.deinit();
+    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
     // Resolve HMAC key
     const kr = auth_graph_manager.AuthGraphManager.resolveHmacKey(allocator, data_dir) catch |err| {
@@ -128,7 +128,7 @@ fn printAuthResealUsage() void {
 pub fn cmdAuthReseal(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     if (hasHelpFlag(argv, start_idx)) {
         printAuthResealUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     const data_dir = parseDataDirFlag(argv, start_idx);
@@ -137,7 +137,7 @@ pub fn cmdAuthReseal(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: us
         std.debug.print("Error: Failed to initialize auth store: {s}\n", .{@errorName(err)});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer mgr.deinit();
+    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
     // Resolve HMAC key
     const kr = auth_graph_manager.AuthGraphManager.resolveHmacKey(allocator, data_dir) catch |err| {
@@ -182,7 +182,7 @@ fn printAuthVerifyUsage() void {
 pub fn cmdAuthVerify(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     if (hasHelpFlag(argv, start_idx)) {
         printAuthVerifyUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     const data_dir = parseDataDirFlag(argv, start_idx);
@@ -191,7 +191,7 @@ pub fn cmdAuthVerify(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: us
         std.debug.print("Error: Failed to initialize auth store: {s}\n", .{@errorName(err)});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer mgr.deinit();
+    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
     // Resolve HMAC key
     const kr = auth_graph_manager.AuthGraphManager.resolveHmacKey(allocator, data_dir) catch |err| {

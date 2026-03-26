@@ -114,6 +114,19 @@ pub fn initCliAuthManager(allocator: std.mem.Allocator, data_dir: ?[]const u8) !
     return AuthGraphManager.init(allocator, store);
 }
 
+/// Persist any dirty graph-store state and deinitialise the CLI auth manager.
+///
+/// CLI commands run as short-lived processes without a persistence thread.
+/// This function ensures that mutations (user create, role create, etc.) are
+/// flushed to disk before the process exits.  Call this instead of (or in
+/// addition to) `mgr.deinit()` from every CLI command that may mutate auth
+/// state.
+pub fn deinitAndSaveCliAuth(allocator: std.mem.Allocator, mgr: *AuthGraphManager) void {
+    // Flush any in-memory changes to disk before tearing down.
+    graph_store.getGlobalStore(allocator).saveIfDirty();
+    mgr.deinit();
+}
+
 // -- Tests --
 
 test "isPasswordStrong rejects short passwords" {

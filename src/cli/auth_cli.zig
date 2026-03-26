@@ -59,7 +59,7 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer mgr.deinit();
+    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
     const subcmd_idx = start_idx + 1;
 
@@ -73,13 +73,13 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 
     if (std.mem.eql(u8, subcmd, "--help") or std.mem.eql(u8, subcmd, "-h")) {
         printPolicyUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     if (std.mem.eql(u8, subcmd, "create")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
             printPolicyUsage();
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
         if (subcmd_idx + 1 >= argv.len) {
             std.debug.print("Error: policy create requires <name>\n", .{});
@@ -116,11 +116,11 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             .created_by = 0,
         });
         printOut("RLS policy '{s}' created for table '{s}'\n", .{ name, table });
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     } else if (std.mem.eql(u8, subcmd, "list")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
             printPolicyUsage();
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
         var found = false;
         var it = mgr.storage.policyIterator();
@@ -137,7 +137,7 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                 printOut("- {s} on {s}\n", .{ record.getName(), record.getTable() });
             }
         }
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     } else if (std.mem.eql(u8, subcmd, "show")) {
         if (subcmd_idx + 1 >= argv.len) {
             std.debug.print("Error: policy show requires <name>\n", .{});
@@ -158,7 +158,7 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         if (!found) {
             printOut("Policy '{s}' not found\n", .{name});
         }
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     } else if (std.mem.eql(u8, subcmd, "delete")) {
         if (subcmd_idx + 1 >= argv.len) {
             std.debug.print("Error: policy delete requires <name>\n", .{});
@@ -174,7 +174,7 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             }
         }
         printOut("Policy '{s}' deleted\n", .{name});
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     std.debug.print("Error: unknown policy subcommand '{s}'\n", .{subcmd});
@@ -191,7 +191,7 @@ pub fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer mgr.deinit();
+    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
     const perm_idx = start_idx + 1;
     if (perm_idx >= argv.len) {
@@ -203,13 +203,13 @@ pub fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     const permission = argv[perm_idx];
     if (std.mem.eql(u8, permission, "--help") or std.mem.eql(u8, permission, "-h")) {
         printGrantUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     // Check for trailing help flag
     if (hasHelpFlag(argv, perm_idx + 1)) {
         printGrantUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     var target: ?[]const u8 = null;
@@ -268,7 +268,7 @@ pub fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer mgr.deinit();
+    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
     const perm_idx = start_idx + 1;
     if (perm_idx >= argv.len) {
@@ -280,12 +280,12 @@ pub fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     const permission = argv[perm_idx];
     if (std.mem.eql(u8, permission, "--help") or std.mem.eql(u8, permission, "-h")) {
         printRevokeUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     if (hasHelpFlag(argv, perm_idx + 1)) {
         printRevokeUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     var target: ?[]const u8 = null;

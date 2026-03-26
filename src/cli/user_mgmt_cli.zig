@@ -122,7 +122,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer mgr.deinit();
+    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
     const subcmd_idx = findSubcommandStart(argv, start_idx);
     if (subcmd_idx >= argv.len) {
@@ -135,13 +135,13 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
 
     if (std.mem.eql(u8, subcommand, "--help") or std.mem.eql(u8, subcommand, "-h")) {
         printUserUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     if (std.mem.eql(u8, subcommand, "create")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
             printUserUsage();
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
         if (subcmd_idx + 2 >= argv.len) {
             std.debug.print("Error: user create requires <username> and <email>\n", .{});
@@ -248,7 +248,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
     if (std.mem.eql(u8, subcommand, "list")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
             printOut("Usage: geode user list\nLists all users\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
         printOut("Users:\n", .{});
         var it = mgr.storage.userIterator();
@@ -259,13 +259,13 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         if (mgr.storage.user_cache.count() == 0) {
             printOut("  (no users)\n", .{});
         }
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     if (std.mem.eql(u8, subcommand, "show") or std.mem.eql(u8, subcommand, "info")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
             printOut("Usage: geode user show <username>\nShow user details\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
         if (subcmd_idx + 1 >= argv.len) {
             std.debug.print("Error: user show/info requires <username>\n", .{});
@@ -282,7 +282,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         } else {
             printOut("User: {s}\nEmail: unknown\nRole: user\nStatus: active\n", .{username});
         }
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     if (std.mem.eql(u8, subcommand, "delete")) {
@@ -293,7 +293,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         const username = argv[subcmd_idx + 1];
         if (std.mem.eql(u8, username, "--help") or std.mem.eql(u8, username, "-h")) {
             printOut("geode user delete - Delete a user\n\nUsage: geode user delete <username>\n\nDeletes the specified user from the local user store.\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
         // Find user by username and remove
         var found = false;
@@ -311,7 +311,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.debug.print("Error: user '{s}' not found\n", .{username});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     if (std.mem.eql(u8, subcommand, "update")) {
@@ -386,7 +386,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             try mgr.storage.persistUser(user_id, username, new_email orelse "unknown@example.com", pw, "");
         }
         printOut("User '{s}' updated\n", .{username});
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     if (std.mem.eql(u8, subcommand, "assign-role")) {
@@ -404,7 +404,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         }
         // Note: full role assignment via graph edges would need HAS_ROLE edge creation
         printOut("Assigned role '{s}' to user '{s}'\n", .{ role, username });
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     if (std.mem.eql(u8, subcommand, "permissions")) {
@@ -435,7 +435,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
         }
         printOut("\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     if (std.mem.eql(u8, subcommand, "disable") or std.mem.eql(u8, subcommand, "enable")) {
@@ -449,7 +449,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             try mgr.storage.updateUser(existing.id, null, null, enable, null, null);
         }
         printOut("User '{s}' {s}\n", .{ username, if (enable) "enabled" else "disabled" });
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     // CANARY: REQ=REQ-MFA-SETUP-REAL-001; FEATURE="MFARealEnrollment"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/mfa_comprehensive_security.yml; OWNER=cli; UPDATED=2026-01-29
@@ -463,7 +463,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             printOut("  --show-recovery   Show recovery codes\n", .{});
             printOut("  --regenerate      Regenerate new secret and recovery codes\n", .{});
             printOut("  --help, -h        Show this help\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
         if (subcmd_idx + 1 >= argv.len) {
             std.debug.print("Error: mfa-setup requires <username>\n", .{});
@@ -544,7 +544,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             printOut("\nStore these recovery codes securely. Each can only be used once.\n", .{});
         }
 
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     if (std.mem.eql(u8, subcommand, "mfa-verify")) {
@@ -554,7 +554,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             printOut("\nOptions:\n", .{});
             printOut("  --token <code>    The 6-digit TOTP code to verify\n", .{});
             printOut("  --help, -h        Show this help\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
         if (subcmd_idx + 1 >= argv.len) {
             std.debug.print("Error: mfa-verify requires <username>\n", .{});
@@ -582,7 +582,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         }
 
         printOut("MFA token verified for {s}\n", .{username});
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     // CANARY: REQ=REQ-MFA-TOGGLE-001; FEATURE="MFAToggleSecure"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_security.yml; OWNER=cli; UPDATED=2026-01-14
@@ -599,7 +599,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             printOut("\nExamples:\n", .{});
             printOut("  geode user mfa enable alice --code 123456\n", .{});
             printOut("  geode user mfa disable alice\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
         // Support: geode user mfa enable <username>
         if (subcmd_idx + 2 >= argv.len) {
@@ -686,7 +686,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         } else {
             printOut("MFA disabled for {s}.\n", .{username});
         }
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     if (std.mem.eql(u8, subcommand, "change-password")) {
@@ -749,7 +749,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             try mgr.storage.updateUser(existing.id, null, final_new, null, null, null);
         }
         printOut("Password changed for user '{s}'\n", .{username});
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     if (std.mem.eql(u8, subcommand, "reset-password")) {
@@ -792,7 +792,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             try mgr.storage.updateUser(existing.id, null, final_new, null, null, null);
         }
         printOut("Password reset for user '{s}'\n", .{username});
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     std.debug.print("Error: Unknown user subcommand '{s}'\n", .{subcommand});
@@ -809,7 +809,7 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer mgr.deinit();
+    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
     if (start_idx + 1 >= argv.len) {
         std.debug.print("Error: missing role subcommand\n", .{});
@@ -822,13 +822,13 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
     // Handle --help and -h flags
     if (std.mem.eql(u8, subcommand, "--help") or std.mem.eql(u8, subcommand, "-h")) {
         printRoleUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     if (std.mem.eql(u8, subcommand, "create")) {
         if (hasHelpFlag(argv, start_idx + 2)) {
             printRoleUsage();
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
         if (start_idx + 2 >= argv.len) {
             std.debug.print("Error: role create requires <rolename>\n", .{});
@@ -856,11 +856,11 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             try mgr.storage.persistRole(role_id, rolename, description, 0, 0, false);
         }
         printOut("Role '{s}' created successfully\n", .{rolename});
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     } else if (std.mem.eql(u8, subcommand, "list")) {
         if (hasHelpFlag(argv, start_idx + 2)) {
             printOut("Usage: geode role list\nLists all roles\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
         printOut("Roles:\n", .{});
         var it = mgr.storage.roleIterator();
@@ -872,11 +872,11 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         if (!found) {
             printOut("  (no roles)\n", .{});
         }
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     } else if (std.mem.eql(u8, subcommand, "delete")) {
         if (hasHelpFlag(argv, start_idx + 2)) {
             printOut("Usage: geode role delete <rolename>\nDelete role by name\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
         if (start_idx + 2 >= argv.len) {
             std.debug.print("Error: role delete requires <rolename>\n", .{});
@@ -889,11 +889,11 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             deleted = true;
         }
         printOut("Role '{s}' {s}\n", .{ rolename, if (deleted) "deleted" else "not found (noop)" });
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     } else if (std.mem.eql(u8, subcommand, "show")) {
         if (hasHelpFlag(argv, start_idx + 2)) {
             printRoleUsage();
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
         if (start_idx + 2 >= argv.len) {
             std.debug.print("Error: role show requires <rolename>\n", .{});
@@ -905,7 +905,7 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         } else {
             printOut("Role: {s}\nDescription: (not found)\n", .{rolename});
         }
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     } else {
         std.debug.print("Error: Unknown role subcommand '{s}'\n", .{subcommand});
         printRoleUsage();

@@ -227,7 +227,7 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     };
-    defer mgr.deinit();
+    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
     // Initialize API key manager
     var manager = api_keys.ApiKeyManager.init(allocator);
@@ -244,13 +244,13 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 
     if (std.mem.eql(u8, subcommand, "--help") or std.mem.eql(u8, subcommand, "-h")) {
         printUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     if (std.mem.eql(u8, subcommand, "create")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
             printUsage();
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
 
         var username: ?[]const u8 = null;
@@ -383,7 +383,7 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     if (std.mem.eql(u8, subcommand, "list")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
             printOut("Usage: geode apikey list --user <username>\nLists all API keys for a user\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
 
         var username: ?[]const u8 = null;
@@ -441,7 +441,7 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     if (std.mem.eql(u8, subcommand, "revoke")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
             printOut("Usage: geode apikey revoke --user <username> --name <keyname>\nRevokes an API key\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
 
         var username: ?[]const u8 = null;
@@ -502,7 +502,7 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     if (std.mem.eql(u8, subcommand, "revoke-all")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
             printOut("Usage: geode apikey revoke-all --user <username> [--yes]\nRevokes all API keys for a user\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
 
         var username: ?[]const u8 = null;
@@ -560,7 +560,7 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     if (std.mem.eql(u8, subcommand, "validate")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
             printOut("Usage: geode apikey validate <api_key>\nValidates an API key format\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
 
         if (subcmd_idx + 1 >= argv.len) {
@@ -591,7 +591,7 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     if (std.mem.eql(u8, subcommand, "check-scope")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
             printOut("Usage: geode apikey check-scope --user <username> --name <keyname> --scope <scope>\nChecks if a key has a specific scope\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
 
         var username: ?[]const u8 = null;
