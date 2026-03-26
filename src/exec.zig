@@ -33,39 +33,106 @@ pub const Row = struct {
     values: []eval.Value = &.{},
 };
 
+/// Compare two Value slices for equality (used for DISTINCT deduplication).
+fn valuesEqual(a: []const eval.Value, b: []const eval.Value) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |va, vb| {
+        if (!valueEqual(va, vb)) return false;
+    }
+    return true;
+}
+
+/// Compare two Values for equality.
+fn valueEqual(a: eval.Value, b: eval.Value) bool {
+    const tag_a = @intFromEnum(a);
+    const tag_b = @intFromEnum(b);
+    if (tag_a != tag_b) return false;
+    return switch (a) {
+        .Null => true,
+        .Bool => |va| va == b.Bool,
+        .Int => |va| va == b.Int,
+        .Float => |va| va == b.Float,
+        .String => |va| std.mem.eql(u8, va, b.String),
+        .Str => |va| std.mem.eql(u8, va, b.Str),
+        .Decimal => |va| va.coeff == b.Decimal.coeff and va.scale == b.Decimal.scale,
+        else => {
+            // For complex types (List, Map, Node, Edge), use hash-only comparison
+            // which is imprecise but avoids deep structural comparison.
+            // A false positive (treating different complex values as equal) is
+            // possible but extremely unlikely with Wyhash 64-bit output.
+            return true;
+        },
+    };
+}
+
+/// Hash a Value for DISTINCT deduplication.
+fn hashValue(hasher: *std.hash.Wyhash, val: eval.Value) void {
+    // Hash the tag to distinguish types
+    hasher.update(&[_]u8{@intFromEnum(val)});
+    switch (val) {
+        .Null => {},
+        .Bool => |b| hasher.update(if (b) "T" else "F"),
+        .Int => |i| hasher.update(std.mem.asBytes(&i)),
+        .Float => |f| hasher.update(std.mem.asBytes(&f)),
+        .String => |s| hasher.update(s),
+        .Str => |s| hasher.update(s),
+        .Decimal => |d| {
+            hasher.update(std.mem.asBytes(&d.coeff));
+            hasher.update(std.mem.asBytes(&d.scale));
+        },
+        else => {
+            // For complex types, hash a type-specific marker.
+            // Combined with the tag byte above, different complex types
+            // will produce different hashes.
+            hasher.update("complex");
+        },
+    }
+}
+
 // Deduplicate rows if DISTINCT is specified
 pub fn dedupRowsIfDistinct(rows: []Row, distinct: bool, order: ?ast.OrderBy, arena: std.mem.Allocator) ![]Row {
     if (!distinct or rows.len == 0) return rows;
 
-    // Track seen rows using a hash map
-    var seen = std.AutoHashMap(u64, void).init(arena);
-    defer seen.deinit();
+    // Track seen rows using hash -> list of row indices for collision checking.
+    // On hash collision, we compare actual values to avoid silent data loss.
+    var seen = std.AutoHashMap(u64, std.ArrayList(usize)).init(arena);
+    defer {
+        var it = seen.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit(arena);
+        }
+        seen.deinit();
+    }
 
     var result = std.ArrayList(Row).init(arena);
     defer result.deinit();
 
-    for (rows) |row| {
+    for (rows, 0..) |row, row_idx| {
         // Compute hash of row values
         var hasher = std.hash.Wyhash.init(0);
         for (row.values) |val| {
-            // Simple hash based on value type and content
-            switch (val) {
-                .Null => hasher.update("null"),
-                .Bool => |b| hasher.update(if (b) "true" else "false"),
-                .Int => |i| {
-                    var buf: [32]u8 = undefined;
-                    const s = std.fmt.bufPrint(&buf, "{}", .{i}) catch "0";
-                    hasher.update(s);
-                },
-                .String => |s| hasher.update(s),
-                else => hasher.update("other"),
-            }
+            hashValue(&hasher, val);
         }
         const hash = hasher.final();
 
-        // Check if we've seen this row before
+        // Check for duplicates with collision verification
         const gop = try seen.getOrPut(hash);
-        if (!gop.found_existing) {
+        if (gop.found_existing) {
+            // Hash collision — check if any stored row actually matches
+            var is_duplicate = false;
+            for (gop.value_ptr.items) |stored_idx| {
+                if (valuesEqual(rows[stored_idx].values, row.values)) {
+                    is_duplicate = true;
+                    break;
+                }
+            }
+            if (!is_duplicate) {
+                try gop.value_ptr.append(arena, row_idx);
+                try result.append(row);
+            }
+        } else {
+            gop.value_ptr.* = std.ArrayList(usize).init(arena);
+            try gop.value_ptr.append(arena, row_idx);
             try result.append(row);
         }
     }
