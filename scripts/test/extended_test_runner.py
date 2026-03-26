@@ -1241,12 +1241,15 @@ def start_server(binary, data_dir, port, args, timeout_ms=30000, env_overrides=N
         server_env.update(env_overrides)
 
     # Start server process
-    # Use DEVNULL for stdout/stderr to prevent server from hanging when pipe buffers fill
-    # (The server produces extensive QUIC debug output that would fill pipe buffers)
+    # Capture stderr to a temp file for diagnostics while avoiding pipe buffer deadlocks
+    import tempfile
+
+    server_log = tempfile.NamedTemporaryFile(mode="w", prefix="geode_server_", suffix=".log", delete=False)  # noqa: SIM115
     try:
-        server_proc = subprocess.Popen(server_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=server_env)
+        server_proc = subprocess.Popen(server_cmd, stdout=subprocess.DEVNULL, stderr=server_log, env=server_env)
     except Exception as e:
         print(f"  Failed to start server: {e}")
+        server_log.close()
         return None, None
 
     # Wait for server to initialize with active readiness probe.
@@ -1257,6 +1260,7 @@ def start_server(binary, data_dir, port, args, timeout_ms=30000, env_overrides=N
     time.sleep(2)
 
     ready = False
+    last_probe_error = ""
     probe_env = os.environ.copy()
     if env_overrides:
         probe_env.update(env_overrides)
@@ -1295,10 +1299,12 @@ def start_server(binary, data_dir, port, args, timeout_ms=30000, env_overrides=N
             if probe.returncode == 0:
                 ready = True
                 break
+            else:
+                last_probe_error = (probe.stderr or probe.stdout or "").strip()[:200]
         except subprocess.TimeoutExpired:
-            pass
-        except Exception:
-            pass
+            last_probe_error = "probe timed out"
+        except Exception as e:
+            last_probe_error = str(e)
 
         time.sleep(1)
 
@@ -1306,10 +1312,29 @@ def start_server(binary, data_dir, port, args, timeout_ms=30000, env_overrides=N
         # Verify server is still running even if probe never succeeded
         if server_proc.poll() is not None:
             print(f"  Server exited prematurely with code {server_proc.returncode}")
+            server_log.close()
+            # Print server log for diagnostics
+            try:
+                with open(server_log.name) as f:
+                    log_content = f.read()[-2000:]  # Last 2KB
+                    if log_content:
+                        print(f"  Server log:\n{log_content}")
+            except Exception:
+                pass
             return None, None
-        print(
-            f"  Warning: server readiness probe did not succeed within {int(deadline - time.time() + min(timeout_ms / 1000.0, 30))}s, proceeding anyway"
-        )
+        # Print diagnostic info
+        print(f"  Warning: server readiness probe failed after {int(min(timeout_ms / 1000.0, 30))}s")
+        if last_probe_error:
+            print(f"  Last probe error: {last_probe_error}")
+        # Print server log tail
+        server_log.flush()
+        try:
+            with open(server_log.name) as f:
+                log_content = f.read()[-2000:]
+                if log_content:
+                    print(f"  Server stderr:\n{log_content}")
+        except Exception:
+            pass
 
     return server_proc, port
 
