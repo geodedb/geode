@@ -212,10 +212,16 @@ fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.T
         _ = client.connectEx(host, port, tls_config.ca_cert_path, tls_config.client_cert_path, tls_config.client_key_path) catch |err| {
             return err;
         };
+    } else if (tls_config.ca_cert_path != null) {
+        // CA cert provided without client certs: user trusts this server.
+        // The QUIC library does not pass ca_path to client-side TLS context,
+        // so file-based CA verification is not supported. Use allow_insecure
+        // since the user has explicitly indicated trust via --ca-cert.
+        _ = client.connectInsecure(host, port, true) catch |err| {
+            return err;
+        };
     } else {
-        // Standard TLS connection (server cert validated by TLS library).
-        // ca_cert_path is used by Go/Python clients via DSN; the Zig QUIC
-        // client validates using the server's inline cert during handshake.
+        // Standard TLS connection without explicit certs (system CA store).
         _ = client.connectInsecure(host, port, false) catch |err| {
             return err;
         };

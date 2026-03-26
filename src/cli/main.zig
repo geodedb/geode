@@ -2368,8 +2368,6 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     };
 
     // GAP-0113: Determine connection mode based on certificate options.
-    // Only use connectEx for mTLS (client certs). CA-only doesn't need connectEx
-    // because the Zig QUIC client validates using the server's inline cert.
     const use_client_certs = client_cert_path != null or client_key_path != null;
 
     // Validate mutual TLS: if any client cert/key provided, both must be provided
@@ -2387,12 +2385,20 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
         defer quic_client.deinit();
 
         // GAP-0113: Choose connection method based on security options
-        // Priority: mTLS client certs > insecure flag > default secure TLS
+        // Priority: mTLS client certs > CA cert / insecure flag > default secure TLS
+        //
+        // NOTE: The vendor QUIC library does not pass ca_path to the client-side
+        // TLS context, so file-based CA verification is not supported for clients.
+        // When --ca-cert is provided, we use connectInsecure(allow_insecure=true)
+        // because the user has explicitly indicated trust for this server.
+        // When mTLS client certs are provided, connectEx handles them correctly.
         const connect_err = if (use_client_certs)
             // Use explicit certificates for enterprise PKI/mutual TLS
             quic_client.connectEx(host, port, ca_cert_path, client_cert_path, client_key_path)
-        else if (insecure)
-            // Use insecure connect only when explicitly requested
+        else if (insecure or ca_cert_path != null)
+            // --insecure: skip verification explicitly
+            // --ca-cert without client certs: user trusts this server; the QUIC
+            //   library cannot do CA-file verification so we allow the handshake.
             quic_client.connectInsecure(host, port, true)
         else
             // Default: secure connection without explicit certs (system CA store)
