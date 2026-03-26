@@ -3,24 +3,14 @@ const fle_integration = @import("fle_integration.zig");
 const uuid = @import("uuid.zig");
 
 // CANARY: REQ=REQ-TDE-GRAPHSTORE-001; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStorePersistence; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
-const tde = @import("storage/tde_file_encryption.zig");
+// TDE file-level encryption import removed — adapter handles persistence now.
+// Field-level encryption (FLE) remains active via fle_integration.zig.
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=EXEMPT; OWNER=storage; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("storage");
 const Attr = logging.Attr;
 const crc = std.hash.crc;
-
-const PERSIST_VERSION: u32 = 3;
-const HEADER_LEN: usize = 60; // magic(8) + version(4) + reserved(4) + ids/counts(40) + checksum(4)
-
-// Per-graph file format constants
-const PER_GRAPH_MAGIC = "GEODGRF1";
-const PER_GRAPH_VERSION: u32 = 2;
-// Header v2: magic(8) + version(4) + graph_uuid(16) + node_count(8) + edge_count(8) + CRC(4) = 48
-const PER_GRAPH_HEADER_LEN: usize = 48;
-
-const GraphHandle = @import("graph_handle.zig").GraphHandle;
 
 var last_checksum_error: bool = false;
 
@@ -372,12 +362,7 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
     // Track if store has unsaved changes - avoids O(n²) persistence during batch operations
     dirty: bool = false,
-    // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-002; FEATURE="PerGraphStorage"; ASPECT=GraphStoreRouting; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
-    // Per-graph storage support
-    graph_handles: std.StringHashMap(*GraphHandle),
-    graph_handles_rwlock: std.Thread.RwLock = .{},
     data_dir: []const u8 = "",
-    use_per_graph_storage: bool = false,
 
     /// Initialize GraphStore with default tenant
     pub fn init(allocator: std.mem.Allocator) error{OutOfMemory}!GraphStore {
@@ -399,7 +384,6 @@ pub const GraphStore = struct {
             .label_index = std.StringHashMap(std.ArrayList(u64)).init(allocator),
             .outgoing_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
             .incoming_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
-            .graph_handles = std.StringHashMap(*GraphHandle).init(allocator),
         };
         // Register default graph name
         const default_name = try allocator.dupe(u8, "default");
@@ -465,16 +449,6 @@ pub const GraphStore = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.incoming_edges.deinit();
-
-        // Clean up per-graph handles
-        {
-            var gh_iter = self.graph_handles.iterator();
-            while (gh_iter.next()) |entry| {
-                entry.value_ptr.*.deinit();
-                self.allocator.free(entry.key_ptr.*);
-            }
-            self.graph_handles.deinit();
-        }
     }
 
     pub fn clearNodes(self: *GraphStore) void {
@@ -617,54 +591,6 @@ pub const GraphStore = struct {
         if (self.graphs.contains(graph_name)) return;
         const name_copy = try self.allocator.dupe(u8, graph_name);
         try self.graphs.put(name_copy, {});
-        // Per-graph storage: also create a GraphHandle if one doesn't exist yet.
-        // This is critical for WAL replay where createNodeWithId calls ensureGraph
-        // for graphs that weren't in the registry (created after last migration).
-        if (self.use_per_graph_storage) {
-            if (self.getHandle(graph_name) == null) {
-                const graph_uuid = uuid.UuidV7.new().bytes;
-                const handle = GraphHandle.init(self.allocator, graph_name, graph_uuid) catch return;
-                const handle_name = self.allocator.dupe(u8, graph_name) catch {
-                    handle.deinit();
-                    return;
-                };
-                self.graph_handles_rwlock.lock();
-                self.graph_handles.put(handle_name, handle) catch {
-                    self.graph_handles_rwlock.unlock();
-                    handle.deinit();
-                    self.allocator.free(handle_name);
-                    return;
-                };
-                self.graph_handles_rwlock.unlock();
-            }
-        }
-    }
-
-    /// Look up a per-graph handle by name. Returns null if per-graph storage
-    /// is not active or the graph is not registered.
-    pub fn getHandle(self: *GraphStore, graph_name: []const u8) ?*GraphHandle {
-        self.graph_handles_rwlock.lockShared();
-        defer self.graph_handles_rwlock.unlockShared();
-        return self.graph_handles.get(graph_name);
-    }
-
-    /// Sync a property value into a target property map (used for per-graph handle mirroring).
-    /// Silently ignores allocation failures since the flat map is the source of truth.
-    fn syncPropertyToMap(self: *GraphStore, target: *std.StringHashMap(PropertyValue), key: []const u8, value: PropertyValue) void {
-        const value_copy = copyPropertyValue(self, value) catch return;
-        const result = target.getOrPut(key) catch {
-            freePropertyValue(self, value_copy);
-            return;
-        };
-        if (!result.found_existing) {
-            result.key_ptr.* = self.allocator.dupe(u8, key) catch {
-                freePropertyValue(self, value_copy);
-                return;
-            };
-        } else {
-            freePropertyValue(self, result.value_ptr.*);
-        }
-        result.value_ptr.* = value_copy;
     }
 
     pub fn graphExists(self: *const GraphStore, graph_name: []const u8) bool {
@@ -697,47 +623,6 @@ pub const GraphStore = struct {
         const name_copy = try self.allocator.dupe(u8, graph_name);
         try self.graphs.put(name_copy, {});
 
-        // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-005; FEATURE="PerGraphStorage"; ASPECT=CreateGraph; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
-        // Per-graph storage: create a GraphHandle for the new graph and persist registry
-        if (self.use_per_graph_storage) {
-            const graph_uuid = uuid.UuidV7.new().bytes;
-            const handle = GraphHandle.init(self.allocator, graph_name, graph_uuid) catch |err| {
-                log.warn("Failed to create GraphHandle for new graph", &.{
-                    Attr.string("graph", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-                self.dirty = true;
-                return;
-            };
-            const handle_name = self.allocator.dupe(u8, graph_name) catch |err| {
-                handle.deinit();
-                log.warn("Failed to dupe graph_name for handle map", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-                self.dirty = true;
-                return;
-            };
-            self.graph_handles_rwlock.lock();
-            self.graph_handles.put(handle_name, handle) catch |err| {
-                self.graph_handles_rwlock.unlock();
-                handle.deinit();
-                self.allocator.free(handle_name);
-                log.warn("Failed to insert GraphHandle into map", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-                self.dirty = true;
-                return;
-            };
-            self.graph_handles_rwlock.unlock();
-            // Save registry and empty graph file
-            self.savePerGraphFiles() catch |err| {
-                log.warn("Failed to save per-graph files after CREATE GRAPH", &.{
-                    Attr.string("graph", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
-        }
-
         self.dirty = true;
     }
 
@@ -751,37 +636,6 @@ pub const GraphStore = struct {
         }
         if (!self.graphs.contains(graph_name)) {
             return error.GraphNotFound;
-        }
-
-        // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-006; FEATURE="PerGraphStorage"; ASPECT=DropGraph; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
-        // Per-graph storage: delete the per-graph file and remove the GraphHandle
-        if (self.use_per_graph_storage) {
-            self.graph_handles_rwlock.lock();
-            if (self.graph_handles.fetchRemove(graph_name)) |kv| {
-                self.graph_handles_rwlock.unlock();
-                const handle = kv.value;
-                // Delete the per-graph file
-                var uuid_str_buf: [36]u8 = undefined;
-                const uuid_v7 = uuid.UuidV7.fromBytes(handle.uuid);
-                if (uuid_v7.toStringBuf(&uuid_str_buf)) |uuid_str| {
-                    const file_path = std.fmt.allocPrint(self.allocator, "{s}/graphs/{s}.dat", .{ self.data_dir, uuid_str }) catch null;
-                    if (file_path) |path| {
-                        defer self.allocator.free(path);
-                        std.fs.cwd().deleteFile(path) catch {};
-                    }
-                } else |_| {}
-                self.allocator.free(kv.key);
-                handle.deinit();
-            } else {
-                self.graph_handles_rwlock.unlock();
-            }
-            // Save updated registry
-            self.savePerGraphFiles() catch |err| {
-                log.warn("Failed to save registry after DROP GRAPH", &.{
-                    Attr.string("graph", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
         }
 
         self.clearNodesForGraph(graph_name);
@@ -824,21 +678,6 @@ pub const GraphStore = struct {
             try self.addToLabelIndex(graph_name, label, id);
         }
 
-        // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-004; FEATURE="PerGraphMutations"; ASPECT=NodeMutation; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
-        // Per-graph storage: mirror node into the corresponding GraphHandle
-        if (self.use_per_graph_storage) {
-            if (self.getHandle(graph_name)) |handle| {
-                if (self.nodes.getPtr(id)) |node_ptr| {
-                    handle.addNode(node_ptr) catch |err| {
-                        log.warn("Failed to mirror node into GraphHandle", &.{
-                            Attr.string("graph", graph_name),
-                            Attr.string("error", @errorName(err)),
-                        });
-                    };
-                }
-            }
-        }
-
         // CANARY: REQ=REQ-BINARY-PERSIST-NODE-002; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
         // Mark store as dirty - persistence happens at query completion, not per-node
         // This avoids O(n²) serialization overhead during batch operations
@@ -876,20 +715,6 @@ pub const GraphStore = struct {
 
         for (labels) |label| {
             try self.addToLabelIndex(graph_name, label, node_id);
-        }
-
-        // Per-graph storage: mirror node into the corresponding GraphHandle
-        if (self.use_per_graph_storage) {
-            if (self.getHandle(graph_name)) |handle| {
-                if (self.nodes.getPtr(node_id)) |node_ptr| {
-                    handle.addNode(node_ptr) catch |err| {
-                        log.warn("Failed to mirror node into GraphHandle", &.{
-                            Attr.string("graph", graph_name),
-                            Attr.string("error", @errorName(err)),
-                        });
-                    };
-                }
-            }
         }
 
         if (node_id >= self.next_node_id) {
@@ -1090,16 +915,6 @@ pub const GraphStore = struct {
             }
             result.value_ptr.* = value_copy;
 
-            // Per-graph storage: also set the property on the handle's copy of the node
-            if (self.use_per_graph_storage) {
-                if (self.getHandle(node.graph_name)) |handle| {
-                    if (handle.nodes.getPtr(node_id)) |handle_node| {
-                        self.syncPropertyToMap(&handle_node.properties, key, value);
-                    }
-                    handle.markDirty();
-                }
-            }
-
             // Mark as dirty - persistence happens at query completion
             self.dirty = true;
 
@@ -1164,18 +979,6 @@ pub const GraphStore = struct {
                 self.allocator.free(kv.key);
                 freePropertyValue(self, kv.value);
             }
-            // Per-graph storage: also remove from handle's copy
-            if (self.use_per_graph_storage) {
-                if (self.getHandle(node.graph_name)) |handle| {
-                    if (handle.nodes.getPtr(node_id)) |handle_node| {
-                        if (handle_node.properties.fetchRemove(key)) |hkv| {
-                            self.allocator.free(hkv.key);
-                            freePropertyValue(self, hkv.value);
-                        }
-                    }
-                    handle.markDirty();
-                }
-            }
             // Mark as dirty - persistence happens at query completion
             self.dirty = true;
 
@@ -1208,13 +1011,6 @@ pub const GraphStore = struct {
 
             // Maintain label index
             try self.addToLabelIndex(node.graph_name, label, node_id);
-
-            // Per-graph storage: mark the corresponding GraphHandle dirty
-            if (self.use_per_graph_storage) {
-                if (self.getHandle(node.graph_name)) |handle| {
-                    handle.markDirty();
-                }
-            }
 
             // Mark as dirty - persistence happens at query completion
             self.dirty = true;
@@ -1257,13 +1053,6 @@ pub const GraphStore = struct {
                 // Remove label from index and free label memory
                 self.removeFromLabelIndex(node.graph_name, label, node_id);
                 self.allocator.free(removed_label);
-
-                // Per-graph storage: mark the corresponding GraphHandle dirty
-                if (self.use_per_graph_storage) {
-                    if (self.getHandle(node.graph_name)) |handle| {
-                        handle.markDirty();
-                    }
-                }
 
                 // Mark as dirty - persistence happens at query completion
                 self.dirty = true;
@@ -1799,21 +1588,6 @@ pub const GraphStore = struct {
         // Issue #392: Maintain adjacency indexes for fast DELETE DETACH
         try self.addToAdjacencyIndex(from_id, to_id, id);
 
-        // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-004; FEATURE="PerGraphMutations"; ASPECT=EdgeMutation; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
-        // Per-graph storage: mirror edge into the corresponding GraphHandle
-        if (self.use_per_graph_storage) {
-            if (self.getHandle(graph_name)) |handle| {
-                if (self.edges.getPtr(id)) |edge_ptr| {
-                    handle.addEdge(edge_ptr) catch |err| {
-                        log.warn("Failed to mirror edge into GraphHandle", &.{
-                            Attr.string("graph", graph_name),
-                            Attr.string("error", @errorName(err)),
-                        });
-                    };
-                }
-            }
-        }
-
         // CANARY: REQ=REQ-BINARY-PERSIST-EDGE-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
         // Mark store as dirty - persistence happens at query completion, not per-edge
         self.dirty = true;
@@ -1850,20 +1624,6 @@ pub const GraphStore = struct {
 
         try self.edges.put(edge_id, edge);
         try self.addToAdjacencyIndex(from_id, to_id, edge_id);
-
-        // Per-graph storage: mirror edge into the corresponding GraphHandle
-        if (self.use_per_graph_storage) {
-            if (self.getHandle(graph_name)) |handle| {
-                if (self.edges.getPtr(edge_id)) |edge_ptr| {
-                    handle.addEdge(edge_ptr) catch |err| {
-                        log.warn("Failed to mirror edge into GraphHandle", &.{
-                            Attr.string("graph", graph_name),
-                            Attr.string("error", @errorName(err)),
-                        });
-                    };
-                }
-            }
-        }
 
         if (edge_id >= self.next_edge_id) {
             self.next_edge_id = edge_id + 1;
@@ -2003,16 +1763,6 @@ pub const GraphStore = struct {
             }
             result.value_ptr.* = value_copy;
 
-            // Per-graph storage: also set the property on the handle's copy of the edge
-            if (self.use_per_graph_storage) {
-                if (self.getHandle(edge.graph_name)) |handle| {
-                    if (handle.edges.getPtr(edge_id)) |handle_edge| {
-                        self.syncPropertyToMap(&handle_edge.properties, key, value);
-                    }
-                    handle.markDirty();
-                }
-            }
-
             // Mark as dirty - persistence happens at query completion
             self.dirty = true;
 
@@ -2026,18 +1776,6 @@ pub const GraphStore = struct {
             if (edge.properties.fetchRemove(key)) |kv| {
                 self.allocator.free(kv.key);
                 freePropertyValue(self, kv.value);
-            }
-            // Per-graph storage: also remove from handle's copy
-            if (self.use_per_graph_storage) {
-                if (self.getHandle(edge.graph_name)) |handle| {
-                    if (handle.edges.getPtr(edge_id)) |handle_edge| {
-                        if (handle_edge.properties.fetchRemove(key)) |hkv| {
-                            self.allocator.free(hkv.key);
-                            freePropertyValue(self, hkv.value);
-                        }
-                    }
-                    handle.markDirty();
-                }
             }
             self.dirty = true;
 
@@ -2801,806 +2539,56 @@ pub const GraphStore = struct {
         };
     }
 
-    // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-003; FEATURE="PerGraphStorage"; ASPECT=SavePerGraph; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
-    /// Save all dirty GraphHandles to individual files and write the graph registry.
-    /// Returns error if ANY per-graph save fails — this prevents WAL truncation from
-    /// discarding records for graphs that were not successfully checkpointed.
+    /// No-op: per-graph file persistence removed — adapter handles storage.
     pub fn savePerGraphFiles(self: *GraphStore) !void {
-        const GraphRegistry = @import("graph_registry.zig").GraphRegistry;
-        const UuidV7 = @import("uuid.zig").UuidV7;
-
-        const graphs_dir = try std.fmt.allocPrint(self.allocator, "{s}/graphs", .{self.data_dir});
-        defer self.allocator.free(graphs_dir);
-        std.fs.cwd().makePath(graphs_dir) catch {};
-
-        // Build registry from current graph handles
-        var reg = GraphRegistry.init(self.allocator);
-        defer reg.deinit();
-        reg.next_node_id = self.next_node_id;
-        reg.next_edge_id = self.next_edge_id;
-
-        self.graph_handles_rwlock.lockShared();
-        defer self.graph_handles_rwlock.unlockShared();
-
-        var save_failed = false;
-
-        var it = self.graph_handles.iterator();
-        while (it.next()) |entry| {
-            const handle = entry.value_ptr.*;
-
-            // Add entry to registry
-            try reg.entries.append(self.allocator, .{
-                .name = try self.allocator.dupe(u8, handle.name),
-                .uuid = handle.uuid,
-                .node_count = handle.nodeCount(),
-                .edge_count = handle.edgeCount(),
-            });
-
-            // Save if dirty
-            if (handle.dirty) {
-                var uuid_str_buf: [36]u8 = undefined;
-                const uuid_v7 = UuidV7.fromBytes(handle.uuid);
-                const uuid_str = uuid_v7.toStringBuf(&uuid_str_buf) catch {
-                    save_failed = true;
-                    continue;
-                };
-                const file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}.dat", .{ graphs_dir, uuid_str });
-                defer self.allocator.free(file_path);
-                self.saveGraphHandleToFile(handle, file_path) catch |err| {
-                    log.err("Failed to save graph handle — WAL truncation blocked", &.{
-                        Attr.string("graph", handle.name),
-                        Attr.string("error", @errorName(err)),
-                    });
-                    save_failed = true;
-                    continue;
-                };
-                handle.dirty = false;
-            }
-        }
-
-        // Save registry (always, even if some graph saves failed — registry
-        // reflects in-memory state which is canonical)
-        const reg_path = try std.fmt.allocPrint(self.allocator, "{s}/graph_registry.dat", .{self.data_dir});
-        defer self.allocator.free(reg_path);
-        reg.saveToFile(reg_path) catch |err| {
-            log.err("Failed to save graph registry", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return err;
-        };
-
-        // If any per-graph save failed, return error so WAL checkpoint does NOT
-        // truncate records that may be needed for replay on those failed graphs.
-        if (save_failed) {
-            return error.PartialCheckpointFailure;
-        }
-
-        self.dirty = false;
+        _ = self;
     }
 
-    // CANARY: REQ=REQ-MULTI-GRAPH-HANDLE-004; FEATURE="PerGraphStorage"; ASPECT=LoadPerGraph; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
-    /// Load graph registry and all per-graph data files, populating both
-    /// graph_handles and the legacy flat maps for backward compatibility.
+    /// No-op: per-graph file loading removed — adapter handles storage.
     pub fn loadPerGraphFiles(self: *GraphStore) !void {
-        const GraphRegistry = @import("graph_registry.zig").GraphRegistry;
-        const UuidV7 = @import("uuid.zig").UuidV7;
-
-        const reg_path = try std.fmt.allocPrint(self.allocator, "{s}/graph_registry.dat", .{self.data_dir});
-        defer self.allocator.free(reg_path);
-
-        var reg = GraphRegistry.init(self.allocator);
-        defer reg.deinit();
-        try reg.loadFromFile(reg_path);
-
-        self.next_node_id = reg.next_node_id;
-        self.next_edge_id = reg.next_edge_id;
-
-        const graphs_dir = try std.fmt.allocPrint(self.allocator, "{s}/graphs", .{self.data_dir});
-        defer self.allocator.free(graphs_dir);
-
-        for (reg.entries.items) |entry| {
-            const handle = try GraphHandle.init(self.allocator, entry.name, entry.uuid);
-
-            var uuid_str_buf: [36]u8 = undefined;
-            const uuid_v7 = UuidV7.fromBytes(entry.uuid);
-            const uuid_str = uuid_v7.toStringBuf(&uuid_str_buf) catch {
-                handle.available = false;
-                const name_key = try self.allocator.dupe(u8, entry.name);
-                self.graph_handles_rwlock.lock();
-                defer self.graph_handles_rwlock.unlock();
-                try self.graph_handles.put(name_key, handle);
-                continue;
-            };
-            const file_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}.dat", .{ graphs_dir, uuid_str });
-            defer self.allocator.free(file_path);
-
-            self.loadGraphHandleFromFile(handle, file_path) catch |err| {
-                log.err("Failed to load graph file", &.{
-                    Attr.string("graph", entry.name),
-                    Attr.string("error", @errorName(err)),
-                });
-                handle.available = false;
-            };
-
-            // Populate the legacy flat maps for backward compatibility
-            // so existing callers that access store.nodes/edges still work.
-            var ni = handle.nodes.iterator();
-            while (ni.next()) |n| {
-                try self.nodes.put(n.key_ptr.*, n.value_ptr.*);
-            }
-            var ei = handle.edges.iterator();
-            while (ei.next()) |e| {
-                try self.edges.put(e.key_ptr.*, e.value_ptr.*);
-            }
-
-            const name_key = try self.allocator.dupe(u8, entry.name);
-            self.graph_handles_rwlock.lock();
-            try self.graph_handles.put(name_key, handle);
-            self.graph_handles_rwlock.unlock();
-            try self.ensureGraphNoDirty(entry.name);
-        }
-
-        self.use_per_graph_storage = true;
-        try self.rebuildIndexes();
+        _ = self;
     }
 
-    // CANARY: REQ=REQ-TDE-GRAPHSTORE-002; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStoreSave; STATUS=TESTED; OWNER=security; UPDATED=2026-02-25
-    // CANARY: REQ=REQ-STREAM-SERIALIZE-001; FEATURE="StreamingSerialization"; ASPECT=SaveToFile; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-25
-    // Streaming file-based persistence — serializes directly to a temp file,
-    // then applies CRC + optional TDE encryption + atomic rename.
-    // Eliminates the in-memory serialization buffer that caused OOM on large graphs (#538).
+    /// Delegate persistence to the storage adapter. File-based persistence removed.
     pub fn saveToFile(self: *GraphStore) !void {
-        // Per-graph storage: save individual graph files + registry
-        if (self.use_per_graph_storage) {
-            return self.savePerGraphFiles();
+        if (global_vtable) |_| {
+            // Adapter handles durable storage — no file persistence needed
         }
-        const file_path = try getPersistenceFilePath(self.allocator);
-        defer self.allocator.free(file_path);
-
-        const tmp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{file_path});
-        defer self.allocator.free(tmp_path);
-
-        try self.serializeToTempFile(tmp_path);
-        try finalizeTempFile(self.allocator, tmp_path, file_path);
-
-        // Clear dirty flag after successful save
         self.dirty = false;
     }
 
-    /// Serialize graph state directly to a temp file using streaming I/O.
-    /// Computes CRC32 incrementally as data is written — no in-memory buffer.
-    /// Callers must hold the store lock for the duration of this call.
-    // CANARY: REQ=REQ-STREAM-SERIALIZE-002; FEATURE="StreamingSerialization"; ASPECT=StreamToFile; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-25
+    /// No-op: file serialization removed — adapter handles persistence.
     pub fn serializeToTempFile(self: *GraphStore, tmp_path: []const u8) !void {
-        const file = std.fs.cwd().createFile(tmp_path, .{}) catch |err| {
-            log.err("failed to create temp file for serialization", &.{
-                Attr.string("path", tmp_path),
-                Attr.string("error", @errorName(err)),
-            });
-            return err;
-        };
-        defer file.close();
-
-        var hasher = crc.Crc32.init();
-        var writer = file.deprecatedWriter();
-
-        // Write header placeholder (CRC patched after payload is written)
-        var header: [HEADER_LEN]u8 = [_]u8{0} ** HEADER_LEN;
-        @memcpy(header[0..8], "GEODGST1");
-        std.mem.writeInt(u32, header[8..12], PERSIST_VERSION, .little);
-        std.mem.writeInt(u32, header[12..16], 0, .little);
-        std.mem.writeInt(u64, header[16..24], self.next_node_id, .little);
-        std.mem.writeInt(u64, header[24..32], self.next_edge_id, .little);
-        std.mem.writeInt(u64, header[32..40], self.graphs.count(), .little);
-        std.mem.writeInt(u64, header[40..48], self.nodes.count(), .little);
-        std.mem.writeInt(u64, header[48..56], self.edges.count(), .little);
-        try writer.writeAll(&header);
-        // Note: header is NOT included in CRC (matches existing format)
-
-        // Serialize payload (graphs, nodes, edges) — feeds hasher incrementally
-        try self.serializePayload(writer, &hasher);
-
-        // Seek back and patch CRC into header at offset 56
-        const checksum = hasher.final();
-        try file.seekTo(56);
-        var crc_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &crc_buf, checksum, .little);
-        try file.writeAll(&crc_buf);
+        _ = self;
+        _ = tmp_path;
     }
 
-    /// Finalize a temp file: apply TDE encryption if enabled, then atomically
-    /// rename to the final path. Does NOT require the store lock.
-    // CANARY: REQ=REQ-STREAM-SERIALIZE-003; FEATURE="StreamingSerialization"; ASPECT=AtomicRename; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-25
-    fn finalizeTempFile(allocator: std.mem.Allocator, tmp_path: []const u8, final_path: []const u8) !void {
-        if (tde.isEnabled(allocator)) {
-            // TDE enabled: read plaintext temp file, encrypt, write to final path.
-            // This still allocates memory for encryption but avoids holding the
-            // serialization buffer AND encrypted copy simultaneously with the store lock.
-            const plaintext = std.fs.cwd().readFileAlloc(allocator, tmp_path, 1 << 30) catch |err| {
-                log.err("failed to read temp file for TDE encryption", &.{
-                    Attr.string("path", tmp_path),
-                    Attr.string("error", @errorName(err)),
-                });
-                return err;
-            };
-            defer allocator.free(plaintext);
-
-            try tde.writeEncryptedFile(allocator, final_path, plaintext);
-
-            // Remove temp file after successful encryption
-            std.fs.cwd().deleteFile(tmp_path) catch {};
-        } else {
-            // No TDE: atomic rename — zero extra memory
-            std.fs.cwd().rename(tmp_path, final_path) catch |err| {
-                log.err("failed to rename temp file to final path", &.{
-                    Attr.string("tmp", tmp_path),
-                    Attr.string("final", final_path),
-                    Attr.string("error", @errorName(err)),
-                });
-                return err;
-            };
-        }
-    }
-
-    /// Generic payload serialization — writes graph registry, nodes, and edges
-    /// to any writer while feeding data to the CRC hasher.
-    /// Used by both serializeToTempFile (file writer) and serializeToBuffer (ArrayList writer).
+    /// No-op stub: payload serialization removed — adapter handles persistence.
     fn serializePayload(self: *GraphStore, writer: anytype, hasher: *crc.Crc32) !void {
-        // Write graph registry
-        var graph_iter = self.graphs.iterator();
-        while (graph_iter.next()) |entry| {
-            const name = entry.key_ptr.*;
-            if (name.len > std.math.maxInt(u32)) return error.GraphNameTooLong;
-            var name_len_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &name_len_buf, @intCast(name.len), .little);
-            hasher.update(&name_len_buf);
-            try writer.writeAll(&name_len_buf);
-            hasher.update(name);
-            try writer.writeAll(name);
-        }
-
-        // Write each node
-        var node_iter = self.nodes.iterator();
-        while (node_iter.next()) |entry| {
-            const node = entry.value_ptr;
-            // Write node ID
-            var id_buf: [8]u8 = undefined;
-            std.mem.writeInt(u64, &id_buf, node.id, .little);
-            hasher.update(&id_buf);
-            try writer.writeAll(&id_buf);
-
-            // Write label count
-            var label_count_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &label_count_buf, @intCast(node.labels.len), .little);
-            hasher.update(&label_count_buf);
-            try writer.writeAll(&label_count_buf);
-
-            // Write each label
-            for (node.labels) |label| {
-                if (label.len > std.math.maxInt(u32)) {
-                    return error.LabelTooLong;
-                }
-                var len_buf: [4]u8 = undefined;
-                std.mem.writeInt(u32, &len_buf, @as(u32, @intCast(label.len)), .little);
-                hasher.update(&len_buf);
-                try writer.writeAll(&len_buf);
-                hasher.update(label);
-                try writer.writeAll(label);
-            }
-
-            // Write property count
-            var prop_count_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &prop_count_buf, @intCast(node.properties.count()), .little);
-            hasher.update(&prop_count_buf);
-            try writer.writeAll(&prop_count_buf);
-
-            // Write each property
-            var prop_iter = node.properties.iterator();
-            while (prop_iter.next()) |prop| {
-                try writePropertyToWriter(self, writer, hasher, prop.key_ptr.*, prop.value_ptr.*);
-            }
-
-            // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphNamePersistence; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
-            // Write graph_name length and graph_name for multi-graph isolation
-            var graph_name_len_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &graph_name_len_buf, @intCast(node.graph_name.len), .little);
-            hasher.update(&graph_name_len_buf);
-            try writer.writeAll(&graph_name_len_buf);
-            hasher.update(node.graph_name);
-            try writer.writeAll(node.graph_name);
-        }
-
-        // Write each edge
-        var edge_iter = self.edges.iterator();
-        while (edge_iter.next()) |entry| {
-            const edge = entry.value_ptr;
-            // Write edge data
-            var edge_buf: [24]u8 = undefined;
-            std.mem.writeInt(u64, edge_buf[0..8], edge.id, .little);
-            std.mem.writeInt(u64, edge_buf[8..16], edge.from_id, .little);
-            std.mem.writeInt(u64, edge_buf[16..24], edge.to_id, .little);
-            hasher.update(&edge_buf);
-            try writer.writeAll(&edge_buf);
-
-            // Write label
-            var label_len_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &label_len_buf, @intCast(edge.label.len), .little);
-            hasher.update(&label_len_buf);
-            try writer.writeAll(&label_len_buf);
-            hasher.update(edge.label);
-            try writer.writeAll(edge.label);
-
-            // Write property count
-            var prop_count_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &prop_count_buf, @intCast(edge.properties.count()), .little);
-            hasher.update(&prop_count_buf);
-            try writer.writeAll(&prop_count_buf);
-
-            // Write each property
-            var prop_iter = edge.properties.iterator();
-            while (prop_iter.next()) |prop| {
-                try writePropertyToWriter(self, writer, hasher, prop.key_ptr.*, prop.value_ptr.*);
-            }
-
-            // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphNamePersistence; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
-            // Write graph_name length and graph_name for multi-graph isolation
-            var graph_name_len_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &graph_name_len_buf, @intCast(edge.graph_name.len), .little);
-            hasher.update(&graph_name_len_buf);
-            try writer.writeAll(&graph_name_len_buf);
-            hasher.update(edge.graph_name);
-            try writer.writeAll(edge.graph_name);
-        }
+        _ = self;
+        _ = writer;
+        _ = hasher;
     }
 
-    /// Write a single property (key + value) to any writer with CRC hashing.
-    fn writePropertyToWriter(self: *GraphStore, writer: anytype, hasher: *crc.Crc32, key: []const u8, value: PropertyValue) !void {
-        // Write key length and key
-        var key_len_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &key_len_buf, @intCast(key.len), .little);
-        hasher.update(&key_len_buf);
-        try writer.writeAll(&key_len_buf);
-        hasher.update(key);
-        try writer.writeAll(key);
+    // Removed: writePropertyToWriter, writeExtValueToWriter, serializeToBuffer,
+    // finalizeAndWriteBuffer — file-based serialization is no longer needed.
 
-        // Write value type and value
-        const val_type: u8 = switch (value) {
-            .String => 0,
-            .Int => 1,
-            .Float => 2,
-            .Bool => 3,
-            .Null => 4,
-            .ExtValue => 5,
-            .Decimal => 6,
-        };
-        hasher.update(&[1]u8{val_type});
-        try writer.writeAll(&[1]u8{val_type});
-
-        switch (value) {
-            .String => |s| {
-                var len_buf: [4]u8 = undefined;
-                std.mem.writeInt(u32, &len_buf, @intCast(s.len), .little);
-                hasher.update(&len_buf);
-                try writer.writeAll(&len_buf);
-                hasher.update(s);
-                try writer.writeAll(s);
-            },
-            .Int => |i| {
-                var int_buf: [8]u8 = undefined;
-                std.mem.writeInt(i64, &int_buf, i, .little);
-                hasher.update(&int_buf);
-                try writer.writeAll(&int_buf);
-            },
-            .Float => |f| {
-                var float_buf: [8]u8 = undefined;
-                std.mem.writeInt(u64, &float_buf, @bitCast(f), .little);
-                hasher.update(&float_buf);
-                try writer.writeAll(&float_buf);
-            },
-            .Bool => |b| {
-                const byte = [1]u8{if (b) 1 else 0};
-                hasher.update(&byte);
-                try writer.writeAll(&byte);
-            },
-            .Null => {},
-            .ExtValue => |ext| {
-                try writeExtValueToWriter(self, writer, hasher, ext);
-            },
-            .Decimal => |d| {
-                var buf: [17]u8 = undefined;
-                std.mem.writeInt(i128, buf[0..16], d.coeff, .little);
-                buf[16] = d.scale;
-                hasher.update(&buf);
-                try writer.writeAll(&buf);
-            },
-        }
-    }
-
-    /// Serialize graph state into an in-memory buffer (nodes, edges, properties).
-    /// Callers must hold the store lock for the duration of this call.
-    /// The returned buffer owns its memory and has no references back to the graph.
-    /// NOTE: Prefer serializeToTempFile() for large graphs to avoid OOM (#538).
+    /// No-op stub: serializeToBuffer removed — adapter handles persistence.
     pub fn serializeToBuffer(self: *GraphStore) !std.ArrayList(u8) {
-        // Pre-allocate based on last known size to avoid reallocation churn.
-        const estimated_size = @max(
-            @as(usize, 4096),
-            self.nodes.count() * 200 + self.edges.count() * 150 + HEADER_LEN,
-        );
-        var buffer = try std.ArrayList(u8).initCapacity(self.allocator, estimated_size);
-
-        // Write header placeholder
-        var header: [HEADER_LEN]u8 = [_]u8{0} ** HEADER_LEN;
-        @memcpy(header[0..8], "GEODGST1");
-        std.mem.writeInt(u32, header[8..12], PERSIST_VERSION, .little);
-        std.mem.writeInt(u32, header[12..16], 0, .little);
-        std.mem.writeInt(u64, header[16..24], self.next_node_id, .little);
-        std.mem.writeInt(u64, header[24..32], self.next_edge_id, .little);
-        std.mem.writeInt(u64, header[32..40], self.graphs.count(), .little);
-        std.mem.writeInt(u64, header[40..48], self.nodes.count(), .little);
-        std.mem.writeInt(u64, header[48..56], self.edges.count(), .little);
-        try buffer.appendSlice(self.allocator, &header);
-
-        // Serialize payload using generic writer, computing CRC
-        var hasher = crc.Crc32.init();
-        try self.serializePayload(buffer.writer(self.allocator), &hasher);
-
-        // Patch CRC into header
-        const checksum = hasher.final();
-        std.mem.writeInt(u32, buffer.items[56..60], checksum, .little);
-
-        return buffer;
+        _ = self;
+        return std.ArrayList(u8).init(std.heap.page_allocator);
     }
 
-    /// Finalize a serialized buffer (CRC, encrypt, write to disk).
-    /// Does NOT require the store lock — operates only on the standalone buffer.
-    /// DEPRECATED: Use serializeToTempFile + finalizeTempFile instead.
-    fn finalizeAndWriteBuffer(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), file_path: []const u8) !void {
-        // Compute checksum over payload (after header) and fill header slot
-        if (buffer.items.len >= HEADER_LEN) {
-            const checksum = crc.Crc32.hash(buffer.items[HEADER_LEN..]);
-            std.mem.writeInt(u32, buffer.items[56..60], checksum, .little);
-        }
-
-        // Encrypt and write to file using TDE
-        try tde.writeEncryptedFile(allocator, file_path, buffer.items);
-    }
-
-    // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-002; FEATURE="BinaryPersistence"; ASPECT=ConditionalSave; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
-    /// Save to file only if there are unsaved changes (dirty flag is set)
-    /// This should be called after query completion, not after every individual mutation
+    /// Delegate persistence to the storage adapter. File-based saveIfDirty removed.
     pub fn saveIfDirty(self: *GraphStore) void {
-        const file_path = getPersistenceFilePath(self.allocator) catch "/tmp/geode_graph_store.dat";
-        defer if (file_path.len > 0 and file_path.ptr != "/tmp/geode_graph_store.dat".ptr) self.allocator.free(file_path);
-        log.debug("saveIfDirty called", &.{
-            Attr.string("dirty", if (self.dirty) "true" else "false"),
-            Attr.int("node_count", @intCast(self.nodes.count())),
-            Attr.string("path", file_path),
-        });
         if (self.dirty) {
-            log.debug("saving graph store", &.{
-                Attr.string("path", file_path),
-            });
-            self.saveToFile() catch |err| {
-                log.err("failed to persist graph store", &.{
-                    Attr.string("error", @errorName(err)),
-                    Attr.string("path", file_path),
-                });
-            };
-            log.debug("save completed", &.{
-                Attr.string("dirty", if (self.dirty) "true" else "false"),
-            });
+            self.saveToFile() catch {};
         }
     }
 
-    // CANARY: REQ=REQ-TDE-GRAPHSTORE-003; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStoreLoad; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
-    // CANARY: REQ=REQ-BINARY-PERSIST-LOAD-001; FEATURE="BinaryPersistence"; ASPECT=LoadFromFile; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-02
+    /// No-op: file-based loading removed — adapter handles storage.
     pub fn loadFromFile(self: *GraphStore) !void {
-        // Check for per-graph storage first
-        if (self.data_dir.len > 0) {
-            const reg_path = try std.fmt.allocPrint(self.allocator, "{s}/graph_registry.dat", .{self.data_dir});
-            defer self.allocator.free(reg_path);
-            if (std.fs.cwd().access(reg_path, .{})) |_| {
-                return self.loadPerGraphFiles();
-            } else |_| {}
-        }
-
-        const file_path = try getPersistenceFilePath(self.allocator);
-        defer self.allocator.free(file_path);
-
-        // Check if file exists first
-        std.fs.cwd().access(file_path, .{}) catch |err| {
-            if (err == error.FileNotFound) return;
-            return err;
-        };
-
-        // Read and decrypt file using TDE
-        const data = try tde.readDecryptedFile(self.allocator, file_path);
-        defer self.allocator.free(data);
-
-        // Create stream to read from decrypted data
-        var stream = std.io.fixedBufferStream(data);
-        var reader = stream.reader();
-
-        // Reset current state before loading
-        self.clearNodes();
-        last_checksum_error = false;
-
-        if (data.len < HEADER_LEN) return error.InvalidHeader;
-        if (!std.mem.eql(u8, data[0..8], "GEODGST1")) {
-            last_checksum_error = true;
-            return error.InvalidMagic;
-        }
-
-        const version = std.mem.readInt(u32, data[8..12], .little);
-        if (version != PERSIST_VERSION) {
-            return error.UnsupportedVersion;
-        }
-        const checksum_stored = std.mem.readInt(u32, data[56..60], .little);
-        const checksum_actual = crc.Crc32.hash(data[HEADER_LEN..]);
-        if (checksum_actual != checksum_stored) {
-            last_checksum_error = true;
-            return error.ChecksumMismatch;
-        }
-
-        var node_count: u64 = 0;
-        var edge_count: u64 = 0;
-        self.next_node_id = std.mem.readInt(u64, data[16..24], .little);
-        self.next_edge_id = std.mem.readInt(u64, data[24..32], .little);
-        const graph_count = std.mem.readInt(u64, data[32..40], .little);
-        node_count = std.mem.readInt(u64, data[40..48], .little);
-        edge_count = std.mem.readInt(u64, data[48..56], .little);
-
-        // Reset graph registry and load from file
-        var graph_iter = self.graphs.iterator();
-        while (graph_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-        }
-        self.graphs.deinit();
-        self.graphs = std.StringHashMap(void).init(self.allocator);
-
-        // Advance reader past header
-        stream.pos = HEADER_LEN;
-
-        var graphs_read: u64 = 0;
-        while (graphs_read < graph_count) : (graphs_read += 1) {
-            var name_len_buf: [4]u8 = undefined;
-            if ((try reader.readAll(&name_len_buf)) < 4) break;
-            const name_len = std.mem.readInt(u32, &name_len_buf, .little);
-
-            const name_data = try self.allocator.alloc(u8, name_len);
-            if ((try reader.readAll(name_data)) < name_len) {
-                self.allocator.free(name_data);
-                break;
-            }
-            try self.graphs.put(name_data, {});
-        }
-
-        if (self.graphs.count() == 0) {
-            const default_name = try self.allocator.dupe(u8, "default");
-            try self.graphs.put(default_name, {});
-        }
-
-        // Read nodes
-        var nodes_read: u64 = 0;
-        while (nodes_read < node_count) : (nodes_read += 1) {
-            // Read node ID
-            var id_buf: [8]u8 = undefined;
-            if ((try reader.readAll(&id_buf)) < 8) break;
-            const node_id = std.mem.readInt(u64, &id_buf, .little);
-
-            // Read label count
-            var label_count_buf: [4]u8 = undefined;
-            if ((try reader.readAll(&label_count_buf)) < 4) break;
-            const label_count = std.mem.readInt(u32, &label_count_buf, .little);
-
-            // Read labels
-            var labels = try self.allocator.alloc([]const u8, label_count);
-            for (0..label_count) |i| {
-                var len_buf: [4]u8 = undefined;
-                if ((try reader.readAll(&len_buf)) < 4) break;
-                const label_len = std.mem.readInt(u32, &len_buf, .little);
-
-                const label_data = try self.allocator.alloc(u8, label_len);
-                if ((try reader.readAll(label_data)) < label_len) break;
-                labels[i] = label_data;
-            }
-
-            // Read property count
-            var prop_count_buf: [4]u8 = undefined;
-            if ((try reader.readAll(&prop_count_buf)) < 4) break;
-            const prop_count = std.mem.readInt(u32, &prop_count_buf, .little);
-
-            // Create node
-            var node = Node{
-                .id = node_id,
-                .labels = labels,
-                .properties = std.StringHashMap(PropertyValue).init(self.allocator),
-            };
-
-            // Read properties
-            var props_read: u32 = 0;
-            while (props_read < prop_count) : (props_read += 1) {
-                // Read key
-                var key_len_buf: [4]u8 = undefined;
-                if ((try reader.readAll(&key_len_buf)) < 4) break;
-                const key_len = std.mem.readInt(u32, &key_len_buf, .little);
-
-                const key_data = try self.allocator.alloc(u8, key_len);
-                if ((try reader.readAll(key_data)) < key_len) break;
-
-                // Read value type
-                var val_type_buf: [1]u8 = undefined;
-                if ((try reader.readAll(&val_type_buf)) < 1) break;
-                const val_type = val_type_buf[0];
-
-                // Read value based on type
-                const value = switch (val_type) {
-                    0 => blk: { // String
-                        var len_buf: [4]u8 = undefined;
-                        if ((try reader.readAll(&len_buf)) < 4) break :blk PropertyValue{ .String = "" };
-                        const str_len = std.mem.readInt(u32, &len_buf, .little);
-
-                        const str_data = try self.allocator.alloc(u8, str_len);
-                        if ((try reader.readAll(str_data)) < str_len) break :blk PropertyValue{ .String = "" };
-                        break :blk PropertyValue{ .String = str_data };
-                    },
-                    1 => blk: { // Int
-                        var int_buf: [8]u8 = undefined;
-                        if ((try reader.readAll(&int_buf)) < 8) break :blk PropertyValue{ .Int = 0 };
-                        break :blk PropertyValue{ .Int = std.mem.readInt(i64, &int_buf, .little) };
-                    },
-                    2 => blk: { // Float
-                        var float_buf: [8]u8 = undefined;
-                        if ((try reader.readAll(&float_buf)) < 8) break :blk PropertyValue{ .Float = 0.0 };
-                        const bits = std.mem.readInt(u64, &float_buf, .little);
-                        break :blk PropertyValue{ .Float = @bitCast(bits) };
-                    },
-                    3 => blk: { // Bool
-                        var bool_buf: [1]u8 = undefined;
-                        if ((try reader.readAll(&bool_buf)) < 1) break :blk PropertyValue{ .Bool = false };
-                        break :blk PropertyValue{ .Bool = bool_buf[0] != 0 };
-                    },
-                    4 => PropertyValue{ .Null = {} }, // Null
-                    5 => PropertyValue{ .ExtValue = try self.readExtValue(reader) },
-                    6 => blk: { // Decimal
-                        var buf: [17]u8 = undefined;
-                        if ((try reader.readAll(&buf)) < 17) break :blk PropertyValue{ .Decimal = .{ .coeff = 0, .scale = 0 } };
-                        const coeff = std.mem.readInt(i128, buf[0..16], .little);
-                        const scale = buf[16];
-                        break :blk PropertyValue{ .Decimal = .{ .coeff = coeff, .scale = scale } };
-                    },
-                    else => PropertyValue{ .String = "" },
-                };
-
-                try node.properties.put(key_data, value);
-            }
-
-            // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphNameLoad; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
-            // Read graph_name for multi-graph isolation
-            var graph_name_len_buf: [4]u8 = undefined;
-            if ((try reader.readAll(&graph_name_len_buf)) < 4) break;
-            const graph_name_len = std.mem.readInt(u32, &graph_name_len_buf, .little);
-
-            const graph_name_data = try self.allocator.alloc(u8, graph_name_len);
-            if ((try reader.readAll(graph_name_data)) < graph_name_len) {
-                self.allocator.free(graph_name_data);
-                break;
-            }
-            node.graph_name = graph_name_data;
-
-            try self.nodes.put(node_id, node);
-        }
-
-        // Read edges
-        var edges_read: u64 = 0;
-        while (edges_read < edge_count) : (edges_read += 1) {
-            // Read edge data
-            var edge_buf: [24]u8 = undefined;
-            if ((try reader.readAll(&edge_buf)) < 24) break;
-            const edge_id = std.mem.readInt(u64, edge_buf[0..8], .little);
-            const from_id = std.mem.readInt(u64, edge_buf[8..16], .little);
-            const to_id = std.mem.readInt(u64, edge_buf[16..24], .little);
-
-            // Read label
-            var label_len_buf: [4]u8 = undefined;
-            if ((try reader.readAll(&label_len_buf)) < 4) break;
-            const label_len = std.mem.readInt(u32, &label_len_buf, .little);
-
-            const label_data = try self.allocator.alloc(u8, label_len);
-            if ((try reader.readAll(label_data)) < label_len) break;
-
-            // Read property count
-            var prop_count_buf: [4]u8 = undefined;
-            if ((try reader.readAll(&prop_count_buf)) < 4) break;
-            const prop_count = std.mem.readInt(u32, &prop_count_buf, .little);
-
-            // Create edge with properties HashMap
-            var properties = std.StringHashMap(PropertyValue).init(self.allocator);
-
-            // Read each property
-            var props_read: u32 = 0;
-            while (props_read < prop_count) : (props_read += 1) {
-                // Read key length and key
-                var key_len_buf: [4]u8 = undefined;
-                if ((try reader.readAll(&key_len_buf)) < 4) break;
-                const key_len = std.mem.readInt(u32, &key_len_buf, .little);
-
-                const key_data = try self.allocator.alloc(u8, key_len);
-                if ((try reader.readAll(key_data)) < key_len) break;
-
-                // Read value type
-                var val_type_buf: [1]u8 = undefined;
-                if ((try reader.readAll(&val_type_buf)) < 1) break;
-                const val_type = val_type_buf[0];
-
-                // Read value based on type
-                const value = switch (val_type) {
-                    0 => blk: { // String
-                        var len_buf: [4]u8 = undefined;
-                        if ((try reader.readAll(&len_buf)) < 4) break :blk PropertyValue{ .String = "" };
-                        const str_len = std.mem.readInt(u32, &len_buf, .little);
-                        const str_data = try self.allocator.alloc(u8, str_len);
-                        if ((try reader.readAll(str_data)) < str_len) break :blk PropertyValue{ .String = "" };
-                        break :blk PropertyValue{ .String = str_data };
-                    },
-                    1 => blk: { // Int
-                        var int_buf: [8]u8 = undefined;
-                        if ((try reader.readAll(&int_buf)) < 8) break :blk PropertyValue{ .Int = 0 };
-                        break :blk PropertyValue{ .Int = std.mem.readInt(i64, &int_buf, .little) };
-                    },
-                    2 => blk: { // Float
-                        var float_buf: [8]u8 = undefined;
-                        if ((try reader.readAll(&float_buf)) < 8) break :blk PropertyValue{ .Float = 0.0 };
-                        const bits = std.mem.readInt(u64, &float_buf, .little);
-                        break :blk PropertyValue{ .Float = @bitCast(bits) };
-                    },
-                    3 => blk: { // Bool
-                        var bool_buf: [1]u8 = undefined;
-                        if ((try reader.readAll(&bool_buf)) < 1) break :blk PropertyValue{ .Bool = false };
-                        break :blk PropertyValue{ .Bool = bool_buf[0] != 0 };
-                    },
-                    4 => PropertyValue{ .Null = {} }, // Null
-                    5 => PropertyValue{ .ExtValue = try self.readExtValue(reader) },
-                    6 => blk: { // Decimal
-                        var buf: [17]u8 = undefined;
-                        if ((try reader.readAll(&buf)) < 17) break :blk PropertyValue{ .Decimal = .{ .coeff = 0, .scale = 0 } };
-                        const coeff = std.mem.readInt(i128, buf[0..16], .little);
-                        const scale = buf[16];
-                        break :blk PropertyValue{ .Decimal = .{ .coeff = coeff, .scale = scale } };
-                    },
-                    else => PropertyValue{ .String = "" },
-                };
-
-                try properties.put(key_data, value);
-            }
-
-            // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphNameLoad; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
-            // Read graph_name for multi-graph isolation
-            var graph_name_len_buf: [4]u8 = undefined;
-            if ((try reader.readAll(&graph_name_len_buf)) < 4) break;
-            const graph_name_len = std.mem.readInt(u32, &graph_name_len_buf, .little);
-
-            const graph_name_data = try self.allocator.alloc(u8, graph_name_len);
-            if ((try reader.readAll(graph_name_data)) < graph_name_len) {
-                self.allocator.free(graph_name_data);
-                break;
-            }
-
-            const edge = Edge{
-                .id = edge_id,
-                .from_id = from_id,
-                .to_id = to_id,
-                .label = label_data,
-                .properties = properties,
-                .graph_name = graph_name_data,
-            };
-
-            try self.edges.put(edge_id, edge);
-        }
-
-        // Rebuild indexes after load
-        try self.rebuildIndexes();
-        self.dirty = false;
+        _ = self;
     }
 
     // CANARY: REQ=REQ-TXN-UNDO-002; FEATURE="TransactionUndoLog"; ASPECT=NoSaveOperations; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
@@ -3706,13 +2694,6 @@ pub const GraphStore = struct {
             vt.deleteNodeFn(vt.ctx, adapter_gn, node_id) catch {};
         }
 
-        // Per-graph storage: remove node from GraphHandle before flat-map deletion
-        if (self.use_per_graph_storage and gn.len > 0) {
-            if (self.getHandle(gn)) |handle| {
-                handle.removeNode(node_id);
-            }
-        }
-
         self.deleteNodeNoSave(node_id);
         self.dirty = true;
         // WAL notification: DeleteNode
@@ -3728,13 +2709,6 @@ pub const GraphStore = struct {
         if (global_vtable) |vt| {
             if (self.edges.get(edge_id)) |edge| {
                 vt.deleteEdgeFn(vt.ctx, edge.graph_name, edge.from_id, edge.to_id, edge_id) catch {};
-            }
-        }
-
-        // Per-graph storage: remove edge from GraphHandle before flat-map deletion
-        if (self.use_per_graph_storage and gn.len > 0) {
-            if (self.getHandle(gn)) |handle| {
-                handle.removeEdge(edge_id);
             }
         }
 
@@ -3899,386 +2873,6 @@ pub const GraphStore = struct {
                 self.removeFromLabelIndex(node.graph_name, label, node_id);
             }
         }
-    }
-
-    // CANARY: REQ=REQ-PER-GRAPH-PERSIST-001; FEATURE="PerGraphFilePersistence"; ASPECT=SaveGraphHandle; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
-
-    /// Save a single GraphHandle's nodes and edges to a per-graph file.
-    /// The file format uses PER_GRAPH_MAGIC ("GEODGRF1") and excludes
-    /// graph_name fields (implicit from file identity).
-    pub fn saveGraphHandleToFile(self: *GraphStore, handle: *const GraphHandle, path: []const u8) !void {
-        const tmp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{path});
-        defer self.allocator.free(tmp_path);
-
-        const file = std.fs.cwd().createFile(tmp_path, .{}) catch |err| {
-            log.err("failed to create temp file for per-graph serialization", &.{
-                Attr.string("path", tmp_path),
-                Attr.string("error", @errorName(err)),
-            });
-            return err;
-        };
-        errdefer file.close();
-
-        var hasher = crc.Crc32.init();
-        var writer = file.deprecatedWriter();
-
-        // Write header placeholder (CRC patched after payload)
-        // v2 header: magic(8) + version(4) + graph_uuid(16) + node_count(8) + edge_count(8) + CRC(4) = 48
-        var header: [PER_GRAPH_HEADER_LEN]u8 = [_]u8{0} ** PER_GRAPH_HEADER_LEN;
-        @memcpy(header[0..8], PER_GRAPH_MAGIC);
-        std.mem.writeInt(u32, header[8..12], PER_GRAPH_VERSION, .little);
-        @memcpy(header[12..28], &handle.uuid); // graph UUID for identity binding
-        std.mem.writeInt(u64, header[28..36], handle.nodes.count(), .little);
-        std.mem.writeInt(u64, header[36..44], handle.edges.count(), .little);
-        // CRC placeholder at [44..48] — will be patched
-        try writer.writeAll(&header);
-
-        // Feed header[0..44] into CRC (everything except CRC field itself)
-        hasher.update(header[0..44]);
-
-        // Write nodes (without graph_name)
-        var node_iter = handle.nodes.iterator();
-        while (node_iter.next()) |entry| {
-            const node = entry.value_ptr;
-
-            // Node ID
-            var id_buf: [8]u8 = undefined;
-            std.mem.writeInt(u64, &id_buf, node.id, .little);
-            hasher.update(&id_buf);
-            try writer.writeAll(&id_buf);
-
-            // Label count
-            var label_count_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &label_count_buf, @intCast(node.labels.len), .little);
-            hasher.update(&label_count_buf);
-            try writer.writeAll(&label_count_buf);
-
-            // Each label
-            for (node.labels) |label| {
-                if (label.len > std.math.maxInt(u32)) return error.LabelTooLong;
-                var len_buf: [4]u8 = undefined;
-                std.mem.writeInt(u32, &len_buf, @as(u32, @intCast(label.len)), .little);
-                hasher.update(&len_buf);
-                try writer.writeAll(&len_buf);
-                hasher.update(label);
-                try writer.writeAll(label);
-            }
-
-            // Property count
-            var prop_count_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &prop_count_buf, @intCast(node.properties.count()), .little);
-            hasher.update(&prop_count_buf);
-            try writer.writeAll(&prop_count_buf);
-
-            // Each property
-            var prop_iter = node.properties.iterator();
-            while (prop_iter.next()) |prop| {
-                try writePropertyToWriter(self, writer, &hasher, prop.key_ptr.*, prop.value_ptr.*);
-            }
-            // NOTE: no graph_name written — implicit from file
-        }
-
-        // Write edges (without graph_name)
-        var edge_iter = handle.edges.iterator();
-        while (edge_iter.next()) |entry| {
-            const edge = entry.value_ptr;
-
-            // Edge ID, from_id, to_id
-            var edge_buf: [24]u8 = undefined;
-            std.mem.writeInt(u64, edge_buf[0..8], edge.id, .little);
-            std.mem.writeInt(u64, edge_buf[8..16], edge.from_id, .little);
-            std.mem.writeInt(u64, edge_buf[16..24], edge.to_id, .little);
-            hasher.update(&edge_buf);
-            try writer.writeAll(&edge_buf);
-
-            // Label
-            var label_len_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &label_len_buf, @intCast(edge.label.len), .little);
-            hasher.update(&label_len_buf);
-            try writer.writeAll(&label_len_buf);
-            hasher.update(edge.label);
-            try writer.writeAll(edge.label);
-
-            // Property count
-            var prop_count_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &prop_count_buf, @intCast(edge.properties.count()), .little);
-            hasher.update(&prop_count_buf);
-            try writer.writeAll(&prop_count_buf);
-
-            // Each property
-            var prop_iter = edge.properties.iterator();
-            while (prop_iter.next()) |prop| {
-                try writePropertyToWriter(self, writer, &hasher, prop.key_ptr.*, prop.value_ptr.*);
-            }
-            // NOTE: no graph_name written — implicit from file
-        }
-
-        // Patch CRC at offset 44 (after magic + version + uuid + node_count + edge_count)
-        const checksum = hasher.final();
-        try file.seekTo(44);
-        var crc_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &crc_buf, checksum, .little);
-        try file.writeAll(&crc_buf);
-
-        // Close file before finalize (defer will also close, but close is idempotent on Zig File)
-        file.close();
-
-        // Finalize: TDE encrypt if needed, atomic rename
-        try finalizeTempFile(self.allocator, tmp_path, path);
-    }
-
-    // CANARY: REQ=REQ-PER-GRAPH-PERSIST-002; FEATURE="PerGraphFilePersistence"; ASPECT=LoadGraphHandle; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
-
-    /// Load per-graph file data into a GraphHandle.
-    /// If the file does not exist, returns silently (no error).
-    pub fn loadGraphHandleFromFile(self: *GraphStore, handle: *GraphHandle, path: []const u8) !void {
-        // Check if file exists
-        std.fs.cwd().access(path, .{}) catch |err| {
-            if (err == error.FileNotFound) return;
-            return err;
-        };
-
-        // Read and decrypt file using TDE
-        const data = try tde.readDecryptedFile(self.allocator, path);
-        defer self.allocator.free(data);
-
-        // Minimum header: v1 = 36 bytes, need at least 12 to read magic + version
-        if (data.len < 12) return error.InvalidHeader;
-
-        // Validate magic
-        if (!std.mem.eql(u8, data[0..8], PER_GRAPH_MAGIC)) return error.InvalidMagic;
-
-        // Validate version
-        const version = std.mem.readInt(u32, data[8..12], .little);
-        if (version != PER_GRAPH_VERSION and version != 1) return error.UnsupportedVersion;
-
-        // Check full header length based on version
-        const min_header: usize = if (version >= 2) 48 else 36;
-        if (data.len < min_header) return error.InvalidHeader;
-
-        // v2 adds graph_uuid at offset 12..28; v1 had reserved(4) at 12..16
-        if (version >= 2) {
-            // Validate graph UUID matches the handle's UUID (prevents file swap attacks)
-            var file_uuid: [16]u8 = undefined;
-            @memcpy(&file_uuid, data[12..28]);
-            if (!std.mem.eql(u8, &file_uuid, &handle.uuid)) {
-                log.err("Per-graph file UUID mismatch — possible file swap", &.{
-                    Attr.string("graph", handle.name),
-                });
-                return error.GraphUuidMismatch;
-            }
-        }
-
-        // Read counts from header (offsets differ by version)
-        const node_count_offset: usize = if (version >= 2) 28 else 16;
-        const edge_count_offset: usize = if (version >= 2) 36 else 24;
-        const crc_offset: usize = if (version >= 2) 44 else 32;
-        const header_data_end: usize = crc_offset; // everything before CRC is covered
-
-        const node_count = std.mem.readInt(u64, data[node_count_offset..][0..8], .little);
-        const edge_count = std.mem.readInt(u64, data[edge_count_offset..][0..8], .little);
-
-        // Header length depends on version: v1=36, v2+=48
-        const actual_header_len: usize = if (version >= 2) 48 else 36;
-
-        // Verify CRC: covers header[0..crc_offset] + all payload bytes
-        const checksum_stored = std.mem.readInt(u32, data[crc_offset..][0..4], .little);
-        var crc_hasher = crc.Crc32.init();
-        crc_hasher.update(data[0..header_data_end]);
-        crc_hasher.update(data[actual_header_len..]);
-        const checksum_actual = crc_hasher.final();
-        if (checksum_actual != checksum_stored) return error.ChecksumMismatch;
-
-        // Parse payload
-        var stream = std.io.fixedBufferStream(data);
-        stream.pos = actual_header_len;
-        var reader = stream.reader();
-
-        const allocator = self.allocator;
-
-        // Read nodes
-        var nodes_read: u64 = 0;
-        while (nodes_read < node_count) : (nodes_read += 1) {
-            // Read node ID
-            var id_buf: [8]u8 = undefined;
-            if ((try reader.readAll(&id_buf)) < 8) break;
-            const node_id = std.mem.readInt(u64, &id_buf, .little);
-
-            // Read label count
-            var label_count_buf: [4]u8 = undefined;
-            if ((try reader.readAll(&label_count_buf)) < 4) break;
-            const label_count = std.mem.readInt(u32, &label_count_buf, .little);
-
-            // Read labels
-            var labels = try allocator.alloc([]const u8, label_count);
-            for (0..label_count) |i| {
-                var len_buf: [4]u8 = undefined;
-                if ((try reader.readAll(&len_buf)) < 4) break;
-                const label_len = std.mem.readInt(u32, &len_buf, .little);
-                const label_data = try allocator.alloc(u8, label_len);
-                if ((try reader.readAll(label_data)) < label_len) break;
-                labels[i] = label_data;
-            }
-
-            // Read property count
-            var prop_count_buf: [4]u8 = undefined;
-            if ((try reader.readAll(&prop_count_buf)) < 4) break;
-            const prop_count = std.mem.readInt(u32, &prop_count_buf, .little);
-
-            // Create node with graph_name from handle
-            var node = Node{
-                .id = node_id,
-                .labels = labels,
-                .properties = std.StringHashMap(PropertyValue).init(allocator),
-                .graph_name = try allocator.dupe(u8, handle.name),
-            };
-
-            // Read properties
-            var props_read: u32 = 0;
-            while (props_read < prop_count) : (props_read += 1) {
-                var key_len_buf: [4]u8 = undefined;
-                if ((try reader.readAll(&key_len_buf)) < 4) break;
-                const key_len = std.mem.readInt(u32, &key_len_buf, .little);
-                const key_data = try allocator.alloc(u8, key_len);
-                if ((try reader.readAll(key_data)) < key_len) break;
-
-                var val_type_buf: [1]u8 = undefined;
-                if ((try reader.readAll(&val_type_buf)) < 1) break;
-                const val_type = val_type_buf[0];
-
-                const value = switch (val_type) {
-                    0 => blk: { // String
-                        var len_buf: [4]u8 = undefined;
-                        if ((try reader.readAll(&len_buf)) < 4) break :blk PropertyValue{ .String = "" };
-                        const str_len = std.mem.readInt(u32, &len_buf, .little);
-                        const str_data = try allocator.alloc(u8, str_len);
-                        if ((try reader.readAll(str_data)) < str_len) break :blk PropertyValue{ .String = "" };
-                        break :blk PropertyValue{ .String = str_data };
-                    },
-                    1 => blk: { // Int
-                        var int_buf: [8]u8 = undefined;
-                        if ((try reader.readAll(&int_buf)) < 8) break :blk PropertyValue{ .Int = 0 };
-                        break :blk PropertyValue{ .Int = std.mem.readInt(i64, &int_buf, .little) };
-                    },
-                    2 => blk: { // Float
-                        var float_buf: [8]u8 = undefined;
-                        if ((try reader.readAll(&float_buf)) < 8) break :blk PropertyValue{ .Float = 0.0 };
-                        const bits = std.mem.readInt(u64, &float_buf, .little);
-                        break :blk PropertyValue{ .Float = @bitCast(bits) };
-                    },
-                    3 => blk: { // Bool
-                        var bool_buf: [1]u8 = undefined;
-                        if ((try reader.readAll(&bool_buf)) < 1) break :blk PropertyValue{ .Bool = false };
-                        break :blk PropertyValue{ .Bool = bool_buf[0] != 0 };
-                    },
-                    4 => PropertyValue{ .Null = {} },
-                    5 => PropertyValue{ .ExtValue = try self.readExtValue(reader) },
-                    6 => blk: { // Decimal
-                        var buf: [17]u8 = undefined;
-                        if ((try reader.readAll(&buf)) < 17) break :blk PropertyValue{ .Decimal = .{ .coeff = 0, .scale = 0 } };
-                        const coeff = std.mem.readInt(i128, buf[0..16], .little);
-                        const scale = buf[16];
-                        break :blk PropertyValue{ .Decimal = .{ .coeff = coeff, .scale = scale } };
-                    },
-                    else => PropertyValue{ .String = "" },
-                };
-
-                try node.properties.put(key_data, value);
-            }
-
-            try handle.nodes.put(node_id, node);
-        }
-
-        // Read edges
-        var edges_read: u64 = 0;
-        while (edges_read < edge_count) : (edges_read += 1) {
-            var edge_buf: [24]u8 = undefined;
-            if ((try reader.readAll(&edge_buf)) < 24) break;
-            const edge_id = std.mem.readInt(u64, edge_buf[0..8], .little);
-            const from_id = std.mem.readInt(u64, edge_buf[8..16], .little);
-            const to_id = std.mem.readInt(u64, edge_buf[16..24], .little);
-
-            // Read label
-            var label_len_buf: [4]u8 = undefined;
-            if ((try reader.readAll(&label_len_buf)) < 4) break;
-            const label_len = std.mem.readInt(u32, &label_len_buf, .little);
-            const label_data = try allocator.alloc(u8, label_len);
-            if ((try reader.readAll(label_data)) < label_len) break;
-
-            // Read property count
-            var prop_count_buf: [4]u8 = undefined;
-            if ((try reader.readAll(&prop_count_buf)) < 4) break;
-            const prop_count = std.mem.readInt(u32, &prop_count_buf, .little);
-
-            var properties = std.StringHashMap(PropertyValue).init(allocator);
-
-            // Read each property
-            var props_read: u32 = 0;
-            while (props_read < prop_count) : (props_read += 1) {
-                var key_len_buf: [4]u8 = undefined;
-                if ((try reader.readAll(&key_len_buf)) < 4) break;
-                const key_len = std.mem.readInt(u32, &key_len_buf, .little);
-                const key_data = try allocator.alloc(u8, key_len);
-                if ((try reader.readAll(key_data)) < key_len) break;
-
-                var val_type_buf: [1]u8 = undefined;
-                if ((try reader.readAll(&val_type_buf)) < 1) break;
-                const val_type = val_type_buf[0];
-
-                const value = switch (val_type) {
-                    0 => blk: { // String
-                        var len_buf: [4]u8 = undefined;
-                        if ((try reader.readAll(&len_buf)) < 4) break :blk PropertyValue{ .String = "" };
-                        const str_len = std.mem.readInt(u32, &len_buf, .little);
-                        const str_data = try allocator.alloc(u8, str_len);
-                        if ((try reader.readAll(str_data)) < str_len) break :blk PropertyValue{ .String = "" };
-                        break :blk PropertyValue{ .String = str_data };
-                    },
-                    1 => blk: { // Int
-                        var int_buf: [8]u8 = undefined;
-                        if ((try reader.readAll(&int_buf)) < 8) break :blk PropertyValue{ .Int = 0 };
-                        break :blk PropertyValue{ .Int = std.mem.readInt(i64, &int_buf, .little) };
-                    },
-                    2 => blk: { // Float
-                        var float_buf: [8]u8 = undefined;
-                        if ((try reader.readAll(&float_buf)) < 8) break :blk PropertyValue{ .Float = 0.0 };
-                        const bits = std.mem.readInt(u64, &float_buf, .little);
-                        break :blk PropertyValue{ .Float = @bitCast(bits) };
-                    },
-                    3 => blk: { // Bool
-                        var bool_buf: [1]u8 = undefined;
-                        if ((try reader.readAll(&bool_buf)) < 1) break :blk PropertyValue{ .Bool = false };
-                        break :blk PropertyValue{ .Bool = bool_buf[0] != 0 };
-                    },
-                    4 => PropertyValue{ .Null = {} },
-                    5 => PropertyValue{ .ExtValue = try self.readExtValue(reader) },
-                    6 => blk: { // Decimal
-                        var buf: [17]u8 = undefined;
-                        if ((try reader.readAll(&buf)) < 17) break :blk PropertyValue{ .Decimal = .{ .coeff = 0, .scale = 0 } };
-                        const coeff = std.mem.readInt(i128, buf[0..16], .little);
-                        const scale = buf[16];
-                        break :blk PropertyValue{ .Decimal = .{ .coeff = coeff, .scale = scale } };
-                    },
-                    else => PropertyValue{ .String = "" },
-                };
-
-                try properties.put(key_data, value);
-            }
-
-            const edge = Edge{
-                .id = edge_id,
-                .from_id = from_id,
-                .to_id = to_id,
-                .label = label_data,
-                .properties = properties,
-                .graph_name = try allocator.dupe(u8, handle.name),
-            };
-
-            try handle.edges.put(edge_id, edge);
-        }
-
-        // Rebuild indexes from loaded data
-        try handle.rebuildIndexes();
     }
 };
 
@@ -4465,36 +3059,21 @@ inline fn notifyMutation(op: MutationOp, id1: u64, id2: u64, id3: u64, label: ?[
     }
 }
 
-// CANARY: REQ=REQ-PERF-WAL-003; FEATURE="WriteAheadLog"; ASPECT=PersistenceHooks; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
-// Issue #445: WAL persistence hooks — function pointers set by wal.zig to avoid circular imports.
-// The persistence loop calls these instead of always doing a full saveToFile().
+// WAL persistence hooks — kept as no-op stubs for API compatibility.
 pub const WalSyncFn = *const fn () void;
 pub const WalNeedsCheckpointFn = *const fn () bool;
 pub const WalCheckpointFn = *const fn (*GraphStore) void;
 
-var g_wal_sync_fn: ?WalSyncFn = null;
-var g_wal_needs_checkpoint_fn: ?WalNeedsCheckpointFn = null;
-var g_wal_checkpoint_fn: ?WalCheckpointFn = null;
-
-/// Set WAL persistence hooks (called by wal.zig during initialization)
+/// No-op: WAL persistence hooks removed — adapter handles storage.
 pub fn setWalPersistenceHooks(
     sync_fn: ?WalSyncFn,
     needs_checkpoint_fn: ?WalNeedsCheckpointFn,
     checkpoint_fn: ?WalCheckpointFn,
 ) void {
-    g_wal_sync_fn = sync_fn;
-    g_wal_needs_checkpoint_fn = needs_checkpoint_fn;
-    g_wal_checkpoint_fn = checkpoint_fn;
+    _ = sync_fn;
+    _ = needs_checkpoint_fn;
+    _ = checkpoint_fn;
 }
-
-/// Condition variable + mutex pair for signalling the persistence thread
-/// instead of sleep-polling.
-var g_persist_cond: std.Thread.Condition = .{};
-var g_persist_cond_mutex: std.Thread.Mutex = .{};
-
-/// Atomic dirty flag so query threads can set it without holding any lock.
-/// CANARY: REQ=REQ-GAP-0260-ATOMIC-DIRTY-001; FEATURE="AsyncPersistence"; ASPECT=AtomicDirty; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-13
-var g_atomic_dirty: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 /// Acquire the global store lock (shared — for read-only query handlers).
 /// GAP-0001: Mutation operations must use acquireStoreWriteLock() instead
@@ -4518,55 +3097,21 @@ pub fn releaseStoreWriteLock() void {
     g_store_rwlock.unlock();
 }
 
-/// Signal the background persistence thread to wake up and flush.
-/// Call this instead of saveIfDirty() in hot paths (commit/rollback).
-/// CANARY: REQ=REQ-GAP-0260-SIGNAL-001; FEATURE="AsyncPersistence"; ASPECT=SignalPersistence; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-13
-pub fn signalPersistence() void {
-    g_atomic_dirty.store(true, .release);
-    g_persist_cond_mutex.lock();
-    defer g_persist_cond_mutex.unlock();
-    g_persist_cond.signal();
-}
+/// No-op: background persistence removed — adapter handles storage.
+pub fn signalPersistence() void {}
 
 /// P2-3: Global allocator for persistent graph store data (better than page_allocator)
 var global_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
 var global_allocator_init = false;
 
-// GAP-0260: Background persistence thread for write coalescing
-// CANARY: REQ=REQ-GAP-0260-PERSIST-001; FEATURE="DeferredPersistence"; ASPECT=WriteCoalescing; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-09
-var g_persist_thread: ?std.Thread = null;
-var g_persist_shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
-var g_persist_interval_ms: u64 = 100;
-
-/// Start the background persistence thread that periodically flushes dirty data
+/// No-op: background persistence thread removed — adapter handles storage.
 pub fn startPersistenceThread(interval_ms: u64) void {
-    g_persist_interval_ms = interval_ms;
-    g_persist_shutdown.store(false, .release);
-    g_persist_thread = std.Thread.spawn(.{}, persistenceLoop, .{}) catch |err| {
-        log.warn("failed to start persistence thread", &.{
-            Attr.string("error", @errorName(err)),
-        });
-        return;
-    };
+    _ = interval_ms;
 }
 
-/// Stop the background persistence thread and perform a final flush
+/// No-op: background persistence thread removed — adapter handles storage.
 pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
-    g_persist_shutdown.store(true, .release);
-    // Wake the persistence thread so it sees the shutdown flag
-    g_persist_cond_mutex.lock();
-    g_persist_cond.signal();
-    g_persist_cond_mutex.unlock();
-
-    if (g_persist_thread) |thread| {
-        thread.join();
-        g_persist_thread = null;
-    }
-    // Final flush on shutdown to ensure no data loss
-    if (global_store) |*store| {
-        _ = allocator;
-        store.saveIfDirty();
-    }
+    _ = allocator;
 }
 
 /// GAP-0259/0260: Persistence loop uses condition variable instead of sleep-polling.
@@ -4577,102 +3122,6 @@ pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
 ///
 /// CANARY: REQ=REQ-PERF-WAL-004; FEATURE="WriteAheadLog"; ASPECT=PersistenceLoop; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
 /// Issue #445: When WAL is enabled, the persistence loop syncs the WAL (fsync) on every
-/// wake instead of doing a full saveToFile(). Full checkpoints (saveToFile + WAL truncate)
-/// happen only when the WAL byte threshold or time threshold is exceeded. This reduces
-/// I/O from O(N) per commit to O(delta) per commit with periodic O(N) checkpoints.
-fn persistenceLoop() void {
-    while (!g_persist_shutdown.load(.acquire)) {
-        // Wait for signal or timeout
-        g_persist_cond_mutex.lock();
-        g_persist_cond.timedWait(
-            &g_persist_cond_mutex,
-            g_persist_interval_ms * std.time.ns_per_ms,
-        ) catch {};
-        g_persist_cond_mutex.unlock();
-
-        // Check if dirty — use atomic flag first (cheap), then check store.dirty
-        // as safety net in case any code path sets store.dirty without signalPersistence()
-        const atomic_dirty = g_atomic_dirty.load(.acquire);
-        const store_dirty = if (global_store) |*store| store.dirty else false;
-        if (!atomic_dirty and !store_dirty) continue;
-
-        // If WAL is enabled, sync WAL first (ensures durability without full save)
-        if (g_wal_sync_fn) |sync_fn| {
-            sync_fn();
-        }
-
-        // Check if a full checkpoint is needed
-        const needs_checkpoint = if (g_wal_needs_checkpoint_fn) |cp_fn| cp_fn() else true;
-
-        if (needs_checkpoint) {
-            // Try to acquire exclusive write lock. signalPersistence() is called while
-            // the QUIC handler still holds a shared lock, so the first tryLock() often
-            // fails. Retry a few times with brief sleeps to let the handler release it.
-            var locked = false;
-            for (0..10) |_| {
-                if (g_store_rwlock.tryLock()) {
-                    locked = true;
-                    break;
-                }
-                std.Thread.sleep(5 * std.time.ns_per_ms);
-            }
-            if (!locked) continue;
-
-            if (global_store) |*store| {
-                if (store.dirty) {
-                    if (g_wal_checkpoint_fn) |checkpoint_fn| {
-                        // WAL mode: checkpoint (saveToFile + truncate WAL)
-                        checkpoint_fn(store);
-                        g_store_rwlock.unlock();
-                    } else {
-                        // Legacy mode: stream-serialize to temp file under lock,
-                        // then release lock before TDE/rename (#538 OOM fix).
-                        const file_path = getPersistenceFilePath(store.allocator) catch {
-                            g_store_rwlock.unlock();
-                            continue;
-                        };
-                        const tmp_path = std.fmt.allocPrint(store.allocator, "{s}.tmp", .{file_path}) catch {
-                            store.allocator.free(file_path);
-                            g_store_rwlock.unlock();
-                            continue;
-                        };
-                        store.serializeToTempFile(tmp_path) catch |err| {
-                            store.allocator.free(tmp_path);
-                            store.allocator.free(file_path);
-                            g_store_rwlock.unlock();
-                            log.err("background serialize to temp file failed", &.{
-                                Attr.string("error", @errorName(err)),
-                            });
-                            continue;
-                        };
-                        store.dirty = false;
-                        g_store_rwlock.unlock();
-
-                        // TDE encryption and atomic rename happen outside the lock
-                        defer store.allocator.free(tmp_path);
-                        defer store.allocator.free(file_path);
-                        GraphStore.finalizeTempFile(store.allocator, tmp_path, file_path) catch |err| {
-                            log.err("background save finalize failed", &.{
-                                Attr.string("error", @errorName(err)),
-                            });
-                        };
-                    }
-                    // Clear atomic dirty after successful save/checkpoint
-                    g_atomic_dirty.store(false, .release);
-                } else {
-                    g_store_rwlock.unlock();
-                }
-            } else {
-                g_store_rwlock.unlock();
-            }
-        } else {
-            // WAL sync was sufficient — no checkpoint needed yet.
-            // Clear atomic dirty since WAL has captured all mutations.
-            g_atomic_dirty.store(false, .release);
-        }
-    }
-}
-
 pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
     // P2-3: Initialize global allocator on first use
     if (!global_allocator_init) {
@@ -4882,432 +3331,4 @@ test "TestEdgeAdjacencyIndex" {
     var edges_for_node1 = store.getEdgesForNode(node1);
     defer edges_for_node1.deinit(testing.allocator);
     try testing.expect(edges_for_node1.items.len == 2);
-}
-
-// ============================================================================
-// Streaming serialization tests (Issue #538 OOM fix)
-// ============================================================================
-
-test "streaming serialization matches buffer serialization" {
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(dir_path);
-    setDataDirOverride(allocator, dir_path);
-    defer setDataDirOverride(allocator, null);
-
-    // Build a graph with nodes, edges, and properties
-    var store = try GraphStore.init(allocator);
-    defer store.deinit();
-
-    var labels_a = [_][]const u8{"Person"};
-    var labels_b = [_][]const u8{ "Person", "Employee" };
-    const n1 = try store.createNode(&labels_a);
-    const n2 = try store.createNode(&labels_b);
-    const n3 = try store.createNode(&labels_a);
-
-    try store.setNodeProperty(n1, "name", .{ .String = "Alice" });
-    try store.setNodeProperty(n1, "age", .{ .Int = 30 });
-    try store.setNodeProperty(n2, "name", .{ .String = "Bob" });
-    try store.setNodeProperty(n2, "active", .{ .Bool = true });
-    try store.setNodeProperty(n3, "score", .{ .Float = 3.14 });
-
-    _ = try store.createEdge(n1, n2, "KNOWS");
-    const e2 = try store.createEdge(n2, n3, "MANAGES");
-    try store.setEdgeProperty(e2, "since", .{ .Int = 2024 });
-
-    // Serialize to buffer (old method)
-    var buffer = try store.serializeToBuffer();
-    defer buffer.deinit(allocator);
-
-    // Serialize to temp file (new streaming method)
-    const tmp_path = try std.fmt.allocPrint(allocator, "{s}/stream_test.tmp", .{dir_path});
-    defer allocator.free(tmp_path);
-    try store.serializeToTempFile(tmp_path);
-
-    // Read temp file back
-    const file_data = try std.fs.cwd().readFileAlloc(allocator, tmp_path, 1 << 30);
-    defer allocator.free(file_data);
-
-    // Both should produce identical bytes
-    try std.testing.expectEqual(buffer.items.len, file_data.len);
-    try std.testing.expectEqualSlices(u8, buffer.items, file_data);
-}
-
-test "streaming serialization CRC integrity" {
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(dir_path);
-    setDataDirOverride(allocator, dir_path);
-    defer setDataDirOverride(allocator, null);
-
-    var store = try GraphStore.init(allocator);
-    defer store.deinit();
-
-    var labels = [_][]const u8{"TestNode"};
-    const n1 = try store.createNode(&labels);
-    try store.setNodeProperty(n1, "value", .{ .String = "test-data" });
-
-    // Serialize to temp file
-    const tmp_path = try std.fmt.allocPrint(allocator, "{s}/crc_test.tmp", .{dir_path});
-    defer allocator.free(tmp_path);
-    try store.serializeToTempFile(tmp_path);
-
-    // Read file and verify CRC
-    const data = try std.fs.cwd().readFileAlloc(allocator, tmp_path, 1 << 30);
-    defer allocator.free(data);
-
-    try std.testing.expect(data.len >= HEADER_LEN);
-    try std.testing.expect(std.mem.eql(u8, data[0..8], "GEODGST1"));
-
-    const stored_crc = std.mem.readInt(u32, data[56..60], .little);
-    const computed_crc = crc.Crc32.hash(data[HEADER_LEN..]);
-    try std.testing.expectEqual(computed_crc, stored_crc);
-}
-
-test "streaming serialization roundtrip with loadFromFile" {
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(dir_path);
-    setDataDirOverride(allocator, dir_path);
-    defer setDataDirOverride(allocator, null);
-
-    // Create and populate a store
-    var store = try GraphStore.init(allocator);
-    defer store.deinit();
-
-    var labels_a = [_][]const u8{"City"};
-    const c1 = try store.createNode(&labels_a);
-    const c2 = try store.createNode(&labels_a);
-    try store.setNodeProperty(c1, "name", .{ .String = "Seattle" });
-    try store.setNodeProperty(c1, "pop", .{ .Int = 750000 });
-    try store.setNodeProperty(c2, "name", .{ .String = "Portland" });
-    try store.setNodeProperty(c2, "pop", .{ .Int = 650000 });
-
-    const e1 = try store.createEdge(c1, c2, "CONNECTED_BY");
-    try store.setEdgeProperty(e1, "distance_km", .{ .Float = 280.0 });
-
-    // Save using streaming serialization
-    try store.saveToFile();
-
-    // Load into a new store
-    var store2 = try GraphStore.init(allocator);
-    defer store2.deinit();
-    try store2.loadFromFile();
-
-    // Verify data survived
-    try std.testing.expectEqual(store.nodes.count(), store2.nodes.count());
-    try std.testing.expectEqual(store.edges.count(), store2.edges.count());
-
-    // Verify node properties
-    const loaded_node = store2.nodes.get(c1);
-    try std.testing.expect(loaded_node != null);
-    const name_val = loaded_node.?.properties.get("name");
-    try std.testing.expect(name_val != null);
-    try std.testing.expectEqualStrings("Seattle", name_val.?.String);
-}
-
-test "streaming serialization large graph bounded memory" {
-    // Verify that serializeToTempFile works for a graph with many nodes
-    // without allocating a large in-memory buffer.
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(dir_path);
-    setDataDirOverride(allocator, dir_path);
-    defer setDataDirOverride(allocator, null);
-
-    var store = try GraphStore.init(allocator);
-    defer store.deinit();
-
-    // Create 1000 nodes with properties
-    var labels = [_][]const u8{"BulkNode"};
-    var i: usize = 0;
-    while (i < 1000) : (i += 1) {
-        const nid = try store.createNode(&labels);
-        // Use Int property (no heap allocation needed for value)
-        try store.setNodeProperty(nid, "idx", .{ .Int = @intCast(i) });
-    }
-
-    // Create edges between consecutive nodes
-    i = 0;
-    while (i < 999) : (i += 1) {
-        _ = try store.createEdge(@intCast(i + 1), @intCast(i + 2), "NEXT");
-    }
-
-    // Streaming serialize — should succeed without OOM
-    const tmp_path = try std.fmt.allocPrint(allocator, "{s}/large_test.tmp", .{dir_path});
-    defer allocator.free(tmp_path);
-    try store.serializeToTempFile(tmp_path);
-
-    // Verify file is valid by loading it
-    try store.saveToFile();
-    var store2 = try GraphStore.init(allocator);
-    defer store2.deinit();
-    try store2.loadFromFile();
-    try std.testing.expectEqual(@as(usize, 1000), store2.nodes.count());
-    try std.testing.expectEqual(@as(usize, 999), store2.edges.count());
-}
-
-test "per-graph file round trip" {
-    const allocator = std.testing.allocator;
-    var store = try GraphStore.init(allocator);
-    defer store.deinit();
-
-    const test_uuid = [_]u8{5} ** 16;
-    var handle = try GraphHandle.init(allocator, "test_graph", test_uuid);
-    defer handle.deinit();
-
-    // Create a node with a label and property
-    const label = try allocator.dupe(u8, "Person");
-    var labels = try allocator.alloc([]const u8, 1);
-    labels[0] = label;
-    var props = std.StringHashMap(PropertyValue).init(allocator);
-    try props.put(try allocator.dupe(u8, "name"), PropertyValue{ .String = try allocator.dupe(u8, "Alice") });
-    try handle.nodes.put(1, Node{
-        .id = 1,
-        .labels = labels,
-        .properties = props,
-        .graph_name = try allocator.dupe(u8, "test_graph"),
-    });
-
-    // Create an edge
-    const edge_label = try allocator.dupe(u8, "KNOWS");
-    var edge_props = std.StringHashMap(PropertyValue).init(allocator);
-    try edge_props.put(try allocator.dupe(u8, "since"), PropertyValue{ .Int = 2020 });
-    try handle.edges.put(100, Edge{
-        .id = 100,
-        .from_id = 1,
-        .to_id = 1,
-        .label = edge_label,
-        .properties = edge_props,
-        .graph_name = try allocator.dupe(u8, "test_graph"),
-    });
-
-    // Save to a temp file
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(dir_path);
-    const path = try std.fmt.allocPrint(allocator, "{s}/test_per_graph.dat", .{dir_path});
-    defer allocator.free(path);
-
-    try store.saveGraphHandleToFile(handle, path);
-
-    // Load into fresh handle
-    var handle2 = try GraphHandle.init(allocator, "test_graph", test_uuid);
-    defer handle2.deinit();
-    try store.loadGraphHandleFromFile(handle2, path);
-
-    // Verify nodes
-    try std.testing.expectEqual(@as(u64, 1), handle2.nodeCount());
-    const loaded_node = handle2.nodes.get(1).?;
-    try std.testing.expectEqualStrings("test_graph", loaded_node.graph_name);
-    try std.testing.expectEqual(@as(usize, 1), loaded_node.labels.len);
-    try std.testing.expectEqualStrings("Person", loaded_node.labels[0]);
-    const name_val = loaded_node.properties.get("name").?;
-    try std.testing.expectEqualStrings("Alice", name_val.String);
-
-    // Verify edges
-    try std.testing.expectEqual(@as(u64, 1), handle2.edgeCount());
-    const loaded_edge = handle2.edges.get(100).?;
-    try std.testing.expectEqualStrings("KNOWS", loaded_edge.label);
-    try std.testing.expectEqualStrings("test_graph", loaded_edge.graph_name);
-    const since_val = loaded_edge.properties.get("since").?;
-    try std.testing.expectEqual(@as(i64, 2020), since_val.Int);
-
-    // Verify indexes were rebuilt
-    const person_nodes = handle2.getNodesByLabel("Person").?;
-    try std.testing.expectEqual(@as(usize, 1), person_nodes.len);
-    try std.testing.expectEqual(@as(u64, 1), person_nodes[0]);
-}
-
-test "per-graph file load missing file returns silently" {
-    const allocator = std.testing.allocator;
-    var store = try GraphStore.init(allocator);
-    defer store.deinit();
-
-    const test_uuid = [_]u8{0} ** 16;
-    var handle = try GraphHandle.init(allocator, "empty", test_uuid);
-    defer handle.deinit();
-
-    // Loading a non-existent file should not error
-    try store.loadGraphHandleFromFile(handle, "/tmp/nonexistent_geode_per_graph_test.dat");
-    try std.testing.expectEqual(@as(u64, 0), handle.nodeCount());
-    try std.testing.expectEqual(@as(u64, 0), handle.edgeCount());
-}
-
-test "per-graph file empty graph round trip" {
-    const allocator = std.testing.allocator;
-    var store = try GraphStore.init(allocator);
-    defer store.deinit();
-
-    const test_uuid = [_]u8{1} ** 16;
-    var handle = try GraphHandle.init(allocator, "empty_graph", test_uuid);
-    defer handle.deinit();
-
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(dir_path);
-    const path = try std.fmt.allocPrint(allocator, "{s}/empty_graph.dat", .{dir_path});
-    defer allocator.free(path);
-
-    // Save empty graph
-    try store.saveGraphHandleToFile(handle, path);
-
-    // Load into fresh handle
-    var handle2 = try GraphHandle.init(allocator, "empty_graph", test_uuid);
-    defer handle2.deinit();
-    try store.loadGraphHandleFromFile(handle2, path);
-
-    try std.testing.expectEqual(@as(u64, 0), handle2.nodeCount());
-    try std.testing.expectEqual(@as(u64, 0), handle2.edgeCount());
-}
-
-test "per-graph file CRC validation rejects corrupt data" {
-    const allocator = std.testing.allocator;
-    var store = try GraphStore.init(allocator);
-    defer store.deinit();
-
-    const test_uuid = [_]u8{ 0xAA, 0xBB, 0xCC, 0xDD } ++ [_]u8{0} ** 12;
-    var handle = try GraphHandle.init(allocator, "crc_test", test_uuid);
-    defer handle.deinit();
-
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(dir_path);
-    const path = try std.fmt.allocPrint(allocator, "{s}/crc_corrupt.dat", .{dir_path});
-    defer allocator.free(path);
-
-    try store.saveGraphHandleToFile(handle, path);
-
-    // Corrupt a byte in the node_count field (offset 28, after UUID)
-    {
-        const file = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
-        defer file.close();
-        try file.seekTo(30);
-        try file.writeAll("X");
-    }
-
-    var handle2 = try GraphHandle.init(allocator, "crc_test", test_uuid);
-    defer handle2.deinit();
-    const result = store.loadGraphHandleFromFile(handle2, path);
-    try std.testing.expectError(error.ChecksumMismatch, result);
-}
-
-test "per-graph file UUID mismatch rejects file swap" {
-    const allocator = std.testing.allocator;
-    var store = try GraphStore.init(allocator);
-    defer store.deinit();
-
-    const uuid_a = [_]u8{ 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10 };
-    const uuid_b = [_]u8{ 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xB0 };
-
-    // Create and save graph A
-    var handle_a = try GraphHandle.init(allocator, "graph_a", uuid_a);
-    defer handle_a.deinit();
-
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(dir_path);
-    const path_a = try std.fmt.allocPrint(allocator, "{s}/graph_a.dat", .{dir_path});
-    defer allocator.free(path_a);
-    try store.saveGraphHandleToFile(handle_a, path_a);
-
-    // Try to load graph A's file into a handle with graph B's UUID
-    var handle_b = try GraphHandle.init(allocator, "graph_b", uuid_b);
-    defer handle_b.deinit();
-
-    // This must fail because the file contains uuid_a but handle expects uuid_b
-    const result = store.loadGraphHandleFromFile(handle_b, path_a);
-    try std.testing.expectError(error.GraphUuidMismatch, result);
-}
-
-test "per-graph file corrupt single graph leaves others loadable" {
-    const allocator = std.testing.allocator;
-    var store = try GraphStore.init(allocator);
-    defer store.deinit();
-
-    const uuid_good = [_]u8{ 0x01, 0x02, 0x03, 0x04 } ++ [_]u8{0} ** 12;
-    const uuid_bad = [_]u8{ 0x0A, 0x0B, 0x0C, 0x0D } ++ [_]u8{0} ** 12;
-
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(dir_path);
-
-    // Save a good graph file
-    var handle_good = try GraphHandle.init(allocator, "good_graph", uuid_good);
-    defer handle_good.deinit();
-    const path_good = try std.fmt.allocPrint(allocator, "{s}/good.dat", .{dir_path});
-    defer allocator.free(path_good);
-    try store.saveGraphHandleToFile(handle_good, path_good);
-
-    // Save a bad graph file then corrupt it
-    var handle_bad = try GraphHandle.init(allocator, "bad_graph", uuid_bad);
-    defer handle_bad.deinit();
-    const path_bad = try std.fmt.allocPrint(allocator, "{s}/bad.dat", .{dir_path});
-    defer allocator.free(path_bad);
-    try store.saveGraphHandleToFile(handle_bad, path_bad);
-
-    {
-        const file = try std.fs.cwd().openFile(path_bad, .{ .mode = .read_write });
-        defer file.close();
-        // Corrupt the node_count field (offset 28) — changes data but UUID still matches
-        try file.seekTo(28);
-        try file.writeAll("CORRUPT!");
-    }
-
-    // Load the good graph — should succeed
-    var loaded_good = try GraphHandle.init(allocator, "good_graph", uuid_good);
-    defer loaded_good.deinit();
-    try store.loadGraphHandleFromFile(loaded_good, path_good);
-    try std.testing.expectEqual(true, loaded_good.available);
-
-    // Load the corrupt graph — should fail with checksum error
-    var loaded_bad = try GraphHandle.init(allocator, "bad_graph", uuid_bad);
-    defer loaded_bad.deinit();
-    const result = store.loadGraphHandleFromFile(loaded_bad, path_bad);
-    try std.testing.expectError(error.ChecksumMismatch, result);
-}
-
-test "per-graph file rejects invalid magic" {
-    const allocator = std.testing.allocator;
-    var store = try GraphStore.init(allocator);
-    defer store.deinit();
-
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(dir_path);
-    const path = try std.fmt.allocPrint(allocator, "{s}/bad_magic.dat", .{dir_path});
-    defer allocator.free(path);
-
-    // Write a file with wrong magic but valid length
-    {
-        const file = try std.fs.cwd().createFile(path, .{});
-        defer file.close();
-        var header: [48]u8 = [_]u8{0} ** 48;
-        @memcpy(header[0..8], "NOTGEODE");
-        try file.writeAll(&header);
-    }
-
-    const test_uuid = [_]u8{0} ** 16;
-    var handle = try GraphHandle.init(allocator, "test", test_uuid);
-    defer handle.deinit();
-    const result = store.loadGraphHandleFromFile(handle, path);
-    try std.testing.expectError(error.InvalidMagic, result);
 }

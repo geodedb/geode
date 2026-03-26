@@ -390,9 +390,7 @@ REQ-BENCHMARK-TDE-001,TDE Overhead Benchmark,Documentation,EXEMPT,,,security,202
 REQ-BINARY-PERSIST-001,BinaryPersistence,ServerInit,IMPL,,,server,2026-02-02,src/server/server_init.zig
 REQ-BINARY-PERSIST-003,BinaryPersistence,MainImports,IMPL,,,server,2026-02-02,src/server/main.zig
 REQ-BINARY-PERSIST-DIRTY-001,BinaryPersistence,DirtyTracking,IMPL,,,storage,2026-02-02,src/graph_store.zig
-REQ-BINARY-PERSIST-DIRTY-002,BinaryPersistence,ConditionalSave,IMPL,,,storage,2026-02-02,src/graph_store.zig
 REQ-BINARY-PERSIST-EDGE-001,BinaryPersistence,DirtyTracking,IMPL,,,storage,2026-02-02,src/graph_store.zig
-REQ-BINARY-PERSIST-LOAD-001,BinaryPersistence,LoadFromFile,TESTED,,,storage,2026-02-02,src/graph_store.zig
 REQ-BINARY-PERSIST-NODE-002,BinaryPersistence,DirtyTracking,IMPL,,,storage,2026-02-02,src/graph_store.zig
 REQ-BINARY-PERSIST-PATH-001,BinaryPersistence,PathResolution,TESTED,,,storage,2026-02-02,src/graph_store.zig
 REQ-BINARY-PERSIST-TEST-001,BinaryPersistence,UnitTests,TESTED,,,storage,2026-02-02,tests/test_binary_persistence.zig
@@ -984,9 +982,6 @@ REQ-GAP-0240,TypePromotionUnitTests,ScaleConversion,TESTED,,,eval,2026-01-25,src
 REQ-GAP-0257-ISO-001,ISO Conformance Evidence,Docs,IMPL,,,docs,2026-02-09,docs/gql/GQL_CONFORMANCE_PROFILE.md
 REQ-GAP-0258-MTLS-CLI-001,mTLS CLI,CertificateMapping,IMPL,,,cli,2026-02-09,src/cli/mtls_cli.zig
 REQ-GAP-0259-RWLOCK-001,AsyncPersistence,RwLockMigration,IMPL,,,storage,2026-02-13,src/graph_store.zig
-REQ-GAP-0260-ATOMIC-DIRTY-001,AsyncPersistence,AtomicDirty,IMPL,,,storage,2026-02-13,src/graph_store.zig
-REQ-GAP-0260-PERSIST-001,DeferredPersistence,WriteCoalescing,IMPL,,,storage,2026-02-09,src/graph_store.zig
-REQ-GAP-0260-SIGNAL-001,AsyncPersistence,SignalPersistence,IMPL,,,storage,2026-02-13,src/graph_store.zig
 REQ-GAP-0481-NO-PASSWORD-HINT-LOG,AuthSecurity,SecurityAudit,TESTED,,,security,2026-02-18,src/security/test_auth_security.zig
 REQ-GAP-0489-BLAKE2B-MIGRATION,Blake2bToArgon2idAutoMigration,SecurityAudit,TESTED,,,security,2026-02-18,src/security/test_blake2b_migration.zig
 REQ-GAP-0490-FEDERATION-CLIENT-AUTH,FederationAuth,ClientToken,TESTED,,,security,2026-02-18,src/distributed/federation.zig
@@ -2973,17 +2968,13 @@ REQ-MULTI-GRAPH-005,MultiGraphSupport,QueryRouting,TESTED,,,engine,2026-01-15,te
 REQ-MULTI-GRAPH-006,MultiGraphIsolation,MatchFiltering,TESTED,,,engine,2025-12-22,src/execution/match_operations.zig
 REQ-MULTI-GRAPH-006,MultiGraphIsolation,MatchFiltering,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-006,MultiGraphIsolation,MatchFiltering,TESTED,,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
-REQ-MULTI-GRAPH-006,MultiGraphIsolation,NodeGraphNameLoad,TESTED,,,engine,2025-12-24,src/graph_store.zig
 REQ-MULTI-GRAPH-006,MultiGraphIsolation,NodeGraphNameLoad,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-006,MultiGraphIsolation,NodeGraphNameLoad,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-MULTI-GRAPH-006,MultiGraphIsolation,NodeGraphNamePersistence,TESTED,,,engine,2025-12-24,src/graph_store.zig
 REQ-MULTI-GRAPH-006,MultiGraphIsolation,NodeGraphNamePersistence,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-006,MultiGraphIsolation,NodeGraphNamePersistence,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-MULTI-GRAPH-006,MultiGraphSupport,ServerHandler,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-MULTI-GRAPH-007,MultiGraphIsolation,EdgeGraphNameLoad,TESTED,,,engine,2025-12-24,src/graph_store.zig
 REQ-MULTI-GRAPH-007,MultiGraphIsolation,EdgeGraphNameLoad,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-007,MultiGraphIsolation,EdgeGraphNameLoad,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-MULTI-GRAPH-007,MultiGraphIsolation,EdgeGraphNamePersistence,TESTED,,,engine,2025-12-24,src/graph_store.zig
 REQ-MULTI-GRAPH-007,MultiGraphIsolation,EdgeGraphNamePersistence,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-007,MultiGraphIsolation,EdgeGraphNamePersistence,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-MULTI-GRAPH-007,MultiGraphIsolation,NodeFiltering,TESTED,,,engine,2025-12-22,src/execution/match_operations.zig
@@ -3078,14 +3069,7 @@ REQ-MULTI-GRAPH-DELETE-001,MultiGraphIsolation,DeleteGraphFilter,TESTED,,,engine
 REQ-MULTI-GRAPH-DELETE-002,MultiGraphIsolation,DeleteGraphContext,TESTED,,,engine,2025-12-24,src/execution/statement_dispatcher.zig
 REQ-MULTI-GRAPH-DELETE-002,MultiGraphIsolation,DeleteGraphContext,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-HANDLE-001,PerGraphDataIsolation,GraphHandle,IMPL,,,storage,2026-03-16,src/graph_handle.zig
-REQ-MULTI-GRAPH-HANDLE-002,PerGraphStorage,GraphStoreRouting,IMPL,,,storage,2026-03-16,src/graph_store.zig
-REQ-MULTI-GRAPH-HANDLE-003,PerGraphStorage,SavePerGraph,IMPL,,,storage,2026-03-16,src/graph_store.zig
-REQ-MULTI-GRAPH-HANDLE-004,PerGraphMutations,EdgeMutation,IMPL,,,storage,2026-03-16,src/graph_store.zig
 REQ-MULTI-GRAPH-HANDLE-004,PerGraphMutations,NodeMutation,IMPL,,,storage,2026-03-16,src/graph_handle.zig
-REQ-MULTI-GRAPH-HANDLE-004,PerGraphMutations,NodeMutation,IMPL,,,storage,2026-03-16,src/graph_store.zig
-REQ-MULTI-GRAPH-HANDLE-004,PerGraphStorage,LoadPerGraph,IMPL,,,storage,2026-03-16,src/graph_store.zig
-REQ-MULTI-GRAPH-HANDLE-005,PerGraphStorage,CreateGraph,IMPL,,,storage,2026-03-16,src/graph_store.zig
-REQ-MULTI-GRAPH-HANDLE-006,PerGraphStorage,DropGraph,IMPL,,,storage,2026-03-16,src/graph_store.zig
 REQ-MULTI-GRAPH-HANDLE-EXPORT-001,PerGraphStorage,LibExport,IMPL,,,storage,2026-03-16,src/lib.zig
 REQ-MULTI-GRAPH-REGISTRY-001,PerGraphFileMapping,GraphRegistry,IMPL,,,storage,2026-03-16,src/graph_registry.zig
 REQ-MULTI-GRAPH-SECURITY-001,MultiGraphSecurity,RBACGraphScope,TESTED,,,security,2025-12-20,src/security/multi_graph_security.zig
@@ -3159,8 +3143,6 @@ REQ-PARSER-PATTERN-001,ParserSupport,Patterns,TESTED,,,parser,2026-01-16,tests/t
 REQ-PARSER-PATTERN-001,ParserSupport,Patterns,TESTED,,,parser,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-PARSER-PATTERN-ADV-001,ParserSupport,AdvancedPatterns,TESTED,,,parser,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-PARSER-SUBQUERY-001,ParserSupport,SubqueryParsing,TESTED,,,parser,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
-REQ-PER-GRAPH-PERSIST-001,PerGraphFilePersistence,SaveGraphHandle,IMPL,,,storage,2026-03-16,src/graph_store.zig
-REQ-PER-GRAPH-PERSIST-002,PerGraphFilePersistence,LoadGraphHandle,IMPL,,,storage,2026-03-16,src/graph_store.zig
 REQ-PERF-001,Perf,Bench,BENCHED,,,perf,2026-01-17',tools/test_canary_lint.py
 REQ-PERF-001,Perf,Bench,BENCHED,,,perf,2026-01-17',tools/test_canary_lint.py
 REQ-PERF-001,Performance,QueryOptimization,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
@@ -3331,7 +3313,6 @@ REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,IMPL,,,build,2026-01-
 REQ-PERF-WAL-001,WriteAheadLog,DeltaPersistence,TESTED,,,storage,2026-02-17,src/wal.zig
 REQ-PERF-WAL-001,WriteAheadLog,UnitTest,TESTED,,,storage,2026-02-17,tests/test_wal.zig
 REQ-PERF-WAL-002,WriteAheadLog,MutationCallback,TESTED,,,storage,2026-02-17,src/graph_store.zig
-REQ-PERF-WAL-003,WriteAheadLog,PersistenceHooks,TESTED,,,storage,2026-02-17,src/graph_store.zig
 REQ-PERF-WAL-004,WriteAheadLog,PersistenceLoop,TESTED,,,storage,2026-02-17,src/graph_store.zig
 REQ-PERF-WAL-005,WriteAheadLog,ServerInit,TESTED,,,storage,2026-02-17,src/server/server_init.zig
 REQ-PERF-WAL-006,WriteAheadLog,LibExport,TESTED,,,storage,2026-02-17,src/lib.zig
@@ -3785,9 +3766,6 @@ REQ-STR-002,StringMinMax,StringMax,TESTED,,,engine,2026-01-15,tests/test_gap_019
 REQ-STR-003,StringMinMax,NullHandling,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-STREAM-001,Streaming,ResultStreaming,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-STREAM-BATCH-001,Streaming,BatchStreaming,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
-REQ-STREAM-SERIALIZE-001,StreamingSerialization,SaveToFile,TESTED,,,storage,2026-02-25,src/graph_store.zig
-REQ-STREAM-SERIALIZE-002,StreamingSerialization,StreamToFile,TESTED,,,storage,2026-02-25,src/graph_store.zig
-REQ-STREAM-SERIALIZE-003,StreamingSerialization,AtomicRename,TESTED,,,storage,2026-02-25,src/graph_store.zig
 REQ-STREAM-UNWIND-001,Streaming,UnwindStreaming,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-STREAMING-001,StreamingDataGenerator,DataGeneration,TESTED,,,streaming,2026-01-15,tests/test_gap_0193_remaining_categories.zig
 REQ-STREAMING-002,StreamingDataGenerator,RateControl,TESTED,,,streaming,2026-01-15,tests/test_gap_0193_remaining_categories.zig
@@ -3846,8 +3824,6 @@ REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SECURITY,TESTED,,,security,2026-01-
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SchemaCatalog,TESTED,,,security,2026-01-28,src/schema/catalog.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SharedUtility,TESTED,,,security,2026-01-28,src/storage/tde_file_encryption.zig
 REQ-TDE-GRAPHSTORE-001,TDEFileLevelEncryption,GraphStorePersistence,TESTED,,,security,2026-01-28,src/graph_store.zig
-REQ-TDE-GRAPHSTORE-002,TDEFileLevelEncryption,GraphStoreSave,TESTED,,,security,2026-02-25,src/graph_store.zig
-REQ-TDE-GRAPHSTORE-003,TDEFileLevelEncryption,GraphStoreLoad,TESTED,,,security,2026-01-28,src/graph_store.zig
 REQ-TDE-NONCE-001,TDE_AES_GCM_Nonce_Security,Security,EXEMPT,,,security,2026-01-17,src/security/test_tde_nonce.zig
 REQ-TDE-PROC-001,TDEProcedures,KeyHierarchy,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
 REQ-TDE-PROC-002,TDEProcedures,KeyRotation,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
