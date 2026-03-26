@@ -3602,16 +3602,16 @@ var g_store_rwlock: std.Thread.RwLock = .{};
 /// Issue #452: Schema epoch counter for plan cache invalidation.
 /// Incremented on DDL operations (CREATE/DROP INDEX, schema changes).
 /// Plan cache entries created at an older epoch are treated as stale.
-var g_schema_epoch: u64 = 0;
+var g_schema_epoch: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 
 /// Get the current schema epoch (for plan cache invalidation checks)
 pub fn getSchemaEpoch() u64 {
-    return g_schema_epoch;
+    return g_schema_epoch.load(.monotonic);
 }
 
 /// Increment the schema epoch (called on DDL: CREATE/DROP INDEX, etc.)
 pub fn bumpSchemaEpoch() void {
-    g_schema_epoch += 1;
+    _ = g_schema_epoch.fetchAdd(1, .monotonic);
 }
 
 // CANARY: REQ=REQ-PERF-WAL-002; FEATURE="WriteAheadLog"; ASPECT=MutationCallback; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
