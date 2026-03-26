@@ -863,8 +863,25 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 std.debug.print("Error: --graph requires a graph name\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
-            graph = argv[i + 1];
-            graph_for_prepend = argv[i + 1]; // --graph flag: prepend USE GRAPH
+            const graph_arg = argv[i + 1];
+            // Validate graph name to prevent GQL injection (S5):
+            // Only allow identifiers matching [a-zA-Z_][a-zA-Z0-9_]*
+            if (graph_arg.len == 0) {
+                std.debug.print("Error: --graph name must not be empty\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            for (graph_arg, 0..) |c, idx| {
+                const valid = if (idx == 0)
+                    (std.ascii.isAlphabetic(c) or c == '_')
+                else
+                    (std.ascii.isAlphanumeric(c) or c == '_');
+                if (!valid) {
+                    std.debug.print("Error: invalid graph name '{s}' — must match [a-zA-Z_][a-zA-Z0-9_]* (no special characters)\n", .{graph_arg});
+                    std.process.exit(@intFromEnum(ExitCode.usage_error));
+                }
+            }
+            graph = graph_arg;
+            graph_for_prepend = graph_arg; // --graph flag: prepend USE GRAPH
             i += 1;
         } else if (std.mem.eql(u8, arg, "--file") or std.mem.eql(u8, arg, "-f")) {
             // CANARY: REQ=REQ-CLI-FILE-FLAG-002; FEATURE="QueryFileFlag"; ASPECT=FlagParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-31

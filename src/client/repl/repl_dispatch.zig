@@ -17,6 +17,20 @@ const ColumnInfo = struct {
     type: []const u8,
 };
 
+/// Validate a graph name to prevent GQL injection (S5).
+/// Graph names must match [a-zA-Z_][a-zA-Z0-9_]*.
+fn isValidGraphName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    for (name, 0..) |c, idx| {
+        const valid = if (idx == 0)
+            (std.ascii.isAlphabetic(c) or c == '_')
+        else
+            (std.ascii.isAlphanumeric(c) or c == '_');
+        if (!valid) return false;
+    }
+    return true;
+}
+
 const LastPayloadKind = enum {
     none,
     rows,
@@ -2090,6 +2104,13 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
                 return;
             }
 
+            // Validate graph name to prevent GQL injection (S5)
+            if (!isValidGraphName(graph_name)) {
+                const stderr = platform.getStderrHandle();
+                try stderr.writeAll("Error [GEODE-E2002]: Invalid graph name — must match [a-zA-Z_][a-zA-Z0-9_]*\r\n");
+                return;
+            }
+
             // Send USE GRAPH statement to server
             const use_stmt = try std.fmt.allocPrint(state.allocator, "USE GRAPH {s};", .{graph_name});
             defer state.allocator.free(use_stmt);
@@ -2636,7 +2657,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
                 const args_start = cmd_end + 2;
                 if (args_start < trimmed.len) {
                     const use_args = std.mem.trim(u8, trimmed[args_start..], " \t;");
-                    if (use_args.len > 0) {
+                    if (use_args.len > 0 and isValidGraphName(use_args)) {
                         // Convert \use to USE GRAPH statement and add to batch
                         if (batch_statements.items.len > 0) {
                             try batch_statements.append(state.allocator, ' ');
