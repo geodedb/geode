@@ -252,7 +252,11 @@ pub fn main() !void {
     }
     log.info("server.start", &.{Attr.string("level", log_level_arg orelse "info")});
 
+    // GAP-0269: Track total startup time for operator diagnostics
+    const startup_begin = std.time.milliTimestamp();
+
     // Initialize user management (auth is always enabled in the server process)
+    var phase_start = std.time.milliTimestamp();
     const user_mgmt = geode.user_management;
     user_mgmt.initUserStore(gpa) catch |err| {
         log.err("Failed to initialize user store", &.{Attr.string("error", @errorName(err))});
@@ -260,6 +264,9 @@ pub fn main() !void {
     };
     defer user_mgmt.deinitUserStore();
     user_mgmt.setAuthEnabled(true);
+    log.info("Startup phase: user store initialized", &.{
+        Attr.int("elapsed_ms", std.time.milliTimestamp() - phase_start),
+    });
     // NOTE: ensureDefaultUser() is called AFTER server_init.initialize() below
     // so that users from the auth graph store are synced first (avoiding a
     // second admin with a different password).
@@ -270,6 +277,7 @@ pub fn main() !void {
     var key_path = cert_paths.key_path;
 
     // Try to generate certificates if using QUIC or gRPC (TLS needed for both)
+    phase_start = std.time.milliTimestamp();
     if (listen_quic != null or listen_grpc != null) {
         cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path) catch |err| {
             log.warn("Could not generate certificates, using fallback paths", &.{
@@ -281,6 +289,9 @@ pub fn main() !void {
             key_path = "/tmp/geode-server.key";
             try cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path);
         };
+        log.info("Startup phase: certificates ready", &.{
+            Attr.int("elapsed_ms", std.time.milliTimestamp() - phase_start),
+        });
     }
 
     // Initialize AuditLogger (Phase 2 Spec Compliance)
@@ -326,6 +337,7 @@ pub fn main() !void {
     }
 
     // Initialize server components using modularized server_init (M3.2 Phase 3 initialization extraction)
+    phase_start = std.time.milliTimestamp();
     var init_ctx = try server_init.initialize(
         gpa,
         order_keys_mode_expr,
@@ -339,8 +351,13 @@ pub fn main() !void {
     init_ctx.fixupSelfPointers();
     defer init_ctx.deinit();
 
+    log.info("Startup phase: server initialized", &.{
+        Attr.int("elapsed_ms", std.time.milliTimestamp() - phase_start),
+    });
+
     // Sync users from auth graph store into the in-memory user store so that
     // authenticate() can find users created by bootstrapDefaultAdmin().
+    phase_start = std.time.milliTimestamp();
     if (init_ctx.auth_graph_mgr) |agm| {
         var it = agm.storage.userIterator();
         while (it.next()) |record| {
@@ -368,6 +385,9 @@ pub fn main() !void {
         log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
         return err;
     };
+    log.info("Startup phase: user sync complete", &.{
+        Attr.int("elapsed_ms", std.time.milliTimestamp() - phase_start),
+    });
 
     // Extract initialization values for compatibility with existing code
     const env_spill_threshold = init_ctx.env_config.spill_threshold;
@@ -499,11 +519,23 @@ pub fn main() !void {
         quic_connection_handler.setMtlsProvider(&mtls_prov);
         defer quic_connection_handler.setMtlsProvider(null);
 
+        // S6: Initialize per-IP authentication rate limiter for brute-force protection.
+        // CANARY: REQ=REQ-SEC-RATE-LIMIT-007; FEATURE="AuthRateLimiting"; ASPECT=ServerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+        const auth_rate_limiter_mod = @import("auth_rate_limiter.zig");
+        var ip_rate_limiter = auth_rate_limiter_mod.AuthRateLimiter.init(gpa);
+        defer ip_rate_limiter.deinit();
+        quic_connection_handler.setAuthRateLimiter(&ip_rate_limiter);
+        defer quic_connection_handler.setAuthRateLimiter(null);
+
         if (mtls_required) {
             log.info("mTLS authentication enabled for QUIC connections", &.{});
         }
 
+        phase_start = std.time.milliTimestamp();
         try transport.listen();
+        log.info("Startup phase: QUIC transport listening", &.{
+            Attr.int("elapsed_ms", std.time.milliTimestamp() - phase_start),
+        });
 
         log.info("QUIC server started", &.{
             Attr.string("address", address_str),
@@ -518,6 +550,7 @@ pub fn main() !void {
         // CANARY: REQ=REQ-PERF-ASYNC-CONN-002; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPoolInit; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
         // GAP-0202: Initialize thread pool for async connection handling
         // This allows accepting new connections while previous ones are being processed
+        phase_start = std.time.milliTimestamp();
         const pool = thread_pool.ThreadPool.init(gpa, .{
             .num_threads = 0, // Auto-detect based on CPU count
         }) catch |err| {
@@ -542,8 +575,14 @@ pub fn main() !void {
         };
         defer pool.deinit();
 
-        log.info("Async connection handling enabled", &.{
+        log.info("Startup phase: thread pool initialized", &.{
+            Attr.int("elapsed_ms", std.time.milliTimestamp() - phase_start),
             Attr.int("worker_threads", @intCast(pool.workers.len)),
+        });
+
+        // GAP-0269: Log total startup time for operator diagnostics
+        log.info("Server startup complete", &.{
+            Attr.int("total_elapsed_ms", std.time.milliTimestamp() - startup_begin),
         });
 
         // Production mode: accept connections in a loop and dispatch to thread pool
