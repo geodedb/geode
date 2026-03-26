@@ -1025,12 +1025,6 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         }
     }
 
-    // Auto-detect CA cert: if user didn't specify --ca-cert, --insecure, or custom certs,
-    // probe standard locations so `geode query` works out of the box against a local server.
-    if (ca_cert_path == null and !insecure) {
-        ca_cert_path = resolveDefaultCaCert();
-    }
-
     // CANARY: REQ=REQ-CLI-FILE-FLAG-003; FEATURE="QueryFileFlag"; ASPECT=FileReading; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-31
     // Handle --file input with tilde expansion (same as /source in shell)
     var file_allocated: ?[]u8 = null;
@@ -2373,8 +2367,10 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
         return error.InvalidAddress;
     };
 
-    // GAP-0113: Determine connection mode based on certificate options
-    const use_certs = ca_cert_path != null or client_cert_path != null or client_key_path != null;
+    // GAP-0113: Determine connection mode based on certificate options.
+    // Only use connectEx for mTLS (client certs). CA-only doesn't need connectEx
+    // because the Zig QUIC client validates using the server's inline cert.
+    const use_client_certs = client_cert_path != null or client_key_path != null;
 
     // Validate mutual TLS: if any client cert/key provided, both must be provided
     if ((client_cert_path != null) != (client_key_path != null)) {
@@ -2391,8 +2387,8 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
         defer quic_client.deinit();
 
         // GAP-0113: Choose connection method based on security options
-        // Priority: explicit certs > insecure flag > default secure
-        const connect_err = if (use_certs)
+        // Priority: mTLS client certs > insecure flag > default secure TLS
+        const connect_err = if (use_client_certs)
             // Use explicit certificates for enterprise PKI/mutual TLS
             quic_client.connectEx(host, port, ca_cert_path, client_cert_path, client_key_path)
         else if (insecure)
@@ -3691,12 +3687,6 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    // Auto-detect CA cert: if user didn't specify --ca-cert, --insecure, or custom certs,
-    // probe standard locations so `geode shell` works out of the box against a local server.
-    if (ca_cert_path == null and !insecure) {
-        ca_cert_path = resolveDefaultCaCert();
-    }
-
     // Use \r\n so output renders correctly even if a previous session left
     // the terminal in raw mode (OPOST disabled).
     std.debug.print("Geode Shell " ++ VERSION ++ "\r\n", .{});
@@ -3704,11 +3694,11 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // Note: Print "Connecting to..." here since actual connection happens in REPL loop
     if (insecure) {
         std.debug.print("Connecting to {s} (insecure mode - TLS verification disabled)\r\n", .{server});
-    } else if (ca_cert_path != null or client_cert_path != null) {
-        std.debug.print("Connecting to {s} (TLS with custom certificates)\r\n", .{server});
-        if (ca_cert_path) |ca| std.debug.print("  CA cert: {s}\r\n", .{ca});
+    } else if (client_cert_path != null) {
+        std.debug.print("Connecting to {s} (TLS with mutual authentication)\r\n", .{server});
         if (client_cert_path) |cert| std.debug.print("  Client cert: {s}\r\n", .{cert});
         if (client_key_path) |key| std.debug.print("  Client key: {s}\r\n", .{key});
+        if (ca_cert_path) |ca| std.debug.print("  CA cert: {s}\r\n", .{ca});
     } else {
         std.debug.print("Connecting to {s} (TLS enabled)\r\n", .{server});
     }
@@ -3874,31 +3864,6 @@ fn clearCredentials(allocator: std.mem.Allocator) !void {
     defer allocator.free(creds_path);
 
     std.fs.deleteFileAbsolute(creds_path) catch {};
-}
-
-/// Probe standard locations for a Geode CA certificate.
-/// Precedence: GEODE_TLS_CA env var > /etc/geode/certs/server.crt > data-dir cert.
-/// Returns null if no readable cert is found (connection will use system CA store).
-fn resolveDefaultCaCert() ?[]const u8 {
-    // 1. Environment variable (highest priority, matches DSN spec)
-    if (comptime @import("builtin").os.tag != .windows) {
-        if (std.posix.getenv("GEODE_TLS_CA")) |env_ca| {
-            if (env_ca.len > 0) {
-                // Verify the file is readable before returning it
-                if (std.fs.cwd().access(env_ca, .{})) |_| {
-                    return env_ca;
-                } else |_| {}
-            }
-        }
-    }
-
-    // 2. Standard package install location
-    const default_cert = "/etc/geode/certs/server.crt";
-    if (std.fs.cwd().access(default_cert, .{})) |_| {
-        return default_cert;
-    } else |_| {}
-
-    return null;
 }
 
 fn promptPassword(allocator: std.mem.Allocator, prompt_text: []const u8) ![]const u8 {

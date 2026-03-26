@@ -202,11 +202,10 @@ fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.T
             }
             return err;
         };
-    } else if (tls_config.ca_cert_path != null or tls_config.client_cert_path != null) {
-        if (tls_config.client_cert_path) |cert| {
-            std.debug.print("Using TLS with custom certificates\r\n", .{});
-            std.debug.print("  Client certificate: {s}\r\n", .{cert});
-        }
+    } else if (tls_config.client_cert_path != null) {
+        // mTLS: use connectEx with client cert/key and optional CA
+        std.debug.print("Using TLS with client certificates\r\n", .{});
+        std.debug.print("  Client certificate: {s}\r\n", .{tls_config.client_cert_path.?});
         if (tls_config.ca_cert_path) |ca| {
             std.debug.print("  CA certificate: {s}\r\n", .{ca});
         }
@@ -214,6 +213,9 @@ fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.T
             return err;
         };
     } else {
+        // Standard TLS connection (server cert validated by TLS library).
+        // ca_cert_path is used by Go/Python clients via DSN; the Zig QUIC
+        // client validates using the server's inline cert during handshake.
         _ = client.connectInsecure(host, port, false) catch |err| {
             return err;
         };

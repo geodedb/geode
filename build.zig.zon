@@ -80,8 +80,8 @@
         // Updated 2026-03: v0.1.11 split endpoint mutex (mu + timer_mu),
         // thread-safe poll with spice, eliminates c=8 contention bottleneck.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#5d8f177ce24591274b69d86dbcd939f9fe836455",
-            .hash = "quic-0.1.10-gBIqUe1-NQDtDscJKhSpCKjY65m1V_FyPoQPbP4NSeDe",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#c2e4805dc6155828aa3bcef66691b852dd99007f",
+            .hash = "quic-0.1.10-gBIqUe1-NQAtApN8NLJsiLjeJm-Sr6e4g5vGlSo4-gWS",
         },
 
         // =======================================================================
