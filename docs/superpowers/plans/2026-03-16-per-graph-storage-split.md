@@ -17,6 +17,7 @@
 ### Task 1: Create GraphHandle struct
 
 **Files:**
+
 - Create: `src/graph_handle.zig`
 - Reference: `src/graph_store.zig:147-176` (Node/Edge structs), `src/graph_store.zig:342-392` (GraphStore fields)
 
@@ -178,6 +179,7 @@ pub const GraphHandle = struct {
 - [ ] **Step 2: Write unit tests for GraphHandle**
 
 Add tests at the bottom of `src/graph_handle.zig`:
+
 ```zig
 test "GraphHandle - init and deinit" {
     const allocator = std.testing.allocator;
@@ -232,6 +234,7 @@ git commit -m "feat: add GraphHandle struct for per-graph data isolation"
 ### Task 2: Create GraphRegistry for file mapping
 
 **Files:**
+
 - Create: `src/graph_registry.zig`
 - Reference: `src/uuid.zig` (UUIDv7), `src/storage/tde_file_encryption.zig` (TDE)
 
@@ -497,11 +500,13 @@ git commit -m "feat: add GraphRegistry for per-graph UUID file mapping"
 ### Task 3: Per-graph file serialization and deserialization
 
 **Files:**
+
 - Modify: `src/graph_handle.zig`
 - Reference: `src/graph_store.zig:2534-2714` (serializeToTempFile, serializePayload, writePropertyToWriter)
 - Reference: `src/graph_store.zig:2857-3155` (loadFromFile, readExtValue)
 
 The per-graph file uses the same node/edge serialization as the monolithic format EXCEPT:
+
 - Different magic (`GEODGRF1` instead of `GEODGST1`)
 - No graph registry section (only nodes and edges)
 - `graph_name` field is NOT written per node/edge (implicit from file)
@@ -512,6 +517,7 @@ The per-graph file uses the same node/edge serialization as the monolithic forma
 Port the serialization logic from `graph_store.zig:serializePayload` (lines 2608-2714) and `writePropertyToWriter` (lines 2717-2777) into GraphHandle, but skip the graph_name field during write. During load, populate node/edge graph_name from `self.name`.
 
 Key constants:
+
 ```zig
 pub const PER_GRAPH_MAGIC = "GEODGRF1";
 pub const PER_GRAPH_VERSION: u32 = 1;
@@ -523,6 +529,7 @@ a) Making them `pub` on GraphStore and calling through a reference, or
 b) Extracting them into a shared `src/storage/serialization.zig` module
 
 Option (b) is cleaner. Extract these functions from graph_store.zig into a shared module:
+
 - `writePropertyToWriter`
 - `readProperty`
 - `writeExtValueToWriter`
@@ -576,6 +583,7 @@ git commit -m "feat: add per-graph file I/O with shared serialization"
 ### Task 4: Add GraphHandle routing to GraphStore
 
 **Files:**
+
 - Modify: `src/graph_store.zig` (lines 342-392 struct, all accessor methods)
 - Reference: `src/graph_handle.zig`
 
@@ -595,6 +603,7 @@ This is the core refactor. The strategy:
 - [ ] **Step 1: Add graph_handles field and getHandle method to GraphStore**
 
 At `src/graph_store.zig:392`, add:
+
 ```zig
 graph_handles: std.StringHashMap(*GraphHandle) = undefined,
 graph_handles_mutex: std.Thread.Mutex = .{},
@@ -603,6 +612,7 @@ use_per_graph_storage: bool = false, // true after migration or fresh init with 
 ```
 
 Add method:
+
 ```zig
 pub fn getHandle(self: *GraphStore, graph_name: []const u8) ?*GraphHandle {
     self.graph_handles_mutex.lock();
@@ -614,6 +624,7 @@ pub fn getHandle(self: *GraphStore, graph_name: []const u8) ?*GraphHandle {
 - [ ] **Step 2: Modify init to initialize graph_handles**
 
 In `initWithTenant` (line 369-392), add:
+
 ```zig
 .graph_handles = std.StringHashMap(*GraphHandle).init(allocator),
 ```
@@ -621,6 +632,7 @@ In `initWithTenant` (line 369-392), add:
 - [ ] **Step 3: Modify createGraph to create a GraphHandle**
 
 In `createGraph` (line 612-619), after creating the graph name entry, also create a GraphHandle:
+
 ```zig
 pub fn createGraph(self: *GraphStore, graph_name: []const u8) !void {
     if (self.graphs.contains(graph_name)) return error.GraphAlreadyExists;
@@ -640,6 +652,7 @@ pub fn createGraph(self: *GraphStore, graph_name: []const u8) !void {
 - [ ] **Step 4: Modify dropGraph to destroy GraphHandle**
 
 In `dropGraph` (line 621-633), after clearing nodes, also destroy the handle:
+
 ```zig
 if (self.use_per_graph_storage) {
     self.graph_handles_mutex.lock();
@@ -759,6 +772,7 @@ pub fn loadPerGraphFiles(self: *GraphStore) !void {
 - [ ] **Step 6: Modify saveToFile and loadFromFile to detect mode**
 
 In `saveToFile` (line 2516): add check for `use_per_graph_storage`:
+
 ```zig
 pub fn saveToFile(self: *GraphStore) !void {
     if (self.use_per_graph_storage) {
@@ -769,6 +783,7 @@ pub fn saveToFile(self: *GraphStore) !void {
 ```
 
 In `loadFromFile` (line 2857): after loading, check if registry exists:
+
 ```zig
 pub fn loadFromFile(self: *GraphStore) !void {
     // Check for per-graph storage first
@@ -801,6 +816,7 @@ git commit -m "feat: add per-graph GraphHandle routing to GraphStore"
 ### Task 5: Implement monolithic-to-split migration
 
 **Files:**
+
 - Create: `src/storage/migration.zig`
 - Modify: `src/server/server_init.zig` (line 223-336)
 - Modify: `src/server/main.zig` (line 329-340)
@@ -965,6 +981,7 @@ Add tests for `detectStorageState` and `migrateToPerGraph` using temp directorie
 - [ ] **Step 3: Integrate migration into server startup**
 
 In `src/server/server_init.zig` (around line 223), BEFORE loading the graph store:
+
 ```zig
 const migration = @import("../storage/migration.zig");
 const storage_state = try migration.detectStorageState(data_dir, allocator);
@@ -997,12 +1014,14 @@ git commit -m "feat: add automatic migration from monolithic to per-graph storag
 ### Task 6: Update getGlobalStore and data_dir propagation
 
 **Files:**
+
 - Modify: `src/graph_store.zig` (getGlobalStore, line 3716-3780)
 - Modify: `src/server/main.zig` (line 329)
 
 - [ ] **Step 1: Propagate data_dir into GraphStore during initialization**
 
 In `getGlobalStore` (line 3716), after creating the global store:
+
 ```zig
 global_store.?.data_dir = if (last_data_dir) |dir| dir else "";
 ```
@@ -1023,17 +1042,20 @@ git commit -m "fix: propagate data_dir into GraphStore for per-graph file paths"
 ### Task 7: Update execution layer to route through GraphHandles
 
 **Files:**
+
 - Modify: `src/execution/match_operations.zig` (line 365, 592, 1227, 1642, 3180)
 - Modify: `src/execution/crud_operations.zig` (line 358, 565, 763, 1335, 1389, 1694, 1961, 2378)
 - Modify: `src/execution/statement_dispatcher.zig` (line 790, 817, 921, 932)
 
 This is the largest task. The key change: where callers currently do:
+
 ```zig
 const store = graph_store.getGlobalStore(allocator);
 // access store.nodes, store.edges directly
 ```
 
 They should now do:
+
 ```zig
 const store = graph_store.getGlobalStore(allocator);
 const handle = store.getHandle(current_graph) orelse return error.GraphNotFound;
@@ -1043,6 +1065,7 @@ const handle = store.getHandle(current_graph) orelse return error.GraphNotFound;
 **However**, during the transition phase (Task 4 Step 5), we populate the legacy flat maps from all graph handles. So existing callers will STILL WORK — they just won't benefit from per-graph isolation yet.
 
 The priority callers to update are:
+
 1. `match_operations.zig` — already has `filter_graph` variable, easy to route
 2. `crud_operations.zig` — already passes `graph_name` for node/edge creation
 3. `statement_dispatcher.zig` — CREATE/DROP GRAPH already graph-aware
@@ -1050,6 +1073,7 @@ The priority callers to update are:
 - [ ] **Step 1: Update match_operations.zig to use GraphHandle for label lookups**
 
 At each `getGlobalStore` call site, check if `use_per_graph_storage` and route through handle:
+
 ```zig
 const store = graph_store.getGlobalStore(allocator);
 if (store.use_per_graph_storage) {
@@ -1064,6 +1088,7 @@ This is incremental — the fallback is the existing flat map path.
 - [ ] **Step 2: Update crud_operations.zig mutations to mark correct handle as dirty**
 
 When nodes/edges are created/deleted, mark the appropriate GraphHandle as dirty:
+
 ```zig
 if (store.use_per_graph_storage) {
     if (store.getHandle(graph_name)) |handle| {
@@ -1082,6 +1107,7 @@ CREATE GRAPH should create GraphHandle + write per-graph file.
 DROP GRAPH should destroy handle + delete file.
 
 In CREATE GRAPH (line 817), after `graph_store.createGraph()`:
+
 ```zig
 if (store.use_per_graph_storage) {
     if (store.getHandle(graph_name)) |handle| {
@@ -1095,6 +1121,7 @@ if (store.use_per_graph_storage) {
 ```
 
 In DROP GRAPH (line 932), before `graph_store.dropGraph()`:
+
 ```zig
 if (store.use_per_graph_storage) {
     if (store.getHandle(graph_name)) |handle| {
@@ -1127,6 +1154,7 @@ git commit -m "feat: route execution layer through per-graph GraphHandles"
 ### Task 8: Update WAL checkpoint for per-graph saves
 
 **Files:**
+
 - Modify: `src/wal.zig` (line 575-587, checkpoint function)
 
 - [ ] **Step 1: Modify checkpoint to save only dirty graph files**
@@ -1138,6 +1166,7 @@ The key remaining issue: WAL truncation must only remove records up to the check
 - [ ] **Step 2: Test checkpoint with per-graph storage**
 
 Create a test that:
+
 1. Creates nodes in two different graphs
 2. Triggers WAL checkpoint
 3. Verifies only dirty graph files were updated
@@ -1155,12 +1184,14 @@ git commit -m "fix: verify WAL checkpoint works with per-graph persistence"
 ### Task 9: Update backup system
 
 **Files:**
+
 - Modify: `src/server/backup_manager.zig`
 - Modify: `src/cli/backup_cli.zig`
 
 - [ ] **Step 1: Update backup to include graphs/ directory**
 
 The backup manager needs to archive:
+
 - `graph_registry.dat`
 - All files in `graphs/` directory
 - `geode_catalog.dat`
@@ -1184,6 +1215,7 @@ git commit -m "feat: update backup/restore for per-graph storage layout"
 ### Task 10: Geodetestlab integration tests
 
 **Files:**
+
 - Create: `../geode-test-harness/geodetestlab-cli/specs/per_graph_storage.yml`
 
 - [ ] **Step 1: Create per-graph storage integration test spec**
@@ -1288,6 +1320,7 @@ git commit -m "test: add per-graph storage isolation and persistence specs"
 ### Task 11: Update existing test files
 
 **Files:**
+
 - Modify: All test files in `tests/` that call `getGlobalStore` (13 files, ~45 call sites)
 
 These tests use the in-process GraphStore directly. They should continue to work unchanged because the legacy flat maps are still populated during the transition. Run the full test suite to verify.
@@ -1305,6 +1338,7 @@ Expected: 97%+ pass rate maintained
 - [ ] **Step 3: Fix any failures**
 
 If tests fail, investigate and fix. Common issues:
+
 - File path resolution (data_dir not set in test context)
 - Missing graphs/ directory in test temp dirs
 - Serialization format differences
@@ -1323,6 +1357,7 @@ git commit -m "test: verify all existing tests pass with per-graph storage"
 ### Task 12: Remove legacy flat map duplication
 
 **Files:**
+
 - Modify: `src/graph_store.zig`
 
 Once all callers are routed through GraphHandles, remove the dual-write to legacy flat maps. This is a follow-up optimization — the initial implementation keeps backward compat.
@@ -1366,6 +1401,7 @@ sudo systemctl start geode
 - [ ] **Step 4: Verify migration on system server**
 
 Check journal logs for migration output. Verify per-graph files exist:
+
 ```bash
 sudo ls -la /var/lib/geode/graphs/
 sudo cat /var/lib/geode/graph_registry.dat | hexdump -C | head -5
