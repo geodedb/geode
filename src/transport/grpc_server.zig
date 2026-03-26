@@ -203,7 +203,10 @@ fn deinitServerState(state: *server_state.ServerState) void {
     if (state.exec_session) |*sess| sess.deinit();
     if (state.session_config) |*cfg| cfg.deinit();
     if (state.authenticated_user) |u| alloc.free(u);
-    if (state.authenticated_password) |p| alloc.free(p);
+    if (state.authenticated_password) |p| {
+        @memset(@constCast(p), 0); // SECURITY (S7): Zero plaintext password before freeing
+        alloc.free(p);
+    }
     state.txn_manager.deinit();
     for (state.inserted_values.items) |item| {
         alloc.free(item.value);

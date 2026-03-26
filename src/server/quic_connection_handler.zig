@@ -446,7 +446,10 @@ pub fn handleQuicConnection(
         if (state.exec_session) |*sess| sess.deinit();
         if (state.session_config) |*cfg| cfg.deinit();
         if (state.authenticated_user) |u| gpa.free(u);
-        if (state.authenticated_password) |p| gpa.free(p);
+        if (state.authenticated_password) |p| {
+            @memset(@constCast(p), 0); // SECURITY (S7): Zero plaintext password before freeing
+            gpa.free(p);
+        }
         state.txn_manager.deinit();
         for (state.inserted_values.items) |item| {
             state.allocator.free(item.value);
@@ -804,7 +807,10 @@ fn handleClientMessage(
                 });
                 // Grant federation-level session: store identity, grant ReadWrite role
                 if (state.authenticated_user) |u| gpa.free(u);
-                if (state.authenticated_password) |p| gpa.free(p);
+                if (state.authenticated_password) |p| {
+                    @memset(@constCast(p), 0); // SECURITY (S7): Zero plaintext password before freeing
+                    gpa.free(p);
+                }
                 state.authenticated_user = try gpa.dupe(u8, hello_req.username);
                 state.authenticated_password = try gpa.dupe(u8, hello_req.password);
                 state.authenticated_role = @intFromEnum(user_mgmt.Role.ReadWrite);
@@ -837,7 +843,10 @@ fn handleClientMessage(
                 };
 
                 if (state.authenticated_user) |u| gpa.free(u);
-                if (state.authenticated_password) |p| gpa.free(p);
+                if (state.authenticated_password) |p| {
+                    @memset(@constCast(p), 0); // SECURITY (S7): Zero plaintext password before freeing
+                    gpa.free(p);
+                }
                 state.authenticated_user = try gpa.dupe(u8, hello_req.username);
                 state.authenticated_password = try gpa.dupe(u8, hello_req.password);
                 state.authenticated_role = @intFromEnum(auth_result.role);
