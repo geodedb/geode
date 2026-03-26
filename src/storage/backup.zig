@@ -167,9 +167,30 @@ pub const BackupManager = struct {
         const backup_id = generateBackupId();
         const timestamp = std.time.milliTimestamp();
 
-        // Persist via adapter checkpoint, then read the snapshot payload.
+        // Persist via adapter checkpoint (no-op for file-based — adapter owns storage).
         try self.store.saveToFile();
-        const payload = try readGraphStorePayload(self.allocator);
+
+        // Read per-graph storage layout (graph_registry.dat + graphs/*.dat).
+        // Falls back to legacy monolithic graph_store.dat if the per-graph directory
+        // layout is not present (migration path).
+        const data_dir = blk: {
+            if (graph_store.getDataDirOverride()) |ov| {
+                break :blk try self.allocator.dupe(u8, ov);
+            } else if (std.process.getEnvVarOwned(self.allocator, "GEODE_DATA_DIR")) |dir| {
+                break :blk dir;
+            } else |_| {
+                break :blk try self.allocator.dupe(u8, "/tmp");
+            }
+        };
+        defer self.allocator.free(data_dir);
+
+        // Try per-graph archive first; fall back to legacy monolithic file.
+        const payload = readPerGraphStoragePayload(self.allocator, data_dir) catch |pg_err| blk: {
+            log.warn("Per-graph payload read failed, trying legacy path", &.{
+                Attr.string("error", @errorName(pg_err)),
+            });
+            break :blk try readGraphStorePayload(self.allocator);
+        };
         defer self.allocator.free(payload);
 
         const compressed = try compressData(payload, self.config.compression, self.allocator);
