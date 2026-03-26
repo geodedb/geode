@@ -3699,21 +3699,49 @@ pub fn releaseStoreWriteLock() void {
     g_store_rwlock.unlock();
 }
 
-/// No-op: background persistence removed — adapter handles storage.
-pub fn signalPersistence() void {}
-
 /// P2-3: Global allocator for persistent graph store data (better than page_allocator)
 var global_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
 var global_allocator_init = false;
 
-/// No-op: background persistence thread removed — adapter handles storage.
+/// Start a background thread that periodically flushes dirty data to disk.
+/// Needed for cross-process visibility (CLI user commands → server).
+var g_persist_shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var g_persist_thread: ?std.Thread = null;
+var g_persist_interval_ms: u64 = 5000;
+
 pub fn startPersistenceThread(interval_ms: u64) void {
-    _ = interval_ms;
+    g_persist_interval_ms = interval_ms;
+    g_persist_shutdown.store(false, .release);
+    g_persist_thread = std.Thread.spawn(.{}, persistenceLoop, .{}) catch return;
 }
 
-/// No-op: background persistence thread removed — adapter handles storage.
 pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
     _ = allocator;
+    g_persist_shutdown.store(true, .release);
+    if (g_persist_thread) |t| {
+        t.join();
+        g_persist_thread = null;
+    }
+}
+
+/// Wake the persistence thread to flush immediately.
+pub fn signalPersistence() void {
+    // Direct flush — no condition variable needed with the short poll interval.
+    if (global_store != null) {
+        global_store.?.saveIfDirty();
+    }
+}
+
+fn persistenceLoop() void {
+    // Use a short poll interval (1s) for responsive cross-process visibility
+    const poll_ms: u64 = @min(g_persist_interval_ms, 1000);
+    while (!g_persist_shutdown.load(.acquire)) {
+        std.Thread.sleep(poll_ms * std.time.ns_per_ms);
+        if (g_persist_shutdown.load(.acquire)) break;
+        if (global_store != null) {
+            global_store.?.saveIfDirty();
+        }
+    }
 }
 
 /// GAP-0259/0260: Persistence loop uses condition variable instead of sleep-polling.
