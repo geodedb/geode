@@ -12,6 +12,18 @@ const crypto = std.crypto;
 //   {"op":"Unwrap","envelope":{...}} -> {"status":"OK","plaintext":"<64 hex>"}
 // Errors -> {"status":"ERR","code":"AuthenticationFailed"}
 // This is a development scaffold; now includes minimal token auth (header field) on each request.
+
+/// Constant-time comparison to prevent timing attacks on authentication tokens.
+/// Returns true iff `a` and `b` are equal, without leaking which byte differs.
+fn timingSafeEql(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    var diff: u8 = 0;
+    for (a, b) |x, y| {
+        diff |= x ^ y;
+    }
+    return diff == 0;
+}
+
 // CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate|TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_AuthNegative; OWNER=security; UPDATED=2025-09-26
 // CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify; OWNER=security; UPDATED=2025-09-26
 // CANARY: REQ=REQ-GQL-SEC-UNWRAP-001; FEATURE="PrivilegedUnwrapPath"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapTamperDetect; OWNER=security; UPDATED=2025-09-26
@@ -234,7 +246,7 @@ pub const RemoteKmsServer = struct {
             const auth_start = auth.? + 8;
             const auth_end = std.mem.indexOfPos(u8, request, auth_start, "\"") orelse return error.InvalidRequest;
             const provided_token = request[auth_start..auth_end];
-            if (!std.mem.eql(u8, provided_token, expected_token)) {
+            if (!timingSafeEql(provided_token, expected_token)) {
                 return try std.fmt.bufPrint(response_buf, "{{\"status\":\"ERR\",\"code\":\"AuthenticationFailed\"}}\n", .{});
             }
         }
