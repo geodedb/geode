@@ -2408,6 +2408,12 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
             }
         } else |err| {
             last_error = @errorName(err);
+            // If insecure mode is forbidden in release builds, report and exit immediately
+            if (err == error.InsecureForbiddenInRelease) {
+                std.debug.print("Error: --insecure-tls-skip-verify is only available in debug builds.\n", .{});
+                std.debug.print("For production use, configure a trusted CA certificate with --ca-cert instead.\n", .{});
+                break;
+            }
             // If refused, stop retrying and fall back immediately
             if (std.mem.indexOf(u8, last_error.?, "ConnectionRefused") != null) {
                 break;
@@ -3956,7 +3962,12 @@ fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: [
     // Connect to server (use explicit insecure flag, fall back to shell transport config)
     const insecure = allow_insecure or repl_quic_transport.getTlsConfig().insecure;
     _ = client.connectInsecure(host, port, insecure) catch |err| {
-        std.debug.print("Error: Could not connect to server {s}:{d}: {s}\n", .{ host, port, @errorName(err) });
+        if (err == error.InsecureForbiddenInRelease) {
+            std.debug.print("Error: --insecure-tls-skip-verify is only available in debug builds.\n", .{});
+            std.debug.print("For production use, configure a trusted CA certificate with --ca-cert instead.\n", .{});
+        } else {
+            std.debug.print("Error: Could not connect to server {s}:{d}: {s}\n", .{ host, port, @errorName(err) });
+        }
         return error.ConnectionFailed;
     };
 

@@ -58,7 +58,7 @@ chown -R geode:geode /etc/geode/certs
 # Set proper permissions
 chmod 750 /var/lib/geode
 chmod 755 /var/log/geode
-chmod 750 /etc/geode/certs
+chmod 755 /etc/geode/certs
 
 # Generate TLS certificates if they don't exist
 if [ ! -f /etc/geode/certs/server.crt ] || [ ! -f /etc/geode/certs/server.key ]; then

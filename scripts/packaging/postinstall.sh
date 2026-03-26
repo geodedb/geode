@@ -17,7 +17,7 @@ chown -R geode:geode /etc/geode
 # Set proper permissions
 chmod 750 /var/lib/geode
 chmod 750 /var/log/geode
-chmod 700 /etc/geode/certs
+chmod 755 /etc/geode/certs
 
 # Reload systemd to recognize the new service
 if command -v systemctl >/dev/null 2>&1; then

@@ -804,6 +804,13 @@ pub const QuicClient = struct {
     }
 
     pub fn connectInsecure(self: *QuicClient, address: []const u8, port: u16, allow_insecure: bool) !void {
+        // SEC: Guard against allow_insecure=true in release builds before it reaches the TLS
+        // library (which would panic). Return a recoverable error so callers can show a
+        // user-friendly message instead of a core dump.
+        if (allow_insecure and comptime @import("builtin").mode != .Debug and !@import("builtin").is_test) {
+            return error.InsecureForbiddenInRelease;
+        }
+
         // CANARY: REQ=REQ-QUIC-LOCALHOST-001; FEATURE="LocalhostNormalization"; ASPECT=ClientConnect; STATUS=IMPL; OWNER=transport; UPDATED=2026-01-28
         // Issue #382: Normalize "localhost" to "127.0.0.1" for consistent DNS/TLS handling
         const normalized_address = if (std.mem.eql(u8, address, "localhost"))

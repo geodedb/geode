@@ -132,7 +132,8 @@ If not using a package manager:
 
    sudo mkdir -p /var/log/geode /etc/geode/certs
    sudo chown -R geode:geode /var/lib/geode /var/log/geode /etc/geode/certs
-   sudo chmod 750 /var/lib/geode /etc/geode/certs
+   sudo chmod 750 /var/lib/geode
+   sudo chmod 755 /etc/geode/certs
    sudo chmod 755 /var/log/geode
    ```
 

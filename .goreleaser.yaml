@@ -490,11 +490,12 @@ nfpms:
     file_info:
       mode: 0750
 
-      # Certificate directory
+      # Certificate directory — world-traversable so system users can read
+      # the public cert (server.crt 0644); private key remains 0600
   - dst: /etc/geode/certs
     type: dir
     file_info:
-      mode: 0700
+      mode: 0755
 
       # Systemd service file
   - src: deployment/systemd/geode.service

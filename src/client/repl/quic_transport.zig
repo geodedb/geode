@@ -196,6 +196,10 @@ fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.T
     if (tls_config.insecure) {
         std.debug.print("Warning: TLS verification disabled (--insecure flag)\r\n", .{});
         _ = client.connectInsecure(host, port, true) catch |err| {
+            if (err == error.InsecureForbiddenInRelease) {
+                std.debug.print("Error: --insecure-tls-skip-verify is only available in debug builds.\r\n", .{});
+                std.debug.print("For production use, configure a trusted CA certificate with --ca-cert instead.\r\n", .{});
+            }
             return err;
         };
     } else if (tls_config.ca_cert_path != null or tls_config.client_cert_path != null) {

@@ -868,7 +868,13 @@ fn connectMigrationClient(allocator: std.mem.Allocator, server_addr: []const u8,
     } else if (tls_config.insecure) {
         // Use insecure connect only when explicitly requested
         std.debug.print("Warning: TLS verification disabled (--insecure-tls-skip-verify flag)\n", .{});
-        try client.connectInsecure(host, port, true);
+        client.connectInsecure(host, port, true) catch |err| {
+            if (err == error.InsecureForbiddenInRelease) {
+                std.debug.print("Error: --insecure-tls-skip-verify is only available in debug builds.\n", .{});
+                std.debug.print("For production use, configure a trusted CA certificate with --ca-cert instead.\n", .{});
+            }
+            return err;
+        };
     } else {
         // Default: secure connection with system CA store
         try client.connectInsecure(host, port, false);
@@ -1415,7 +1421,12 @@ fn executeRemoteBackup(
     } else if (tls_config.insecure) {
         std.debug.print("Warning: TLS verification disabled (--insecure-tls-skip-verify flag)\n", .{});
         _ = client.connectInsecure(host, port, true) catch |err| {
-            std.debug.print("Error: Failed to connect to {s}:{}: {}\n", .{ host, port, err });
+            if (err == error.InsecureForbiddenInRelease) {
+                std.debug.print("Error: --insecure-tls-skip-verify is only available in debug builds.\n", .{});
+                std.debug.print("For production use, configure a trusted CA certificate with --ca-cert instead.\n", .{});
+            } else {
+                std.debug.print("Error: Failed to connect to {s}:{}: {}\n", .{ host, port, err });
+            }
             return err;
         };
     } else {
@@ -1693,7 +1704,12 @@ fn executeRemoteRestore(
     } else if (tls_config.insecure) {
         std.debug.print("Warning: TLS verification disabled (--insecure-tls-skip-verify flag)\n", .{});
         client.connectInsecure(host, port, true) catch |err| {
-            std.debug.print("RESTORE: Failed to connect to server: {}\n", .{err});
+            if (err == error.InsecureForbiddenInRelease) {
+                std.debug.print("Error: --insecure-tls-skip-verify is only available in debug builds.\n", .{});
+                std.debug.print("For production use, configure a trusted CA certificate with --ca-cert instead.\n", .{});
+            } else {
+                std.debug.print("RESTORE: Failed to connect to server: {}\n", .{err});
+            }
             return error.ConnectionFailed;
         };
     } else {
