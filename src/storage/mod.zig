@@ -10,3 +10,5 @@ pub const PropertyValue = graph_store_mod.PropertyValue;
 pub const backup = @import("backup.zig");
 pub const tde_file_encryption = @import("tde_file_encryption.zig");
 pub const heap = @import("heap.zig");
+/// graph-storage adapter (primary per-graph storage engine)
+pub const graph_storage_adapter = @import("graph_storage_adapter.zig");
