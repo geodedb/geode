@@ -28,9 +28,13 @@ pub const MetricsServer = struct {
         self.stop();
     }
 
-    /// Start the metrics HTTP server
+    /// Start the metrics HTTP server.
+    /// SECURITY (S10): Binds to 127.0.0.1 by default to prevent unauthenticated
+    /// metrics scraping from the network.  Override with GEODE_METRICS_BIND env var
+    /// (e.g. "0.0.0.0" to restore the old behavior behind a firewall).
     pub fn start(self: *MetricsServer) !void {
-        const address = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, self.port);
+        const bind_addr = resolveMetricsBindAddress();
+        const address = std.net.Address.initIp4(bind_addr, self.port);
         self.server = try address.listen(.{
             .reuse_address = true,
         });
@@ -133,6 +137,38 @@ pub const MetricsServer = struct {
         }
     }
 };
+
+/// Resolve the metrics bind address from GEODE_METRICS_BIND env var,
+/// defaulting to 127.0.0.1 (localhost only).
+fn resolveMetricsBindAddress() [4]u8 {
+    var gpa_alloc = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_alloc.deinit();
+    const alloc = gpa_alloc.allocator();
+    const env_val = std.process.getEnvVarOwned(alloc, "GEODE_METRICS_BIND") catch null;
+    defer if (env_val) |v| alloc.free(v);
+    if (env_val) |val| {
+        return parseIp4Addr(val) orelse .{ 127, 0, 0, 1 };
+    }
+    return .{ 127, 0, 0, 1 };
+}
+
+/// Parse a dotted-quad IPv4 string into a 4-byte array, or null on failure.
+fn parseIp4Addr(s: []const u8) ?[4]u8 {
+    var result: [4]u8 = undefined;
+    var octet_idx: usize = 0;
+    var seg_start: usize = 0;
+    for (s, 0..) |c, i| {
+        if (c == '.') {
+            if (octet_idx >= 3) return null;
+            result[octet_idx] = std.fmt.parseInt(u8, s[seg_start..i], 10) catch return null;
+            octet_idx += 1;
+            seg_start = i + 1;
+        }
+    }
+    if (octet_idx != 3) return null;
+    result[3] = std.fmt.parseInt(u8, s[seg_start..], 10) catch return null;
+    return result;
+}
 
 // CANARY: REQ=REQ-PROMETHEUS-WIRE-002; FEATURE="Prometheus Metrics Endpoint"; ASPECT=GlobalCollector; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
 // Global metrics collector for the server
