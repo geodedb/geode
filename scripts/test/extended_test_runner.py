@@ -602,7 +602,7 @@ def run_test(
                         setup_processed.insert(1, "--server")
                         setup_processed.insert(2, server_address)
                         # Add --insecure flag (test servers use self-signed certs)
-                        setup_processed.insert(3, "--insecure")
+                        setup_processed.insert(3, "--insecure-tls-skip-verify")
                         # Inject auth credentials if not already present
                         has_user = any(str(arg) == "-U" or str(arg) == "--user" for arg in setup_processed)
                         if not has_user:
@@ -739,7 +739,7 @@ def run_test(
             modified_args.insert(1, "--server")
             modified_args.insert(2, server_address)
             # Add --insecure flag (test servers use self-signed certs)
-            modified_args.insert(3, "--insecure")
+            modified_args.insert(3, "--insecure-tls-skip-verify")
             # Inject auth credentials if not already present
             has_user = any(str(arg) == "-U" or str(arg) == "--user" for arg in modified_args)
             if not has_user:
@@ -1249,16 +1249,67 @@ def start_server(binary, data_dir, port, args, timeout_ms=30000, env_overrides=N
         print(f"  Failed to start server: {e}")
         return None, None
 
-    # Wait for server to initialize (QUIC uses UDP, can't use TCP socket check)
-    # Use a time-based wait with process check
-    wait_time = min(6, timeout_ms / 1000.0)  # Wait up to 6 seconds
-    time.sleep(wait_time)
+    # Wait for server to initialize with active readiness probe.
+    # Instead of a fixed sleep, attempt a lightweight query in a retry loop.
+    # This handles CI environments (K8s) where cold-start can exceed 6 seconds.
+    deadline = time.time() + min(timeout_ms / 1000.0, 30)
+    # Initial sleep to let the server bind its listen socket
+    time.sleep(2)
 
-    # Verify server is still running
-    if server_proc.poll() is not None:
-        # Server exited prematurely (stderr not available since we use DEVNULL)
-        print(f"  Server exited prematurely with code {server_proc.returncode}")
-        return None, None
+    ready = False
+    probe_env = os.environ.copy()
+    if env_overrides:
+        probe_env.update(env_overrides)
+    username = (env_overrides or {}).get("GEODE_ADMIN_USERNAME", os.environ.get("GEODE_ADMIN_USERNAME", "geode"))
+    password = (env_overrides or {}).get(
+        "GEODE_DEFAULT_PASSWORD", os.environ.get("GEODE_DEFAULT_PASSWORD", "geode-test-password")
+    )
+
+    while time.time() < deadline:
+        # Check process is still alive
+        if server_proc.poll() is not None:
+            print(f"  Server exited prematurely with code {server_proc.returncode}")
+            return None, None
+
+        # Probe with a simple query
+        try:
+            probe = subprocess.run(
+                [
+                    binary,
+                    "query",
+                    "--server",
+                    f"127.0.0.1:{port}",
+                    "--insecure-tls-skip-verify",
+                    "-U",
+                    username,
+                    "-P",
+                    password,
+                    "RETURN 1 AS _probe",
+                ],
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+                env=probe_env,
+            )
+            if probe.returncode == 0:
+                ready = True
+                break
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception:
+            pass
+
+        time.sleep(1)
+
+    if not ready:
+        # Verify server is still running even if probe never succeeded
+        if server_proc.poll() is not None:
+            print(f"  Server exited prematurely with code {server_proc.returncode}")
+            return None, None
+        print(
+            f"  Warning: server readiness probe did not succeed within {int(deadline - time.time() + min(timeout_ms / 1000.0, 30))}s, proceeding anyway"
+        )
 
     return server_proc, port
 
@@ -1567,7 +1618,7 @@ def main():
                                 "query",
                                 "--server",
                                 f"127.0.0.1:{server_port}",
-                                "--insecure",
+                                "--insecure-tls-skip-verify",
                                 "-U",
                                 username,
                                 "-P",

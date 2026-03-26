@@ -1,0 +1,24 @@
+.{
+    .name = .uuid,
+    .version = "0.1.0",
+    .fingerprint = 0xd17f50a6ae62bdb4,
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .json = .{
+            .url = "git+https://gitlab.com/devnw/zig/json.git#f8924477c708ee0ecc546003175dbb60540e1339",
+            .hash = "json-0.1.0-tOue4QSpCwCpF5cK2b-gB_Hanst_Btx76cS4JrKRBdhj",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "tests",
+        "bench",
+        "examples",
+        "docs",
+        "LICENSE",
+        "README.md",
+        "CHANGELOG.md",
+    },
+}

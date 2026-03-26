@@ -1,0 +1,17 @@
+.{
+    .name = .yaml,
+    .version = "0.1.1",
+    .fingerprint = 0xea31a98484bec595,
+    .minimum_zig_version = "0.15.1",
+    .dependencies = .{
+        .spice = .{
+            .url = "https://gitlab.com/devnw/zig/spice/-/archive/main/spice-main.tar.gz",
+            .hash = "spice-0.0.0-HnDb58jJAACojBd1dquGT-Ngc6TORlC6izlAKf0f4Rno",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
