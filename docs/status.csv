@@ -3760,6 +3760,7 @@ REQ-STR-002,StringMinMax,StringMax,TESTED,,,engine,2026-01-15,tests/test_gap_019
 REQ-STR-003,StringMinMax,NullHandling,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-STREAM-001,Streaming,ResultStreaming,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-STREAM-BATCH-001,Streaming,BatchStreaming,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
+REQ-STREAM-LOAD-001,StreamingLoad,MmapNonTDE,TESTED,,,storage,2026-03-26,src/graph_store.zig
 REQ-STREAM-SERIALIZE-001,StreamingSerialization,SaveToFile,TESTED,,,storage,2026-02-25,src/graph_store.zig
 REQ-STREAM-SERIALIZE-002,StreamingSerialization,StreamToFile,TESTED,,,storage,2026-02-25,src/graph_store.zig
 REQ-STREAM-SERIALIZE-003,StreamingSerialization,AtomicRename,TESTED,,,storage,2026-02-25,src/graph_store.zig

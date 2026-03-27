@@ -2932,6 +2932,7 @@ pub const GraphStore = struct {
 
     // CANARY: REQ=REQ-TDE-GRAPHSTORE-003; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStoreLoad; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
     // CANARY: REQ=REQ-BINARY-PERSIST-LOAD-001; FEATURE="BinaryPersistence"; ASPECT=LoadFromFile; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-02
+    // CANARY: REQ=REQ-STREAM-LOAD-001; FEATURE="StreamingLoad"; ASPECT=MmapNonTDE; STATUS=TESTED; OWNER=storage; UPDATED=2026-03-26
     pub fn loadFromFile(self: *GraphStore) !void {
         const file_path = try getPersistenceFilePath(self.allocator);
         defer self.allocator.free(file_path);
@@ -2942,9 +2943,50 @@ pub const GraphStore = struct {
             return err;
         };
 
-        // Read and decrypt file using TDE
-        const data = try tde.readDecryptedFile(self.allocator, file_path);
-        defer self.allocator.free(data);
+        // P4/GAP-0267: For non-TDE files, use mmap to avoid a single large heap
+        // allocation that causes OOM on multi-GB graph files. For TDE-encrypted
+        // files, AES-GCM requires full-file decryption for tag verification, so
+        // the existing readDecryptedFile path is kept.
+        //
+        // Detection: peek at the file header to see if it has the TDE magic
+        // ("GEOTDEFL"). If so, fall through to readDecryptedFile. Otherwise, mmap.
+        var heap_data: ?[]u8 = null;
+        var mmap_data: ?[]align(std.heap.page_size_min) u8 = null;
+        defer {
+            if (heap_data) |hd| self.allocator.free(hd);
+            if (mmap_data) |md| std.posix.munmap(md);
+        }
+
+        const data: []const u8 = blk: {
+            const file = try std.fs.cwd().openFile(file_path, .{});
+            defer file.close();
+            const file_size = try file.getEndPos();
+            if (file_size < 8) break :blk &[_]u8{}; // too small, will fail header check below
+
+            // Peek at the first 8 bytes to detect TDE encryption
+            var magic_buf: [8]u8 = undefined;
+            const magic_read = try file.readAll(&magic_buf);
+            if (magic_read >= 8 and std.mem.eql(u8, &magic_buf, &tde.MAGIC)) {
+                // TDE-encrypted file — must use heap-based decryption (AES-GCM
+                // requires full ciphertext for authentication tag verification).
+                const decrypted = try tde.readDecryptedFile(self.allocator, file_path);
+                heap_data = decrypted;
+                break :blk decrypted;
+            }
+
+            // Non-TDE file — use mmap to avoid heap allocation.
+            if (file_size == 0) break :blk &[_]u8{};
+            const mapped = try std.posix.mmap(
+                null,
+                @intCast(file_size),
+                std.os.linux.PROT.READ,
+                .{ .TYPE = .PRIVATE },
+                file.handle,
+                0,
+            );
+            mmap_data = mapped;
+            break :blk mapped;
+        };
 
         // Create stream to read from decrypted data
         var stream = std.io.fixedBufferStream(data);
