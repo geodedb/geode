@@ -195,13 +195,11 @@ const BufferedProtoReader = struct {
                     if (would_block_attempts >= max_would_block_attempts) {
                         return error.Timeout;
                     }
-                    // #540: Handler-driven poll — when data isn't available,
-                    // the handler itself calls poll(0) to process any pending
-                    // UDP datagrams into connection RX buffers. This distributes
-                    // poll load across all handler threads instead of relying
-                    // solely on the dedicated poll thread, eliminating the c=8+
-                    // starvation bottleneck.
-                    self.transport.poll(0) catch {};
+                    // #540: Wait for the dedicated poll thread to deliver data.
+                    // Handler threads do NOT call poll(0) themselves — that
+                    // contends on ep.mu with 30+ threads and serializes all I/O.
+                    // The dedicated pollLoop thread in quic.zig runs at 50μs
+                    // intervals and broadcasts poll_cv on every cycle.
                     if (self.stream.poll_sync) |ps| {
                         ps.waitForPoll(200 * std.time.ns_per_us);
                     } else {
@@ -639,7 +637,6 @@ fn runStreamQueryLoop(
         const packet_opt = line_reader.nextMessage() catch |err| {
             if (err == error.EndOfStream) return;
             if (err == error.WouldBlock) {
-                transport.poll(0) catch {};
                 if (stream.poll_sync) |ps| {
                     ps.waitForPoll(200 * std.time.ns_per_us);
                 } else {
@@ -702,8 +699,7 @@ pub fn handleQuicConnection(
     var total_waited_us: u64 = 0;
     while (total_waited_us < max_total_wait_ms * 1000) : (poll_attempts += 1) {
         if (conn.inner.hasIncomingStreams()) break;
-        // #540: Handler-driven poll accelerates handshake completion
-        transport.poll(0) catch {};
+        // Dedicated poll thread handles packet delivery — no handler poll needed.
         std.Thread.sleep(backoff_us * std.time.ns_per_us);
         total_waited_us += backoff_us;
         backoff_us = @min(backoff_us * 2, max_backoff_us);
@@ -860,7 +856,6 @@ pub fn handleQuicConnection(
             const packet_opt = line_reader.nextMessage() catch |err| {
                 if (err == error.EndOfStream) return;
                 if (err == error.WouldBlock) {
-                    transport.poll(0) catch {};
                     if (stream.poll_sync) |ps| {
                         ps.waitForPoll(200 * std.time.ns_per_us);
                     } else {
@@ -952,7 +947,6 @@ pub fn handleQuicConnection(
         const packet_opt = line_reader.nextMessage() catch |err| {
             if (err == error.EndOfStream) return;
             if (err == error.WouldBlock) {
-                transport.poll(0) catch {};
                 if (stream.poll_sync) |ps| {
                     ps.waitForPoll(200 * std.time.ns_per_us);
                 } else {
