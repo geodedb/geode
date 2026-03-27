@@ -1606,39 +1606,40 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
         try authority.put(node, 1.0);
     }
 
-    // Build outgoing edges map for efficiency
-    var outgoing = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator);
-    defer {
-        var out_iter = outgoing.iterator();
-        while (out_iter.next()) |entry| {
-            entry.value_ptr.deinit(allocator);
-        }
-        outgoing.deinit();
-    }
+    // Build neighbor node-ID lists from adjacency indexes (O(V+E) total,
+    // avoids full edge scan that was previously O(E) per call).
+    var outgoing = std.AutoHashMap(u64, []const u64).init(allocator);
+    defer outgoing.deinit();
 
-    var incoming = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator);
-    defer {
-        var in_iter = incoming.iterator();
-        while (in_iter.next()) |entry| {
-            entry.value_ptr.deinit(allocator);
-        }
-        incoming.deinit();
-    }
+    var incoming = std.AutoHashMap(u64, []const u64).init(allocator);
+    defer incoming.deinit();
+
+    // Temporary lists to collect neighbor node IDs from edge IDs
+    var out_tmp = std.ArrayList(u64).init(allocator);
+    defer out_tmp.deinit(allocator);
+    var in_tmp = std.ArrayList(u64).init(allocator);
+    defer in_tmp.deinit(allocator);
 
     for (node_list.items) |node| {
-        try outgoing.put(node, try std.ArrayList(u64).initCapacity(allocator, 0));
-        try incoming.put(node, try std.ArrayList(u64).initCapacity(allocator, 0));
-    }
+        out_tmp.clearRetainingCapacity();
+        if (store.getOutgoingEdgeIds(node)) |edge_ids| {
+            for (edge_ids) |eid| {
+                if (store.edges.get(eid)) |edge| {
+                    try out_tmp.append(allocator, edge.to_id);
+                }
+            }
+        }
+        try outgoing.put(node, try allocator.dupe(u64, out_tmp.items));
 
-    var edge_iter = store.edges.iterator();
-    while (edge_iter.next()) |entry| {
-        const edge = entry.value_ptr.*;
-        if (outgoing.getPtr(edge.from_id)) |out_list| {
-            try out_list.append(allocator, edge.to_id);
+        in_tmp.clearRetainingCapacity();
+        if (store.getIncomingEdgeIds(node)) |edge_ids| {
+            for (edge_ids) |eid| {
+                if (store.edges.get(eid)) |edge| {
+                    try in_tmp.append(allocator, edge.from_id);
+                }
+            }
         }
-        if (incoming.getPtr(edge.to_id)) |in_list| {
-            try in_list.append(allocator, edge.from_id);
-        }
+        try incoming.put(node, try allocator.dupe(u64, in_tmp.items));
     }
 
     // Iterate
@@ -1652,8 +1653,8 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
         // Authority update: auth(p) = sum of hub(q) for all q pointing to p
         for (node_list.items) |node| {
             var auth_sum: f64 = 0.0;
-            if (incoming.get(node)) |in_list| {
-                for (in_list.items) |source| {
+            if (incoming.get(node)) |in_nodes| {
+                for (in_nodes) |source| {
                     auth_sum += hub.get(source) orelse 1.0;
                 }
             }
@@ -1663,8 +1664,8 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
         // Hub update: hub(p) = sum of auth(q) for all q that p points to
         for (node_list.items) |node| {
             var hub_sum: f64 = 0.0;
-            if (outgoing.get(node)) |out_list| {
-                for (out_list.items) |target| {
+            if (outgoing.get(node)) |out_nodes| {
+                for (out_nodes) |target| {
                     hub_sum += new_authority.get(target) orelse 1.0;
                 }
             }
