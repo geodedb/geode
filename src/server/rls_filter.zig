@@ -108,6 +108,24 @@ pub const RLSFilterEngine = struct {
         return false;
     }
 
+    /// Snapshot denied labels for a specific user+graph into a HashSet.
+    /// Single lock acquisition instead of per-label locking.  Caller must call
+    /// `deinit()` on the returned map when done.
+    pub fn snapshotDeniedLabels(self: *Self, allocator: std.mem.Allocator, graph: []const u8, username: []const u8) !std.StringHashMap(void) {
+        self.mu.lock();
+        defer self.mu.unlock();
+
+        var denied = std.StringHashMap(void).init(allocator);
+        for (self.policies.items) |p| {
+            if (!p.deny) continue;
+            if (!std.mem.eql(u8, p.graph, graph)) continue;
+            if (p.username.len == 0 or std.mem.eql(u8, p.username, username)) {
+                try denied.put(p.label, {});
+            }
+        }
+        return denied;
+    }
+
     /// Return the number of currently active policies.
     pub fn policyCount(self: *Self) usize {
         self.mu.lock();
@@ -147,10 +165,18 @@ pub fn applyRLSFilter(
     // Fast path: no policies → nothing to filter.
     if (engine.policyCount() == 0) return 0;
 
+    // Snapshot denied labels once (single lock acquisition) instead of
+    // acquiring the mutex per-label per-row — O(1) lock instead of O(R*L).
+    var denied = engine.snapshotDeniedLabels(allocator, graph_name, username) catch return 0;
+    defer denied.deinit();
+
+    // If no labels are denied for this user+graph, skip the row scan.
+    if (denied.count() == 0) return 0;
+
     var removed: usize = 0;
     var i: usize = 0;
     while (i < result.rows.len) {
-        if (rowContainsDeniedLabel(engine, result.rows[i], username, graph_name)) {
+        if (rowContainsDeniedLabel(&denied, result.rows[i])) {
             // Free the row's value memory if owned.
             if (result.owns_value_memory) {
                 for (result.rows[i]) |val| {
@@ -188,23 +214,22 @@ pub fn applyRLSFilter(
 }
 
 /// Check whether a single row contains any Node or Edge value with a denied label.
+/// Uses a pre-snapshotted HashSet for O(1) lookups instead of per-call mutex acquisition.
 fn rowContainsDeniedLabel(
-    engine: *RLSFilterEngine,
+    denied_labels: *const std.StringHashMap(void),
     row: []const Value,
-    username: []const u8,
-    graph_name: []const u8,
 ) bool {
     for (row) |val| {
         switch (val) {
             .Node => |node| {
                 for (node.labels) |label| {
-                    if (engine.isLabelDenied(graph_name, label, username)) {
+                    if (denied_labels.contains(label)) {
                         return true;
                     }
                 }
             },
             .Edge => |edge| {
-                if (engine.isLabelDenied(graph_name, edge.label, username)) {
+                if (denied_labels.contains(edge.label)) {
                     return true;
                 }
             },
@@ -212,13 +237,13 @@ fn rowContainsDeniedLabel(
                 // Check all nodes and edges in the path.
                 for (path.nodes) |node| {
                     for (node.labels) |label| {
-                        if (engine.isLabelDenied(graph_name, label, username)) {
+                        if (denied_labels.contains(label)) {
                             return true;
                         }
                     }
                 }
                 for (path.edges) |edge| {
-                    if (engine.isLabelDenied(graph_name, edge.label, username)) {
+                    if (denied_labels.contains(edge.label)) {
                         return true;
                     }
                 }
@@ -296,4 +321,71 @@ test "global RLS filter engine getter/setter" {
     try std.testing.expect(getGlobalRLSFilterEngine() != null);
     setGlobalRLSFilterEngine(null);
     try std.testing.expect(getGlobalRLSFilterEngine() == null);
+}
+
+test "RLSFilterEngine: snapshotDeniedLabels returns correct labels" {
+    const allocator = std.testing.allocator;
+    var engine = RLSFilterEngine.init(allocator);
+    defer engine.deinit();
+
+    try engine.addDenyPolicy("default", "Secret", "alice");
+    try engine.addDenyPolicy("default", "TopSecret", "");
+    try engine.addDenyPolicy("other", "Private", "alice");
+
+    // alice in "default" graph should see Secret + TopSecret denied
+    var denied = try engine.snapshotDeniedLabels(allocator, "default", "alice");
+    defer denied.deinit();
+
+    try std.testing.expect(denied.contains("Secret"));
+    try std.testing.expect(denied.contains("TopSecret"));
+    try std.testing.expect(!denied.contains("Private")); // wrong graph
+    try std.testing.expectEqual(@as(usize, 2), denied.count());
+}
+
+test "RLSFilterEngine: snapshotDeniedLabels empty for non-matching user" {
+    const allocator = std.testing.allocator;
+    var engine = RLSFilterEngine.init(allocator);
+    defer engine.deinit();
+
+    try engine.addDenyPolicy("default", "Secret", "alice");
+
+    // bob should get empty snapshot (user-specific policy for alice only)
+    var denied = try engine.snapshotDeniedLabels(allocator, "default", "bob");
+    defer denied.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), denied.count());
+}
+
+test "rowContainsDeniedLabel uses snapshot correctly" {
+    const allocator = std.testing.allocator;
+
+    // Build a denied labels set manually
+    var denied = std.StringHashMap(void).init(allocator);
+    defer denied.deinit();
+    try denied.put("Secret", {});
+
+    // Create a row with an Edge that has the denied label
+    const secret_edge = graph_store.Edge{
+        .id = 1,
+        .label = "Secret",
+        .from_id = 1,
+        .to_id = 2,
+        .properties = std.StringHashMap(graph_store.PropertyValue).init(allocator),
+    };
+    const edge_val = Value{ .Edge = &secret_edge };
+    const row = [_]Value{edge_val};
+
+    try std.testing.expect(rowContainsDeniedLabel(&denied, &row));
+
+    // Row with non-denied label should pass
+    const public_edge = graph_store.Edge{
+        .id = 2,
+        .label = "Public",
+        .from_id = 1,
+        .to_id = 2,
+        .properties = std.StringHashMap(graph_store.PropertyValue).init(allocator),
+    };
+    const ok_edge_val = Value{ .Edge = &public_edge };
+    const ok_row = [_]Value{ok_edge_val};
+    try std.testing.expect(!rowContainsDeniedLabel(&denied, &ok_row));
 }
