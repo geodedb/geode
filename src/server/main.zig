@@ -591,18 +591,28 @@ pub fn main() !void {
         // GAP-0269: Log total startup time for operator diagnostics (stderr, visible at all log levels)
         std.debug.print("[startup] server ready ({d}ms total)\n", .{std.time.milliTimestamp() - startup_begin});
 
-        // Production mode: accept connections in a loop and dispatch to thread pool
-        // The accept() function polls internally to receive packets and complete handshakes
+        // #540: Spawn a dedicated poll thread to continuously process incoming
+        // UDP datagrams. This decouples packet delivery from the accept loop,
+        // eliminating the c=8+ contention bottleneck where handler threads starve
+        // waiting for data that only arrives when the main thread calls poll().
+        var poll_shutdown = std.atomic.Value(bool).init(false);
+        const poll_thread = std.Thread.spawn(.{}, quic_transport.QuicTransport.pollLoop, .{ &transport, &poll_shutdown }) catch |err| {
+            log.err("Failed to spawn poll thread", &.{Attr.string("error", @errorName(err))});
+            return;
+        };
+        defer {
+            poll_shutdown.store(true, .release);
+            poll_thread.join();
+        }
+
+        // Production mode: accept connections in a loop and dispatch to thread pool.
+        // The dedicated poll thread handles packet delivery — this loop only checks
+        // for completed handshakes via tryAccept().
         while (true) {
             // GAP-0203: Process deferred connection cleanups on the main thread.
-            // Handler threads queue finished connections for destruction here because
-            // only the main thread can safely modify endpoint bookkeeping (connection
-            // tables, timers) without racing with poll().
             transport.drainPendingDestroy();
 
             // #49: Admission control — skip accept when at capacity.
-            // This prevents resource exhaustion under heavy load by refusing
-            // new connections before they consume thread pool and memory resources.
             if (transport.getConnectionCount() >= transport.config.max_connections) {
                 std.Thread.sleep(5 * std.time.ns_per_ms);
                 continue;
@@ -615,12 +625,10 @@ pub fn main() !void {
                         Attr.string("error", @errorName(err)),
                     });
                 }
-                // Brief yield then loop back to poll() quickly.
-                // Handlers depend on poll() to process incoming QUIC packets —
-                // longer delays here mean handlers wait longer for data.
-                // 500μs gives handlers time to complete in-flight reads
-                // while keeping poll frequency at ~2000/sec for responsiveness.
-                std.Thread.sleep(500 * std.time.ns_per_us);
+                // #540: With dedicated poll thread, the accept loop only needs
+                // to check for new connections. Sleep 1ms between checks — poll
+                // thread handles data delivery independently.
+                std.Thread.sleep(1 * std.time.ns_per_ms);
                 continue;
             };
 

@@ -195,12 +195,15 @@ const BufferedProtoReader = struct {
                     if (would_block_attempts >= max_would_block_attempts) {
                         return error.Timeout;
                     }
-                    // Wait for the next poll() cycle to deliver packets instead
-                    // of blind-sleeping. waitForPoll blocks until leavePoll()
-                    // signals new data is available, reducing thundering herd
-                    // from 8 handlers all retrying simultaneously every 100μs.
+                    // #540: Handler-driven poll — when data isn't available,
+                    // the handler itself calls poll(0) to process any pending
+                    // UDP datagrams into connection RX buffers. This distributes
+                    // poll load across all handler threads instead of relying
+                    // solely on the dedicated poll thread, eliminating the c=8+
+                    // starvation bottleneck.
+                    self.transport.poll(0) catch {};
                     if (self.stream.poll_sync) |ps| {
-                        ps.waitForPoll(2 * std.time.ns_per_ms);
+                        ps.waitForPoll(200 * std.time.ns_per_us);
                     } else {
                         std.Thread.sleep(100 * std.time.ns_per_us);
                     }
@@ -408,18 +411,19 @@ pub fn handleQuicConnection(
     defer transport.destroyConnection(conn);
     log.debug("Entering handleQuicConnection", &.{});
 
-    // Wait for incoming STREAM frames using exponential backoff.
-    // #60: Uses Thread.sleep instead of poll_cv.waitForPoll() because
-    // waitForPoll's mutex acquisition on PollSync.mu contends with the
-    // main thread's enterPoll()/leavePoll() cycle, preventing the QUIC
-    // handshake from completing (clients see "no recent network activity").
+    // Wait for incoming STREAM frames with handler-driven polling.
+    // #540: Instead of blind-sleeping, handlers call poll(0) themselves to
+    // process incoming handshake packets. This eliminates the dependency on
+    // the main thread's poll frequency for handshake completion.
     var poll_attempts: usize = 0;
     var backoff_us: u64 = 100; // Start at 100μs
-    const max_backoff_us: u64 = 50_000; // Cap at 50ms
+    const max_backoff_us: u64 = 10_000; // Cap at 10ms (reduced from 50ms)
     const max_total_wait_ms: u64 = 500;
     var total_waited_us: u64 = 0;
     while (total_waited_us < max_total_wait_ms * 1000) : (poll_attempts += 1) {
         if (conn.inner.hasIncomingStreams()) break;
+        // #540: Handler-driven poll accelerates handshake completion
+        transport.poll(0) catch {};
         std.Thread.sleep(backoff_us * std.time.ns_per_us);
         total_waited_us += backoff_us;
         backoff_us = @min(backoff_us * 2, max_backoff_us);
@@ -572,9 +576,10 @@ pub fn handleQuicConnection(
         const packet_opt = line_reader.nextMessage() catch |err| {
             if (err == error.EndOfStream) return;
             if (err == error.WouldBlock) {
-                // Wait for poll() to deliver new QUIC packets
+                // #540: Handler-driven poll on WouldBlock
+                transport.poll(0) catch {};
                 if (stream.poll_sync) |ps| {
-                    ps.waitForPoll(2 * std.time.ns_per_ms);
+                    ps.waitForPoll(200 * std.time.ns_per_us);
                 } else {
                     std.Thread.sleep(100 * std.time.ns_per_us);
                 }

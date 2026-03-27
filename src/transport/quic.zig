@@ -354,17 +354,37 @@ pub const QuicTransport = struct {
         }
     }
 
+    /// Dedicated poll loop — run on a separate thread to decouple packet delivery
+    /// from the accept loop. This eliminates the c=8+ contention bottleneck where
+    /// handler threads starve waiting for data that only arrives when the main
+    /// thread calls poll() between accept attempts (#540).
+    ///
+    /// The poll thread continuously processes incoming UDP datagrams into connection
+    /// RX buffers and signals waiting handler threads via poll_cv.broadcast().
+    pub fn pollLoop(self: *QuicTransport, shutdown: *std.atomic.Value(bool)) void {
+        while (!shutdown.load(.acquire)) {
+            // #540: High-frequency non-blocking poll — process any pending UDP
+            // datagrams without blocking on the socket. poll(0) returns immediately
+            // if no data is available. This maximizes throughput under load while
+            // the 50μs sleep prevents 100% CPU spin when idle.
+            // drainPendingDestroy is handled by the main accept loop thread only
+            // (it acquires ep.mu which would contend with poll's internal locking).
+            self.poll(0) catch {};
+            std.Thread.sleep(50 * std.time.ns_per_us);
+        }
+        // Final poll to flush any remaining packets on shutdown
+        self.poll(0) catch {};
+    }
+
     pub fn accept(self: *QuicTransport) !*QuicConnection {
         if (self.endpoint) |ep| {
-            // GAP-0203: Drain deferred connection cleanups before polling.
+            // GAP-0203: Drain deferred connection cleanups.
             self.drainPendingDestroy();
 
-            // QUIC library v0.1.10: poll() is internally thread-safe.
-            // No PollSync needed — handlers can do concurrent I/O during poll.
-            ep.poll(0) catch |err| {
-                return err;
-            };
-            self.poll_sync.poll_cv.broadcast(); // Wake handlers waiting for data
+            // #540: poll() is now handled by the dedicated poll thread.
+            // The accept loop only does tryAccept() for new connections.
+            // This decouples data delivery from connection acceptance,
+            // eliminating the c=8+ starvation bottleneck.
 
             // Non-blocking check for completed handshakes
             const conn = api.tryAccept(ep) orelse return QuicError.WouldBlock;
