@@ -2621,17 +2621,49 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-STREAM-SERIALIZE-003; FEATURE="StreamingSerialization"; ASPECT=AtomicRename; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-25
     fn finalizeTempFile(allocator: std.mem.Allocator, tmp_path: []const u8, final_path: []const u8) !void {
         if (tde.isEnabled(allocator)) {
-            // TDE enabled: read plaintext temp file, encrypt, write to final path.
-            const plaintext = std.fs.cwd().readFileAlloc(allocator, tmp_path, 1 << 30) catch |err| {
-                log.err("failed to read temp file for TDE encryption", &.{
+            // P7: Use mmap instead of readFileAlloc to avoid a full heap copy of
+            // the plaintext temp file. The OS pages in data on demand, eliminating
+            // the O(file_size) heap allocation that caused OOM on large graphs.
+            const file = std.fs.cwd().openFile(tmp_path, .{}) catch |err| {
+                log.err("failed to open temp file for TDE encryption", &.{
                     Attr.string("path", tmp_path),
                     Attr.string("error", @errorName(err)),
                 });
                 return err;
             };
-            defer allocator.free(plaintext);
+            defer file.close();
 
-            try tde.writeEncryptedFile(allocator, final_path, plaintext);
+            const file_size = file.getEndPos() catch |err| {
+                log.err("failed to get temp file size for TDE encryption", &.{
+                    Attr.string("path", tmp_path),
+                    Attr.string("error", @errorName(err)),
+                });
+                return err;
+            };
+
+            if (file_size == 0) {
+                // Empty file — nothing to encrypt; just delete and return.
+                std.fs.cwd().deleteFile(tmp_path) catch {};
+                return;
+            }
+
+            const mapped = std.posix.mmap(
+                null,
+                @intCast(file_size),
+                std.os.linux.PROT.READ,
+                .{ .TYPE = .PRIVATE },
+                file.handle,
+                0,
+            ) catch |err| {
+                log.err("failed to mmap temp file for TDE encryption", &.{
+                    Attr.string("path", tmp_path),
+                    Attr.string("error", @errorName(err)),
+                });
+                return err;
+            };
+            defer std.posix.munmap(mapped);
+
+            try tde.writeEncryptedFile(allocator, final_path, mapped);
 
             // Remove temp file after successful encryption
             std.fs.cwd().deleteFile(tmp_path) catch {};
