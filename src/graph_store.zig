@@ -3735,8 +3735,9 @@ pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
         t.join();
         g_persist_thread = null;
     }
-    // Final flush under lock — no worker threads should be running at this point
-    // but take the lock for safety.
+    // Final flush — no worker threads should be running at this point
+    // but take the lock for safety. Use split-phase for consistency with
+    // the persistence loop (P3: avoid holding lock during TDE finalization).
     if (global_store != null) {
         const store_ptr: *GraphStore = &(global_store.?);
         // GAP-0268: Final WAL sync + checkpoint to ensure all mutations are persisted
@@ -3744,12 +3745,12 @@ pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
         if (g_wal_sync_fn) |sync_fn| {
             sync_fn();
         }
-        g_store_rwlock.lockShared();
-        defer g_store_rwlock.unlockShared();
         if (g_wal_checkpoint_fn) |checkpoint_fn| {
+            g_store_rwlock.lockShared();
+            defer g_store_rwlock.unlockShared();
             checkpoint_fn(store_ptr);
         } else {
-            store_ptr.saveIfDirty();
+            persistSplitPhase(store_ptr);
         }
     }
 }
@@ -3769,25 +3770,74 @@ fn persistenceLoop() void {
                 sync_fn();
             }
 
-            // Acquire shared lock to prevent races with mutation threads.
-            // serialization iterates graphs/nodes/edges hash maps — concurrent
-            // modification causes alignment panics and corrupted output.
-            g_store_rwlock.lockShared();
-            defer g_store_rwlock.unlockShared();
-
             // GAP-0268: When WAL hooks are installed and a checkpoint is needed,
             // checkpoint (which truncates the WAL) instead of the plain save.
             // This prevents unbounded WAL growth.
             const needs_checkpoint = if (g_wal_needs_checkpoint_fn) |needs_fn| needs_fn() else false;
             if (needs_checkpoint) {
+                g_store_rwlock.lockShared();
+                defer g_store_rwlock.unlockShared();
                 if (g_wal_checkpoint_fn) |checkpoint_fn| {
                     checkpoint_fn(store_ptr);
                 }
             } else {
-                store_ptr.saveIfDirty();
+                // P3: Split persistence into two phases so the shared lock is NOT
+                // held during TDE encryption / finalization. Phase 1 (serialize)
+                // reads hash maps and requires the lock; phase 2 (finalize) only
+                // does file I/O (rename or TDE encrypt+write) and does not.
+                persistSplitPhase(store_ptr);
             }
         }
     }
+}
+
+/// P3: Two-phase persistence — serialize under shared lock, finalize without lock.
+/// This prevents TDE encryption (which can be slow for large files) from blocking
+/// mutation threads that need the exclusive write lock.
+fn persistSplitPhase(store_ptr: *GraphStore) void {
+    const file_path = getPersistenceFilePath(store_ptr.allocator) catch "/tmp/geode_graph_store.dat";
+    const file_path_owned = file_path.len > 0 and file_path.ptr != "/tmp/geode_graph_store.dat".ptr;
+    defer if (file_path_owned) store_ptr.allocator.free(file_path);
+
+    const tmp_path = std.fmt.allocPrint(store_ptr.allocator, "{s}.tmp", .{file_path}) catch {
+        log.err("failed to allocate tmp_path for persistence", &.{});
+        return;
+    };
+    defer store_ptr.allocator.free(tmp_path);
+
+    // Phase 1: Serialize to temp file under shared lock.
+    const did_serialize = blk: {
+        g_store_rwlock.lockShared();
+        defer g_store_rwlock.unlockShared();
+
+        if (!store_ptr.dirty) break :blk false;
+
+        store_ptr.serializeToTempFile(tmp_path) catch |err| {
+            log.err("failed to serialize graph store to temp file", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.string("path", tmp_path),
+            });
+            break :blk false;
+        };
+        break :blk true;
+    };
+
+    if (!did_serialize) return;
+
+    // Phase 2: Finalize (TDE encrypt + rename) WITHOUT holding the store lock.
+    GraphStore.finalizeTempFile(store_ptr.allocator, tmp_path, file_path) catch |err| {
+        log.err("failed to finalize graph store persistence", &.{
+            Attr.string("error", @errorName(err)),
+            Attr.string("path", file_path),
+        });
+        return;
+    };
+
+    // Clear dirty flag. A brief shared lock re-acquire is not needed because
+    // dirty is only set true by mutation threads (under write lock) and only
+    // cleared here. A concurrent mutation between serialize and this point
+    // will set dirty=true again, causing the next loop tick to re-persist.
+    store_ptr.dirty = false;
 }
 
 /// GAP-0259/0260: Persistence is handled solely by the background loop (1s poll).
