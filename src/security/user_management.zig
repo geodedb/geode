@@ -319,13 +319,14 @@ pub fn ensureDefaultUser(allocator: std.mem.Allocator) !void {
         // Create admin user (force password reset only for auto-generated passwords)
         try createUser(allocator, admin_user, admin_password, admin_email, .Admin, generated_password);
 
-        // Log generated password so the admin can retrieve it from journal/logs.
-        // Uses log.err to ensure visibility even at --log-level error (the default).
+        // Log that a password was generated (without the password itself — S3 security fix).
+        // The actual password is printed to stderr via std.debug.print in server_init.zig
+        // for one-time retrieval; it must NEVER appear in structured logs that are forwarded
+        // to log aggregators (ELK, Datadog, CloudWatch, etc.).
         if (generated_password) {
             log.err("Initial admin password generated - change on first login", &.{
                 Attr.string("admin_username", admin_user),
-                Attr.string("GEODE_INITIAL_ADMIN_PASSWORD", admin_password),
-                Attr.string("action_required", "Password must be changed on first login"),
+                Attr.string("action_required", "Password was printed to stderr — change on first login"),
             });
         }
     }

@@ -368,9 +368,11 @@ pub const GraphStore = struct {
     incoming_edges: std.AutoHashMap(u64, std.ArrayList(u64)), // to_node_id -> edge_ids
     /// Optional CSR adjacency for fast traversal (if built elsewhere)
     csr: ?*const anyopaque = null,
-    // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
-    // Track if store has unsaved changes - avoids O(n²) persistence during batch operations
-    dirty: bool = false,
+    // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-27
+    // Track if store has unsaved changes - avoids O(n²) persistence during batch operations.
+    // Atomic because the persistence thread reads this without holding the store write lock
+    // while mutation threads write it under the write lock (data race fix).
+    dirty: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     data_dir: []const u8 = "",
 
     /// Initialize GraphStore with default tenant
@@ -593,7 +595,7 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-GRAPH-008; FEATURE="GraphRegistry"; ASPECT=GraphHelpers; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-03
     fn ensureGraph(self: *GraphStore, graph_name: []const u8) !void {
         try self.ensureGraphNoDirty(graph_name);
-        self.dirty = true;
+        self.dirty.store(true, .release);
     }
 
     fn ensureGraphNoDirty(self: *GraphStore, graph_name: []const u8) !void {
@@ -632,7 +634,7 @@ pub const GraphStore = struct {
         const name_copy = try self.allocator.dupe(u8, graph_name);
         try self.graphs.put(name_copy, {});
 
-        self.dirty = true;
+        self.dirty.store(true, .release);
     }
 
     pub fn dropGraph(self: *GraphStore, graph_name: []const u8) !void {
@@ -651,7 +653,7 @@ pub const GraphStore = struct {
         if (self.graphs.fetchRemove(graph_name)) |kv| {
             self.allocator.free(kv.key);
         }
-        self.dirty = true;
+        self.dirty.store(true, .release);
     }
 
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
@@ -690,7 +692,7 @@ pub const GraphStore = struct {
         // CANARY: REQ=REQ-BINARY-PERSIST-NODE-002; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
         // Mark store as dirty - persistence happens at query completion, not per-node
         // This avoids O(n²) serialization overhead during batch operations
-        self.dirty = true;
+        self.dirty.store(true, .release);
         log.debug("Node created, dirty=true", &.{
             Attr.int("node_id", @intCast(id)),
             Attr.int("total_nodes", @intCast(self.nodes.count())),
@@ -731,7 +733,7 @@ pub const GraphStore = struct {
         }
 
         if (mark_dirty) {
-            self.dirty = true;
+            self.dirty.store(true, .release);
         }
     }
 
@@ -925,7 +927,7 @@ pub const GraphStore = struct {
             result.value_ptr.* = value_copy;
 
             // Mark as dirty - persistence happens at query completion
-            self.dirty = true;
+            self.dirty.store(true, .release);
 
             // WAL notification: SetNodeProperty
             notifyMutation(.set_node_property, node_id, 0, 0, null, key, value, null);
@@ -989,7 +991,7 @@ pub const GraphStore = struct {
                 freePropertyValue(self, kv.value);
             }
             // Mark as dirty - persistence happens at query completion
-            self.dirty = true;
+            self.dirty.store(true, .release);
 
             // WAL notification: RemoveNodeProperty
             notifyMutation(.remove_node_property, node_id, 0, 0, null, key, null, null);
@@ -1022,7 +1024,7 @@ pub const GraphStore = struct {
             try self.addToLabelIndex(node.graph_name, label, node_id);
 
             // Mark as dirty - persistence happens at query completion
-            self.dirty = true;
+            self.dirty.store(true, .release);
 
             // WAL notification: AddNodeLabel
             notifyMutation(.add_node_label, node_id, 0, 0, label, null, null, null);
@@ -1064,7 +1066,7 @@ pub const GraphStore = struct {
                 self.allocator.free(removed_label);
 
                 // Mark as dirty - persistence happens at query completion
-                self.dirty = true;
+                self.dirty.store(true, .release);
 
                 // WAL notification: RemoveNodeLabel
                 notifyMutation(.remove_node_label, node_id, 0, 0, label, null, null, null);
@@ -1092,7 +1094,7 @@ pub const GraphStore = struct {
     }
 
     pub fn isDirty(self: *const GraphStore) bool {
-        return self.dirty;
+        return @constCast(&self.dirty).load(.acquire);
     }
 
     pub fn getNodePtr(self: *const GraphStore, node_id: u64) ?*const Node {
@@ -1599,7 +1601,7 @@ pub const GraphStore = struct {
 
         // CANARY: REQ=REQ-BINARY-PERSIST-EDGE-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
         // Mark store as dirty - persistence happens at query completion, not per-edge
-        self.dirty = true;
+        self.dirty.store(true, .release);
 
         // WAL notification: CreateEdge
         notifyMutation(.create_edge, id, from_id, to_id, edge_type, null, null, graph_name);
@@ -1639,7 +1641,7 @@ pub const GraphStore = struct {
         }
 
         if (mark_dirty) {
-            self.dirty = true;
+            self.dirty.store(true, .release);
         }
     }
 
@@ -1773,7 +1775,7 @@ pub const GraphStore = struct {
             result.value_ptr.* = value_copy;
 
             // Mark as dirty - persistence happens at query completion
-            self.dirty = true;
+            self.dirty.store(true, .release);
 
             // WAL notification: SetEdgeProperty
             notifyMutation(.set_edge_property, edge_id, 0, 0, null, key, value, null);
@@ -1786,7 +1788,7 @@ pub const GraphStore = struct {
                 self.allocator.free(kv.key);
                 freePropertyValue(self, kv.value);
             }
-            self.dirty = true;
+            self.dirty.store(true, .release);
 
             // WAL notification: RemoveEdgeProperty
             notifyMutation(.remove_edge_property, edge_id, 0, 0, null, key, null, null);
@@ -2572,7 +2574,7 @@ pub const GraphStore = struct {
         try finalizeTempFile(self.allocator, tmp_path, file_path);
 
         // Clear dirty flag after successful save
-        self.dirty = false;
+        self.dirty.store(false, .release);
     }
 
     /// Serialize graph state directly to a temp file using streaming I/O.
@@ -2650,7 +2652,7 @@ pub const GraphStore = struct {
             const mapped = std.posix.mmap(
                 null,
                 @intCast(file_size),
-                std.os.linux.PROT.READ,
+                std.posix.PROT.READ,
                 .{ .TYPE = .PRIVATE },
                 file.handle,
                 0,
@@ -2909,12 +2911,13 @@ pub const GraphStore = struct {
     pub fn saveIfDirty(self: *GraphStore) void {
         const file_path = getPersistenceFilePath(self.allocator) catch "/tmp/geode_graph_store.dat";
         defer if (file_path.len > 0 and file_path.ptr != "/tmp/geode_graph_store.dat".ptr) self.allocator.free(file_path);
+        const is_dirty = @constCast(&self.dirty).load(.acquire);
         log.debug("saveIfDirty called", &.{
-            Attr.string("dirty", if (self.dirty) "true" else "false"),
+            Attr.string("dirty", if (is_dirty) "true" else "false"),
             Attr.int("node_count", @intCast(self.nodes.count())),
             Attr.string("path", file_path),
         });
-        if (self.dirty) {
+        if (is_dirty) {
             log.debug("saving graph store", &.{
                 Attr.string("path", file_path),
             });
@@ -2925,7 +2928,7 @@ pub const GraphStore = struct {
                 });
             };
             log.debug("save completed", &.{
-                Attr.string("dirty", if (self.dirty) "true" else "false"),
+                Attr.string("dirty", if (@constCast(&self.dirty).load(.acquire)) "true" else "false"),
             });
         }
     }
@@ -2979,7 +2982,7 @@ pub const GraphStore = struct {
             const mapped = try std.posix.mmap(
                 null,
                 @intCast(file_size),
-                std.os.linux.PROT.READ,
+                std.posix.PROT.READ,
                 .{ .TYPE = .PRIVATE },
                 file.handle,
                 0,
@@ -3271,7 +3274,7 @@ pub const GraphStore = struct {
 
         // Rebuild indexes after load
         try self.rebuildIndexes();
-        self.dirty = false;
+        self.dirty.store(false, .release);
     }
 
     // CANARY: REQ=REQ-TXN-UNDO-002; FEATURE="TransactionUndoLog"; ASPECT=NoSaveOperations; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
@@ -3378,7 +3381,7 @@ pub const GraphStore = struct {
         }
 
         self.deleteNodeNoSave(node_id);
-        self.dirty = true;
+        self.dirty.store(true, .release);
         // WAL notification: DeleteNode
         notifyMutation(.delete_node, node_id, 0, 0, null, null, null, gn);
     }
@@ -3396,7 +3399,7 @@ pub const GraphStore = struct {
         }
 
         self.deleteEdgeNoSave(edge_id);
-        self.dirty = true;
+        self.dirty.store(true, .release);
         // WAL notification: DeleteEdge
         notifyMutation(.delete_edge, edge_id, 0, 0, null, null, null, gn);
     }
@@ -3884,7 +3887,7 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
         g_store_rwlock.lockShared();
         defer g_store_rwlock.unlockShared();
 
-        if (!store_ptr.dirty) break :blk false;
+        if (!@constCast(&store_ptr.dirty).load(.acquire)) break :blk false;
 
         store_ptr.serializeToTempFile(tmp_path) catch |err| {
             log.err("failed to serialize graph store to temp file", &.{
@@ -3907,11 +3910,11 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
         return;
     };
 
-    // Clear dirty flag. A brief shared lock re-acquire is not needed because
-    // dirty is only set true by mutation threads (under write lock) and only
-    // cleared here. A concurrent mutation between serialize and this point
-    // will set dirty=true again, causing the next loop tick to re-persist.
-    store_ptr.dirty = false;
+    // Clear dirty flag atomically. Mutation threads store(true, .release) under
+    // the write lock; the persistence thread stores(false, .release) here without
+    // a lock.  A concurrent mutation between serialize and this point will set
+    // dirty=true again, causing the next loop tick to re-persist.
+    @constCast(&store_ptr.dirty).store(false, .release);
 }
 
 /// GAP-0259/0260: Persistence is handled solely by the background loop (1s poll).
