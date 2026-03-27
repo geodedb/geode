@@ -131,6 +131,47 @@ make status-generate
 make build && make verify-fast
 ```
 
+### Load Test Baseline Tracking
+
+Load test results are tracked against baselines in `benchmarks/loadtest/` to detect performance regressions between releases. The system compares QPS and p50 latency at each concurrency level.
+
+**Baseline file**: `benchmarks/loadtest/baseline.jsonl` (JSONL, one record per concurrency level)
+
+```bash
+# Run load tests (requires ../geode-test-harness with Go loadtest built)
+cd ../geode-test-harness
+GEODE_ADMIN_PASSWORD=<password> LOADTEST_DSN="localhost:3141?insecure=true&user=geode&pass=<password>" make loadtest-go
+
+# Compare results against baseline (from geode repo root)
+make loadtest-compare
+
+# Save current results as new baseline (after verified improvement)
+make loadtest-save-baseline
+```
+
+**Regression thresholds** (configurable via `--threshold`):
+
+- QPS: regression if current < baseline * 0.8 (20% drop)
+- p50 latency: regression if current > baseline * 1.2 (20% increase)
+- Error rate: regression if current > 10% and baseline was < 5%
+
+**CI**: The `loadtest-regression` job in `.gitlab-ci.yml` runs comparison on MRs and main branch pushes (`allow_failure: true` initially).
+
+**Updating baselines**: After performance improvements, run `make loadtest-save-baseline` to update the baseline. Commit the updated `baseline.jsonl` with the performance change.
+
+### Geodetestlab Integration Test Suite
+
+The full integration test suite lives in `../geode-test-harness/`:
+
+```bash
+# Run full suite (198 specs, ~25 min with 2 workers)
+cd ../geode-test-harness
+GEODE_BINARY=/path/to/geode make test
+
+# Run single spec
+make test-spec SPEC=geodetestlab-cli/specs/my_spec.yml
+```
+
 ### Recent Test Improvements (October 2025)
 
 - **stdin handling** in test runner fixed (critical issue)
@@ -201,6 +242,8 @@ make fmt               # Format Zig code
 make pre-commit        # Run pre-commit checks
 make cross-compile     # Cross-compile for all platforms
 make geodetestlab-comprehensive  # Full integration test suite
+make loadtest-compare  # Compare load test results against baseline
+make loadtest-save-baseline  # Save current results as new baseline
 ```
 
 ## 📋 Code Conventions
