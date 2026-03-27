@@ -25,6 +25,11 @@ const grpc_tls = @import("grpc_tls.zig");
 const backup_mgr = geode.backup_manager;
 const SimplifiedBackupManager = backup_mgr.SimplifiedBackupManager;
 
+// S1: RLS post-result filtering (parity with QUIC handler).
+const rls_filter = @import("../server/rls_filter.zig");
+// S6: Auth rate limiter (parity with QUIC handler).
+const auth_rate_limiter_mod = @import("../server/auth_rate_limiter.zig");
+
 const logging = @import("logging");
 const log = logging.scoped("grpc");
 const Attr = logging.Attr;
@@ -987,7 +992,26 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
     try caps.append(allocator, try allocator.dupe(u8, "TLS1.3"));
 
     if (user_mgmt.isAuthEnabled()) {
+        // S6: Check auth rate limiter before authentication attempt (parity with QUIC handler).
+        if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
+            const client_key = if (req.username.len > 0) req.username else "unknown";
+            if (limiter.isLocked(client_key)) {
+                const resp = schema.HelloResponse{
+                    .success = false,
+                    .session_id = "",
+                    .error_message = "Too many failed authentication attempts. Try again later.",
+                    .capabilities = caps,
+                };
+                return encodeMessage(allocator, resp);
+            }
+        }
+
         if (req.username.len == 0 or req.password.len == 0) {
+            // S6: Record failure for empty credentials.
+            if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
+                const client_key = if (req.username.len > 0) req.username else "unknown";
+                limiter.recordFailure(client_key);
+            }
             const resp = schema.HelloResponse{
                 .success = false,
                 .session_id = "",
@@ -997,6 +1021,10 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
             return encodeMessage(allocator, resp);
         }
         const auth_result = user_mgmt.authenticate(req.username, req.password) catch {
+            // S6: Record failure for bad credentials.
+            if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
+                limiter.recordFailure(req.username);
+            }
             const resp = schema.HelloResponse{
                 .success = false,
                 .session_id = "",
@@ -1005,6 +1033,11 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
             };
             return encodeMessage(allocator, resp);
         };
+
+        // S6: Successful authentication — reset failure counter.
+        if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
+            limiter.recordSuccess(req.username);
+        }
         // CANARY: REQ=REQ-DSN-GRAPH-BIND-005; FEATURE="DSNGraphBinding"; ASPECT=GrpcGraphResolution; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
         // Resolve graph from HELLO request — validate, auto-create, bind session
         var resolved_graph: ?[]const u8 = null;
@@ -1395,6 +1428,14 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                         try appendFlagToResult(allocator, &exec_result, flag);
                     }
 
+                    // S1: Apply RLS filter on gRPC PROFILE path (parity with QUIC handler).
+                    if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
+                        if (state.authenticated_user) |auth_user| {
+                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                            _ = rls_filter.applyRLSFilter(allocator, &exec_result, rls_engine, auth_user, rls_graph);
+                        }
+                    }
+
                     const store_ptr = graph_store.getGlobalStore(allocator);
                     const profile_msg = try profile_payload.buildProfilePayload(allocator, traits, exec_result.rows.len, .{
                         .compact = store.config.compact_profile,
@@ -1436,6 +1477,14 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
 
                     for (flags.items) |flag| {
                         try appendFlagToResult(allocator, &exec_result, flag);
+                    }
+
+                    // S1: Apply RLS filter on gRPC rows path (parity with QUIC handler).
+                    if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
+                        if (state.authenticated_user) |auth_user| {
+                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                            _ = rls_filter.applyRLSFilter(allocator, &exec_result, rls_engine, auth_user, rls_graph);
+                        }
                     }
 
                     var order_keys: []const []const u8 = &.{};
@@ -1694,6 +1743,10 @@ fn handleRollbackTo(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
 
 fn handleCdcDiag(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
     // GAP-0255: Use the real global CDC engine when available (parity with QUIC handler).
+    // Acquire CDC mutex for thread-safe access (parity with procedure_registry).
+    const cdc_mutex = execution.getCdcMutex();
+    cdc_mutex.lock();
+    defer cdc_mutex.unlock();
     if (execution.getGlobalCdcEngine()) |eng| {
         const resp = try eng.exportDiagnostics(allocator);
         return encodeMessage(allocator, resp);
@@ -1712,6 +1765,10 @@ fn handleCdcDiag(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
 
 fn handleCdcCtrl(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     // GAP-0255: Use the real global CDC engine when available (parity with QUIC handler).
+    // Acquire CDC mutex for thread-safe access (parity with procedure_registry).
+    const cdc_mutex = execution.getCdcMutex();
+    cdc_mutex.lock();
+    defer cdc_mutex.unlock();
     if (execution.getGlobalCdcEngine()) |eng| {
         var reader: std.Io.Reader = .fixed(request_bytes);
         var req = protobuf.decode(schema.CdcControlRequest, &reader, allocator) catch {

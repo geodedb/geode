@@ -19,6 +19,9 @@ pub const executeCallProcedure = procedure_registry.executeCallProcedure;
 /// Public accessor for the global CDC engine (used by gRPC transport).
 pub const getGlobalCdcEngine = procedure_registry.getGlobalCdcEngine;
 
+/// Public accessor for the CDC mutex (used by gRPC transport for thread-safe CDC access).
+pub const getCdcMutex = procedure_registry.getCdcMutex;
+
 /// Execute CALL subquery statement
 /// Executes the subquery statement (Query, Call, Create, etc.) with context
 /// and optionally applies RETURN clause transformation

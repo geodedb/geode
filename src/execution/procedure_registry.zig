@@ -71,6 +71,12 @@ pub fn getGlobalCdcEngine() ?*cdc_mod.CDCEngine {
     return global_cdc_engine;
 }
 
+/// Public accessor for the CDC mutex so external transports (gRPC) can
+/// acquire it before accessing the CDC engine (parity with procedure calls).
+pub fn getCdcMutex() *std.Thread.Mutex {
+    return &global_cdc_mutex;
+}
+
 // ===========================================================================
 // FLE Config Parsing Helper Functions
 // ===========================================================================

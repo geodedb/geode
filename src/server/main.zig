@@ -518,6 +518,9 @@ pub fn main() !void {
         defer ip_rate_limiter.deinit();
         quic_connection_handler.setAuthRateLimiter(&ip_rate_limiter);
         defer quic_connection_handler.setAuthRateLimiter(null);
+        // Also set the centralized global so gRPC transport can access the same limiter.
+        auth_rate_limiter_mod.setGlobalRateLimiter(&ip_rate_limiter);
+        defer auth_rate_limiter_mod.setGlobalRateLimiter(null);
 
         // S1: Initialize the global RLS filter engine for label-based row filtering.
         // The engine lives on the main thread's stack and is accessed by connection
@@ -528,6 +531,14 @@ pub fn main() !void {
         defer rls_engine.deinit();
         rls_filter_mod.setGlobalRLSFilterEngine(&rls_engine);
         defer rls_filter_mod.setGlobalRLSFilterEngine(null);
+
+        // GAP-0268: Wire WAL persistence hooks for checkpoint truncation.
+        // The hooks allow the persistence loop to sync and truncate the WAL
+        // after each successful checkpoint, preventing unbounded WAL growth.
+        // CANARY: REQ=REQ-WAL-HOOKS-001; FEATURE="WAL Persistence Hooks"; ASPECT=ServerInit; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-27
+        const wal_mod = geode.wal;
+        wal_mod.installPersistenceHooks();
+        defer wal_mod.removePersistenceHooks();
 
         if (mtls_required) {
             log.info("mTLS authentication enabled for QUIC connections", &.{});

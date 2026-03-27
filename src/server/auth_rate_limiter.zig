@@ -174,6 +174,21 @@ pub const AuthRateLimiter = struct {
     }
 };
 
+// ── Global singleton accessor ──────────────────────────────────────────
+// Allows multiple transports (QUIC, gRPC) to share the same rate limiter.
+
+var g_global_rate_limiter: ?*AuthRateLimiter = null;
+
+/// Set the global authentication rate limiter (called during server startup).
+pub fn setGlobalRateLimiter(limiter: ?*AuthRateLimiter) void {
+    g_global_rate_limiter = limiter;
+}
+
+/// Get the global authentication rate limiter (used by all transports).
+pub fn getGlobalRateLimiter() ?*AuthRateLimiter {
+    return g_global_rate_limiter;
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────
 
 test "auth_rate_limiter: new IP is not locked" {
