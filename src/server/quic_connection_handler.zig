@@ -920,6 +920,11 @@ pub fn handleQuicConnection(
     _ = conn_state.active_streams.fetchAdd(1, .release);
     defer {
         _ = conn_state.active_streams.fetchSub(1, .release);
+        // Wait for ALL additional stream handlers to finish before freeing
+        // conn_state. Without this, handlers reference freed memory → segfault.
+        while (conn_state.active_streams.load(.acquire) > 0) {
+            std.Thread.sleep(1 * std.time.ns_per_ms);
+        }
         conn_state.deinit();
     }
 
