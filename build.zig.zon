@@ -77,11 +77,11 @@
         },
 
         // QUIC v1/v2 protocol implementation
-        // Updated 2026-03-27: v0.1.11+ (HEAD 950124b) — split endpoint mutex,
-        // thread-safe poll, reduced pollWithStats lock contention, benchmark suite.
+        // Updated 2026-03-27: v0.1.11+ (a979f59) — split endpoint mutex,
+        // ACK data race fix, bytes_in_flight leak fix, narrow handshake locks.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#4602a4d29eca586e2d08b2835756c67109988791",
-            .hash = "quic-0.1.10-gBIqUVW3NQCKHWBQNoo7qkNmBR5rZN7u4k7hiy3o9v_u",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#a979f59267452e75e049ad7a28f840aef7732684",
+            .hash = "quic-0.1.10-gBIqUW-4NQAyGdyqoT0LGMvqP6Ju1nYwQL2cBhYe4hWw",
         },
 
         // =======================================================================
