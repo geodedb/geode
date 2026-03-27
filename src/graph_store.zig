@@ -626,7 +626,9 @@ pub const GraphStore = struct {
     pub fn createGraph(self: *GraphStore, graph_name: []const u8) !void {
         // Dual-write: create in adapter, then fall through to local HashMap
         if (global_vtable) |vt| {
-            _ = vt.getOrCreateGraphFn(vt.ctx, graph_name) catch {};
+            _ = vt.getOrCreateGraphFn(vt.ctx, graph_name) catch |err| {
+                log.err("dual-write: adapter createGraph failed", &.{ Attr.string("error", @errorName(err)), Attr.string("graph", graph_name) });
+            };
         }
         if (self.graphs.contains(graph_name)) {
             return error.GraphAlreadyExists;
@@ -661,7 +663,9 @@ pub const GraphStore = struct {
     pub fn createNodeWithGraph(self: *GraphStore, labels: [][]const u8, graph_name: []const u8) !u64 {
         // Dual-write: create in adapter (independent ID space), then fall through to local HashMap
         if (global_vtable) |vt| {
-            _ = vt.createNodeFn(vt.ctx, graph_name, labels) catch {};
+            _ = vt.createNodeFn(vt.ctx, graph_name, labels) catch |err| {
+                log.err("dual-write: adapter createNode failed", &.{ Attr.string("error", @errorName(err)), Attr.string("graph", graph_name) });
+            };
         }
         try self.ensureGraph(graph_name);
         // Generate UUIDv7-style time-based unique ID
@@ -907,7 +911,9 @@ pub const GraphStore = struct {
         // Dual-write: set property in adapter, then fall through to local HashMap
         if (global_vtable) |vt| {
             const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "default";
-            vt.setNodePropertyFn(vt.ctx, gn, node_id, key, value) catch {};
+            vt.setNodePropertyFn(vt.ctx, gn, node_id, key, value) catch |err| {
+                log.err("dual-write: adapter setNodeProperty failed", &.{Attr.string("error", @errorName(err))});
+            };
         }
         if (self.nodes.getPtr(node_id)) |node| {
             // Note: Encryption is now handled by the caller (execution.zig) before calling setNodeProperty
@@ -983,7 +989,9 @@ pub const GraphStore = struct {
         // Dual-write: remove property in adapter, then fall through to local HashMap
         if (global_vtable) |vt| {
             const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "default";
-            vt.removeNodePropertyFn(vt.ctx, gn, node_id, key) catch {};
+            vt.removeNodePropertyFn(vt.ctx, gn, node_id, key) catch |err| {
+                log.err("dual-write: adapter removeNodeProperty failed", &.{Attr.string("error", @errorName(err))});
+            };
         }
         if (self.nodes.getPtr(node_id)) |node| {
             if (node.properties.fetchRemove(key)) |kv| {
@@ -1575,7 +1583,9 @@ pub const GraphStore = struct {
     pub fn createEdgeWithGraph(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8) !u64 {
         // Dual-write: create in adapter (independent ID space), then fall through to local HashMap
         if (global_vtable) |vt| {
-            _ = vt.createEdgeFn(vt.ctx, graph_name, from_id, to_id, edge_type) catch {};
+            _ = vt.createEdgeFn(vt.ctx, graph_name, from_id, to_id, edge_type) catch |err| {
+                log.err("dual-write: adapter createEdge failed", &.{ Attr.string("error", @errorName(err)), Attr.string("graph", graph_name) });
+            };
         }
         try self.ensureGraph(graph_name);
         // Generate UUIDv7-style time-based unique ID
@@ -3377,7 +3387,9 @@ pub const GraphStore = struct {
         // Dual-write: delete from adapter, then fall through to local HashMap
         if (global_vtable) |vt| {
             const adapter_gn = if (gn.len > 0) gn else "default";
-            vt.deleteNodeFn(vt.ctx, adapter_gn, node_id) catch {};
+            vt.deleteNodeFn(vt.ctx, adapter_gn, node_id) catch |err| {
+                log.err("dual-write: adapter deleteNode failed", &.{Attr.string("error", @errorName(err))});
+            };
         }
 
         self.deleteNodeNoSave(node_id);
@@ -3394,7 +3406,9 @@ pub const GraphStore = struct {
         // Dual-write: delete from adapter, then fall through to local HashMap
         if (global_vtable) |vt| {
             if (self.edges.get(edge_id)) |edge| {
-                vt.deleteEdgeFn(vt.ctx, edge.graph_name, edge.from_id, edge.to_id, edge_id) catch {};
+                vt.deleteEdgeFn(vt.ctx, edge.graph_name, edge.from_id, edge.to_id, edge_id) catch |err| {
+                    log.err("dual-write: adapter deleteEdge failed", &.{Attr.string("error", @errorName(err))});
+                };
             }
         }
 
@@ -3829,6 +3843,15 @@ pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
         } else {
             persistSplitPhase(store_ptr);
         }
+        // Final per-graph storage checkpoint — flush buffer pool pages to .store files
+        // before the process exits.
+        if (global_adapter) |adapter| {
+            adapter.checkpointAll() catch |err| {
+                log.err("per-graph storage final checkpoint failed on shutdown", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+        }
     }
 }
 
@@ -3856,6 +3879,14 @@ fn persistenceLoop() void {
                 defer g_store_rwlock.unlockShared();
                 if (g_wal_checkpoint_fn) |checkpoint_fn| {
                     checkpoint_fn(store_ptr);
+                }
+                // Also checkpoint per-graph storage on WAL checkpoint ticks.
+                if (global_adapter) |adapter| {
+                    adapter.checkpointAll() catch |err| {
+                        log.err("per-graph storage checkpoint failed", &.{
+                            Attr.string("error", @errorName(err)),
+                        });
+                    };
                 }
             } else {
                 // P3: Split persistence into two phases so the shared lock is NOT
@@ -3915,6 +3946,18 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
     // a lock.  A concurrent mutation between serialize and this point will set
     // dirty=true again, causing the next loop tick to re-persist.
     @constCast(&store_ptr.dirty).store(false, .release);
+
+    // Flush per-graph storage adapter pages to disk (the new per-graph .store files).
+    // This runs AFTER the monolithic graph_store.dat save so that the legacy path
+    // remains the source of truth during the migration period. Once reads move to
+    // the adapter, the monolithic save can be removed.
+    if (global_adapter) |adapter| {
+        adapter.checkpointAll() catch |err| {
+            log.err("per-graph storage checkpoint failed", &.{
+                Attr.string("error", @errorName(err)),
+            });
+        };
+    }
 }
 
 /// GAP-0259/0260: Persistence is handled solely by the background loop (1s poll).
