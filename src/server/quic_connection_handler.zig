@@ -945,7 +945,7 @@ pub fn handleQuicConnection(
     // This reuses the existing line_reader that already consumed the HELLO.
     while (true) {
         const packet_opt = line_reader.nextMessage() catch |err| {
-            if (err == error.EndOfStream) return;
+            if (err == error.EndOfStream) break; // First stream done — check multiplexed streams
             if (err == error.WouldBlock) {
                 if (stream.poll_sync) |ps| {
                     ps.waitForPoll(200 * std.time.ns_per_us);
@@ -955,10 +955,10 @@ pub fn handleQuicConnection(
                 continue;
             }
             log.err("Protobuf read error", &.{Attr.string("error", @errorName(err))});
-            return;
+            break; // Error — check multiplexed streams before destroying
         };
 
-        if (packet_opt == null) return; // EOF
+        if (packet_opt == null) break; // EOF — check multiplexed streams
         var packet = packet_opt.?;
         defer packet.deinit(gpa);
 
@@ -974,6 +974,21 @@ pub fn handleQuicConnection(
             continue;
         };
     }
+
+    // First stream ended (EOF or error). Close it but keep the connection alive
+    // for any remaining multiplexed streams. The defer stack will:
+    // 1. Wait for active_streams to reach 0 (conn_state defer)
+    // 2. Shut down the acceptor thread (acceptor_shutdown defer)
+    // 3. Destroy the connection (transport.destroyConnection defer)
+    //
+    // Without this, destroyConnection fires immediately when the first stream
+    // closes, killing all multiplexed streams with EOF.
+    stream.close();
+
+    // Keep accepting new streams while existing ones are active.
+    // The acceptor thread handles this, so we just wait here.
+    // active_streams was decremented by the conn_state defer for the first stream.
+    // The conn_state wait loop handles waiting for additional streams.
 }
 
 fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Program) void {
