@@ -389,6 +389,286 @@ fn buildOrderKeys(
 
 const DEBUG_PROFILE = false;
 
+// ── Stream multiplexing support ──────────────────────────────────────────────
+// CANARY: REQ=REQ-QUIC-MUX-001; FEATURE="StreamMultiplexing"; ASPECT=SharedConnState; STATUS=IMPL; OWNER=server; UPDATED=2026-03-27
+/// Shared connection state for QUIC stream multiplexing.
+/// After the HELLO handshake on the first stream, this holds the authenticated
+/// identity that is inherited by all additional streams on the connection.
+/// Fields are read-only after initialization (set once after HELLO).
+pub const SharedConnState = struct {
+    allocator: std.mem.Allocator,
+    /// Authenticated username (owned, heap-allocated). Null if auth is disabled.
+    authenticated_user: ?[]const u8 = null,
+    /// Authenticated role (u8 enum value of user_mgmt.Role).
+    authenticated_role: ?u8 = null,
+    /// Whether the user must reset their password.
+    password_reset_required: bool = false,
+    /// Session graph binding (owned, heap-allocated). Null if not bound.
+    current_graph: ?[]const u8 = null,
+    /// Whether the session was bound to a graph via DSN/HELLO.
+    graph_bound: bool = false,
+    /// Security manager pointer (global lifetime, not owned).
+    security_manager: ?*geode_auth.SecurityManager = null,
+    /// Shared AST cache pointer (global lifetime, not owned).
+    shared_ast_cache: ?*anyopaque = null,
+    /// Shared query optimizer pointer (global lifetime, not owned).
+    shared_optimizer: ?*query_plan_cache.SharedQueryOptimizer = null,
+    /// Peer IP string for rate limiting (owned if allocated).
+    peer_ip: []const u8 = "unknown",
+    peer_ip_allocated: bool = false,
+    /// Server configuration flags (immutable after init).
+    disable_estimates: bool = false,
+    compact_profile: bool = false,
+    memcurve_profile: bool = false,
+    env_spill_threshold: usize = 0,
+    env_storage_checksum_error: bool = false,
+    /// Number of active streams (including the first one). Used to know when
+    /// the connection is idle. Atomic so the acceptor thread and stream handler
+    /// threads can update it without a mutex.
+    active_streams: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
+    /// Snapshot shared identity from a fully-initialized ServerState (after HELLO).
+    pub fn captureFromState(self: *SharedConnState, state: *const ServerState) !void {
+        if (state.authenticated_user) |u| {
+            self.authenticated_user = try self.allocator.dupe(u8, u);
+        }
+        self.authenticated_role = state.authenticated_role;
+        self.password_reset_required = state.password_reset_required;
+        self.graph_bound = state.graph_bound;
+        if (state.exec_session) |sess| {
+            if (sess.graph) |g| {
+                self.current_graph = try self.allocator.dupe(u8, g);
+            }
+        }
+    }
+
+    pub fn deinit(self: *SharedConnState) void {
+        if (self.authenticated_user) |u| self.allocator.free(u);
+        if (self.current_graph) |g| self.allocator.free(g);
+        // peer_ip freed by the connection handler's defer
+    }
+};
+
+/// Context passed to a spawned stream handler thread.
+const StreamHandlerContext = struct {
+    allocator: std.mem.Allocator,
+    transport: *quic_transport.QuicTransport,
+    stream: *quic_transport.QuicStream,
+    conn_state: *SharedConnState,
+};
+
+/// Entry point for additional (non-first) stream handler threads.
+/// Each stream gets its own ServerState with per-stream transaction/result
+/// state, but inherits the connection's authenticated identity.
+// CANARY: REQ=REQ-QUIC-MUX-002; FEATURE="StreamMultiplexing"; ASPECT=StreamHandler; STATUS=IMPL; OWNER=server; UPDATED=2026-03-27
+fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
+    const ctx: *StreamHandlerContext = @ptrCast(@alignCast(ctx_ptr));
+    const gpa = ctx.allocator;
+    const cs = ctx.conn_state;
+    const stream = ctx.stream;
+    const transport = ctx.transport;
+    defer {
+        stream.close();
+        _ = cs.active_streams.fetchSub(1, .release);
+        gpa.destroy(ctx);
+    }
+
+    // Build a per-stream ServerState inheriting shared connection identity.
+    var state = ServerState{ .allocator = gpa };
+    state.exec_session = execution.SessionState.init(gpa);
+    state.txn_manager.init(gpa);
+    state.inserted_values = .{};
+    state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
+    state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
+    state.graph_types = std.HashMap([]const u8, geode.server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
+    state.query_mem_limit_bytes = cs.env_spill_threshold;
+    state.storage_checksum_error = cs.env_storage_checksum_error;
+    state.security_manager = cs.security_manager;
+    state.query_optimizer = cs.shared_optimizer;
+    state.query_ast_cache = cs.shared_ast_cache;
+    state.graph_bound = cs.graph_bound;
+
+    // Inherit authenticated identity from the connection's HELLO.
+    if (cs.authenticated_user) |u| {
+        state.authenticated_user = gpa.dupe(u8, u) catch null;
+    }
+    state.authenticated_role = cs.authenticated_role;
+    state.password_reset_required = cs.password_reset_required;
+
+    // Bind to the same graph as the connection.
+    if (cs.current_graph) |g| {
+        if (state.exec_session) |*sess| {
+            sess.graph = gpa.dupe(u8, g) catch null;
+        }
+    }
+
+    // Initialize evaluator callbacks (idempotent).
+    execution.initEvaluator();
+
+    // Federation planner (per-stream; lightweight init).
+    var federation_manager = geode.distributed.query_planner.FederationManager.init(gpa);
+    defer federation_manager.deinit();
+    var dist_planner = geode.distributed.query_planner.DistributedQueryPlanner.init(gpa, &federation_manager);
+    defer dist_planner.deinit();
+    state.federation_manager = &federation_manager;
+    state.distributed_planner = &dist_planner;
+
+    // Env-driven optimizer/inline flags (same as first stream).
+    state.query_optimizer_enabled = if (std.process.getEnvVarOwned(gpa, "GEODE_ENABLE_QUERY_OPTIMIZER")) |v| blk: {
+        defer gpa.free(v);
+        if (v.len == 0) break :blk false;
+        if (v[0] == '0') break :blk false;
+        if (std.ascii.eqlIgnoreCase(v, "false")) break :blk false;
+        if (std.ascii.eqlIgnoreCase(v, "off")) break :blk false;
+        break :blk true;
+    } else |_| false;
+    state.inline_results_enabled = if (std.process.getEnvVarOwned(gpa, "GEODE_INLINE_RESULTS")) |v| blk: {
+        defer gpa.free(v);
+        if (v.len == 0) break :blk true;
+        if (v[0] == '0') break :blk false;
+        if (std.ascii.eqlIgnoreCase(v, "false")) break :blk false;
+        if (std.ascii.eqlIgnoreCase(v, "off")) break :blk false;
+        break :blk true;
+    } else |_| true;
+    state.inline_results_max_rows = if (std.process.getEnvVarOwned(gpa, "GEODE_INLINE_RESULTS_MAX_ROWS")) |v| blk: {
+        defer gpa.free(v);
+        break :blk std.fmt.parseInt(usize, v, 10) catch state.inline_results_max_rows;
+    } else |_| state.inline_results_max_rows;
+
+    defer {
+        state.resetResult();
+        if (state.exec_session) |*sess| sess.deinit();
+        if (state.session_config) |*cfg| cfg.deinit();
+        if (state.authenticated_user) |u| gpa.free(u);
+        if (state.authenticated_password) |p| {
+            @memset(@constCast(p), 0);
+            gpa.free(p);
+        }
+        state.txn_manager.deinit();
+        for (state.inserted_values.items) |item| {
+            state.allocator.free(item.value);
+        }
+        state.inserted_values.deinit(state.allocator);
+        state.catalog_schemas.deinit();
+        state.catalog_graphs.deinit();
+        var gt_iter = state.graph_types.iterator();
+        while (gt_iter.next()) |entry| {
+            state.allocator.free(entry.key_ptr.*);
+            state.allocator.free(entry.value_ptr.name);
+        }
+        state.graph_types.deinit();
+    }
+
+    // Run the query loop for this stream.
+    runStreamQueryLoop(gpa, transport, stream, &state, cs.disable_estimates, cs.compact_profile, cs.memcurve_profile, cs.peer_ip);
+}
+
+/// Stream acceptor loop: runs on a dedicated thread after the first stream's
+/// HELLO succeeds. Polls the connection for new peer-initiated streams and
+/// spawns a handler thread for each one.
+// CANARY: REQ=REQ-QUIC-MUX-003; FEATURE="StreamMultiplexing"; ASPECT=StreamAcceptor; STATUS=IMPL; OWNER=server; UPDATED=2026-03-27
+fn streamAcceptorLoop(
+    gpa: std.mem.Allocator,
+    transport: *quic_transport.QuicTransport,
+    conn: *quic_transport.QuicConnection,
+    conn_state: *SharedConnState,
+    shutdown: *std.atomic.Value(bool),
+) void {
+    const max_additional_streams: u32 = 64; // Limit to prevent resource exhaustion
+    while (!shutdown.load(.acquire)) {
+        // Check if connection is still alive
+        if (conn.isDrained()) break;
+
+        // Check stream limit
+        if (conn_state.active_streams.load(.acquire) >= max_additional_streams) {
+            std.Thread.sleep(5 * std.time.ns_per_ms);
+            continue;
+        }
+
+        // Non-blocking attempt to accept a new stream
+        if (conn.tryAcceptStream()) |new_stream| {
+            log.debug("Accepted additional multiplexed stream", &.{});
+            _ = conn_state.active_streams.fetchAdd(1, .release);
+
+            // Allocate context for the handler thread
+            const ctx = gpa.create(StreamHandlerContext) catch {
+                log.warn("Failed to allocate stream handler context", &.{});
+                new_stream.close();
+                _ = conn_state.active_streams.fetchSub(1, .release);
+                continue;
+            };
+            ctx.* = .{
+                .allocator = gpa,
+                .transport = transport,
+                .stream = new_stream,
+                .conn_state = conn_state,
+            };
+
+            _ = std.Thread.spawn(.{}, handleAdditionalStream, .{@as(*anyopaque, @ptrCast(ctx))}) catch {
+                log.warn("Failed to spawn stream handler thread", &.{});
+                new_stream.close();
+                _ = conn_state.active_streams.fetchSub(1, .release);
+                gpa.destroy(ctx);
+                continue;
+            };
+        } else {
+            // No stream pending — poll and back off
+            transport.poll(0) catch {};
+            std.Thread.sleep(1 * std.time.ns_per_ms);
+        }
+    }
+}
+
+/// Run the protobuf message loop for a single QUIC stream.
+/// Used by both the first stream (inline in handleQuicConnection) and
+/// additional multiplexed streams (in handleAdditionalStream).
+fn runStreamQueryLoop(
+    gpa: std.mem.Allocator,
+    transport: *quic_transport.QuicTransport,
+    stream: *quic_transport.QuicStream,
+    state: *ServerState,
+    disable_estimates: bool,
+    compact_profile: bool,
+    memcurve_profile: bool,
+    peer_ip: []const u8,
+) void {
+    var line_reader = BufferedProtoReader.init(gpa, transport, stream) catch return;
+    defer line_reader.deinit();
+
+    while (true) {
+        const packet_opt = line_reader.nextMessage() catch |err| {
+            if (err == error.EndOfStream) return;
+            if (err == error.WouldBlock) {
+                transport.poll(0) catch {};
+                if (stream.poll_sync) |ps| {
+                    ps.waitForPoll(200 * std.time.ns_per_us);
+                } else {
+                    std.Thread.sleep(100 * std.time.ns_per_us);
+                }
+                continue;
+            }
+            log.err("Protobuf read error", &.{Attr.string("error", @errorName(err))});
+            return;
+        };
+
+        if (packet_opt == null) return; // EOF
+        var packet = packet_opt.?;
+        defer packet.deinit(gpa);
+
+        const msg = packet.quic orelse {
+            log.err("Received empty ClientPacket", &.{});
+            sendExecuteError(gpa, stream, "58000", "Empty packet", &.{}, &.{}) catch return;
+            continue;
+        };
+
+        handleClientMessage(gpa, state, stream, msg, disable_estimates, compact_profile, memcurve_profile, peer_ip) catch |err| {
+            log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
+            sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch return;
+            continue;
+        };
+    }
+}
+
 // CANARY: REQ=REQ-ABAC-WIRE-013; FEATURE="ABAC Enforcement"; ASPECT=QUICHandler; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Updated handleQuicConnection signature to accept SecurityManager for ABAC enforcement
 pub fn handleQuicConnection(
@@ -568,15 +848,105 @@ pub fn handleQuicConnection(
     const peer_ip_allocated = !std.mem.eql(u8, peer_ip, "unknown");
     defer if (peer_ip_allocated) gpa.free(peer_ip);
 
-    // Protobuf protocol only - use protobuf reader
+    // ── Phase 1: HELLO on first stream ─────────────────────────────────────
+    // Wait for the first message (expected to be HELLO) and process it.
+    // This keeps the handshake flow identical to the pre-multiplexing code.
     var line_reader = try BufferedProtoReader.init(gpa, transport, stream);
     defer line_reader.deinit();
 
+    // Read and process the first message (HELLO).
+    const hello_done = hello_blk: {
+        while (true) {
+            const packet_opt = line_reader.nextMessage() catch |err| {
+                if (err == error.EndOfStream) return;
+                if (err == error.WouldBlock) {
+                    transport.poll(0) catch {};
+                    if (stream.poll_sync) |ps| {
+                        ps.waitForPoll(200 * std.time.ns_per_us);
+                    } else {
+                        std.Thread.sleep(100 * std.time.ns_per_us);
+                    }
+                    continue;
+                }
+                log.err("Protobuf read error during HELLO", &.{Attr.string("error", @errorName(err))});
+                return err;
+            };
+
+            if (packet_opt == null) return; // EOF before HELLO
+            var packet = packet_opt.?;
+            defer packet.deinit(gpa);
+
+            const msg = packet.quic orelse {
+                try sendExecuteError(gpa, stream, "58000", "Empty packet", &.{}, &.{});
+                continue;
+            };
+
+            // Process the message (should be HELLO, but handleClientMessage handles all types).
+            handleClientMessage(gpa, &state, stream, msg, disable_estimates, compact_profile, memcurve_profile, peer_ip) catch |err| {
+                log.err("HELLO processing error", &.{Attr.string("error", @errorName(err))});
+                sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch return;
+                continue;
+            };
+
+            // After the first successfully processed message, continue to the query phase.
+            break :hello_blk true;
+        }
+        break :hello_blk false;
+    };
+    if (!hello_done) return;
+
+    // ── Phase 2: Stream multiplexing ─────────────────────────────────────
+    // CANARY: REQ=REQ-QUIC-MUX-004; FEATURE="StreamMultiplexing"; ASPECT=AcceptorSpawn; STATUS=IMPL; OWNER=server; UPDATED=2026-03-27
+    // Start a stream acceptor thread that watches for additional client-initiated
+    // streams on this connection. Each new stream gets its own handler thread
+    // with per-stream transaction/result state but shared authentication.
+    var conn_state = SharedConnState{
+        .allocator = gpa,
+        .security_manager = security_manager,
+        .shared_ast_cache = shared_ast_cache,
+        .shared_optimizer = shared_optimizer,
+        .peer_ip = peer_ip,
+        .peer_ip_allocated = false, // Lifetime managed by caller's defer
+        .disable_estimates = disable_estimates,
+        .compact_profile = compact_profile,
+        .memcurve_profile = memcurve_profile,
+        .env_spill_threshold = env_spill_threshold,
+        .env_storage_checksum_error = env_storage_checksum_error,
+    };
+    conn_state.captureFromState(&state) catch {
+        log.warn("Failed to capture connection state for multiplexing", &.{});
+    };
+    // First stream counts as active.
+    _ = conn_state.active_streams.fetchAdd(1, .release);
+    defer {
+        _ = conn_state.active_streams.fetchSub(1, .release);
+        conn_state.deinit();
+    }
+
+    var acceptor_shutdown = std.atomic.Value(bool).init(false);
+    const acceptor_thread = std.Thread.spawn(.{}, streamAcceptorLoop, .{
+        gpa, transport, conn, &conn_state, &acceptor_shutdown,
+    }) catch |err| {
+        // If we can't spawn the acceptor, fall back to single-stream mode.
+        // The first stream still works fine — just no multiplexing.
+        log.warn("Failed to spawn stream acceptor, single-stream mode", &.{
+            Attr.string("error", @errorName(err)),
+        });
+        runStreamQueryLoop(gpa, transport, stream, &state, disable_estimates, compact_profile, memcurve_profile, peer_ip);
+        return;
+    };
+    defer {
+        acceptor_shutdown.store(true, .release);
+        acceptor_thread.join();
+    }
+
+    // ── Phase 3: First stream query loop (inline) ────────────────────────
+    // The first stream's remaining messages are processed on this thread.
+    // This reuses the existing line_reader that already consumed the HELLO.
     while (true) {
         const packet_opt = line_reader.nextMessage() catch |err| {
             if (err == error.EndOfStream) return;
             if (err == error.WouldBlock) {
-                // #540: Handler-driven poll on WouldBlock
                 transport.poll(0) catch {};
                 if (stream.poll_sync) |ps| {
                     ps.waitForPoll(200 * std.time.ns_per_us);
@@ -586,7 +956,7 @@ pub fn handleQuicConnection(
                 continue;
             }
             log.err("Protobuf read error", &.{Attr.string("error", @errorName(err))});
-            return err;
+            return;
         };
 
         if (packet_opt == null) return; // EOF
@@ -595,21 +965,13 @@ pub fn handleQuicConnection(
 
         const msg = packet.quic orelse {
             log.err("Received empty ClientPacket", &.{});
-            try sendExecuteError(gpa, stream, "58000", "Empty packet", &.{}, &.{});
+            sendExecuteError(gpa, stream, "58000", "Empty packet", &.{}, &.{}) catch return;
             continue;
         };
 
-        // Process protobuf message and emit responses directly.
-        // Lock acquisition moved inside handleClientMessage so that mutations
-        // acquire the exclusive write lock while reads use the shared lock.
-        // (GAP-0001: fixes data race on concurrent MERGE/CREATE/DELETE)
         handleClientMessage(gpa, &state, stream, msg, disable_estimates, compact_profile, memcurve_profile, peer_ip) catch |err| {
             log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
-            // Best-effort error response — stream may already be closed
-            sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch |send_err| {
-                log.warn("Failed to send error response, closing connection", &.{Attr.string("error", @errorName(send_err))});
-                return;
-            };
+            sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch return;
             continue;
         };
     }

@@ -576,6 +576,28 @@ pub const QuicConnection = struct {
         return stream;
     }
 
+    /// Non-blocking stream accept: returns null when no peer-initiated stream
+    /// is pending, instead of returning error.WouldBlock like acceptStream().
+    /// Used by the multiplexed connection handler to poll for new streams
+    /// while servicing the first stream inline.
+    pub fn tryAcceptStream(self: *QuicConnection) ?*QuicStream {
+        const qc = self.quic_connection orelse return null;
+        const stream_id = api.acceptStream(qc) catch return null;
+        const stream = self.allocator.create(QuicStream) catch return null;
+        stream.* = QuicStream{
+            .allocator = self.allocator,
+            .connection = self.inner,
+            .stream_id = stream_id,
+            .poll_sync = self.poll_sync,
+            .tracking_index = self.streams.items.len,
+        };
+        self.streams.append(self.allocator, stream) catch {
+            self.allocator.destroy(stream);
+            return null;
+        };
+        return stream;
+    }
+
     pub fn isDrained(self: *QuicConnection) bool {
         const qc = self.quic_connection orelse return true;
         return api.isDrained(qc);
