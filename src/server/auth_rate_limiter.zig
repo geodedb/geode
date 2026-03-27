@@ -37,6 +37,8 @@ pub const AuthRateLimiter = struct {
     /// Keys that this map owns (heap-duped IP strings).
     allocator: std.mem.Allocator,
     mutex: std.Thread.Mutex = .{},
+    /// Counter for periodic eviction of expired entries.
+    record_count: u32 = 0,
 
     /// Default configuration constants.
     pub const default_max_attempts: u32 = 10;
@@ -85,9 +87,16 @@ pub const AuthRateLimiter = struct {
 
     /// Record a failed authentication attempt for the given IP.
     /// If the failure count reaches `max_attempts`, the IP is locked out.
+    /// Periodically evicts expired entries to prevent unbounded memory growth.
     pub fn recordFailure(self: *Self, ip: []const u8) void {
         self.mutex.lock();
         defer self.mutex.unlock();
+
+        // Evict expired entries every 100 failures to bound memory growth
+        self.record_count +%= 1;
+        if (self.record_count % 100 == 0) {
+            self.evictExpiredLocked();
+        }
 
         const now = std.time.nanoTimestamp();
 
@@ -129,7 +138,11 @@ pub const AuthRateLimiter = struct {
     pub fn evictExpired(self: *Self) void {
         self.mutex.lock();
         defer self.mutex.unlock();
+        self.evictExpiredLocked();
+    }
 
+    /// Internal: evict expired entries while already holding the mutex.
+    fn evictExpiredLocked(self: *Self) void {
         const now = std.time.nanoTimestamp();
         // Collect keys to remove (cannot mutate while iterating).
         var to_remove = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch return;
@@ -138,8 +151,6 @@ pub const AuthRateLimiter = struct {
         var iter = self.entries.iterator();
         while (iter.next()) |kv| {
             const entry = kv.value_ptr.*;
-            // Evict if lockout expired or if there have been no failures
-            // for longer than the lockout window.
             const cutoff = now - @as(i128, self.lockout_duration_ns);
             if (entry.lockout_until_ns != 0 and now >= entry.lockout_until_ns) {
                 to_remove.append(self.allocator, kv.key_ptr.*) catch continue;
