@@ -603,6 +603,35 @@ test-performance-benchmarks:
     expire_in: 1 week
 
 # =============================================================================
+# Test Stage - Load Test Regression Check
+# Compares QPS and latency against tracked baseline to detect regressions.
+# Starts as warning-only (allow_failure: true) until baseline is stable.
+# =============================================================================
+
+loadtest-regression:
+  stage: test
+  image: python:3.12-slim
+  script:
+    - |
+      if [ -f reports/loadtest_go.json ]; then
+        python3 benchmarks/loadtest/compare.py \
+          --baseline benchmarks/loadtest/baseline.jsonl \
+          --current reports/loadtest_go.json \
+          --output benchmarks/loadtest/results/comparison.jsonl
+      else
+        echo "SKIP: reports/loadtest_go.json not found (load test did not run)"
+      fi
+  allow_failure: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  artifacts:
+    paths:
+      - benchmarks/loadtest/results/
+    when: always
+    expire_in: 1 week
+
+# =============================================================================
 # Test Stage - Code Coverage Collection (GAP-0251)
 # CANARY: REQ=REQ-CI-COVERAGE-001; FEATURE="CodeCoverageCI"; ASPECT=Core; STATUS=IMPL; OWNER=ci; UPDATED=2026-03-13
 # GAP-0251: Collect line/branch coverage via kcov + Zig DWARF debug info

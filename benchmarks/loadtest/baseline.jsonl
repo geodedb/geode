@@ -1,0 +1,4 @@
+{"schema_version":2,"kind":"LoadTest","benchmark":"qps_c1","concurrency":1,"qps":19.0,"latency_p50_ms":52.8,"latency_p99_ms":57.4,"errors":0,"total_queries":95,"duration_s":5,"pass":true,"threshold_qps_min":15.0,"threshold_p50_max_ms":70.0}
+{"schema_version":2,"kind":"LoadTest","benchmark":"qps_c2","concurrency":2,"qps":31.0,"latency_p50_ms":53.3,"latency_p99_ms":888.9,"errors":0,"total_queries":155,"duration_s":5,"pass":true,"threshold_qps_min":25.0,"threshold_p50_max_ms":70.0}
+{"schema_version":2,"kind":"LoadTest","benchmark":"qps_c4","concurrency":4,"qps":31.2,"latency_p50_ms":53.2,"latency_p99_ms":2863.0,"errors":1,"total_queries":157,"duration_s":5,"pass":true,"threshold_qps_min":25.0,"threshold_p50_max_ms":70.0}
+{"schema_version":2,"kind":"LoadTest","benchmark":"qps_c8","concurrency":8,"qps":2.2,"latency_p50_ms":6585.0,"latency_p99_ms":6593.0,"errors":0,"total_queries":11,"duration_s":5,"pass":false,"threshold_qps_min":2.0,"threshold_p50_max_ms":7000.0}

@@ -33,6 +33,7 @@ endif
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate match-ops-parity match-ops-bench cli-transport-parity stdio-abstraction-check release-target-manifest-check docker-release-sync docker-release-check docker-release-signoff
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test client-test-zig
 .PHONY: transport-parity-smokes status-generate no-feature-flags zig-package-cache-check cluster-test
+.PHONY: loadtest-compare loadtest-save-baseline
 # Note: geodetestlab and client-test-harness moved to separate repository (geode-test-harness)
 .PHONY: deps deps-check
 .PHONY: pre-commit pre-commit-install pre-commit-update pre-commit-all setup-dev lint lint-bootstrap
@@ -108,6 +109,8 @@ help:
 	@echo "  make no-feature-flags   - Check for compile-time flags"
 	@echo "  make match-ops-parity   - Run MATCH staged parity golden suite"
 	@echo "  make match-ops-bench    - Run MATCH staged benchmark campaign suite"
+	@echo "  make loadtest-compare   - Compare load test results against baseline"
+	@echo "  make loadtest-save-baseline - Save current load test results as baseline"
 	@echo "  make cli-transport-parity - Run CLI transport response parity goldens"
 	@echo "  make stdio-abstraction-check - Enforce centralized CLI stdio handle wrappers"
 	@echo "  make zig-package-cache-check - Validate docker/zig-packages cache freshness"
@@ -369,6 +372,17 @@ fuzz:
 
 bench:
 	$(ZIG) build bench $(ZIG_FLAGS)
+
+## Load test benchmarks
+loadtest-compare: ## Compare load test results against baseline
+	python3 benchmarks/loadtest/compare.py \
+		--baseline benchmarks/loadtest/baseline.jsonl \
+		--current ../geode-test-harness/reports/loadtest_go.json
+
+loadtest-save-baseline: ## Save current load test results as new baseline
+	python3 benchmarks/loadtest/save_baseline.py \
+		--input ../geode-test-harness/reports/loadtest_go.json \
+		--output benchmarks/loadtest/baseline.jsonl
 
 match-ops-parity:
 	@$(ZIG) build test-match-parity --summary all $(ZIG_FLAGS)
