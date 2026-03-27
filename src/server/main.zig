@@ -264,9 +264,7 @@ pub fn main() !void {
     };
     defer user_mgmt.deinitUserStore();
     user_mgmt.setAuthEnabled(true);
-    log.info("Startup phase: user store initialized", &.{
-        Attr.int("elapsed_ms", std.time.milliTimestamp() - phase_start),
-    });
+    std.debug.print("[startup] user store initialized ({d}ms)\n", .{std.time.milliTimestamp() - phase_start});
     // NOTE: ensureDefaultUser() is called AFTER server_init.initialize() below
     // so that users from the auth graph store are synced first (avoiding a
     // second admin with a different password).
@@ -289,9 +287,7 @@ pub fn main() !void {
             key_path = "/tmp/geode-server.key";
             try cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path);
         };
-        log.info("Startup phase: certificates ready", &.{
-            Attr.int("elapsed_ms", std.time.milliTimestamp() - phase_start),
-        });
+        std.debug.print("[startup] certificates ready ({d}ms)\n", .{std.time.milliTimestamp() - phase_start});
     }
 
     // Initialize AuditLogger (Phase 2 Spec Compliance)
@@ -351,9 +347,7 @@ pub fn main() !void {
     init_ctx.fixupSelfPointers();
     defer init_ctx.deinit();
 
-    log.info("Startup phase: server initialized", &.{
-        Attr.int("elapsed_ms", std.time.milliTimestamp() - phase_start),
-    });
+    std.debug.print("[startup] server initialized ({d}ms)\n", .{std.time.milliTimestamp() - phase_start});
 
     // Sync users from auth graph store into the in-memory user store so that
     // authenticate() can find users created by bootstrapDefaultAdmin().
@@ -385,9 +379,7 @@ pub fn main() !void {
         log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
         return err;
     };
-    log.info("Startup phase: user sync complete", &.{
-        Attr.int("elapsed_ms", std.time.milliTimestamp() - phase_start),
-    });
+    std.debug.print("[startup] user sync complete ({d}ms)\n", .{std.time.milliTimestamp() - phase_start});
 
     // Extract initialization values for compatibility with existing code
     const env_spill_threshold = init_ctx.env_config.spill_threshold;
@@ -533,9 +525,7 @@ pub fn main() !void {
 
         phase_start = std.time.milliTimestamp();
         try transport.listen();
-        log.info("Startup phase: QUIC transport listening", &.{
-            Attr.int("elapsed_ms", std.time.milliTimestamp() - phase_start),
-        });
+        std.debug.print("[startup] QUIC transport listening ({d}ms)\n", .{std.time.milliTimestamp() - phase_start});
 
         log.info("QUIC server started", &.{
             Attr.string("address", address_str),
@@ -575,15 +565,10 @@ pub fn main() !void {
         };
         defer pool.deinit();
 
-        log.info("Startup phase: thread pool initialized", &.{
-            Attr.int("elapsed_ms", std.time.milliTimestamp() - phase_start),
-            Attr.int("worker_threads", @intCast(pool.workers.len)),
-        });
+        std.debug.print("[startup] thread pool initialized ({d}ms, {d} workers)\n", .{ std.time.milliTimestamp() - phase_start, pool.workers.len });
 
-        // GAP-0269: Log total startup time for operator diagnostics
-        log.info("Server startup complete", &.{
-            Attr.int("total_elapsed_ms", std.time.milliTimestamp() - startup_begin),
-        });
+        // GAP-0269: Log total startup time for operator diagnostics (stderr, visible at all log levels)
+        std.debug.print("[startup] server ready ({d}ms total)\n", .{std.time.milliTimestamp() - startup_begin});
 
         // Production mode: accept connections in a loop and dispatch to thread pool
         // The accept() function polls internally to receive packets and complete handshakes
