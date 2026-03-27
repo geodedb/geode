@@ -80,8 +80,8 @@
         // Updated 2026-03-27: v0.1.11+ (HEAD 950124b) — split endpoint mutex,
         // thread-safe poll, reduced pollWithStats lock contention, benchmark suite.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#950124bf4097f2c576489ff04d010dd3ae1b9479",
-            .hash = "quic-0.1.10-gBIqUXGyNQARdd8GtFuFMprt-vti8cCQ8-fWGjRuTLtc",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#4602a4d29eca586e2d08b2835756c67109988791",
+            .hash = "quic-0.1.10-gBIqUVW3NQCKHWBQNoo7qkNmBR5rZN7u4k7hiy3o9v_u",
         },
 
         // =======================================================================
