@@ -519,6 +519,16 @@ pub fn main() !void {
         quic_connection_handler.setAuthRateLimiter(&ip_rate_limiter);
         defer quic_connection_handler.setAuthRateLimiter(null);
 
+        // S1: Initialize the global RLS filter engine for label-based row filtering.
+        // The engine lives on the main thread's stack and is accessed by connection
+        // handlers via the global singleton in rls_filter.zig.
+        // CANARY: REQ=REQ-SEC-RLS-WIRE-004; FEATURE="RLS Query Enforcement"; ASPECT=ServerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+        const rls_filter_mod = @import("rls_filter.zig");
+        var rls_engine = rls_filter_mod.RLSFilterEngine.init(gpa);
+        defer rls_engine.deinit();
+        rls_filter_mod.setGlobalRLSFilterEngine(&rls_engine);
+        defer rls_filter_mod.setGlobalRLSFilterEngine(null);
+
         if (mtls_required) {
             log.info("mTLS authentication enabled for QUIC connections", &.{});
         }

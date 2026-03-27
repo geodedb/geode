@@ -375,6 +375,11 @@ pub const ExecutionContext = struct {
     // When true, the session is bound to a specific graph via the DSN graph name field;
     // USE GRAPH commands must be rejected to preserve connection-level graph isolation.
     graph_bound: bool = false,
+    // S1: Opaque pointer to the RLS filter engine for label-based row filtering.
+    // Currently used by the post-execution filter in quic_connection_handler; included
+    // here for future in-execution RLS integration (e.g., predicate push-down).
+    // CANARY: REQ=REQ-SEC-RLS-WIRE-006; FEATURE="RLS Query Enforcement"; ASPECT=ExecutionContext; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+    rls_engine: ?*anyopaque = null,
 };
 
 threadlocal var g_active_context: ?*const ExecutionContext = null;

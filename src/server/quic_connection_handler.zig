@@ -51,6 +51,10 @@ var g_mtls_provider: ?*mtls_provider.MtlsProvider = null;
 const auth_rate_limiter = @import("auth_rate_limiter.zig");
 var g_auth_rate_limiter: ?*auth_rate_limiter.AuthRateLimiter = null;
 
+// S1: Post-execution RLS filter — removes result rows containing denied labels.
+// CANARY: REQ=REQ-SEC-RLS-WIRE-002; FEATURE="RLS Query Enforcement"; ASPECT=QUICImport; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+const rls_filter = @import("rls_filter.zig");
+
 /// Set the global mTLS provider (called from server/main.zig during startup)
 pub fn setMtlsProvider(provider: ?*mtls_provider.MtlsProvider) void {
     g_mtls_provider = provider;
@@ -1372,6 +1376,14 @@ fn handleClientMessage(
                         lock_released = true;
                     }
 
+                    // S1: RLS filter on PROFILE path (same logic as .rows path).
+                    if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
+                        if (state.authenticated_user) |auth_user| {
+                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                            _ = rls_filter.applyRLSFilter(gpa, &exec_result, rls_engine, auth_user, rls_graph);
+                        }
+                    }
+
                     const profile_msg = try profile_payload.buildProfilePayload(gpa, traits, exec_result.rows.len, .{
                         .compact = compact_profile,
                         .include_mem_curve = memcurve_profile,
@@ -1410,6 +1422,17 @@ fn handleClientMessage(
                     if (needs_store_lock) {
                         if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
                         lock_released = true;
+                    }
+
+                    // S1: Apply label-based RLS filtering AFTER lock release and BEFORE
+                    // response serialization.  This removes rows whose Node/Edge labels
+                    // are denied for the authenticated user in the current graph.
+                    // CANARY: REQ=REQ-SEC-RLS-WIRE-003; FEATURE="RLS Query Enforcement"; ASPECT=PostResultFilter; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+                    if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
+                        if (state.authenticated_user) |auth_user| {
+                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                            _ = rls_filter.applyRLSFilter(gpa, &exec_result, rls_engine, auth_user, rls_graph);
+                        }
                     }
 
                     for (flags.items) |flag| {

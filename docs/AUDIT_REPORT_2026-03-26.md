@@ -109,7 +109,7 @@
 
 | # | Finding | Severity | Score |
 |---|---------|----------|-------|
-| S1 | RLS engine not wired to query execution path — policies are decorative | Critical | 100 |
+| S1 | ~~RLS engine not wired to query execution path — policies are decorative~~ **RESOLVED**: Post-execution label-based RLS filter wired into QUIC handler (rls_filter.zig) | Critical | 100 |
 | S2 | Deterministic MFA: TOTP secrets derived from username + static salt, computable offline | Critical | 95 |
 | S3 | Admin password logged to structured logger with named attribute | Critical | 90 |
 | S4 | Fail-open auth when SecurityManager is null | High | 85 |
@@ -146,7 +146,7 @@
 
 | # | Domain | Finding | Severity | Score |
 |---|--------|---------|----------|-------|
-| 1 | Security | RLS engine not wired to query execution — all policies decorative | Critical | 100 |
+| 1 | Security | ~~RLS engine not wired to query execution — all policies decorative~~ **RESOLVED** | Critical | 100 |
 | 2 | Performance | Centrality algorithms O(V²*E) — ignore adjacency indexes | P0 | 100 |
 | 3 | Security | Deterministic MFA — TOTP secrets computable offline from username | Critical | 95 |
 | 4 | Performance | Persistence lock blocks all mutations during full disk I/O | P0 | 95 |
@@ -163,7 +163,7 @@
 
 | Blocker | Domain | Why |
 |---------|--------|-----|
-| RLS not enforced (S1) | Security | Row-level security policies exist but are never evaluated on queries |
+| ~~RLS not enforced (S1)~~ **RESOLVED** | Security | Row-level security policies now enforced via post-execution label-based filter (rls_filter.zig) |
 | Deterministic MFA (S2) | Security | MFA provides zero additional security — secrets computable from username |
 | OOM on large graphs (GAP-0267) | Performance | Server crashes loading production-scale data |
 | Unbounded WAL growth (GAP-0268) | Performance | Disk exhaustion and degrading startup in production |

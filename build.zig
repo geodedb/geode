@@ -1576,6 +1576,20 @@ pub fn build(b: *std.Build) void {
     const run_rls_injection_tests = b.addRunArtifact(rls_injection_tests);
     test_step.dependOn(&run_rls_injection_tests.step);
 
+    // S1: RLS filter engine unit tests (label-based post-execution row filtering)
+    // CANARY: REQ=REQ-SEC-RLS-WIRE-005; FEATURE="RLS Query Enforcement"; ASPECT=UnitTests; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+    const rls_filter_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/server/rls_filter.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    rls_filter_tests.root_module.addImport("geode", root_mod);
+    rls_filter_tests.root_module.addImport("logging", logging_mod);
+    const run_rls_filter_tests = b.addRunArtifact(rls_filter_tests);
+    test_step.dependOn(&run_rls_filter_tests.step);
+
     const audit_security_mod = b.createModule(.{ .root_source_file = b.path("src/security/audit.zig"), .target = target, .optimize = optimize });
     audit_security_mod.addImport("rls", rls_mod);
     audit_security_mod.addImport("logging", logging_mod);
