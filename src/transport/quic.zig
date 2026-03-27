@@ -720,7 +720,13 @@ pub const QuicStream = struct {
                 }
                 return err;
             };
-            if (n == 0) return QuicError.WriteError;
+            if (n == 0) {
+                // Congestion window full — retry with backoff (same as FlowControlBlocked)
+                blocked_retries += 1;
+                if (blocked_retries > max_blocked_retries) return QuicError.WriteError;
+                std.Thread.sleep(5 * std.time.ns_per_ms);
+                continue;
+            }
             written += n;
             blocked_retries = 0;
         }
