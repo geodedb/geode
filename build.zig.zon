@@ -77,11 +77,11 @@
         },
 
         // QUIC v1/v2 protocol implementation
-        // Updated 2026-03: v0.1.11 split endpoint mutex (mu + timer_mu),
-        // thread-safe poll with spice, eliminates c=8 contention bottleneck.
+        // Updated 2026-03-27: v0.1.11+ (HEAD 950124b) — split endpoint mutex,
+        // thread-safe poll, reduced pollWithStats lock contention, benchmark suite.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#c2e4805dc6155828aa3bcef66691b852dd99007f",
-            .hash = "quic-0.1.10-gBIqUe1-NQAtApN8NLJsiLjeJm-Sr6e4g5vGlSo4-gWS",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#950124bf4097f2c576489ff04d010dd3ae1b9479",
+            .hash = "quic-0.1.10-gBIqUXGyNQARdd8GtFuFMprt-vti8cCQ8-fWGjRuTLtc",
         },
 
         // =======================================================================
