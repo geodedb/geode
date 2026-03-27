@@ -118,6 +118,12 @@ pub const WebhookSink = struct {
             .raw => |r| r,
             .percent_encoded => |p| p,
         };
+
+        // SSRF prevention: block private/reserved IP ranges
+        if (isPrivateHost(host)) {
+            return error.PrivateHostBlocked;
+        }
+
         const scheme = uri.scheme;
         const port: u16 = uri.port orelse if (std.mem.eql(u8, scheme, "https")) @as(u16, 443) else @as(u16, 80);
         // Extract path from Component union
@@ -203,6 +209,38 @@ pub const WebhookSink = struct {
     }
 };
 
+/// SSRF prevention: reject webhook URLs targeting private/reserved networks.
+/// Blocks localhost, link-local, cloud metadata endpoints, and RFC1918 private ranges.
+fn isPrivateHost(host: []const u8) bool {
+    // Block localhost variants
+    if (std.mem.eql(u8, host, "localhost") or
+        std.mem.eql(u8, host, "127.0.0.1") or
+        std.mem.eql(u8, host, "::1") or
+        std.mem.eql(u8, host, "0.0.0.0"))
+        return true;
+
+    // Block cloud metadata endpoints
+    if (std.mem.eql(u8, host, "169.254.169.254") or
+        std.mem.eql(u8, host, "metadata.google.internal"))
+        return true;
+
+    // Block RFC1918 private ranges by prefix
+    if (std.mem.startsWith(u8, host, "10.") or
+        std.mem.startsWith(u8, host, "192.168."))
+        return true;
+
+    // Block 172.16.0.0/12 range (172.16.x.x - 172.31.x.x)
+    if (std.mem.startsWith(u8, host, "172.")) {
+        if (host.len >= 6) {
+            const dot_pos = std.mem.indexOfPos(u8, host, 4, ".") orelse return false;
+            const second_octet = std.fmt.parseInt(u8, host[4..dot_pos], 10) catch return false;
+            if (second_octet >= 16 and second_octet <= 31) return true;
+        }
+    }
+
+    return false;
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -286,4 +324,68 @@ test "WebhookSink - interface implementation" {
 
     try iface.send(&events);
     iface.deinit();
+}
+
+test "isPrivateHost - blocks localhost variants" {
+    try std.testing.expect(isPrivateHost("localhost"));
+    try std.testing.expect(isPrivateHost("127.0.0.1"));
+    try std.testing.expect(isPrivateHost("::1"));
+    try std.testing.expect(isPrivateHost("0.0.0.0"));
+}
+
+test "isPrivateHost - blocks cloud metadata endpoints" {
+    try std.testing.expect(isPrivateHost("169.254.169.254"));
+    try std.testing.expect(isPrivateHost("metadata.google.internal"));
+}
+
+test "isPrivateHost - blocks RFC1918 private ranges" {
+    try std.testing.expect(isPrivateHost("10.0.0.1"));
+    try std.testing.expect(isPrivateHost("10.255.255.255"));
+    try std.testing.expect(isPrivateHost("192.168.1.1"));
+    try std.testing.expect(isPrivateHost("192.168.0.100"));
+    try std.testing.expect(isPrivateHost("172.16.0.1"));
+    try std.testing.expect(isPrivateHost("172.31.255.255"));
+}
+
+test "isPrivateHost - allows public hosts" {
+    try std.testing.expect(!isPrivateHost("example.com"));
+    try std.testing.expect(!isPrivateHost("8.8.8.8"));
+    try std.testing.expect(!isPrivateHost("172.32.0.1"));
+    try std.testing.expect(!isPrivateHost("172.15.0.1"));
+    try std.testing.expect(!isPrivateHost("11.0.0.1"));
+    try std.testing.expect(!isPrivateHost("193.168.1.1"));
+}
+
+test "WebhookSink - sendHttpPost blocks private hosts (SSRF)" {
+    const testing = std.testing;
+
+    var sink = WebhookSink.init(testing.allocator);
+    defer sink.deinit();
+
+    var headers = std.StringHashMap([]const u8).init(testing.allocator);
+    defer headers.deinit();
+
+    // Should return PrivateHostBlocked for localhost URLs
+    try testing.expectError(error.PrivateHostBlocked, sink.sendHttpPost(
+        "http://localhost:8080/hook",
+        "{}",
+        5000,
+        &headers,
+    ));
+
+    // Should return PrivateHostBlocked for RFC1918 URLs
+    try testing.expectError(error.PrivateHostBlocked, sink.sendHttpPost(
+        "http://10.0.0.5/webhook",
+        "{}",
+        5000,
+        &headers,
+    ));
+
+    // Should return PrivateHostBlocked for cloud metadata
+    try testing.expectError(error.PrivateHostBlocked, sink.sendHttpPost(
+        "http://169.254.169.254/latest/meta-data/",
+        "{}",
+        5000,
+        &headers,
+    ));
 }
