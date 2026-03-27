@@ -1693,7 +1693,12 @@ fn handleRollbackTo(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn handleCdcDiag(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
-    // No CDC engine available via gRPC — return default diagnostics
+    // GAP-0255: Use the real global CDC engine when available (parity with QUIC handler).
+    if (execution.getGlobalCdcEngine()) |eng| {
+        const resp = try eng.exportDiagnostics(allocator);
+        return encodeMessage(allocator, resp);
+    }
+    // No CDC engine running — return default diagnostics
     const resp = schema.CdcDiagnosticsResponse{
         .config = .{ .enabled = false },
         .engine = .{ .is_running = false },
@@ -1705,8 +1710,38 @@ fn handleCdcDiag(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
     return encodeMessage(allocator, resp);
 }
 
-fn handleCdcCtrl(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
-    // No CDC engine — always return NO_ENGINE
+fn handleCdcCtrl(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    // GAP-0255: Use the real global CDC engine when available (parity with QUIC handler).
+    if (execution.getGlobalCdcEngine()) |eng| {
+        var reader: std.Io.Reader = .fixed(request_bytes);
+        var req = protobuf.decode(schema.CdcControlRequest, &reader, allocator) catch {
+            const resp = schema.CdcControlResponse{
+                .success = false,
+                .status = try allocator.dupe(u8, "INVALID_REQUEST"),
+                .guardrail_epoch = eng.guardrail_epoch,
+            };
+            return encodeMessage(allocator, resp);
+        };
+        defer req.deinit(allocator);
+
+        if (std.ascii.eqlIgnoreCase(req.action, "RESET_GUARDRAILS")) {
+            eng.resetGuardrailState();
+            const resp = schema.CdcControlResponse{
+                .success = true,
+                .status = try allocator.dupe(u8, "OK"),
+                .guardrail_epoch = eng.guardrail_epoch,
+            };
+            return encodeMessage(allocator, resp);
+        } else {
+            const resp = schema.CdcControlResponse{
+                .success = false,
+                .status = try allocator.dupe(u8, "UNSUPPORTED"),
+                .guardrail_epoch = eng.guardrail_epoch,
+            };
+            return encodeMessage(allocator, resp);
+        }
+    }
+    // No CDC engine running — return NO_ENGINE
     const resp = schema.CdcControlResponse{
         .success = false,
         .status = try allocator.dupe(u8, "NO_ENGINE"),
@@ -1716,6 +1751,10 @@ fn handleCdcCtrl(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    // GAP-0255: Acquire shared store lock for backup consistency (parity with QUIC handler).
+    graph_store.acquireStoreLock();
+    defer graph_store.releaseStoreLock();
+
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.BackupRequest, &reader, allocator) catch {
         const resp = schema.BackupResponse{

@@ -16,6 +16,9 @@ const procedure_registry = @import("procedure_registry.zig");
 /// Delegates to procedure_registry for actual procedure handling
 pub const executeCallProcedure = procedure_registry.executeCallProcedure;
 
+/// Public accessor for the global CDC engine (used by gRPC transport).
+pub const getGlobalCdcEngine = procedure_registry.getGlobalCdcEngine;
+
 /// Execute CALL subquery statement
 /// Executes the subquery statement (Query, Call, Create, etc.) with context
 /// and optionally applies RETURN clause transformation

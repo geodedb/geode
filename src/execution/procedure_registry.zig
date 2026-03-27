@@ -66,6 +66,11 @@ var global_tde_mutex: std.Thread.Mutex = .{};
 var global_cdc_engine: ?*cdc_mod.CDCEngine = null;
 var global_cdc_mutex: std.Thread.Mutex = .{};
 
+/// Public accessor so other transports (gRPC) can read the global CDC engine.
+pub fn getGlobalCdcEngine() ?*cdc_mod.CDCEngine {
+    return global_cdc_engine;
+}
+
 // ===========================================================================
 // FLE Config Parsing Helper Functions
 // ===========================================================================
