@@ -202,7 +202,7 @@ pub fn initialize(
     index_catalog.initIndexCatalog(allocator);
 
     // Process environment variables
-    var env_config = try processEnvironmentVariables(allocator, memcurve_profile_ref);
+    const env_config = try processEnvironmentVariables(allocator, memcurve_profile_ref);
 
     // Apply ORDER BY key policy
     const order_expr = if (order_keys_mode_expr) true else env_config.order_keys_expr;
