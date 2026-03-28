@@ -201,7 +201,7 @@ const BufferedProtoReader = struct {
                     // The dedicated pollLoop thread in quic.zig runs at 50μs
                     // intervals and broadcasts poll_cv on every cycle.
                     if (self.stream.poll_sync) |ps| {
-                        ps.waitForPoll(200 * std.time.ns_per_us);
+                        ps.waitForPoll(2 * std.time.ns_per_ms);
                     } else {
                         std.Thread.sleep(100 * std.time.ns_per_us);
                     }
@@ -638,7 +638,7 @@ fn runStreamQueryLoop(
             if (err == error.EndOfStream) return;
             if (err == error.WouldBlock) {
                 if (stream.poll_sync) |ps| {
-                    ps.waitForPoll(200 * std.time.ns_per_us);
+                    ps.waitForPoll(2 * std.time.ns_per_ms);
                 } else {
                     std.Thread.sleep(100 * std.time.ns_per_us);
                 }
@@ -857,7 +857,7 @@ pub fn handleQuicConnection(
                 if (err == error.EndOfStream) return;
                 if (err == error.WouldBlock) {
                     if (stream.poll_sync) |ps| {
-                        ps.waitForPoll(200 * std.time.ns_per_us);
+                        ps.waitForPoll(2 * std.time.ns_per_ms);
                     } else {
                         std.Thread.sleep(100 * std.time.ns_per_us);
                     }
@@ -948,7 +948,7 @@ pub fn handleQuicConnection(
             if (err == error.EndOfStream) break; // First stream done — check multiplexed streams
             if (err == error.WouldBlock) {
                 if (stream.poll_sync) |ps| {
-                    ps.waitForPoll(200 * std.time.ns_per_us);
+                    ps.waitForPoll(2 * std.time.ns_per_ms);
                 } else {
                     std.Thread.sleep(100 * std.time.ns_per_us);
                 }

@@ -381,10 +381,14 @@ pub const QuicTransport = struct {
             // GAP-0203: Drain deferred connection cleanups.
             self.drainPendingDestroy();
 
-            // #540: poll() is now handled by the dedicated poll thread.
-            // The accept loop only does tryAccept() for new connections.
-            // This decouples data delivery from connection acceptance,
-            // eliminating the c=8+ starvation bottleneck.
+            // Poll to drive handshake completion. The dedicated poll thread also
+            // polls at 50μs intervals, but the accept loop must poll too because
+            // handshakes require rapid multi-round-trip packet exchange and the
+            // poll thread's 50μs gap may miss time-sensitive handshake frames.
+            ep.poll(0) catch |err| {
+                return err;
+            };
+            self.poll_sync.poll_cv.broadcast();
 
             // Non-blocking check for completed handshakes
             const conn = api.tryAccept(ep) orelse return QuicError.WouldBlock;
