@@ -2394,7 +2394,9 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     }
 
     var attempts: u32 = 0;
-    const max_attempts = retry_count + 1;
+    // GAP-0260: Always allow at least 2 attempts (1 automatic retry) to handle
+    // transient QUIC connection drops under rapid sequential CLI usage.
+    const max_attempts = @max(retry_count + 1, 2);
     var last_error: ?[]const u8 = null;
 
     while (attempts < max_attempts) : (attempts += 1) {
@@ -2427,7 +2429,18 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
             if (handshake_err) |_| {
                 // Handshake successful, proceed with query execution
                 params_transferred = true;
-                return try executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs);
+                executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs) catch |err| {
+                    // GAP-0260: Auto-retry once on connection failure. QUIC
+                    // transport can drop messages under rapid sequential
+                    // connections; a single retry resolves most transient
+                    // failures without requiring explicit --retry flag.
+                    if (err == error.ConnectionFailed and attempts == 0) {
+                        last_error = "connection dropped, retrying";
+                        continue;
+                    }
+                    return err;
+                };
+                return;
             } else |_| {
                 last_error = "connection timeout";
             }
@@ -2964,11 +2977,9 @@ fn executeQueryOnConnection(
             if (err == error.EndOfStream) {
                 // GAP-0260: If we never received any execute response (no schema),
                 // the connection was dropped before the server processed our query.
-                // Report this as an error rather than silently returning fake success.
+                // Return ConnectionFailed so the caller can retry.
                 if (!status_captured) {
-                    has_error = true;
-                    error_message = "Connection closed before server response";
-                    error_status = "08006"; // connection_failure
+                    return error.ConnectionFailed;
                 }
                 break;
             }
