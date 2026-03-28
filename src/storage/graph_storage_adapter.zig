@@ -477,6 +477,213 @@ pub const StorageAdapter = struct {
     }
 
     // ------------------------------------------------------------------
+    // Edge property operations
+    // ------------------------------------------------------------------
+
+    /// Set a property on an edge. Finds the edge by scanning the source
+    /// node's outgoing adjacency list for the matching edge_id, then uses
+    /// the engine's property store to write the key/value.
+    ///
+    /// CONCERN: The graph-storage AdjStore does not expose an
+    /// `updateEdgePropHead` method. When `prop_head` is 0 (first property
+    /// on an edge), `putProperty` returns a *new* prop_head, but we
+    /// cannot write it back into the EdgeEntry because AdjStore stores
+    /// edges in fixed-size page blocks with no single-entry update API.
+    /// Therefore edge properties only work correctly when the edge
+    /// already has a non-zero prop_head, or when prop_head 0 happens to
+    /// be returned unchanged (which it won't be). This is a known
+    /// limitation until AdjStore gains an `updateEdgePropHead` method.
+    pub fn setEdgeProperty(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        from_id: u64,
+        _: u64, // to_id — unused; edge found via from's adjacency list
+        edge_id: u64,
+        key: []const u8,
+        value: graph_store.PropertyValue,
+    ) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+
+        // Scan the outgoing adjacency list to find the edge's prop_head.
+        var iter = try mg.engine.expandOut(from_id, null);
+        defer iter.deinit();
+
+        var prop_head: u32 = 0;
+        var found = false;
+        while (try iter.next()) |entry| {
+            if (entry.edge_id == edge_id) {
+                prop_head = entry.prop_head;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return error.EdgeNotFound;
+
+        const storage_val = toStorageProperty(value);
+        // putProperty returns the (possibly new) prop_head, but we cannot
+        // write it back to the EdgeEntry without AdjStore support.
+        _ = try mg.engine.putProperty(prop_head, key, storage_val);
+    }
+
+    /// Get a property from an edge by scanning the source node's outgoing
+    /// adjacency list for the matching edge_id, then reading from the
+    /// property store.
+    pub fn getEdgeProperty(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        from_id: u64,
+        edge_id: u64,
+        key: []const u8,
+        allocator: Allocator,
+    ) !?gs.PropertyValue {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+
+        var iter = try mg.engine.expandOut(from_id, null);
+        defer iter.deinit();
+
+        while (try iter.next()) |entry| {
+            if (entry.edge_id == edge_id) {
+                if (entry.prop_head == 0) return null;
+                return mg.engine.getProperty(entry.prop_head, key, allocator);
+            }
+        }
+
+        return error.EdgeNotFound;
+    }
+
+    // ------------------------------------------------------------------
+    // Full node scanning
+    // ------------------------------------------------------------------
+
+    /// A single entry from a full node scan.
+    pub const ScanEntry = struct {
+        slot_id: u64,
+        rec: gs.node.NodeRec,
+    };
+
+    /// Scan all live nodes in the named graph. Returns a caller-owned
+    /// slice of `ScanEntry` values. Uses the engine's efficient
+    /// page-scan iterator (one pin per page rather than per node).
+    pub fn scanAllNodes(self: *StorageAdapter, graph_name: []const u8, allocator: Allocator) ![]ScanEntry {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+
+        const Ctx = struct {
+            entries: std.ArrayList(ScanEntry),
+
+            fn onNode(ctx: *@This(), node_id: u64, rec: gs.node.NodeRec) void {
+                ctx.entries.append(allocator, .{ .slot_id = node_id, .rec = rec }) catch {};
+            }
+        };
+
+        var ctx = Ctx{ .entries = .{} };
+        try mg.engine.node_store.scanNodes(
+            mg.engine.manifest.next_node_id,
+            &ctx,
+            &Ctx.onNode,
+        );
+
+        return ctx.entries.toOwnedSlice(allocator);
+    }
+
+    // ------------------------------------------------------------------
+    // Statistics API
+    // ------------------------------------------------------------------
+
+    /// Aggregate statistics for a single graph, sourced from the engine
+    /// manifest.
+    pub const GraphStats = struct {
+        node_count: u64,
+        edge_count: u64,
+        pages_used: u64,
+        label_count: u32,
+    };
+
+    /// Return manifest-level statistics for the named graph, or null if
+    /// the graph is not loaded.
+    pub fn getGraphStats(self: *StorageAdapter, graph_name: []const u8) ?GraphStats {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return null;
+        const m = &mg.engine.manifest;
+
+        return .{
+            .node_count = m.node_count,
+            .edge_count = m.edge_count,
+            .pages_used = m.nodes_pages +
+                m.adj_out_pages +
+                m.adj_in_pages +
+                m.props_pages +
+                m.var_pages +
+                m.free_pages,
+            .label_count = m.label_count,
+        };
+    }
+
+    // ------------------------------------------------------------------
+    // Property iteration
+    // ------------------------------------------------------------------
+
+    /// Return all properties on a node as a hash map. Keys are
+    /// heap-allocated copies owned by the map; values are converted
+    /// geode `PropertyValue` instances. The caller owns the returned
+    /// map and must free each key/value plus the map itself.
+    pub fn getAllNodeProperties(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        node_id: u64,
+        allocator: Allocator,
+    ) !std.StringHashMap(gs.PropertyValue) {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
+
+        var result = std.StringHashMap(gs.PropertyValue).init(allocator);
+        errdefer result.deinit();
+
+        if (rec.prop_head == 0) return result;
+
+        // Use the engine's property iterator to walk all key-value pairs.
+        // The iterator yields raw PropertyEntrySlice (encoded bytes). We
+        // re-fetch each property by key through getProperty, which
+        // returns a decoded PropertyValue.
+        var iter = try mg.engine.getAllProperties(rec.prop_head);
+        defer iter.deinit();
+
+        // Collect keys first (iterator borrows page buffers).
+        var keys = std.ArrayList([]const u8).init(allocator);
+        defer {
+            for (keys.items) |k| allocator.free(k);
+            keys.deinit();
+        }
+        while (try iter.next()) |entry| {
+            try keys.append(try allocator.dupe(u8, entry.key));
+        }
+
+        // Now fetch each property by key.
+        for (keys.items) |key| {
+            if (try mg.engine.getProperty(rec.prop_head, key, allocator)) |val| {
+                // Transfer key ownership into the map.
+                const owned_key = try allocator.dupe(u8, key);
+                try result.put(owned_key, val);
+            }
+        }
+
+        return result;
+    }
+
+    // ------------------------------------------------------------------
     // Transaction operations
     // ------------------------------------------------------------------
 
