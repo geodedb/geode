@@ -61,41 +61,49 @@ pub fn initImplDefinedFlags(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Compute base flags for query execution
-/// Returns appropriate ordering and property flags based on query characteristics
-pub fn computeBaseFlags(ordered: bool, distinct: bool) []const []const u8 {
+/// Thread-safe buffer type for base flags (caller-owned).
+pub const BaseFlagsBuf = [12][]const u8;
+
+/// Compute base flags for query execution into a caller-owned buffer.
+/// Returns appropriate ordering and property flags based on query characteristics.
+/// The returned slice borrows from `buf`, so `buf` must outlive the slice.
+pub fn computeBaseFlags(buf: *BaseFlagsBuf, ordered: bool, distinct: bool) []const []const u8 {
     var idx: usize = 0;
-    flags_buf_base[idx] = if (g_order_keys_expr) F_PROPERTY_ORDER else F_ILLEGAL;
+    buf[idx] = if (g_order_keys_expr) F_PROPERTY_ORDER else F_ILLEGAL;
     idx += 1;
-    flags_buf_base[idx] = nullsFlag();
+    buf[idx] = nullsFlag();
     idx += 1;
     if (ordered) {
-        flags_buf_base[idx] = F_TIEBREAK;
+        buf[idx] = F_TIEBREAK;
         idx += 1;
     }
     if (distinct and !ordered) {
-        flags_buf_base[idx] = F_DISTINCT_UNORDERED;
+        buf[idx] = F_DISTINCT_UNORDERED;
         idx += 1;
     }
     if (g_adapt_estimates) {
-        flags_buf_base[idx] = F_ADAPT_EST;
+        buf[idx] = F_ADAPT_EST;
         idx += 1;
     }
-    return flags_buf_base[0..idx];
+    return buf[0..idx];
 }
 
-/// Compute extended flags including union phases
-/// Builds on base flags with additional metadata flags
-pub fn computeFlagsExtended(ordered: bool, distinct: bool, union_phases: bool) []const []const u8 {
-    const base = computeBaseFlags(ordered, distinct);
+/// Thread-safe buffer type for extended flags (caller-owned).
+pub const ExtFlagsBuf = [7][]const u8;
+
+/// Compute extended flags including union phases into a caller-owned buffer.
+/// Builds on base flags with additional metadata flags.
+pub fn computeFlagsExtended(buf: *ExtFlagsBuf, ordered: bool, distinct: bool, union_phases: bool) []const []const u8 {
+    var base_buf: BaseFlagsBuf = undefined;
+    const base = computeBaseFlags(&base_buf, ordered, distinct);
     var i: usize = 0;
-    while (i < base.len) : (i += 1) flags_buf_ext[i] = base[i];
+    while (i < base.len) : (i += 1) buf[i] = base[i];
     var end: usize = base.len;
     if (union_phases) {
-        flags_buf_ext[end] = F_UNION_PHASES;
+        buf[end] = F_UNION_PHASES;
         end += 1;
     }
-    return flags_buf_ext[0..end];
+    return buf[0..end];
 }
 
 /// Get implementation-defined flag codes

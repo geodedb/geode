@@ -1350,7 +1350,8 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
 
             var flags = std.ArrayList([]const u8).initCapacity(allocator, 8) catch return error.OutOfMemory;
             defer flags.deinit(allocator);
-            const base_flags = server_flags.computeBaseFlags(ordered, distinct);
+            var base_flags_buf: server_flags.BaseFlagsBuf = undefined;
+            const base_flags = server_flags.computeBaseFlags(&base_flags_buf, ordered, distinct);
             for (base_flags) |flag| {
                 try appendFlagIfMissing(allocator, &flags, flag);
             }

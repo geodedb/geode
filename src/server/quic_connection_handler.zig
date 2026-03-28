@@ -1669,7 +1669,8 @@ fn handleClientMessage(
 
             var flags = std.ArrayList([]const u8).initCapacity(gpa, 8) catch return error.OutOfMemory;
             defer flags.deinit(gpa);
-            const base_flags = server_flags.computeBaseFlags(ordered, distinct);
+            var base_flags_buf: server_flags.BaseFlagsBuf = undefined;
+            const base_flags = server_flags.computeBaseFlags(&base_flags_buf, ordered, distinct);
             for (base_flags) |flag| {
                 try appendFlagIfMissing(gpa, &flags, flag);
             }

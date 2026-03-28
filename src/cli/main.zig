@@ -2558,7 +2558,11 @@ fn executeQueryOnConnection(
         _ = stderr_handle.writeAll(err_msg) catch {};
         return error.ConnectionFailed;
     };
-    defer stream.deinit();
+    // GAP-0260: Signal stream FIN before close to ensure clean QUIC teardown.
+    defer {
+        stream.finish() catch {};
+        stream.deinit();
+    }
 
     // Send HELLO message with authentication credentials
     // CANARY: REQ=REQ-LIB-MIGRATION-PROTO-001; FEATURE="ProtoMigration"; ASPECT=HelloMessage; STATUS=TESTED; OWNER=cli; UPDATED=2026-02-02
@@ -2957,7 +2961,17 @@ fn executeQueryOnConnection(
         const loop_allocator = loop_arena.allocator();
 
         const resp = readProtoMessage(loop_allocator, stream, quic_client, timeout_secs) catch |err| {
-            if (err == error.EndOfStream) break;
+            if (err == error.EndOfStream) {
+                // GAP-0260: If we never received any execute response (no schema),
+                // the connection was dropped before the server processed our query.
+                // Report this as an error rather than silently returning fake success.
+                if (!status_captured) {
+                    has_error = true;
+                    error_message = "Connection closed before server response";
+                    error_status = "08006"; // connection_failure
+                }
+                break;
+            }
             return err;
         };
 
