@@ -214,54 +214,17 @@ pub fn initialize(
     // Set data directory for GraphStore persistence (canonical configuration for isolation)
     graph_store.setDataDirOverride(allocator, data_dir);
 
-    // Per-graph storage migration detection
-    // CANARY: REQ=REQ-STORAGE-MIGRATION-002; FEATURE="PerGraphStorageMigration"; ASPECT=ServerInit; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-16
-    if (data_dir) |dir| {
-        const migration = @import("../storage/migration.zig");
-        const storage_state = migration.detectStorageState(dir, allocator) catch |err| blk: {
-            log.warn("Storage state detection failed, proceeding normally", &.{
+    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-007; FEATURE="EngineBackedPersistence"; ASPECT=ServerInit; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
+    // Initialize global store with engine-backed adapter (creates adapter + loads from engine).
+    const store = if (data_dir) |dir|
+        graph_store.initGlobalStore(allocator, dir) catch |err| blk: {
+            log.warn("Failed to initialize engine-backed store, falling back to in-memory", &.{
                 Attr.string("error", @errorName(err)),
             });
-            break :blk migration.StorageState.fresh;
-        };
-        switch (storage_state) {
-            .legacy_monolithic => {
-                log.info("Detected monolithic graph store, migrating to per-graph storage", &.{});
-                _ = migration.migrateToPerGraph(dir, allocator) catch |err| {
-                    log.err("Migration failed, falling back to monolithic mode", &.{
-                        Attr.string("error", @errorName(err)),
-                    });
-                };
-            },
-            .interrupted => {
-                log.warn("Detected interrupted migration, recovering", &.{});
-                _ = migration.recoverInterruptedMigration(dir, allocator) catch |err| {
-                    log.err("Migration recovery failed", &.{
-                        Attr.string("error", @errorName(err)),
-                    });
-                };
-            },
-            .per_graph => {
-                log.info("Per-graph storage detected, loading normally", &.{});
-            },
-            .fresh => {},
+            break :blk graph_store.getGlobalStore(allocator);
         }
-    }
-
-    // Initialize graph-storage adapter as primary storage (handles WAL replay internally)
-    if (data_dir) |dir| {
-        _ = graph_store.initGlobalAdapter(allocator, dir) catch |err| {
-            log.warn("Failed to initialize graph-storage adapter", &.{
-                Attr.string("error", @errorName(err)),
-            });
-        };
-    }
-
-    // Initialize GraphStore so we can surface checksum diagnostics if needed.
-    const store = graph_store.getGlobalStore(allocator);
-    if (graph_store.lastLoadHadChecksumError()) {
-        env_config.storage_checksum_error = true;
-    }
+    else
+        graph_store.getGlobalStore(allocator);
 
     // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-007; FEATURE="AuthGraphManager Integration"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
     // Initialize AuthGraphManager: resolve HMAC key, verify or bootstrap auth chain

@@ -622,6 +622,7 @@ fn walCheckpointHook(store: *graph_store.GraphStore) void {
             store.saveToFile() catch {};
         };
     } else {
+        // No WAL — delegate to adapter checkpoint + IdMap save
         store.saveToFile() catch {};
     }
 }

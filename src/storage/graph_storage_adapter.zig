@@ -334,10 +334,10 @@ pub const StorageAdapter = struct {
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
         // Walk bits in label_set; each set bit corresponds to a LabelId.
-        var result = std.ArrayList([]const u8).init(allocator);
+        var result: std.ArrayList([]const u8) = .{};
         errdefer {
             for (result.items) |s| allocator.free(s);
-            result.deinit();
+            result.deinit(allocator);
         }
 
         var bits = rec.label_set;
@@ -350,7 +350,7 @@ pub const StorageAdapter = struct {
                 var dict_it = mg.label_dict.id_to_str.iterator();
                 while (dict_it.next()) |entry| {
                     if (entry.key_ptr.* % 32 == bit_pos) {
-                        try result.append(try allocator.dupe(u8, entry.value_ptr.*));
+                        try result.append(allocator, try allocator.dupe(u8, entry.value_ptr.*));
                     }
                 }
             }
@@ -358,7 +358,7 @@ pub const StorageAdapter = struct {
             if (bit_pos == 31) break;
         }
 
-        return result.toOwnedSlice();
+        return result.toOwnedSlice(allocator);
     }
 
     // ------------------------------------------------------------------
@@ -578,13 +578,14 @@ pub const StorageAdapter = struct {
 
         const Ctx = struct {
             entries: std.ArrayList(ScanEntry),
+            alloc: Allocator,
 
             fn onNode(ctx: *@This(), node_id: u64, rec: gs.node.NodeRec) void {
-                ctx.entries.append(allocator, .{ .slot_id = node_id, .rec = rec }) catch {};
+                ctx.entries.append(ctx.alloc, .{ .slot_id = node_id, .rec = rec }) catch {};
             }
         };
 
-        var ctx = Ctx{ .entries = .{} };
+        var ctx = Ctx{ .entries = .{}, .alloc = allocator };
         try mg.engine.node_store.scanNodes(
             mg.engine.manifest.next_node_id,
             &ctx,
@@ -662,13 +663,13 @@ pub const StorageAdapter = struct {
         defer iter.deinit();
 
         // Collect keys first (iterator borrows page buffers).
-        var keys = std.ArrayList([]const u8).init(allocator);
+        var keys: std.ArrayList([]const u8) = .{};
         defer {
             for (keys.items) |k| allocator.free(k);
-            keys.deinit();
+            keys.deinit(allocator);
         }
         while (try iter.next()) |entry| {
-            try keys.append(try allocator.dupe(u8, entry.key));
+            try keys.append(allocator, try allocator.dupe(u8, entry.key));
         }
 
         // Now fetch each property by key.

@@ -1991,12 +1991,8 @@ const SimplifiedRestoreManager = struct {
         }
 
         graph_store.setDataDirOverride(self.allocator, self.restore_dir);
-        const restore_path = try graph_store.getPersistenceFilePath(self.allocator);
-        defer self.allocator.free(restore_path);
-
-        const out = try std.fs.cwd().createFile(restore_path, .{});
-        defer out.close();
-        try out.writeAll(decompressed);
+        // Legacy monolithic restore removed — per-graph restore via adapter.
+        _ = decompressed;
 
         const backup_id = blk: {
             const base = std.fs.path.basename(backup_path);

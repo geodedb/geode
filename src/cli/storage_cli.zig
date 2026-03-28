@@ -92,6 +92,7 @@ fn runCheck(allocator: std.mem.Allocator, check_name: []const u8, json_output: b
     if (std.mem.eql(u8, check_name, "graph_store")) {
         const store = graph_store.getGlobalStore(allocator);
         const node_count = store.getNodeCount();
+        // Checkpoint via adapter (no more graph_store.dat)
         store.saveToFile() catch |err| {
             if (json_output) {
                 try printTo(stdout, "{{\"graph_store_ok\":false,\"error\":\"{s}\"}}\n", .{@errorName(err)});

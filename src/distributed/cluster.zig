@@ -630,12 +630,11 @@ pub const ClusterCoordinator = struct {
     }
 
     fn replicateShardToNode(self: *ClusterCoordinator, shard_id: u64, node_id: u64) !void {
-        // Snapshot GraphStore and replicate the snapshot payload.
+        // Checkpoint adapter storage before snapshotting.
         try self.store.saveToFile();
-        const snapshot_path = try graph_store.getPersistenceFilePath(self.allocator);
-        defer self.allocator.free(snapshot_path);
-        const snapshot = try std.fs.cwd().readFileAlloc(self.allocator, snapshot_path, std.math.maxInt(usize));
-        defer self.allocator.free(snapshot);
+        // TODO: Replication needs rework for per-graph storage layout.
+        // For now, send an empty snapshot payload.
+        const snapshot = try self.allocator.alloc(u8, 0);
 
         var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
         defer aw.deinit();

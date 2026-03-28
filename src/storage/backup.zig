@@ -295,17 +295,12 @@ pub const BackupManager = struct {
         }
 
         graph_store.setDataDirOverride(self.allocator, restore_dir);
-        const restore_path = try graph_store.getPersistenceFilePath(self.allocator);
-        defer self.allocator.free(restore_path);
 
         // Check if this is a per-graph archive or legacy monolithic format.
         if (decompressed.len >= 8 and std.mem.eql(u8, decompressed[0..8], "GEODBAK1")) {
             try restorePerGraphPayload(self.allocator, restore_dir, decompressed);
-        } else {
-            const out = try std.fs.cwd().createFile(restore_path, .{});
-            defer out.close();
-            try out.writeAll(decompressed);
         }
+        // Legacy monolithic format backups are no longer supported for restore.
 
         try self.store.loadFromFile();
     }
@@ -406,15 +401,10 @@ fn generateBackupId() u64 {
     return rng.random().int(u64);
 }
 
+/// DEPRECATED: Legacy monolithic payload reader. Returns empty payload since
+/// graph_store.dat is no longer written. Callers should use readPerGraphStoragePayload.
 fn readGraphStorePayload(allocator: std.mem.Allocator) ![]u8 {
-    const path = try graph_store.getPersistenceFilePath(allocator);
-    defer allocator.free(path);
-
-    const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
-    defer file.close();
-    const stat = try file.stat();
-    const size: usize = @intCast(stat.size);
-    return try file.readToEndAlloc(allocator, size);
+    return try allocator.alloc(u8, 0);
 }
 
 /// Append a single file entry (name + data) into the archive buffer.

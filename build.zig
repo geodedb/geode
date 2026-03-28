@@ -755,10 +755,7 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("wal", wal_ext_mod);
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
 
-    // Storage migration unit tests (detectStorageState)
-    const storage_migration_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/storage/migration.zig"), .target = target, .optimize = optimize }) });
-    storage_migration_unit_tests.root_module.addImport("logging", logging_mod);
-    const run_storage_migration_unit_tests = b.addRunArtifact(storage_migration_unit_tests);
+    // Storage migration removed (Phase 2: engine-backed persistence)
 
     const match_call_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_match_call_integration.zig"), .target = target, .optimize = optimize }) });
     match_call_tests.root_module.addImport("geode", root_mod);
@@ -1043,7 +1040,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_string_func_tests.step);
     test_step.dependOn(&run_graph_algo_tests.step);
     test_step.dependOn(&run_graph_store_unit_tests.step);
-    test_step.dependOn(&run_storage_migration_unit_tests.step);
+    // Storage migration tests removed (Phase 2: engine-backed persistence)
     test_step.dependOn(&run_match_call_tests.step);
     test_step.dependOn(&run_multihop_tests.step);
     test_step.dependOn(&run_init_ctx_tests.step);
