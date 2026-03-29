@@ -1972,10 +1972,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
         // Issue #391: Use label index for O(1) lookup instead of O(n) full table scan
         if (node_pattern.labels.len > 0) {
             // Get candidate nodes from label index
-            var candidates = store.getNodesByLabels(target_graph, node_pattern.labels) catch blk: {
-                // Fallback to empty if index lookup fails - use store.allocator for consistency
-                break :blk std.ArrayList(u64).empty;
-            };
+            var candidates = try store.getNodesByLabels(target_graph, node_pattern.labels);
             defer candidates.deinit(store.allocator);
 
             // Check candidates for property match
@@ -2317,16 +2314,12 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
 
         // Fallback: find nodes by labels
         if (source_id == null and hop.left.labels.len > 0) {
-            var candidates = store.getNodesByLabels(target_graph, hop.left.labels) catch blk: {
-                break :blk std.ArrayList(u64).empty;
-            };
+            var candidates = try store.getNodesByLabels(target_graph, hop.left.labels);
             defer candidates.deinit(store.allocator);
             if (candidates.items.len > 0) source_id = candidates.items[0];
         }
         if (target_id == null and hop.right.labels.len > 0) {
-            var candidates = store.getNodesByLabels(target_graph, hop.right.labels) catch blk: {
-                break :blk std.ArrayList(u64).empty;
-            };
+            var candidates = try store.getNodesByLabels(target_graph, hop.right.labels);
             defer candidates.deinit(store.allocator);
             if (candidates.items.len > 0) target_id = candidates.items[0];
         }
