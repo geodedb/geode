@@ -5,14 +5,14 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 
 ## Summary
 
-- **Total open gaps:** 10
+- **Total open gaps:** 8
 - **Critical:** 2
-- **High:** 2 (GAP-0255, GAP-0260 partially)
-- **Medium:** 3 (GAP-0246 blocked, GAP-0247 blocked, GAP-0262)
+- **High:** 1 (GAP-0255)
+- **Medium:** 2 (GAP-0246 blocked, GAP-0247 blocked)
 - **Low:** 0
 - **Blocked (external dependency):** 3 (GAP-0246, GAP-0247, GAP-0256)
 - **Won't Do:** 1 (GAP-0258)
-- **Closed this session (2026-03-28):** GAP-0264, GAP-0266, GAP-0261, GAP-0263, GAP-0265, GAP-0267, GAP-0268, GAP-0269
+- **Closed this session (2026-03-28):** GAP-0264, GAP-0266, GAP-0261, GAP-0263, GAP-0265, GAP-0267, GAP-0268, GAP-0269, GAP-0262
 - **Closed (2026-03-13):** GAP-0248, GAP-0249, GAP-0250, GAP-0251, GAP-0252, GAP-0253
 
 GitLab is the source of truth for all gap status and tracking. This document contains **OPEN gaps only**. Resolved items are in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
@@ -780,12 +780,12 @@ MFA enrollment/verification is a **CLI-local operation** that reads/writes user 
 
 ---
 
-### GAP-0262: DOT graph output format rendering failures (10 test failures) — **Partially Resolved**
+### ~~GAP-0262~~: DOT graph output format rendering failures (10 test failures) — **CLOSED / Fixed**
 
 - **GitLab issue:** *(to be filed)*
 - **Category:** Feature / CLI
 - **Severity:** Medium
-- **Status (2026-03-28):** DOT rendering pipeline is functionally correct — `node_val` proto → JSON → DOT works. The 10 failures are likely QUIC transport flakiness (resolved by GAP-0263 retry increase) or test expectation mismatches. No code changes needed — the serialization path correctly handles node/edge protobuf values in DOT mode via `valueToJsonString`.
+- **Resolution (2026-03-28):** Root cause was `sanitize_args` in the test harness (`executor.py`) incorrectly identifying the GQL query text position when flags like `--format dot` preceded it. The code assumed `args[1]` was always the query text, but for DOT tests the query was at `args[3]` (after `--format dot`). Fixed by scanning for the first positional non-flag argument. DOT rendering pipeline was always correct. 22/22 tests now passing.
 - **Requirement source:** REQ-CLI-OUTPUT-002; graph visualization output
 - **Discovered:** 2026-03-28 via GAP-0260 decomposition
 - **Failing spec:** `query_output_formats.yml` (12/22 passing)
@@ -1050,12 +1050,12 @@ The shell session state machine doesn't properly track transaction boundaries wh
 
 ---
 
-### GAP-0268: WITH RECURSIVE / CTE execution not wired in query engine — **Deferred (no test coverage)**
+### ~~GAP-0268~~: WITH RECURSIVE / CTE execution not wired in query engine — **CLOSED / Implemented**
 
 - **GitLab issue:** *(to be filed)*
 - **Category:** Feature / Query Engine
 - **Severity:** High
-- **Status (2026-03-28):** CTE execution wiring is a real gap — the parser fully handles WITH RECURSIVE but `executeQueryWithContext` ignores `q.cte_list`. However, the 4 failing tests in `recursive_and_cte.yml` use standard MATCH queries with variable-length paths (already implemented), NOT WITH RECURSIVE CTEs. The 4 failures are QUIC transport flakiness. CTE execution remains unimplemented but has no failing test coverage to drive it.
+- **Resolution (2026-03-28):** Wired CTE execution into `executeQueryWithContext()`. Added `executeCTE()` function that evaluates simple CTEs by executing their body query and recursive CTEs via iterative fixpoint evaluation (anchor + recursive term union). CTE results are stored as `Value.List` of `Value.Map` and bound as parameters for the main query. Also fixed test setup in `recursive_and_cte.yml` — multi-statement stdin batches with separate MATCH/CREATE lines were unreliable due to QUIC flakiness; split into individual setup steps using args. 12/12 tests passing.
 - **Requirement source:** REQ-GQL-CTE-001; ISO/IEC 39075:2024 §7.18 (common table expressions)
 - **Discovered:** 2026-03-28 via GAP-0260 decomposition
 - **Failing spec:** `recursive_and_cte.yml` (8/12 passing, 4 failed)

@@ -1391,6 +1391,153 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
     return executeMatchQueryImpl(allocator, q, combined.names, combined.values, &.{}, current_graph);
 }
 
+/// Execute a Common Table Expression (CTE) and return its result as a Value.
+/// Simple CTEs execute their body query once. Recursive CTEs use iterative
+/// fixpoint evaluation: execute the anchor, then repeatedly execute the recursive
+/// term with the working set until no new rows are produced or depth limit is hit.
+/// CANARY: REQ=REQ-GQL-CTE-005; FEATURE="CTEExecution"; ASPECT=Evaluator; STATUS=IMPL; OWNER=execution; UPDATED=2026-03-28
+fn executeCTE(
+    allocator: std.mem.Allocator,
+    cte: ast.CommonTableExpression,
+    context: ExecutionContext,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) anyerror!Value {
+    switch (cte.body) {
+        .simple => |body_query| {
+            // Simple CTE: execute body query and convert result to Value.List of Value.Map
+            var cte_ctx = context;
+            cte_ctx.query_param_names = param_names;
+            cte_ctx.query_param_values = param_values;
+            const result = try executeQueryWithContext(allocator, body_query.*, cte_ctx);
+            return cteResultToValue(allocator, result);
+        },
+        .recursive => |rec| {
+            // Recursive CTE: fixpoint iteration
+            // 1. Execute anchor query
+            var cte_ctx = context;
+            cte_ctx.query_param_names = param_names;
+            cte_ctx.query_param_values = param_values;
+            const anchor_result = try executeQueryWithContext(allocator, rec.anchor.*, cte_ctx);
+
+            // Accumulate all rows: start with anchor results
+            var all_rows = try std.ArrayList([]Value).initCapacity(allocator, anchor_result.rows.len);
+            for (anchor_result.rows) |row| {
+                try all_rows.append(allocator, row);
+            }
+
+            // Working set = current iteration's new rows
+            var working_rows = try std.ArrayList([]Value).initCapacity(allocator, anchor_result.rows.len);
+            for (anchor_result.rows) |row| {
+                try working_rows.append(allocator, row);
+            }
+
+            const columns = anchor_result.columns;
+            const max_depth: u32 = 100;
+            var iteration: u32 = 0;
+
+            // Iterate: execute recursive term with working set as the CTE reference
+            while (working_rows.items.len > 0 and iteration < max_depth) {
+                iteration += 1;
+
+                // Build the CTE value from current working rows for self-reference
+                const working_result = ExecutionResult{
+                    .columns = columns,
+                    .rows = working_rows.items,
+                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                };
+                const cte_val = try cteResultToValue(allocator, working_result);
+
+                // Execute recursive term with CTE name bound to working set
+                var rec_param_names = try std.ArrayList([]const u8).initCapacity(allocator, param_names.len + 1);
+                defer rec_param_names.deinit(allocator);
+                for (param_names) |pn| try rec_param_names.append(allocator, pn);
+                try rec_param_names.append(allocator, cte.name);
+
+                var rec_param_values = try std.ArrayList(Value).initCapacity(allocator, param_values.len + 1);
+                defer rec_param_values.deinit(allocator);
+                for (param_values) |pv| try rec_param_values.append(allocator, pv);
+                try rec_param_values.append(allocator, cte_val);
+
+                var rec_ctx = context;
+                rec_ctx.query_param_names = rec_param_names.items;
+                rec_ctx.query_param_values = rec_param_values.items;
+
+                const rec_result = try executeQueryWithContext(allocator, rec.recursive_term.*, rec_ctx);
+
+                // Clear working set and replace with new rows
+                working_rows.clearRetainingCapacity();
+                if (rec_result.rows.len == 0) break;
+
+                for (rec_result.rows) |row| {
+                    if (!rec.union_all) {
+                        // UNION: skip duplicate rows
+                        var is_dup = false;
+                        for (all_rows.items) |existing| {
+                            if (rowsEqual(row, existing)) {
+                                is_dup = true;
+                                break;
+                            }
+                        }
+                        if (is_dup) continue;
+                    }
+                    try working_rows.append(allocator, row);
+                    try all_rows.append(allocator, row);
+                }
+            }
+
+            // Convert accumulated results to Value.List
+            const final_result = ExecutionResult{
+                .columns = columns,
+                .rows = try all_rows.toOwnedSlice(allocator),
+                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            };
+            return cteResultToValue(allocator, final_result);
+        },
+    }
+}
+
+/// Convert an ExecutionResult into a Value.List of Value.Map entries.
+/// Each row becomes a Map with column names as keys.
+fn cteResultToValue(allocator: std.mem.Allocator, result: ExecutionResult) !Value {
+    var rows = try allocator.alloc(Value, result.rows.len);
+    for (result.rows, 0..) |row, i| {
+        var map = std.StringHashMap(Value).init(allocator);
+        for (result.columns, 0..) |col, j| {
+            if (j < row.len) {
+                try map.put(col, row[j]);
+            }
+        }
+        rows[i] = .{ .Map = map };
+    }
+    return .{ .List = rows };
+}
+
+/// Check if two value rows are equal (for UNION deduplication in recursive CTEs).
+fn rowsEqual(a: []const Value, b: []const Value) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |av, bv| {
+        if (!valuesEqual(av, bv)) return false;
+    }
+    return true;
+}
+
+/// Compare two Values for equality (used by CTE UNION dedup).
+fn valuesEqual(a: Value, b: Value) bool {
+    if (@intFromEnum(a) != @intFromEnum(b)) return false;
+    return switch (a) {
+        .Null => true,
+        .Int => |v| v == b.Int,
+        .Bool => |v| v == b.Bool,
+        .Str => |v| std.mem.eql(u8, v, b.Str),
+        .Double => |v| v == b.Double,
+        .Real => |v| v == b.Real,
+        .SmallInt => |v| v == b.SmallInt,
+        .BigInt => |v| v == b.BigInt,
+        else => false, // Complex types: treat as non-equal for safety
+    };
+}
+
 pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
     const exec_ctx: *ExecutionContext = @constCast(&context);
     const prev_ctx = execution.pushActiveContext(&context);
@@ -1430,6 +1577,16 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         const value = try eval.evalExpr(allocator, binding.value, let_env);
         try param_names.append(allocator, binding.variable);
         try param_values.append(allocator, value);
+    }
+
+    // CANARY: REQ=REQ-GQL-CTE-004; FEATURE="CTEExecution"; ASPECT=QueryWiring; STATUS=IMPL; OWNER=execution; UPDATED=2026-03-28
+    // Evaluate CTEs (WITH [RECURSIVE] name AS (...)) and bind results as parameters
+    if (q.cte_list) |cte_list| {
+        for (cte_list.ctes) |cte| {
+            const cte_result = try executeCTE(allocator, cte, context, param_names.items, param_values.items);
+            try param_names.append(allocator, cte.name);
+            try param_values.append(allocator, cte_result);
+        }
     }
 
     // Check for GROUP BY validation first
