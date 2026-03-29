@@ -1329,6 +1329,12 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 });
             };
 
+            // Persist the UUID that the storage adapter assigned so
+            // the graph data directory survives restarts.
+            if (graph_store.GraphStore.getGraphUuid(graph_name)) |uuid| {
+                cat.updateGraphUuid(graph_name, uuid);
+            }
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),

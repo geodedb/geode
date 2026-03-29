@@ -1443,6 +1443,10 @@ fn handleClientMessage(
                                 try sendQuicMessage(gpa, stream, resp);
                                 return;
                             };
+                            // Persist UUID so graph survives restarts
+                            if (graph_store.GraphStore.getGraphUuid(requested_graph)) |uuid| {
+                                cat.updateGraphUuid(requested_graph, uuid);
+                            }
 
                             if (state.exec_session) |*sess| {
                                 if (sess.graph) |old| gpa.free(old);

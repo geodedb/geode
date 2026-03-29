@@ -613,6 +613,35 @@ pub const GraphStore = struct {
         self.dirty.store(true, .release);
     }
 
+    /// Open a graph using a known UUID (for catalog recovery).  Opens the
+    /// existing on-disk storage directory instead of generating a new UUID.
+    pub fn openOrCreateGraphWithUuid(self: *GraphStore, graph_name: []const u8, graph_uuid: [16]u8) !void {
+        if (global_adapter) |adapter| {
+            _ = adapter.openGraphWithUuid(graph_name, graph_uuid) catch |err| {
+                log.err("adapter openGraphWithUuid failed", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.string("graph", graph_name),
+                });
+            };
+        }
+        if (self.graphs.contains(graph_name)) {
+            return;
+        }
+        const name_copy = try self.allocator.dupe(u8, graph_name);
+        try self.graphs.put(name_copy, {});
+        _ = try self.getOrCreateIdMap(graph_name);
+        self.dirty.store(true, .release);
+    }
+
+    /// Return the UUID for a named graph from the storage adapter, or null
+    /// if the adapter is not initialized or the graph is not loaded.
+    pub fn getGraphUuid(graph_name: []const u8) ?[16]u8 {
+        if (global_adapter) |adapter| {
+            return adapter.getGraphUuid(graph_name);
+        }
+        return null;
+    }
+
     pub fn dropGraph(self: *GraphStore, graph_name: []const u8) !void {
         // Dual-write: drop from adapter, then fall through to local cleanup
         if (global_vtable) |vt| {

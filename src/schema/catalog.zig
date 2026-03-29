@@ -60,7 +60,7 @@ pub const Catalog = struct {
     allocator: std.mem.Allocator,
     rwlock: std.Thread.RwLock,
     schemas: std.StringHashMap(void),
-    graphs: std.StringHashMap(void),
+    graphs: std.StringHashMap([16]u8),
     indexes: std.StringHashMap(IndexInfo),
     constraints: std.StringHashMap(ConstraintInfo),
     data_dir: []const u8,
@@ -75,7 +75,7 @@ pub const Catalog = struct {
             .allocator = allocator,
             .rwlock = .{},
             .schemas = std.StringHashMap(void).init(allocator),
-            .graphs = std.StringHashMap(void).init(allocator),
+            .graphs = std.StringHashMap([16]u8).init(allocator),
             .indexes = std.StringHashMap(IndexInfo).init(allocator),
             .constraints = std.StringHashMap(ConstraintInfo).init(allocator),
             .data_dir = try allocator.dupe(u8, data_dir),
@@ -183,14 +183,16 @@ pub const Catalog = struct {
             try buffer.appendSlice(self.allocator, name);
         }
 
-        // Write graphs (just names)
+        // Write graphs (name + 16-byte UUID)
         var graph_iter = self.graphs.iterator();
         while (graph_iter.next()) |entry| {
             const name = entry.key_ptr.*;
+            const uuid = entry.value_ptr.*;
             var len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &len_buf, @intCast(name.len), .little);
             try buffer.appendSlice(self.allocator, &len_buf);
             try buffer.appendSlice(self.allocator, name);
+            try buffer.appendSlice(self.allocator, &uuid);
         }
 
         // Write indexes
@@ -319,7 +321,9 @@ pub const Catalog = struct {
             try self.schemas.put(name, {});
         }
 
-        // Read graphs
+        // Read graphs (name + 16-byte UUID).  Old catalog files without UUIDs
+        // are detected by checking remaining bytes — if less than 16 bytes
+        // remain after the name, we treat it as the legacy (name-only) format.
         i = 0;
         while (i < graph_count) : (i += 1) {
             var len_buf: [4]u8 = undefined;
@@ -330,21 +334,52 @@ pub const Catalog = struct {
             errdefer self.allocator.free(name);
             if ((try reader.readAll(name)) < name_len) return error.InvalidCatalogFile;
 
-            try self.graphs.put(name, {});
+            // Try to read the 16-byte UUID that follows the name.
+            var uuid: [16]u8 = .{0} ** 16;
+            const uuid_bytes = reader.readAll(&uuid) catch 0;
+            if (uuid_bytes < 16) {
+                // Legacy format (no UUID) — will generate a new one below.
+                uuid = .{0} ** 16;
+            }
+
+            try self.graphs.put(name, uuid);
         }
 
-        // Ensure catalog graphs exist in GraphStore registry
+        // Ensure catalog graphs exist in GraphStore registry, using stored
+        // UUIDs so existing data directories are reopened (not orphaned).
         const store = graph_store.getGlobalStore(self.allocator);
         var graph_iter = self.graphs.iterator();
         while (graph_iter.next()) |entry| {
             const graph_name = entry.key_ptr.*;
+            const uuid = entry.value_ptr.*;
             if (!store.graphExists(graph_name)) {
-                _ = store.createGraph(graph_name) catch |err| {
-                    log.err("Failed to ensure graph in store", &.{
-                        Attr.string("name", graph_name),
-                        Attr.string("error", @errorName(err)),
-                    });
+                const is_zero_uuid = blk: {
+                    for (uuid) |b| {
+                        if (b != 0) break :blk false;
+                    }
+                    break :blk true;
                 };
+                if (is_zero_uuid) {
+                    // Legacy catalog without UUID — create new engine
+                    _ = store.createGraph(graph_name) catch |err| {
+                        log.err("Failed to ensure graph in store", &.{
+                            Attr.string("name", graph_name),
+                            Attr.string("error", @errorName(err)),
+                        });
+                    };
+                    // Retrieve and store the generated UUID
+                    if (graph_store.GraphStore.getGraphUuid(graph_name)) |new_uuid| {
+                        entry.value_ptr.* = new_uuid;
+                    }
+                } else {
+                    // Known UUID — open existing storage directory
+                    store.openOrCreateGraphWithUuid(graph_name, uuid) catch |err| {
+                        log.err("Failed to open graph with UUID", &.{
+                            Attr.string("name", graph_name),
+                            Attr.string("error", @errorName(err)),
+                        });
+                    };
+                }
             }
         }
 
@@ -596,8 +631,10 @@ pub const Catalog = struct {
         return self.schemas.contains(name);
     }
 
-    // CANARY: REQ=REQ-GRAPH-META-001; FEATURE="GraphMetadataPersistence"; ASPECT=AddGraph; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-01-09
-    /// Add a graph to the catalog and persist
+    // CANARY: REQ=REQ-GRAPH-META-001; FEATURE="GraphMetadataPersistence"; ASPECT=AddGraph; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-03-29
+    /// Add a graph to the catalog and persist.  Stores a zero UUID initially;
+    /// call `updateGraphUuid` after the storage adapter creates the engine to
+    /// persist the real UUID.
     pub fn addGraph(self: *Catalog, name: []const u8) !void {
         self.rwlock.lock();
         defer self.rwlock.unlock();
@@ -611,8 +648,27 @@ pub const Catalog = struct {
         const owned_name = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned_name);
 
-        try self.graphs.put(owned_name, {});
+        // Store zero UUID initially; updateGraphUuid() fills it in after the
+        // storage adapter assigns a real UUID.
+        try self.graphs.put(owned_name, .{0} ** 16);
         try self.save();
+    }
+
+    /// Update the stored UUID for a graph after the storage adapter has
+    /// created the engine.  Called from CREATE GRAPH execution path.
+    pub fn updateGraphUuid(self: *Catalog, name: []const u8, uuid: [16]u8) void {
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
+        if (self.graphs.getPtr(name)) |ptr| {
+            ptr.* = uuid;
+            self.save() catch |err| {
+                log.err("Failed to persist graph UUID update", &.{
+                    Attr.string("name", name),
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+        }
     }
 
     // CANARY: REQ=REQ-GRAPH-META-002; FEATURE="GraphMetadataPersistence"; ASPECT=RemoveGraph; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-01-09

@@ -2447,7 +2447,7 @@ REQ-GRAPH-LEIDEN-SPLIT-001,Leiden Split Community,Graph,TESTED,,,graph,2025-10-1
 REQ-GRAPH-LOUVAIN-001,LouvainCommunityDetection,GraphAnalytics,TESTED,,,graph,2026-01-25,src/graph/community_louvain.zig
 REQ-GRAPH-LOUVAIN-002,ModularityScore,GraphAnalytics,TESTED,,,graph,2026-01-25,src/graph/community_louvain.zig
 REQ-GRAPH-LOUVAIN-003,LouvainIntegration,GraphAnalytics,TESTED,,,graph,2026-01-25,src/graph/algorithms.zig
-REQ-GRAPH-META-001,GraphMetadataPersistence,AddGraph,EXEMPT,,,catalog,2026-01-09,src/schema/catalog.zig
+REQ-GRAPH-META-001,GraphMetadataPersistence,AddGraph,EXEMPT,,,catalog,2026-03-29,src/schema/catalog.zig
 REQ-GRAPH-META-002,GraphMetadataPersistence,RemoveGraph,EXEMPT,,,catalog,2026-01-09,src/schema/catalog.zig
 REQ-GRAPH-META-003,GraphMetadataPersistence,GraphExists,EXEMPT,,,catalog,2026-01-09,src/schema/catalog.zig
 REQ-GRAPH-PERSIST-005,NamedGraphPersistence,CatalogTests,TESTED,,,schema,2026-01-29,src/schema/catalog.zig

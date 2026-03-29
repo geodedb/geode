@@ -1098,6 +1098,10 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
                             };
                             return encodeMessage(allocator, resp);
                         };
+                        // Persist UUID so graph survives restarts
+                        if (graph_store.GraphStore.getGraphUuid(requested_graph)) |uuid| {
+                            cat.updateGraphUuid(requested_graph, uuid);
+                        }
                         resolved_graph = requested_graph;
                     } else {
                         const resp = schema.HelloResponse{
@@ -1179,6 +1183,10 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
                     };
                     return encodeMessage(allocator, resp);
                 };
+                // Persist UUID so graph survives restarts
+                if (graph_store.GraphStore.getGraphUuid(requested_graph)) |uuid| {
+                    cat.updateGraphUuid(requested_graph, uuid);
+                }
             }
             noauth_resolved_graph = requested_graph;
         }

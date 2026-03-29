@@ -218,6 +218,32 @@ pub const StorageAdapter = struct {
         return self.createGraphLocked(name);
     }
 
+    /// Open an existing graph by name and UUID.  Uses `GraphEngine.open()` to
+    /// recover the existing on-disk data directory instead of creating a new
+    /// one.  Falls back to `GraphEngine.create()` if the UUID directory does
+    /// not exist (e.g. first run after migration).
+    pub fn openGraphWithUuid(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) !*ManagedGraph {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.engines.get(name)) |mg| {
+            return mg;
+        }
+
+        return self.openGraphLocked(name, graph_uuid);
+    }
+
+    /// Return the stored UUID for a loaded graph, or null if not loaded.
+    pub fn getGraphUuid(self: *StorageAdapter, name: []const u8) ?[16]u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.engines.get(name)) |mg| {
+            return mg.uuid;
+        }
+        return null;
+    }
+
     /// Check whether a graph with the given name is currently loaded.
     pub fn graphExists(self: *StorageAdapter, name: []const u8) bool {
         self.mutex.lock();
@@ -785,6 +811,46 @@ pub const StorageAdapter = struct {
         try self.engines.put(owned_name, mg);
 
         log.info("created graph '{s}'", .{name});
+
+        return mg;
+    }
+
+    /// Open an existing graph engine from a known UUID directory.  Falls back
+    /// to creating a new engine if the directory is missing (handles the case
+    /// where a graph name was persisted before this fix was deployed).
+    fn openGraphLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) !*ManagedGraph {
+        var cfg = self.config;
+        cfg.data_dir = self.data_dir;
+
+        const engine = gs.GraphEngine.open(
+            self.allocator,
+            self.data_dir,
+            graph_uuid,
+            cfg,
+        ) catch |err| {
+            // Directory missing — fall back to creating a new engine so that
+            // graphs persisted before this fix (with no UUID on disk) still work.
+            log.warn("GraphEngine.open failed for graph '{s}', creating new: {}", .{ name, err });
+            return self.createGraphLocked(name);
+        };
+        errdefer engine.close() catch {};
+
+        const mg = try self.allocator.create(ManagedGraph);
+        errdefer self.allocator.destroy(mg);
+
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+
+        mg.* = .{
+            .engine = engine,
+            .label_dict = LabelStringDict.init(self.allocator),
+            .name = owned_name,
+            .uuid = graph_uuid,
+        };
+
+        try self.engines.put(owned_name, mg);
+
+        log.info("opened existing graph '{s}'", .{name});
 
         return mg;
     }
