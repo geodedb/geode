@@ -251,25 +251,27 @@ pub const IdMap = struct {
 // UUIDv7 generation
 // ---------------------------------------------------------------------------
 
-/// Atomic counter for sub-millisecond ordering within the same timestamp.
-var uuid_counter = std.atomic.Value(u16).init(0);
-/// Last millisecond timestamp used for UUIDv7 generation.
-var uuid_last_ms = std.atomic.Value(i64).init(0);
+/// Mutex-protected state for UUIDv7 generation.
+/// Uses a mutex instead of 64-bit atomics for 32-bit ARM compatibility
+/// (std.atomic.Value(i64) is unsupported on arm-linux-gnueabihf).
+var uuid_mutex = std.Thread.Mutex{};
+var uuid_counter_val: u16 = 0;
+var uuid_last_ms_val: i64 = 0;
 
 /// Generate a UUIDv7 value: 48-bit millisecond timestamp | 4-bit version(7)
 /// | 12-bit counter/random | 2-bit variant(10) | 62-bit random.
 pub fn generateUuidV7() u128 {
     const ms = std.time.milliTimestamp();
 
+    uuid_mutex.lock();
     // Reset or increment the sub-ms counter
-    const last = uuid_last_ms.load(.acquire);
-    if (ms != last) {
-        // New millisecond — try to claim it
-        if (uuid_last_ms.cmpxchgStrong(last, ms, .acq_rel, .acquire) == null) {
-            uuid_counter.store(0, .release);
-        }
+    if (ms != uuid_last_ms_val) {
+        uuid_last_ms_val = ms;
+        uuid_counter_val = 0;
     }
-    const seq = uuid_counter.fetchAdd(1, .acq_rel);
+    const seq = uuid_counter_val;
+    uuid_counter_val +%= 1;
+    uuid_mutex.unlock();
 
     // 62 bits of randomness for the lower portion
     var rand_bytes: [8]u8 = undefined;
