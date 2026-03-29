@@ -106,11 +106,24 @@ pub fn generateSecurePassword() [32]u8 {
 ///
 /// The caller must call `deinit()` on the returned manager when done.
 pub fn initCliAuthManager(allocator: std.mem.Allocator, data_dir: ?[]const u8) !AuthGraphManager {
-    // Set the data directory override so getGlobalStore uses the right path
-    if (data_dir) |dir| {
-        graph_store.setDataDirOverride(allocator, dir);
-    }
-    const store = graph_store.getGlobalStore(allocator);
+    // Resolve the data directory from the flag, env var, or default
+    const resolved_dir: []const u8 = if (data_dir) |dir|
+        dir
+    else if (std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR")) |env_dir|
+        env_dir
+    else |_|
+        "/var/lib/geode";
+
+    // Use initGlobalStore which initializes the storage adapter so that
+    // saveIfDirty actually persists node/edge data to disk.  Without the
+    // adapter, saveToFile is a no-op and user mutations are lost between
+    // CLI invocations (GAP-0266).
+    const store = graph_store.initGlobalStore(allocator, resolved_dir) catch |err| {
+        // Fall back to getGlobalStore if adapter init fails (e.g., permissions)
+        graph_store.setDataDirOverride(allocator, resolved_dir);
+        std.log.warn("Failed to init storage adapter for CLI auth (falling back): {}", .{err});
+        return AuthGraphManager.init(allocator, graph_store.getGlobalStore(allocator));
+    };
     return AuthGraphManager.init(allocator, store);
 }
 
