@@ -1,16 +1,18 @@
 # Gap Analysis
 
 Last updated: 2026-03-28
-Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28)
+Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28)
 
 ## Summary
 
-- **Total open gaps:** 7
+- **Total open gaps:** 15
 - **Critical:** 2
-- **High:** 3
-- **Medium:** 2
+- **High:** 6
+- **Medium:** 5
+- **Low:** 2
 - **Blocked (external dependency):** 3 (GAP-0246, GAP-0247, GAP-0256)
 - **Won't Do:** 1 (GAP-0258)
+- **Partially closed (2026-03-28):** GAP-0260 (QUIC root cause fixed, 93 residual failures decomposed into GAP-0261 through GAP-0269)
 - **Closed this session (2026-03-13):** GAP-0248, GAP-0249, GAP-0250, GAP-0251, GAP-0252, GAP-0253
 
 GitLab is the source of truth for all gap status and tracking. This document contains **OPEN gaps only**. Resolved items are in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
@@ -734,6 +736,403 @@ The primary root cause was **QUIC transport message loss under rapid sequential 
 - Zero failures in core CRUD, MATCH, and GQL compliance specs
 - FLE/TDE tests updated for per-graph storage engine persistence model
 - Advanced query pattern specs (nested, recursive, WITH) achieve ≥ 80% pass rate
+
+---
+
+### GAP-0261: MFA enrollment and verification flows not functional (32 test failures)
+
+- **GitLab issue:** *(to be filed)*
+- **Category:** Feature / Security
+- **Severity:** High
+- **Requirement source:** REQ-0005 Security; MFA authentication flows
+- **Discovered:** 2026-03-28 via GAP-0260 decomposition
+- **Failing spec:** `mfa_comprehensive_security.yml` (10/42 passing)
+
+#### Summary
+
+The MFA (Multi-Factor Authentication) system has partial infrastructure but non-functional end-to-end flows. The `mfa_comprehensive_security.yml` spec tests 42 MFA scenarios; only 10 pass (basic flag and configuration tests). The remaining 32 failures cover TOTP enrollment, QR code generation, token verification, recovery codes, and MFA enforcement on login.
+
+#### Evidence
+
+- `src/security/mfa.zig` — MFA module delegates to `ext_mfa.enroll()` (line 34) but the external MFA enrollment produces secrets that cannot be verified through the QUIC protocol
+- `src/security/user_manager.zig:160-162` — `generateMFASecret()` creates a secret and sets `mfa_enabled`, but the TOTP verification flow (`mfa-verify` command) runs as a CLI-local operation against the file-based user store, not against the running server's auth system
+- `src/cli/user_mgmt_cli.zig:456-497` — `mfa-setup` command calls `mfa.enroll()` but the enrollment state is persisted to the CLI's local GraphStore instance, not to the server's running auth state
+- The test harness starts a Geode server and expects MFA commands to interact with it via QUIC, but MFA commands operate on a separate local data directory
+
+#### Root Cause
+
+MFA enrollment/verification is a **CLI-local operation** that reads/writes user records from disk, while the test harness expects these operations to affect the **running server's** auth state. The two data stores are independent — the CLI opens its own GraphStore from the `--data-dir` path, while the server has its own in-memory GraphStore initialized at startup.
+
+#### Recommended Fix
+
+1. Wire MFA enrollment through the QUIC protocol as a server-side operation (preferred)
+2. OR: Ensure the server reloads user state from disk after CLI mutations
+3. Implement TOTP token verification in the server's auth flow (`authenticate()` in `user_management.zig`)
+4. Add recovery code generation and validation
+
+#### Acceptance Criteria
+
+- `mfa_comprehensive_security.yml` achieves ≥ 80% pass rate (≥ 34/42)
+- MFA enrollment via `geode user mfa-setup` is reflected in subsequent server auth queries
+- TOTP verification blocks login when MFA is enabled and no valid token is provided
+- Recovery codes work as fallback when TOTP device is unavailable
+
+---
+
+### GAP-0262: DOT graph output format rendering failures (10 test failures)
+
+- **GitLab issue:** *(to be filed)*
+- **Category:** Feature / CLI
+- **Severity:** Medium
+- **Requirement source:** REQ-CLI-OUTPUT-002; graph visualization output
+- **Discovered:** 2026-03-28 via GAP-0260 decomposition
+- **Failing spec:** `query_output_formats.yml` (12/22 passing)
+
+#### Summary
+
+The CLI `--format dot` output mode fails for all graph-producing queries. JSON, table, and CSV formats work correctly (12/12 passing). All 10 DOT format tests fail: `dot-format-empty-graph`, `dot-format-single-node`, `dot-format-node-with-label`, `dot-format-relationship`, `dot-format-edge-label`, `dot-format-graph-attributes`, `dot-format-multiple-nodes`, `dot-format-chain`, `dot-format-dedup-nodes`, `dot-format-full-graph`.
+
+#### Evidence
+
+- DOT format requires the query result to contain node/edge objects with `id`, `labels`, and relationship data
+- The DOT renderer in `src/cli/main.zig` (function `getDotNodeId`, `getDotIdString`) expects specific JSON object structures in the result rows
+- When MATCH returns property values (e.g., `RETURN n.name`) rather than node objects (e.g., `RETURN n`), the DOT renderer cannot extract graph structure
+- The DOT renderer may also fail when the result format from the QUIC protobuf response doesn't include the node/edge identity information needed for graph visualization
+
+#### Root Cause
+
+The DOT output format requires graph-structural information (node IDs, labels, edge types, source/target) that is only available when returning full node/edge objects. Many test queries return property projections rather than full objects, and the serialization path from protobuf→JSON→DOT may lose structural information.
+
+#### Recommended Fix
+
+1. Ensure `RETURN n` (full node object) includes `id`, `labels`, and `properties` in the protobuf response
+2. Ensure `RETURN r` (full edge object) includes `id`, `type`, `start_node`, `end_node` in the response
+3. Fix the DOT renderer to handle both property-projection and full-object result formats
+4. Add fallback rendering for property-only results (table-like DOT output)
+
+#### Acceptance Criteria
+
+- `query_output_formats.yml` achieves 100% pass rate (22/22)
+- `geode query "MATCH (n)-[r]->(m) RETURN n, r, m" --format dot` produces valid DOT syntax
+- DOT output can be rendered by Graphviz without errors
+
+---
+
+### GAP-0263: QUIC transport residual message loss under rapid connections (9 test failures)
+
+- **GitLab issue:** *(to be filed)*
+- **Category:** Transport / Reliability
+- **Severity:** Medium
+- **Requirement source:** REQ-0009 Performance; REQ-0003 Query Correctness
+- **Discovered:** 2026-03-28 via GAP-0260 root cause analysis
+- **Failing spec:** `geode_quic_transport.yml` (10/19 passing)
+
+#### Summary
+
+Despite the QUIC reliability fixes in commits `e6d8e71a` and `00530a62` (thread-safe flags, stream FIN, EndOfStream detection, auto-retry), ~10-30% of rapid sequential QUIC connections still experience message loss. The vendor QUIC library (`vendor/quic` v0.1.10) intermittently fails to deliver EXECUTE messages when multiple CLI processes connect/disconnect in rapid succession.
+
+#### Evidence
+
+- The auto-retry mechanism (commit `00530a62`) resolves ~70% of transient failures but ~30% persist even after retry
+- `geode_quic_transport.yml` tests 19 QUIC-specific scenarios; 9 fail under parallel execution
+- The accept loop (`src/transport/quic.zig:379-412`) calls `drainPendingDestroy()` before each `tryAccept()`, but pending connection cleanups from handler threads may not complete before the next connection handshake begins
+- `PollSync` (`src/transport/quic.zig:46-115`) coordinates poll access between the accept loop and handler threads, but the 50μs handler poll interval and 100μs post-poll sleep may be insufficient for rapid connection cycling
+- The QUIC connection handler's `handleQuicConnection` (`src/server/quic_connection_handler.zig:671-992`) spawns a `streamAcceptorLoop` thread per connection — thread creation/teardown overhead contributes to timing sensitivity
+
+#### Root Cause
+
+The vendor QUIC library's endpoint manages all connections on a single UDP socket. When a client process exits, the OS may delay the CONNECTION_CLOSE frame delivery. The next client's Initial packet arrives before the server's endpoint processes the previous connection's closure, causing connection ID confusion or packet misrouting within the endpoint.
+
+#### Recommended Fix
+
+1. **Short-term**: Increase auto-retry count to 3 (currently 2) for QUIC CLI connections
+2. **Medium-term**: Add a connection drain grace period in the server's `destroyConnection` path — queue the connection for delayed destruction (e.g., 50ms) rather than immediate cleanup
+3. **Long-term**: Upgrade the vendor QUIC library to add proper connection migration support and improve the endpoint's connection ID disambiguation under rapid recycling
+
+#### Acceptance Criteria
+
+- `geode_quic_transport.yml` achieves ≥ 85% pass rate (≥ 16/19)
+- Rapid sequential CLI queries (10 queries, no sleep) achieve ≥ 95% success rate
+- Zero false-success responses (08006 correctly reported on connection failure)
+
+---
+
+### GAP-0264: MERGE label index fallback causes duplicate node creation (8 test failures)
+
+- **GitLab issue:** *(to be filed)*
+- **Category:** Correctness / Query Engine
+- **Severity:** High
+- **Requirement source:** REQ-GQL-MERGE-001; ISO/IEC 39075:2024 §14.5 (MERGE statement)
+- **Discovered:** 2026-03-28 via GAP-0260 decomposition
+- **Failing spec:** `merge_performance_january_2026.yml` (0/8 passing)
+
+#### Summary
+
+The MERGE statement creates duplicate nodes instead of finding existing ones. When `store.getNodesByLabels()` throws an error (e.g., label index not populated for the target graph), the execution silently falls back to an empty candidate list. With zero candidates, MERGE always takes the CREATE path, creating a new node even when a matching node already exists.
+
+#### Evidence
+
+- `src/execution/crud_operations.zig:1975-1978`:
+
+  ```zig
+  var candidates = store.getNodesByLabels(target_graph, node_pattern.labels) catch blk: {
+      break :blk std.ArrayList(u64).empty;  // Silent fallback → no candidates → always CREATE
+  };
+  ```
+
+- All 8 tests in `merge_performance_january_2026.yml` fail: `merge-creates-node`, `merge-finds-existing-node`, `merge-label-index-basic`, `merge-multiple-labels`, `delete-detach-with-adjacency`, `create-edge-adjacency-basic`, `merge-repeated-operations`, `merge-graph-isolation`
+- Existing MERGE specs (`gql_merge_bare_set.yml`, `gql_merge_edge.yml`, `gql_merge_properties.yml`) pass — these specs likely use simpler patterns where the label index is populated before MERGE runs
+- The label index (`graph_store.zig:748-777`, `addToLabelIndex`) is populated during `createNodeWithGraph` — but if the first MERGE for a graph runs before any CREATE has populated the index, `getNodesByLabels` returns an error because the composite key `"graph:label"` doesn't exist in the `label_index` HashMap
+
+#### Root Cause
+
+`getNodesByLabels()` in `graph_store.zig:817-826` returns an empty ArrayList when the label index has no entry for the first label. This is correct behavior (no nodes with that label exist). The error path at line 1975-1978 catches ALL errors including `OutOfMemory` and treats them the same as "no candidates." The actual bug is that when a **prior CREATE has already created nodes but the label index lookup fails for a different reason** (e.g., graph not found, concurrent modification), the fallback masks the real error.
+
+Additionally, the MERGE test uses `merge-finds-existing-node` which expects `MERGE (n:TestLabel {name: 'Alice'})` to find an existing node — but if the previous `CREATE` test failed (QUIC flakiness), there's no node to find.
+
+#### Recommended Fix
+
+1. Propagate errors from `getNodesByLabels()` instead of silently falling back to empty:
+
+   ```zig
+   var candidates = try store.getNodesByLabels(target_graph, node_pattern.labels);
+   ```
+
+2. If the intent is to handle "no index entry" gracefully, catch only the specific "key not found" case and return empty for that — propagate all other errors
+3. Add a full-scan fallback when the label index is empty: iterate `store.nodes` to find candidates by label+graph match (slower but correct)
+4. Ensure the test harness setup creates the test data reliably (fixed by QUIC retry in GAP-0260)
+
+#### Acceptance Criteria
+
+- `merge_performance_january_2026.yml` achieves ≥ 75% pass rate (≥ 6/8)
+- `MERGE (n:Label {prop: value})` correctly finds existing nodes instead of creating duplicates
+- MERGE with multiple labels works correctly
+- MERGE respects graph boundaries
+
+---
+
+### GAP-0265: FLE/TDE tests reference obsolete `graph_store.dat` storage format (7+ test failures)
+
+- **GitLab issue:** *(to be filed)*
+- **Category:** Testing / Architecture
+- **Severity:** High
+- **Requirement source:** REQ-FLE-STORAGE-001; REQ-TDE-001
+- **Discovered:** 2026-03-28 via GAP-0260 decomposition
+- **Failing spec:** `fle_plaintext_verification_basic.yml` (9/16 passing), plus 20 FLE/TDE specs (~205 failures total from GAP-0260 baseline)
+
+#### Summary
+
+The FLE (Field-Level Encryption) and TDE (Transparent Data Encryption) test specs verify at-rest encryption by scanning the data directory for plaintext markers. These tests were written for the monolithic `graph_store.dat` persistence format which has been replaced by per-graph, engine-backed storage across 8+ files per graph. The tests fail because:
+
+1. The scan targets no longer exist (`graph_store.dat` was removed in commit `16833164`)
+2. Data is now spread across `nodes.store`, `props.store`, `adj_out.store`, `adj_in.store`, `var.store`, `free.store` + WAL + manifests in per-graph subdirectories
+3. TDE page-level encryption is NOT wired into the new per-graph storage engine — the `graph_storage` library's `encryption.zig` supports AES-256-GCM page encryption but is not enabled during engine initialization
+
+#### Evidence
+
+- `src/storage/graph_storage_adapter.zig:210-219` — `getOrCreateGraph` creates engines without TDE key configuration
+- `docker/zig-packages/graph_storage-0.1.0-*/src/encryption.zig` — page-level AES-256-GCM encryption exists in the library
+- `src/storage/tde_file_encryption.zig` — TDE utilities exist but only used by backup and legacy index persistence
+- `src/execution/fle_hooks.zig` — FLE encryption hooks are correctly wired into the execution path (CREATE, MATCH+SET) — field-level encryption of property values works, but the at-rest verification tests can't find the data in the expected locations
+- FLE test specs use `grep -r -a -l <marker> ${data_dir}` to scan ALL files for plaintext markers — this now scans per-graph subdirectories but may find markers in metadata (property keys, WAL records, manifest files) that are not expected to be encrypted
+
+#### Root Cause
+
+**Two separate issues:**
+
+1. **Test architecture mismatch**: Tests grep for plaintext in all files, but property *keys* are not encrypted by FLE (by design), WAL operation metadata may contain unencrypted references, and manifest files contain statistics/metadata that isn't encrypted
+2. **TDE not wired**: The per-graph storage engine does not receive a TDE key, so page-level encryption is disabled. All 8 store files are written in plaintext at the page level, even when TDE is configured via `GEODE_TDE_KEY` environment variable
+
+#### Recommended Fix
+
+**Phase 1 — Wire TDE into per-graph engine:**
+
+1. In `StorageAdapter.createGraphLocked()`, read TDE key from environment/config and pass to `GraphEngine.create()` config
+2. Enable page-level AES-256-GCM encryption for all store files when TDE key is present
+3. Verify WAL entries are also encrypted (or add WAL encryption)
+
+**Phase 2 — Update test specs:**
+
+1. Update grep patterns to only scan `.store` files (exclude manifest, metadata)
+2. Only verify that property VALUES (not keys) are encrypted
+3. Separate FLE tests (field-level) from TDE tests (page-level)
+4. Account for per-graph subdirectory structure: `${data_dir}/graphs/<uuid>/*.store`
+
+#### Acceptance Criteria
+
+- `fle_plaintext_verification_basic.yml` achieves 100% pass rate
+- All 21 FLE/TDE specs achieve ≥ 80% pass rate
+- With TDE enabled, `grep -r -a <marker> ${data_dir}/graphs/*/` returns exit code 1 (no plaintext found in store files)
+- FLE-encrypted field values are opaque envelopes in protobuf responses unless decryption key is provided
+
+---
+
+### GAP-0266: Auth CLI user/role management operates on wrong data store (6 test failures)
+
+- **GitLab issue:** *(to be filed)*
+- **Category:** Correctness / CLI
+- **Severity:** High
+- **Requirement source:** REQ-AUTH-USER-MGMT-001; user management commands
+- **Discovered:** 2026-03-28 via GAP-0260 decomposition
+- **Failing spec:** `geode_auth.yml` (4/11 passing, 6 failed: `user-create-basic`, `user-create-with-password`, `user-list`, `role-list`, `policy-create-rls`, `token-based-auth`)
+
+#### Summary
+
+The `geode user create`, `geode user list`, and `geode role` CLI commands operate on a CLI-local GraphStore instance rather than the running server's auth state. When the test harness starts a Geode server and then runs CLI user management commands, the CLI opens its own GraphStore from the `--data-dir` path. User records created by the CLI are written to the local file but are NOT reflected in the running server's in-memory user store.
+
+#### Evidence
+
+- `src/cli/user_mgmt_cli.zig:118-125` — `cmdUser` calls `initCliAuthManager()` which opens a LOCAL GraphStore via `graph_store.getGlobalStore(allocator)` — this is a separate instance from the server's GraphStore
+- `src/cli/cli_auth_helpers.zig:108-115` — `initCliAuthManager` sets the data dir override and gets a global store, but the server process has its own global store already initialized
+- `src/cli/cli_auth_helpers.zig:124-128` — `deinitAndSaveCliAuth` calls `saveIfDirty()` which persists to disk, but the running server's in-memory user store is not reloaded
+- Test output shows `user-create-with-password` returning exit code 0 (success) but `user-list` immediately after shows "(no users)" — the creation succeeded in the CLI's local store but the list command reads from a fresh store instance
+
+#### Root Cause
+
+The CLI auth commands run in the same process as the `geode` binary but do NOT connect to a running server via QUIC. They directly manipulate the file-based user store. The running server has no mechanism to detect that the on-disk user store has been modified externally and reload it.
+
+#### Recommended Fix
+
+1. **Option A (server-side)**: Make auth CLI commands send requests over QUIC to the running server (like `geode query` does), so user mutations go through the server's auth system
+2. **Option B (reload mechanism)**: Add a file-watch or periodic reload of the user store in the server, so CLI-written changes are picked up
+3. **Option C (test-harness)**: Configure test specs to use `geode query "CALL geode.auth.createUser(...)"` via QUIC instead of `geode user create` CLI commands
+4. Most reliable fix is Option A — auth management should be server-side operations
+
+#### Acceptance Criteria
+
+- `geode_auth.yml` achieves ≥ 90% pass rate (≥ 10/11)
+- `geode user create alice alice@example.com --password P@ss1` followed by `geode user list` shows alice
+- User created via CLI is immediately authenticatable on the running server
+
+---
+
+### GAP-0267: Shell/REPL multi-statement session management failures (6 test failures)
+
+- **GitLab issue:** *(to be filed)*
+- **Category:** Feature / CLI
+- **Severity:** Low
+- **Requirement source:** REQ-CLI-SHELL-001; interactive shell operations
+- **Discovered:** 2026-03-28 via GAP-0260 decomposition
+- **Failing spec:** `shell_source_batch.yml` (44/50 passing, 2-6 failures depending on QUIC flakiness)
+
+#### Summary
+
+The shell `\source` command and batch file execution have residual failures in multi-statement session management. The QUIC reliability fix (GAP-0260) reduced failures from 14/50 to 2-6/50. The remaining failures are in cleanup/teardown tests (`cleanup-multi-txn`, `cleanup-merge-test`) that depend on multiple sequential transactions completing cleanly within a single shell session.
+
+#### Evidence
+
+- `shell_source_batch.yml` has 50 tests; 44 pass consistently, 2-6 fail with QUIC flakiness
+- Failing tests: `cleanup-multi-txn` (multi-transaction cleanup), `cleanup-merge-test` (MERGE in batch context)
+- The shell REPL (`src/client/repl/quic_transport.zig`) uses a single persistent QUIC connection with keepalive polling every 500ms — more reliable than per-query connections, but multi-statement sessions still depend on transaction state propagation across the connection
+- Known issue: `\source` command reads a file and executes each line as a separate query on the same connection — transaction state (BEGIN/COMMIT/ROLLBACK) must be tracked across statements
+
+#### Root Cause
+
+The shell session state machine doesn't properly track transaction boundaries when executing batch files via `\source`. If a statement within a batch fails (e.g., MERGE target not found), the transaction state may become inconsistent, causing subsequent cleanup statements to fail.
+
+#### Recommended Fix
+
+1. Add explicit transaction state tracking in the `\source` command execution loop
+2. On statement failure within a batch, automatically rollback the current transaction before proceeding
+3. Add a `--stop-on-error` flag to `\source` to halt batch execution on first failure
+
+#### Acceptance Criteria
+
+- `shell_source_batch.yml` achieves ≥ 96% pass rate (≥ 48/50)
+- `\source batch_file.gql` with multi-transaction content completes without session state corruption
+
+---
+
+### GAP-0268: WITH RECURSIVE / CTE execution not wired in query engine (4 test failures)
+
+- **GitLab issue:** *(to be filed)*
+- **Category:** Feature / Query Engine
+- **Severity:** High
+- **Requirement source:** REQ-GQL-CTE-001; ISO/IEC 39075:2024 §7.18 (common table expressions)
+- **Discovered:** 2026-03-28 via GAP-0260 decomposition
+- **Failing spec:** `recursive_and_cte.yml` (8/12 passing, 4 failed)
+
+#### Summary
+
+The GQL parser correctly recognizes `WITH [RECURSIVE] name AS (query)` syntax and builds proper AST structures (`CommonTableExpression`, `CTEList`, `RecursiveCTE`). However, the execution engine **never checks `q.cte_list`** — the parsed CTE definitions are attached to the Query AST node but completely ignored during execution. The 4 failing tests in `recursive_and_cte.yml` test variable-length path traversal patterns that depend on recursive graph traversal.
+
+#### Evidence
+
+- **Parser** (`src/gql/parser.zig:376-578`): Complete CTE parsing — `parseCTEList()`, `parseSingleCTE()`, `parseCTEBody()` all implemented. Handles `WITH RECURSIVE name AS (anchor UNION ALL recursive_term)` syntax. Sets `has_recursive_cte` flag. CANARY markers present: REQ-GQL-CTE-002, REQ-GQL-CTE-003
+- **AST** (`src/gql/ast.zig:205-234`): `CommonTableExpression` struct with `name`, `is_recursive`, `column_names`, `body` (union of `.simple` and `.recursive`). `Query.cte_list` field exists (line 75). `Query.has_recursive_cte` flag exists (line 91)
+- **Execution** (`src/execution/query_execution.zig:1394-1900`): `executeQueryWithContext()` checks for MATCH, CREATE, MERGE, CALL, UNWIND, WITH clause, but **has zero references to `cte_list` or `has_recursive_cte`**. Confirmed by grep: no matches for `cte_list` in any execution file
+- **Planner** (`src/planner/recursive.zig`): `RecursiveQueryProcessor` struct is defined with `max_recursion_depth`, `cycle_detection`, `path_tracking` — comprehensive structure but imported NOWHERE in execution code
+- **Test** (`tests/e2e_recursive_queries.zig`): Expects `error.NotImplemented`, confirming known unimplemented status
+
+#### Root Cause
+
+CTE parsing was implemented as part of GQL compliance work but the execution wiring was never completed. The parsed CTE definitions are silently ignored — queries fall through to the default RETURN execution path which produces empty or incorrect results.
+
+#### Recommended Fix
+
+1. Add CTE evaluation entry point in `executeQueryWithContext()`:
+
+   ```
+   if (q.cte_list) |cte_list| {
+       for (cte_list.ctes) |cte| {
+           if (cte.is_recursive) → iterative fixpoint execution (anchor → loop recursive term → union)
+           else → execute simple CTE body, bind result as named table
+       }
+       // Make CTE results available as virtual tables for MATCH/WHERE/RETURN
+   }
+   ```
+
+2. Wire `RecursiveQueryProcessor` from `src/planner/recursive.zig` into the execution path
+3. Implement cycle detection for recursive CTEs (prevent infinite loops)
+4. Support CTE result binding as virtual label/table reference in subsequent MATCH clauses
+
+#### Acceptance Criteria
+
+- `recursive_and_cte.yml` achieves 100% pass rate (12/12)
+- `WITH RECURSIVE nums AS (RETURN 1 AS n UNION ALL MATCH (prev) WHERE prev.n < 5 RETURN prev.n + 1 AS n) RETURN nums.n` returns rows [1, 2, 3, 4, 5]
+- Recursive CTEs with cycle detection terminate correctly
+- Simple (non-recursive) CTEs work as named subqueries
+
+---
+
+### GAP-0269: GQL compliance residual failures (4 test failures)
+
+- **GitLab issue:** *(to be filed)*
+- **Category:** Correctness / GQL Compliance
+- **Severity:** Medium
+- **Requirement source:** REQ-GQL-001; ISO/IEC 39075:2024 compliance
+- **Discovered:** 2026-03-28 via GAP-0260 decomposition
+- **Failing spec:** `geode_gql_compliance.yml` (26/30 passing, 4 failed)
+
+#### Summary
+
+Four GQL compliance tests fail intermittently: `keywords-delete-temp`, `variable-length-paths-unbounded`, `distinct-operations`, `case-expressions`. These failures are a mix of QUIC transport flakiness (queries not delivered) and potential correctness issues in edge-case query patterns.
+
+#### Evidence
+
+- `keywords-delete-temp`: Tests DELETE with temporary/computed node references — may fail due to QUIC retry not resolving the connection issue
+- `variable-length-paths-unbounded`: Tests `[:REL*]` (unbounded variable-length path) — execution may timeout or exceed memory limits for deeply connected graphs
+- `distinct-operations`: Tests `RETURN DISTINCT` — may fail when QUIC drops the query, returning empty results
+- `case-expressions`: Tests `CASE WHEN ... THEN ... ELSE ... END` — may have edge cases in expression evaluation
+- The `gql_conformance_39075.yml` spec (ISO/IEC 39075:2024 official tests) was not in the sample; the 70/70 compliance claim in CLAUDE.md should be re-verified against the current build
+
+#### Root Cause
+
+Mixed: 2-3 failures are likely QUIC flakiness (would pass on retry), 1-2 may be genuine edge-case bugs in variable-length path traversal or CASE expression evaluation.
+
+#### Recommended Fix
+
+1. Re-run `geode_gql_compliance.yml` 5 times and identify which failures are consistent vs flaky
+2. For consistent failures: investigate the specific query execution path
+3. For `variable-length-paths-unbounded`: add depth limiting to prevent infinite traversal
+4. For `case-expressions`: verify CASE/WHEN/THEN/ELSE/END evaluation in `src/eval.zig`
+5. Increase QUIC retry count for compliance test execution
+
+#### Acceptance Criteria
+
+- `geode_gql_compliance.yml` achieves ≥ 93% pass rate (≥ 28/30)
+- `gql_conformance_39075.yml` maintains 100% pass rate (70/70)
+- No regressions in core GQL compliance
 
 ---
 
