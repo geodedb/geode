@@ -318,8 +318,9 @@ pub const StorageAdapter = struct {
         const mg = try self.getOrCreateGraph(graph_name);
         const node_id = try mg.engine.allocNode();
 
-        // Write an initial (empty) node record so the node store knows this
-        // slot is occupied.
+        // Write an initial node record.  The txn_stamp must be non-zero so
+        // that getNode() does not treat the slot as empty (isEmpty checks all
+        // fields == 0).  Using 1 as a sentinel "created" stamp.
         const rec = gs.node.NodeRec{
             .out_head = 0,
             .in_head = 0,
@@ -327,7 +328,7 @@ pub const StorageAdapter = struct {
             .label_set = 0,
             .flags = 0,
             ._pad = 0,
-            .txn_stamp = 0,
+            .txn_stamp = 1,
         };
         try mg.engine.putNode(node_id, rec);
 

@@ -383,6 +383,16 @@ pub const Catalog = struct {
             }
         }
 
+        // Reload in-memory node/edge model from the now-opened graph engines.
+        // The initial loadFromFile during initGlobalStore ran before graphs were
+        // loaded in the adapter, so it found nothing.  This second pass picks up
+        // the data that was persisted in the storage engines.
+        store.loadFromFile() catch |err| {
+            log.err("Failed to reload store from adapter after catalog load", &.{
+                Attr.string("error", @errorName(err)),
+            });
+        };
+
         // Read indexes
         i = 0;
         while (i < index_count) : (i += 1) {
