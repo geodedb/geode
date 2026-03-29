@@ -96,6 +96,8 @@ test_logs/
 # Docker development artifacts (large binary files)
 docker/zig/*.tar.xz
 docker/zig/*.tar.gz
+# Zig package cache — populated by zig build, not checked in
+docker/zig-packages/
 docker/msquic/lib/*.so*
 docker/msquic/lib/*.a
 # Docker local build/runtime artifacts (generated)
