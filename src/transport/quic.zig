@@ -382,12 +382,11 @@ pub const QuicTransport = struct {
             // GAP-0203: Drain deferred connection cleanups.
             self.drainPendingDestroy();
 
-            // The dedicated poll thread handles packet delivery at 1ms
-            // intervals. The accept loop only needs to check for completed
-            // handshakes — no redundant poll call here.
-
-            // Non-blocking check for completed handshakes
-            const conn = api.tryAccept(ep) orelse return QuicError.WouldBlock;
+            // CV-based blocking accept: waits up to 50ms for a new
+            // connection via the endpoint's accept_cv, using near-zero
+            // CPU when idle. Falls back to WouldBlock if no connection
+            // arrives within the timeout.
+            const conn = api.waitForAccepted(ep, 50) orelse return QuicError.WouldBlock;
 
             // Return immediately — handler waits for streams via poll_cv
             const wrapper = try self.allocator.create(QuicConnection);
