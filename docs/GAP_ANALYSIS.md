@@ -1,7 +1,7 @@
 # Gap Analysis
 
-Last updated: 2026-03-28
-Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28)
+Last updated: 2026-03-29
+Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests)
 
 ## Summary
 
@@ -1158,6 +1158,94 @@ These are open bugs that may relate to requirement violations but are tracked as
 | [#515](https://gitlab.com/devnw/codepros/geode/geode/-/issues/515) | gRPC missing 7 message types | High | Transport parity |
 | [#514](https://gitlab.com/devnw/codepros/geode/geode/-/issues/514) | gRPC 22023 error on rapid writes (aarch64) | Medium | REQ-0008 Platform |
 | [#479](https://gitlab.com/devnw/codepros/geode/geode/-/issues/479) | gRPC segfault on aarch64 rapid writes | High | REQ-0008 Platform |
+
+---
+
+## Geodetestlab Test Suite Failures (2026-03-29)
+
+**Full suite run:** 200 specs, 3952 tests, 2 parallel workers
+**Results:** 3764 passed (95.3%), 153 failed, 35 skipped
+**Run date:** 2026-03-29 (against commit `e790bd1b`)
+
+All 153 failures are pre-existing. None were introduced by the storage persistence fixes (commits `de0e6751` through `e790bd1b`). The 5 storage-related specs pass 100% (53/53 tests).
+
+### Category 1: TDE Plaintext Verification (7 specs, 69 failures)
+
+**Root cause:** `PageEncryption` in `graph_storage/src/encryption.zig` is implemented but the `Pager` (`pager.zig`) never calls `encryptPage()`/`decryptPage()` during page I/O. Store files are written in plaintext even when `GEODE_TDE_KEY` is set. GAP-0265 acknowledges this gap.
+
+**Fix required:** Wire `PageEncryption` into `Pager.readPage()`/`writePage()` when `encryption_key` is present in `GraphConfig`.
+
+| Spec | Passed | Failed | Total |
+|------|--------|--------|-------|
+| `tde_plaintext_verification_page.yml` | 13 | 10 | 23 |
+| `tde_plaintext_verification_multitenant.yml` | 9 | 15 | 24 |
+| `tde_plaintext_verification_combined.yml` | 11 | 13 | 24 |
+| `tde_plaintext_verification_edge_cases.yml` | 21 | 11 | 32 |
+| `tde_plaintext_verification_backup.yml` | 9 | 8 | 17 |
+| `tde_plaintext_verification_key_rotation.yml` | 9 | 7 | 16 |
+| `tde_plaintext_verification_wal.yml` | 8 | 5 | 13 |
+
+### Category 2: Authentication / MFA / Password Security (5 specs, 55 failures)
+
+**Root cause:** Several auth features have partial implementations or test expectations that exceed current capability. MFA enrollment/verification flows, API key scoping, password policy enforcement, and auth provider chaining have implementation gaps.
+
+| Spec | Passed | Failed | Total |
+|------|--------|--------|-------|
+| `mfa_comprehensive_security.yml` | 19 | 23 | 42 |
+| `api_key_auth.yml` | 7 | 15 | 22 |
+| `geode_auth_security.yml` | 20 | 7 | 31 |
+| `gap_153_154_password_security.yml` | 13 | 6 | 19 |
+| `gap_155_156_regression.yml` | 4 | 4 | 8 |
+
+### Category 3: FLE (File-Level Encryption) (2 specs, 6 failures)
+
+**Root cause:** FLE access control and comprehensive security tests have edge cases where encryption enforcement doesn't cover all code paths.
+
+| Spec | Passed | Failed | Total |
+|------|--------|--------|-------|
+| `fle_comprehensive_security.yml` | 70 | 5 | 75 |
+| `fle_plaintext_verification_access_control.yml` | 18 | 1 | 19 |
+
+### Category 4: Auth Provider + Basic Auth (2 specs, 4 failures)
+
+**Root cause:** External authentication provider integration and basic auth session handling gaps.
+
+| Spec | Passed | Failed | Total |
+|------|--------|--------|-------|
+| `authn_provider.yml` | 13 | 2 | 15 |
+| `geode_auth.yml` | 8 | 2 | 11 |
+
+### Category 5: MERGE Performance (1 spec, 8 failures)
+
+**Root cause:** MERGE statement is parsed and the write lock is acquired, but full MERGE semantics (match-or-create with property merging) are not implemented in the execution engine.
+
+| Spec | Passed | Failed | Total |
+|------|--------|--------|-------|
+| `merge_performance_january_2026.yml` | 0 | 8 | 8 |
+
+### Category 6: ORDER BY Large Resultset (1 spec, 9 failures)
+
+**Root cause:** ORDER BY with large result sets (1000+ rows) exhibits performance degradation or incorrect ordering under certain key configurations.
+
+| Spec | Passed | Failed | Total |
+|------|--------|--------|-------|
+| `gap_0257_orderby_large_resultset.yml` | 33 | 9 | 42 |
+
+### Category 7: Transaction Management (1 spec, 1 failure)
+
+**Root cause:** Single flaky test in transaction isolation — intermittent under parallel execution (QUIC contention), passes on solo rerun.
+
+| Spec | Passed | Failed | Total |
+|------|--------|--------|-------|
+| `gql_transaction_management_comprehensive.yml` | 19 | 1 | 20 |
+
+### Category 8: Gap Analysis Fixes Flake (1 spec, 1 failure)
+
+**Root cause:** Intermittent QUIC query timeout under parallel test execution. Passes 90/90 on solo rerun.
+
+| Spec | Passed | Failed | Total |
+|------|--------|--------|-------|
+| `gap_analysis_fixes_january_2026.yml` | 89 | 1 | 90 |
 
 ---
 
