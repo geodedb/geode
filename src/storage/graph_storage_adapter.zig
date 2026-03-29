@@ -749,7 +749,84 @@ pub const StorageAdapter = struct {
 
         var it = self.engines.iterator();
         while (it.next()) |entry| {
-            try entry.value_ptr.*.engine.checkpoint();
+            const mg = entry.value_ptr.*;
+            try mg.engine.checkpoint();
+            // Save adapter-level label string dict alongside the engine
+            // data so that label string ↔ ID mappings survive restarts.
+            self.saveLabelDict(mg) catch |err| {
+                log.warn("failed to save label dict for graph '{s}': {}", .{ mg.name, err });
+            };
+        }
+    }
+
+    /// Save the adapter's LabelStringDict to a file in the graph's data
+    /// directory.  Format: count(u32) then [name_len(u32) | name | id(u32)]
+    /// per entry.
+    fn saveLabelDict(self: *StorageAdapter, mg: *ManagedGraph) !void {
+        _ = self;
+        const path = try mg.engine.allocator.alloc(u8, mg.engine.graph_dir.path.len + "/adapter_labels.dat".len);
+        defer mg.engine.allocator.free(path);
+        @memcpy(path[0..mg.engine.graph_dir.path.len], mg.engine.graph_dir.path);
+        @memcpy(path[mg.engine.graph_dir.path.len..], "/adapter_labels.dat");
+
+        const file = try std.fs.cwd().createFile(path, .{});
+        defer file.close();
+
+        const count: u32 = @intCast(mg.label_dict.str_to_id.count());
+        var count_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &count_buf, count, .little);
+        try file.writeAll(&count_buf);
+
+        // Write next_id
+        var next_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &next_buf, mg.label_dict.next_id, .little);
+        try file.writeAll(&next_buf);
+
+        var dict_it = mg.label_dict.str_to_id.iterator();
+        while (dict_it.next()) |dict_entry| {
+            const name = dict_entry.key_ptr.*;
+            const id = dict_entry.value_ptr.*;
+            var name_len_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &name_len_buf, @intCast(name.len), .little);
+            try file.writeAll(&name_len_buf);
+            try file.writeAll(name);
+            var id_buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &id_buf, id, .little);
+            try file.writeAll(&id_buf);
+        }
+    }
+
+    /// Load the adapter's LabelStringDict from disk into the ManagedGraph.
+    fn loadLabelDict(self: *StorageAdapter, mg: *ManagedGraph) void {
+        const path = std.fmt.allocPrint(self.allocator, "{s}/adapter_labels.dat", .{mg.engine.graph_dir.path}) catch return;
+        defer self.allocator.free(path);
+
+        const data = std.fs.cwd().readFileAlloc(self.allocator, path, 1024 * 1024) catch return;
+        defer self.allocator.free(data);
+
+        if (data.len < 8) return; // need at least count + next_id
+        const count = std.mem.readInt(u32, data[0..4], .little);
+        mg.label_dict.next_id = std.mem.readInt(u32, data[4..8], .little);
+
+        var offset: usize = 8;
+        var i: u32 = 0;
+        while (i < count) : (i += 1) {
+            if (offset + 4 > data.len) return;
+            const name_len = std.mem.readInt(u32, data[offset..][0..4], .little);
+            offset += 4;
+
+            if (name_len > 1024 or offset + name_len + 4 > data.len) return;
+            const name = self.allocator.dupe(u8, data[offset..][0..name_len]) catch return;
+            offset += name_len;
+
+            const id = std.mem.readInt(u32, data[offset..][0..4], .little);
+            offset += 4;
+
+            mg.label_dict.str_to_id.put(name, id) catch {
+                self.allocator.free(name);
+                return;
+            };
+            mg.label_dict.id_to_str.put(id, name) catch return;
         }
     }
 
@@ -850,6 +927,10 @@ pub const StorageAdapter = struct {
         };
 
         try self.engines.put(owned_name, mg);
+
+        // Load the adapter-level label string dict from disk so that label
+        // string ↔ ID mappings match what was used when nodes were created.
+        self.loadLabelDict(mg);
 
         log.info("opened existing graph '{s}'", .{name});
 

@@ -2706,6 +2706,11 @@ pub const GraphStore = struct {
             };
             defer self.allocator.free(scan_entries);
 
+            log.info("loadFromAdapter: scanned nodes", &.{
+                Attr.string("graph", graph_name),
+                Attr.int("count", @intCast(scan_entries.len)),
+            });
+
             for (scan_entries) |entry| {
                 const slot_id = entry.slot_id;
 
@@ -2734,28 +2739,24 @@ pub const GraphStore = struct {
                     .graph_name = graph_name_copy,
                 };
 
-                // Load properties from adapter
-                var storage_props = adapter.getAllNodeProperties(graph_name, slot_id, self.allocator) catch |err| {
-                    log.warn("Failed to get node properties from adapter", &.{
-                        Attr.string("error", @errorName(err)),
-                    });
-                    // Continue with empty properties
-                    break;
-                };
-                defer {
-                    // Clean up the storage property map — we've copied values out
+                // Load properties from adapter (best-effort: node is added
+                // even if properties fail to load, e.g. props.store empty).
+                load_props: {
+                    var storage_props = adapter.getAllNodeProperties(graph_name, slot_id, self.allocator) catch break :load_props;
+                    defer {
+                        var sp_iter = storage_props.iterator();
+                        while (sp_iter.next()) |sp_entry| {
+                            self.allocator.free(sp_entry.key_ptr.*);
+                        }
+                        storage_props.deinit();
+                    }
+
                     var sp_iter = storage_props.iterator();
                     while (sp_iter.next()) |sp_entry| {
-                        self.allocator.free(sp_entry.key_ptr.*);
+                        const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
+                        const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
+                        try node.properties.put(key_copy, pv);
                     }
-                    storage_props.deinit();
-                }
-
-                var sp_iter = storage_props.iterator();
-                while (sp_iter.next()) |sp_entry| {
-                    const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
-                    const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
-                    try node.properties.put(key_copy, pv);
                 }
 
                 try self.nodes.put(node_uuid, node);
