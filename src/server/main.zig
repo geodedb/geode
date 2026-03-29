@@ -625,10 +625,10 @@ pub fn main() !void {
                         Attr.string("error", @errorName(err)),
                     });
                 }
-                // #540: With dedicated poll thread, the accept loop only needs
-                // to check for new connections. Sleep 1ms between checks — poll
-                // thread handles data delivery independently.
-                std.Thread.sleep(1 * std.time.ns_per_ms);
+                // With dedicated poll thread, the accept loop only needs to
+                // check for new connections. 10ms sleep keeps idle CPU low
+                // while maintaining responsive connection acceptance.
+                std.Thread.sleep(10 * std.time.ns_per_ms);
                 continue;
             };
 

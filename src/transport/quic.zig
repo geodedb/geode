@@ -363,14 +363,15 @@ pub const QuicTransport = struct {
     /// RX buffers and signals waiting handler threads via poll_cv.broadcast().
     pub fn pollLoop(self: *QuicTransport, shutdown: *std.atomic.Value(bool)) void {
         while (!shutdown.load(.acquire)) {
-            // #540: High-frequency non-blocking poll — process any pending UDP
-            // datagrams without blocking on the socket. poll(0) returns immediately
-            // if no data is available. This maximizes throughput under load while
-            // the 50μs sleep prevents 100% CPU spin when idle.
+            // Non-blocking poll — process any pending UDP datagrams without
+            // blocking on the socket. poll(0) returns immediately if no data
+            // is available. 1ms sleep keeps idle CPU <5% while maintaining
+            // acceptable latency for incoming packets (was 50μs which caused
+            // 55%+ idle CPU from 20k syscalls/sec overhead).
             // drainPendingDestroy is handled by the main accept loop thread only
             // (it acquires ep.mu which would contend with poll's internal locking).
             self.poll(0) catch {};
-            std.Thread.sleep(50 * std.time.ns_per_us);
+            std.Thread.sleep(1 * std.time.ns_per_ms);
         }
         // Final poll to flush any remaining packets on shutdown
         self.poll(0) catch {};
@@ -381,14 +382,9 @@ pub const QuicTransport = struct {
             // GAP-0203: Drain deferred connection cleanups.
             self.drainPendingDestroy();
 
-            // Poll to drive handshake completion. The dedicated poll thread also
-            // polls at 50μs intervals, but the accept loop must poll too because
-            // handshakes require rapid multi-round-trip packet exchange and the
-            // poll thread's 50μs gap may miss time-sensitive handshake frames.
-            ep.poll(0) catch |err| {
-                return err;
-            };
-            self.poll_sync.poll_cv.broadcast();
+            // The dedicated poll thread handles packet delivery at 1ms
+            // intervals. The accept loop only needs to check for completed
+            // handshakes — no redundant poll call here.
 
             // Non-blocking check for completed handshakes
             const conn = api.tryAccept(ep) orelse return QuicError.WouldBlock;
