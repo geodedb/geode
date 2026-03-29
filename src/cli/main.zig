@@ -2394,9 +2394,11 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     }
 
     var attempts: u32 = 0;
-    // GAP-0260: Always allow at least 2 attempts (1 automatic retry) to handle
+    // GAP-0260/GAP-0263: Allow at least 3 attempts (2 automatic retries) to handle
     // transient QUIC connection drops under rapid sequential CLI usage.
-    const max_attempts = @max(retry_count + 1, 2);
+    // Increased from 2 to 3 based on GAP-0263 analysis showing ~30% residual
+    // failures after first retry under rapid connection cycling.
+    const max_attempts = @max(retry_count + 1, 3);
     var last_error: ?[]const u8 = null;
 
     while (attempts < max_attempts) : (attempts += 1) {
@@ -2430,12 +2432,15 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
                 // Handshake successful, proceed with query execution
                 params_transferred = true;
                 executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs) catch |err| {
-                    // GAP-0260: Auto-retry once on connection failure. QUIC
+                    // GAP-0260/GAP-0263: Auto-retry on connection failure. QUIC
                     // transport can drop messages under rapid sequential
-                    // connections; a single retry resolves most transient
-                    // failures without requiring explicit --retry flag.
-                    if (err == error.ConnectionFailed and attempts == 0) {
+                    // connections; retries resolve most transient failures
+                    // without requiring explicit --retry flag.
+                    if (err == error.ConnectionFailed and attempts + 1 < max_attempts) {
                         last_error = "connection dropped, retrying";
+                        // GAP-0263: Brief delay between retries to let the server
+                        // finish processing the previous connection's cleanup.
+                        std.Thread.sleep(10 * std.time.ns_per_ms);
                         continue;
                     }
                     return err;
