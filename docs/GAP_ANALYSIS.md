@@ -691,14 +691,42 @@ Running the full suite with `-j 2` (2 parallel workers) produces ~40 additional 
 - No data integrity or correctness issues in core CRUD/MATCH operations (these specs pass)
 - Load test performance: **PASS** at all levels (no regressions, +75% QPS improvement at c=4)
 
-#### Recommended Fix Priority
+#### Progress (2026-03-28)
 
-1. **High: Advanced query patterns** (63 failures) — nested queries, recursive CTE, WITH clause scoping are core GQL features
-2. **High: Encryption re-wiring** (205 failures) — FLE/TDE tests need updating for per-graph engine persistence
-3. **Medium: Auth/MFA** (78 failures) — investigate state accumulation and password-reset interaction
-4. **Medium: Shell/REPL** (44 failures) — multi-statement session management
-5. **Low: QUIC flakiness** (13 failures + ~40 variance) — increase test timeouts, add retry logic
-6. **Low: Spatial/WKB** (10 failures) — complete WKB function implementations
+**Root cause identified and partially fixed:**
+
+The primary root cause was **QUIC transport message loss under rapid sequential CLI connections**. Each CLI `query` command creates a new QUIC connection. Under rapid sequential connections (as in test harness setup), the QUIC library intermittently fails to deliver the EXECUTE message to the server. The client received a "success" response (default status_class 00000) because the EndOfStream error path silently returned the uninitialized default status.
+
+**Fixes applied (commits `e6d8e71a`, `00530a62`):**
+
+1. **Thread-safe `computeBaseFlags`**: Eliminated global static buffer data race in query flag computation (CWE-362).
+2. **Stream FIN on close**: CLI now signals FIN before closing QUIC streams for cleaner teardown.
+3. **EndOfStream detection**: Returns `error.ConnectionFailed` (08006) instead of fake success when the server never responds.
+4. **Automatic retry**: CLI query command now retries once on connection failure (min 2 attempts).
+
+**Results on representative 22-spec sample (529 tests):**
+
+| Spec | Before | After |
+|------|--------|-------|
+| nested_queries_basic | 0/12 | **12/12** |
+| with_clause_relationship_vars | 6/20 | **20/20** |
+| geode_regression_tests | ~28/43 | **42/43** |
+| spatial_wkb_functions | ~28/38 | **38/38** |
+| geode_comprehensive | 33/33 | **33/33** |
+| mfa_comprehensive_security | N/A | 10/42 |
+| merge_performance | N/A | 0/8 |
+| Sample total | N/A | **433/529 (81.9%)** |
+
+#### Remaining Failures by Category
+
+1. **MFA (32 failures)**: MFA flows not fully implemented — feature gap, not regression
+2. **Query output formats (10 failures)**: JSON/table format rendering issues
+3. **QUIC transport (9 failures)**: Residual transport flakiness
+4. **MERGE complex patterns (8 failures)**: Advanced MERGE patterns unimplemented
+5. **FLE plaintext (7 failures)**: Need re-wiring for per-graph storage engine
+6. **Auth CLI (6 failures)**: User create/list CLI commands not persisting
+7. **Shell/REPL (6 failures)**: Multi-statement session management issues
+8. **Recursive CTE (4 failures)**: WITH RECURSIVE execution partially wired
 
 #### Acceptance Criteria
 
