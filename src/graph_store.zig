@@ -1613,14 +1613,19 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphIsolation"; ASPECT=CreateEdge; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Create edge with optional graph name for per-graph data isolation
     pub fn createEdgeWithGraph(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8) !u64 {
-        // Dual-write: create in adapter (independent ID space), then fall through to local HashMap
-        const adapter_slot_id: ?u64 = if (global_vtable) |vt|
-            vt.createEdgeFn(vt.ctx, graph_name, from_id, to_id, edge_type) catch |err| blk: {
+        // Dual-write: create in adapter (independent ID space).
+        // Translate UUID-based node IDs to engine slot IDs via the IdMap,
+        // since the engine stores nodes by slot position, not UUID.
+        const adapter_slot_id: ?u64 = blk: {
+            const vt = global_vtable orelse break :blk null;
+            const im = (self.getOrCreateIdMap(graph_name) catch break :blk null);
+            const from_slot = im.nodeSlot(@as(u128, from_id)) orelse break :blk null;
+            const to_slot = im.nodeSlot(@as(u128, to_id)) orelse break :blk null;
+            break :blk vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type) catch |err| err_blk: {
                 log.err("dual-write: adapter createEdge failed", &.{ Attr.string("error", @errorName(err)), Attr.string("graph", graph_name) });
-                break :blk null;
-            }
-        else
-            null;
+                break :err_blk null;
+            };
+        };
         try self.ensureGraph(graph_name);
         // Generate UUIDv7-based time-sortable unique ID
         const id = generateTimeBasedId();
@@ -2721,12 +2726,12 @@ pub const GraphStore = struct {
                     });
                     continue;
                 };
-                // labels are already allocated copies
 
-                // Determine the node's UUID — check IdMap reverse lookup, or use slot_id as-is
+                // Determine the node's UUID — check IdMap reverse lookup, or use slot_id as-is.
+                // Use the lower 64 bits of the u128 UUID (the unique part on little-endian).
                 const id_map = self.getIdMap(graph_name);
                 const node_uuid: u64 = if (id_map) |im|
-                    if (im.nodeUuid(slot_id)) |uuid_val| @truncate(uuid_val >> 64) else slot_id
+                    if (im.nodeUuid(slot_id)) |uuid_val| @truncate(uuid_val) else slot_id
                 else
                     slot_id;
 
@@ -2778,7 +2783,7 @@ pub const GraphStore = struct {
                 for (out_edges) |edge_entry| {
                     // Check if this edge is already loaded (could be from another node's outgoing scan)
                     const edge_uuid: u64 = if (id_map) |im|
-                        if (im.edgeUuid(edge_entry.edge_id)) |uuid_val| @truncate(uuid_val >> 64) else edge_entry.edge_id
+                        if (im.edgeUuid(edge_entry.edge_id)) |uuid_val| @truncate(uuid_val) else edge_entry.edge_id
                     else
                         edge_entry.edge_id;
 
@@ -2786,7 +2791,7 @@ pub const GraphStore = struct {
 
                     // Resolve target node UUID
                     const target_uuid: u64 = if (id_map) |im|
-                        if (im.nodeUuid(edge_entry.neighbor)) |uuid_val| @truncate(uuid_val >> 64) else edge_entry.neighbor
+                        if (im.nodeUuid(edge_entry.neighbor)) |uuid_val| @truncate(uuid_val) else edge_entry.neighbor
                     else
                         edge_entry.neighbor;
 
