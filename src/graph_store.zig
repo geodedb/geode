@@ -3145,8 +3145,16 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
     if (global_adapter) |existing| return existing;
 
     const gs = @import("graph_storage");
+    const tde = @import("storage/tde_file_encryption.zig");
+
+    // GAP-0265: Wire TDE encryption key into per-graph storage engine.
+    // Without this, page-level encryption is disabled even when GEODE_TDE_KEY
+    // is set — all store files are written in plaintext.
+    const tde_key = tde.loadKey(allocator) catch null;
+
     const adapter = try graph_storage_adapter.StorageAdapter.init(allocator, data_dir, gs.GraphConfig{
         .data_dir = data_dir,
+        .encryption_key = tde_key,
     });
     global_adapter = adapter;
 
