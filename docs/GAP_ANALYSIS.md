@@ -5,19 +5,150 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 
 ## Summary
 
-- **Total open gaps:** 8
-- **Critical:** 2
-- **High:** 1 (GAP-0255)
+- **Total open gaps:** 11
+- **Critical:** 3 (GAP-0256, GAP-0270, GAP-0271)
+- **High:** 2 (GAP-0255, GAP-0272)
 - **Medium:** 2 (GAP-0246 blocked, GAP-0247 blocked)
 - **Low:** 0
 - **Blocked (external dependency):** 3 (GAP-0246, GAP-0247, GAP-0256)
 - **Won't Do:** 1 (GAP-0258)
+- **Opened this session (2026-03-29):** GAP-0270, GAP-0271, GAP-0272
 - **Closed this session (2026-03-28):** GAP-0264, GAP-0266, GAP-0261, GAP-0263, GAP-0265, GAP-0267, GAP-0268, GAP-0269, GAP-0262
 - **Closed (2026-03-13):** GAP-0248, GAP-0249, GAP-0250, GAP-0251, GAP-0252, GAP-0253
 
 GitLab is the source of truth for all gap status and tracking. This document contains **OPEN gaps only**. Resolved items are in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
 
 ## Gaps
+
+### GAP-0270: CLI auth commands do not connect to running server — **OPEN / Architecture Gap**
+
+- **Category:** Architecture / Authentication
+- **Severity:** Critical
+- **Failures caused:** 63 geodetestlab test failures across 10 specs
+- **Opened:** 2026-03-29 (full suite audit)
+
+**Description:**
+
+CLI authentication subcommands (`geode user create`, `geode user list`, `geode role list`, `geode mfa enable`, `geode apikey revoke-all`, `geode user delete`, etc.) initialize their own local `GraphStore` and `StorageAdapter` via `cli_auth_helpers.zig:initCliAuthManager()` instead of connecting to the running Geode server via QUIC. This creates a separate, isolated `__geode_security` graph in the CLI process that has no knowledge of users, roles, or policies managed by the server.
+
+**Impact:**
+
+When the test harness starts a server on a temp data directory and then runs CLI auth commands, the CLI opens its own storage adapter against the same directory. Because the server already holds file locks, the CLI creates a fresh empty security graph and finds no users. This single architectural issue causes 63 of the 70 remaining test failures:
+
+| Spec | Failed | Total | Affected commands |
+|------|--------|-------|-------------------|
+| `mfa_comprehensive_security.yml` | 23 | 42 | `mfa enable`, `mfa disable`, `mfa status` |
+| `api_key_auth.yml` | 15 | 22 | `apikey create`, `apikey list`, `apikey revoke` |
+| `geode_auth_security.yml` | 7 | 31 | `user create`, `role grant`, `policy create` |
+| `gap_153_154_password_security.yml` | 6 | 19 | `user create` with password policies |
+| `gap_155_156_regression.yml` | 4 | 8 | `mfa enable`, `mfa disable` |
+| `fle_comprehensive_security.yml` | 5 | 75 | `user delete` (cleanup steps) |
+| `authn_provider.yml` | 2 | 15 | `apikey revoke-all`, `user delete` (cleanup) |
+| `geode_auth.yml` | 2 | 11 | `user list`, `role list` |
+
+**Current state (evidence):**
+
+- `src/cli/cli_auth_helpers.zig:110-127` — `initCliAuthManager` defaults to `/var/lib/geode` or the provided `--data-dir`, opening a new `StorageAdapter` and `GraphStore`
+- `src/cli/user_mgmt_cli.zig:118-125` — `cmdUser` calls `initCliAuthManager` then operates on the local store
+- `src/cli/auth_cli.zig` — `cmdPolicy`, `cmdGrant`, `cmdRevoke` follow the same pattern
+- Server-side auth operations go through QUIC handler -> execution engine -> shared `GraphStore`
+- No `CALL geode.auth.*` procedures exist in `src/execution/procedure_registry.zig`
+
+**Recommended fix (Option C — estimated 50-80 lines):**
+
+Add a `--server` flag to CLI auth commands that, when present, delegates the operation to the running server via `geode query` with equivalent GQL statements:
+
+```
+// In user_mgmt_cli.zig cmdUser():
+if (server_address) |srv| {
+    // Build: "CALL geode.auth.user_create('alice', 'pw', 'alice@example.com')"
+    // Delegate to cmdQuery with --server flag
+} else {
+    // Offline mode: local storage (current behavior)
+    var mgr = cli_auth.initCliAuthManager(allocator, data_dir);
+}
+```
+
+This requires implementing `CALL geode.auth.*` procedures in the execution engine's procedure registry (~500 lines for user_create, user_list, user_delete, role_create, role_list, mfa_enable, mfa_disable, grant, revoke).
+
+**Alternative approaches:**
+
+- (A) Implement auth procedures in procedure_registry.zig and convert test specs to use `query:` format with `CALL geode.auth.*()` (~500 lines + spec rewrites)
+- (B) Have test harness convert CLI auth args to `geode query` calls (test-only fix, doesn't help production)
+
+---
+
+### GAP-0271: FLE role parser allows semicolon injection — **OPEN / Security Bug**
+
+- **Category:** Security / Access Control
+- **Severity:** Critical (security)
+- **Failures caused:** 1 geodetestlab test failure
+- **Opened:** 2026-03-29 (full suite audit)
+
+**Description:**
+
+The FLE (Field-Level Encryption) access control role parser does not treat semicolons as delimiters or injection vectors. When a role argument contains a semicolon (e.g., `--role "user;admin"`), the parser splits on `;` and the `admin` portion grants elevated access to encrypted fields that should be restricted.
+
+**Impact:**
+
+An attacker with low-privilege `user` role access could inject `; admin` into a role parameter to gain administrative access to FLE-protected fields (SSN, salary, medical records, etc.). This bypasses the intended access control policy.
+
+**Current state (evidence):**
+
+- Test `fle-acl-test-role-injection-semicolon` in `fle_plaintext_verification_access_control.yml` FAILS: the query returns `FLESECRET_ADMIN_ONLY_TopSecretData123` when it should be blocked
+- Comma injection (`--role "user,admin"`) is correctly blocked
+- Wildcard injection (`--role "*"`) is correctly blocked
+- Only semicolon injection succeeds
+
+**Fix required:**
+
+In the FLE role parsing logic (likely in `src/security/` or the FLE annotations module), sanitize or reject semicolons in role strings using the same pattern that already handles commas:
+
+```zig
+// Current: splits on comma only
+// Fix: reject or strip semicolons before role matching
+if (std.mem.indexOfScalar(u8, role_str, ';') != null) {
+    return error.InvalidRoleFormat;
+}
+```
+
+---
+
+### GAP-0272: Bulk MERGE via stdin causes silent failure — **OPEN / Stability**
+
+- **Category:** Stability / QUIC Transport
+- **Severity:** High
+- **Failures caused:** 1 geodetestlab test failure
+- **Opened:** 2026-03-29 (full suite audit)
+
+**Description:**
+
+When executing 50 MERGE statements piped via stdin (`geode query -`), the second of three equal-sized batches fails silently with exit code 1 and empty stdout/stderr. Batch 1 (50 MERGEs) and batch 3 (remaining MERGEs) both succeed. The failure is deterministic — batch 2 fails consistently.
+
+**Impact:**
+
+Bulk data ingestion via stdin is unreliable for medium-sized batches. Users piping GQL scripts into `geode query -` may lose data without any error indication.
+
+**Current state (evidence):**
+
+- Test `issue-536-create-practices-batch2` in `regression_issue_536_auth_count_overflow.yml` fails with exit code 1, empty stdout, empty stderr
+- Batch 1 (same size, same syntax) passes
+- Batch 3 (same size, same syntax) passes
+- The MERGE statements use `ON CREATE SET id = ...` syntax (bare variable assignment) which may parse differently from `ON CREATE SET n.id = ...` (property assignment)
+
+**Possible root causes:**
+
+1. QUIC connection dropped mid-stream during the second batch (connection state corruption after batch 1 response)
+2. A specific MERGE statement in batch 2 triggers a parser/execution error that isn't surfaced to stderr
+3. Memory pressure or buffer overflow in the stdin reader after processing batch 1's response
+
+**Fix approach:**
+
+1. Check if `ON CREATE SET id = ...` (bare variable) parses differently from `ON CREATE SET n.id = ...` (node property) — may be a parser issue
+2. Add error propagation to the stdin query pipeline so parser/execution errors reach stderr
+3. Check QUIC stream state management between sequential queries on the same connection
+
+---
 
 ### ~~GAP-0249~~: Concurrent MERGE data race — **CLOSED / Already Fixed**
 
