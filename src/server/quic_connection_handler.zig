@@ -426,6 +426,10 @@ pub const SharedConnState = struct {
     /// the connection is idle. Atomic so the acceptor thread and stream handler
     /// threads can update it without a mutex.
     active_streams: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// GAP-0274: Condition variable for stream drain — replaces sleep-polling.
+    /// Handler threads signal on stream close; main thread waits instead of spinning.
+    streams_mu: std.Thread.Mutex = .{},
+    streams_cv: std.Thread.Condition = .{},
 
     /// Snapshot shared identity from a fully-initialized ServerState (after HELLO).
     pub fn captureFromState(self: *SharedConnState, state: *const ServerState) !void {
@@ -470,6 +474,8 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     defer {
         stream.close();
         _ = cs.active_streams.fetchSub(1, .release);
+        // GAP-0274: Signal the drain waiter that a stream closed
+        cs.streams_cv.broadcast();
         gpa.destroy(ctx);
     }
 
@@ -581,7 +587,10 @@ fn streamAcceptorLoop(
 
         // Check stream limit
         if (conn_state.active_streams.load(.acquire) >= max_additional_streams) {
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+            // GAP-0274: Wait for a stream to close instead of blind-sleeping
+            conn_state.streams_mu.lock();
+            conn_state.streams_cv.timedWait(&conn_state.streams_mu, 5 * std.time.ns_per_ms) catch {};
+            conn_state.streams_mu.unlock();
             continue;
         }
 
@@ -595,6 +604,7 @@ fn streamAcceptorLoop(
                 log.warn("Failed to allocate stream handler context", &.{});
                 new_stream.close();
                 _ = conn_state.active_streams.fetchSub(1, .release);
+                conn_state.streams_cv.broadcast();
                 continue;
             };
             ctx.* = .{
@@ -608,6 +618,7 @@ fn streamAcceptorLoop(
                 log.warn("Failed to spawn stream handler thread", &.{});
                 new_stream.close();
                 _ = conn_state.active_streams.fetchSub(1, .release);
+                conn_state.streams_cv.broadcast();
                 gpa.destroy(ctx);
                 continue;
             };
@@ -917,11 +928,13 @@ pub fn handleQuicConnection(
     _ = conn_state.active_streams.fetchAdd(1, .release);
     defer {
         _ = conn_state.active_streams.fetchSub(1, .release);
-        // Wait for ALL additional stream handlers to finish before freeing
-        // conn_state. Without this, handlers reference freed memory → segfault.
+        // GAP-0274: Wait for ALL additional stream handlers to finish before
+        // freeing conn_state. Uses condition variable instead of busy-wait.
+        conn_state.streams_mu.lock();
         while (conn_state.active_streams.load(.acquire) > 0) {
-            std.Thread.sleep(1 * std.time.ns_per_ms);
+            conn_state.streams_cv.wait(&conn_state.streams_mu);
         }
+        conn_state.streams_mu.unlock();
         conn_state.deinit();
     }
 
