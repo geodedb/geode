@@ -1,26 +1,26 @@
 # Gap Analysis
 
-Last updated: 2026-03-29
-Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests)
+Last updated: 2026-03-30
+Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270–0272 closure (2026-03-30)
 
 ## Summary
 
-- **Total open gaps:** 11
-- **Critical:** 3 (GAP-0256, GAP-0270, GAP-0271)
-- **High:** 2 (GAP-0255, GAP-0272)
+- **Total open gaps:** 8
+- **Critical:** 1 (GAP-0256)
+- **High:** 1 (GAP-0255)
 - **Medium:** 2 (GAP-0246 blocked, GAP-0247 blocked)
 - **Low:** 0
 - **Blocked (external dependency):** 3 (GAP-0246, GAP-0247, GAP-0256)
 - **Won't Do:** 1 (GAP-0258)
-- **Opened this session (2026-03-29):** GAP-0270, GAP-0271, GAP-0272
-- **Closed this session (2026-03-28):** GAP-0264, GAP-0266, GAP-0261, GAP-0263, GAP-0265, GAP-0267, GAP-0268, GAP-0269, GAP-0262
+- **Closed this session (2026-03-30):** GAP-0270, GAP-0271, GAP-0272
+- **Closed (2026-03-28):** GAP-0264, GAP-0266, GAP-0261, GAP-0263, GAP-0265, GAP-0267, GAP-0268, GAP-0269, GAP-0262
 - **Closed (2026-03-13):** GAP-0248, GAP-0249, GAP-0250, GAP-0251, GAP-0252, GAP-0253
 
 GitLab is the source of truth for all gap status and tracking. This document contains **OPEN gaps only**. Resolved items are in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
 
 ## Gaps
 
-### GAP-0270: CLI auth commands do not connect to running server — **OPEN / Architecture Gap**
+### GAP-0270: CLI auth commands do not connect to running server — **CLOSED (2026-03-30)**
 
 - **Category:** Architecture / Authentication
 - **Severity:** Critical
@@ -76,9 +76,11 @@ This requires implementing `CALL geode.auth.*` procedures in the execution engin
 - (A) Implement auth procedures in procedure_registry.zig and convert test specs to use `query:` format with `CALL geode.auth.*()` (~500 lines + spec rewrites)
 - (B) Have test harness convert CLI auth args to `geode query` calls (test-only fix, doesn't help production)
 
+**Resolution (2026-03-30):** Combined approaches A+B. Implemented `CALL geode.auth.*` procedures (user_create, user_list, user_delete, role_list, mfa_enable, mfa_disable) in `procedure_registry.zig`. Added `listUsers()` and `deleteUser()` to `user_management.zig`. Modified test harness executor to auto-convert CLI auth commands to CALL queries when a server is running.
+
 ---
 
-### GAP-0271: FLE role parser allows semicolon injection — **OPEN / Security Bug**
+### GAP-0271: FLE role parser allows semicolon injection — **CLOSED (2026-03-30)**
 
 - **Category:** Security / Access Control
 - **Severity:** Critical (security)
@@ -112,9 +114,11 @@ if (std.mem.indexOfScalar(u8, role_str, ';') != null) {
 }
 ```
 
+**Resolution (2026-03-30):** Added `--role` flag to `cmdQuery` with strict validation (`[a-zA-Z0-9_-]` only). Extended HelloRequest protocol with role field (field 8). Server validates role strings in HELLO handler, rejecting semicolons, commas, wildcards, and other injection characters. Updated test harness to allow role values through `sanitize_args` for security tests.
+
 ---
 
-### GAP-0272: Bulk MERGE via stdin causes silent failure — **OPEN / Stability**
+### GAP-0272: Bulk MERGE via stdin causes silent failure — **CLOSED (2026-03-30)**
 
 - **Category:** Stability / QUIC Transport
 - **Severity:** High
@@ -147,6 +151,8 @@ Bulk data ingestion via stdin is unreliable for medium-sized batches. Users pipi
 1. Check if `ON CREATE SET id = ...` (bare variable) parses differently from `ON CREATE SET n.id = ...` (node property) — may be a parser issue
 2. Add error propagation to the stdin query pipeline so parser/execution errors reach stderr
 3. Check QUIC stream state management between sequential queries on the same connection
+
+**Resolution (2026-03-30):** `executeQueryOnConnection` now returns `error.QueryFailed` when the server responds with an error payload, ensuring non-zero exit code and visible error output. Increased QUIC retry delay from 10ms to 50ms between attempts. The caller now handles `QueryFailed` separately from connection failures and outputs error context to stderr.
 
 ---
 
