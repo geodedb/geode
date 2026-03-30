@@ -7,8 +7,27 @@ const value_types = @import("../value_types.zig");
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 
+// GAP-0273: Spice parallelism for graph algorithm hot paths
+const spice_wrapper = @import("parallel/spice");
+const SpicePool = spice_wrapper.SpicePool;
+
 // Local type aliases
 const Value = value_types.Value;
+
+// GAP-0273: Global spice pool for graph algorithm parallelism.
+// Initialized lazily on first use, shared across all algorithm calls.
+var g_spice_pool: ?SpicePool = null;
+var g_spice_pool_mu: std.Thread.Mutex = .{};
+
+fn getSpicePool(allocator: std.mem.Allocator) *SpicePool {
+    g_spice_pool_mu.lock();
+    defer g_spice_pool_mu.unlock();
+    if (g_spice_pool == null) {
+        g_spice_pool = SpicePool.init(allocator, null);
+        g_spice_pool.?.start();
+    }
+    return &g_spice_pool.?;
+}
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-003; FEATURE="ExecutionRefactoring"; ASPECT=CENTRALITY_ALGORITHMS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
 // Extracted centrality and community detection algorithms from execution.zig for better modularity (M1 Phase 3)
@@ -37,6 +56,7 @@ pub fn getNeighbors(store: *graph_store.GraphStore, node_id: u64, allocator: std
 }
 
 /// Degree Centrality - count edges for each node
+/// GAP-0273: Uses spice parallelForEach for concurrent degree computation on large graphs.
 pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
     var node_list = try std.ArrayList(u64).initCapacity(allocator, 0);
     defer node_list.deinit(allocator);
@@ -46,18 +66,43 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
         try node_list.append(allocator, entry.key_ptr.*);
     }
 
-    var rows = try allocator.alloc([]Value, node_list.items.len);
-    for (node_list.items, 0..) |node_id, i| {
-        // Use adjacency indexes for O(1) degree lookup instead of O(E) edge scan
-        const out_degree: u64 = if (store.getOutgoingEdgeIds(node_id)) |ids| ids.len else 0;
-        const in_degree: u64 = if (store.getIncomingEdgeIds(node_id)) |ids| ids.len else 0;
-        const degree = out_degree + in_degree;
-
-        var row = try allocator.alloc(Value, 2);
-        row[0] = Value{ .Int = @intCast(node_id) };
-        row[1] = Value{ .Int = @intCast(degree) };
-        rows[i] = row;
+    const n = node_list.items.len;
+    const rows = try allocator.alloc([]Value, n);
+    // Pre-allocate all row arrays so parallel workers don't need the allocator
+    for (rows) |*row| {
+        row.* = try allocator.alloc(Value, 2);
     }
+
+    const DegreeCtx = struct {
+        nodes: []const u64,
+        rows: [][]Value,
+        store_ptr: *graph_store.GraphStore,
+    };
+
+    const ctx = DegreeCtx{
+        .nodes = node_list.items,
+        .rows = rows,
+        .store_ptr = store,
+    };
+
+    // GAP-0273: Parallel degree computation — each node's degree is independent
+    const pool = getSpicePool(allocator);
+    spice_wrapper.parallelForEach(
+        pool,
+        0,
+        n,
+        ctx,
+        struct {
+            fn compute(_: *spice_wrapper.Task, idx: usize, c: DegreeCtx) void {
+                const node_id = c.nodes[idx];
+                const out_degree: u64 = if (c.store_ptr.getOutgoingEdgeIds(node_id)) |ids| ids.len else 0;
+                const in_degree: u64 = if (c.store_ptr.getIncomingEdgeIds(node_id)) |ids| ids.len else 0;
+                c.rows[idx][0] = Value{ .Int = @intCast(node_id) };
+                c.rows[idx][1] = Value{ .Int = @intCast(out_degree + in_degree) };
+            }
+        }.compute,
+        spice_wrapper.Thresholds.forEach,
+    );
 
     return ExecutionResult{
         .columns = columns,
