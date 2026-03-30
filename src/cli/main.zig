@@ -843,6 +843,8 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // CANARY: REQ=REQ-CLI-FILE-FLAG-001; FEATURE="QueryFileFlag"; ASPECT=FileInput; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-31
     // Issue GAP-384: Add --file flag to execute GQL from a file (same as /source in shell)
     var source_file: ?[]const u8 = null;
+    // GAP-0271: FLE role for field-level access control
+    var role: ?[]const u8 = null;
     var params = std.ArrayList(schema.Param){};
     var params_owned = true;
     defer if (params_owned) {
@@ -1033,6 +1035,26 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             // Just skip the log level value - query command doesn't use it but we need to consume it
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--role")) {
+            // GAP-0271: FLE role for field-level access control
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --role requires a role name\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            const role_arg = argv[i + 1];
+            // Validate role: only allow [a-zA-Z0-9_-], reject injection chars
+            for (role_arg) |c| {
+                if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') {
+                    std.debug.print("Error: invalid role name '{s}' — must match [a-zA-Z0-9_-]+ (no special characters)\n", .{role_arg});
+                    std.process.exit(@intFromEnum(ExitCode.usage_error));
+                }
+            }
+            if (role_arg.len == 0) {
+                std.debug.print("Error: --role name must not be empty\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            role = role_arg;
             i += 1;
         } else if (!std.mem.startsWith(u8, arg, "-") or std.mem.eql(u8, arg, "-")) {
             // First non-option argument is the query text, or "-" for stdin
@@ -1317,6 +1339,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .graph = graph_for_prepend,
             .graph_for_hello = graph,
             .use_grpc = use_grpc,
+            .role = role,
         });
         return;
     }
@@ -1359,6 +1382,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .graph_for_hello = graph,
             .page_size = page_size,
             .params = params,
+            .role = role,
         }) catch |err| {
             if (err == error.AuthenticationFailed)
                 std.process.exit(@intFromEnum(ExitCode.auth_error));
@@ -1483,6 +1507,7 @@ const QuicQueryOptions = struct {
     graph_for_hello: ?[]const u8 = null, // For HELLO handshake (set from both --graph and DSN)
     page_size: u32 = 1000,
     params: std.ArrayList(schema.Param),
+    role: ?[]const u8 = null, // GAP-0271: FLE role for field-level access control
 };
 
 const GrpcQueryOptions = struct {
@@ -2175,6 +2200,7 @@ const ChunkedQueryOptions = struct {
     graph: ?[]const u8 = null,
     graph_for_hello: ?[]const u8 = null,
     use_grpc: bool = false,
+    role: ?[]const u8 = null, // GAP-0271: FLE role
 };
 
 // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-006; FEATURE="ChunkedExecution"; ASPECT=Execution; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-13
@@ -2302,6 +2328,7 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 .graph_for_hello = opts.graph_for_hello,
                 .page_size = 1000,
                 .params = empty_params,
+                .role = opts.role,
             }) catch |err| {
                 std.debug.print("Error executing chunk: {}\n", .{err});
                 error_count += 1;
@@ -2366,6 +2393,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     const graph = opts.graph;
     const graph_for_hello = opts.graph_for_hello;
     const page_size = opts.page_size;
+    const fle_role = opts.role;
     var params = opts.params;
     var params_transferred = false;
     defer if (!params_transferred) {
@@ -2431,7 +2459,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
             if (handshake_err) |_| {
                 // Handshake successful, proceed with query execution
                 params_transferred = true;
-                executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs) catch |err| {
+                executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, fle_role) catch |err| {
                     // GAP-0260/GAP-0263: Auto-retry on connection failure. QUIC
                     // transport can drop messages under rapid sequential
                     // connections; retries resolve most transient failures
@@ -2565,6 +2593,7 @@ fn executeQueryOnConnection(
     params: std.ArrayList(schema.Param),
     page_size: u32,
     timeout_secs: u32,
+    fle_role: ?[]const u8,
 ) !void {
     // Get stdout and stderr handles for output
     const stdout = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable };
@@ -2589,6 +2618,7 @@ fn executeQueryOnConnection(
         .password = password orelse "",
         .tenant_id = null,
         .graph = graph_for_hello,
+        .role = fle_role,
     };
 
     log.debug("Client sending HELLO (Protobuf)", &.{});

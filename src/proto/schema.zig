@@ -44,6 +44,7 @@ pub const HelloRequest = struct {
     client_version: []const u8 = "",
     wanted_conformance: []const u8 = "",
     graph: ?[]const u8 = null,
+    role: ?[]const u8 = null, // FLE role for field-level access control
 
     pub const _desc_table = .{
         .username = fd(1, .{ .scalar = .string }),
@@ -53,6 +54,7 @@ pub const HelloRequest = struct {
         .client_version = fd(5, .{ .scalar = .string }),
         .wanted_conformance = fd(6, .{ .scalar = .string }),
         .graph = fd(7, .{ .scalar = .string }),
+        .role = fd(8, .{ .scalar = .string }),
     };
 
     pub fn deinit(self: *HelloRequest, allocator: std.mem.Allocator) void {

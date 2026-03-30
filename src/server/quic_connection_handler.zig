@@ -28,6 +28,8 @@ const query_ast_cache = @import("query_ast_cache.zig");
 const geode_auth = @import("geode_auth");
 // GAP-0258: Import mTLS provider for QUIC client certificate authentication
 const mtls_provider = geode.mtls_provider;
+// GAP-0271: Import FLE integration for role-based field access control
+const fle_integration = geode.fle_integration;
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-012; FEATURE="ServerRefactoring"; ASPECT=QUIC_HANDLERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.3 - QUIC Connection Handlers Module (Eighth Increment)
@@ -1367,6 +1369,26 @@ fn handleClientMessage(
                     gpa.free(old);
                 }
                 state.session_config.?.tenant_id = try gpa.dupe(u8, tenant);
+            }
+
+            // GAP-0271: Set FLE role from HELLO request with injection validation
+            if (hello_req.role) |requested_role| {
+                if (requested_role.len > 0) {
+                    // Validate role: only [a-zA-Z0-9_-] allowed — reject semicolons, commas, wildcards
+                    var role_valid = true;
+                    for (requested_role) |c| {
+                        if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') {
+                            role_valid = false;
+                            break;
+                        }
+                    }
+                    if (role_valid) {
+                        fle_integration.setCurrentUserRole(requested_role);
+                    } else {
+                        log.warn("Rejected invalid FLE role: contains illegal characters", &.{});
+                        fle_integration.setCurrentUserRole(null);
+                    }
+                }
             }
 
             // CANARY: REQ=REQ-DSN-GRAPH-BIND-003; FEATURE="DSNGraphBinding"; ASPECT=QuicGraphResolution; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
