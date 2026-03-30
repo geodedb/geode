@@ -54,13 +54,16 @@ inline fn debugLog(comptime fmt: []const u8, args: anytype) void {
 /// - Handler threads are "readers" (can do I/O concurrently with each other)
 /// - The main thread is the "writer" (needs exclusive access for poll())
 ///
-/// Uses mutex+condvar for correct and efficient blocking without spin-loops.
+/// GAP-0277: Each wait-point has its own condition variable so signal() is
+/// correct and broadcast() is unnecessary. This eliminates the fragile
+/// requirement that broadcast() must be used to avoid cross-wakeup stalls.
 pub const PollSync = struct {
     mu: std.Thread.Mutex = .{},
-    cv: std.Thread.Condition = .{},
-    /// Signaled after every leavePoll() so handler threads waiting for data
-    /// can wake up promptly instead of blind-sleeping. Separate from `cv`
-    /// to avoid spurious wakeups between handler data-wait and protocol-wait.
+    /// Wakes handler threads blocked in enterIo (waiting for poll to finish).
+    io_cv: std.Thread.Condition = .{},
+    /// Wakes the poll thread blocked in enterPoll (waiting for I/O to drain).
+    drain_cv: std.Thread.Condition = .{},
+    /// Wakes handler threads waiting for new data after a poll cycle.
     poll_cv: std.Thread.Condition = .{},
     poll_requested: bool = false,
     active_io_count: u32 = 0,
@@ -70,7 +73,7 @@ pub const PollSync = struct {
         self.mu.lock();
         defer self.mu.unlock();
         while (self.poll_requested) {
-            self.cv.wait(&self.mu);
+            self.io_cv.wait(&self.mu);
         }
         self.active_io_count += 1;
     }
@@ -80,10 +83,8 @@ pub const PollSync = struct {
         self.mu.lock();
         defer self.mu.unlock();
         if (self.active_io_count > 0) self.active_io_count -= 1;
-        // broadcast, not signal: both enterIo and enterPoll wait on the same cv.
-        // signal() could wake a handler blocked in enterIo (poll_requested=true)
-        // instead of the main thread blocked in enterPoll, causing permanent stall.
-        if (self.active_io_count == 0) self.cv.broadcast();
+        // signal() is safe: only the poll thread waits on drain_cv.
+        if (self.active_io_count == 0) self.drain_cv.signal();
     }
 
     /// Called by the main thread before poll(). Blocks until all I/O finishes.
@@ -92,7 +93,7 @@ pub const PollSync = struct {
         defer self.mu.unlock();
         self.poll_requested = true;
         while (self.active_io_count > 0) {
-            self.cv.wait(&self.mu);
+            self.drain_cv.wait(&self.mu);
         }
     }
 
@@ -101,7 +102,7 @@ pub const PollSync = struct {
         self.mu.lock();
         defer self.mu.unlock();
         self.poll_requested = false;
-        self.cv.broadcast();
+        self.io_cv.broadcast(); // Wake all handlers waiting to enter I/O
         self.poll_cv.broadcast(); // Wake handlers waiting for data after poll
     }
 
