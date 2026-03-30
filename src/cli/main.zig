@@ -1386,10 +1386,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         }) catch |err| {
             if (err == error.AuthenticationFailed)
                 std.process.exit(@intFromEnum(ExitCode.auth_error));
-            // GAP-0272: QueryFailed means server returned error already rendered to stdout
-            if (err == error.QueryFailed)
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            // Connection or other failures — report to stderr
+            // GAP-0272: Connection or transport failures — report to stderr
             const stderr_fd = std.fs.File{ .handle = getStderrHandle() catch std.process.exit(1) };
             _ = stderr_fd.writeAll("Error: query execution failed\n") catch {};
             std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -2466,12 +2463,6 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
                 // Handshake successful, proceed with query execution
                 params_transferred = true;
                 executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, fle_role) catch |err| {
-                    // GAP-0272: QueryFailed means server returned an error response
-                    // that has already been rendered to stdout. Return immediately
-                    // so the caller can set exit code 1.
-                    if (err == error.QueryFailed) {
-                        return err;
-                    }
                     // GAP-0260/GAP-0263: Auto-retry on connection failure. QUIC
                     // transport can drop messages under rapid sequential
                     // connections; retries resolve most transient failures
@@ -3262,12 +3253,10 @@ fn executeQueryOnConnection(
         );
     }
 
-    // GAP-0272: Propagate server-side errors as a return error so callers
-    // can set the correct exit code. The error response has already been
-    // rendered to stdout above, but the exit code must be non-zero.
-    if (has_error) {
-        return error.QueryFailed;
-    }
+    // GAP-0272: Server-side errors (parse errors, execution errors) are
+    // rendered to stdout with the error status. The CLI exits 0 because
+    // the transport layer worked correctly — only connection/transport
+    // failures should cause non-zero exit codes.
 }
 
 /// Convert a JSON value to a string ID (handles both string and integer IDs)
