@@ -1386,6 +1386,12 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         }) catch |err| {
             if (err == error.AuthenticationFailed)
                 std.process.exit(@intFromEnum(ExitCode.auth_error));
+            // GAP-0272: QueryFailed means server returned error already rendered to stdout
+            if (err == error.QueryFailed)
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            // Connection or other failures — report to stderr
+            const stderr_fd = std.fs.File{ .handle = getStderrHandle() catch std.process.exit(1) };
+            _ = stderr_fd.writeAll("Error: query execution failed\n") catch {};
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
     }
@@ -2460,15 +2466,23 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
                 // Handshake successful, proceed with query execution
                 params_transferred = true;
                 executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, fle_role) catch |err| {
+                    // GAP-0272: QueryFailed means server returned an error response
+                    // that has already been rendered to stdout. Return immediately
+                    // so the caller can set exit code 1.
+                    if (err == error.QueryFailed) {
+                        return err;
+                    }
                     // GAP-0260/GAP-0263: Auto-retry on connection failure. QUIC
                     // transport can drop messages under rapid sequential
                     // connections; retries resolve most transient failures
                     // without requiring explicit --retry flag.
                     if (err == error.ConnectionFailed and attempts + 1 < max_attempts) {
                         last_error = "connection dropped, retrying";
-                        // GAP-0263: Brief delay between retries to let the server
-                        // finish processing the previous connection's cleanup.
-                        std.Thread.sleep(10 * std.time.ns_per_ms);
+                        // GAP-0263/GAP-0272: Brief delay between retries to let the
+                        // server finish processing the previous connection's cleanup.
+                        // Increased from 10ms to 50ms to reduce failures during
+                        // rapid sequential bulk operations (e.g., stdin batches).
+                        std.Thread.sleep(50 * std.time.ns_per_ms);
                         continue;
                     }
                     return err;
@@ -3246,6 +3260,13 @@ fn executeQueryOnConnection(
                 .result_payload = result_payload,
             },
         );
+    }
+
+    // GAP-0272: Propagate server-side errors as a return error so callers
+    // can set the correct exit code. The error response has already been
+    // rendered to stdout above, but the exit code must be non-zero.
+    if (has_error) {
+        return error.QueryFailed;
     }
 }
 
