@@ -4469,18 +4469,22 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const role = user_mgmt.Role.fromString(role_str) orelse .User;
         user_mgmt.createUser(allocator, username, password, email, role, false) catch |err| {
             log.warn("geode.auth.user_create failed", &.{Attr.string("error", @errorName(err))});
-            const columns = try allocator.alloc([]const u8, 1);
-            columns[0] = try allocator.dupe(u8, "error");
-            const row = try allocator.alloc(Value, 1);
-            row[0] = Value{ .Str = @errorName(err) };
+            const columns = try allocator.alloc([]const u8, 2);
+            columns[0] = try allocator.dupe(u8, "status");
+            columns[1] = try allocator.dupe(u8, "username");
+            const row = try allocator.alloc(Value, 2);
+            row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: {s}", .{@errorName(err)}) };
+            row[1] = Value{ .Str = username };
             const rows = try allocator.alloc([]Value, 1);
             rows[0] = row;
             return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
         };
-        const columns = try allocator.alloc([]const u8, 1);
+        const columns = try allocator.alloc([]const u8, 2);
         columns[0] = try allocator.dupe(u8, "status");
-        const row = try allocator.alloc(Value, 1);
-        row[0] = Value{ .Str = "created" };
+        columns[1] = try allocator.dupe(u8, "username");
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "created {s}", .{username}) };
+        row[1] = Value{ .Str = username };
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
@@ -4512,10 +4516,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         user_mgmt.deleteUser(username) catch |err| {
             log.warn("geode.auth.user_delete failed", &.{Attr.string("error", @errorName(err))});
         };
-        const columns = try allocator.alloc([]const u8, 1);
+        const columns = try allocator.alloc([]const u8, 2);
         columns[0] = try allocator.dupe(u8, "status");
-        const row = try allocator.alloc(Value, 1);
-        row[0] = Value{ .Str = "deleted" };
+        columns[1] = try allocator.dupe(u8, "username");
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "deleted {s}", .{username}) };
+        row[1] = Value{ .Str = username };
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
