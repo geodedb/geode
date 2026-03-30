@@ -242,6 +242,38 @@ pub fn getUser(username: []const u8) ?User {
     return user_store.?.get(username);
 }
 
+/// GAP-0270: List all users in the in-memory store
+pub fn listUsers() ![]const User {
+    user_store_mutex.lock();
+    defer user_store_mutex.unlock();
+
+    if (user_store == null) return &[_]User{};
+    const store = &user_store.?;
+    var count: usize = 0;
+    var iter = store.iterator();
+    while (iter.next()) |_| count += 1;
+    if (count == 0) return &[_]User{};
+    const result = try store.allocator.alloc(User, count);
+    var i: usize = 0;
+    var iter2 = store.iterator();
+    while (iter2.next()) |entry| {
+        result[i] = entry.value_ptr.*;
+        i += 1;
+    }
+    return result;
+}
+
+/// GAP-0270: Delete a user from the in-memory store
+pub fn deleteUser(username: []const u8) !void {
+    user_store_mutex.lock();
+    defer user_store_mutex.unlock();
+
+    if (user_store == null) return error.Unauthenticated;
+    var store = &user_store.?;
+    if (!store.contains(username)) return error.Unauthenticated;
+    _ = store.fetchRemove(username);
+}
+
 /// Check if any users exist
 pub fn hasUsers() bool {
     user_store_mutex.lock();
