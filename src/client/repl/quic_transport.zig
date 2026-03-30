@@ -60,7 +60,8 @@ const QuicTransportConnection = struct {
                 self.client.poll(0) catch {};
                 self.client_mu.unlock();
             }
-            std.Thread.sleep(500 * std.time.ns_per_ms);
+            // GAP-0276: Reduced from 500ms to 100ms for faster keepalive response
+            std.Thread.sleep(100 * std.time.ns_per_ms);
         }
     }
 };
