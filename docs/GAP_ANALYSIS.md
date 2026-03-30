@@ -5,13 +5,14 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 
 ## Summary
 
-- **Total open gaps:** 8
+- **Total open gaps:** 14
 - **Critical:** 1 (GAP-0256)
-- **High:** 1 (GAP-0255)
-- **Medium:** 2 (GAP-0246 blocked, GAP-0247 blocked)
+- **High:** 4 (GAP-0255, GAP-0273, GAP-0274, GAP-0275)
+- **Medium:** 5 (GAP-0246 blocked, GAP-0247 blocked, GAP-0276, GAP-0277, GAP-0278)
 - **Low:** 0
 - **Blocked (external dependency):** 3 (GAP-0246, GAP-0247, GAP-0256)
 - **Won't Do:** 1 (GAP-0258)
+- **Opened this session (2026-03-30):** GAP-0273, GAP-0274, GAP-0275, GAP-0276, GAP-0277, GAP-0278
 - **Closed this session (2026-03-30):** GAP-0270, GAP-0271, GAP-0272
 - **Closed (2026-03-28):** GAP-0264, GAP-0266, GAP-0261, GAP-0263, GAP-0265, GAP-0267, GAP-0268, GAP-0269, GAP-0262
 - **Closed (2026-03-13):** GAP-0248, GAP-0249, GAP-0250, GAP-0251, GAP-0252, GAP-0253
@@ -239,6 +240,204 @@ Bulk data ingestion via stdin is unreliable for medium-sized batches. Users pipi
 - **Impact/Risk:** Cannot integrate with enterprise identity providers (Okta, Auth0, Azure AD, etc.).
 - **Recommended fix:** Implement token introspection endpoint; OIDC discovery; claims-to-role mapping.
 - **Acceptance criteria:** OAuth2/OIDC authentication functional with configurable provider. **Status: Blocked** — requires dedicated auth provider sprint.
+
+---
+
+### GAP-0273: Spice parallelism wired but unused in hot paths — **OPEN / Performance**
+
+- **Category:** Performance / Parallelism
+- **Severity:** High
+- **Opened:** 2026-03-30 (parallelism audit)
+
+**Description:**
+
+The `spice` fork/join parallelism library is declared as a dependency (`build.zig.zon:122`), wrapped in `src/parallel/spice.zig` (449 lines) and `src/execution/parallel.zig` (275 lines), with tests and benchmarks. However, the wrapper is not invoked from any production hot path. The 18 import sites are limited to:
+
+- The wrapper files themselves (`spice.zig`, `parallel.zig`)
+- Test/benchmark files (`test_spice_integration.zig`, `benchmark_spice_parallelism.zig`, `test_feature_completion.zig`)
+- Files that import but never call spice functions (`hnsw.zig`, `cbo.zig`, `index_optimizer.zig`, `proto_util.zig`, `txn_coordinator.zig`, `query_coordinator.zig`)
+
+**Impact:**
+
+CPU-bound operations that would benefit from fork/join parallelism run single-threaded:
+
+- HNSW vector distance computation (embarrassingly parallel)
+- Cost-based optimizer plan enumeration
+- Batch protobuf serialization
+- Graph algorithm execution (PageRank, Louvain, BFS/DFS)
+
+**Current state (evidence):**
+
+- `src/index/hnsw.zig` imports `parallel` but uses sequential loops for distance computation
+- `src/planner/cbo.zig` imports `parallel` but enumerates plans sequentially
+- `src/execution/parallel.zig:Pool` wraps `SpicePool` but `forkJoin` / `spiceMap` are never called from the execution engine
+- Benchmarks show 2-4x speedup potential on 4+ cores for vector operations
+
+**Recommended fix:**
+
+1. Wire `parallel.spiceMap` into HNSW distance computation for multi-probe queries
+2. Wire `parallel.forkJoin` into graph algorithm traversals (PageRank iterations)
+3. Wire `parallel.forEach` into batch node/edge creation during MERGE
+4. Add parallel plan enumeration in CBO for plans exceeding threshold
+
+**Acceptance criteria:** At least 3 hot paths using spice parallelism with measurable throughput improvement on 4+ cores.
+
+---
+
+### GAP-0274: Stream acceptor and active-streams use busy-wait anti-pattern — **OPEN / Performance**
+
+- **Category:** Performance / Concurrency
+- **Severity:** High
+- **Opened:** 2026-03-30 (parallelism audit)
+
+**Description:**
+
+The QUIC stream acceptor loop and active-streams drain use `std.Thread.sleep()` busy-waiting instead of condition variables:
+
+1. **Stream acceptor** (`src/server/quic_connection_handler.zig:617`): Sleeps 1ms in a loop waiting for new streams instead of blocking on a condition variable.
+2. **Active streams drain** (`src/server/quic_connection_handler.zig:922-924`): Spins checking `active_streams.load(.acquire) > 0` with 1ms sleep, wasting CPU cycles.
+3. **Stream acceptor backoff** (`src/server/quic_connection_handler.zig:584`): Sleeps 5ms when at max streams instead of waiting for a stream to close.
+
+**Impact:**
+
+- **Latency**: Up to 1ms added per stream accept/close (worst case 64ms for 64 streams)
+- **CPU waste**: Polling atomic counters instead of blocking
+- **Scalability**: Under high connection churn, acceptor threads consume CPU without productive work
+
+**Current state (evidence):**
+
+```zig
+// Line 922-924: busy-wait anti-pattern
+while (conn_state.active_streams.load(.acquire) > 0) {
+    std.Thread.sleep(1 * std.time.ns_per_ms);
+}
+```
+
+**Recommended fix:**
+
+Add a `streams_cv: std.Thread.Condition` to `SharedConnState`. Handler threads broadcast on stream close (`fetchSub + broadcast`). Main thread waits on condition variable instead of sleep-polling.
+
+**Acceptance criteria:** Zero `std.Thread.sleep()` calls in stream lifecycle synchronization. Condition variables used for stream accept and drain.
+
+---
+
+### GAP-0275: Duplicate concurrency libraries — spice AND concurrency-0.1.0 — **OPEN / Architecture**
+
+- **Category:** Architecture / Dependencies
+- **Severity:** High
+- **Opened:** 2026-03-30 (parallelism audit)
+
+**Description:**
+
+Geode ships two separate concurrency libraries that serve overlapping purposes:
+
+1. **`spice`** (`build.zig.zon:122`): Fork/join parallelism — thread pool, parallel map, reduce, forEach, pipeline. Wrapped in `src/parallel/spice.zig`.
+2. **`concurrency-0.1.0`** (vendored in `docker/zig-packages/`): Lock-free Vyukov MPMC queue thread pool. Wrapped in `src/transport/thread_pool.zig`.
+
+Both provide thread pools. The `concurrency` library is used for QUIC connection dispatch (`src/server/main.zig:565`). The `spice` library is imported but unused in production.
+
+**Impact:**
+
+- Two thread pool implementations running simultaneously wastes threads and memory
+- Different APIs, different tuning parameters, different failure modes
+- Maintenance burden: two wrappers to maintain
+- `concurrency` queue is hard-coded to 4096 slots regardless of configuration
+
+**Recommended fix:**
+
+Consolidate on `spice` for all parallelism:
+
+1. Replace `thread_pool.zig` (concurrency wrapper) with `spice.SpicePool`
+2. Add a `submitAsync` method to the spice wrapper for long-lived tasks (connection handlers)
+3. Remove `concurrency-0.1.0` dependency
+4. Single thread pool, single tuning surface
+
+**Acceptance criteria:** Single thread pool library used across the codebase. `concurrency-0.1.0` removed from dependencies.
+
+---
+
+### GAP-0276: REPL keepalive thread sleeps 500ms between polls — **OPEN / Latency**
+
+- **Category:** Performance / Client
+- **Severity:** Medium
+- **Opened:** 2026-03-30 (parallelism audit)
+
+**Description:**
+
+The REPL QUIC keepalive thread (`src/client/repl/quic_transport.zig:63`) sleeps 500ms between `poll(0)` calls. This means idle connections can take up to 500ms to detect incoming server-initiated frames (e.g., PING/PONG for connection liveness). If the server sends a keepalive probe and the client doesn't respond within the server's idle timeout, the connection drops.
+
+**Impact:**
+
+- Idle REPL sessions may disconnect unexpectedly on slow networks
+- 500ms worst-case latency for keepalive responses
+- Interactive "feel" degraded during pauses
+
+**Recommended fix:**
+
+Reduce keepalive interval to 100ms. Add exponential backoff: 50ms under activity, 200ms when idle for >5s.
+
+**Acceptance criteria:** Keepalive interval ≤200ms under normal conditions.
+
+---
+
+### GAP-0277: PollSync requires broadcast instead of signal — fragile correctness — **OPEN / Correctness**
+
+- **Category:** Correctness / Concurrency
+- **Severity:** Medium
+- **Opened:** 2026-03-30 (parallelism audit)
+
+**Description:**
+
+The `PollSync` readers-writer synchronization primitive (`src/transport/quic.zig:57-114`) uses two condition variables (`cv` and `poll_cv`) and requires `broadcast()` instead of `signal()` to avoid a permanent stall. The code comment at line 82-84 documents this:
+
+> "signal() could wake a handler blocked in enterIo instead of the main thread → permanent stall"
+
+Both `enterIo()` and `enterPoll()` wait on the same `cv` condition variable. If `signal()` wakes an `enterIo()` waiter instead of the `enterPoll()` waiter, the poll thread never wakes and all I/O stalls permanently.
+
+**Impact:**
+
+The current code uses `broadcast()` correctly, but the design is fragile. A future edit changing `broadcast()` to `signal()` would cause a deadlock that is extremely difficult to diagnose (intermittent, load-dependent).
+
+**Recommended fix:**
+
+Refactor PollSync to use separate condition variables for each wait-point, making `signal()` correct and `broadcast()` unnecessary. This eliminates the class of bug entirely.
+
+Alternatively, add a `// SAFETY:` comment explaining why `broadcast()` is required and add a unit test that catches the deadlock under contention.
+
+**Acceptance criteria:** PollSync either uses separate condition variables per wait-point or has a documented safety comment + regression test.
+
+---
+
+### GAP-0278: 72+ global mutexes with no deadlock ordering policy — **OPEN / Correctness**
+
+- **Category:** Correctness / Concurrency
+- **Severity:** Medium
+- **Opened:** 2026-03-30 (parallelism audit)
+
+**Description:**
+
+The codebase has 72+ `std.Thread.Mutex` instances across modules including graph_store, execution, security, transport, streaming, and distributed systems. There is no documented lock ordering policy and no runtime deadlock detection for production code (only `src/server/txn/isolation_integration.zig` has deadlock detection for transaction wait graphs).
+
+Key mutex clusters that could interact:
+
+1. `graph_store.zig:45` (store_mutex) ↔ `execution.zig:183` (catalog_mutex) — query execution reads store under catalog lock
+2. `connections_mutex` ↔ `pending_destroy_mutex` — nested in `destroyConnection`
+3. `fle_catalog.zig:18` ↔ `fle_integration.zig:42` (global_mutex) — FLE operations
+4. `procedure_registry.zig:64,66,70` — three separate mutexes for audit, CDC, TDE
+
+**Impact:**
+
+No deadlocks have been reported in production, but the lack of ordering policy means any code change that acquires two mutexes in a different order could introduce a deadlock. This risk increases as more features add cross-module locking.
+
+**Recommended fix:**
+
+1. Document a lock ordering hierarchy in `CLAUDE.md` or `docs/ARCHITECTURE.md`
+2. Add `// Lock ordering: N` comments to each mutex (lower N acquired first)
+3. Consider replacing fine-grained mutexes with a tiered locking strategy (store → catalog → security → transport)
+
+**Acceptance criteria:** Lock ordering documented. No nested lock acquisitions violate the documented order.
+
+---
 
 ### ~~GAP-0253~~: Cryptographic signature algorithms — **CLOSED / Implemented**
 
