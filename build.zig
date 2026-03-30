@@ -115,6 +115,7 @@ pub fn build(b: *std.Build) void {
     const uri_dep = b.dependency("uri", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
     });
     const uri_mod = uri_dep.module("uri");
 
@@ -122,6 +123,7 @@ pub fn build(b: *std.Build) void {
     const yaml_dep = b.dependency("yaml", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
     });
     const yaml_mod = yaml_dep.module("yaml");
 
@@ -129,6 +131,7 @@ pub fn build(b: *std.Build) void {
     const toml_dep = b.dependency("toml", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
     });
     const toml_mod = toml_dep.module("toml");
 
@@ -136,6 +139,7 @@ pub fn build(b: *std.Build) void {
     const strings_dep = b.dependency("strings", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
     });
     const strings_mod = strings_dep.module("strings");
 
@@ -150,6 +154,7 @@ pub fn build(b: *std.Build) void {
     const ds_dep = b.dependency("ds", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
     });
     const ds_mod = ds_dep.module("ds");
 
@@ -157,6 +162,7 @@ pub fn build(b: *std.Build) void {
     const vulkan_dep = b.dependency("vulkan", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
     });
     const vulkan_mod = vulkan_dep.module("vulkan");
 
@@ -175,8 +181,11 @@ pub fn build(b: *std.Build) void {
     const json_dep = b.dependency("json", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
+        .uri = false,
     });
     const json_mod = json_dep.module("json");
+    json_mod.addImport("uri", uri_mod);
 
     // TLS 1.3 implementation (ztls is the main public API module)
     const tls_dep = b.dependency("tls", .{
@@ -200,15 +209,25 @@ pub fn build(b: *std.Build) void {
     const slog_dep = b.dependency("slog", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
+        .json = false,
     });
     const slog_mod = slog_dep.module("slogz");
+    slog_mod.addImport("json", json_mod);
 
     // Configuration management - XDG compliant, multi-format support
     const config_dep = b.dependency("config", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
+        .json = false,
+        .yaml = false,
+        .toml = false,
     });
     const config_mod = config_dep.module("config");
+    config_mod.addImport("json", json_mod);
+    config_mod.addImport("yaml", yaml_mod);
+    config_mod.addImport("toml", toml_mod);
 
     // ==========================================================================
     // Phase 4 External Library Dependencies (Application Libraries)
@@ -218,15 +237,21 @@ pub fn build(b: *std.Build) void {
     const cli_dep = b.dependency("cli", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
+        .config = false,
     });
     const cli_mod = cli_dep.module("zig_cli");
+    cli_mod.addImport("config", config_mod);
 
     // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
     const dns_dep = b.dependency("dns", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
+        .cli = false,
     });
     const dns_mod = dns_dep.module("dns");
+    dns_mod.addImport("cli", cli_mod);
 
     // ==========================================================================
     // Phase 5 External Library Dependencies (Optional Enhancements)
@@ -236,8 +261,11 @@ pub fn build(b: *std.Build) void {
     const mcp_dep = b.dependency("mcp", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
+        .json = false,
     });
     const mcp_mod = mcp_dep.module("mcp");
+    mcp_mod.addImport("json", json_mod);
 
     // Protobuf (Google Protocol Buffers)
     const protobuf_dep = b.dependency("protobuf", .{
@@ -250,6 +278,7 @@ pub fn build(b: *std.Build) void {
     const grpc_dep = b.dependency("grpc_zig", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
     });
     const grpc_server_mod = grpc_dep.module("grpc-server");
     const grpc_client_mod = grpc_dep.module("grpc-client");
