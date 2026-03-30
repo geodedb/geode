@@ -5,15 +5,15 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 
 ## Summary
 
-- **Total open gaps:** 14
+- **Total open gaps:** 9
 - **Critical:** 1 (GAP-0256)
-- **High:** 4 (GAP-0255, GAP-0273, GAP-0274, GAP-0275)
-- **Medium:** 5 (GAP-0246 blocked, GAP-0247 blocked, GAP-0276, GAP-0277, GAP-0278)
+- **High:** 2 (GAP-0255, GAP-0275)
+- **Medium:** 2 (GAP-0246 blocked, GAP-0247 blocked)
 - **Low:** 0
 - **Blocked (external dependency):** 3 (GAP-0246, GAP-0247, GAP-0256)
 - **Won't Do:** 1 (GAP-0258)
 - **Opened this session (2026-03-30):** GAP-0273, GAP-0274, GAP-0275, GAP-0276, GAP-0277, GAP-0278
-- **Closed this session (2026-03-30):** GAP-0270, GAP-0271, GAP-0272
+- **Closed this session (2026-03-30):** GAP-0270, GAP-0271, GAP-0272, GAP-0273, GAP-0274, GAP-0276, GAP-0277, GAP-0278
 - **Closed (2026-03-28):** GAP-0264, GAP-0266, GAP-0261, GAP-0263, GAP-0265, GAP-0267, GAP-0268, GAP-0269, GAP-0262
 - **Closed (2026-03-13):** GAP-0248, GAP-0249, GAP-0250, GAP-0251, GAP-0252, GAP-0253
 
@@ -243,7 +243,7 @@ Bulk data ingestion via stdin is unreliable for medium-sized batches. Users pipi
 
 ---
 
-### GAP-0273: Spice parallelism wired but unused in hot paths — **OPEN / Performance**
+### GAP-0273: Spice parallelism wired but unused in hot paths — **CLOSED (2026-03-30)**
 
 - **Category:** Performance / Parallelism
 - **Severity:** High
@@ -284,7 +284,7 @@ CPU-bound operations that would benefit from fork/join parallelism run single-th
 
 ---
 
-### GAP-0274: Stream acceptor and active-streams use busy-wait anti-pattern — **OPEN / Performance**
+### GAP-0274: Stream acceptor and active-streams use busy-wait anti-pattern — **CLOSED (2026-03-30)**
 
 - **Category:** Performance / Concurrency
 - **Severity:** High
@@ -356,7 +356,7 @@ Consolidate on `spice` for all parallelism:
 
 ---
 
-### GAP-0276: REPL keepalive thread sleeps 500ms between polls — **OPEN / Latency**
+### GAP-0276: REPL keepalive thread sleeps 500ms between polls — **CLOSED (2026-03-30)**
 
 - **Category:** Performance / Client
 - **Severity:** Medium
@@ -380,7 +380,7 @@ Reduce keepalive interval to 100ms. Add exponential backoff: 50ms under activity
 
 ---
 
-### GAP-0277: PollSync requires broadcast instead of signal — fragile correctness — **OPEN / Correctness**
+### GAP-0277: PollSync requires broadcast instead of signal — fragile correctness — **CLOSED (2026-03-30)**
 
 - **Category:** Correctness / Concurrency
 - **Severity:** Medium
@@ -408,7 +408,7 @@ Alternatively, add a `// SAFETY:` comment explaining why `broadcast()` is requir
 
 ---
 
-### GAP-0278: 72+ global mutexes with no deadlock ordering policy — **OPEN / Correctness**
+### GAP-0278: 72+ global mutexes with no deadlock ordering policy — **CLOSED (2026-03-30)**
 
 - **Category:** Correctness / Concurrency
 - **Severity:** Medium
