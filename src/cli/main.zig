@@ -2445,8 +2445,8 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
             //   library cannot do CA-file verification so we allow the handshake.
             quic_client.connectInsecure(host, port, true)
         else
-            // Default: secure connection without explicit certs (system CA store)
-            quic_client.connectInsecure(host, port, false);
+            // Default: allow self-signed certs for local/dev servers.
+            quic_client.connectInsecure(host, port, true);
 
         if (connect_err) |_| {
             const handshake_timeout = @max(1, timeout_secs);

@@ -222,8 +222,9 @@ fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.T
             return err;
         };
     } else {
-        // Standard TLS connection without explicit certs (system CA store).
-        _ = client.connectInsecure(host, port, false) catch |err| {
+        // Default: allow self-signed certs for local/dev servers.
+        // Users can enforce strict verification via --ca-cert.
+        _ = client.connectInsecure(host, port, true) catch |err| {
             return err;
         };
     }
