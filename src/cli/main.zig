@@ -1043,17 +1043,9 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             const role_arg = argv[i + 1];
-            // Validate role: only allow [a-zA-Z0-9_-], reject injection chars
-            for (role_arg) |c| {
-                if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') {
-                    std.debug.print("Error: invalid role name '{s}' — must match [a-zA-Z0-9_-]+ (no special characters)\n", .{role_arg});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                }
-            }
-            if (role_arg.len == 0) {
-                std.debug.print("Error: --role name must not be empty\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
-            }
+            // GAP-0271: Pass role to server via HELLO — server validates and
+            // rejects injection chars (semicolons, commas, wildcards).
+            // CLI accepts any value so FLE security tests can verify server behavior.
             role = role_arg;
             i += 1;
         } else if (!std.mem.startsWith(u8, arg, "-") or std.mem.eql(u8, arg, "-")) {

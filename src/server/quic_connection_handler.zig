@@ -1371,7 +1371,8 @@ fn handleClientMessage(
                 state.session_config.?.tenant_id = try gpa.dupe(u8, tenant);
             }
 
-            // GAP-0271: Set FLE role from HELLO request with injection validation
+            // GAP-0271: Set FLE role from HELLO request with injection validation.
+            // Always reset role on new connection to prevent stale role leakage.
             if (hello_req.role) |requested_role| {
                 if (requested_role.len > 0) {
                     // Validate role: only [a-zA-Z0-9_-] allowed — reject semicolons, commas, wildcards
@@ -1388,7 +1389,11 @@ fn handleClientMessage(
                         log.warn("Rejected invalid FLE role: contains illegal characters", &.{});
                         fle_integration.setCurrentUserRole(null);
                     }
+                } else {
+                    fle_integration.setCurrentUserRole(null);
                 }
+            } else {
+                fle_integration.setCurrentUserRole(null);
             }
 
             // CANARY: REQ=REQ-DSN-GRAPH-BIND-003; FEATURE="DSNGraphBinding"; ASPECT=QuicGraphResolution; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
