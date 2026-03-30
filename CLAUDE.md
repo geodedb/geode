@@ -255,6 +255,26 @@ make loadtest-save-baseline  # Save current results as new baseline
 - **CANARY Markers**: Required for all implementations
 - **Memory Safety**: Proper allocation/deallocation patterns
 
+### Mutex Lock Ordering (GAP-0278)
+
+When acquiring multiple mutexes, always acquire in this order (lower tier first):
+
+| Tier | Mutex | Module | Notes |
+|------|-------|--------|-------|
+| 1 | `store_mutex` | `graph_store.zig` | Graph data — outermost lock |
+| 2 | `catalog_mutex` | `execution.zig` | Schema catalog |
+| 3 | `connections_mutex` | `transport/quic.zig` | QUIC connection list |
+| 3 | `pending_destroy_mutex` | `transport/quic.zig` | Deferred cleanup |
+| 4 | `fle_catalog_mutex` | `schema/fle_catalog.zig` | FLE field metadata |
+| 4 | `global_mutex` (FLE) | `fle_integration.zig` | FLE role state |
+| 5 | `user_store_mutex` | `user_management.zig` | Auth user store |
+| 5 | `session_mutex` | `session_storage.zig` | Session state |
+| 6 | `audit_mutex` | `procedure_registry.zig` | Audit logger |
+| 6 | `tde_mutex` | `procedure_registry.zig` | TDE engine |
+| 6 | `cdc_mutex` | `procedure_registry.zig` | CDC engine |
+
+Never hold a higher-tier mutex while acquiring a lower-tier one. Thread-local atomics (`std.atomic.Value`) don't require ordering.
+
 ### Testing Requirements
 
 - **Unit Tests**: All components must have test coverage
