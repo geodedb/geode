@@ -144,8 +144,8 @@
         // Updated 2026-02-11: concurrent connections, HPACK Huffman, TLS errdefer
         // GAP-0443: Use git+https URL with full commit hash for supply chain auditability
         .grpc_zig = .{
-            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#0d9ff8977900f5640f724d643f566b0ceef9dd56",
-            .hash = "grpc_zig-0.1.0-7FnvpPy5AQDuehoJFTLmYAqAaWx1wuBOMwrDAeJpo4ND",
+            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#567932b041af34354245a436dedb57199aac0ec3",
+            .hash = "grpc_zig-0.1.0-7FnvpPy5AQByCDKE7DThcSEDDzyW6f3zb0m8F0GJohU-",
         },
 
         // =======================================================================

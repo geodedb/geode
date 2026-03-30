@@ -303,7 +303,7 @@ pub const GraphStore = struct {
     outgoing_edges: std.AutoHashMap(u64, std.ArrayList(u64)), // from_node_id -> edge_ids
     incoming_edges: std.AutoHashMap(u64, std.ArrayList(u64)), // to_node_id -> edge_ids
     /// Per-graph IdMaps for UUIDv7 ↔ engine slot_id translation.
-    id_maps: std.StringHashMap(id_map_mod.IdMap) = std.StringHashMap(id_map_mod.IdMap).init(std.heap.page_allocator),
+    id_maps: std.StringHashMap(id_map_mod.IdMap) = undefined,
     /// Optional CSR adjacency for fast traversal (if built elsewhere)
     csr: ?*const anyopaque = null,
     // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-27
