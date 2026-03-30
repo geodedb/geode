@@ -75,8 +75,16 @@ variables:
 
 # Pre-populate Zig package cache from vendored packages to avoid network
 # fetches that can fail with transient GitHub 502 errors.
+# Use vendored package cache if present, otherwise fetch dependencies from network.
 .zig-vendor-cache: &zig-vendor-cache
-  - mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p" && cp -rn docker/zig-packages/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
+  - |
+    mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p"
+    if [ -d "docker/zig-packages" ] && ls docker/zig-packages/* >/dev/null 2>&1; then
+      cp -rn docker/zig-packages/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
+      echo "✓ populated cache from vendored packages"
+    else
+      echo "⚠ docker/zig-packages absent — zig build will fetch from network"
+    fi
 
 # =============================================================================
 # Governance Stage - Status and Feature Flag Checks
@@ -501,8 +509,12 @@ test-macos-unit:
       zvm install "${ZIG_VERSION}"
       zvm use "${ZIG_VERSION}"
       zig version
-    # Pre-populate Zig package cache from vendored packages
-    - mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p" && cp -rn docker/zig-packages/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
+    # Use vendored cache if present, otherwise zig build fetches from network
+    - |
+      mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p"
+      if [ -d "docker/zig-packages" ] && ls docker/zig-packages/* >/dev/null 2>&1; then
+        cp -rn docker/zig-packages/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
+      fi
   script:
     - |
       export PATH="$HOME/bin:$PATH"
@@ -901,8 +913,12 @@ snapshot:
       zvm install "${ZIG_VERSION}"
       zvm use "${ZIG_VERSION}"
       zig version
-    # Pre-populate Zig package cache from vendored packages (same as Dockerfile)
-    - mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p" && cp -rn docker/zig-packages/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
+    # Use vendored cache if present, otherwise zig build fetches from network
+    - |
+      mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p"
+      if [ -d "docker/zig-packages" ] && ls docker/zig-packages/* >/dev/null 2>&1; then
+        cp -rn docker/zig-packages/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
+      fi
   script:
     - |
       echo "=== Running GoReleaser Snapshot ==="
@@ -1017,8 +1033,12 @@ build-release:
       zvm install "${ZIG_VERSION}"
       zvm use "${ZIG_VERSION}"
       zig version
-    # Pre-populate Zig package cache from vendored packages (same as Dockerfile)
-    - mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p" && cp -rn docker/zig-packages/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
+    # Use vendored cache if present, otherwise zig build fetches from network
+    - |
+      mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p"
+      if [ -d "docker/zig-packages" ] && ls docker/zig-packages/* >/dev/null 2>&1; then
+        cp -rn docker/zig-packages/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
+      fi
   script:
     - |
       echo "=== Building Release: ${CI_COMMIT_TAG} ==="
