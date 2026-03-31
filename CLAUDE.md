@@ -161,11 +161,14 @@ make loadtest-save-baseline
 
 ### Geodetestlab Integration Test Suite
 
-The full integration test suite lives in `../geode-test-harness/`:
+The full integration test suite lives in `../geode-test-harness/`. We highly recommend using the unified test target which runs the `geodetestlab` unit tests, integration tests, shell tests, and load tests all together:
 
 ```bash
-# Run full suite (198 specs, ~25 min with 2 workers)
+# Run the complete test suite (unit, integration, shell, load tests)
 cd ../geode-test-harness
+make test-everything GEODE_BINARY=/path/to/geode
+
+# Run just the integration suite (198 specs, ~25 min with 2 workers)
 GEODE_BINARY=/path/to/geode make test
 
 # Run single spec
