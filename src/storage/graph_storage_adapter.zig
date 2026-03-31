@@ -969,6 +969,28 @@ pub const StorageAdapter = struct {
         const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
         try mg.engine.removeEdgeProperty(from_id, edge_id, key);
     }
+
+    // ------------------------------------------------------------------
+    // Storage inspection
+    // ------------------------------------------------------------------
+
+    /// Return storage-level statistics for the named graph.
+    pub fn getStorageStats(self: *StorageAdapter, graph_name: []const u8) !gs.GraphEngine.StorageStats {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        return mg.engine.getStorageStats();
+    }
+
+    /// Run an integrity check on the named graph and return the report.
+    pub fn checkIntegrity(self: *StorageAdapter, graph_name: []const u8) !gs.GraphEngine.IntegrityReport {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        return mg.engine.checkIntegrity();
+    }
 };
 
 // ============================================================================

@@ -4684,6 +4684,89 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    }
+
+    // ------------------------------------------------------------------
+    // geode.storage.* — storage inspection procedures
+    // ------------------------------------------------------------------
+    else if (std.mem.eql(u8, proc_name, "geode.storage.stats")) {
+        // geode.storage.stats([graph_name]) -> node_count, edge_count, ...
+        // Reads storage-level statistics from the graph-storage engine.
+        const adapter = graph_store.getGlobalAdapter() orelse return ExecutionError.UnknownProcedure;
+
+        var graph_name: []const u8 = "default";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) graph_name = args[0].String;
+        }
+
+        const stats = adapter.getStorageStats(graph_name) catch |err| {
+            log.warn("geode.storage.stats failed", &.{Attr.string("error", @errorName(err))});
+            return ExecutionError.UnknownProcedure;
+        };
+
+        const columns = try allocator.alloc([]const u8, 12);
+        columns[0] = try allocator.dupe(u8, "node_count");
+        columns[1] = try allocator.dupe(u8, "edge_count");
+        columns[2] = try allocator.dupe(u8, "label_count");
+        columns[3] = try allocator.dupe(u8, "format_version");
+        columns[4] = try allocator.dupe(u8, "page_size");
+        columns[5] = try allocator.dupe(u8, "wal_lsn");
+        columns[6] = try allocator.dupe(u8, "last_checkpoint_lsn");
+        columns[7] = try allocator.dupe(u8, "free_pages_nodes");
+        columns[8] = try allocator.dupe(u8, "free_pages_adj_out");
+        columns[9] = try allocator.dupe(u8, "free_pages_adj_in");
+        columns[10] = try allocator.dupe(u8, "free_pages_props");
+        columns[11] = try allocator.dupe(u8, "free_pages_var");
+
+        const row = try allocator.alloc(Value, 12);
+        row[0] = Value{ .Int = @intCast(stats.node_count) };
+        row[1] = Value{ .Int = @intCast(stats.edge_count) };
+        row[2] = Value{ .Int = @intCast(stats.label_count) };
+        row[3] = Value{ .Int = @intCast(stats.format_version) };
+        row[4] = Value{ .Int = @intCast(stats.page_size) };
+        row[5] = Value{ .Int = @intCast(stats.wal_lsn) };
+        row[6] = Value{ .Int = @intCast(stats.last_checkpoint_lsn) };
+        row[7] = Value{ .Int = @intCast(stats.free_pages_nodes) };
+        row[8] = Value{ .Int = @intCast(stats.free_pages_adj_out) };
+        row[9] = Value{ .Int = @intCast(stats.free_pages_adj_in) };
+        row[10] = Value{ .Int = @intCast(stats.free_pages_props) };
+        row[11] = Value{ .Int = @intCast(stats.free_pages_var) };
+
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.storage.integrity")) {
+        // geode.storage.integrity([graph_name]) -> node_count_consistent, edge_count_consistent, ...
+        // Runs an integrity check on the graph-storage engine.
+        const adapter = graph_store.getGlobalAdapter() orelse return ExecutionError.UnknownProcedure;
+
+        var graph_name: []const u8 = "default";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) graph_name = args[0].String;
+        }
+
+        const report = adapter.checkIntegrity(graph_name) catch |err| {
+            log.warn("geode.storage.integrity failed", &.{Attr.string("error", @errorName(err))});
+            return ExecutionError.UnknownProcedure;
+        };
+
+        const columns = try allocator.alloc([]const u8, 4);
+        columns[0] = try allocator.dupe(u8, "node_count_consistent");
+        columns[1] = try allocator.dupe(u8, "edge_count_consistent");
+        columns[2] = try allocator.dupe(u8, "label_index_entries");
+        columns[3] = try allocator.dupe(u8, "total_errors");
+
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Bool = report.node_count_consistent };
+        row[1] = Value{ .Bool = report.edge_count_consistent };
+        row[2] = Value{ .Int = @intCast(report.label_index_entries) };
+        row[3] = Value{ .Int = @intCast(report.total_errors) };
+
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
     } else {
         // Unknown procedure - return error
         log.warn("Unknown procedure", &.{
