@@ -325,15 +325,16 @@ pub const StorageAdapter = struct {
             .out_head = 0,
             .in_head = 0,
             .prop_head = 0,
-            .label_set = 0,
+            .label_head = 0,
+            .label_count = 0,
             .flags = 0,
-            ._pad = 0,
+            ._pad = .{ 0, 0, 0, 0 },
             .txn_stamp = 1,
         };
         try mg.engine.putNode(node_id, rec);
 
-        // Attach each label via the engine (updates label_set bitmap and
-        // label index).
+        // Attach each label via the engine (updates label blocks in var.store
+        // and the label index).
         for (labels) |lbl| {
             const label_id = try mg.label_dict.getOrCreate(lbl);
             try mg.engine.addLabel(node_id, label_id);
@@ -360,29 +361,21 @@ pub const StorageAdapter = struct {
         const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
-        // Walk bits in label_set; each set bit corresponds to a LabelId.
+        // Retrieve label IDs from the engine's LabelStore (variable-length
+        // label blocks stored in var.store).
+        const label_ids = try mg.engine.label_store.getLabels(rec.label_head, allocator);
+        defer allocator.free(label_ids);
+
         var result: std.ArrayList([]const u8) = .{};
         errdefer {
             for (result.items) |s| allocator.free(s);
             result.deinit(allocator);
         }
 
-        var bits = rec.label_set;
-        var bit_pos: u5 = 0;
-        while (bits != 0) : (bit_pos += 1) {
-            if (bits & 1 != 0) {
-                // The engine stores label_id % 32 in the bitmap, so we need
-                // to find which LabelId mapped to this bit position. Walk the
-                // dictionary to find labels whose id % 32 == bit_pos.
-                var dict_it = mg.label_dict.id_to_str.iterator();
-                while (dict_it.next()) |entry| {
-                    if (entry.key_ptr.* % 32 == bit_pos) {
-                        try result.append(allocator, try allocator.dupe(u8, entry.value_ptr.*));
-                    }
-                }
+        for (label_ids) |label_id| {
+            if (mg.label_dict.getString(label_id)) |name| {
+                try result.append(allocator, try allocator.dupe(u8, name));
             }
-            bits >>= 1;
-            if (bit_pos == 31) break;
         }
 
         return result.toOwnedSlice(allocator);
