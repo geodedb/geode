@@ -72,7 +72,7 @@
         // TLS 1.3 library for QUIC
         // Updated 2026-03: HRR state reset, mTLS with OpenSSL/BoringSSL interop
         .tls = .{
-            .url = "git+https://gitlab.com/devnw/zig/tls.git#379e722ad46d911bca1d1b297ea2ca546d660724",
+            .url = "git+https://gitlab.com/devnw/zig/tls.git#f97a66710dbbf195ba9b7ccedc0de91ae5187697",
             .hash = "tls-0.1.0-mtEaLIe3EQBEmvzS1f_XV-2S9T5CVbJ_x-GZnASwNair",
         },
 
