@@ -1039,6 +1039,16 @@ pub const GraphStore = struct {
     }
 
     pub fn addNodeLabel(self: *GraphStore, node_id: u64, label: []const u8) !void {
+        // Dual-write: add node label in adapter via IdMap slot translation
+        if (global_vtable) |vt| {
+            if (vt.addNodeLabelFn) |f| {
+                const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "default";
+                const slot_id = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, node_id)) orelse node_id) else node_id;
+                f(vt.ctx, gn, slot_id, label) catch |err| {
+                    log.err("dual-write: adapter addNodeLabel failed", &.{Attr.string("error", @errorName(err))});
+                };
+            }
+        }
         if (self.nodes.getPtr(node_id)) |node| {
             // Check if label already exists
             for (node.labels) |existing_label| {
@@ -1072,6 +1082,16 @@ pub const GraphStore = struct {
     }
 
     pub fn removeNodeLabel(self: *GraphStore, node_id: u64, label: []const u8) !void {
+        // Dual-write: remove node label in adapter via IdMap slot translation
+        if (global_vtable) |vt| {
+            if (vt.removeNodeLabelFn) |f| {
+                const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "default";
+                const slot_id = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, node_id)) orelse node_id) else node_id;
+                f(vt.ctx, gn, slot_id, label) catch |err| {
+                    log.err("dual-write: adapter removeNodeLabel failed", &.{Attr.string("error", @errorName(err))});
+                };
+            }
+        }
         if (self.nodes.getPtr(node_id)) |node| {
             // Find the label to remove
             var found_index: ?usize = null;
@@ -1815,6 +1835,20 @@ pub const GraphStore = struct {
     }
 
     pub fn setEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
+        // Dual-write: set edge property in adapter via IdMap slot translation
+        if (global_vtable) |vt| {
+            if (vt.setEdgePropertyFn) |f| {
+                if (self.edges.get(edge_id)) |edge| {
+                    const gn = edge.graph_name;
+                    const slot_from = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, edge.from_id)) orelse edge.from_id) else edge.from_id;
+                    const slot_to = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, edge.to_id)) orelse edge.to_id) else edge.to_id;
+                    const slot_edge = if (self.getIdMap(gn)) |im| (im.edgeSlot(@as(u128, edge_id)) orelse edge_id) else edge_id;
+                    f(vt.ctx, gn, slot_from, slot_to, slot_edge, key, value) catch |err| {
+                        log.err("dual-write: adapter setEdgeProperty failed", &.{Attr.string("error", @errorName(err))});
+                    };
+                }
+            }
+        }
         if (self.edges.getPtr(edge_id)) |edge| {
             // Note: Encryption is now handled by the caller (execution.zig) before calling setEdgeProperty
             // This ensures consistent parameters (schema, record_id) between encryption and decryption
@@ -1841,6 +1875,20 @@ pub const GraphStore = struct {
     }
 
     pub fn removeEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8) void {
+        // Dual-write: remove edge property in adapter via IdMap slot translation
+        if (global_vtable) |vt| {
+            if (vt.removeEdgePropertyFn) |f| {
+                if (self.edges.get(edge_id)) |edge_info| {
+                    const gn = edge_info.graph_name;
+                    const slot_from = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, edge_info.from_id)) orelse edge_info.from_id) else edge_info.from_id;
+                    const slot_to = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, edge_info.to_id)) orelse edge_info.to_id) else edge_info.to_id;
+                    const slot_edge = if (self.getIdMap(gn)) |im| (im.edgeSlot(@as(u128, edge_id)) orelse edge_id) else edge_id;
+                    f(vt.ctx, gn, slot_from, slot_to, slot_edge, key) catch |err| {
+                        log.err("dual-write: adapter removeEdgeProperty failed", &.{Attr.string("error", @errorName(err))});
+                    };
+                }
+            }
+        }
         if (self.edges.getPtr(edge_id)) |edge| {
             if (edge.properties.fetchRemove(key)) |kv| {
                 self.allocator.free(kv.key);
