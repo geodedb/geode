@@ -711,6 +711,54 @@ pub const StorageAdapter = struct {
         return result;
     }
 
+    /// Return all properties for an edge given its `prop_head` pointer.
+    /// Works identically to `getAllNodeProperties` but takes a raw
+    /// `prop_head` instead of looking up a node record — edge property
+    /// heads come directly from the `EdgeEntry` returned by the
+    /// adjacency iterator.
+    pub fn getAllEdgeProperties(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        prop_head: u32,
+        allocator: Allocator,
+    ) !std.StringHashMap(gs.PropertyValue) {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+
+        var result = std.StringHashMap(gs.PropertyValue).init(allocator);
+        errdefer result.deinit();
+
+        if (prop_head == 0) return result;
+
+        const prop_head_u64: u64 = @intCast(prop_head);
+
+        // Use the engine's property iterator to walk all key-value pairs.
+        var iter = try mg.engine.getAllProperties(prop_head_u64);
+        defer iter.deinit();
+
+        // Collect keys first (iterator borrows page buffers).
+        var keys: std.ArrayList([]const u8) = .{};
+        defer {
+            for (keys.items) |k| allocator.free(k);
+            keys.deinit(allocator);
+        }
+        while (try iter.next()) |entry| {
+            try keys.append(allocator, try allocator.dupe(u8, entry.key));
+        }
+
+        // Now fetch each property by key.
+        for (keys.items) |key| {
+            if (try mg.engine.getProperty(prop_head_u64, key, allocator)) |val| {
+                const owned_key = try allocator.dupe(u8, key);
+                try result.put(owned_key, val);
+            }
+        }
+
+        return result;
+    }
+
     // ------------------------------------------------------------------
     // Transaction operations
     // ------------------------------------------------------------------

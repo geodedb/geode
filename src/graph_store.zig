@@ -2849,7 +2849,7 @@ pub const GraphStore = struct {
                     const edge_label_copy = try self.allocator.dupe(u8, edge_label_str);
                     const edge_graph_name_copy = try self.allocator.dupe(u8, graph_name);
 
-                    const edge = Edge{
+                    var edge = Edge{
                         .id = edge_uuid,
                         .from_id = node_uuid,
                         .to_id = target_uuid,
@@ -2857,6 +2857,27 @@ pub const GraphStore = struct {
                         .properties = std.StringHashMap(PropertyValue).init(self.allocator),
                         .graph_name = edge_graph_name_copy,
                     };
+
+                    // Load edge properties from adapter (best-effort: edge is
+                    // added even if properties fail to load).
+                    load_edge_props: {
+                        if (edge_entry.prop_head == 0) break :load_edge_props;
+                        var storage_props = adapter.getAllEdgeProperties(graph_name, edge_entry.prop_head, self.allocator) catch break :load_edge_props;
+                        defer {
+                            var sp_iter = storage_props.iterator();
+                            while (sp_iter.next()) |sp_entry| {
+                                self.allocator.free(sp_entry.key_ptr.*);
+                            }
+                            storage_props.deinit();
+                        }
+
+                        var sp_iter = storage_props.iterator();
+                        while (sp_iter.next()) |sp_entry| {
+                            const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
+                            const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
+                            try edge.properties.put(key_copy, pv);
+                        }
+                    }
 
                     try self.edges.put(edge_uuid, edge);
                     try self.addToAdjacencyIndex(node_uuid, target_uuid, edge_uuid);
