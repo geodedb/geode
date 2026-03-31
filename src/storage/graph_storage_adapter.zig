@@ -936,6 +936,79 @@ pub const StorageAdapter = struct {
 
         return mg;
     }
+
+    // ------------------------------------------------------------------
+    // Node label operations (vtable targets)
+    // ------------------------------------------------------------------
+
+    /// Add a label to a node. The label string is mapped to a numeric
+    /// LabelId via the per-graph dictionary, creating a new mapping if
+    /// this is the first time the label has been seen.
+    pub fn addNodeLabel(self: *StorageAdapter, graph_name: []const u8, node_id: u64, label: []const u8) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const label_id = try mg.label_dict.getOrCreate(label);
+        try mg.engine.addLabel(node_id, label_id);
+    }
+
+    /// Remove a label from a node. If the label string is not in the
+    /// per-graph dictionary then there is nothing to remove.
+    pub fn removeNodeLabel(self: *StorageAdapter, graph_name: []const u8, node_id: u64, label: []const u8) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const label_id = mg.label_dict.getId(label) orelse return; // nothing to remove
+        try mg.engine.removeLabel(node_id, label_id);
+    }
+
+    // ------------------------------------------------------------------
+    // Edge property operations (vtable targets)
+    // ------------------------------------------------------------------
+
+    /// Remove a property from an edge. Finds the edge by scanning the
+    /// source node's outgoing adjacency list for the matching edge_id,
+    /// then writes a null tombstone via the property store.
+    ///
+    /// Same limitation as `setEdgeProperty`: the updated prop_head
+    /// cannot be written back into the EdgeEntry until AdjStore gains
+    /// an `updateEdgePropHead` method (Task 2.1).
+    pub fn removeEdgeProperty(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        from_id: u64,
+        _: u64, // to_id — unused; edge found via from's adjacency list
+        edge_id: u64,
+        key: []const u8,
+    ) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+
+        // Scan the outgoing adjacency list to find the edge's prop_head.
+        var iter = try mg.engine.expandOut(from_id, null);
+        defer iter.deinit();
+
+        var prop_head: u32 = 0;
+        var found = false;
+        while (try iter.next()) |entry| {
+            if (entry.edge_id == edge_id) {
+                prop_head = entry.prop_head;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return error.EdgeNotFound;
+
+        if (prop_head == 0) return; // no properties to remove
+
+        // Write a null tombstone. Cannot update prop_head back to
+        // the edge entry yet (no updateEdgePropHead API).
+        _ = try mg.engine.putProperty(prop_head, key, .null);
+    }
 };
 
 // ============================================================================

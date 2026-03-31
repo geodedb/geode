@@ -3278,6 +3278,18 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
         fn removeNodeProperty(ctx: *anyopaque, graph_name: []const u8, node_id: u64, key: []const u8) anyerror!void {
             return castAdapter(ctx).removeNodeProperty(graph_name, node_id, key);
         }
+        fn setEdgeProperty(ctx: *anyopaque, graph_name: []const u8, from_id: u64, to_id: u64, edge_id: u64, key: []const u8, value: PropertyValue) anyerror!void {
+            return castAdapter(ctx).setEdgeProperty(graph_name, from_id, to_id, edge_id, key, value);
+        }
+        fn removeEdgeProperty(ctx: *anyopaque, graph_name: []const u8, from_id: u64, to_id: u64, edge_id: u64, key: []const u8) anyerror!void {
+            return castAdapter(ctx).removeEdgeProperty(graph_name, from_id, to_id, edge_id, key);
+        }
+        fn addNodeLabel(ctx: *anyopaque, graph_name: []const u8, node_id: u64, label: []const u8) anyerror!void {
+            return castAdapter(ctx).addNodeLabel(graph_name, node_id, label);
+        }
+        fn removeNodeLabel(ctx: *anyopaque, graph_name: []const u8, node_id: u64, label: []const u8) anyerror!void {
+            return castAdapter(ctx).removeNodeLabel(graph_name, node_id, label);
+        }
         fn deinitAdapter(ctx: *anyopaque) void {
             castAdapter(ctx).deinit();
         }
@@ -3294,10 +3306,10 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
         .deleteEdgeFn = &Dispatch.deleteEdge,
         .setNodePropertyFn = &Dispatch.setNodeProperty,
         .removeNodePropertyFn = &Dispatch.removeNodeProperty,
-        .setEdgePropertyFn = null,
-        .removeEdgePropertyFn = null,
-        .addNodeLabelFn = null,
-        .removeNodeLabelFn = null,
+        .setEdgePropertyFn = &Dispatch.setEdgeProperty,
+        .removeEdgePropertyFn = &Dispatch.removeEdgeProperty,
+        .addNodeLabelFn = &Dispatch.addNodeLabel,
+        .removeNodeLabelFn = &Dispatch.removeNodeLabel,
         .deinitFn = &Dispatch.deinitAdapter,
     };
 
