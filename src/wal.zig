@@ -4,10 +4,15 @@ const txn_undo_log = @import("txn_undo_log.zig");
 const tde = @import("storage/tde_file_encryption.zig");
 const wal_lib = @import("wal");
 
-// CANARY: REQ=REQ-PERF-WAL-001; FEATURE="WriteAheadLog"; ASPECT=DeltaPersistence; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
+// CANARY: REQ=REQ-PERF-WAL-001; FEATURE="WriteAheadLog"; ASPECT=DeltaPersistence; STATUS=TESTED; OWNER=storage; UPDATED=2026-03-31
 // CANARY: REQ=REQ-TDE-ENFORCE-002; FEATURE=TDEEnforcement; ASPECT=WALEncryption; STATUS=TESTED; OWNER=security; UPDATED=2026-02-19
-// Issue #445: Write-Ahead Log for delta persistence.
-// Delegates to the external wal library (gitlab.com/devnw/zig/wal) for crash-safe
+//
+// This WAL is a logical change feed for CDC/audit purposes.
+// Physical crash recovery is handled by the graph-storage engine's own WAL
+// (via engine.open() which replays committed transactions on startup).
+// This WAL is NOT required for database durability.
+//
+// Delegates to the external wal library (gitlab.com/devnw/zig/wal) for
 // append-only storage. This module provides the geode-specific serialization layer
 // (WalRecord types, mutation callbacks, persistence hooks, global instance management).
 
@@ -177,10 +182,23 @@ pub const WriteAheadLog = struct {
         self.inner.sync() catch {};
     }
 
-    /// Replay WAL records from checkpoint_lsn onto the given store.
-    /// Returns the last replayed LSN.
+    /// DEPRECATED: Crash recovery is now handled by the graph-storage engine's
+    /// own WAL via engine.open(). This Geode WAL serves only as a logical change
+    /// feed for CDC/audit. Replay is skipped; returns 0.
     pub fn replay(self: *WriteAheadLog, store: *graph_store.GraphStore) !u64 {
-        // Inhibit mutation callbacks during replay to prevent re-emitting WAL records
+        log.info("WAL replay skipped — crash recovery delegated to graph-storage engine", &.{});
+
+        // Legacy replay logic retained for reference and potential CDC replay.
+        // Gate behind an unreachable condition to keep applyRecord reachable
+        // for the compiler while ensuring this path is never taken at runtime.
+        if (false) {
+            return self.replayLegacy(store);
+        }
+        return 0;
+    }
+
+    /// Legacy replay implementation — retained for potential CDC replay use.
+    fn replayLegacy(self: *WriteAheadLog, store: *graph_store.GraphStore) !u64 {
         graph_store.setMutationNotifyInhibit(true);
         defer graph_store.setMutationNotifyInhibit(false);
 
@@ -196,11 +214,9 @@ pub const WriteAheadLog = struct {
 
             if (entry.lsn <= self.checkpoint_lsn) continue;
 
-            // Parse the geode-specific payload: [u64: txn_id][u8: op_type][payload...]
             const payload = entry.payload;
-            if (payload.len < 9) continue; // Need at least txn_id (8) + op_type (1)
+            if (payload.len < 9) continue;
 
-            // Skip txn_id (8 bytes), read op_type
             const op_type_byte = payload[8];
             const record_payload = payload[9..];
 
@@ -235,9 +251,11 @@ pub const WriteAheadLog = struct {
         self.last_checkpoint_ms = std.time.milliTimestamp();
     }
 
-    /// Perform a checkpoint: save full snapshot via store.saveToFile(), then truncate WAL.
+    /// Perform a checkpoint: delegates physical durability to the graph-storage
+    /// engine (via adapter.checkpointAll()), saves IdMaps, then truncates this
+    /// logical WAL for space management.
     pub fn checkpoint(self: *WriteAheadLog, store: *graph_store.GraphStore) !void {
-        try store.saveToFile();
+        try store.saveToFile(); // calls adapter.checkpointAll() + saveIdMaps()
         const checkpoint_at = self.inner.currentLsn();
         try self.truncate(checkpoint_at);
     }
@@ -613,12 +631,15 @@ fn walNeedsCheckpointHook() bool {
     return true;
 }
 
+/// Checkpoint hook: delegates physical durability to the graph-storage engine
+/// (adapter.checkpointAll()), saves IdMaps, and truncates the logical WAL.
 fn walCheckpointHook(store: *graph_store.GraphStore) void {
     if (g_wal) |w| {
         w.checkpoint(store) catch |err| {
             log.err("WAL checkpoint failed", &.{
                 Attr.string("error", @errorName(err)),
             });
+            // Fall back to engine checkpoint + IdMap save directly
             store.saveToFile() catch {};
         };
     } else {
