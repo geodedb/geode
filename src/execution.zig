@@ -1451,9 +1451,23 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .UseGraph => |ug| {
-            // CANARY: REQ=REQ-DSN-GRAPH-BIND-002; FEATURE="DSNGraphBinding"; ASPECT=UseGraphRejection; STATUS=IMPL; OWNER=engine; UPDATED=2026-03-25
-            // Reject USE GRAPH when session is bound to a graph via DSN
+            // CANARY: REQ=REQ-DSN-GRAPH-BIND-002; FEATURE="DSNGraphBinding"; ASPECT=UseGraphRejection; STATUS=IMPL; OWNER=engine; UPDATED=2026-03-31
+            // When session is bound via DSN, allow USE GRAPH if it matches the
+            // bound graph (idempotent no-op). Reject only if switching to a
+            // different graph.
             if (context.graph_bound) {
+                if (context.session_state) |session| {
+                    if (session.graph) |bound| {
+                        if (std.mem.eql(u8, bound, ug.graph_name)) {
+                            // Same graph — no-op, return empty success result
+                            return ExecutionResult{
+                                .columns = try allocator.alloc([]const u8, 0),
+                                .rows = try allocator.alloc([]value_types.Value, 0),
+                                .flags = std.ArrayList([]const u8).empty,
+                            };
+                        }
+                    }
+                }
                 return error.GraphBound;
             }
             // CANARY: REQ=REQ-MULTI-GRAPH-032; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphValidation; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-27
