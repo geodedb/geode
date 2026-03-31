@@ -3166,6 +3166,10 @@ const AdapterVTable = struct {
     deleteEdgeFn: *const fn (*anyopaque, []const u8, u64, u64, u64) anyerror!void,
     setNodePropertyFn: *const fn (*anyopaque, []const u8, u64, []const u8, PropertyValue) anyerror!void,
     removeNodePropertyFn: *const fn (*anyopaque, []const u8, u64, []const u8) anyerror!void,
+    setEdgePropertyFn: ?*const fn (*anyopaque, []const u8, u64, u64, u64, []const u8, PropertyValue) anyerror!void,
+    removeEdgePropertyFn: ?*const fn (*anyopaque, []const u8, u64, u64, u64, []const u8) anyerror!void,
+    addNodeLabelFn: ?*const fn (*anyopaque, []const u8, u64, []const u8) anyerror!void,
+    removeNodeLabelFn: ?*const fn (*anyopaque, []const u8, u64, []const u8) anyerror!void,
     deinitFn: *const fn (*anyopaque) void,
 };
 
@@ -3242,6 +3246,10 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
         .deleteEdgeFn = &Dispatch.deleteEdge,
         .setNodePropertyFn = &Dispatch.setNodeProperty,
         .removeNodePropertyFn = &Dispatch.removeNodeProperty,
+        .setEdgePropertyFn = null,
+        .removeEdgePropertyFn = null,
+        .addNodeLabelFn = null,
+        .removeNodeLabelFn = null,
         .deinitFn = &Dispatch.deinitAdapter,
     };
 
