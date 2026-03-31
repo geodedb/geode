@@ -409,39 +409,23 @@ pub const StorageAdapter = struct {
     }
 
     /// Get all outgoing edges from a node.
-    /// Materializes the iterator into a caller-owned slice.
+    /// Returns a caller-owned slice from the engine.
     pub fn getOutgoingEdges(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![]gs.edge.EdgeEntry {
         self.mutex.lock();
         defer self.mutex.unlock();
 
         const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
-        var iter = try mg.engine.expandOut(node_id, null);
-        defer iter.deinit();
-
-        var result: std.ArrayList(gs.edge.EdgeEntry) = .{};
-        errdefer result.deinit(allocator);
-        while (try iter.next()) |entry| {
-            try result.append(allocator, entry);
-        }
-        return result.toOwnedSlice(allocator);
+        return mg.engine.expandOut(node_id, null, allocator);
     }
 
     /// Get all incoming edges to a node.
-    /// Materializes the iterator into a caller-owned slice.
+    /// Returns a caller-owned slice from the engine.
     pub fn getIncomingEdges(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![]gs.edge.EdgeEntry {
         self.mutex.lock();
         defer self.mutex.unlock();
 
         const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
-        var iter = try mg.engine.expandIn(node_id, null);
-        defer iter.deinit();
-
-        var result: std.ArrayList(gs.edge.EdgeEntry) = .{};
-        errdefer result.deinit(allocator);
-        while (try iter.next()) |entry| {
-            try result.append(allocator, entry);
-        }
-        return result.toOwnedSlice(allocator);
+        return mg.engine.expandIn(node_id, null, allocator);
     }
 
     // ------------------------------------------------------------------
@@ -507,24 +491,14 @@ pub const StorageAdapter = struct {
     // Edge property operations
     // ------------------------------------------------------------------
 
-    /// Set a property on an edge. Finds the edge by scanning the source
-    /// node's outgoing adjacency list for the matching edge_id, then uses
-    /// the engine's property store to write the key/value.
-    ///
-    /// CONCERN: The graph-storage AdjStore does not expose an
-    /// `updateEdgePropHead` method. When `prop_head` is 0 (first property
-    /// on an edge), `putProperty` returns a *new* prop_head, but we
-    /// cannot write it back into the EdgeEntry because AdjStore stores
-    /// edges in fixed-size page blocks with no single-entry update API.
-    /// Therefore edge properties only work correctly when the edge
-    /// already has a non-zero prop_head, or when prop_head 0 happens to
-    /// be returned unchanged (which it won't be). This is a known
-    /// limitation until AdjStore gains an `updateEdgePropHead` method.
+    /// Set a property on an edge. Delegates to the engine's
+    /// `setEdgeProperty` which handles prop_head updates in both
+    /// adjacency lists automatically.
     pub fn setEdgeProperty(
         self: *StorageAdapter,
         graph_name: []const u8,
         from_id: u64,
-        _: u64, // to_id — unused; edge found via from's adjacency list
+        to_id: u64,
         edge_id: u64,
         key: []const u8,
         value: graph_store.PropertyValue,
@@ -533,31 +507,12 @@ pub const StorageAdapter = struct {
         defer self.mutex.unlock();
 
         const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
-
-        // Scan the outgoing adjacency list to find the edge's prop_head.
-        var iter = try mg.engine.expandOut(from_id, null);
-        defer iter.deinit();
-
-        var prop_head: u32 = 0;
-        var found = false;
-        while (try iter.next()) |entry| {
-            if (entry.edge_id == edge_id) {
-                prop_head = entry.prop_head;
-                found = true;
-                break;
-            }
-        }
-        if (!found) return error.EdgeNotFound;
-
         const storage_val = toStorageProperty(value);
-        // putProperty returns the (possibly new) prop_head, but we cannot
-        // write it back to the EdgeEntry without AdjStore support.
-        _ = try mg.engine.putProperty(prop_head, key, storage_val);
+        try mg.engine.setEdgeProperty(from_id, to_id, edge_id, key, storage_val);
     }
 
-    /// Get a property from an edge by scanning the source node's outgoing
-    /// adjacency list for the matching edge_id, then reading from the
-    /// property store.
+    /// Get a property from an edge. Delegates to the engine's
+    /// `getEdgeProperty` which handles adjacency list scanning internally.
     pub fn getEdgeProperty(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -570,18 +525,7 @@ pub const StorageAdapter = struct {
         defer self.mutex.unlock();
 
         const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
-
-        var iter = try mg.engine.expandOut(from_id, null);
-        defer iter.deinit();
-
-        while (try iter.next()) |entry| {
-            if (entry.edge_id == edge_id) {
-                if (entry.prop_head == 0) return null;
-                return mg.engine.getProperty(entry.prop_head, key, allocator);
-            }
-        }
-
-        return error.EdgeNotFound;
+        return mg.engine.getEdgeProperty(from_id, edge_id, key, allocator);
     }
 
     // ------------------------------------------------------------------
@@ -1016,18 +960,13 @@ pub const StorageAdapter = struct {
     // Edge property operations (vtable targets)
     // ------------------------------------------------------------------
 
-    /// Remove a property from an edge. Finds the edge by scanning the
-    /// source node's outgoing adjacency list for the matching edge_id,
-    /// then writes a null tombstone via the property store.
-    ///
-    /// Same limitation as `setEdgeProperty`: the updated prop_head
-    /// cannot be written back into the EdgeEntry until AdjStore gains
-    /// an `updateEdgePropHead` method (Task 2.1).
+    /// Remove a property from an edge. Delegates to the engine's
+    /// `removeEdgeProperty` which handles adjacency list scanning internally.
     pub fn removeEdgeProperty(
         self: *StorageAdapter,
         graph_name: []const u8,
         from_id: u64,
-        _: u64, // to_id — unused; edge found via from's adjacency list
+        _: u64, // to_id — reserved for future use
         edge_id: u64,
         key: []const u8,
     ) !void {
@@ -1035,27 +974,7 @@ pub const StorageAdapter = struct {
         defer self.mutex.unlock();
 
         const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
-
-        // Scan the outgoing adjacency list to find the edge's prop_head.
-        var iter = try mg.engine.expandOut(from_id, null);
-        defer iter.deinit();
-
-        var prop_head: u32 = 0;
-        var found = false;
-        while (try iter.next()) |entry| {
-            if (entry.edge_id == edge_id) {
-                prop_head = entry.prop_head;
-                found = true;
-                break;
-            }
-        }
-        if (!found) return error.EdgeNotFound;
-
-        if (prop_head == 0) return; // no properties to remove
-
-        // Write a null tombstone. Cannot update prop_head back to
-        // the edge entry yet (no updateEdgePropHead API).
-        _ = try mg.engine.putProperty(prop_head, key, .null);
+        try mg.engine.removeEdgeProperty(from_id, edge_id, key);
     }
 };
 
