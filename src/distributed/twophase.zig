@@ -10,6 +10,8 @@ const logging = @import("logging");
 const log = logging.scoped("twophase");
 const Attr = logging.Attr;
 
+pub const ParticipantNode = @import("twophase_participant.zig").ParticipantNode;
+
 const fd = protobuf.fd;
 
 /// Two-Phase Commit transaction states
@@ -77,7 +79,7 @@ pub const Savepoint = struct {
     timestamp: i64,
 };
 
-// CANARY: REQ=REQ-DIST-2PC-MSG-001; FEATURE="Two-Phase Commit Message Format"; ASPECT=Protocol; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
+// CANARY: REQ=REQ-DIST-2PC-MSG-001; FEATURE="Two-Phase Commit Message Format"; ASPECT=Protocol; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
 /// 2PC protocol message for network communication
 pub const TwoPhaseMessage = dist_schema.TwoPhaseMessage;
 
@@ -149,7 +151,7 @@ pub const TwoPhaseTransport = struct {
 
         // Parse endpoint into host and port
         // GAP-0144: Secure TLS connections for 2PC coordination
-        // CANARY: REQ=REQ-2PC-TLS-001; FEATURE="2PC TLS"; ASPECT=Security; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-13
+        // CANARY: REQ=REQ-2PC-TLS-001; FEATURE="2PC TLS"; ASPECT=Security; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-13
         const colon_pos = std.mem.indexOf(u8, endpoint, ":") orelse return error.InvalidEndpoint;
         const host = endpoint[0..colon_pos];
         const port_str = endpoint[colon_pos + 1 ..];
@@ -201,7 +203,7 @@ pub const TwoPhaseTransport = struct {
         return self.connections.getPtr(endpoint).?;
     }
 
-    // CANARY: REQ=REQ-2PC-TIMEOUT-001; FEATURE="2PCTimeout"; ASPECT=Transport; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
+    // CANARY: REQ=REQ-2PC-TIMEOUT-001; FEATURE="2PCTimeout"; ASPECT=Transport; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
     /// Send a 2PC message and receive response with timeout handling
     pub fn sendMessage(self: *TwoPhaseTransport, endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !TwoPhaseResponse {
         const start_time = std.time.milliTimestamp();
@@ -315,7 +317,7 @@ fn readFrame(
     return body;
 }
 
-// CANARY: REQ=REQ-DIST-2PC-TRANSPORT-001; FEATURE="Two-Phase Commit Network Transport"; ASPECT=QUICMessaging; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
+// CANARY: REQ=REQ-DIST-2PC-TRANSPORT-001; FEATURE="Two-Phase Commit Network Transport"; ASPECT=QUICMessaging; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
 /// Send a 2PC message to a participant endpoint using QUIC transport
 fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !TwoPhaseResponse {
     // Use global transport if available, otherwise fall back to creating a one-shot connection
@@ -324,7 +326,7 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
     }
 
     // GAP-0144: Secure TLS for one-shot 2PC connections
-    // CANARY: REQ=REQ-2PC-TLS-002; FEATURE="2PC TLS One-shot"; ASPECT=Security; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-2PC-TLS-002; FEATURE="2PC TLS One-shot"; ASPECT=Security; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-13
     // One-shot connection for when transport not initialized
     // Parse endpoint into host and port
     const colon_pos = std.mem.indexOf(u8, endpoint, ":") orelse return error.InvalidEndpoint;
@@ -492,106 +494,43 @@ pub const Transaction = struct {
         return error.SavepointNotFound;
     }
 
-    // PERF-D003: Thread worker for parallel prepare dispatch
-    fn prepareWorker(
-        participant: *Participant,
-        send_fn: SendFn,
-        send_ctx: ?*anyopaque,
-        id: []const u8,
-        coordinator_id: []const u8,
-        operations: std.ArrayList(Operation),
-        timeout_ms: u64,
-        allocator: Allocator,
-        vote_ok: *bool,
-    ) void {
-        participant.state = .preparing;
-
-        const msg = TwoPhaseMessage{
-            .msg_type = .PREPARE,
-            .transaction_id = id,
-            .coordinator_id = coordinator_id,
-            .timestamp = std.time.timestamp(),
-            .operations = operations,
-        };
-
-        const response = send_fn(send_ctx, participant.endpoint, msg, timeout_ms) catch {
-            participant.prepare_response = .VOTE_TIMEOUT;
-            vote_ok.* = false;
-            return;
-        };
-        defer response.deinit(allocator);
-
-        participant.prepare_response = response.vote;
-        participant.last_message_time = std.time.timestamp();
-
-        if (response.vote != .VOTE_COMMIT) {
-            vote_ok.* = false;
-        }
-    }
-
     pub fn prepare(self: *Transaction) !bool {
         self.state = .preparing;
 
-        // CANARY: REQ=REQ-DIST-2PC-001; FEATURE="Two-Phase Commit Messaging"; ASPECT=Prepare; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
-        // PERF-D003: Send prepare messages to all participants in parallel
-        const n = self.participants.items.len;
-
-        if (n == 0) {
-            self.state = .prepared;
-            return true;
-        }
-
-        // Allocate per-participant vote results and thread handles
-        var vote_results = try self.allocator.alloc(bool, n);
-        defer self.allocator.free(vote_results);
-        for (vote_results) |*v| v.* = true;
-
-        var threads = try self.allocator.alloc(?std.Thread, n);
-        defer self.allocator.free(threads);
-
-        // Spawn a thread per participant
-        for (self.participants.items, 0..) |*participant, i| {
-            threads[i] = std.Thread.spawn(.{}, prepareWorker, .{
-                participant,
-                self.send_fn,
-                self.send_ctx,
-                self.id,
-                self.coordinator_id,
-                self.operations,
-                self.timeout_ms,
-                self.allocator,
-                &vote_results[i],
-            }) catch {
-                // If we cannot spawn, run inline (fallback)
-                prepareWorker(
-                    participant,
-                    self.send_fn,
-                    self.send_ctx,
-                    self.id,
-                    self.coordinator_id,
-                    self.operations,
-                    self.timeout_ms,
-                    self.allocator,
-                    &vote_results[i],
-                );
-                threads[i] = null;
-            };
-        }
-
-        // Join all threads
-        for (threads) |maybe_t| {
-            if (maybe_t) |t| t.join();
-        }
-
-        // Check all votes
+        // CANARY: REQ=REQ-DIST-2PC-001; FEATURE="Two-Phase Commit Messaging"; ASPECT=Prepare; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
+        // Send prepare messages to all participants
         var all_voted_commit = true;
-        for (vote_results) |v| {
-            if (!v) {
+        for (self.participants.items) |*participant| {
+            participant.state = .preparing;
+
+            // Create and send prepare message
+            const msg = TwoPhaseMessage{
+                .msg_type = .PREPARE,
+                .transaction_id = self.id,
+                .coordinator_id = self.coordinator_id,
+                .timestamp = std.time.timestamp(),
+                .operations = self.operations,
+            };
+
+            // Send message to participant (async with timeout)
+            const response = self.send_fn(self.send_ctx, participant.endpoint, msg, self.timeout_ms) catch |err| {
+                // Network error - treat as abort vote
+                participant.prepare_response = .VOTE_TIMEOUT;
                 all_voted_commit = false;
-                break;
+                _ = err;
+                continue;
+            };
+            defer response.deinit(self.allocator);
+
+            participant.prepare_response = response.vote;
+            participant.last_message_time = std.time.timestamp();
+
+            if (response.vote != .VOTE_COMMIT) {
+                all_voted_commit = false;
             }
         }
 
+        // Check all votes
         if (!all_voted_commit) {
             self.state = .aborting;
             return false;
@@ -601,46 +540,6 @@ pub const Transaction = struct {
         return true;
     }
 
-    // PERF-D004: Thread worker for parallel commit dispatch
-    fn commitWorker(
-        participant: *Participant,
-        send_fn: SendFn,
-        send_ctx: ?*anyopaque,
-        id: []const u8,
-        coordinator_id: []const u8,
-        timeout_ms: u64,
-        allocator: Allocator,
-    ) void {
-        participant.state = .committing;
-
-        var ops = std.ArrayList(Operation).init(allocator);
-        defer ops.deinit(allocator);
-        const msg = TwoPhaseMessage{
-            .msg_type = .COMMIT,
-            .transaction_id = id,
-            .coordinator_id = coordinator_id,
-            .timestamp = std.time.timestamp(),
-            .operations = ops,
-        };
-
-        // Send commit message (with retry for reliability)
-        var retries: u32 = 0;
-        const max_retries: u32 = 3;
-        while (retries < max_retries) : (retries += 1) {
-            if (send_fn(send_ctx, participant.endpoint, msg, timeout_ms)) |resp| {
-                resp.deinit(allocator);
-            } else |_| {
-                const backoff_ms: u64 = @as(u64, 100) << @as(u6, @intCast(retries));
-                std.time.sleep(backoff_ms * std.time.ns_per_ms);
-                continue;
-            }
-            break;
-        }
-
-        participant.state = .committed;
-        participant.last_message_time = std.time.timestamp();
-    }
-
     pub fn commit(self: *Transaction) !void {
         if (self.state != .prepared) {
             return error.InvalidState;
@@ -648,45 +547,39 @@ pub const Transaction = struct {
 
         self.state = .committing;
 
-        // CANARY: REQ=REQ-DIST-2PC-002; FEATURE="Two-Phase Commit Messaging"; ASPECT=Commit; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
-        // PERF-D004: Send commit messages to all participants in parallel
-        const n = self.participants.items.len;
+        // CANARY: REQ=REQ-DIST-2PC-002; FEATURE="Two-Phase Commit Messaging"; ASPECT=Commit; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
+        // Send commit messages to all participants
+        for (self.participants.items) |*participant| {
+            participant.state = .committing;
 
-        if (n == 0) {
-            self.state = .committed;
-            return;
-        }
-
-        var threads = try self.allocator.alloc(?std.Thread, n);
-        defer self.allocator.free(threads);
-
-        for (self.participants.items, 0..) |*participant, i| {
-            threads[i] = std.Thread.spawn(.{}, commitWorker, .{
-                participant,
-                self.send_fn,
-                self.send_ctx,
-                self.id,
-                self.coordinator_id,
-                self.timeout_ms,
-                self.allocator,
-            }) catch {
-                // Fallback: run inline if thread spawn fails
-                commitWorker(
-                    participant,
-                    self.send_fn,
-                    self.send_ctx,
-                    self.id,
-                    self.coordinator_id,
-                    self.timeout_ms,
-                    self.allocator,
-                );
-                threads[i] = null;
+            // Create and send commit message
+            var ops = std.ArrayList(Operation).init(self.allocator);
+            defer ops.deinit(self.allocator);
+            const msg = TwoPhaseMessage{
+                .msg_type = .COMMIT,
+                .transaction_id = self.id,
+                .coordinator_id = self.coordinator_id,
+                .timestamp = std.time.timestamp(),
+                .operations = ops,
             };
-        }
 
-        // Join all threads
-        for (threads) |maybe_t| {
-            if (maybe_t) |t| t.join();
+            // Send commit message (with retry for reliability)
+            var retries: u32 = 0;
+            const max_retries: u32 = 3;
+            while (retries < max_retries) : (retries += 1) {
+                if (self.send_fn(self.send_ctx, participant.endpoint, msg, self.timeout_ms)) |resp| {
+                    resp.deinit(self.allocator);
+                } else |_| {
+                    // Retry after exponential backoff
+                    const backoff_ms: u64 = @as(u64, 100) << @as(u6, @intCast(retries));
+                    std.time.sleep(backoff_ms * std.time.ns_per_ms);
+                    continue;
+                }
+                break;
+            }
+
+            participant.state = .committed;
+            participant.last_message_time = std.time.timestamp();
         }
 
         self.state = .committed;
@@ -695,7 +588,7 @@ pub const Transaction = struct {
     pub fn abort(self: *Transaction) !void {
         self.state = .aborting;
 
-        // CANARY: REQ=REQ-DIST-2PC-003; FEATURE="Two-Phase Commit Messaging"; ASPECT=Abort; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
+        // CANARY: REQ=REQ-DIST-2PC-003; FEATURE="Two-Phase Commit Messaging"; ASPECT=Abort; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
         // Send abort messages to all participants
         for (self.participants.items) |*participant| {
             participant.state = .aborting;
@@ -924,278 +817,7 @@ pub const Coordinator = struct {
     }
 };
 
-/// Two-Phase Commit Participant
-// CANARY: REQ=REQ-2PC-PARTICIPANT-001; FEATURE="2PC Participant Node"; ASPECT=StorageOps; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
-pub const ParticipantNode = struct {
-    allocator: Allocator,
-    node_id: []const u8,
-    transactions: std.StringHashMap(LocalTransaction),
-    resource_manager: *ResourceManager,
-    store: ?*graph_store.GraphStore,
-
-    pub const LocalTransaction = struct {
-        id: []const u8,
-        coordinator_id: []const u8,
-        state: TransactionState,
-        write_set: []u8,
-        locks: std.ArrayList(Lock),
-
-        pub fn deinit(self: *LocalTransaction, allocator: Allocator) void {
-            allocator.free(self.id);
-            allocator.free(self.coordinator_id);
-            allocator.free(self.write_set);
-            self.locks.deinit(allocator);
-        }
-    };
-
-    pub const Lock = struct {
-        resource_id: u64,
-        lock_type: LockType,
-        acquired_at: i64,
-    };
-
-    pub const LockType = enum {
-        shared,
-        exclusive,
-    };
-
-    pub const ResourceManager = struct {
-        locks: std.AutoHashMap(u64, LockInfo),
-
-        pub const LockInfo = struct {
-            holder: ?[]const u8,
-            lock_type: LockType,
-        };
-
-        pub fn init(allocator: Allocator) ResourceManager {
-            return .{ .locks = std.AutoHashMap(u64, LockInfo).init(allocator) };
-        }
-
-        pub fn deinit(self: *ResourceManager) void {
-            self.locks.deinit();
-        }
-
-        pub fn acquireLock(self: *ResourceManager, resource_id: u64, transaction_id: []const u8, lock_type: LockType) !bool {
-            const result = try self.locks.getOrPut(resource_id);
-            if (!result.found_existing) {
-                result.value_ptr.* = .{
-                    .holder = transaction_id,
-                    .lock_type = lock_type,
-                };
-                return true;
-            }
-
-            // Check compatibility
-            if (result.value_ptr.holder == null) {
-                result.value_ptr.holder = transaction_id;
-                result.value_ptr.lock_type = lock_type;
-                return true;
-            }
-            if (result.value_ptr.holder) |holder| {
-                if (std.mem.eql(u8, holder, transaction_id)) {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        pub fn releaseLock(self: *ResourceManager, resource_id: u64, transaction_id: []const u8) !void {
-            if (self.locks.getPtr(resource_id)) |lock_info| {
-                if (lock_info.holder) |holder| {
-                    if (std.mem.eql(u8, holder, transaction_id)) {
-                        lock_info.holder = null;
-                    }
-                }
-            }
-        }
-    };
-
-    pub fn init(allocator: Allocator, node_id: []const u8, resource_manager: *ResourceManager) ParticipantNode {
-        return .{
-            .allocator = allocator,
-            .node_id = node_id,
-            .transactions = std.StringHashMap(LocalTransaction).init(allocator),
-            .resource_manager = resource_manager,
-            .store = null,
-        };
-    }
-
-    /// Initialize with GraphStore for actual data persistence
-    pub fn initWithStore(allocator: Allocator, node_id: []const u8, resource_manager: *ResourceManager, store: *graph_store.GraphStore) ParticipantNode {
-        return .{
-            .allocator = allocator,
-            .node_id = node_id,
-            .transactions = std.StringHashMap(LocalTransaction).init(allocator),
-            .resource_manager = resource_manager,
-            .store = store,
-        };
-    }
-
-    /// Set the GraphStore after initialization
-    pub fn setStore(self: *ParticipantNode, store: *graph_store.GraphStore) void {
-        self.store = store;
-    }
-
-    pub fn deinit(self: *ParticipantNode) void {
-        var it = self.transactions.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
-        self.transactions.deinit();
-    }
-
-    pub fn handlePrepare(self: *ParticipantNode, msg: *const TwoPhaseMessage, payload: []const u8) !PrepareResponse {
-        if (self.transactions.getPtr(msg.transaction_id)) |existing| {
-            return if (existing.state == .prepared) .VOTE_COMMIT else .VOTE_ABORT;
-        }
-
-        // Create local transaction
-        var local_txn = LocalTransaction{
-            .id = try self.allocator.dupe(u8, msg.transaction_id),
-            .coordinator_id = try self.allocator.dupe(u8, msg.coordinator_id),
-            .state = .preparing,
-            .write_set = try self.allocator.dupe(u8, payload),
-            .locks = std.ArrayList(Lock).init(self.allocator),
-        };
-        errdefer local_txn.deinit(self.allocator);
-
-        // Try to acquire locks for all operations
-        for (msg.operations.items) |op| {
-            const resource_id = switch (op) {
-                .node_op => |node_op| node_op.node_id,
-                .edge_op => |edge_op| edge_op.edge_id,
-            };
-
-            const lock_acquired = try self.resource_manager.acquireLock(
-                resource_id,
-                local_txn.id,
-                .exclusive,
-            );
-
-            if (!lock_acquired) {
-                // Cannot acquire lock, vote abort
-                for (local_txn.locks.items) |lock| {
-                    self.resource_manager.releaseLock(lock.resource_id, local_txn.id) catch {};
-                }
-                return .VOTE_ABORT;
-            }
-
-            try local_txn.locks.append(self.allocator, .{
-                .resource_id = resource_id,
-                .lock_type = .exclusive,
-                .acquired_at = std.time.timestamp(),
-            });
-        }
-
-        // All locks acquired, prepare transaction
-        local_txn.state = .prepared;
-        try self.transactions.put(local_txn.id, local_txn);
-
-        return .VOTE_COMMIT;
-    }
-
-    // CANARY: REQ=REQ-2PC-COMMIT-001; FEATURE="2PC Commit Handler"; ASPECT=StorageApplication; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
-    pub fn handleCommit(self: *ParticipantNode, transaction_id: []const u8) !void {
-        const removed = self.transactions.fetchRemove(transaction_id) orelse return error.TransactionNotFound;
-        var local_txn = removed.value;
-        defer local_txn.deinit(self.allocator);
-
-        if (local_txn.state != .prepared) {
-            return error.InvalidState;
-        }
-
-        local_txn.state = .committing;
-        defer {
-            for (local_txn.locks.items) |lock| {
-                self.resource_manager.releaseLock(lock.resource_id, local_txn.id) catch {};
-            }
-        }
-
-        // Apply operations to GraphStore
-        const store = self.store orelse return error.NoStorage;
-        var reader: std.Io.Reader = .fixed(local_txn.write_set);
-        var msg = protobuf.decode(TwoPhaseMessage, &reader, self.allocator) catch |err| {
-            log.err("2PC participant failed to decode write set", &.{Attr.string("error", @errorName(err))});
-            return err;
-        };
-        defer msg.deinit(self.allocator);
-
-        for (msg.operations.items) |op| {
-            try self.applyOperation(store, op);
-        }
-
-        local_txn.state = .committed;
-    }
-
-    // CANARY: REQ=REQ-2PC-ABORT-001; FEATURE="2PC Abort Handler"; ASPECT=UndoApplication; STATUS=IMPL; OWNER=distributed; UPDATED=2026-01-10
-    pub fn handleAbort(self: *ParticipantNode, transaction_id: []const u8) !void {
-        const removed = self.transactions.fetchRemove(transaction_id) orelse return error.TransactionNotFound;
-        var local_txn = removed.value;
-        defer local_txn.deinit(self.allocator);
-
-        local_txn.state = .aborting;
-        for (local_txn.locks.items) |lock| {
-            self.resource_manager.releaseLock(lock.resource_id, local_txn.id) catch {};
-        }
-        local_txn.state = .aborted;
-    }
-
-    /// Apply a single operation to storage
-    fn applyOperation(self: *ParticipantNode, store: *graph_store.GraphStore, op: Operation) !void {
-        switch (op) {
-            .node_op => |node_op| {
-                const graph_name = if (node_op.graph_name.len > 0) node_op.graph_name else graph_store.DEFAULT_GRAPH_NAME;
-                const labels = if (node_op.label.len > 0) &[_][]const u8{node_op.label} else &[_][]const u8{};
-                switch (node_op.op_type) {
-                    .CREATE => {
-                        if (store.getNodePtr(node_op.node_id) == null) {
-                            store.createNodeWithId(node_op.node_id, labels, graph_name) catch |err| switch (err) {
-                                error.NodeAlreadyExists => {},
-                                else => return err,
-                            };
-                        } else if (node_op.label.len > 0) {
-                            store.addNodeLabel(node_op.node_id, node_op.label) catch {};
-                        }
-                        try value_convert.applyMapEntriesToNode(store, self.allocator, node_op.node_id, node_op.properties.items);
-                    },
-                    .UPDATE => {
-                        if (store.getNodePtr(node_op.node_id) != null) {
-                            try value_convert.applyMapEntriesToNode(store, self.allocator, node_op.node_id, node_op.properties.items);
-                        }
-                    },
-                    .DELETE => {
-                        store.deleteNode(node_op.node_id);
-                    },
-                    else => {},
-                }
-            },
-            .edge_op => |edge_op| {
-                const graph_name = if (edge_op.graph_name.len > 0) edge_op.graph_name else graph_store.DEFAULT_GRAPH_NAME;
-                switch (edge_op.op_type) {
-                    .CREATE => {
-                        if (store.getEdgePtr(edge_op.edge_id) == null) {
-                            store.createEdgeWithId(edge_op.edge_id, edge_op.source_id, edge_op.target_id, edge_op.edge_type, graph_name) catch |err| switch (err) {
-                                error.EdgeAlreadyExists => {},
-                                else => return err,
-                            };
-                        }
-                        try value_convert.applyMapEntriesToEdge(store, self.allocator, edge_op.edge_id, edge_op.properties.items);
-                    },
-                    .UPDATE => {
-                        if (store.getEdgePtr(edge_op.edge_id) != null) {
-                            try value_convert.applyMapEntriesToEdge(store, self.allocator, edge_op.edge_id, edge_op.properties.items);
-                        }
-                    },
-                    .DELETE => {
-                        store.deleteEdge(edge_op.edge_id);
-                    },
-                    else => {},
-                }
-            },
-        }
-    }
-};
+// ParticipantNode extracted to twophase_participant.zig
 
 /// High-level 2PC coordinator wrapper used by DistributedCoordinator.
 pub const TwoPCCoordinator = struct {
