@@ -223,9 +223,9 @@
         },
 
         // Timeseries - Pattern matching, DTW, matrix profile, PELT change-point detection
-        // GAP-0292: Use local path during development for ChunkStorage persistence wiring.
         .timeseries = .{
-            .path = "../../../../../zig/timeseries",
+            .url = "git+https://gitlab.com/devnw/zig/timeseries.git#14283384bc8877360a943f8c0607304fd4b77a60",
+            .hash = "timeseries-0.1.0-iAEwOqLoAwDptgxTdefl3MgFtrtTNIiSGIwmokFNGMCs",
         },
 
         // Metrics - Counters, gauges, histograms, Prometheus export
