@@ -339,6 +339,7 @@ pub fn extValueToProjectedValue(allocator: std.mem.Allocator, ext: ExtValue) !Va
             }
             break :blk .{ .List = values };
         },
+        .Array => |arr| try dynamicArrayToProjectedValue(allocator, arr),
         else => extValueToValue(try cloneExtValue(allocator, ext)),
     };
 }
@@ -780,6 +781,114 @@ fn parseHashText(allocator: std.mem.Allocator, text: []const u8) !heap.Value {
     return eval_funcs.Hash(allocator, text[0..colon], text[colon + 1 ..]);
 }
 
+fn freeProjectedValues(allocator: std.mem.Allocator, values: []Value, initialized: usize) void {
+    for (values[0..initialized]) |value| freeValue(allocator, value);
+    allocator.free(values);
+}
+
+fn dynamicArrayToProjectedValue(allocator: std.mem.Allocator, arr: arrays.DynamicArray) !Value {
+    const len = arr.length();
+    const values = try allocator.alloc(Value, len);
+    var initialized: usize = 0;
+    errdefer freeProjectedValues(allocator, values, initialized);
+
+    switch (arr.elem_type) {
+        .int => {
+            for (0..len) |i| {
+                values[i] = .{ .Int = try arr.getInt(i) };
+                initialized += 1;
+            }
+        },
+        .bool => {
+            for (0..len) |i| {
+                values[i] = .{ .Bool = arr.data[i] != 0 };
+                initialized += 1;
+            }
+        },
+        .text => {
+            var offset: usize = 0;
+            for (0..len) |i| {
+                if (offset + 4 > arr.data.len) return error.InvalidParams;
+                const text_len = std.mem.readInt(u32, arr.data[offset .. offset + 4][0..4], .little);
+                offset += 4;
+                const text_len_usize: usize = @intCast(text_len);
+                if (offset + text_len_usize > arr.data.len) return error.InvalidParams;
+                values[i] = .{ .Text = try allocator.dupe(u8, arr.data[offset .. offset + text_len_usize]) };
+                initialized += 1;
+                offset += text_len_usize;
+            }
+        },
+        .decimal => {
+            var offset: usize = 0;
+            for (0..len) |i| {
+                if (offset + 18 > arr.data.len) return error.InvalidParams;
+                const coeff = std.mem.readInt(i128, arr.data[offset .. offset + 16][0..16], .little);
+                offset += 16;
+                const raw_scale = std.mem.readInt(i16, arr.data[offset .. offset + 2][0..2], .little);
+                offset += 2;
+                const scale: u8 = @intCast(if (raw_scale < 0) 0 else raw_scale);
+                values[i] = .{ .Decimal = .{
+                    .coeff = coeff,
+                    .scale = scale,
+                    .orig_scale = scale,
+                    .orig_repr = null,
+                } };
+                initialized += 1;
+            }
+        },
+    }
+
+    return .{ .List = values };
+}
+
+fn encodeTextArrayData(allocator: std.mem.Allocator, items: []const std.json.Value) ![]u8 {
+    var data = std.ArrayList(u8).empty;
+    errdefer data.deinit(allocator);
+
+    for (items) |item| {
+        const text = switch (item) {
+            .string => |value| value,
+            else => return error.InvalidParams,
+        };
+        var len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &len_buf, @intCast(text.len), .little);
+        try data.appendSlice(allocator, &len_buf);
+        try data.appendSlice(allocator, text);
+    }
+
+    return data.toOwnedSlice(allocator);
+}
+
+fn encodeBoolArrayData(allocator: std.mem.Allocator, items: []const std.json.Value) ![]u8 {
+    const data = try allocator.alloc(u8, items.len);
+    errdefer allocator.free(data);
+    for (items, 0..) |item, i| {
+        data[i] = switch (item) {
+            .bool => |value| if (value) 1 else 0,
+            else => return error.InvalidParams,
+        };
+    }
+    return data;
+}
+
+fn encodeDecimalArrayData(allocator: std.mem.Allocator, items: []const std.json.Value) ![]u8 {
+    const data = try allocator.alloc(u8, items.len * 18);
+    errdefer allocator.free(data);
+    var offset: usize = 0;
+    for (items) |item| {
+        const coeff: i128 = switch (item) {
+            .float => |value| @intFromFloat(value * 1_000_000.0),
+            .integer => |value| value * 1_000_000,
+            else => return error.InvalidParams,
+        };
+        std.mem.writeInt(i128, data[offset .. offset + 16][0..16], coeff, .little);
+        offset += 16;
+        std.mem.writeInt(i16, data[offset .. offset + 2][0..2], 6, .little);
+        offset += 2;
+    }
+    return data;
+}
+
 fn parseArrayText(allocator: std.mem.Allocator, text: []const u8) !heap.Value {
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, text, .{});
     defer parsed.deinit();
@@ -787,17 +896,108 @@ fn parseArrayText(allocator: std.mem.Allocator, text: []const u8) !heap.Value {
         .array => |arr| arr,
         else => return error.InvalidParams,
     };
-    var values = try allocator.alloc(heap.Value, array.items.len);
-    for (array.items, 0..) |item, i| {
-        values[i] = switch (item) {
-            .integer => |n| .{ .Int = @intCast(n) },
-            .string => |s| .{ .Text = try allocator.dupe(u8, s) },
-            .bool => |b| .{ .Bool = b },
-            else => return error.InvalidParams,
-        };
+    if (array.items.len == 0) {
+        return .{ .Array = .{ .elem_type = .int, .data = try allocator.alloc(u8, 0), .allocator = allocator } };
     }
-    defer allocator.free(values);
-    return eval_funcs.Array(allocator, values);
+
+    return switch (array.items[0]) {
+        .integer => blk: {
+            var ints = std.ArrayList(i64).empty;
+            defer ints.deinit(allocator);
+            for (array.items) |item| {
+                switch (item) {
+                    .integer => |value| try ints.append(allocator, @intCast(value)),
+                    else => return error.InvalidParams,
+                }
+            }
+            break :blk .{ .Array = try arrays.DynamicArray.fromInts(allocator, ints.items) };
+        },
+        .string => .{ .Array = .{
+            .elem_type = .text,
+            .data = try encodeTextArrayData(allocator, array.items),
+            .allocator = allocator,
+        } },
+        .bool => .{ .Array = .{
+            .elem_type = .bool,
+            .data = try encodeBoolArrayData(allocator, array.items),
+            .allocator = allocator,
+        } },
+        .float => .{ .Array = .{
+            .elem_type = .decimal,
+            .data = try encodeDecimalArrayData(allocator, array.items),
+            .allocator = allocator,
+        } },
+        else => return error.InvalidParams,
+    };
+}
+
+fn extListToHeapValue(allocator: std.mem.Allocator, list: []const ExtValue) !heap.Value {
+    if (list.len == 0) {
+        return .{ .Array = .{ .elem_type = .int, .data = try allocator.alloc(u8, 0), .allocator = allocator } };
+    }
+
+    switch (list[0]) {
+        .Int, .SmallInt, .BigInt => {
+            var ints = std.ArrayList(i64).empty;
+            defer ints.deinit(allocator);
+            for (list) |item| {
+                const value = switch (item) {
+                    .Int => |v| v,
+                    .SmallInt => |v| @as(i64, v),
+                    .BigInt => |v| v,
+                    else => return error.UnsupportedParamType,
+                };
+                try ints.append(allocator, value);
+            }
+            return .{ .Array = try arrays.DynamicArray.fromInts(allocator, ints.items) };
+        },
+        .Bool => {
+            const data = try allocator.alloc(u8, list.len);
+            errdefer allocator.free(data);
+            for (list, 0..) |item, i| {
+                data[i] = switch (item) {
+                    .Bool => |v| if (v) 1 else 0,
+                    else => return error.UnsupportedParamType,
+                };
+            }
+            return .{ .Array = .{ .elem_type = .bool, .data = data, .allocator = allocator } };
+        },
+        .Str, .Text, .Char, .Varchar => {
+            var data = std.ArrayList(u8).empty;
+            errdefer data.deinit(allocator);
+            for (list) |item| {
+                const text = switch (item) {
+                    .Str => |v| v,
+                    .Text => |v| v,
+                    .Char => |v| v.data,
+                    .Varchar => |v| v.data,
+                    else => return error.UnsupportedParamType,
+                };
+                var len_buf: [4]u8 = undefined;
+                std.mem.writeInt(u32, &len_buf, @intCast(text.len), .little);
+                try data.appendSlice(allocator, &len_buf);
+                try data.appendSlice(allocator, text);
+            }
+            return .{ .Array = .{ .elem_type = .text, .data = try data.toOwnedSlice(allocator), .allocator = allocator } };
+        },
+        .Decimal => {
+            const data = try allocator.alloc(u8, list.len * 18);
+            errdefer allocator.free(data);
+            var offset: usize = 0;
+            for (list) |item| {
+                const value = switch (item) {
+                    .Decimal => |v| v,
+                    else => return error.UnsupportedParamType,
+                };
+                std.mem.writeInt(i128, data[offset .. offset + 16][0..16], value.coeff, .little);
+                offset += 16;
+                std.mem.writeInt(i16, data[offset .. offset + 2][0..2], value.scale, .little);
+                offset += 2;
+            }
+            return .{ .Array = .{ .elem_type = .decimal, .data = data, .allocator = allocator } };
+        },
+        else => return error.UnsupportedParamType,
+    }
 }
 
 pub fn protoExtendedToHeapValue(allocator: std.mem.Allocator, ext: schema.ExtendedValue) !heap.Value {
@@ -807,7 +1007,10 @@ pub fn protoExtendedToHeapValue(allocator: std.mem.Allocator, ext: schema.Extend
             if (!std.ascii.eqlIgnoreCase(type_name, "BYTEA") and !std.ascii.eqlIgnoreCase(type_name, "GEOMETRY")) {
                 if (decodeExtValueBinary(allocator, bytes)) |decoded| {
                     return switch (decoded) {
-                        .List => error.UnsupportedParamType,
+                        .List => |list| blk: {
+                            defer freeExtValue(allocator, decoded);
+                            break :blk try extListToHeapValue(allocator, list);
+                        },
                         else => extValueToHeapValue(decoded),
                     };
                 } else |_| {

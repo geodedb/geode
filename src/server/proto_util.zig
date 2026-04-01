@@ -106,7 +106,7 @@ pub fn protoValueToValue(allocator: std.mem.Allocator, value: schema.Value, dept
             }
             break :blk .{ .Map = map };
         },
-        .ext_val => |ev| property_codec.extValueToValue(try property_codec.protoExtendedToExtValue(allocator, ev)),
+        .ext_val => |ev| try property_codec.extValueToProjectedValue(allocator, try property_codec.protoExtendedToExtValue(allocator, ev)),
         .node_val, .edge_val, .path_val => return error.UnsupportedParamType,
     };
 }

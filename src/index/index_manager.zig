@@ -5,8 +5,20 @@ const fulltext = @import("fulltext.zig");
 const hnsw = @import("hnsw_lib");
 const rtree = @import("rtree_lib");
 const advanced_types = @import("advanced_types_index.zig");
+const jsonb_inverted = @import("jsonb_inverted.zig");
+const domain_trie = @import("domain_trie.zig");
 const vector_index = @import("vector_index.zig");
 const spatial_index = @import("spatial_index.zig");
+const graph_store = @import("../graph_store.zig");
+const property_codec = @import("../property_value_codec.zig");
+const vector_types = @import("../types/vector.zig");
+const geographic = @import("../types/geographic.zig");
+const jsonb = @import("../types/jsonb.zig");
+const url = @import("../types/url.zig");
+const cryptographic = @import("../types/cryptographic.zig");
+
+var global_index_manager: ?*IndexManager = null;
+var global_index_manager_mutex = std.Thread.Mutex{};
 
 // Comprehensive index management for graph database
 pub const IndexManager = struct {
@@ -22,6 +34,10 @@ pub const IndexManager = struct {
     advanced_spatial_indexes: std.StringHashMap(*advanced_types.SpatialIndexWrapper),
     advanced_network_indexes: std.StringHashMap(*advanced_types.NetworkIndexWrapper),
     advanced_signature_indexes: std.StringHashMap(*advanced_types.SignatureIndexWrapper),
+    advanced_interval_indexes: std.StringHashMap(*advanced_types.IntervalIndexWrapper),
+    advanced_jsonb_indexes: std.StringHashMap(*jsonb_inverted.JsonbInvertedIndex),
+    advanced_domain_indexes: std.StringHashMap(*domain_trie.DomainTrie),
+    advanced_property_indexes: std.StringHashMap(AdvancedPropertyIndex),
     statistics: IndexStatistics,
 
     pub const IndexType = enum {
@@ -36,6 +52,16 @@ pub const IndexManager = struct {
         spatial_geographic,
         network_cidr,
         signature_crypto,
+        interval_tree,
+        jsonb_inverted,
+        domain_trie,
+    };
+
+    pub const AdvancedPropertyIndex = struct {
+        name: []const u8,
+        label: []const u8,
+        property: []const u8,
+        index_type: IndexType,
     };
 
     pub const PropertyIndex = struct {
@@ -145,6 +171,10 @@ pub const IndexManager = struct {
             .advanced_spatial_indexes = std.StringHashMap(*advanced_types.SpatialIndexWrapper).init(allocator),
             .advanced_network_indexes = std.StringHashMap(*advanced_types.NetworkIndexWrapper).init(allocator),
             .advanced_signature_indexes = std.StringHashMap(*advanced_types.SignatureIndexWrapper).init(allocator),
+            .advanced_interval_indexes = std.StringHashMap(*advanced_types.IntervalIndexWrapper).init(allocator),
+            .advanced_jsonb_indexes = std.StringHashMap(*jsonb_inverted.JsonbInvertedIndex).init(allocator),
+            .advanced_domain_indexes = std.StringHashMap(*domain_trie.DomainTrie).init(allocator),
+            .advanced_property_indexes = std.StringHashMap(AdvancedPropertyIndex).init(allocator),
             .statistics = .{
                 .total_indexes = 0,
                 .total_entries = 0,
@@ -168,7 +198,7 @@ pub const IndexManager = struct {
             }
             if (entry.value_ptr.hash_index) |*hash| {
                 for (hash.buckets) |*bucket| {
-                    bucket.entries.deinit();
+                    bucket.entries.deinit(self.allocator);
                 }
                 self.allocator.free(hash.buckets);
             }
@@ -177,7 +207,7 @@ pub const IndexManager = struct {
 
         var label_it = self.label_indexes.iterator();
         while (label_it.next()) |entry| {
-            entry.value_ptr.node_ids.deinit();
+            entry.value_ptr.node_ids.deinit(self.allocator);
             if (entry.value_ptr.bitmap) |*bm| {
                 self.allocator.free(bm.bits);
             }
@@ -192,17 +222,17 @@ pub const IndexManager = struct {
                 self.allocator.destroy(tree);
             }
         }
-        self.composite_indexes.deinit();
+        self.composite_indexes.deinit(self.allocator);
 
         var ft_it = self.fulltext_indexes.iterator();
         while (ft_it.next()) |entry| {
-            entry.value_ptr.deinit();
+            entry.value_ptr.*.deinit();
         }
         self.fulltext_indexes.deinit();
 
         var spatial_it = self.spatial_indexes.iterator();
         while (spatial_it.next()) |entry| {
-            entry.value_ptr.deinit();
+            entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.spatial_indexes.deinit();
@@ -221,6 +251,7 @@ pub const IndexManager = struct {
         while (adv_vector_it.next()) |entry| {
             entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
         }
         self.advanced_vector_indexes.deinit();
 
@@ -228,6 +259,7 @@ pub const IndexManager = struct {
         while (adv_spatial_it.next()) |entry| {
             entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
         }
         self.advanced_spatial_indexes.deinit();
 
@@ -235,6 +267,7 @@ pub const IndexManager = struct {
         while (adv_network_it.next()) |entry| {
             entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
         }
         self.advanced_network_indexes.deinit();
 
@@ -242,8 +275,42 @@ pub const IndexManager = struct {
         while (adv_signature_it.next()) |entry| {
             entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
         }
         self.advanced_signature_indexes.deinit();
+
+        var adv_interval_it = self.advanced_interval_indexes.iterator();
+        while (adv_interval_it.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.advanced_interval_indexes.deinit();
+
+        var adv_jsonb_it = self.advanced_jsonb_indexes.iterator();
+        while (adv_jsonb_it.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.advanced_jsonb_indexes.deinit();
+
+        var adv_domain_it = self.advanced_domain_indexes.iterator();
+        while (adv_domain_it.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.advanced_domain_indexes.deinit();
+
+        var adv_prop_it = self.advanced_property_indexes.iterator();
+        while (adv_prop_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.name);
+            self.allocator.free(entry.value_ptr.label);
+            self.allocator.free(entry.value_ptr.property);
+        }
+        self.advanced_property_indexes.deinit();
     }
 
     // Create a property index
@@ -442,7 +509,7 @@ pub const IndexManager = struct {
         if (self.label_indexes.getPtr(index_name)) |index| {
             index.statistics.write_count += 1;
 
-            try index.node_ids.append(node_id);
+            try index.node_ids.append(self.allocator, node_id);
 
             if (index.bitmap) |*bm| {
                 if (node_id < bm.size) {
@@ -519,7 +586,7 @@ pub const IndexManager = struct {
                 defer self.allocator.free(results);
 
                 // Extract node IDs from results
-                var node_ids = std.ArrayList(u64).init(self.allocator);
+                var node_ids = std.ArrayList(u64).empty;
 
                 for (results) |r| {
                     const key_cmp_start = std.mem.order(u8, r.key, start_key);
@@ -680,8 +747,8 @@ pub const IndexManager = struct {
         index_name: []const u8,
         query_mbr: rtree.MBR,
     ) ![]u64 {
-        var results = std.ArrayList(u64).init(self.allocator);
-        defer results.deinit();
+        var results = std.ArrayList(u64).empty;
+        defer results.deinit(self.allocator);
 
         if (self.spatial_indexes.get(index_name)) |spatial| {
             try spatial.search(query_mbr, self.allocator, &results);
@@ -692,7 +759,7 @@ pub const IndexManager = struct {
             }
         }
 
-        return results.toOwnedSlice();
+        return results.toOwnedSlice(self.allocator);
     }
 
     // Vector index operations
@@ -744,16 +811,16 @@ pub const IndexManager = struct {
     pub fn insertIntoVectorIndex(
         self: *IndexManager,
         index_name: []const u8,
-        vector: []const f32,
+        vector_data: []const f32,
         node_id: u64,
     ) !void {
         if (self.vector_indexes.get(index_name)) |vector_idx| {
             const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_idx));
-            try hnsw_index.insert(node_id, vector);
+            try hnsw_index.insert(node_id, vector_data);
         } else if (self.property_indexes.getPtr(index_name)) |index| {
             if (index.vector_index) |vector_idx| {
                 const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_idx));
-                try hnsw_index.insert(node_id, vector);
+                try hnsw_index.insert(node_id, vector_data);
                 index.statistics.entries += 1;
                 index.statistics.write_count += 1;
                 self.statistics.total_entries += 1;
@@ -806,13 +873,15 @@ pub const IndexManager = struct {
         dimension: u16,
         metric: advanced_types.VectorIndexWrapper.DistanceMetric,
     ) !void {
-        // Validate inputs
         if (name.len == 0 or name.len > 255) return error.InvalidInput;
-        if (dimension == 0 or dimension > 8192) return error.InvalidInput;
+        if (dimension > 8192) return error.InvalidInput;
 
         if (self.advanced_vector_indexes.contains(name)) {
             return error.IndexAlreadyExists;
         }
+
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
 
         const wrapper = try self.allocator.create(advanced_types.VectorIndexWrapper);
         errdefer self.allocator.destroy(wrapper);
@@ -820,7 +889,7 @@ pub const IndexManager = struct {
         wrapper.* = try advanced_types.VectorIndexWrapper.init(self.allocator, dimension, metric);
         errdefer wrapper.deinit();
 
-        try self.advanced_vector_indexes.put(name, wrapper);
+        try self.advanced_vector_indexes.put(owned_name, wrapper);
         self.statistics.total_indexes += 1;
     }
 
@@ -828,12 +897,14 @@ pub const IndexManager = struct {
         self: *IndexManager,
         name: []const u8,
     ) !void {
-        // Validate inputs
         if (name.len == 0 or name.len > 255) return error.InvalidInput;
 
         if (self.advanced_spatial_indexes.contains(name)) {
             return error.IndexAlreadyExists;
         }
+
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
 
         const wrapper = try self.allocator.create(advanced_types.SpatialIndexWrapper);
         errdefer self.allocator.destroy(wrapper);
@@ -841,7 +912,7 @@ pub const IndexManager = struct {
         wrapper.* = try advanced_types.SpatialIndexWrapper.init(self.allocator);
         errdefer wrapper.deinit();
 
-        try self.advanced_spatial_indexes.put(name, wrapper);
+        try self.advanced_spatial_indexes.put(owned_name, wrapper);
         self.statistics.total_indexes += 1;
     }
 
@@ -853,10 +924,13 @@ pub const IndexManager = struct {
             return error.IndexAlreadyExists;
         }
 
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+
         const wrapper = try self.allocator.create(advanced_types.NetworkIndexWrapper);
         wrapper.* = try advanced_types.NetworkIndexWrapper.init(self.allocator);
 
-        try self.advanced_network_indexes.put(name, wrapper);
+        try self.advanced_network_indexes.put(owned_name, wrapper);
         self.statistics.total_indexes += 1;
     }
 
@@ -868,10 +942,67 @@ pub const IndexManager = struct {
             return error.IndexAlreadyExists;
         }
 
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+
         const wrapper = try self.allocator.create(advanced_types.SignatureIndexWrapper);
         wrapper.* = try advanced_types.SignatureIndexWrapper.init(self.allocator);
 
-        try self.advanced_signature_indexes.put(name, wrapper);
+        try self.advanced_signature_indexes.put(owned_name, wrapper);
+        self.statistics.total_indexes += 1;
+    }
+
+    pub fn createAdvancedIntervalIndex(
+        self: *IndexManager,
+        name: []const u8,
+    ) !void {
+        if (self.advanced_interval_indexes.contains(name)) {
+            return error.IndexAlreadyExists;
+        }
+
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+
+        const wrapper = try self.allocator.create(advanced_types.IntervalIndexWrapper);
+        wrapper.* = advanced_types.IntervalIndexWrapper.init(self.allocator);
+
+        try self.advanced_interval_indexes.put(owned_name, wrapper);
+        self.statistics.total_indexes += 1;
+    }
+
+    pub fn createAdvancedJsonbIndex(
+        self: *IndexManager,
+        name: []const u8,
+    ) !void {
+        if (self.advanced_jsonb_indexes.contains(name)) {
+            return error.IndexAlreadyExists;
+        }
+
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+
+        const index = try self.allocator.create(jsonb_inverted.JsonbInvertedIndex);
+        index.* = jsonb_inverted.JsonbInvertedIndex.init(self.allocator);
+
+        try self.advanced_jsonb_indexes.put(owned_name, index);
+        self.statistics.total_indexes += 1;
+    }
+
+    pub fn createAdvancedDomainIndex(
+        self: *IndexManager,
+        name: []const u8,
+    ) !void {
+        if (self.advanced_domain_indexes.contains(name)) {
+            return error.IndexAlreadyExists;
+        }
+
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+
+        const index = try self.allocator.create(domain_trie.DomainTrie);
+        index.* = domain_trie.DomainTrie.init(self.allocator);
+
+        try self.advanced_domain_indexes.put(owned_name, index);
         self.statistics.total_indexes += 1;
     }
 
@@ -880,11 +1011,11 @@ pub const IndexManager = struct {
     pub fn insertIntoAdvancedVectorIndex(
         self: *IndexManager,
         index_name: []const u8,
-        vector: @import("../types/vector.zig").VectorF32,
+        vector_value: vector_types.VectorF32,
         entity_id: u64,
     ) !void {
         if (self.advanced_vector_indexes.getPtr(index_name)) |wrapper| {
-            try wrapper.*.insert(entity_id, vector);
+            try wrapper.*.insert(entity_id, vector_value);
             self.statistics.total_entries += 1;
         } else {
             return error.IndexNotFound;
@@ -905,6 +1036,64 @@ pub const IndexManager = struct {
         }
     }
 
+    pub fn insertIntoAdvancedNetworkIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        value: @import("../storage/heap.zig").Value,
+        entity_id: u64,
+    ) !void {
+        if (self.advanced_network_indexes.getPtr(index_name)) |wrapper| {
+            try wrapper.*.insert(entity_id, value);
+            self.statistics.total_entries += 1;
+        } else {
+            return error.IndexNotFound;
+        }
+    }
+
+    pub fn insertIntoAdvancedIntervalIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        lower: i32,
+        upper: i32,
+        entity_id: u64,
+    ) !void {
+        if (self.advanced_interval_indexes.getPtr(index_name)) |wrapper| {
+            const r = try @import("../types/range.zig").IntRange.init(lower, upper, .inclusive_exclusive);
+            try wrapper.*.tree.insert(r, entity_id);
+            self.statistics.total_entries += 1;
+        } else {
+            return error.IndexNotFound;
+        }
+    }
+
+    pub fn insertIntoAdvancedJsonbIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        entity_id: u64,
+        document: jsonb.JsonbDocument,
+    ) !void {
+        if (self.advanced_jsonb_indexes.getPtr(index_name)) |index| {
+            try index.*.indexDocument(entity_id, document);
+            self.statistics.total_entries += 1;
+        } else {
+            return error.IndexNotFound;
+        }
+    }
+
+    pub fn insertIntoAdvancedDomainIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        domain: url.Domain,
+        entity_id: u64,
+    ) !void {
+        if (self.advanced_domain_indexes.getPtr(index_name)) |index| {
+            try index.*.insert(domain, entity_id);
+            self.statistics.total_entries += 1;
+        } else {
+            return error.IndexNotFound;
+        }
+    }
+
     pub fn queryAdvancedVectorIndex(
         self: *IndexManager,
         index_name: []const u8,
@@ -918,6 +1107,39 @@ pub const IndexManager = struct {
         }
     }
 
+    pub fn queryAdvancedVectorIndexWithMetric(
+        self: *IndexManager,
+        index_name: []const u8,
+        query_vector: @import("../types/vector.zig").VectorF32,
+        k: u32,
+        metric: advanced_types.VectorIndexWrapper.DistanceMetric,
+    ) ![]advanced_types.VectorSearchResult {
+        if (self.advanced_vector_indexes.getPtr(index_name)) |wrapper| {
+            return try wrapper.*.searchWithMetric(query_vector, k, metric, self.allocator);
+        } else {
+            return error.IndexNotFound;
+        }
+    }
+
+    pub fn searchAdvancedVectorIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        query_vector: @import("../types/vector.zig").VectorF32,
+        k: u32,
+    ) ![]struct { id: u64, score: f64 } {
+        const results = try self.queryAdvancedVectorIndex(index_name, query_vector, k);
+        defer self.allocator.free(results);
+
+        const converted = try self.allocator.alloc(struct { id: u64, score: f64 }, results.len);
+        for (results, 0..) |result, i| {
+            converted[i] = .{
+                .id = result.node_id,
+                .score = result.distance,
+            };
+        }
+        return converted;
+    }
+
     pub fn queryAdvancedSpatialIndex(
         self: *IndexManager,
         index_name: []const u8,
@@ -925,10 +1147,137 @@ pub const IndexManager = struct {
         radius_km: f64,
     ) ![]advanced_types.SpatialSearchResult {
         if (self.advanced_spatial_indexes.getPtr(index_name)) |wrapper| {
-            return try wrapper.*.search(query_location, radius_km, self.allocator);
+            return try wrapper.*.searchWithinRadius(query_location, radius_km, self.allocator);
         } else {
             return error.IndexNotFound;
         }
+    }
+
+    pub fn registerAdvancedPropertyIndex(
+        self: *IndexManager,
+        index_name: []const u8,
+        label: []const u8,
+        property: []const u8,
+        index_type: IndexType,
+    ) !void {
+        if (self.advanced_property_indexes.contains(index_name)) return;
+
+        const owned_key = try self.allocator.dupe(u8, index_name);
+        errdefer self.allocator.free(owned_key);
+
+        try self.advanced_property_indexes.put(owned_key, .{
+            .name = try self.allocator.dupe(u8, index_name),
+            .label = try self.allocator.dupe(u8, label),
+            .property = try self.allocator.dupe(u8, property),
+            .index_type = index_type,
+        });
+    }
+
+    pub fn findAdvancedVectorIndexForProperty(self: *IndexManager, property: []const u8) ?[]const u8 {
+        var iter = self.advanced_property_indexes.iterator();
+        while (iter.next()) |entry| {
+            const meta = entry.value_ptr.*;
+            if (meta.index_type == .vector_f32 and std.mem.eql(u8, meta.property, property)) {
+                return meta.name;
+            }
+        }
+        return null;
+    }
+
+    pub fn rebuildAdvancedIndexesForProperty(
+        self: *IndexManager,
+        store: *graph_store.GraphStore,
+        label: []const u8,
+        property: []const u8,
+    ) !void {
+        var names = std.ArrayList([]const u8).empty;
+        defer names.deinit(self.allocator);
+
+        var iter = self.advanced_property_indexes.iterator();
+        while (iter.next()) |entry| {
+            const meta = entry.value_ptr.*;
+            if (std.mem.eql(u8, meta.label, label) and std.mem.eql(u8, meta.property, property)) {
+                try names.append(self.allocator, meta.name);
+            }
+        }
+
+        for (names.items) |name| {
+            try self.rebuildAdvancedIndex(store, name);
+        }
+    }
+
+    pub fn rebuildAdvancedIndexesForLabel(
+        self: *IndexManager,
+        store: *graph_store.GraphStore,
+        label: []const u8,
+    ) !void {
+        var names = std.ArrayList([]const u8).empty;
+        defer names.deinit(self.allocator);
+
+        var iter = self.advanced_property_indexes.iterator();
+        while (iter.next()) |entry| {
+            const meta = entry.value_ptr.*;
+            if (std.mem.eql(u8, meta.label, label)) {
+                try names.append(self.allocator, meta.name);
+            }
+        }
+
+        for (names.items) |name| {
+            try self.rebuildAdvancedIndex(store, name);
+        }
+    }
+
+    pub fn rebuildAdvancedIndex(
+        self: *IndexManager,
+        store: *graph_store.GraphStore,
+        index_name: []const u8,
+    ) !void {
+        const meta = self.advanced_property_indexes.get(index_name) orelse return;
+        const index_name_copy = try self.allocator.dupe(u8, index_name);
+        defer self.allocator.free(index_name_copy);
+        const label_copy = try self.allocator.dupe(u8, meta.label);
+        defer self.allocator.free(label_copy);
+        const property_copy = try self.allocator.dupe(u8, meta.property);
+        defer self.allocator.free(property_copy);
+        const index_type = meta.index_type;
+
+        switch (index_type) {
+            .vector_f32 => {
+                const dimension: u16 = if (self.advanced_vector_indexes.get(index_name)) |wrapper| wrapper.dimension else 0;
+                const metric = if (self.advanced_vector_indexes.get(index_name)) |wrapper| wrapper.metric else advanced_types.VectorIndexWrapper.DistanceMetric.l2;
+                _ = try self.dropAdvancedIndex(index_name, .vector_f32);
+                try self.createAdvancedVectorIndex(index_name_copy, dimension, metric);
+            },
+            .spatial_geographic => {
+                _ = try self.dropAdvancedIndex(index_name, .spatial_geographic);
+                try self.createAdvancedSpatialIndex(index_name_copy);
+            },
+            .network_cidr => {
+                _ = try self.dropAdvancedIndex(index_name, .network_cidr);
+                try self.createAdvancedNetworkIndex(index_name_copy);
+            },
+            .signature_crypto => {
+                _ = try self.dropAdvancedIndex(index_name, .signature_crypto);
+                try self.createAdvancedSignatureIndex(index_name_copy);
+            },
+            .interval_tree => {
+                _ = try self.dropAdvancedIndex(index_name, .interval_tree);
+                try self.createAdvancedIntervalIndex(index_name_copy);
+            },
+            .jsonb_inverted => {
+                _ = try self.dropAdvancedIndex(index_name, .jsonb_inverted);
+                try self.createAdvancedJsonbIndex(index_name_copy);
+            },
+            .domain_trie => {
+                _ = try self.dropAdvancedIndex(index_name, .domain_trie);
+                try self.createAdvancedDomainIndex(index_name_copy);
+            },
+            else => return,
+        }
+
+        try self.registerAdvancedPropertyIndex(index_name_copy, label_copy, property_copy, index_type);
+        try self.populateAdvancedIndex(store, self.advanced_property_indexes.get(index_name_copy).?);
+        self.statistics.rebuild_count += 1;
     }
 
     pub fn dropAdvancedIndex(
@@ -941,6 +1290,8 @@ pub const IndexManager = struct {
                 if (self.advanced_vector_indexes.fetchRemove(index_name)) |kv| {
                     kv.value.deinit();
                     self.allocator.destroy(kv.value);
+                    self.allocator.free(kv.key);
+                    self.removeAdvancedPropertyIndex(index_name);
                     self.statistics.total_indexes -= 1;
                     return true;
                 }
@@ -949,6 +1300,8 @@ pub const IndexManager = struct {
                 if (self.advanced_spatial_indexes.fetchRemove(index_name)) |kv| {
                     kv.value.deinit();
                     self.allocator.destroy(kv.value);
+                    self.allocator.free(kv.key);
+                    self.removeAdvancedPropertyIndex(index_name);
                     self.statistics.total_indexes -= 1;
                     return true;
                 }
@@ -957,6 +1310,8 @@ pub const IndexManager = struct {
                 if (self.advanced_network_indexes.fetchRemove(index_name)) |kv| {
                     kv.value.deinit();
                     self.allocator.destroy(kv.value);
+                    self.allocator.free(kv.key);
+                    self.removeAdvancedPropertyIndex(index_name);
                     self.statistics.total_indexes -= 1;
                     return true;
                 }
@@ -965,6 +1320,38 @@ pub const IndexManager = struct {
                 if (self.advanced_signature_indexes.fetchRemove(index_name)) |kv| {
                     kv.value.deinit();
                     self.allocator.destroy(kv.value);
+                    self.allocator.free(kv.key);
+                    self.removeAdvancedPropertyIndex(index_name);
+                    self.statistics.total_indexes -= 1;
+                    return true;
+                }
+            },
+            .interval_tree => {
+                if (self.advanced_interval_indexes.fetchRemove(index_name)) |kv| {
+                    kv.value.deinit();
+                    self.allocator.destroy(kv.value);
+                    self.allocator.free(kv.key);
+                    self.removeAdvancedPropertyIndex(index_name);
+                    self.statistics.total_indexes -= 1;
+                    return true;
+                }
+            },
+            .jsonb_inverted => {
+                if (self.advanced_jsonb_indexes.fetchRemove(index_name)) |kv| {
+                    kv.value.deinit();
+                    self.allocator.destroy(kv.value);
+                    self.allocator.free(kv.key);
+                    self.removeAdvancedPropertyIndex(index_name);
+                    self.statistics.total_indexes -= 1;
+                    return true;
+                }
+            },
+            .domain_trie => {
+                if (self.advanced_domain_indexes.fetchRemove(index_name)) |kv| {
+                    kv.value.deinit();
+                    self.allocator.destroy(kv.value);
+                    self.allocator.free(kv.key);
+                    self.removeAdvancedPropertyIndex(index_name);
                     self.statistics.total_indexes -= 1;
                     return true;
                 }
@@ -973,4 +1360,226 @@ pub const IndexManager = struct {
         }
         return false;
     }
+
+    fn populateAdvancedIndex(self: *IndexManager, store: *graph_store.GraphStore, meta: AdvancedPropertyIndex) !void {
+        var node_iter = store.nodes.iterator();
+        while (node_iter.next()) |entry| {
+            const node = entry.value_ptr;
+            if (!nodeHasLabel(node.labels, meta.label)) continue;
+            const prop = node.properties.get(meta.property) orelse continue;
+            try self.insertAdvancedPropertyValue(meta, node.id, prop);
+        }
+
+        var edge_iter = store.edges.iterator();
+        while (edge_iter.next()) |entry| {
+            const edge = entry.value_ptr;
+            if (!std.mem.eql(u8, edge.label, meta.label)) continue;
+            const prop = edge.properties.get(meta.property) orelse continue;
+            try self.insertAdvancedPropertyValue(meta, edge.id, prop);
+        }
+    }
+
+    fn insertAdvancedPropertyValue(
+        self: *IndexManager,
+        meta: AdvancedPropertyIndex,
+        entity_id: u64,
+        prop: graph_store.PropertyValue,
+    ) !void {
+        switch (meta.index_type) {
+            .vector_f32 => {
+                if (vectorFromPropertyValue(self.allocator, prop)) |vec| {
+                    defer if (vec.owned) |data| self.allocator.free(data);
+                    try self.insertIntoAdvancedVectorIndex(meta.name, vec.value, entity_id);
+                }
+            },
+            .spatial_geographic => {
+                if (latLonFromPropertyValue(prop)) |location| {
+                    try self.insertIntoAdvancedSpatialIndex(meta.name, location, entity_id);
+                }
+            },
+            .network_cidr => {
+                if (networkValueFromPropertyValue(prop)) |network_value| {
+                    try self.insertIntoAdvancedNetworkIndex(meta.name, network_value, entity_id);
+                }
+            },
+            .signature_crypto => {
+                if (signatureFromPropertyValue(self.allocator, prop)) |signature| {
+                    defer signature.deinit(self.allocator);
+                    if (self.advanced_signature_indexes.getPtr(meta.name)) |wrapper| {
+                        try wrapper.*.insert(entity_id, signature);
+                        self.statistics.total_entries += 1;
+                    }
+                }
+            },
+            .interval_tree => {
+                if (intRangeFromPropertyValue(prop)) |r| {
+                    if (r.lower) |lower| {
+                        if (r.upper) |upper| {
+                            try self.insertIntoAdvancedIntervalIndex(meta.name, lower, upper, entity_id);
+                        }
+                    }
+                }
+            },
+            .jsonb_inverted => {
+                if (jsonbFromPropertyValue(self.allocator, prop)) |doc| {
+                    defer doc.deinit();
+                    try self.insertIntoAdvancedJsonbIndex(meta.name, entity_id, doc);
+                }
+            },
+            .domain_trie => {
+                if (domainFromPropertyValue(self.allocator, prop)) |domain| {
+                    defer domain.deinit(self.allocator);
+                    try self.insertIntoAdvancedDomainIndex(meta.name, domain, entity_id);
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn removeAdvancedPropertyIndex(self: *IndexManager, index_name: []const u8) void {
+        if (self.advanced_property_indexes.fetchRemove(index_name)) |kv| {
+            self.allocator.free(kv.key);
+            self.allocator.free(kv.value.name);
+            self.allocator.free(kv.value.label);
+            self.allocator.free(kv.value.property);
+        }
+    }
 };
+
+pub fn ensureGlobalIndexManager(allocator: std.mem.Allocator) !*IndexManager {
+    global_index_manager_mutex.lock();
+    defer global_index_manager_mutex.unlock();
+
+    if (global_index_manager) |manager| return manager;
+
+    const manager = try allocator.create(IndexManager);
+    manager.* = IndexManager.init(allocator);
+    global_index_manager = manager;
+    return manager;
+}
+
+pub fn getGlobalIndexManager() ?*IndexManager {
+    return global_index_manager;
+}
+
+pub fn cleanupGlobalIndexManager() void {
+    global_index_manager_mutex.lock();
+    defer global_index_manager_mutex.unlock();
+
+    if (global_index_manager) |manager| {
+        const allocator = manager.allocator;
+        manager.deinit();
+        allocator.destroy(manager);
+        global_index_manager = null;
+    }
+}
+
+fn nodeHasLabel(labels: [][]const u8, label: []const u8) bool {
+    for (labels) |node_label| {
+        if (std.mem.eql(u8, node_label, label)) return true;
+    }
+    return false;
+}
+
+const OwnedVector = struct {
+    value: vector_types.VectorF32,
+    owned: ?[]f32 = null,
+};
+
+fn vectorFromPropertyValue(allocator: std.mem.Allocator, prop: graph_store.PropertyValue) ?OwnedVector {
+    const ext = switch (prop) {
+        .ExtValue => |value| value,
+        else => return null,
+    };
+
+    return switch (ext) {
+        .VectorF32 => |vec| .{ .value = .{ .dim = vec.dim, .data = vec.data } },
+        .VectorI32 => |vec| blk: {
+            const converted = allocator.alloc(f32, @intCast(vec.dim)) catch return null;
+            for (vec.data, 0..) |item, i| converted[i] = @floatFromInt(item);
+            break :blk .{
+                .value = .{ .dim = vec.dim, .data = converted },
+                .owned = converted,
+            };
+        },
+        else => null,
+    };
+}
+
+fn latLonFromPropertyValue(prop: graph_store.PropertyValue) ?geographic.LatLon {
+    const ext = switch (prop) {
+        .ExtValue => |value| value,
+        else => return null,
+    };
+
+    return switch (ext) {
+        .LatLon => |location| geographic.LatLon.initUnchecked(location.lat, location.lon),
+        .LatLonAlt => |location| geographic.LatLon.initUnchecked(location.lat, location.lon),
+        else => null,
+    };
+}
+
+fn networkValueFromPropertyValue(prop: graph_store.PropertyValue) ?@import("../storage/heap.zig").Value {
+    return switch (prop) {
+        .ExtValue => |ext| switch (ext) {
+            .IpAddr, .Subnet, .Mac => property_codec.extValueToHeapValue(ext),
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn signatureFromPropertyValue(allocator: std.mem.Allocator, prop: graph_store.PropertyValue) ?cryptographic.Signature {
+    const ext = switch (prop) {
+        .ExtValue => |value| value,
+        else => return null,
+    };
+
+    return switch (ext) {
+        .Text => |text| cryptographic.Signature.fromString(text, allocator) catch null,
+        .Str => |text| cryptographic.Signature.fromString(text, allocator) catch null,
+        else => null,
+    };
+}
+
+fn intRangeFromPropertyValue(prop: graph_store.PropertyValue) ?@import("../types/range.zig").IntRange {
+    return switch (prop) {
+        .ExtValue => |ext| switch (ext) {
+            .IntRange => |r| r,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn jsonbFromPropertyValue(allocator: std.mem.Allocator, prop: graph_store.PropertyValue) ?jsonb.JsonbDocument {
+    return switch (prop) {
+        .ExtValue => |ext| switch (ext) {
+            .Jsonb => |doc| jsonb.JsonbDocument.fromString(allocator, doc.data) catch null,
+            .Json => |doc| jsonb.JsonbDocument.fromString(allocator, doc) catch null,
+            else => null,
+        },
+        .String => |text| jsonb.JsonbDocument.fromString(allocator, text) catch null,
+        else => null,
+    };
+}
+
+fn domainFromPropertyValue(allocator: std.mem.Allocator, prop: graph_store.PropertyValue) ?url.Domain {
+    return switch (prop) {
+        .ExtValue => |ext| switch (ext) {
+            .Domain => |domain| cloneDomain(allocator, domain),
+            .Url => |parsed_url| url.Domain.fromString(allocator, parsed_url.host) catch null,
+            .Text => |text| url.Domain.fromString(allocator, text) catch null,
+            .Str => |text| url.Domain.fromString(allocator, text) catch null,
+            else => null,
+        },
+        .String => |text| url.Domain.fromString(allocator, text) catch null,
+        else => null,
+    };
+}
+
+fn cloneDomain(allocator: std.mem.Allocator, domain: url.Domain) ?url.Domain {
+    const domain_str = domain.toString(allocator) catch return null;
+    defer allocator.free(domain_str);
+    return url.Domain.fromString(allocator, domain_str) catch null;
+}

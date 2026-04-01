@@ -3,7 +3,6 @@ const ast = @import("../gql/ast.zig");
 const heap = @import("../storage/heap.zig");
 const vector_index = @import("../index/vector_index.zig");
 const spatial_index = @import("../index/spatial_index.zig");
-const hnsw = @import("hnsw_lib");
 
 // CANARY: REQ=REQ-GQL-ADVANCED-TYPES-OPTIMIZER; FEATURE="Advanced Types Query Optimizer"; ASPECT=Optimizer; STATUS=TESTED; TEST=src/optimizer/advanced_types_optimizer.zig; OWNER=optimizer; UPDATED=2026-01-15
 
@@ -157,14 +156,14 @@ pub const AdvancedTypesOptimizer = struct {
     /// Optimize index usage for advanced types
     fn optimizeIndexUsage(self: *AdvancedTypesOptimizer, plan: *QueryPlan) !void {
         // Analyze index selectivity and choose best execution order
-        var index_operations = std.ArrayList(IndexOperation).init(self.allocator);
-        defer index_operations.deinit();
+        var index_operations = std.ArrayList(IndexOperation).empty;
+        defer index_operations.deinit(self.allocator);
 
         // Collect all index operations
         for (plan.operations.items) |op| {
             switch (op) {
                 .VectorSimilarity => |vec_op| {
-                    try index_operations.append(IndexOperation{
+                    try index_operations.append(self.allocator, IndexOperation{
                         .type = .vector,
                         .selectivity = self.estimateVectorSelectivity(vec_op),
                         .cost = self.estimateVectorCost(vec_op),
@@ -172,7 +171,7 @@ pub const AdvancedTypesOptimizer = struct {
                     });
                 },
                 .SpatialSearch => |spatial_op| {
-                    try index_operations.append(IndexOperation{
+                    try index_operations.append(self.allocator, IndexOperation{
                         .type = .spatial,
                         .selectivity = self.estimateSpatialSelectivity(spatial_op),
                         .cost = self.estimateSpatialCost(spatial_op),
@@ -184,7 +183,7 @@ pub const AdvancedTypesOptimizer = struct {
         }
 
         // Sort by cost-effectiveness (selectivity / cost)
-        std.sort.sort(IndexOperation, index_operations.items, {}, IndexOperation.compareCostEffectiveness);
+        std.sort.pdq(IndexOperation, index_operations.items, {}, IndexOperation.compareCostEffectiveness);
 
         // Reorder operations in plan based on optimization
         try self.reorderOperations(plan, index_operations.items);
@@ -222,11 +221,11 @@ pub const AdvancedTypesOptimizer = struct {
     }
 
     // Geographic optimization helpers
-    fn chooseOptimalMetricWithStats(self: *AdvancedTypesOptimizer, vec_op: *VectorSimilarityOperation, stats: vector_index.VectorIndexStats) hnsw.DistanceMetric {
+    fn chooseOptimalMetricWithStats(self: *AdvancedTypesOptimizer, vec_op: *VectorSimilarityOperation, stats: vector_index.VectorIndexStats) VectorMetric {
         _ = self;
         // Choose metric based on vector dimension and dataset size
         if (stats.total_vectors > 100000 and vec_op.dimension > 500) {
-            return .dot; // Dot product is faster for large, high-dimensional datasets
+            return .dot_product; // Dot product is faster for large, high-dimensional datasets
         } else if (vec_op.query_type == .similarity) {
             return .cosine; // Cosine similarity for semantic similarity
         } else {
@@ -235,7 +234,6 @@ pub const AdvancedTypesOptimizer = struct {
     }
 
     fn chooseOptimalSpatialIndex(self: *AdvancedTypesOptimizer, spatial_op: *SpatialSearchOperation) SpatialIndexType {
-        _ = self;
         if (spatial_op.point_density > self.statistics.high_density_threshold) {
             return .rtree; // R-tree for high-density point clouds
         } else if (spatial_op.search_type == .radius and spatial_op.radius_km < 1.0) {
@@ -258,14 +256,12 @@ pub const AdvancedTypesOptimizer = struct {
     }
 
     fn shouldUseSpatialHash(self: *AdvancedTypesOptimizer, spatial_op: *SpatialSearchOperation) bool {
-        _ = self;
         // Use spatial hash for small, dense areas
         const area = spatial_op.bounding_box.area();
         return area < self.statistics.spatial_hash_area_threshold;
     }
 
     fn shouldUseSpatialHashWithStats(self: *AdvancedTypesOptimizer, spatial_op: *SpatialSearchOperation, stats: spatial_index.SpatialIndexStats) bool {
-        _ = self;
         // Use spatial hash for small, dense areas with large datasets
         const area = spatial_op.bounding_box.area();
         const density = @as(f64, @floatFromInt(stats.total_points)) / area;
@@ -274,7 +270,6 @@ pub const AdvancedTypesOptimizer = struct {
 
     // Cryptographic optimization helpers
     fn chooseVerificationStrategy(self: *AdvancedTypesOptimizer, crypto_op: *CryptographicVerifyOperation) VerificationStrategy {
-        _ = self;
         if (crypto_op.signature_count > self.statistics.parallel_verify_threshold) {
             return .parallel; // Parallel verification for many signatures
         } else if (crypto_op.algorithm == .Ed25519) {
@@ -349,7 +344,6 @@ pub const AdvancedTypesOptimizer = struct {
     }
 
     fn estimateSpatialSelectivity(self: *AdvancedTypesOptimizer, spatial_op: SpatialSearchOperation) f64 {
-        _ = self;
         // Estimate selectivity based on search area and point density
         const search_area = if (spatial_op.search_type == .radius)
             std.math.pi * spatial_op.radius_km * spatial_op.radius_km
@@ -362,7 +356,7 @@ pub const AdvancedTypesOptimizer = struct {
     fn estimateSpatialCost(self: *AdvancedTypesOptimizer, spatial_op: SpatialSearchOperation) f64 {
         _ = self;
         // Cost based on search type and area
-        const base_cost = if (spatial_op.search_type == .radius) 1.0 else 0.5;
+        const base_cost: f64 = if (spatial_op.search_type == .radius) 1.0 else 0.5;
         const area_factor = if (spatial_op.search_type == .radius)
             spatial_op.radius_km * spatial_op.radius_km
         else
@@ -372,11 +366,22 @@ pub const AdvancedTypesOptimizer = struct {
     }
 
     fn reorderOperations(self: *AdvancedTypesOptimizer, plan: *QueryPlan, index_ops: []IndexOperation) !void {
-        _ = self;
-        _ = plan;
-        _ = index_ops;
-        // Reorder operations in the query plan for optimal execution
-        // Placeholder implementation
+        var reordered = std.ArrayList(Operation).empty;
+        errdefer reordered.deinit(self.allocator);
+
+        for (index_ops) |index_op| {
+            try reordered.append(self.allocator, index_op.operation);
+        }
+
+        for (plan.operations.items) |op| {
+            switch (op) {
+                .VectorSimilarity, .SpatialSearch => {},
+                else => try reordered.append(self.allocator, op),
+            }
+        }
+
+        plan.operations.deinit(plan.allocator);
+        plan.operations = reordered;
     }
 };
 
@@ -411,16 +416,18 @@ pub const AdvancedTypeStatistics = struct {
 
 // Query plan structures
 pub const QueryPlan = struct {
+    allocator: std.mem.Allocator,
     operations: std.ArrayList(Operation),
 
     pub fn init(allocator: std.mem.Allocator) QueryPlan {
         return QueryPlan{
-            .operations = std.ArrayList(Operation).init(allocator),
+            .allocator = allocator,
+            .operations = std.ArrayList(Operation).empty,
         };
     }
 
     pub fn deinit(self: *QueryPlan) void {
-        self.operations.deinit();
+        self.operations.deinit(self.allocator);
     }
 };
 
@@ -433,6 +440,7 @@ pub const Operation = union(enum) {
 };
 
 pub const VectorSimilarityOperation = struct {
+    index_name: []const u8 = "",
     dimension: u32,
     k: u32,
     similarity_threshold: f32,
@@ -445,6 +453,7 @@ pub const VectorSimilarityOperation = struct {
 };
 
 pub const SpatialSearchOperation = struct {
+    index_name: []const u8 = "",
     search_type: SpatialSearchType,
     radius_km: f64 = 0.0,
     bounding_box: BoundingBox = BoundingBox{},
@@ -572,7 +581,7 @@ test "AdvancedTypesOptimizer basic operations" {
         .k = 10,
         .similarity_threshold = 0.8,
     };
-    try plan.operations.append(Operation{ .VectorSimilarity = vec_op });
+    try plan.operations.append(allocator, Operation{ .VectorSimilarity = vec_op });
 
     // Test optimization
     try optimizer.optimizeQuery(&plan);

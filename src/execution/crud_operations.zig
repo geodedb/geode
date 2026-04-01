@@ -867,7 +867,9 @@ pub fn executeCreateQuery(
         switch (remove_clause) {
             .Property => |prop| {
                 if (created_nodes.get(prop.object)) |node_id| {
-                    store.removeNodeProperty(node_id, prop.property);
+                    if (store.nodes.getPtr(node_id)) |node_ptr| {
+                        property_mutation.removeNodeProperty(store, node_ptr, prop.property);
+                    }
                 }
             },
             .Labels => |label_removal| {

@@ -30,6 +30,7 @@ const eval = @import("eval.zig");
 // Phase 5 M5.3: Import evaluator_adapter to provide callbacks to eval module
 const evaluator_adapter = @import("execution/evaluator_adapter.zig");
 const graph_store = @import("graph_store.zig");
+const index_manager = @import("index/index_manager.zig");
 const catalog_mod = @import("schema/catalog.zig");
 const fle_hooks_mod = @import("execution/fle_hooks.zig");
 const graph_algorithms = @import("execution/graph_algorithms.zig");
@@ -1140,9 +1141,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return executeProfile(allocator, prof, context);
         },
         .CreateIndex => |ci| {
-            // CREATE INDEX implementation with validation (Catalog instance)
             const cat = context.catalog;
-            // Auto-generate index name from label+properties if not provided
             const index_name = ci.name orelse blk: {
                 var parts = try std.ArrayList(u8).initCapacity(allocator, 64);
                 try parts.appendSlice(allocator, "idx_");
@@ -1160,19 +1159,13 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     return ExecutionResult{
                         .columns = try allocator.alloc([]const u8, 0),
                         .rows = try allocator.alloc([]Value, 0),
-                        .flags = blk: {
-                            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-                            break :blk list;
-                        },
+                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
                     };
                 }
             }
 
-            // Validate index type compatibility with property
-            // HNSW/vector indexes should only be used on vector properties
             if (ci.index_type == .vector or ci.index_type == .vector_f32) {
                 for (ci.properties) |prop| {
-                    // Common text field names that shouldn't have vector indexes
                     const is_text_field = std.mem.eql(u8, prop, "name") or
                         std.mem.eql(u8, prop, "title") or
                         std.mem.eql(u8, prop, "description") or
@@ -1180,12 +1173,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                         std.mem.eql(u8, prop, "content") or
                         std.mem.eql(u8, prop, "label") or
                         std.mem.eql(u8, prop, "id");
-
-                    // Vector properties typically have "vector" or "embedding" in their name
                     const is_vector_name = std.mem.indexOf(u8, prop, "vector") != null or
                         std.mem.indexOf(u8, prop, "embedding") != null or
                         std.mem.indexOf(u8, prop, "emb") != null;
-
                     if (is_text_field and !is_vector_name) {
                         return error.IncompatibleIndexDataType;
                     }
@@ -1204,9 +1194,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     .spatial_geographic => "spatial_geographic",
                     .network_cidr => "network_cidr",
                     .signature_crypto => "signature_crypto",
-                    .interval_tree => "IntervalTree",
-                    .jsonb_inverted => "JsonbInverted",
-                    .domain_trie => "DomainTrie",
+                    .interval_tree => "interval_tree",
+                    .jsonb_inverted => "jsonb_inverted",
+                    .domain_trie => "domain_trie",
                 },
                 .table_name = ci.label,
                 .columns = @as([][]const u8, @constCast(ci.properties)),
@@ -1217,22 +1207,18 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     return ExecutionResult{
                         .columns = try allocator.alloc([]const u8, 0),
                         .rows = try allocator.alloc([]Value, 0),
-                        .flags = blk: {
-                            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-                            break :blk list;
-                        },
+                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
                     };
                 }
                 return err;
             };
 
+            try statement_dispatcher.ensureAdvancedRuntimeIndex(allocator, index_name, ci.label, ci.properties, ci.index_type);
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
-                .flags = blk: {
-                    const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-                    break :blk list;
-                },
+                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             };
         },
         .CreateConstraint => |cc| {
@@ -1301,15 +1287,42 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .DropIndex => |di| {
-            // DROP INDEX implementation
-            _ = di;
+            const cat = context.catalog;
+            const index_name = di.name;
+
+            var found_key: ?[]const u8 = null;
+            var iter = cat.indexes.iterator();
+            while (iter.next()) |entry| {
+                const info = entry.value_ptr.*;
+                if (std.mem.eql(u8, info.name, index_name)) {
+                    found_key = entry.key_ptr.*;
+                    break;
+                }
+            }
+
+            if (found_key) |key| {
+                if (cat.indexes.fetchRemove(key)) |removed| {
+                    if (statement_dispatcher.runtimeAdvancedIndexTypeFromCatalog(removed.value.index_type)) |kind| {
+                        if (index_manager.getGlobalIndexManager()) |manager| {
+                            _ = manager.dropAdvancedIndex(removed.value.name, kind) catch false;
+                        }
+                    }
+                    cat.allocator.free(removed.key);
+                    cat.allocator.free(removed.value.name);
+                    cat.allocator.free(removed.value.table_name);
+                    for (removed.value.columns) |col| {
+                        cat.allocator.free(col);
+                    }
+                    cat.allocator.free(removed.value.columns);
+                }
+            } else if (!di.if_exists) {
+                return error.IndexNotFound;
+            }
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
-                .flags = blk: {
-                    const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-                    break :blk list;
-                },
+                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
             };
         },
         .DropConstraint => |dc| {

@@ -1330,7 +1330,9 @@ pub fn evalCollectionFunction(
     // CANARY: REQ=REQ-CLIENT-INTEGRATION-001; FEATURE="range() function"; ASPECT=BuiltinFunctions; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-11-15
     // range(start, stop [, step])
     if (std.mem.eql(u8, function_name, "range")) {
-        if (args.len < 2 or args.len > 3) return Value{ .Null = {} };
+        // Let the GA advanced-type constructor Range(base_type, lower, upper, bounds)
+        // fall through to evalAdvancedTypeFunction.
+        if (args.len < 2 or args.len > 3) return null;
 
         const start_val = try eval.evalExpr(allocator, args[0].*, env);
         const start = switch (start_val) {

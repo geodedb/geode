@@ -4866,11 +4866,11 @@ pub const Parser = struct {
                     index_type = .network_cidr;
                 } else if (std.ascii.eqlIgnoreCase(type_str, "signature_crypto")) {
                     index_type = .signature_crypto;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "IntervalTree")) {
+                } else if (std.ascii.eqlIgnoreCase(type_str, "interval_tree") or std.ascii.eqlIgnoreCase(type_str, "IntervalTree")) {
                     index_type = .interval_tree;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "JsonbInverted")) {
+                } else if (std.ascii.eqlIgnoreCase(type_str, "jsonb_inverted") or std.ascii.eqlIgnoreCase(type_str, "JsonbInverted")) {
                     index_type = .jsonb_inverted;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "DomainTrie")) {
+                } else if (std.ascii.eqlIgnoreCase(type_str, "domain_trie") or std.ascii.eqlIgnoreCase(type_str, "DomainTrie")) {
                     index_type = .domain_trie;
                 } else {
                     // Reject unrecognized index types
@@ -4950,11 +4950,11 @@ pub const Parser = struct {
                     index_type = .network_cidr;
                 } else if (std.ascii.eqlIgnoreCase(type_str, "signature_crypto")) {
                     index_type = .signature_crypto;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "IntervalTree")) {
+                } else if (std.ascii.eqlIgnoreCase(type_str, "interval_tree") or std.ascii.eqlIgnoreCase(type_str, "IntervalTree")) {
                     index_type = .interval_tree;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "JsonbInverted")) {
+                } else if (std.ascii.eqlIgnoreCase(type_str, "jsonb_inverted") or std.ascii.eqlIgnoreCase(type_str, "JsonbInverted")) {
                     index_type = .jsonb_inverted;
-                } else if (std.ascii.eqlIgnoreCase(type_str, "DomainTrie")) {
+                } else if (std.ascii.eqlIgnoreCase(type_str, "domain_trie") or std.ascii.eqlIgnoreCase(type_str, "DomainTrie")) {
                     index_type = .domain_trie;
                 } else {
                     // Reject unrecognized index types

@@ -1,5 +1,6 @@
 const std = @import("std");
 const graph_store = @import("../graph_store.zig");
+const index_manager = @import("../index/index_manager.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const fle_hooks = @import("fle_hooks.zig");
@@ -125,6 +126,22 @@ fn valueMapToJson(allocator: std.mem.Allocator, map: std.StringHashMap(Value)) !
     return try allocator.dupe(u8, buf.items);
 }
 
+fn rebuildAdvancedIndexesForProperty(
+    store: *graph_store.GraphStore,
+    label: []const u8,
+    property: []const u8,
+) void {
+    if (index_manager.getGlobalIndexManager()) |manager| {
+        manager.rebuildAdvancedIndexesForProperty(store, label, property) catch {};
+    }
+}
+
+fn rebuildAdvancedIndexesForLabel(store: *graph_store.GraphStore, label: []const u8) void {
+    if (index_manager.getGlobalIndexManager()) |manager| {
+        manager.rebuildAdvancedIndexesForLabel(store, label) catch {};
+    }
+}
+
 pub fn coercePropertyValue(allocator: std.mem.Allocator, value: Value) !graph_store.PropertyValue {
     return switch (value) {
         .Map => |map| blk: {
@@ -139,12 +156,31 @@ pub fn coercePropertyValue(allocator: std.mem.Allocator, value: Value) !graph_st
 }
 
 pub fn clearNodeProperties(store: *graph_store.GraphStore, node: *graph_store.Node) void {
+    var keys = std.ArrayList([]const u8).empty;
+    defer keys.deinit(store.allocator);
+
     var prop_iter = node.properties.iterator();
     while (prop_iter.next()) |prop_entry| {
-        store.allocator.free(prop_entry.key_ptr.*);
-        property_codec.freePropertyValue(store.allocator, prop_entry.value_ptr.*);
+        keys.append(store.allocator, prop_entry.key_ptr.*) catch return;
     }
-    node.properties.clearRetainingCapacity();
+
+    for (keys.items) |key| {
+        store.removeNodeProperty(node.id, key);
+    }
+}
+
+pub fn clearEdgeProperties(store: *graph_store.GraphStore, edge: *graph_store.Edge) void {
+    var keys = std.ArrayList([]const u8).empty;
+    defer keys.deinit(store.allocator);
+
+    var prop_iter = edge.properties.iterator();
+    while (prop_iter.next()) |prop_entry| {
+        keys.append(store.allocator, prop_entry.key_ptr.*) catch return;
+    }
+
+    for (keys.items) |key| {
+        store.removeEdgeProperty(edge.id, key);
+    }
 }
 
 pub fn setNodePropertyFromValue(
@@ -172,6 +208,7 @@ pub fn setNodePropertyFromValue(
     defer property_codec.freePropertyValue(allocator, prop_value);
 
     try store.setNodeProperty(node_id, key, prop_value);
+    if (labels.len > 0) rebuildAdvancedIndexesForProperty(store, labels[0], key);
 }
 
 pub fn setEdgePropertyFromValue(
@@ -199,6 +236,7 @@ pub fn setEdgePropertyFromValue(
     defer property_codec.freePropertyValue(allocator, prop_value);
 
     try store.setEdgeProperty(edge_id, key, prop_value);
+    rebuildAdvancedIndexesForProperty(store, edge_type, key);
 }
 
 pub fn replaceNodeProperties(
@@ -222,4 +260,49 @@ pub fn replaceNodeProperties(
             entry.value_ptr.*,
         );
     }
+
+    if (node.labels.len > 0) rebuildAdvancedIndexesForLabel(store, node.labels[0]);
+}
+
+pub fn replaceEdgeProperties(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    edge: *graph_store.Edge,
+    props_value: Value,
+) !void {
+    clearEdgeProperties(store, edge);
+
+    if (props_value != .Map) return;
+
+    var map_iter = props_value.Map.iterator();
+    while (map_iter.next()) |entry| {
+        try setEdgePropertyFromValue(
+            allocator,
+            store,
+            edge.label,
+            edge.id,
+            entry.key_ptr.*,
+            entry.value_ptr.*,
+        );
+    }
+
+    rebuildAdvancedIndexesForLabel(store, edge.label);
+}
+
+pub fn removeNodeProperty(
+    store: *graph_store.GraphStore,
+    node: *graph_store.Node,
+    key: []const u8,
+) void {
+    store.removeNodeProperty(node.id, key);
+    if (node.labels.len > 0) rebuildAdvancedIndexesForProperty(store, node.labels[0], key);
+}
+
+pub fn removeEdgeProperty(
+    store: *graph_store.GraphStore,
+    edge: *graph_store.Edge,
+    key: []const u8,
+) void {
+    store.removeEdgeProperty(edge.id, key);
+    rebuildAdvancedIndexesForProperty(store, edge.label, key);
 }

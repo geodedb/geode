@@ -6002,8 +6002,18 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                         }
                                     }
                                 },
-                                .AllProperties => {
-                                    // Skip AllProperties for now - not commonly used with relationships
+                                .AllProperties => |all_props| {
+                                    if (rel_var != null and std.mem.eql(u8, all_props.node, rel_var.?)) {
+                                        const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
+                                        const props_value = try eval.evalExpr(allocator, all_props.properties, env);
+                                        try property_mutation.replaceEdgeProperties(allocator, store, edge_ptr, props_value);
+                                    } else if (left_node_var != null and std.mem.eql(u8, all_props.node, left_node_var.?)) {
+                                        const props_value = try eval.evalExpr(allocator, all_props.properties, env);
+                                        try property_mutation.replaceNodeProperties(allocator, store, left_node, props_value);
+                                    } else if (right_node_var != null and std.mem.eql(u8, all_props.node, right_node_var.?)) {
+                                        const props_value = try eval.evalExpr(allocator, all_props.properties, env);
+                                        try property_mutation.replaceNodeProperties(allocator, store, right_node_ptr, props_value);
+                                    }
                                 },
                             }
                         }
@@ -6191,7 +6201,19 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                         }
                                     }
                                 },
-                                .AllProperties => {},
+                                .AllProperties => |all_props| {
+                                    if (rel_var != null and std.mem.eql(u8, all_props.node, rel_var.?)) {
+                                        const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
+                                        const props_value = try eval.evalExpr(allocator, all_props.properties, env);
+                                        try property_mutation.replaceEdgeProperties(allocator, store, edge_ptr, props_value);
+                                    } else if (left_node_var != null and std.mem.eql(u8, all_props.node, left_node_var.?)) {
+                                        const props_value = try eval.evalExpr(allocator, all_props.properties, env);
+                                        try property_mutation.replaceNodeProperties(allocator, store, left_node, props_value);
+                                    } else if (right_node_var != null and std.mem.eql(u8, all_props.node, right_node_var.?)) {
+                                        const props_value = try eval.evalExpr(allocator, all_props.properties, env);
+                                        try property_mutation.replaceNodeProperties(allocator, store, right_node_ptr, props_value);
+                                    }
+                                },
                             }
                         }
 
@@ -6384,7 +6406,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     switch (remove_clause) {
                         .Property => |prop| {
                             if (std.mem.eql(u8, prop.object, match_variable orelse "")) {
-                                store.removeNodeProperty(node.id, prop.property);
+                                if (store.nodes.getPtr(node.id)) |node_ptr| {
+                                    property_mutation.removeNodeProperty(store, node_ptr, prop.property);
+                                }
                             }
                         },
                         .Labels => |label_removal| {

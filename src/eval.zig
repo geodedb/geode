@@ -4,7 +4,10 @@ const eval_funcs = @import("types/evaluator_functions.zig");
 const heap = @import("storage/heap.zig");
 const fle_integration = @import("fle_integration.zig");
 const graph_store = @import("graph_store.zig");
+const advanced_types_index = @import("index/advanced_types_index.zig");
+const index_manager = @import("index/index_manager.zig");
 const property_codec = @import("property_value_codec.zig");
+const vector_types = @import("types/vector.zig");
 
 // CANARY: REQ=REQ-M5.3-EVAL-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=AdapterImport; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.3: Import evaluator_adapter instead of execution.zig to break circular dependency
@@ -2019,6 +2022,10 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 lowercase_name[i] = std.ascii.toLower(c);
             }
 
+            if (std.mem.eql(u8, lowercase_name, "vector_knn")) {
+                break :blk_call try evalVectorKnn(allocator, call.args, env);
+            }
+
             // Look up function in extended registry
             if (registry.get(lowercase_name)) |func| {
                 // Convert arguments from AST to ExtValue
@@ -2472,6 +2479,10 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 }
             }
 
+            if (extractStructuredMember(allocator, target, member.field)) |extracted| {
+                break :blk_member extracted;
+            }
+
             // Handle direct Date value property access (from date() function)
             if (target == .Date) {
                 const datetime_module = @import("types/datetime.zig");
@@ -2567,6 +2578,11 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                             break :blk_member extracted;
                         }
                     },
+                    .Jsonb => |doc| {
+                        if (extractJsonField(allocator, doc.data, member.field)) |extracted| {
+                            break :blk_member extracted;
+                        }
+                    },
                     else => {},
                 }
             }
@@ -2591,6 +2607,10 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     break :blk_index Value{ .Null = {} };
                 }
                 break :blk_index list[@intCast(index)];
+            }
+
+            if (extractStructuredIndex(allocator, target, index)) |extracted| {
+                break :blk_index extracted;
             }
 
             // Otherwise return null
@@ -2750,6 +2770,95 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 // CANARY: REQ=REQ-MAP-PROP-004; FEATURE="MapProperties"; ASPECT=JsonFieldExtraction; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
 /// Extract a field from a JSON string and return it as a Value
 /// Supports nested JSON object access by returning the nested JSON as ExtValue.Json
+fn jsonStdValueToValue(allocator: std.mem.Allocator, value: std.json.Value) !Value {
+    return switch (value) {
+        .null => .{ .Null = {} },
+        .bool => |b| .{ .Bool = b },
+        .integer => |i| .{ .Int = @intCast(i) },
+        .float => |f| .{ .Decimal = .{
+            .coeff = @intFromFloat(f * 1_000_000.0),
+            .scale = 6,
+            .orig_scale = 6,
+            .orig_repr = null,
+        } },
+        .string => |s| .{ .Str = try allocator.dupe(u8, s) },
+        .array => |arr| blk: {
+            const values = try allocator.alloc(Value, arr.items.len);
+            var initialized: usize = 0;
+            errdefer {
+                for (values[0..initialized]) |item| property_codec.freeValue(allocator, item);
+                allocator.free(values);
+            }
+            for (arr.items, 0..) |item, i| {
+                values[i] = try jsonStdValueToValue(allocator, item);
+                initialized += 1;
+            }
+            break :blk .{ .List = values };
+        },
+        .object => |obj| blk: {
+            var map = std.StringHashMap(Value).init(allocator);
+            errdefer {
+                var iter = map.iterator();
+                while (iter.next()) |entry| {
+                    allocator.free(entry.key_ptr.*);
+                    property_codec.freeValue(allocator, entry.value_ptr.*);
+                }
+                map.deinit();
+            }
+
+            var iter = obj.iterator();
+            while (iter.next()) |entry| {
+                try map.put(
+                    try allocator.dupe(u8, entry.key_ptr.*),
+                    try jsonStdValueToValue(allocator, entry.value_ptr.*),
+                );
+            }
+            break :blk .{ .Map = map };
+        },
+        else => .{ .Null = {} },
+    };
+}
+
+fn parseJsonStructuredValue(allocator: std.mem.Allocator, json_slice: []const u8) ?Value {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, json_slice, .{}) catch return null;
+    defer parsed.deinit();
+    return jsonStdValueToValue(allocator, parsed.value) catch null;
+}
+
+fn structuredJsonValue(allocator: std.mem.Allocator, value: Value) ?Value {
+    return switch (value) {
+        .Json => |json_str| parseJsonStructuredValue(allocator, json_str),
+        .Jsonb => |doc| parseJsonStructuredValue(allocator, doc.data),
+        .ExtValue => |ext| switch (ext) {
+            .Json => |json_str| parseJsonStructuredValue(allocator, json_str),
+            .Jsonb => |doc| parseJsonStructuredValue(allocator, doc.data),
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn extractStructuredMember(allocator: std.mem.Allocator, target: Value, field: []const u8) ?Value {
+    const structured = structuredJsonValue(allocator, target) orelse return null;
+    return switch (structured) {
+        .Map => |map| map.get(field),
+        else => null,
+    };
+}
+
+fn extractStructuredIndex(allocator: std.mem.Allocator, target: Value, index: i64) ?Value {
+    if (index < 0) return Value{ .Null = {} };
+
+    const structured = structuredJsonValue(allocator, target) orelse return null;
+    return switch (structured) {
+        .List => |list| {
+            if (index >= list.len) return Value{ .Null = {} };
+            return list[@intCast(index)];
+        },
+        else => null,
+    };
+}
+
 fn extractJsonField(allocator: std.mem.Allocator, json_str: []const u8, field: []const u8) ?Value {
     // Simple JSON field extractor - looks for "field": value patterns
     // Find the field key in the JSON
@@ -2781,7 +2890,9 @@ fn extractJsonField(allocator: std.mem.Allocator, json_str: []const u8, field: [
                 return parseJsonValue(allocator, json_str, &i);
             } else {
                 // Skip this value
-                _ = parseJsonValue(allocator, json_str, &i);
+                if (parseJsonValue(allocator, json_str, &i)) |skipped| {
+                    property_codec.freeValue(allocator, skipped);
+                }
             }
         } else {
             i += 1;
@@ -2817,7 +2928,6 @@ fn parseJsonValue(allocator: std.mem.Allocator, json_str: []const u8, i: *usize)
         i.* += 1; // Skip closing quote
         return Value{ .Str = str_val };
     } else if (c == '{') {
-        // Nested object - return as Json ExtValue for further member access
         const obj_start = i.*;
         var depth: i32 = 1;
         i.* += 1;
@@ -2833,18 +2943,24 @@ fn parseJsonValue(allocator: std.mem.Allocator, json_str: []const u8, i: *usize)
             }
             i.* += 1;
         }
-        const obj_str = allocator.dupe(u8, json_str[obj_start..i.*]) catch return null;
-        return Value{ .ExtValue = .{ .Json = obj_str } };
+        return parseJsonStructuredValue(allocator, json_str[obj_start..i.*]);
     } else if (c == '[') {
-        // Array - skip for now
+        const arr_start = i.*;
         var depth: i32 = 1;
         i.* += 1;
         while (i.* < json_str.len and depth > 0) {
             if (json_str[i.*] == '[') depth += 1;
             if (json_str[i.*] == ']') depth -= 1;
+            if (json_str[i.*] == '"') {
+                i.* += 1;
+                while (i.* < json_str.len and json_str[i.*] != '"') {
+                    if (json_str[i.*] == '\\' and i.* + 1 < json_str.len) i.* += 1;
+                    i.* += 1;
+                }
+            }
             i.* += 1;
         }
-        return Value{ .Null = {} };
+        return parseJsonStructuredValue(allocator, json_str[arr_start..i.*]);
     } else if (c == 't' and i.* + 4 <= json_str.len and std.mem.eql(u8, json_str[i.*..][0..4], "true")) {
         i.* += 4;
         return Value{ .Bool = true };
@@ -2876,6 +2992,205 @@ fn parseJsonValue(allocator: std.mem.Allocator, json_str: []const u8, i: *usize)
     }
 
     return null;
+}
+
+const VectorMetric = advanced_types_index.VectorIndexWrapper.DistanceMetric;
+
+const OwnedVector = struct {
+    vector: vector_types.VectorF32,
+    owned: ?[]f32 = null,
+};
+
+const VectorCandidate = struct {
+    id: u64,
+    score: f64,
+};
+
+fn valueToVectorF32(allocator: std.mem.Allocator, value: Value) EvalError!OwnedVector {
+    return switch (value) {
+        .ExtValue => |ext| switch (ext) {
+            .VectorF32 => |vec| .{ .vector = .{ .dim = vec.dim, .data = vec.data } },
+            .VectorI32 => |vec| blk: {
+                const data = try allocator.alloc(f32, vec.dim);
+                for (vec.data, 0..) |item, i| data[i] = @floatFromInt(item);
+                break :blk .{
+                    .vector = .{ .dim = vec.dim, .data = data },
+                    .owned = data,
+                };
+            },
+            else => error.TypeMismatch,
+        },
+        else => error.TypeMismatch,
+    };
+}
+
+fn parseVectorMetric(value: Value) EvalError!VectorMetric {
+    const metric_text = switch (value) {
+        .Str => |text| text,
+        .Text => |text| text,
+        else => return error.TypeMismatch,
+    };
+
+    if (std.ascii.eqlIgnoreCase(metric_text, "l2")) return .l2;
+    if (std.ascii.eqlIgnoreCase(metric_text, "cosine")) return .cosine;
+    if (std.ascii.eqlIgnoreCase(metric_text, "dot") or std.ascii.eqlIgnoreCase(metric_text, "dot_product")) return .dot_product;
+    return error.InvalidArgs;
+}
+
+fn metricDistance(metric: VectorMetric, query: vector_types.VectorF32, candidate: vector_types.VectorF32) EvalError!f64 {
+    if (query.dim != candidate.dim) return error.TypeMismatch;
+
+    switch (metric) {
+        .l2 => {
+            var sum: f64 = 0;
+            for (query.data, candidate.data) |lhs, rhs| {
+                const diff = @as(f64, lhs) - @as(f64, rhs);
+                sum += diff * diff;
+            }
+            return @sqrt(sum);
+        },
+        .cosine => {
+            var dot: f64 = 0;
+            var lhs_norm: f64 = 0;
+            var rhs_norm: f64 = 0;
+            for (query.data, candidate.data) |lhs, rhs| {
+                const l = @as(f64, lhs);
+                const r = @as(f64, rhs);
+                dot += l * r;
+                lhs_norm += l * l;
+                rhs_norm += r * r;
+            }
+            if (lhs_norm == 0 or rhs_norm == 0) return 1.0;
+            return 1.0 - (dot / (@sqrt(lhs_norm) * @sqrt(rhs_norm)));
+        },
+        .dot_product => {
+            var dot: f64 = 0;
+            for (query.data, candidate.data) |lhs, rhs| {
+                dot += @as(f64, lhs) * @as(f64, rhs);
+            }
+            return -dot;
+        },
+    }
+}
+
+fn compareVectorCandidates(_: void, lhs: VectorCandidate, rhs: VectorCandidate) bool {
+    if (lhs.score == rhs.score) return lhs.id < rhs.id;
+    return lhs.score < rhs.score;
+}
+
+fn propertyVectorCandidate(allocator: std.mem.Allocator, value: graph_store.PropertyValue) EvalError!?OwnedVector {
+    return switch (value) {
+        .ExtValue => |ext| switch (ext) {
+            .VectorF32 => |vec| .{ .vector = .{ .dim = vec.dim, .data = vec.data } },
+            .VectorI32 => |vec| blk: {
+                const data = try allocator.alloc(f32, vec.dim);
+                for (vec.data, 0..) |item, i| data[i] = @floatFromInt(item);
+                break :blk .{
+                    .vector = .{ .dim = vec.dim, .data = data },
+                    .owned = data,
+                };
+            },
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn vectorCandidatesToList(allocator: std.mem.Allocator, candidates: []const VectorCandidate, limit: usize) EvalError!Value {
+    const out_len = @min(limit, candidates.len);
+    const values = try allocator.alloc(Value, out_len);
+    for (candidates[0..out_len], 0..) |candidate, i| {
+        values[i] = .{ .Int = @intCast(candidate.id) };
+    }
+    return .{ .List = values };
+}
+
+fn scanVectorKnn(
+    allocator: std.mem.Allocator,
+    property_name: []const u8,
+    query_vec: vector_types.VectorF32,
+    k: usize,
+    metric: VectorMetric,
+) EvalError!Value {
+    const store = graph_store.getGlobalStore(allocator);
+    var candidates = std.ArrayList(VectorCandidate).empty;
+    defer candidates.deinit(allocator);
+
+    var node_iter = store.nodes.iterator();
+    while (node_iter.next()) |entry| {
+        const prop = entry.value_ptr.properties.get(property_name) orelse continue;
+        const maybe_vec = try propertyVectorCandidate(allocator, prop);
+        if (maybe_vec) |candidate_vec| {
+            defer if (candidate_vec.owned) |data| allocator.free(data);
+            const score = metricDistance(metric, query_vec, candidate_vec.vector) catch continue;
+            try candidates.append(allocator, .{ .id = entry.value_ptr.id, .score = score });
+        }
+    }
+
+    var edge_iter = store.edges.iterator();
+    while (edge_iter.next()) |entry| {
+        const prop = entry.value_ptr.properties.get(property_name) orelse continue;
+        const maybe_vec = try propertyVectorCandidate(allocator, prop);
+        if (maybe_vec) |candidate_vec| {
+            defer if (candidate_vec.owned) |data| allocator.free(data);
+            const score = metricDistance(metric, query_vec, candidate_vec.vector) catch continue;
+            try candidates.append(allocator, .{ .id = entry.value_ptr.id, .score = score });
+        }
+    }
+
+    std.sort.pdq(VectorCandidate, candidates.items, {}, compareVectorCandidates);
+    return vectorCandidatesToList(allocator, candidates.items, k);
+}
+
+fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) EvalError!Value {
+    if (args.len != 4) return error.InvalidArgs;
+
+    const property_value = try evalExpr(allocator, args[0].*, env);
+    const property_name = switch (property_value) {
+        .Str => |text| text,
+        .Text => |text| text,
+        else => return error.TypeMismatch,
+    };
+
+    const query_value = try evalExpr(allocator, args[1].*, env);
+    const query_vec = try valueToVectorF32(allocator, query_value);
+    defer if (query_vec.owned) |data| allocator.free(data);
+
+    const k_value = try evalExpr(allocator, args[2].*, env);
+    const raw_k: i64 = switch (k_value) {
+        .Int => |value| value,
+        .SmallInt => |value| value,
+        .BigInt => |value| value,
+        else => return error.TypeMismatch,
+    };
+    if (raw_k <= 0) return .{ .List = &.{} };
+    const k: usize = @intCast(raw_k);
+
+    const metric = try parseVectorMetric(try evalExpr(allocator, args[3].*, env));
+
+    if (index_manager.getGlobalIndexManager()) |manager| {
+        if (manager.findAdvancedVectorIndexForProperty(property_name)) |index_name| {
+            const results = manager.queryAdvancedVectorIndexWithMetric(index_name, query_vec.vector, @intCast(k), metric) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.IndexNotFound => return scanVectorKnn(allocator, property_name, query_vec.vector, k, metric),
+                error.DimensionMismatch, error.InvalidDimension, error.InvalidConfig => return error.InvalidArgs,
+            };
+            defer manager.allocator.free(results);
+
+            var candidates = std.ArrayList(VectorCandidate).empty;
+            defer candidates.deinit(allocator);
+            for (results) |result| {
+                try candidates.append(allocator, .{
+                    .id = result.node_id,
+                    .score = result.distance,
+                });
+            }
+            std.sort.pdq(VectorCandidate, candidates.items, {}, compareVectorCandidates);
+            return vectorCandidatesToList(allocator, candidates.items, k);
+        }
+    }
+
+    return scanVectorKnn(allocator, property_name, query_vec.vector, k, metric);
 }
 
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-003; FEATURE="Phase 6 Modularization"; ASPECT=ValueConverters; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13

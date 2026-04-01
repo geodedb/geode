@@ -452,8 +452,9 @@ pub const AdvancedIndexManager = struct {
 /// Wrapper for HNSW vector index with our VectorF32 types
 pub const VectorIndexWrapper = struct {
     allocator: std.mem.Allocator,
-    hnsw_index: hnsw.Hnsw,
+    hnsw_index: ?hnsw.Hnsw,
     metric: DistanceMetric,
+    dimension: u16,
 
     pub const DistanceMetric = enum {
         l2,
@@ -462,42 +463,78 @@ pub const VectorIndexWrapper = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator, dim: u16, metric: DistanceMetric) !VectorIndexWrapper {
-        // HNSW parameters: M=16, ef_construction=200 for good recall/performance balance
-        const hnsw_index = try hnsw.Hnsw.init(allocator, dim, toHnswMetric(metric), .{
-            .m = 16,
-            .ef_construction = 200,
-            .ef_search = 200,
-        });
-
         return VectorIndexWrapper{
             .allocator = allocator,
-            .hnsw_index = hnsw_index,
+            .hnsw_index = if (dim == 0) null else try hnsw.Hnsw.init(allocator, dim, toHnswMetric(metric), .{
+                .m = 16,
+                .ef_construction = 200,
+                .ef_search = 200,
+            }),
             .metric = metric,
+            .dimension = dim,
         };
     }
 
     pub fn deinit(self: *VectorIndexWrapper) void {
-        self.hnsw_index.deinit();
+        if (self.hnsw_index) |*index| {
+            index.deinit();
+            self.hnsw_index = null;
+        }
     }
 
     pub fn insert(self: *VectorIndexWrapper, node_id: u64, vec: vector.VectorF32) !void {
-        try self.hnsw_index.insert(node_id, vec.data);
+        try self.ensureInitialized(vec.dim);
+        if (self.dimension != vec.dim) return error.DimensionMismatch;
+        try self.hnsw_index.?.insert(node_id, vec.data);
     }
 
     pub fn search(self: *VectorIndexWrapper, query: vector.VectorF32, k: u32, allocator: std.mem.Allocator) ![]VectorSearchResult {
-        const results = try self.hnsw_index.knnSearch(query.data, k);
+        return self.searchWithMetric(query, k, self.metric, allocator);
+    }
+
+    pub fn searchWithMetric(
+        self: *VectorIndexWrapper,
+        query: vector.VectorF32,
+        k: u32,
+        metric: DistanceMetric,
+        allocator: std.mem.Allocator,
+    ) ![]VectorSearchResult {
+        if (self.hnsw_index == null) {
+            return allocator.alloc(VectorSearchResult, 0);
+        }
+        if (self.dimension != query.dim) return error.DimensionMismatch;
+
+        const results = try self.hnsw_index.?.knnSearch(query.data, k);
         defer allocator.free(results);
 
         const search_results = try allocator.alloc(VectorSearchResult, results.len);
         for (results, 0..) |result, i| {
+            const base_distance = @as(f32, @floatCast(result.distance));
+            const similarity: f32 = switch (metric) {
+                .l2, .cosine, .dot_product => self.distanceToSimilarity(metric, base_distance),
+            };
+            const distance: f32 = switch (metric) {
+                .l2, .cosine, .dot_product => base_distance,
+            };
             search_results[i] = VectorSearchResult{
                 .node_id = result.id,
-                .distance = result.distance,
-                .similarity = self.distanceToSimilarity(result.distance),
+                .distance = distance,
+                .similarity = similarity,
             };
         }
 
         return search_results;
+    }
+
+    fn ensureInitialized(self: *VectorIndexWrapper, dim: u16) !void {
+        if (self.hnsw_index == null) {
+            self.dimension = dim;
+            self.hnsw_index = try hnsw.Hnsw.init(self.allocator, dim, toHnswMetric(self.metric), .{
+                .m = 16,
+                .ef_construction = 200,
+                .ef_search = 200,
+            });
+        }
     }
 
     fn toHnswMetric(metric: DistanceMetric) hnsw.DistanceMetric {
@@ -508,8 +545,9 @@ pub const VectorIndexWrapper = struct {
         };
     }
 
-    fn distanceToSimilarity(self: VectorIndexWrapper, distance: f32) f32 {
-        return switch (self.metric) {
+    fn distanceToSimilarity(self: VectorIndexWrapper, metric: DistanceMetric, distance: f32) f32 {
+        _ = self;
+        return switch (metric) {
             .l2 => 1.0 / (1.0 + distance),
             .cosine => 1.0 - distance,
             .dot_product => distance,
@@ -586,12 +624,12 @@ pub const SpatialIndexWrapper = struct {
             .max_y = center.lat + lat_radius,
         };
 
-        var candidates = std.ArrayList(u64).init(allocator);
-        defer candidates.deinit();
+        var candidates = std.ArrayList(u64).empty;
+        defer candidates.deinit(allocator);
         try self.rtree_index.search(search_mbr, allocator, &candidates);
 
-        var results = std.ArrayList(SpatialSearchResult).init(allocator);
-        defer results.deinit();
+        var results = std.ArrayList(SpatialSearchResult).empty;
+        defer results.deinit(allocator);
 
         for (candidates.items) |candidate_id| {
             // GAP-0205 FIX: Retrieve actual coordinates from the coordinate map
@@ -605,7 +643,7 @@ pub const SpatialIndexWrapper = struct {
 
             // Only include results within the radius (precise filtering after bounding box query)
             if (distance <= radius_km) {
-                try results.append(SpatialSearchResult{
+                try results.append(allocator, SpatialSearchResult{
                     .node_id = candidate_id,
                     .distance_km = distance,
                     .point = candidate_point,
@@ -613,7 +651,7 @@ pub const SpatialIndexWrapper = struct {
             }
         }
 
-        return results.toOwnedSlice();
+        return results.toOwnedSlice(allocator);
     }
 };
 
@@ -642,21 +680,22 @@ pub const NetworkIndexWrapper = struct {
     pub fn insert(self: *NetworkIndexWrapper, node_id: u64, value: heap.Value) !void {
         switch (value) {
             .IpAddr => |ip| {
-                const key = try self.ipToKey(ip);
-                try self.patricia_index.insert(key, node_id);
+                const subnet = switch (ip) {
+                    .v4 => heap.Subnet{ .addr = ip, .prefix_len = 32 },
+                    .v6 => heap.Subnet{ .addr = ip, .prefix_len = 128 },
+                };
+                try self.patricia_index.insert(subnet, node_id);
                 // GAP-0206 FIX: Store the original value for retrieval
                 try self.value_map.put(node_id, value);
             },
             .Subnet => |subnet| {
-                const key = try self.subnetToKey(subnet);
-                try self.patricia_index.insert(key, node_id);
+                try self.patricia_index.insert(subnet, node_id);
                 // GAP-0206 FIX: Store the original value for retrieval
                 try self.value_map.put(node_id, value);
             },
             .Mac => |mac| {
-                const key = try self.macToKey(mac);
-                try self.patricia_index.insert(key, node_id);
                 // GAP-0206 FIX: Store the original value for retrieval
+                _ = mac;
                 try self.value_map.put(node_id, value);
             },
             else => return error.UnsupportedNetworkType,
@@ -680,20 +719,20 @@ pub const NetworkIndexWrapper = struct {
         const matches = try self.patricia_index.searchPrefix(prefix, allocator);
         defer allocator.free(matches);
 
-        var results_list = std.ArrayList(NetworkSearchResult).init(allocator);
-        defer results_list.deinit();
+        var results_list = std.ArrayList(NetworkSearchResult).empty;
+        defer results_list.deinit(allocator);
 
         for (matches) |match| {
             // GAP-0206 FIX: Retrieve actual stored value
             if (self.value_map.get(match.value)) |stored_value| {
-                try results_list.append(NetworkSearchResult{
+                try results_list.append(allocator, NetworkSearchResult{
                     .node_id = match.value,
                     .network_value = stored_value,
                 });
             }
         }
 
-        return results_list.toOwnedSlice();
+        return results_list.toOwnedSlice(allocator);
     }
 
     fn ipToKey(self: NetworkIndexWrapper, ip: heap.IpAddr) ![]u8 {
@@ -835,20 +874,20 @@ pub const SignatureIndexWrapper = struct {
 
         const result = try self.signature_map.getOrPut(key);
         if (!result.found_existing) {
-            result.value_ptr.* = std.ArrayList(u64).init(self.allocator);
+            result.value_ptr.* = .empty;
         }
-        try result.value_ptr.append(node_id);
+        try result.value_ptr.append(self.allocator, node_id);
     }
 
     pub fn searchByAlgorithm(self: *SignatureIndexWrapper, alg: cryptographic.Signature.SignatureAlg, allocator: std.mem.Allocator) ![]SignatureSearchResult {
-        var results = std.ArrayList(SignatureSearchResult).init(allocator);
-        defer results.deinit();
+        var results = std.ArrayList(SignatureSearchResult).empty;
+        defer results.deinit(allocator);
 
         var iter = self.signature_map.iterator();
         while (iter.next()) |entry| {
             if (entry.key_ptr.algorithm == alg) {
                 for (entry.value_ptr.items) |node_id| {
-                    try results.append(SignatureSearchResult{
+                    try results.append(allocator, SignatureSearchResult{
                         .node_id = node_id,
                         .algorithm = alg,
                     });
@@ -856,7 +895,7 @@ pub const SignatureIndexWrapper = struct {
             }
         }
 
-        return results.toOwnedSlice();
+        return results.toOwnedSlice(allocator);
     }
 
     fn hashSignature(self: SignatureIndexWrapper, signature: []const u8) u64 {

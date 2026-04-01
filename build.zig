@@ -941,6 +941,19 @@ pub fn build(b: *std.Build) void {
     const limitations_fixes_step = b.step("test-limitations-fixes", "Run bug limitation fixes tests");
     limitations_fixes_step.dependOn(&run_limitations_fixes_tests.step);
 
+    const advanced_property_ga_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_advanced_property_ga_conformance.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    advanced_property_ga_tests.root_module.addImport("geode", root_mod);
+    advanced_property_ga_tests.root_module.addImport("schema", schema_mod);
+    const run_advanced_property_ga_tests = b.addRunArtifact(advanced_property_ga_tests);
+    const advanced_property_ga_step = b.step("test-advanced-property-ga", "Run advanced property GA conformance tests");
+    advanced_property_ga_step.dependOn(&run_advanced_property_ga_tests.step);
+
     // GAP-0401: MATCH refactor staged benchmark campaign
     const match_bench_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -1107,6 +1120,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_match_parity_tests.step);
     test_step.dependOn(&run_limit_pushdown_tests.step);
     test_step.dependOn(&run_limitations_fixes_tests.step);
+    test_step.dependOn(&run_advanced_property_ga_tests.step);
     test_step.dependOn(&run_cli_transport_parity_tests.step);
     test_step.dependOn(&run_auth_security_tests.step);
     test_step.dependOn(&run_random_security_tests.step);

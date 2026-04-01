@@ -122,6 +122,8 @@ pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");
 // Re-export type promotion utilities for advanced types roundtrip tests
 pub const type_promotion = @import("eval/type_promotion.zig");
+pub const index_manager = @import("index/index_manager.zig");
+pub const advanced_types_optimizer = @import("optimizer/advanced_types_optimizer.zig");
 // Re-export unicode utilities (normalization, case folding, UTF-16/WTF-8 helpers)
 pub const unicode = @import("unicode/geode_unicode.zig");
 pub const unicode_tables = @import("unicode/unicode_tables.zig");
