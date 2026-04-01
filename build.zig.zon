@@ -80,8 +80,8 @@
         // Updated 2026-03-27: v0.1.11+ (a979f59) — split endpoint mutex,
         // ACK data race fix, bytes_in_flight leak fix, narrow handshake locks.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#36a8486a5d56367ee8fe1ecee26adc111c52b19e",
-            .hash = "quic-0.1.11-gBIqUUniNQBfKa4cdHgkbdoBA7o47K6FM6lclKpVt8ay",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#d7ade732f2d7b32919d009b62f66e1c1d52cefad",
+            .hash = "quic-0.1.11-gBIqUYzhNQB1I0zs49tXqF0obwuW_E2LhWotj0kCZZEj",
         },
 
         // =======================================================================
