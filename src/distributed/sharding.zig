@@ -583,7 +583,7 @@ pub const ShardManager = struct {
         return @intCast(std.time.timestamp());
     }
 
-    // CANARY: REQ=REQ-DIST-SPLIT-001; FEATURE="Shard Split Point"; ASPECT=SplitPoint; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
+    // CANARY: REQ=REQ-DIST-SPLIT-001; FEATURE="Shard Split Point"; ASPECT=SplitPoint; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn findSplitPoint(self: *ShardManager, shard: *Shard) ![]const u8 {
         // Find median key for balanced split
         if (shard.key_range) |range| {
@@ -711,7 +711,7 @@ pub const ShardManager = struct {
         target.statistics.last_updated = std.time.timestamp();
     }
 
-    // CANARY: REQ=REQ-DIST-RANGE-001; FEATURE="Key Range Operations"; ASPECT=RangeOverlap; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
+    // CANARY: REQ=REQ-DIST-RANGE-001; FEATURE="Key Range Operations"; ASPECT=RangeOverlap; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn rangeOverlaps(self: *ShardManager, range1: ?KeyRange, range2: ?KeyRange) bool {
         _ = self;
         if (range1 == null or range2 == null) return false;
@@ -735,7 +735,7 @@ pub const ShardManager = struct {
         return .map_reduce;
     }
 
-    // CANARY: REQ=REQ-DIST-RANGE-SHARD-001; FEATURE="Range-Based Sharding"; ASPECT=ShardLookup; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
+    // CANARY: REQ=REQ-DIST-RANGE-SHARD-001; FEATURE="Range-Based Sharding"; ASPECT=ShardLookup; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn getRangeShardId(self: *ShardManager, key: []const u8) u64 {
         // Find shard whose key range contains the given key
         var it = self.shards.iterator();
@@ -760,7 +760,7 @@ pub const ShardManager = struct {
         return 0;
     }
 
-    // CANARY: REQ=REQ-DIST-GRAPH-SHARD-001; FEATURE="Graph-Aware Sharding"; ASPECT=EdgeCutMinimization; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
+    // CANARY: REQ=REQ-DIST-GRAPH-SHARD-001; FEATURE="Graph-Aware Sharding"; ASPECT=EdgeCutMinimization; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn getGraphAwareShardId(self: *ShardManager, key: []const u8) u64 {
         // Graph-aware sharding aims to minimize edge cuts by keeping connected nodes together
         // Strategy: Use community detection hint from key prefix
@@ -793,7 +793,7 @@ pub const ShardManager = struct {
         return self.consistent_hash.getNode(key).id;
     }
 
-    // CANARY: REQ=REQ-DIST-GEO-SHARD-001; FEATURE="Geo-Distributed Sharding"; ASPECT=LocalityAware; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
+    // CANARY: REQ=REQ-DIST-GEO-SHARD-001; FEATURE="Geo-Distributed Sharding"; ASPECT=LocalityAware; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn getGeoShardId(self: *ShardManager, key: []const u8) u64 {
         // Geo-distributed sharding places data near users
         // Keys can be formatted as "region:data_key" to hint at geography

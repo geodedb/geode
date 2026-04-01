@@ -739,7 +739,7 @@ pub const ClusterCoordinator = struct {
         });
     }
 
-    // CANARY: REQ=REQ-DIST-CLUSTER-001; FEATURE="DistributedCluster"; ASPECT=ReplicationLag; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-DIST-CLUSTER-001; FEATURE="DistributedCluster"; ASPECT=ReplicationLag; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn getReplicationLag(self: *ClusterCoordinator, node_id: u64, shard_id: u64) !u64 {
         // Calculate replication lag based on node health check latency
         // In a real implementation, this would compare snapshot generations between primary and replica
@@ -836,7 +836,7 @@ pub const ClusterCoordinator = struct {
         });
     }
 
-    // CANARY: REQ=REQ-DIST-CLUSTER-003; FEATURE="DistributedCluster"; ASPECT=Rebalance; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-DIST-CLUSTER-003; FEATURE="DistributedCluster"; ASPECT=Rebalance; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn rebalanceShards(self: *ClusterCoordinator) !void {
         const node_count = self.cluster_state.nodes.items.len;
         if (node_count == 0) {
@@ -881,7 +881,7 @@ pub const ClusterCoordinator = struct {
         });
     }
 
-    // CANARY: REQ=REQ-DIST-CLUSTER-004; FEATURE="DistributedCluster"; ASPECT=Topology; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-DIST-CLUSTER-004; FEATURE="DistributedCluster"; ASPECT=Topology; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn serializeClusterTopology(self: *ClusterCoordinator) ![]const u8 {
         var nodes = std.ArrayList(TopologyNode).init(self.allocator);
         defer nodes.deinit(self.allocator);

@@ -77,7 +77,7 @@ pub const Savepoint = struct {
     timestamp: i64,
 };
 
-// CANARY: REQ=REQ-DIST-2PC-MSG-001; FEATURE="Two-Phase Commit Message Format"; ASPECT=Protocol; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
+// CANARY: REQ=REQ-DIST-2PC-MSG-001; FEATURE="Two-Phase Commit Message Format"; ASPECT=Protocol; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
 /// 2PC protocol message for network communication
 pub const TwoPhaseMessage = dist_schema.TwoPhaseMessage;
 
@@ -201,7 +201,7 @@ pub const TwoPhaseTransport = struct {
         return self.connections.getPtr(endpoint).?;
     }
 
-    // CANARY: REQ=REQ-2PC-TIMEOUT-001; FEATURE="2PCTimeout"; ASPECT=Transport; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-2PC-TIMEOUT-001; FEATURE="2PCTimeout"; ASPECT=Transport; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     /// Send a 2PC message and receive response with timeout handling
     pub fn sendMessage(self: *TwoPhaseTransport, endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !TwoPhaseResponse {
         const start_time = std.time.milliTimestamp();
@@ -315,7 +315,7 @@ fn readFrame(
     return body;
 }
 
-// CANARY: REQ=REQ-DIST-2PC-TRANSPORT-001; FEATURE="Two-Phase Commit Network Transport"; ASPECT=QUICMessaging; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
+// CANARY: REQ=REQ-DIST-2PC-TRANSPORT-001; FEATURE="Two-Phase Commit Network Transport"; ASPECT=QUICMessaging; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
 /// Send a 2PC message to a participant endpoint using QUIC transport
 fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !TwoPhaseResponse {
     // Use global transport if available, otherwise fall back to creating a one-shot connection
@@ -495,7 +495,7 @@ pub const Transaction = struct {
     pub fn prepare(self: *Transaction) !bool {
         self.state = .preparing;
 
-        // CANARY: REQ=REQ-DIST-2PC-001; FEATURE="Two-Phase Commit Messaging"; ASPECT=Prepare; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
+        // CANARY: REQ=REQ-DIST-2PC-001; FEATURE="Two-Phase Commit Messaging"; ASPECT=Prepare; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
         // Send prepare messages to all participants
         var all_voted_commit = true;
         for (self.participants.items) |*participant| {
@@ -545,7 +545,7 @@ pub const Transaction = struct {
 
         self.state = .committing;
 
-        // CANARY: REQ=REQ-DIST-2PC-002; FEATURE="Two-Phase Commit Messaging"; ASPECT=Commit; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
+        // CANARY: REQ=REQ-DIST-2PC-002; FEATURE="Two-Phase Commit Messaging"; ASPECT=Commit; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
         // Send commit messages to all participants
         for (self.participants.items) |*participant| {
             participant.state = .committing;
@@ -586,7 +586,7 @@ pub const Transaction = struct {
     pub fn abort(self: *Transaction) !void {
         self.state = .aborting;
 
-        // CANARY: REQ=REQ-DIST-2PC-003; FEATURE="Two-Phase Commit Messaging"; ASPECT=Abort; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
+        // CANARY: REQ=REQ-DIST-2PC-003; FEATURE="Two-Phase Commit Messaging"; ASPECT=Abort; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
         // Send abort messages to all participants
         for (self.participants.items) |*participant| {
             participant.state = .aborting;
@@ -816,7 +816,7 @@ pub const Coordinator = struct {
 };
 
 /// Two-Phase Commit Participant
-// CANARY: REQ=REQ-2PC-PARTICIPANT-001; FEATURE="2PC Participant Node"; ASPECT=StorageOps; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-10
+// CANARY: REQ=REQ-2PC-PARTICIPANT-001; FEATURE="2PC Participant Node"; ASPECT=StorageOps; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
 pub const ParticipantNode = struct {
     allocator: Allocator,
     node_id: []const u8,
@@ -986,7 +986,7 @@ pub const ParticipantNode = struct {
         return .VOTE_COMMIT;
     }
 
-    // CANARY: REQ=REQ-2PC-COMMIT-001; FEATURE="2PC Commit Handler"; ASPECT=StorageApplication; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-2PC-COMMIT-001; FEATURE="2PC Commit Handler"; ASPECT=StorageApplication; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     pub fn handleCommit(self: *ParticipantNode, transaction_id: []const u8) !void {
         const removed = self.transactions.fetchRemove(transaction_id) orelse return error.TransactionNotFound;
         var local_txn = removed.value;
@@ -1019,7 +1019,7 @@ pub const ParticipantNode = struct {
         local_txn.state = .committed;
     }
 
-    // CANARY: REQ=REQ-2PC-ABORT-001; FEATURE="2PC Abort Handler"; ASPECT=UndoApplication; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-2PC-ABORT-001; FEATURE="2PC Abort Handler"; ASPECT=UndoApplication; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     pub fn handleAbort(self: *ParticipantNode, transaction_id: []const u8) !void {
         const removed = self.transactions.fetchRemove(transaction_id) orelse return error.TransactionNotFound;
         var local_txn = removed.value;

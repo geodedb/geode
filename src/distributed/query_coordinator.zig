@@ -111,7 +111,7 @@ pub const QueryCoordinator = struct {
     }
 
     /// Scatter query fragments to shards with concurrent execution
-    /// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=ConcurrentExecution; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-14
+    /// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=ConcurrentExecution; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-01
     /// GAP-0184: Implements actual concurrent scatter/gather for fragment execution
     fn scatterQuery(self: *Self, plan: DistributedPlan, params: []const protocol.Value) ![]federation.QueryResults {
         const fragment_count = plan.fragments.items.len;
@@ -640,7 +640,7 @@ const ShardMap = struct {
         self.shards.deinit();
     }
 
-    // CANARY: REQ=REQ-SHARD-PRUNE-001; FEATURE="ShardPruning"; ASPECT=QueryOptimization; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-SHARD-PRUNE-001; FEATURE="ShardPruning"; ASPECT=QueryOptimization; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn getShardsForQuery(self: *ShardMap, query: []const u8) ![][]const u8 {
         // Try to extract partition key predicates from query
         // Look for patterns like "WHERE id = <value>" or "WHERE partition_key = <value>"
@@ -832,7 +832,7 @@ const TopKHeap = struct {
 };
 
 /// Coordinator metrics
-/// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=Metrics; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-14
+/// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=Metrics; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-01
 const CoordinatorMetrics = struct {
     total_queries: u64,
     total_time_ms: u64,
@@ -860,7 +860,7 @@ const CoordinatorMetrics = struct {
 
 // =============================================================================
 // GAP-0184: Unit Tests for Concurrent Shard Execution
-// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=UnitTests; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-14
+// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=UnitTests; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-01
 // =============================================================================
 
 test "QueryCoordinator: initialization" {
