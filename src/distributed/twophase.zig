@@ -216,7 +216,8 @@ pub const TwoPhaseTransport = struct {
     }
 
     // CANARY: REQ=REQ-2PC-TIMEOUT-001; FEATURE="2PCTimeout"; ASPECT=Transport; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
-    /// Send a 2PC message and receive response with timeout handling
+    /// Send a 2PC message and receive response with timeout handling.
+    /// Stamps the GEODE_CLUSTER_TOKEN into the message auth_token field before sending.
     pub fn sendMessage(self: *TwoPhaseTransport, endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !TwoPhaseResponse {
         const start_time = std.time.milliTimestamp();
 
@@ -237,8 +238,12 @@ pub const TwoPhaseTransport = struct {
             return error.Timeout;
         }
 
+        // Stamp cluster auth token into the message before sending
+        var authed_msg = msg;
+        authed_msg.auth_token = std.posix.getenv("GEODE_CLUSTER_TOKEN") orelse "";
+
         // Encode and send message with length-prefixed protobuf framing
-        const frame = try encodeFrame(self.allocator, msg);
+        const frame = try encodeFrame(self.allocator, authed_msg);
         defer self.allocator.free(frame);
         try stream.writeAll(frame);
 
@@ -387,7 +392,11 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
     const stream = try client.openStream(true);
     defer stream.close();
 
-    const frame = try encodeFrame(allocator, msg);
+    // Stamp cluster auth token into the message before sending
+    var authed_msg = msg;
+    authed_msg.auth_token = std.posix.getenv("GEODE_CLUSTER_TOKEN") orelse "";
+
+    const frame = try encodeFrame(allocator, authed_msg);
     defer allocator.free(frame);
     try stream.writeAll(frame);
 
@@ -1188,6 +1197,7 @@ pub const TwoPCCoordinator = struct {
     }
 
     /// Handle inbound 2PC messages (participant side).
+    /// Validates the auth_token field against GEODE_CLUSTER_TOKEN before processing.
     pub fn handleMessage(self: *TwoPCCoordinator, from: []const u8, message_type: MessageType, payload: []const u8) !void {
         if (!self.enable_participant) return;
 
@@ -1197,6 +1207,18 @@ pub const TwoPCCoordinator = struct {
             return err;
         };
         defer msg.deinit(self.allocator);
+
+        // Validate cluster auth token
+        const cluster_auth = @import("cluster_auth.zig");
+        const expected_token = std.posix.getenv("GEODE_CLUSTER_TOKEN");
+        if (expected_token) |tok| {
+            if (tok.len > 0 and !cluster_auth.validateClusterToken(msg.auth_token)) {
+                log.warn("2PC message rejected: invalid cluster auth token", &.{
+                    Attr.string("from", from),
+                });
+                return error.AuthenticationFailed;
+            }
+        }
 
         const response: ?TwoPhaseResponse = switch (message_type) {
             .PREPARE => blk: {

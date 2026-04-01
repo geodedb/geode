@@ -647,6 +647,7 @@ REQ-DIST-FRAG-002,Fragment Deserialization,Core,TESTED,,,distributed,2026-01-25,
 REQ-DIST-FRAG-003,Fragment Serialization Tests,Testing,TESTED,,,distributed,2026-01-25,src/distributed/enhanced_query_transport.zig
 REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,IMPL,,,distributed,2026-04-01,src/distributed/sharding.zig
 REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,IMPL,,,distributed,2026-04-01,src/distributed/sharding.zig
+REQ-DIST-HASH-AGG-001,DistributedHashAggregate,ValueAccumulation,TESTED,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-federation-correctness.md
 REQ-DIST-LB-001,Load Balancing,ShardSelection,TESTED,,,distributed,2026-01-08,src/distributed/enhanced_query_transport.zig
 REQ-DIST-LOCAL-001,DistributedLocalExecution,Distributed,TESTED,,,distributed,2026-01-25,src/distributed/query_coordinator.zig
 REQ-DIST-MIGRATE-002,Shard Data Migration,PartialMigration,EXEMPT,,,distributed,2026-01-08,src/distributed/sharding.zig
@@ -820,6 +821,7 @@ REQ-EXPR-TYPE-003,ExprTypeCoverage,Types,TESTED,,,exec,2026-01-25,src/server/gra
 REQ-FED-001,Federation,QueryFederation,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-FED-QUIC-001,FederationQUICConnection,Connection,TESTED,,,federation,2026-01-10,src/distributed/federation.zig
 REQ-FED-TLS-001,Federation TLS,Security,TESTED,,,distributed,2026-01-13,src/distributed/federation.zig
+REQ-FED-UNION-DISTINCT-001,FederationUnionDistinct,Deduplication,TESTED,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-federation-correctness.md
 REQ-FEDERATION-INDEX-REC-001,FederationIndexRecommendations,Index,TESTED,,,distributed,2026-01-25,src/server/index_optimizer.zig
 REQ-FEDERATION-QUERY-001,Federation,FederatedQuery,TESTED,,,federation,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-FINAL-001,FinalSort,SortExecution,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
@@ -1318,7 +1320,6 @@ REQ-GQL-024,FederationLatencyAggregates,VarianceEnvelope,BENCHED,,,federation,20
 REQ-GQL-024,FederationMismatchFlag,Federation,TESTED,,,federation,2025-09-23,src/distributed/federation.zig
 REQ-GQL-024,FederationMismatchFlag,Federation,TESTED,,,federation,2025-09-23,src/distributed/federation.zig
 REQ-GQL-024,FederationMismatchFlag,Federation,TESTED,,,federation,2025-09-23,src/distributed/federation_flag.zig
-REQ-GQL-024,FederationMismatchFlag,Federation,TESTED,,,federation,2025-09-23,src/distributed/federation_root.zig
 REQ-GQL-024,FederationMismatchFlag,Federation,TESTED,,,federation,2025-09-23,tests/e2e_federation_mismatch_flag.zig
 REQ-GQL-024,FederationMismatchFlag,LatencyAggregateArchive,TESTED,,,federation,2025-09-26,src/tools/fed_latency_aggregate.zig
 REQ-GQL-024,FederationMismatchFlag,LatencyAggregateGovernanceSummary,TESTED,,,federation,2025-09-26,src/tools/fed_latency_governance.zig

@@ -131,6 +131,7 @@ pub const TwoPhaseMessage = struct {
     coordinator_id: []const u8 = "",
     timestamp: i64 = 0,
     operations: std.ArrayList(TwoPhaseOperation),
+    auth_token: []const u8 = "",
 
     pub const _desc_table = .{
         .msg_type = fd(1, .{ .scalar = .@"enum" }),
@@ -138,6 +139,7 @@ pub const TwoPhaseMessage = struct {
         .coordinator_id = fd(3, .{ .scalar = .string }),
         .timestamp = fd(4, .{ .scalar = .int64 }),
         .operations = fd(5, .{ .repeated = .{ .submessage = {} } }),
+        .auth_token = fd(6, .{ .scalar = .string }),
     };
 
     pub fn deinit(self: *TwoPhaseMessage, allocator: std.mem.Allocator) void {
