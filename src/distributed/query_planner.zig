@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
+const cbo = @import("../planner/cbo.zig");
 
 // Distributed query planning for federation-aware query optimization
 pub const DistributedQueryPlanner = struct {
@@ -7,6 +8,7 @@ pub const DistributedQueryPlanner = struct {
     federation_manager: *FederationManager,
     shard_registry: ShardRegistry,
     cost_model: DistributedCostModel,
+    stats_registry: ?*cbo.StatsRegistry = null,
 
     pub fn init(allocator: std.mem.Allocator, federation_manager: *FederationManager) DistributedQueryPlanner {
         return .{
@@ -15,6 +17,11 @@ pub const DistributedQueryPlanner = struct {
             .shard_registry = ShardRegistry.init(allocator),
             .cost_model = DistributedCostModel.init(),
         };
+    }
+
+    /// Set the CBO statistics registry for data-driven row estimation
+    pub fn setStatsRegistry(self: *DistributedQueryPlanner, registry: *cbo.StatsRegistry) void {
+        self.stats_registry = registry;
     }
 
     pub fn deinit(self: *DistributedQueryPlanner) void {
@@ -42,13 +49,14 @@ pub const DistributedQueryPlanner = struct {
     fn analyzeQueryDistribution(self: *DistributedQueryPlanner, query: *const ast.Query) !DistributionAnalysis {
         var analysis = DistributionAnalysis.init(self.allocator);
 
-        // Analyze MATCH patterns for shard affinity
-        // Simplified for now - would analyze actual MATCH chains in real implementation
-        try self.analyzeMatchChain(&analysis, "simplified_match_chain");
-
-        // Simplified analysis for compilation
-        _ = query;
-        // Real implementation would analyze WHERE, aggregations, ORDER BY, etc.
+        // Extract label affinities from MATCH pattern chains
+        for (query.match.chains) |chain| {
+            for (chain.nodes) |node| {
+                for (node.labels) |label| {
+                    try analysis.addLabelAffinity(label);
+                }
+            }
+        }
 
         return analysis;
     }
@@ -169,11 +177,25 @@ pub const DistributedQueryPlanner = struct {
         return false; // Simplified for now
     }
 
+    /// Estimate row count for a shard using CBO statistics when available.
+    /// Falls back to a default heuristic (1000 rows) when no stats exist.
     fn estimateShardRows(self: *DistributedQueryPlanner, shard_id: u32, analysis: DistributionAnalysis) usize {
-        _ = self;
         _ = shard_id;
-        _ = analysis;
-        return 1000; // Simplified estimation
+
+        // Try CBO statistics for each label that has shard affinity
+        if (self.stats_registry) |registry| {
+            var it = analysis.label_affinities.iterator();
+            while (it.next()) |entry| {
+                if (registry.getTableStats(entry.key_ptr.*)) |stats| {
+                    const total_shards = @max(1, self.shard_registry.shards.count());
+                    const rows_per_shard = stats.row_count / total_shards;
+                    // Add 10% buffer for estimation variance
+                    return rows_per_shard + rows_per_shard / 10;
+                }
+            }
+        }
+
+        return 1000; // Default when no statistics available
     }
 
     fn estimateDataTransfer(self: *DistributedQueryPlanner, plan: ShardLocalPlan) usize {
@@ -575,3 +597,85 @@ pub const CrossShardJoin = struct {
     join_key: []const u8,
     estimated_cardinality: usize,
 };
+
+// --- Tests ---
+
+test "estimateShardRows: returns default 1000 without stats" {
+    const ally = std.testing.allocator;
+    var fm = FederationManager.init(ally);
+    defer fm.deinit();
+    var planner = DistributedQueryPlanner.init(ally, &fm);
+    defer planner.deinit();
+
+    var analysis = DistributionAnalysis.init(ally);
+    defer analysis.deinit();
+
+    const estimate = planner.estimateShardRows(1, analysis);
+    try std.testing.expectEqual(@as(usize, 1000), estimate);
+}
+
+test "estimateShardRows: uses CBO stats when registry is set" {
+    const ally = std.testing.allocator;
+    var fm = FederationManager.init(ally);
+    defer fm.deinit();
+    var planner = DistributedQueryPlanner.init(ally, &fm);
+    defer planner.deinit();
+
+    // Set up stats registry with known data
+    var registry = cbo.StatsRegistry.init(ally);
+    defer registry.deinit();
+    try registry.updateTableStats("Person", .{
+        .row_count = 10000,
+        .page_count = 500,
+        .avg_row_size = 128,
+        .last_updated = 0,
+    });
+
+    planner.setStatsRegistry(&registry);
+
+    // Register 2 shards in the shard registry so rows distribute
+    try planner.shard_registry.shards.put(1, ShardInfo{
+        .id = 1,
+        .endpoint = "localhost:3141",
+        .labels = &.{},
+        .estimated_size = 0,
+        .status = .active,
+    });
+    try planner.shard_registry.shards.put(2, ShardInfo{
+        .id = 2,
+        .endpoint = "localhost:3142",
+        .labels = &.{},
+        .estimated_size = 0,
+        .status = .active,
+    });
+
+    // Create analysis with label affinity matching our stats
+    var analysis = DistributionAnalysis.init(ally);
+    defer analysis.deinit();
+    try analysis.addLabelAffinity("Person");
+
+    const estimate = planner.estimateShardRows(1, analysis);
+    // 10000 / 2 shards = 5000 + 10% buffer = 5500
+    try std.testing.expectEqual(@as(usize, 5500), estimate);
+}
+
+test "estimateShardRows: falls back to default when label has no stats" {
+    const ally = std.testing.allocator;
+    var fm = FederationManager.init(ally);
+    defer fm.deinit();
+    var planner = DistributedQueryPlanner.init(ally, &fm);
+    defer planner.deinit();
+
+    var registry = cbo.StatsRegistry.init(ally);
+    defer registry.deinit();
+    // Registry is empty - no stats for any label
+
+    planner.setStatsRegistry(&registry);
+
+    var analysis = DistributionAnalysis.init(ally);
+    defer analysis.deinit();
+    try analysis.addLabelAffinity("UnknownLabel");
+
+    const estimate = planner.estimateShardRows(1, analysis);
+    try std.testing.expectEqual(@as(usize, 1000), estimate);
+}
