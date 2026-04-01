@@ -40,8 +40,9 @@ pub fn encryptPropertyIfNeeded(
     const requires_encryption = fle_integration.fieldRequiresEncryption(node_type, field_name);
 
     // Create encryption context
+    // GAP-0281: Use per-thread tenant_id from fle_integration instead of hardcoded "default"
     const ctx = fle_integration.EncryptionContext{
-        .tenant_id = "default",
+        .tenant_id = fle_integration.getCurrentTenantId(),
         .schema_name = node_type,
         .allocator = allocator,
         .current_user_role = fle_integration.getCurrentUserRole(),
@@ -87,8 +88,9 @@ pub fn encryptEdgePropertyIfNeeded(
     const requires_encryption = fle_integration.fieldRequiresEncryption(edge_type, field_name);
 
     // Create encryption context
+    // GAP-0281: Use per-thread tenant_id from fle_integration instead of hardcoded "default"
     const ctx = fle_integration.EncryptionContext{
-        .tenant_id = "default",
+        .tenant_id = fle_integration.getCurrentTenantId(),
         .schema_name = edge_type,
         .allocator = allocator,
         .current_user_role = fle_integration.getCurrentUserRole(),
@@ -135,8 +137,9 @@ pub fn decryptPropertyIfNeeded(
     const node_type = node_labels[0];
 
     // Create encryption context
+    // GAP-0281: Use per-thread tenant_id from fle_integration instead of hardcoded "default"
     const ctx = fle_integration.EncryptionContext{
-        .tenant_id = "default",
+        .tenant_id = fle_integration.getCurrentTenantId(),
         .schema_name = node_type,
         .allocator = allocator,
         .current_user_role = fle_integration.getCurrentUserRole(),

@@ -1389,6 +1389,9 @@ fn handleClientMessage(
                 state.session_config.?.tenant_id = try gpa.dupe(u8, tenant);
             }
 
+            // GAP-0281: Set per-thread FLE tenant_id from session config for encryption namespace isolation.
+            fle_integration.setCurrentTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
+
             // GAP-0271: Set FLE role from HELLO request with injection validation.
             // Always reset role on new connection to prevent stale role leakage.
             if (hello_req.role) |requested_role| {
@@ -1714,6 +1717,8 @@ fn handleClientMessage(
                 .query_param_values = bindings.values,
                 .optimizer_hints = if (plan_handle != null) &optimizer_hints_storage else null,
                 .graph_bound = state.graph_bound,
+                // GAP-0281: Thread session tenant_id into execution context for FLE hooks
+                .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
             };
 
             var flags = std.ArrayList([]const u8).initCapacity(gpa, 8) catch return error.OutOfMemory;

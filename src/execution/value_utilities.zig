@@ -236,7 +236,7 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                                 const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
                                 const user_role = fle_integration.getCurrentUserRole();
                                 const fle_ctx = fle_integration.EncryptionContext{
-                                    .tenant_id = "default",
+                                    .tenant_id = fle_integration.getCurrentTenantId(),
                                     .schema_name = type_name,
                                     .allocator = allocator,
                                     .current_user_role = user_role,
@@ -328,7 +328,7 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                             if (fle_integration.hasEncryptedFields()) {
                                 const type_name = edge.label;
                                 const fle_ctx = fle_integration.EncryptionContext{
-                                    .tenant_id = "default",
+                                    .tenant_id = fle_integration.getCurrentTenantId(),
                                     .schema_name = type_name,
                                     .allocator = allocator,
                                     .current_user_role = fle_integration.getCurrentUserRole(),

@@ -62,6 +62,35 @@ pub fn setCurrentUserRole(role: ?[]const u8) void {
     }
 }
 
+// GAP-0281: Per-thread tenant_id map for FLE encryption namespace isolation.
+// Same pattern as per_thread_roles (GAP-0285/S3): keyed by thread ID so each
+// connection handler thread maintains its own tenant_id state.
+// CANARY: REQ=REQ-MULTI-TENANT-FLE-002; FEATURE="FLE Multi-Tenancy"; ASPECT=PerThreadTenant; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+var per_thread_tenants: std.AutoHashMap(std.Thread.Id, []const u8) = std.AutoHashMap(std.Thread.Id, []const u8).init(std.heap.c_allocator);
+
+/// Set the current tenant_id for FLE encryption namespace (per-thread, safe for concurrent connections).
+/// Should be called at the start of query execution when session has a tenant_id.
+pub fn setCurrentTenantId(tenant_id: ?[]const u8) void {
+    global_mutex.lock();
+    defer global_mutex.unlock();
+    const tid = std.Thread.getCurrentId();
+    if (tenant_id) |t| {
+        per_thread_tenants.put(tid, t) catch {
+            _ = per_thread_tenants.remove(tid);
+        };
+    } else {
+        _ = per_thread_tenants.remove(tid);
+    }
+}
+
+/// Get the current tenant_id for FLE operations.
+/// Returns the per-thread tenant_id if set, otherwise "default".
+pub fn getCurrentTenantId() []const u8 {
+    global_mutex.lock();
+    defer global_mutex.unlock();
+    return per_thread_tenants.get(std.Thread.getCurrentId()) orelse "default";
+}
+
 /// Get the current user role.
 /// Checks environment variable GEODE_CURRENT_ROLE first (non-allocating via std.posix.getenv),
 /// then falls back to per-thread role state.
@@ -537,8 +566,9 @@ pub fn checkPropertyAccess(
     node_id: u64,
 ) ![]const u8 {
     // Create encryption context with correct schema
+    // GAP-0281: Use per-thread tenant_id instead of hardcoded "default"
     const ctx = EncryptionContext{
-        .tenant_id = "default",
+        .tenant_id = getCurrentTenantId(),
         .schema_name = type_name, // Use actual type name, not "default"
         .allocator = allocator,
         .current_user_role = getCurrentUserRole(),

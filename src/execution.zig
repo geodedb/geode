@@ -381,6 +381,9 @@ pub const ExecutionContext = struct {
     // here for future in-execution RLS integration (e.g., predicate push-down).
     // CANARY: REQ=REQ-SEC-RLS-WIRE-006; FEATURE="RLS Query Enforcement"; ASPECT=ExecutionContext; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
     rls_engine: ?*anyopaque = null,
+    // CANARY: REQ=REQ-MULTI-TENANT-FLE-001; FEATURE="FLE Multi-Tenancy"; ASPECT=ExecutionContext; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+    // GAP-0281: Session tenant_id threaded through to FLE encryption hooks
+    tenant_id: ?[]const u8 = null,
 };
 
 threadlocal var g_active_context: ?*const ExecutionContext = null;
@@ -397,6 +400,15 @@ pub fn pushActiveContext(ctx: *const ExecutionContext) ?*const ExecutionContext 
 
 pub fn popActiveContext(prev: ?*const ExecutionContext) void {
     g_active_context = prev;
+}
+
+/// Returns the session tenant_id from the active ExecutionContext, or "default" if unavailable.
+/// GAP-0281: Used by FLE hooks to thread tenant_id into EncryptionContext.
+pub fn getSessionTenantId() []const u8 {
+    if (g_active_context) |ctx| {
+        if (ctx.tenant_id) |tid| return tid;
+    }
+    return "default";
 }
 
 pub const ExecutionError = error{

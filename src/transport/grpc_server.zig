@@ -25,6 +25,8 @@ const grpc_tls = @import("grpc_tls.zig");
 const backup_mgr = geode.backup_manager;
 const SimplifiedBackupManager = backup_mgr.SimplifiedBackupManager;
 
+// GAP-0281: FLE integration for per-tenant encryption namespace setup.
+const fle_integration = geode.fle_integration;
 // S1: RLS post-result filtering (parity with QUIC handler).
 const rls_filter = @import("../server/rls_filter.zig");
 // S6: Auth rate limiter (parity with QUIC handler).
@@ -132,6 +134,9 @@ const SessionStore = struct {
             state.session_config = server_state.SessionConfiguration.init(self.allocator);
             state.session_config.?.tenant_id = try self.allocator.dupe(u8, tenant);
         }
+
+        // GAP-0281: Set per-thread FLE tenant_id for encryption namespace isolation.
+        fle_integration.setCurrentTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
 
         // CANARY: REQ=REQ-DSN-GRAPH-BIND-004; FEATURE="DSNGraphBinding"; ASPECT=GrpcSessionGraph; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
         if (graph) |g| {
@@ -1382,6 +1387,8 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 .query_param_names = bindings.names,
                 .query_param_values = bindings.values,
                 .graph_bound = state.graph_bound,
+                // GAP-0281: Thread session tenant_id into execution context for FLE hooks
+                .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
             };
 
             var flags = std.ArrayList([]const u8).initCapacity(allocator, 8) catch return error.OutOfMemory;
