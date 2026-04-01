@@ -1313,6 +1313,12 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
+    // Validate migration name for path traversal (GAP-0285/0301)
+    migration.validateMigrationName(migration_name.?) catch {
+        std.debug.print("Error: invalid migration name '{s}' (must not contain path separators or '..')\n", .{migration_name.?});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+
     // Ensure migrations directory exists
     std.fs.cwd().makePath(migrations_dir) catch |err| {
         if (err != error.PathAlreadyExists) {
