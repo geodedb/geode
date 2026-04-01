@@ -157,6 +157,37 @@ fn parseFLEConfigMap(allocator: std.mem.Allocator, map_props: []const ast.Proper
     return .{ .algorithm = algorithm, .visibility_roles = visibility_roles };
 }
 
+/// S1: Build an error ExecutionResult with the given message and a single "status" column.
+/// Used to return authorization/validation errors from procedure handlers without
+/// raising a Zig error (which would tear down the connection).
+fn buildProcedureErrorResult(allocator: std.mem.Allocator, message: []const u8) !ExecutionResult {
+    const columns = try allocator.alloc([]const u8, 1);
+    columns[0] = try allocator.dupe(u8, "status");
+    const row = try allocator.alloc(Value, 1);
+    row[0] = Value{ .Str = try allocator.dupe(u8, message) };
+    const rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+}
+
+/// S1: Verify the caller has the Admin role. Returns an error result if not.
+/// When auth is enabled but no role is set (null), access is denied.
+/// When auth is disabled (role is null and isAuthEnabled() is false), access is allowed
+/// to preserve backwards compatibility for single-user deployments.
+fn requireAdminRole(allocator: std.mem.Allocator, context: ExecutionContext) !?ExecutionResult {
+    if (context.role) |role| {
+        if (role != .Admin) {
+            return try buildProcedureErrorResult(allocator, "Permission denied: Admin role required");
+        }
+        return null; // Admin — allowed
+    }
+    // No role set: if auth is enabled, deny; if disabled, allow (backwards compat)
+    if (user_mgmt.isAuthEnabled()) {
+        return try buildProcedureErrorResult(allocator, "Permission denied: authentication required");
+    }
+    return null; // Auth disabled — allowed
+}
+
 pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: ExecutionContext) !ExecutionResult {
 
     // Get the procedure name from the Call expression
@@ -4488,6 +4519,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     // instead of opening a separate local GraphStore.
     // =========================================================================
     else if (std.mem.eql(u8, proc_name, "geode.auth.user_create")) {
+        // S1: Admin authorization required for user creation
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
         // geode.auth.user_create(username, password, email[, role]) -> status
         var username: []const u8 = "";
         var password: []const u8 = "";
@@ -4544,6 +4577,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
     } else if (std.mem.eql(u8, proc_name, "geode.auth.user_list")) {
+        // S1: Admin authorization required for user listing
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
         // geode.auth.user_list() -> username, email, role, active
         const columns = try allocator.alloc([]const u8, 4);
         columns[0] = try allocator.dupe(u8, "username");
@@ -4562,6 +4597,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         }
         return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };
     } else if (std.mem.eql(u8, proc_name, "geode.auth.user_delete")) {
+        // S1: Admin authorization required for user deletion
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
         // geode.auth.user_delete(username) -> status
         var username: []const u8 = "";
         if (call_stmt.procedure == .Call) {
@@ -4581,6 +4618,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
     } else if (std.mem.eql(u8, proc_name, "geode.auth.user_show")) {
+        // S1: Admin authorization required for user inspection
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
         // geode.auth.user_show(username) -> username, email, role, status
         var username: []const u8 = "";
         if (call_stmt.procedure == .Call) {
@@ -4611,6 +4650,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     } else if (std.mem.eql(u8, proc_name, "geode.auth.user_enable") or
         std.mem.eql(u8, proc_name, "geode.auth.user_disable"))
     {
+        // S1: Admin authorization required for user enable/disable
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
         // geode.auth.user_enable/disable(username) -> status, username
         var username: []const u8 = "";
         if (call_stmt.procedure == .Call) {
@@ -4631,6 +4672,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
     } else if (std.mem.eql(u8, proc_name, "geode.auth.user_assign_role")) {
+        // S1: Admin authorization required for role assignment
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
         // geode.auth.user_assign_role(username, role) -> status
         var username: []const u8 = "";
         var role_name: []const u8 = "";
@@ -4647,6 +4690,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
     } else if (std.mem.eql(u8, proc_name, "geode.auth.user_permissions")) {
+        // S1: Admin authorization required for viewing user permissions
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
         // geode.auth.user_permissions(username) -> permission list
         var username: []const u8 = "";
         if (call_stmt.procedure == .Call) {
@@ -4667,6 +4712,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         }
         return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };
     } else if (std.mem.eql(u8, proc_name, "geode.auth.user_change_password")) {
+        // S1: Admin authorization required for password changes (self-service via CLI uses old-pw verification)
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
         // geode.auth.user_change_password(username, old_password, new_password) -> status
         var username: []const u8 = "";
         var old_pw: []const u8 = "";
@@ -4677,14 +4724,16 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             if (args.len >= 2 and args[1].* == .String) old_pw = args[1].String;
             if (args.len >= 3 and args[2].* == .String) new_pw = args[2].String;
         }
-        // Verify old password before changing (old_pw used for authentication)
+        // S6: Verify old password before changing — MUST fail if old password is wrong
         if (old_pw.len > 0) {
             _ = user_mgmt.authenticate(username, old_pw) catch |err| {
                 log.warn("geode.auth.user_change_password: old password verification failed", &.{Attr.string("error", @errorName(err))});
+                return try buildProcedureErrorResult(allocator, "Old password verification failed");
             };
         }
         user_mgmt.updateUserPassword(allocator, username, new_pw) catch |err| {
             log.warn("geode.auth.user_change_password failed", &.{Attr.string("error", @errorName(err))});
+            return try buildProcedureErrorResult(allocator, "Password change failed");
         };
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "status");
@@ -4694,6 +4743,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
     } else if (std.mem.eql(u8, proc_name, "geode.auth.user_reset_password")) {
+        // S1: Admin authorization required for password reset
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
         // geode.auth.user_reset_password(username, new_password) -> status
         var username: []const u8 = "";
         var new_pw: []const u8 = "";
@@ -4713,6 +4764,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
     } else if (std.mem.eql(u8, proc_name, "geode.auth.mfa_setup")) {
+        // S1: Admin authorization required for MFA setup
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
         // geode.auth.mfa_setup(username, opts) -> MFA secret, recovery codes, provisioning URI
         var username: []const u8 = "";
         var opts: []const u8 = "";

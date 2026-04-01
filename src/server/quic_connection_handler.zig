@@ -921,8 +921,10 @@ pub fn handleQuicConnection(
         .env_spill_threshold = env_spill_threshold,
         .env_storage_checksum_error = env_storage_checksum_error,
     };
-    conn_state.captureFromState(&state) catch {
-        log.warn("Failed to capture connection state for multiplexing", &.{});
+    conn_state.captureFromState(&state) catch |err| {
+        // S7: Do NOT allow unauthenticated streams — close connection on capture failure
+        log.err("Failed to capture connection state for multiplexing: {}", .{err});
+        return;
     };
     // First stream counts as active.
     _ = conn_state.active_streams.fetchAdd(1, .release);
@@ -1326,8 +1328,9 @@ fn handleClientMessage(
                     gpa.free(p);
                 }
                 state.authenticated_user = try gpa.dupe(u8, hello_req.username);
-                state.authenticated_password = try gpa.dupe(u8, hello_req.password);
                 state.authenticated_role = @intFromEnum(user_mgmt.Role.ReadWrite);
+                // GAP-0293: Zero plaintext password — federation auth complete, no need to retain
+                state.authenticated_password = null;
                 // GAP-0490: mTLS enforcement for federation connections (opportunistic — log only)
                 if (g_mtls_provider) |provider| {
                     _ = provider;
@@ -1369,9 +1372,11 @@ fn handleClientMessage(
                     gpa.free(p);
                 }
                 state.authenticated_user = try gpa.dupe(u8, hello_req.username);
-                state.authenticated_password = try gpa.dupe(u8, hello_req.password);
                 state.authenticated_role = @intFromEnum(auth_result.role);
                 state.password_reset_required = auth_result.password_reset_required;
+                // GAP-0293: Zero plaintext password immediately after successful auth.
+                // Authentication has already completed — no need to retain password in memory.
+                state.authenticated_password = null;
             }
 
             if (hello_req.tenant_id) |tenant| {
@@ -2046,6 +2051,17 @@ fn handleClientMessage(
             }
         },
         .backup => |backup_req| {
+            // S2: Require Admin role for backup operations
+            if (user_mgmt.isAuthEnabled()) {
+                const is_admin = if (state.authenticated_role) |r|
+                    @as(user_mgmt.Role, @enumFromInt(r)) == .Admin
+                else
+                    false;
+                if (state.authenticated_user == null or !is_admin) {
+                    try sendQuicMessage(gpa, stream, .{ .backup = .{ .success = false, .message = try gpa.dupe(u8, "Permission denied: Admin role required for backup operations") } });
+                    return;
+                }
+            }
             // GAP-0001: Backup reads from the store — shared lock prevents
             // concurrent mutations from corrupting the snapshot.
             graph_store.acquireStoreLock();
@@ -2127,6 +2143,17 @@ fn handleClientMessage(
             }
         },
         .restore => |restore_req| {
+            // S2: Require Admin role for restore operations
+            if (user_mgmt.isAuthEnabled()) {
+                const is_admin = if (state.authenticated_role) |r|
+                    @as(user_mgmt.Role, @enumFromInt(r)) == .Admin
+                else
+                    false;
+                if (state.authenticated_user == null or !is_admin) {
+                    try sendQuicMessage(gpa, stream, .{ .restore = .{ .success = false, .message = try gpa.dupe(u8, "Permission denied: Admin role required for restore operations") } });
+                    return;
+                }
+            }
             // GAP-0001: Restore mutates on-disk state — exclusive write lock
             graph_store.acquireStoreWriteLock();
             defer graph_store.releaseStoreWriteLock();
@@ -2175,6 +2202,17 @@ fn handleClientMessage(
             } });
         },
         .upload_backup => |upload_req| {
+            // S2: Require Admin role for backup upload operations
+            if (user_mgmt.isAuthEnabled()) {
+                const is_admin = if (state.authenticated_role) |r|
+                    @as(user_mgmt.Role, @enumFromInt(r)) == .Admin
+                else
+                    false;
+                if (state.authenticated_user == null or !is_admin) {
+                    try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = try gpa.dupe(u8, "Permission denied: Admin role required for backup upload") } });
+                    return;
+                }
+            }
             if (upload_req.size_bytes == 0 or upload_req.checksum.len == 0) {
                 try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = try gpa.dupe(u8, "Invalid upload request") } });
                 return;
