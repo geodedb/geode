@@ -33,6 +33,7 @@ const allocateColumnStrings = execution.allocateColumnStrings;
 
 // Import for unique column name generation
 const match_operations = @import("match_operations.zig");
+const planned_read_runtime = @import("planned_read_runtime.zig");
 const return_and_sorting = @import("return_and_sorting.zig");
 const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 
@@ -1544,11 +1545,6 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     defer execution.popActiveContext(prev_ctx);
     // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Execution; STATUS=TESTED; TEST=graph_algorithms; OWNER=execution; UPDATED=2026-01-17
 
-    // Check for query chaining: if next_query exists, execute chain
-    if (q.next_query) |next_query_ptr| {
-        return executeQueryChain(allocator, q, next_query_ptr, context);
-    }
-
     // Evaluate LET bindings first and add them to parameter environment
     // GAP-0220 FIX: Use try for proper error propagation
     var param_names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
@@ -1596,6 +1592,28 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     const is_chaining_return = if (q.with_clause) |wc| q.ret.items.ptr == wc.items.ptr and q.ret.items.len == wc.items.len else false;
     if (!is_chaining_return) {
         try validateGroupBy(q.ret, q.group_by);
+    }
+
+    if (try planned_read_runtime.executeIfSupported(allocator, &q, context, param_names.items, param_values.items)) |planned_result| {
+        return planned_result;
+    }
+
+    return executeLegacyQueryWithResolvedParams(allocator, q, context, param_names.items, param_values.items);
+}
+
+pub fn executeLegacyQueryWithResolvedParams(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    context: ExecutionContext,
+    resolved_param_names: []const []const u8,
+    resolved_param_values: []const Value,
+) anyerror!ExecutionResult {
+    const exec_ctx: *ExecutionContext = @constCast(&context);
+    const param_names = struct { items: []const []const u8 }{ .items = resolved_param_names };
+    const param_values = struct { items: []const Value }{ .items = resolved_param_values };
+
+    if (q.next_query) |next_query_ptr| {
+        return executeQueryChain(allocator, q, next_query_ptr, context);
     }
 
     // Check if there's BOTH a MATCH and CREATE pattern (MATCH ... CREATE)

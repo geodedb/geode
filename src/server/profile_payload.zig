@@ -1,5 +1,6 @@
 const std = @import("std");
 const spice_wrapper = @import("parallel/spice");
+const planned_read_runtime = @import("../execution/planned_read_runtime.zig");
 const query_traits = @import("../query/query_traits.zig");
 const schema = @import("schema");
 
@@ -338,6 +339,99 @@ pub fn buildProfilePayload(
     };
 }
 
+pub fn buildProfilePayloadFromTrace(
+    allocator: std.mem.Allocator,
+    plan: planned_read_runtime.Plan,
+    trace: planned_read_runtime.RuntimeTrace,
+    opts: ProfileOptions,
+) !schema.ProfilePayload {
+    _ = plan;
+
+    var op_list = std.ArrayList(schema.ProfileOp).initCapacity(allocator, trace.ops.len) catch return error.OutOfMemory;
+    errdefer {
+        for (op_list.items) |*item| item.deinit(allocator);
+        op_list.deinit(allocator);
+    }
+
+    var cumulative_time: u64 = 0;
+    for (trace.ops, 0..) |op, idx| {
+        cumulative_time += op.time_ns;
+        try op_list.append(allocator, .{
+            .op = try allocator.dupe(u8, plannedOpName(op.kind)),
+            .phase = try allocator.dupe(u8, plannedOpPhase(op.kind)),
+            .id = 0,
+            .op_index = @intCast(idx),
+            .input_rows = op.input_rows,
+            .rows = op.rows,
+            .time_ns = op.time_ns,
+            .cpu_time_ns = op.time_ns,
+            .bytes_out = 0,
+            .bytes_alloc = 0,
+            .estimate_bytes = 0,
+            .estimate_vs_actual = 0,
+            .percent_peak = 0,
+            .percent_net = 0,
+            .cumulative_time_ns = cumulative_time,
+            .freed_bytes = 0,
+            .net_after_op = 0,
+            .error_bytes = 0,
+            .error_abs_pct = 0,
+            .index_name = "",
+            .selectivity_est = 0,
+        });
+    }
+
+    var peak_contributors = std.ArrayList(schema.ProfilePeakContributor).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    errdefer peak_contributors.deinit(allocator);
+
+    var mem_curve = std.ArrayList(schema.ProfileMemCurvePoint).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    errdefer mem_curve.deinit(allocator);
+
+    var flagger_findings = std.ArrayList([]const u8).initCapacity(allocator, opts.flagger_findings.len) catch return error.OutOfMemory;
+    errdefer {
+        for (flagger_findings.items) |flag| allocator.free(flag);
+        flagger_findings.deinit(allocator);
+    }
+    for (opts.flagger_findings) |flag| {
+        try flagger_findings.append(allocator, try allocator.dupe(u8, flag));
+    }
+
+    return schema.ProfilePayload{
+        .profile_version = 2,
+        .ops = op_list,
+        .peak_contributors = peak_contributors,
+        .totals = .{
+            .time_ns = trace.totalTimeNs(),
+            .peak_bytes = 0,
+        },
+        .total_time_ns = trace.totalTimeNs(),
+        .spills = .{
+            .sort_spills = 0,
+            .distinct_spills = 0,
+            .union_spills = 0,
+            .spill_reason = "",
+            .peak_bytes_at_spill = 0,
+            .first_spill_op_index = 0,
+        },
+        .memory = .{
+            .net_bytes = 0,
+            .peak_bytes = 0,
+            .total_alloc_bytes = 0,
+        },
+        .planner_estimates = null,
+        .mem_curve = mem_curve,
+        .setop = null,
+        .hashagg_spills = 0,
+        .hashagg_spill_reason = "",
+        .committed_txns = opts.committed_txns,
+        .graph_store_nodes = opts.graph_store_nodes,
+        .graph_store_edges = opts.graph_store_edges,
+        .graph_store_dirty = opts.graph_store_dirty,
+        .flagger_findings = flagger_findings,
+        .compact = opts.compact,
+    };
+}
+
 pub fn buildProfileJson(
     allocator: std.mem.Allocator,
     traits: query_traits.QueryTraits,
@@ -545,6 +639,62 @@ pub fn profilePayloadToJson(allocator: std.mem.Allocator, payload: schema.Profil
     try w.writeAll("]}");
 
     return buf.toOwnedSlice(allocator);
+}
+
+fn plannedOpName(kind: planned_read_runtime.OpKind) []const u8 {
+    return switch (kind) {
+        .ConstProjection => "ConstProjection",
+        .AllNodesScan => "AllNodesScan",
+        .LabelScan => "LabelScan",
+        .ExpandOut => "ExpandOut",
+        .ExpandIn => "ExpandIn",
+        .ExpandEither => "ExpandEither",
+        .OptionalMatch => "OptionalMatch",
+        .VarLengthExpand => "VarLengthExpand",
+        .ShortestPath => "ShortestPath",
+        .PathModeExpand => "PathModeExpand",
+        .PathCapture => "PathCapture",
+        .CallProcedure => "CallProcedure",
+        .CallSubquery => "CallSubquery",
+        .Create => "Create",
+        .Merge => "Merge",
+        .Unwind => "Unwind",
+        .Set => "Set",
+        .Remove => "Remove",
+        .Delete => "Delete",
+        .RecursiveCTE => "RecursiveCTE",
+        .QueryChain => "QueryChain",
+        .LegacyExecute => "LegacyExecute",
+        .Filter => "Filter",
+        .Aggregate => "Aggregate",
+        .Project => "Project",
+        .Distinct => "Distinct",
+        .Limit => "Limit",
+        .Sort => "Sort",
+    };
+}
+
+fn plannedOpPhase(kind: planned_read_runtime.OpKind) []const u8 {
+    return switch (kind) {
+        .ConstProjection => "PROJECT",
+        .AllNodesScan, .LabelScan => "SCAN",
+        .ExpandOut, .ExpandIn, .ExpandEither => "EXPAND",
+        .OptionalMatch => "MATCH",
+        .VarLengthExpand, .ShortestPath, .PathModeExpand => "EXPAND",
+        .PathCapture => "PROJECT",
+        .CallProcedure, .CallSubquery => "CALL",
+        .Create, .Merge, .Set, .Remove, .Delete => "WRITE",
+        .Unwind => "UNWIND",
+        .RecursiveCTE => "CTE",
+        .QueryChain => "CHAIN",
+        .LegacyExecute => "EXECUTE",
+        .Filter => "FILTER",
+        .Aggregate => "AGGREGATE",
+        .Project => "PROJECT",
+        .Distinct => "DISTINCT",
+        .Limit => "PAGE",
+        .Sort => "ORDER",
+    };
 }
 
 fn sumU64(values: []const u64) u64 {

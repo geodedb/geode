@@ -4480,7 +4480,6 @@ test "rollback removes adapter-backed state before reload" {
 
     try testing.expect(store.getNodePtr(node_id) == null);
 }
-
 test "listGraphNames merges persisted adapter graphs with local cache" {
     deinitGlobalStore();
     defer deinitGlobalStore();

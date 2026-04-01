@@ -8,6 +8,7 @@ const value_types = @import("../value_types.zig");
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
+const planned_read_runtime = @import("planned_read_runtime.zig");
 
 // Import helper functions used by statement handlers
 const getCatalog = execution.getCatalog;
@@ -730,6 +731,18 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
     // M2: context now used for catalog access via dependency injection
     // EXPLAIN shows the query execution plan with cost estimates
 
+    switch (exp.query.*) {
+        .Query => |q| {
+            var planned_query = q;
+            if (try planned_read_runtime.buildPlanIfSupported(allocator, &planned_query, context)) |plan| {
+                var owned_plan = plan;
+                defer owned_plan.deinit(allocator);
+                return buildPlannedExplainResult(allocator, owned_plan);
+            }
+        },
+        else => {},
+    }
+
     // Helper to format plan operations with stack buffer (performance optimization)
     const formatPlanOp = struct {
         fn format(alloc: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ![]const u8 {
@@ -912,6 +925,26 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
     // PROFILE executes the query and returns execution statistics
     // For now, execute the query and add basic profiling information
 
+    switch (prof.query.*) {
+        .Query => |q| {
+            var planned_query = q;
+            if (try planned_read_runtime.executeProfiledIfSupported(
+                allocator,
+                &planned_query,
+                context,
+                context.query_param_names,
+                context.query_param_values,
+                true,
+            )) |planned| {
+                var owned_planned = planned;
+                defer owned_planned.deinitMetadata(allocator);
+                defer owned_planned.result.deinit(allocator);
+                return buildPlannedProfileResult(allocator, owned_planned);
+            }
+        },
+        else => {},
+    }
+
     // Execute the wrapped query
     var query_result = try executeStatementWithContext(allocator, prof.query.*, context);
     defer query_result.deinit(allocator);
@@ -964,6 +997,93 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
     };
 }
 
+fn buildPlannedExplainResult(allocator: std.mem.Allocator, plan: planned_read_runtime.Plan) !ExecutionResult {
+    const columns = try allocator.alloc([]const u8, 1);
+    columns[0] = try allocator.dupe(u8, "plan");
+
+    const rows = try allocator.alloc([]Value, plan.ops.len);
+    errdefer allocator.free(rows);
+
+    for (plan.ops, 0..) |op, idx| {
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = try allocator.dupe(u8, plannedOpName(op.kind)) };
+        rows[idx] = row;
+    }
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
+
+fn buildPlannedProfileResult(allocator: std.mem.Allocator, planned: planned_read_runtime.ProfiledExecution) !ExecutionResult {
+    const columns = try allocator.alloc([]const u8, 2);
+    columns[0] = try allocator.dupe(u8, "metric");
+    columns[1] = try allocator.dupe(u8, "value");
+
+    const rows = try allocator.alloc([]Value, 5);
+    errdefer allocator.free(rows);
+
+    rows[0] = try allocator.alloc(Value, 2);
+    rows[0][0] = Value{ .Str = try allocator.dupe(u8, "profile") };
+    rows[0][1] = Value{ .Str = try allocator.dupe(u8, "planned_query_profile") };
+
+    rows[1] = try allocator.alloc(Value, 2);
+    rows[1][0] = Value{ .Str = try allocator.dupe(u8, "rows") };
+    rows[1][1] = Value{ .Int = @intCast(planned.result.rows.len) };
+
+    rows[2] = try allocator.alloc(Value, 2);
+    rows[2][0] = Value{ .Str = try allocator.dupe(u8, "columns") };
+    rows[2][1] = Value{ .Int = @intCast(planned.result.columns.len) };
+
+    rows[3] = try allocator.alloc(Value, 2);
+    rows[3][0] = Value{ .Str = try allocator.dupe(u8, "time_ns") };
+    rows[3][1] = Value{ .Int = @intCast(planned.trace.totalTimeNs()) };
+
+    rows[4] = try allocator.alloc(Value, 2);
+    rows[4][0] = Value{ .Str = try allocator.dupe(u8, "operators") };
+    rows[4][1] = Value{ .Int = @intCast(planned.trace.ops.len) };
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
+
+fn plannedOpName(kind: planned_read_runtime.OpKind) []const u8 {
+    return switch (kind) {
+        .ConstProjection => "ConstProjection",
+        .AllNodesScan => "AllNodesScan",
+        .LabelScan => "LabelScan",
+        .ExpandOut => "ExpandOut",
+        .ExpandIn => "ExpandIn",
+        .ExpandEither => "ExpandEither",
+        .OptionalMatch => "OptionalMatch",
+        .VarLengthExpand => "VarLengthExpand",
+        .ShortestPath => "ShortestPath",
+        .PathModeExpand => "PathModeExpand",
+        .PathCapture => "PathCapture",
+        .CallProcedure => "CallProcedure",
+        .CallSubquery => "CallSubquery",
+        .Create => "Create",
+        .Merge => "Merge",
+        .Unwind => "Unwind",
+        .Set => "Set",
+        .Remove => "Remove",
+        .Delete => "Delete",
+        .RecursiveCTE => "RecursiveCTE",
+        .QueryChain => "QueryChain",
+        .LegacyExecute => "LegacyExecute",
+        .Filter => "Filter",
+        .Aggregate => "Aggregate",
+        .Project => "Project",
+        .Distinct => "Distinct",
+        .Limit => "Limit",
+        .Sort => "Sort",
+    };
+}
 const Catalog = @import("../schema/catalog.zig").Catalog;
 const testing = std.testing;
 
