@@ -490,14 +490,15 @@ fn canReadPlaintext(
     const type_meta = catalog.getType(type_name) orelse return true;
     const field_meta = type_meta.getField(field_name) orelse return true;
 
-    // For encrypted+searchable fields, empty to_roles means deny by default
-    // For non-searchable encrypted fields, empty to_roles allows access (backward compat)
+    // SECURITY FIX: Empty to_roles means NO ONE can read plaintext (fail-secure).
+    // Previously, non-searchable encrypted fields with empty visibility allowed access,
+    // which violated the principle of least privilege and failed the locked-field test.
     if (field_meta.visibility.to_roles.len == 0) {
-        if (field_meta.isSearchable() and field_meta.isEncrypted()) {
-            // Searchable encrypted fields require explicit grant
+        if (field_meta.isEncrypted()) {
+            // Empty visibility on an encrypted field = locked to nobody
             return false;
         }
-        // Non-searchable fields allow access if no restrictions configured
+        // Non-encrypted fields with no restrictions allow access (not FLE-protected)
         return true;
     }
 
