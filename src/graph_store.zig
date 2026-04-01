@@ -160,12 +160,20 @@ fn copyPropertyValue(self: *GraphStore, value: PropertyValue) !PropertyValue {
     };
 }
 
-fn freePropertyValue(self: *GraphStore, value: PropertyValue) void {
+fn freePropertyValueWithAllocator(allocator: std.mem.Allocator, value: PropertyValue) void {
     switch (value) {
-        .String => |s| self.allocator.free(s),
-        .ExtValue => |ext| freeExtValue(self, ext),
+        .String => |s| allocator.free(s),
+        .ExtValue => |ext| freeExtValueWithAllocator(allocator, ext),
         else => {},
     }
+}
+
+fn freePropertyValue(self: *GraphStore, value: PropertyValue) void {
+    freePropertyValueWithAllocator(self.allocator, value);
+}
+
+pub fn freeDetachedPropertyValue(allocator: std.mem.Allocator, value: PropertyValue) void {
+    freePropertyValueWithAllocator(allocator, value);
 }
 
 fn copyExtValue(self: *GraphStore, value: @import("eval_extended.zig").ExtValue) !@import("eval_extended.zig").ExtValue {
@@ -255,43 +263,75 @@ fn copyExtValue(self: *GraphStore, value: @import("eval_extended.zig").ExtValue)
     };
 }
 
-fn freeExtValue(self: *GraphStore, value: @import("eval_extended.zig").ExtValue) void {
+fn freeExtValueWithAllocator(allocator: std.mem.Allocator, value: @import("eval_extended.zig").ExtValue) void {
     const bitstring_mod = @import("types/bitstring.zig");
     const jsonb_mod = @import("types/jsonb.zig");
     const url_mod = @import("types/url.zig");
 
     switch (value) {
-        .Str => |s| self.allocator.free(s),
-        .Bytea => |b| self.allocator.free(b),
-        .Json => |j| self.allocator.free(j),
-        .Geometry => |g| self.allocator.free(g.wkb),
-        .LanguageTag => |lt| self.allocator.free(lt.tag),
-        .VectorF32 => |vec| self.allocator.free(vec.data),
-        .VectorI32 => |vec| self.allocator.free(vec.data),
+        .Str => |s| allocator.free(s),
+        .Bytea => |b| allocator.free(b),
+        .Json => |j| allocator.free(j),
+        .Geometry => |g| allocator.free(g.wkb),
+        .LanguageTag => |lt| allocator.free(lt.tag),
+        .VectorF32 => |vec| allocator.free(vec.data),
+        .VectorI32 => |vec| allocator.free(vec.data),
         .Hash => |h| {
-            self.allocator.free(h.digest);
-            if (h.salt) |s| self.allocator.free(s);
+            allocator.free(h.digest);
+            if (h.salt) |s| allocator.free(s);
         },
         .Url => |u| {
-            self.allocator.free(u.scheme);
-            self.allocator.free(u.host);
-            self.allocator.free(u.path);
-            if (u.query) |q| self.allocator.free(q);
-            if (u.fragment) |f| self.allocator.free(f);
+            allocator.free(u.scheme);
+            allocator.free(u.host);
+            allocator.free(u.path);
+            if (u.query) |q| allocator.free(q);
+            if (u.fragment) |f| allocator.free(f);
         },
-        .Domain => |d| url_mod.Domain.deinit(d, self.allocator),
+        .Domain => |d| url_mod.Domain.deinit(d, allocator),
         .Jsonb => |doc| jsonb_mod.JsonbDocument.deinit(doc),
-        .Xml => |doc| self.allocator.free(doc.data),
-        .BitString => |bs| bitstring_mod.BitString.deinit(bs, self.allocator),
-        .VarBit => |bs| bitstring_mod.BitString.deinit(bs, self.allocator),
+        .Xml => |doc| allocator.free(doc.data),
+        .BitString => |bs| bitstring_mod.BitString.deinit(bs, allocator),
+        .VarBit => |bs| bitstring_mod.BitString.deinit(bs, allocator),
         .List => |list| {
             for (list) |item| {
-                freeExtValue(self, item);
+                freeExtValueWithAllocator(allocator, item);
             }
-            self.allocator.free(list);
+            allocator.free(list);
         },
         else => {},
     }
+}
+
+fn freeExtValue(self: *GraphStore, value: @import("eval_extended.zig").ExtValue) void {
+    freeExtValueWithAllocator(self.allocator, value);
+}
+
+pub fn freeDetachedExtValue(allocator: std.mem.Allocator, value: @import("eval_extended.zig").ExtValue) void {
+    freeExtValueWithAllocator(allocator, value);
+}
+
+pub const STORAGE_EXT_TYPE_TAG: u16 = 1;
+
+const NullHasher = struct {
+    fn update(_: *NullHasher, _: []const u8) void {}
+};
+
+pub fn encodeExtValue(allocator: std.mem.Allocator, value: @import("eval_extended.zig").ExtValue) ![]u8 {
+    var dummy: GraphStore = undefined;
+    var sink = NullHasher{};
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(allocator);
+
+    try dummy.writeExtValueToWriter(buf.writer(allocator), &sink, value);
+    return try buf.toOwnedSlice(allocator);
+}
+
+pub fn decodeExtValue(allocator: std.mem.Allocator, bytes: []const u8) !@import("eval_extended.zig").ExtValue {
+    var dummy: GraphStore = undefined;
+    dummy.allocator = allocator;
+
+    var stream = std.io.fixedBufferStream(bytes);
+    return try dummy.readExtValue(stream.reader());
 }
 
 // CANARY: REQ=REQ-MULTI-TENANT-001; FEATURE="MultiTenancy"; ASPECT=GraphStore; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=enterprise; UPDATED=2026-01-09
@@ -734,7 +774,7 @@ pub const GraphStore = struct {
 
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Create node with optional graph name for per-graph data isolation
-    pub fn createNodeWithGraph(self: *GraphStore, labels: [][]const u8, graph_name: []const u8) !u64 {
+    pub fn createNodeWithGraph(self: *GraphStore, labels: []const []const u8, graph_name: []const u8) !u64 {
         const adapter_slot_id: ?u64 = if (global_vtable) |vt|
             try vt.createNodeFn(vt.ctx, graph_name, labels)
         else
@@ -787,9 +827,27 @@ pub const GraphStore = struct {
         return id;
     }
 
-    fn createNodeWithIdInternal(self: *GraphStore, node_id: u64, labels: [][]const u8, graph_name: []const u8, mark_dirty: bool) !void {
+    fn createNodeWithIdInternal(
+        self: *GraphStore,
+        node_id: u64,
+        labels: []const []const u8,
+        graph_name: []const u8,
+        mark_dirty: bool,
+        persist_adapter: bool,
+    ) !void {
+        const adapter_slot_id: ?u64 = if (persist_adapter) blk: {
+            const vt = global_vtable orelse break :blk null;
+            break :blk try vt.createNodeFn(vt.ctx, graph_name, labels);
+        } else null;
+
         try self.ensureGraph(graph_name);
         if (self.nodes.contains(node_id)) return error.NodeAlreadyExists;
+
+        if (adapter_slot_id) |slot_id| {
+            const im = try self.getOrCreateIdMap(graph_name);
+            try im.insertNodeWithSlot(@as(u128, node_id), slot_id);
+            self.saveIdMaps();
+        }
 
         const labels_copy = try self.allocator.alloc([]const u8, labels.len);
         for (labels, 0..) |label, i| {
@@ -821,13 +879,13 @@ pub const GraphStore = struct {
     }
 
     /// Create a node with a specified ID (used for replication/2PC).
-    pub fn createNodeWithId(self: *GraphStore, node_id: u64, labels: [][]const u8, graph_name: []const u8) !void {
-        return self.createNodeWithIdInternal(node_id, labels, graph_name, true);
+    pub fn createNodeWithId(self: *GraphStore, node_id: u64, labels: []const []const u8, graph_name: []const u8) !void {
+        return self.createNodeWithIdInternal(node_id, labels, graph_name, true, true);
     }
 
     /// Create a node with a specified ID without marking dirty (used for rollback).
-    pub fn createNodeWithIdNoSave(self: *GraphStore, node_id: u64, labels: [][]const u8, graph_name: []const u8) !void {
-        return self.createNodeWithIdInternal(node_id, labels, graph_name, false);
+    pub fn createNodeWithIdNoSave(self: *GraphStore, node_id: u64, labels: []const []const u8, graph_name: []const u8) !void {
+        return self.createNodeWithIdInternal(node_id, labels, graph_name, false, false);
     }
 
     // Issue #391: Helper to add node to label index
@@ -982,7 +1040,7 @@ pub const GraphStore = struct {
     }
 
     // Backward-compatible createNode that uses "default" graph
-    pub fn createNode(self: *GraphStore, labels: [][]const u8) !u64 {
+    pub fn createNode(self: *GraphStore, labels: []const []const u8) !u64 {
         return self.createNodeWithGraph(labels, "default");
     }
 
@@ -1805,9 +1863,23 @@ pub const GraphStore = struct {
         edge_type: []const u8,
         graph_name: []const u8,
         mark_dirty: bool,
+        persist_adapter: bool,
     ) !void {
+        const adapter_slot_id: ?u64 = if (persist_adapter) blk: {
+            const vt = global_vtable orelse break :blk null;
+            const from_slot = try self.requireNodeSlot(graph_name, from_id);
+            const to_slot = try self.requireNodeSlot(graph_name, to_id);
+            break :blk try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type);
+        } else null;
+
         try self.ensureGraph(graph_name);
         if (self.edges.contains(edge_id)) return error.EdgeAlreadyExists;
+
+        if (adapter_slot_id) |slot_id| {
+            const im = try self.getOrCreateIdMap(graph_name);
+            try im.insertEdgeWithSlot(@as(u128, edge_id), slot_id);
+            self.saveIdMaps();
+        }
 
         const edge_type_copy = try self.allocator.dupe(u8, edge_type);
         const graph_name_copy = try self.allocator.dupe(u8, graph_name);
@@ -1842,7 +1914,7 @@ pub const GraphStore = struct {
         edge_type: []const u8,
         graph_name: []const u8,
     ) !void {
-        return self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, true);
+        return self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, true, true);
     }
 
     /// Create an edge with a specified ID without marking dirty (used for rollback).
@@ -1854,7 +1926,7 @@ pub const GraphStore = struct {
         edge_type: []const u8,
         graph_name: []const u8,
     ) !void {
-        return self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, false);
+        return self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, false, false);
     }
 
     // Issue #392: Helper to maintain adjacency indexes
@@ -2109,7 +2181,7 @@ pub const GraphStore = struct {
     }
 
     /// DEPRECATED: Legacy ExtValue writer stub — was used by graph_store.dat serialization.
-    fn writeExtValueToWriter(_: *GraphStore, writer: anytype, hasher: anytype, ext: @import("eval_extended.zig").ExtValue) !void {
+    fn writeExtValueToWriter(self: *GraphStore, writer: anytype, hasher: anytype, ext: @import("eval_extended.zig").ExtValue) !void {
         const sub_type: u8 = switch (ext) {
             .Null => 0,
             .Int => 1,
@@ -2278,6 +2350,20 @@ pub const GraphStore = struct {
                     try writer.writeAll(&salt_len_buf);
                     hasher.update(salt);
                     try writer.writeAll(salt);
+                } else {
+                    hasher.update(&[1]u8{0});
+                    try writer.writeAll(&[1]u8{0});
+                }
+                if (hash.params) |params| {
+                    hasher.update(&[1]u8{1});
+                    try writer.writeAll(&[1]u8{1});
+
+                    var params_buf: [9]u8 = undefined;
+                    std.mem.writeInt(u32, params_buf[0..4], params.iterations, .little);
+                    std.mem.writeInt(u32, params_buf[4..8], params.memory_kb, .little);
+                    params_buf[8] = params.parallelism;
+                    hasher.update(&params_buf);
+                    try writer.writeAll(&params_buf);
                 } else {
                     hasher.update(&[1]u8{0});
                     try writer.writeAll(&[1]u8{0});
@@ -2460,10 +2546,14 @@ pub const GraphStore = struct {
                 try writer.writeAll(bs.bytes);
             },
             .IntRange => |range_val| {
-                var buf: [9]u8 = undefined;
-                std.mem.writeInt(i32, buf[0..4], range_val.lower orelse 0, .little);
-                std.mem.writeInt(i32, buf[4..8], range_val.upper orelse 0, .little);
-                buf[8] = @intFromEnum(range_val.bounds);
+                var buf: [10]u8 = undefined;
+                var flags: u8 = 0;
+                if (range_val.lower != null) flags |= 0b01;
+                if (range_val.upper != null) flags |= 0b10;
+                buf[0] = flags;
+                std.mem.writeInt(i32, buf[1..5], range_val.lower orelse 0, .little);
+                std.mem.writeInt(i32, buf[5..9], range_val.upper orelse 0, .little);
+                buf[9] = @intFromEnum(range_val.bounds);
                 hasher.update(&buf);
                 try writer.writeAll(&buf);
             },
@@ -2479,6 +2569,9 @@ pub const GraphStore = struct {
                 std.mem.writeInt(u32, &len_buf, @intCast(list.len), .little);
                 hasher.update(&len_buf);
                 try writer.writeAll(&len_buf);
+                for (list) |item| {
+                    try self.writeExtValueToWriter(writer, hasher, item);
+                }
             },
         }
     }
@@ -2576,10 +2669,23 @@ pub const GraphStore = struct {
                     if ((try reader.readAll(salt_data)) < salt_len) break :blk ext_eval.ExtValue{ .Null = {} };
                     salt = salt_data;
                 }
+                var params_flag: [1]u8 = undefined;
+                if ((try reader.readAll(&params_flag)) < 1) break :blk ext_eval.ExtValue{ .Null = {} };
+                var params: ?heap_mod.Argon2Params = null;
+                if (params_flag[0] != 0) {
+                    var params_buf: [9]u8 = undefined;
+                    if ((try reader.readAll(&params_buf)) < params_buf.len) break :blk ext_eval.ExtValue{ .Null = {} };
+                    params = .{
+                        .iterations = std.mem.readInt(u32, params_buf[0..4], .little),
+                        .memory_kb = std.mem.readInt(u32, params_buf[4..8], .little),
+                        .parallelism = params_buf[8],
+                    };
+                }
                 break :blk ext_eval.ExtValue{ .Hash = .{
                     .alg = @enumFromInt(alg_buf[0]),
                     .digest = digest,
                     .salt = salt,
+                    .params = params,
                 } };
             },
             9 => blk: {
@@ -2664,8 +2770,18 @@ pub const GraphStore = struct {
                 var len_buf: [4]u8 = undefined;
                 if ((try reader.readAll(&len_buf)) < 4) break :blk ext_eval.ExtValue{ .Null = {} };
                 const len = std.mem.readInt(u32, &len_buf, .little);
-                _ = len;
-                break :blk ext_eval.ExtValue{ .List = &.{} };
+                var loaded: usize = 0;
+                const list = try self.allocator.alloc(ext_eval.ExtValue, len);
+                errdefer {
+                    for (list[0..loaded]) |item| {
+                        freeExtValue(self, item);
+                    }
+                    self.allocator.free(list);
+                }
+                while (loaded < len) : (loaded += 1) {
+                    list[loaded] = try self.readExtValue(reader);
+                }
+                break :blk ext_eval.ExtValue{ .List = list };
             },
             21 => blk: {
                 var dim_buf: [2]u8 = undefined;
@@ -2799,11 +2915,12 @@ pub const GraphStore = struct {
                 break :blk ext_eval.ExtValue{ .VarBit = bitstring_mod.BitString{ .bytes = bytes, .bit_length = @intCast(std.mem.readInt(u64, &bit_len_buf, .little)) } };
             },
             32 => blk: {
-                var buf: [9]u8 = undefined;
-                if ((try reader.readAll(&buf)) < 9) break :blk ext_eval.ExtValue{ .Null = {} };
-                const lower = std.mem.readInt(i32, buf[0..4], .little);
-                const upper = std.mem.readInt(i32, buf[4..8], .little);
-                const bounds: range_mod.IntRange.Bounds = @enumFromInt(buf[8]);
+                var buf: [10]u8 = undefined;
+                if ((try reader.readAll(&buf)) < 10) break :blk ext_eval.ExtValue{ .Null = {} };
+                const flags = buf[0];
+                const lower = if ((flags & 0b01) != 0) std.mem.readInt(i32, buf[1..5], .little) else null;
+                const upper = if ((flags & 0b10) != 0) std.mem.readInt(i32, buf[5..9], .little) else null;
+                const bounds: range_mod.IntRange.Bounds = @enumFromInt(buf[9]);
                 break :blk ext_eval.ExtValue{ .IntRange = range_mod.IntRange{ .lower = lower, .upper = upper, .bounds = bounds } };
             },
             33 => blk: {
@@ -4228,6 +4345,76 @@ test "QueryReadSession reloads persisted state instead of compatibility cache" {
     const live_name = live_node.properties.get("name") orelse return error.PropertyNotFound;
     try testing.expect(live_name == .String);
     try testing.expectEqualStrings("stale-cache", live_name.String);
+}
+
+test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(dir_path);
+
+    const store = try initGlobalStore(testing.allocator, dir_path);
+    var node_labels = [_][]const u8{"ReplayNode"};
+
+    try store.createNodeWithId(1001, &node_labels, "default");
+    try store.createNodeWithId(1002, &node_labels, "default");
+    try store.setNodeProperty(1001, "name", .{ .String = "replicated" });
+
+    try store.createEdgeWithId(9001, 1001, 1002, "LINKS", "default");
+    try store.setEdgeProperty(9001, "weight", .{ .Int = 3 });
+
+    const adapter = getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    try adapter.checkpointAll();
+
+    try store.loadFromFile();
+
+    const node = store.getNodePtr(1001) orelse return error.NodeNotFound;
+    const node_name = node.properties.get("name") orelse return error.PropertyNotFound;
+    try testing.expectEqualStrings("replicated", node_name.String);
+
+    const edge = store.getEdgePtr(9001) orelse return error.EdgeNotFound;
+    try testing.expectEqual(@as(u64, 1001), edge.from_id);
+    try testing.expectEqual(@as(u64, 1002), edge.to_id);
+    const edge_weight = edge.properties.get("weight") orelse return error.PropertyNotFound;
+    try testing.expectEqual(@as(i64, 3), edge_weight.Int);
+}
+
+test "rollback removes adapter-backed state before reload" {
+    const txn_undo_log = @import("txn_undo_log.zig");
+
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(dir_path);
+
+    const store = try initGlobalStore(testing.allocator, dir_path);
+    const adapter = getGlobalAdapter() orelse return error.AdapterNotInitialized;
+
+    var undo = txn_undo_log.UndoLog.init(testing.allocator);
+    defer undo.deinit();
+
+    undo.begin();
+
+    var labels = [_][]const u8{"TxnNode"};
+    const node_id = try store.createNodeWithGraph(&labels, "default");
+    try undo.logCreateNode(node_id, "default");
+
+    try store.setNodeProperty(node_id, "name", .{ .String = "transient" });
+    try adapter.checkpointAll();
+
+    try undo.rollback(store);
+    try adapter.checkpointAll();
+    try store.loadFromFile();
+
+    try testing.expect(store.getNodePtr(node_id) == null);
 }
 
 test "listGraphNames merges persisted adapter graphs with local cache" {

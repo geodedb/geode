@@ -337,6 +337,11 @@ fn serializeProperty(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, prop
         2 => try appendI64(buf, allocator, prop.int_value),
         3 => try appendF64(buf, allocator, prop.float_value),
         4 => try buf.append(allocator, if (prop.bool_value) @as(u8, 1) else @as(u8, 0)),
+        5 => {
+            try appendI128(buf, allocator, prop.decimal_coeff);
+            try buf.append(allocator, prop.decimal_scale);
+        },
+        6 => try appendString(buf, allocator, prop.ext_value orelse &.{}),
         else => {},
     }
 }
@@ -350,6 +355,12 @@ fn appendU64(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u64) 
 fn appendI64(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, value: i64) !void {
     var bytes: [8]u8 = undefined;
     std.mem.writeInt(i64, &bytes, value, .little);
+    try buf.appendSlice(allocator, &bytes);
+}
+
+fn appendI128(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, value: i128) !void {
+    var bytes: [16]u8 = undefined;
+    std.mem.writeInt(i128, &bytes, value, .little);
     try buf.appendSlice(allocator, &bytes);
 }
 
@@ -382,6 +393,13 @@ fn readI64(data: []const u8, offset: *usize) !i64 {
     if (offset.* + 8 > data.len) return error.UnexpectedEndOfStream;
     const value = std.mem.readInt(i64, data[offset.*..][0..8], .little);
     offset.* += 8;
+    return value;
+}
+
+fn readI128(data: []const u8, offset: *usize) !i128 {
+    if (offset.* + 16 > data.len) return error.UnexpectedEndOfStream;
+    const value = std.mem.readInt(i128, data[offset.*..][0..16], .little);
+    offset.* += 16;
     return value;
 }
 
@@ -432,7 +450,8 @@ fn applyRecord(store: *graph_store.GraphStore, op_type: WalOpType, payload: []co
             const key = try readString(payload, &offset);
             const value_type = if (offset < payload.len) payload[offset] else return error.UnexpectedEndOfStream;
             offset += 1;
-            const pv = deserializePropertyValue(payload, &offset, value_type) catch graph_store.PropertyValue.Null;
+            const pv = deserializePropertyValue(payload, &offset, value_type, store.allocator) catch graph_store.PropertyValue.Null;
+            defer if (pv == .ExtValue) graph_store.freeDetachedPropertyValue(store.allocator, pv);
             store.setNodeProperty(node_id, key, pv) catch {};
         },
         .RemoveNodeProperty => {
@@ -445,7 +464,8 @@ fn applyRecord(store: *graph_store.GraphStore, op_type: WalOpType, payload: []co
             const key = try readString(payload, &offset);
             const value_type = if (offset < payload.len) payload[offset] else return error.UnexpectedEndOfStream;
             offset += 1;
-            const pv = deserializePropertyValue(payload, &offset, value_type) catch graph_store.PropertyValue.Null;
+            const pv = deserializePropertyValue(payload, &offset, value_type, store.allocator) catch graph_store.PropertyValue.Null;
+            defer if (pv == .ExtValue) graph_store.freeDetachedPropertyValue(store.allocator, pv);
             store.setEdgeProperty(edge_id, key, pv) catch {};
         },
         .RemoveEdgeProperty => {
@@ -476,7 +496,7 @@ fn applyRecord(store: *graph_store.GraphStore, op_type: WalOpType, payload: []co
     }
 }
 
-fn deserializePropertyValue(data: []const u8, offset: *usize, value_type: u8) !graph_store.PropertyValue {
+fn deserializePropertyValue(data: []const u8, offset: *usize, value_type: u8, allocator: std.mem.Allocator) !graph_store.PropertyValue {
     return switch (value_type) {
         0 => graph_store.PropertyValue.Null,
         1 => graph_store.PropertyValue{ .String = try readString(data, offset) },
@@ -487,6 +507,20 @@ fn deserializePropertyValue(data: []const u8, offset: *usize, value_type: u8) !g
             const b = data[offset.*] != 0;
             offset.* += 1;
             break :blk graph_store.PropertyValue{ .Bool = b };
+        },
+        5 => graph_store.PropertyValue{
+            .Decimal = .{
+                .coeff = try readI128(data, offset),
+                .scale = blk: {
+                    if (offset.* >= data.len) return error.UnexpectedEndOfStream;
+                    const scale = data[offset.*];
+                    offset.* += 1;
+                    break :blk scale;
+                },
+            },
+        },
+        6 => graph_store.PropertyValue{
+            .ExtValue = try graph_store.decodeExtValue(allocator, try readString(data, offset)),
         },
         else => graph_store.PropertyValue.Null,
     };
@@ -526,19 +560,6 @@ pub fn deinitGlobalWal() void {
 
 // ---- Mutation callback integration ----
 
-/// Convert a graph_store.PropertyValue to a txn_undo_log.SerializedProperty for WAL records.
-fn propertyValueToSerialized(prop_key: []const u8, value: graph_store.PropertyValue) txn_undo_log.SerializedProperty {
-    return switch (value) {
-        .String => |s| .{ .key = prop_key, .value_type = 1, .string_value = s },
-        .Int => |i| .{ .key = prop_key, .value_type = 2, .int_value = i },
-        .Float => |f| .{ .key = prop_key, .value_type = 3, .float_value = f },
-        .Bool => |b| .{ .key = prop_key, .value_type = 4, .bool_value = b },
-        .Null => .{ .key = prop_key, .value_type = 0 },
-        .Decimal => |d| .{ .key = prop_key, .value_type = 2, .int_value = @intCast(@as(i128, d.coeff)) },
-        .ExtValue => .{ .key = prop_key, .value_type = 0 },
-    };
-}
-
 /// Mutation callback installed in graph_store.
 fn mutationCallback(
     op: graph_store.MutationOp,
@@ -551,6 +572,9 @@ fn mutationCallback(
     graph_name: ?[]const u8,
 ) void {
     const w = getGlobalWal() orelse return;
+    var owned_property: ?txn_undo_log.SerializedProperty = null;
+    defer if (owned_property) |prop| prop.deinit(w.allocator);
+
     const record: WalRecord = switch (op) {
         .create_node => .{ .CreateNode = .{
             .node_id = id1,
@@ -567,7 +591,14 @@ fn mutationCallback(
         .set_node_property => .{ .SetNodeProperty = .{
             .node_id = id1,
             .key = key orelse "",
-            .value = propertyValueToSerialized(key orelse "", value orelse graph_store.PropertyValue.Null),
+            .value = blk: {
+                owned_property = txn_undo_log.SerializedProperty.fromPropertyValue(
+                    w.allocator,
+                    key orelse "",
+                    value orelse graph_store.PropertyValue.Null,
+                ) catch return;
+                break :blk owned_property.?;
+            },
         } },
         .remove_node_property => .{ .RemoveNodeProperty = .{
             .node_id = id1,
@@ -576,7 +607,14 @@ fn mutationCallback(
         .set_edge_property => .{ .SetEdgeProperty = .{
             .edge_id = id1,
             .key = key orelse "",
-            .value = propertyValueToSerialized(key orelse "", value orelse graph_store.PropertyValue.Null),
+            .value = blk: {
+                owned_property = txn_undo_log.SerializedProperty.fromPropertyValue(
+                    w.allocator,
+                    key orelse "",
+                    value orelse graph_store.PropertyValue.Null,
+                ) catch return;
+                break :blk owned_property.?;
+            },
         } },
         .remove_edge_property => .{ .RemoveEdgeProperty = .{
             .edge_id = id1,

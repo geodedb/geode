@@ -26,7 +26,7 @@ test "graphstore crash fuzz expanded 1k" {
         var op: usize = 0;
         while (op < 120) : (op += 1) {
             if (ids.items.len == 0 or (R.int(u8) % 3) != 0) {
-                const id = try store.createNode(&.{ "x" });
+                const id = try store.createNode(&.{"x"});
                 try ids.append(allocator, id);
             } else {
                 const idx = R.intRangeLessThan(usize, 0, ids.items.len);

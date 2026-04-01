@@ -40,7 +40,7 @@ test "protocol: transport parity varlen dataset rows QUIC (gated)" {
     defer allocator.free(addr);
 
     util.progress("Starting server on port {d}...", .{port});
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", data_dir }, &.{ "GEODE_QUIC_PASSIVE_TEARDOWN=1" });
+    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", data_dir }, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     try util.waitForServerReady(allocator, addr, 10000);
 

@@ -21,7 +21,7 @@ test "catalog persistence with GraphStore backing" {
 
         try cat.addSchema("public");
 
-        const index_columns = [_][]const u8{ "id" };
+        const index_columns = [_][]const u8{"id"};
         const index_info = catalog.IndexInfo{
             .name = "users_pk",
             .index_type = "btree",

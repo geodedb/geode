@@ -74,9 +74,9 @@ test "graph algorithms: comprehensive suite" {
     var graph = try @import("geode").graph_store.GraphStore.init(allocator);
     defer graph.deinit();
 
-    const n1 = try graph.createNode(&.{ "Person" });
-    const n2 = try graph.createNode(&.{ "Person" });
-    const n3 = try graph.createNode(&.{ "Person" });
+    const n1 = try graph.createNode(&.{"Person"});
+    const n2 = try graph.createNode(&.{"Person"});
+    const n3 = try graph.createNode(&.{"Person"});
 
     _ = try graph.createEdge(n1, n2, "KNOWS");
     _ = try graph.createEdge(n2, n3, "KNOWS");

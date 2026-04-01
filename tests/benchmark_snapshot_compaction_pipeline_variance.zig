@@ -25,7 +25,7 @@ test "BenchmarkCANARY_REQ_GQL_083_CompactionVarianceEnvelope" {
         // Populate store with some nodes and commit cycles.
         var i: usize = 0;
         while (i < 8) : (i += 1) {
-            _ = try store.createNode(&.{ "bench" });
+            _ = try store.createNode(&.{"bench"});
             pipe.recordCommit(1);
         }
         const start = std.time.nanoTimestamp();

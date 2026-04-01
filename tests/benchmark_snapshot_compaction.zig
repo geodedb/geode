@@ -22,7 +22,7 @@ pub fn main() !void {
     defer ids.deinit(allocator);
     var i: usize = 0;
     while (i < 2000) : (i += 1) {
-        const id = try store.createNode(&.{ "bench" });
+        const id = try store.createNode(&.{"bench"});
         try ids.append(allocator, id);
     }
     try store.saveToFile();

@@ -11,8 +11,8 @@ test "graphstore: mixed inserts and deletes" {
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    const id_a = try store.createNode(&.{ "alpha" });
-    const id_b = try store.createNode(&.{ "beta" });
+    const id_a = try store.createNode(&.{"alpha"});
+    const id_b = try store.createNode(&.{"beta"});
     store.deleteNode(id_b);
     try store.saveToFile();
 
@@ -34,7 +34,7 @@ test "graphstore: truncation tolerance" {
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{ "gamma" });
+    _ = try store.createNode(&.{"gamma"});
     try store.saveToFile();
 
     const file_path = try graph_store.getPersistenceFilePath(allocator);
@@ -64,7 +64,7 @@ test "graphstore: idempotent load" {
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{ "delta" });
+    _ = try store.createNode(&.{"delta"});
     try store.saveToFile();
 
     var store2 = try graph_store.GraphStore.init(allocator);

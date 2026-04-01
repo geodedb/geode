@@ -17,7 +17,7 @@ test "TestCANARY_REQ_GQL_028_SnapshotFailureInjection" {
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
-    const labels = [_][]const u8{ "Fail" };
+    const labels = [_][]const u8{"Fail"};
     const node_id = try store.createNode(labels[0..]);
     try store.setNodeProperty(node_id, "v", .{ .Int = 1 });
     try store.saveToFile();

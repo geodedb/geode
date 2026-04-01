@@ -14,7 +14,7 @@ test "graphstore snapshot save schedule triggers after repeated changes" {
 
     var i: usize = 0;
     while (i < 10) : (i += 1) {
-        _ = try store.createNode(&.{ "sched" });
+        _ = try store.createNode(&.{"sched"});
         if (i % 3 == 0) {
             try store.saveToFile();
         }

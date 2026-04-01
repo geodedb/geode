@@ -28,7 +28,7 @@ test "protocol: transport parity nulls-last ordering QUIC (gated)" {
     const exe = "./zig-out/bin/geode";
     const q = "RETURN null AS a, 1 AS b UNION RETURN 1 AS a, 1 AS b ORDER BY a, b LIMIT 2";
 
-    var server = try util.spawnServerRandom(allocator, &.{ "GEODE_QUIC_PASSIVE_TEARDOWN=1" });
+    var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     const addr = server.getAddr();
 

@@ -55,11 +55,11 @@ test "TestCANARY_REQ_GQL_017_MatchSingleHop" {
     defer h.deinit();
 
     const store = graph_store.getGlobalStore(allocator);
-    const n1 = try store.createNode(&.{ "Person" });
+    const n1 = try store.createNode(&.{"Person"});
     try store.setNodeProperty(n1, "age", .{ .Int = 30 });
-    const n2 = try store.createNode(&.{ "Person" });
+    const n2 = try store.createNode(&.{"Person"});
     try store.setNodeProperty(n2, "age", .{ .Int = 30 });
-    const n3 = try store.createNode(&.{ "Person" });
+    const n3 = try store.createNode(&.{"Person"});
     try store.setNodeProperty(n3, "age", .{ .Int = 40 });
     _ = try store.createEdge(n1, n2, "KNOWS");
     _ = try store.createEdge(n2, n3, "KNOWS");
@@ -80,7 +80,7 @@ test "TestCANARY_REQ_GQL_017_InvalidHopBounds" {
     defer h.deinit();
 
     const store = graph_store.getGlobalStore(allocator);
-    _ = try store.createNode(&.{ "X" });
+    _ = try store.createNode(&.{"X"});
 
     const res = h.exec("MATCH (a:X)-[*3..1]->(b) RETURN a, b");
     try std.testing.expectError(error.InvalidHopBounds, res);
@@ -106,9 +106,9 @@ test "TestCANARY_REQ_GQL_017_BoundedVarLen" {
     defer h.deinit();
 
     const store = graph_store.getGlobalStore(allocator);
-    const a = try store.createNode(&.{ "Person" });
-    const b = try store.createNode(&.{ "Person" });
-    const c = try store.createNode(&.{ "Person" });
+    const a = try store.createNode(&.{"Person"});
+    const b = try store.createNode(&.{"Person"});
+    const c = try store.createNode(&.{"Person"});
     _ = try store.createEdge(a, b, "KNOWS");
     _ = try store.createEdge(b, c, "KNOWS");
 

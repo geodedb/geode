@@ -12,7 +12,7 @@ test "graphstore recovery applies insert" {
 
     var store = try graph_store.GraphStore.init(gpa);
     defer store.deinit();
-    _ = try store.createNode(&.{ "X" });
+    _ = try store.createNode(&.{"X"});
     try store.saveToFile();
 
     var store2 = try graph_store.GraphStore.init(gpa);

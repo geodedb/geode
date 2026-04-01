@@ -755,7 +755,7 @@ pub const QuicProtoClient = struct {
             for (row.values.items, 0..) |v, i| {
                 out_row[i] = try valueToTest(allocator, v);
             }
-            try rows_list.append( out_row);
+            try rows_list.append(out_row);
         }
     }
 
@@ -835,14 +835,14 @@ pub const QuicProtoClient = struct {
             if (exec_resp.payload) |payload| switch (payload) {
                 .schema => |schema_def| {
                     for (schema_def.columns.items) |col| {
-                        try columns.append( try allocator.dupe(u8, col.name));
+                        try columns.append(try allocator.dupe(u8, col.name));
                     }
                     schema_received = true;
                 },
                 .page => |p| {
                     ordered = ordered or p.ordered;
                     if (order_keys.items.len == 0 and p.order_keys.items.len > 0) {
-                        for (p.order_keys.items) |k| try order_keys.append( try allocator.dupe(u8, k));
+                        for (p.order_keys.items) |k| try order_keys.append(try allocator.dupe(u8, k));
                     }
                     try appendRows(allocator, &rows, p);
                     if (!p.final) {
@@ -878,7 +878,7 @@ pub const QuicProtoClient = struct {
                     .page => |p| {
                         ordered = ordered or p.ordered;
                         if (order_keys.items.len == 0 and p.order_keys.items.len > 0) {
-                            for (p.order_keys.items) |k| try order_keys.append( try allocator.dupe(u8, k));
+                            for (p.order_keys.items) |k| try order_keys.append(try allocator.dupe(u8, k));
                         }
                         try appendRows(allocator, &rows, p);
                         if (p.final) done = true;
@@ -1036,7 +1036,7 @@ pub const GrpcProtoClient = struct {
             for (row.values.items, 0..) |v, i| {
                 out_row[i] = try valueToTest(allocator, v);
             }
-            try rows_list.append( out_row);
+            try rows_list.append(out_row);
         }
     }
 
@@ -1113,10 +1113,10 @@ pub const GrpcProtoClient = struct {
         if (exec_resp.status) |status| {
             status_class = try allocator.dupe(u8, status.status_class);
             for (status.additional_statuses.items) |s| {
-                try additional_statuses.append( try allocator.dupe(u8, s));
+                try additional_statuses.append(try allocator.dupe(u8, s));
             }
             for (status.flagger_findings.items) |s| {
-                try flagger_findings.append( try allocator.dupe(u8, s));
+                try flagger_findings.append(try allocator.dupe(u8, s));
             }
         } else {
             status_class = try allocator.dupe(u8, "00000");
@@ -1125,7 +1125,7 @@ pub const GrpcProtoClient = struct {
         if (exec_resp.payload) |payload| switch (payload) {
             .schema => |schema_def| {
                 for (schema_def.columns.items) |col| {
-                    try columns.append( try allocator.dupe(u8, col.name));
+                    try columns.append(try allocator.dupe(u8, col.name));
                 }
             },
             .@"error" => |err| {
@@ -1156,7 +1156,7 @@ pub const GrpcProtoClient = struct {
                     ordered = ordered or page.ordered;
                     if (page.order_keys.items.len > 0 and order_keys.items.len == 0) {
                         for (page.order_keys.items) |k| {
-                            try order_keys.append( try allocator.dupe(u8, k));
+                            try order_keys.append(try allocator.dupe(u8, k));
                         }
                     }
                     try appendRows(allocator, &rows, page);
@@ -1212,7 +1212,7 @@ pub fn makeStringParam(allocator: std.mem.Allocator, name: []const u8, value: []
 pub fn makeIntListParam(allocator: std.mem.Allocator, name: []const u8, values: []const i64) !schema.Param {
     var list_values = std.ArrayList(schema.Value).initCapacity(allocator, values.len) catch return error.OutOfMemory;
     for (values) |v| {
-        try list_values.append( .{ .kind = .{ .int_val = .{ .value = v, .kind = .INT } } });
+        try list_values.append(.{ .kind = .{ .int_val = .{ .value = v, .kind = .INT } } });
     }
     return .{
         .name = try allocator.dupe(u8, name),

@@ -25,7 +25,7 @@ test "graphstore crash fuzz mini" {
     var step: usize = 0;
     while (step < 80) : (step += 1) {
         if (ids.items.len == 0 or randBool(&prng)) {
-            const id = try store.createNode(&.{ "r" });
+            const id = try store.createNode(&.{"r"});
             try ids.append(allocator, id);
         } else {
             const idx = R.intRangeLessThan(usize, 0, ids.items.len);

@@ -29,7 +29,7 @@ test "protocol: transport parity QUIC (ORDER BY with LIMIT/OFFSET)" {
     // Construct 3 rows then slice middle two deterministically.
     const q = "RETURN 3 AS a, 'z' AS t UNION ALL RETURN 1 AS a, 'x' AS t UNION ALL RETURN 2 AS a, 'y' AS t ORDER BY a, t LIMIT 2 OFFSET 1";
 
-    var server = try util.spawnServerRandom(allocator, &.{ "GEODE_QUIC_PASSIVE_TEARDOWN=1" });
+    var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     const addr = server.getAddr();
 

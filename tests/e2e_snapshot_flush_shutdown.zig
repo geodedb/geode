@@ -12,7 +12,7 @@ test "graphstore flush on save" {
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{ "flush" });
+    _ = try store.createNode(&.{"flush"});
     try store.saveToFile();
 
     const path = try graph_store.getPersistenceFilePath(allocator);

@@ -12,9 +12,9 @@ test "graphstore recovery applies only persisted snapshot" {
     // Phase 1: persist first node, then add another without saving.
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    const id_alpha = try store.createNode(&.{ "alpha" });
+    const id_alpha = try store.createNode(&.{"alpha"});
     try store.saveToFile();
-    const id_beta = try store.createNode(&.{ "beta" });
+    const id_beta = try store.createNode(&.{"beta"});
 
     // Simulate crash: new store loads from snapshot.
     var store2 = try graph_store.GraphStore.init(allocator);

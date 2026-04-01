@@ -13,7 +13,7 @@ test "protocol QUIC: MATCH ORDER/LIMIT ordered metadata" {
 
     const allocator = std.testing.allocator;
 
-    var server = try util.spawnServerRandom(allocator, &.{ "GEODE_QUIC_PASSIVE_TEARDOWN=1" });
+    var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     const addr = server.getAddr();
 
@@ -37,7 +37,7 @@ test "protocol QUIC: MATCH LIMIT+OFFSET without ORDER (US001)" {
 
     const allocator = std.testing.allocator;
 
-    var server = try util.spawnServerRandom(allocator, &.{ "GEODE_QUIC_PASSIVE_TEARDOWN=1" });
+    var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     const addr = server.getAddr();
 
@@ -60,7 +60,7 @@ test "protocol QUIC: OPTIONAL MATCH null-preserving semantics" {
 
     const allocator = std.testing.allocator;
 
-    var server = try util.spawnServerRandom(allocator, &.{ "GEODE_QUIC_PASSIVE_TEARDOWN=1" });
+    var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     const addr = server.getAddr();
 

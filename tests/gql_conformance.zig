@@ -134,7 +134,7 @@ test "T1: SKIP recognized" {
     const expected_rows = [_][]const ExpectedValue{
         &[_]ExpectedValue{.{ .Int = 2 }},
     };
-    try expectSuccess(allocator, &result, &.{ "x" }, &expected_rows, &.{});
+    try expectSuccess(allocator, &result, &.{"x"}, &expected_rows, &.{});
 }
 
 test "T2: LIMIT without ORDER BY allowed" {
@@ -147,7 +147,7 @@ test "T2: LIMIT without ORDER BY allowed" {
         &[_]ExpectedValue{.{ .Int = 1 }},
         &[_]ExpectedValue{.{ .Int = 2 }},
     };
-    try expectSuccess(allocator, &result, &.{ "x" }, &expected_rows, &.{ "U:OrderTiebreak=LexJSON" });
+    try expectSuccess(allocator, &result, &.{"x"}, &expected_rows, &.{"U:OrderTiebreak=LexJSON"});
 }
 
 test "T3: ORDER BY expression allowed" {
@@ -157,8 +157,8 @@ test "T3: ORDER BY expression allowed" {
     defer result.deinit(allocator);
 
     const expected_rows = [_][]const ExpectedValue{
-        &[_]ExpectedValue{.{ .Int = 2 }, .{ .Int = 3 }},
-        &[_]ExpectedValue{.{ .Int = 1 }, .{ .Int = 2 }},
+        &[_]ExpectedValue{ .{ .Int = 2 }, .{ .Int = 3 } },
+        &[_]ExpectedValue{ .{ .Int = 1 }, .{ .Int = 2 } },
     };
     try expectSuccess(allocator, &result, &.{ "a", "b" }, &expected_rows, &.{});
 }
@@ -173,7 +173,7 @@ test "T4: Per-key NULLS policy - LAST" {
         &[_]ExpectedValue{.{ .Int = 1 }},
         &[_]ExpectedValue{.{ .Null = {} }},
     };
-    try expectSuccess(allocator, &result, &.{ "x" }, &expected_rows, &.{});
+    try expectSuccess(allocator, &result, &.{"x"}, &expected_rows, &.{});
 }
 
 test "T5: Per-key NULLS policy - mixed" {
@@ -183,8 +183,8 @@ test "T5: Per-key NULLS policy - mixed" {
     defer result.deinit(allocator);
 
     const expected_rows = [_][]const ExpectedValue{
-        &[_]ExpectedValue{.{ .Null = {} }, .{ .Int = 1 }},
-        &[_]ExpectedValue{.{ .Int = 1 }, .{ .Null = {} }},
+        &[_]ExpectedValue{ .{ .Null = {} }, .{ .Int = 1 } },
+        &[_]ExpectedValue{ .{ .Int = 1 }, .{ .Null = {} } },
     };
     try expectSuccess(allocator, &result, &.{ "a", "b" }, &expected_rows, &.{});
 }
@@ -198,7 +198,7 @@ test "T6: Quoted identifier as alias" {
     const expected_rows = [_][]const ExpectedValue{
         &[_]ExpectedValue{.{ .Int = 1 }},
     };
-    try expectSuccess(allocator, &result, &.{ "order" }, &expected_rows, &.{});
+    try expectSuccess(allocator, &result, &.{"order"}, &expected_rows, &.{});
 }
 
 test "T7: UNKNOWN keyword" {
@@ -208,7 +208,7 @@ test "T7: UNKNOWN keyword" {
     defer result.deinit(allocator);
 
     const expected_rows = [_][]const ExpectedValue{
-        &[_]ExpectedValue{.{ .Bool = true }, .{ .Bool = false }},
+        &[_]ExpectedValue{ .{ .Bool = true }, .{ .Bool = false } },
     };
     try expectSuccess(allocator, &result, &.{ "u", "v" }, &expected_rows, &.{});
 }
@@ -224,7 +224,7 @@ test "T8: // comment accepted + flagged" {
     const expected_rows = [_][]const ExpectedValue{
         &[_]ExpectedValue{.{ .Int = 1 }},
     };
-    try expectSuccess(allocator, &result, &.{ "x" }, &expected_rows, &.{ "GB03:DoubleSolidusComment" });
+    try expectSuccess(allocator, &result, &.{"x"}, &expected_rows, &.{"GB03:DoubleSolidusComment"});
 }
 
 test "T9: ORDER BY ordinal allowed + flagged" {
@@ -234,9 +234,9 @@ test "T9: ORDER BY ordinal allowed + flagged" {
     defer result.deinit(allocator);
 
     const expected_rows = [_][]const ExpectedValue{
-        &[_]ExpectedValue{.{ .Int = 1 }, .{ .Int = 2 }},
+        &[_]ExpectedValue{ .{ .Int = 1 }, .{ .Int = 2 } },
     };
-    try expectSuccess(allocator, &result, &.{ "a", "b" }, &expected_rows, &.{ "E:OrdinalSortKey" });
+    try expectSuccess(allocator, &result, &.{ "a", "b" }, &expected_rows, &.{"E:OrdinalSortKey"});
 }
 
 test "T10: -- disabled (clear diagnostic)" {
@@ -259,7 +259,7 @@ test "T11: Session graph switch applies" {
     const expected_rows = [_][]const ExpectedValue{
         &[_]ExpectedValue{.{ .Int = 3 }},
     };
-    try expectSuccess(allocator, &result, &.{ "c" }, &expected_rows, &.{});
+    try expectSuccess(allocator, &result, &.{"c"}, &expected_rows, &.{});
 }
 
 test "T12: Switch to another graph" {
@@ -273,7 +273,7 @@ test "T12: Switch to another graph" {
     const expected_rows = [_][]const ExpectedValue{
         &[_]ExpectedValue{.{ .Int = 2 }},
     };
-    try expectSuccess(allocator, &result, &.{ "c" }, &expected_rows, &.{});
+    try expectSuccess(allocator, &result, &.{"c"}, &expected_rows, &.{});
 }
 
 test "T13: Non-existent graph auto-create (empty)" {
@@ -287,7 +287,7 @@ test "T13: Non-existent graph auto-create (empty)" {
     const expected_rows = [_][]const ExpectedValue{
         &[_]ExpectedValue{.{ .Int = 0 }},
     };
-    try expectSuccess(allocator, &result, &.{ "c" }, &expected_rows, &.{});
+    try expectSuccess(allocator, &result, &.{"c"}, &expected_rows, &.{});
 }
 
 test "T14: COUNT(*) over matches" {
@@ -301,7 +301,7 @@ test "T14: COUNT(*) over matches" {
     const expected_rows = [_][]const ExpectedValue{
         &[_]ExpectedValue{.{ .Int = 3 }},
     };
-    try expectSuccess(allocator, &result, &.{ "c" }, &expected_rows, &.{});
+    try expectSuccess(allocator, &result, &.{"c"}, &expected_rows, &.{});
 }
 
 test "T15: GROUP BY property with HAVING" {
@@ -313,7 +313,7 @@ test "T15: GROUP BY property with HAVING" {
     defer result.deinit(allocator);
 
     const expected_rows = [_][]const ExpectedValue{
-        &[_]ExpectedValue{.{ .String = "A" }, .{ .Int = 2 }},
+        &[_]ExpectedValue{ .{ .String = "A" }, .{ .Int = 2 } },
     };
     try expectSuccess(allocator, &result, &.{ "L", "c" }, &expected_rows, &.{});
 }
@@ -327,7 +327,7 @@ test "T16: SUM/AVG with NULLs skipped" {
     defer result.deinit(allocator);
 
     const expected_rows = [_][]const ExpectedValue{
-        &[_]ExpectedValue{.{ .Int = 3 }, .{ .Float = 1.5 }},
+        &[_]ExpectedValue{ .{ .Int = 3 }, .{ .Float = 1.5 } },
     };
     try expectSuccess(allocator, &result, &.{ "s", "a" }, &expected_rows, &.{});
 }
@@ -341,7 +341,7 @@ test "T17: COUNT(expr) vs COUNT(*)" {
     defer result.deinit(allocator);
 
     const expected_rows = [_][]const ExpectedValue{
-        &[_]ExpectedValue{.{ .Int = 2 }, .{ .Int = 3 }},
+        &[_]ExpectedValue{ .{ .Int = 2 }, .{ .Int = 3 } },
     };
     try expectSuccess(allocator, &result, &.{ "cnv", "cstar" }, &expected_rows, &.{});
 }
@@ -357,7 +357,7 @@ test "T18: COUNT(DISTINCT …)" {
     const expected_rows = [_][]const ExpectedValue{
         &[_]ExpectedValue{.{ .Int = 1 }},
     };
-    try expectSuccess(allocator, &result, &.{ "d" }, &expected_rows, &.{});
+    try expectSuccess(allocator, &result, &.{"d"}, &expected_rows, &.{});
 }
 
 test "T19: GROUP BY legality (error)" {

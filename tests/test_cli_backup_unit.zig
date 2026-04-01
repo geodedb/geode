@@ -81,7 +81,7 @@ test "BackupManager full backup creation" {
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{ "Person" });
+    _ = try store.createNode(&.{"Person"});
 
     const backup_dir = try makeTempDir(allocator, "backups");
     defer cleanupTempDir(allocator, backup_dir);
@@ -119,7 +119,7 @@ test "BackupManager compression reflected in header" {
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{ "Doc" });
+    _ = try store.createNode(&.{"Doc"});
 
     const backup_dir = try makeTempDir(allocator, "backups_compress");
     defer cleanupTempDir(allocator, backup_dir);
@@ -146,7 +146,7 @@ test "Backup directory creation and cleanup" {
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{ "Nested" });
+    _ = try store.createNode(&.{"Nested"});
 
     const base_dir = try makeTempDir(allocator, "nested_base");
     defer cleanupTempDir(allocator, base_dir);

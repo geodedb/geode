@@ -13,7 +13,7 @@ test "protocol QUIC: MATCH varlen 1..2 determinism" {
 
     const allocator = std.testing.allocator;
 
-    var server = try util.spawnServerRandom(allocator, &.{ "GEODE_QUIC_PASSIVE_TEARDOWN=1" });
+    var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     const addr = server.getAddr();
 

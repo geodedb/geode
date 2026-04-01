@@ -12,8 +12,8 @@ test "graphstore: checksum corruption detected" {
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{ "abc" });
-    _ = try store.createNode(&.{ "def" });
+    _ = try store.createNode(&.{"abc"});
+    _ = try store.createNode(&.{"def"});
     try store.saveToFile();
 
     const file_path = try graph_store.getPersistenceFilePath(allocator);

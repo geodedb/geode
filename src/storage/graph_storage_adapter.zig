@@ -94,7 +94,7 @@ pub const LabelStringDict = struct {
 ///
 /// String data is passed through as a slice reference (no copy). The caller
 /// must ensure the source value outlives the returned storage value.
-pub fn toStorageProperty(val: graph_store.PropertyValue) gs.PropertyValue {
+pub fn toStorageProperty(allocator: Allocator, val: graph_store.PropertyValue) !gs.PropertyValue {
     return switch (val) {
         .String => |s| .{ .string = s },
         .Int => |i| .{ .int = i },
@@ -102,7 +102,10 @@ pub fn toStorageProperty(val: graph_store.PropertyValue) gs.PropertyValue {
         .Bool => |b| .{ .bool = b },
         .Null => .null,
         .Decimal => |d| .{ .decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-        .ExtValue => .{ .ext = .{ .type_tag = 0, .data = "" } },
+        .ExtValue => |ext| .{ .ext = .{
+            .type_tag = graph_store.STORAGE_EXT_TYPE_TAG,
+            .data = try graph_store.encodeExtValue(allocator, ext),
+        } },
     };
 }
 
@@ -118,8 +121,20 @@ pub fn fromStorageProperty(allocator: Allocator, val: gs.PropertyValue) !graph_s
         .bool => |b| .{ .Bool = b },
         .null => .Null,
         .decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-        .ext => .Null, // ExtValue round-trip is lossy; no geode ExtValue representation for raw ext
+        .ext => |ext| blk: {
+            if (ext.type_tag != graph_store.STORAGE_EXT_TYPE_TAG) {
+                break :blk .Null;
+            }
+            break :blk .{ .ExtValue = try graph_store.decodeExtValue(allocator, ext.data) };
+        },
     };
+}
+
+fn freeTemporaryStorageProperty(allocator: Allocator, val: gs.PropertyValue) void {
+    switch (val) {
+        .ext => |ext| allocator.free(ext.data),
+        else => {},
+    }
 }
 
 // ============================================================================
@@ -505,7 +520,8 @@ pub const StorageAdapter = struct {
         const mg = try self.requireExistingGraphLocked(graph_name);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
-        const storage_val = toStorageProperty(value);
+        const storage_val = try toStorageProperty(self.allocator, value);
+        defer freeTemporaryStorageProperty(self.allocator, storage_val);
         const new_prop_head = try mg.engine.putProperty(rec.prop_head, key, storage_val);
 
         // Update the node record with the (possibly changed) prop_head.
@@ -568,7 +584,8 @@ pub const StorageAdapter = struct {
         defer self.mutex.unlock();
 
         const mg = try self.requireExistingGraphLocked(graph_name);
-        const storage_val = toStorageProperty(value);
+        const storage_val = try toStorageProperty(self.allocator, value);
+        defer freeTemporaryStorageProperty(self.allocator, storage_val);
         try mg.engine.setEdgeProperty(from_id, to_id, edge_id, key, storage_val);
     }
 
@@ -1177,30 +1194,62 @@ test "LabelStringDict starts at id 1" {
 }
 
 test "toStorageProperty round-trip for scalars" {
+    const allocator = std.testing.allocator;
+
     // Int
-    const gs_int = toStorageProperty(.{ .Int = 42 });
+    const gs_int = try toStorageProperty(allocator, .{ .Int = 42 });
     try std.testing.expectEqual(@as(i64, 42), gs_int.int);
 
     // Float
-    const gs_float = toStorageProperty(.{ .Float = 3.14 });
+    const gs_float = try toStorageProperty(allocator, .{ .Float = 3.14 });
     try std.testing.expectApproxEqAbs(@as(f64, 3.14), gs_float.float, 0.001);
 
     // Bool
-    const gs_bool = toStorageProperty(.{ .Bool = true });
+    const gs_bool = try toStorageProperty(allocator, .{ .Bool = true });
     try std.testing.expect(gs_bool.bool);
 
     // Null
-    const gs_null = toStorageProperty(.Null);
+    const gs_null = try toStorageProperty(allocator, .Null);
     try std.testing.expectEqual(gs.PropertyValue.null, gs_null);
 
     // String
-    const gs_str = toStorageProperty(.{ .String = "hello" });
+    const gs_str = try toStorageProperty(allocator, .{ .String = "hello" });
     try std.testing.expectEqualStrings("hello", gs_str.string);
 
     // Decimal
-    const gs_dec = toStorageProperty(.{ .Decimal = .{ .coeff = 12345, .scale = 2 } });
+    const gs_dec = try toStorageProperty(allocator, .{ .Decimal = .{ .coeff = 12345, .scale = 2 } });
     try std.testing.expectEqual(@as(i128, 12345), gs_dec.decimal.coeff);
     try std.testing.expectEqual(@as(u8, 2), gs_dec.decimal.scale);
+}
+
+test "ExtValue survives adapter property translation" {
+    const allocator = std.testing.allocator;
+    const nested = try allocator.dupe(u8, "nested");
+    errdefer allocator.free(nested);
+
+    const ext = graph_store.PropertyValue{
+        .ExtValue = .{
+            .List = try allocator.dupe(@import("../eval_extended.zig").ExtValue, &.{
+                .{ .Int = 7 },
+                .{ .Str = nested },
+            }),
+        },
+    };
+    defer graph_store.freeDetachedExtValue(allocator, ext.ExtValue);
+
+    const storage_val = try toStorageProperty(allocator, ext);
+    defer freeTemporaryStorageProperty(allocator, storage_val);
+
+    try std.testing.expectEqual(graph_store.STORAGE_EXT_TYPE_TAG, storage_val.ext.type_tag);
+    try std.testing.expect(storage_val.ext.data.len > 0);
+
+    const roundtrip = try fromStorageProperty(allocator, storage_val);
+    defer graph_store.freeDetachedExtValue(allocator, roundtrip.ExtValue);
+
+    try std.testing.expect(roundtrip == .ExtValue);
+    try std.testing.expectEqual(@as(usize, 2), roundtrip.ExtValue.List.len);
+    try std.testing.expectEqual(@as(i64, 7), roundtrip.ExtValue.List[0].Int);
+    try std.testing.expectEqualStrings("nested", roundtrip.ExtValue.List[1].Str);
 }
 
 test "fromStorageProperty round-trip for scalars" {

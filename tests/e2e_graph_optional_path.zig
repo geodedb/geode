@@ -17,7 +17,7 @@ test "OPTIONAL MATCH left-outer preservation and path alias" {
 
     const allocator = testing.allocator;
 
-    var server = try util.spawnServerRandom(allocator, &.{ "GEODE_QUIC_PASSIVE_TEARDOWN=1" });
+    var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     const addr = server.getAddr();
 

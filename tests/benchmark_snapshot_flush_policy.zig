@@ -20,7 +20,7 @@ fn runBenchmark(mode: FlushMode, group_n: usize, window_ms: u32, commits: usize)
     var last_flush_ms: i64 = std.time.milliTimestamp();
     const start = std.time.nanoTimestamp();
     while (i < commits) : (i += 1) {
-        _ = store.createNode(&.{ "flush" }) catch unreachable;
+        _ = store.createNode(&.{"flush"}) catch unreachable;
         switch (mode) {
             .always => store.saveToFile() catch unreachable,
             .every_n => if ((i + 1) % group_n == 0) store.saveToFile() catch unreachable,

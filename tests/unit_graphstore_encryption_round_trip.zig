@@ -30,7 +30,7 @@ test "graphstore encryption round trip save+load" {
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{ "hello" });
+    _ = try store.createNode(&.{"hello"});
     try store.saveToFile();
 
     const path = try graph_store.getPersistenceFilePath(allocator);
