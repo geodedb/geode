@@ -313,9 +313,13 @@ fn joinPath(alloc: std.mem.Allocator, cfg: MigrationConfig, name: []const u8) ![
 
 // ------------------ Lock management ------------------
 
+/// Protects global_lock, policy_mode, and resume_slots from concurrent access.
+var migration_mutex: std.Thread.Mutex = .{};
 var global_lock: ?LockHandle = null;
 
 pub fn acquireLock(_: std.mem.Allocator, ttl_ms: u64) MigrationError!LockHandle {
+    migration_mutex.lock();
+    defer migration_mutex.unlock();
     const now = nowMs();
     if (global_lock) |lh| {
         if (lh.expires_at_ms > now) {
@@ -330,6 +334,8 @@ pub fn acquireLock(_: std.mem.Allocator, ttl_ms: u64) MigrationError!LockHandle 
 }
 
 pub fn heartbeatLock(h: *LockHandle) MigrationError!void {
+    migration_mutex.lock();
+    defer migration_mutex.unlock();
     const now = nowMs();
     if (global_lock) |*lh| {
         if (lh.id != h.id) return error.NoLockHeld;
@@ -341,6 +347,8 @@ pub fn heartbeatLock(h: *LockHandle) MigrationError!void {
 }
 
 pub fn releaseLock(h: *LockHandle) MigrationError!void {
+    migration_mutex.lock();
+    defer migration_mutex.unlock();
     if (global_lock) |lh| {
         if (lh.id != h.id) return error.NoLockHeld;
         global_lock = null;
@@ -349,12 +357,16 @@ pub fn releaseLock(h: *LockHandle) MigrationError!void {
 
 // ------------------ Apply / Status ------------------
 
+/// Applies pending up-migrations in version order. Skips already-applied versions.
+/// Saves ledger after each successful migration for crash safety.
 pub fn applyUpMigrations(
     alloc: std.mem.Allocator,
     cfg: MigrationConfig,
     names: []const []const u8,
     executor: QueryExecutor,
 ) MigrationError!void {
+    var lock = try acquireLock(alloc, 300_000); // 5 minute TTL
+    defer releaseLock(&lock) catch {};
     var ledger = try loadLedger(alloc, cfg);
     defer ledger.deinit();
 
@@ -416,6 +428,8 @@ pub fn applyDownMigrations(
     _: []const []const u8,
     executor: QueryExecutor,
 ) MigrationError!void {
+    var lock = try acquireLock(alloc, 300_000); // 5 minute TTL
+    defer releaseLock(&lock) catch {};
     var ledger = try loadLedger(alloc, cfg);
     defer ledger.deinit();
 
@@ -528,6 +542,8 @@ pub const PolicyMode = enum { strict, lenient };
 var policy_mode: PolicyMode = .lenient;
 
 pub fn enforcePolicy(mode: []const u8) MigrationError!void {
+    migration_mutex.lock();
+    defer migration_mutex.unlock();
     if (std.mem.eql(u8, mode, "STRICT")) {
         policy_mode = .strict;
         return;
@@ -539,6 +555,8 @@ pub fn enforcePolicy(mode: []const u8) MigrationError!void {
 }
 
 pub fn isStrictPolicy() bool {
+    migration_mutex.lock();
+    defer migration_mutex.unlock();
     return policy_mode == .strict;
 }
 
@@ -649,6 +667,7 @@ var resume_slots: [8]ResumeState = .{.{ .token = "", .total_batches = 0, .comple
 var resume_slots_len: usize = 0;
 
 fn getOrInitResume(alloc: std.mem.Allocator, token: []const u8) MigrationError!*ResumeState {
+    // Caller must hold migration_mutex.
     var i: usize = 0;
     while (i < resume_slots_len) : (i += 1) {
         if (std.mem.eql(u8, resume_slots[i].token, token)) return &resume_slots[i];
@@ -661,6 +680,8 @@ fn getOrInitResume(alloc: std.mem.Allocator, token: []const u8) MigrationError!*
 }
 
 pub fn resumeDataMigration(alloc: std.mem.Allocator, token: []const u8) MigrationError!ResumeState {
+    migration_mutex.lock();
+    defer migration_mutex.unlock();
     const rs = try getOrInitResume(alloc, token);
     if (!rs.done) {
         if (rs.completed_batches < rs.total_batches) rs.completed_batches += 1;
