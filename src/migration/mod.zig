@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_migrations.yml; OWNER=migration; UPDATED=2026-01-11
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab-cli/specs/geode_migrations.yml; OWNER=migration; UPDATED=2026-04-01
 // Fully functional migration engine with durable ledger, checksum validation, up/down
 // application, drift detection, and pluggable query executor (QUIC-backed in CLI).
 
@@ -787,12 +787,12 @@ fn testSimulateDriftImpl() void {
 // ------------------ CANARY markers ------------------
 // CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=ObservabilityMetrics; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_ObservabilityMetrics; OWNER=migration; UPDATED=2026-01-11
 // CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=DownReversalSafety; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_DownReversalSafety; OWNER=migration; UPDATED=2026-01-11
-// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=PlanDryRunIntegrity; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_PlanDryRunIntegrity; OWNER=migration; UPDATED=2026-01-11
+// CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=PlanDryRunIntegrity; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_ChecksumValidation_and_PlanDryRun; OWNER=migration; UPDATED=2026-04-01
 // CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=CliParityStatusCommand; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_CliParityStatusCommand; OWNER=migration; UPDATED=2026-01-11
 // CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=DriftPolicyOutcomeStrict; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_087_DriftPolicyOutcomeStrict; OWNER=migration; UPDATED=2026-01-11
 
 // ==================== Unit Tests (GAP-0233) ====================
-// CANARY: REQ=REQ-GAP-0233; FEATURE="MigrationUnitTests"; ASPECT=RegressionTest; STATUS=TESTED; TEST=test_migration_parseVersion; OWNER=migration; UPDATED=2026-01-25
+// CANARY: REQ=REQ-GAP-0233; FEATURE="MigrationUnitTests"; ASPECT=RegressionTest; STATUS=TESTED; TEST="parseVersion extracts leading digits from migration name"; OWNER=migration; UPDATED=2026-04-01
 
 test "parseVersion extracts leading digits from migration name" {
     try std.testing.expectEqual(@as(?i64, 1), parseVersion("001_init.gql"));
