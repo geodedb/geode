@@ -54,6 +54,25 @@ fn getExecutionCallbacks() evaluator_adapter.ExecutionCallbacks {
     };
 }
 
+// GAP-0280: Global timeseries store pointer for server execution path.
+// The Store is created once at server startup (server/main.zig) and shared
+// read-only across all QUIC/gRPC connections.  eval.zig cannot import
+// execution.zig (circular dependency), so a module-level global is used --
+// the same pattern as execution_callbacks above.
+// CANARY: REQ=REQ-TIMESERIES-WIRE-001; FEATURE="TimeseriesServerWiring"; ASPECT=GlobalStore; STATUS=TESTED; TEST=src/eval.zig; OWNER=eval; UPDATED=2026-04-01
+const TimeseriesStore = @import("timeseries/timeseries.zig").Store;
+var g_timeseries_store: ?*TimeseriesStore = null;
+
+/// Set the global timeseries store (called from server/main.zig during startup).
+pub fn setGlobalTimeseriesStore(store: ?*TimeseriesStore) void {
+    g_timeseries_store = store;
+}
+
+/// Get the global timeseries store.
+pub fn getGlobalTimeseriesStore() ?*TimeseriesStore {
+    return g_timeseries_store;
+}
+
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-007; FEATURE="Circular Dependency Resolution"; ASPECT=NullCheck; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Use isNull from value_types module
 const isNull = value_types.isNull;
@@ -859,11 +878,24 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // Time-series value lookup function
+            // GAP-0280: Resolve the store from (1) per-Env pointer, or (2) the global
+            // server-wide store set during startup.  This ensures timeseries.value()
+            // returns real data whether called from the CLI path (env.timeseries_store)
+            // or the QUIC/gRPC server path (g_timeseries_store).
             if (std.mem.eql(u8, function_name, "timeseries.value")) {
                 if (call.args.len != 3) return EvalError.InvalidArgs;
-                if (env.timeseries_store) |store_ptr| {
-                    const store = @constCast(store_ptr);
+                const maybe_store: ?*TimeseriesStore = if (env.timeseries_store) |ptr|
+                    // Safety: @constCast is required because the external timeseries
+                    // library's getSeries/hashKey methods take *Store (mutable pointer)
+                    // even though they only perform read operations.  We cannot change
+                    // the external library signature here.  The Store is effectively
+                    // read-only at query time -- writes only happen via explicit INSERT
+                    // operations which hold the store write-lock.
+                    @constCast(ptr)
+                else
+                    g_timeseries_store;
 
+                if (maybe_store) |store| {
                     const device_id_val = try evalExpr(allocator, call.args[0].*, env);
                     const metric_val = try evalExpr(allocator, call.args[1].*, env);
                     const ts_val = try evalExpr(allocator, call.args[2].*, env);
@@ -887,6 +919,12 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 } else {
                     break :blk_call .{ .Null = {} };
                 }
+            }
+
+            // GAP-0282: Dispatch remaining 7 timeseries GQL functions
+            // Pattern: timeseries.<fn_name>(device_id, metric, ...fn-specific args)
+            if (try evalTimeseriesFunction(allocator, function_name, call.args, env)) |result| {
+                break :blk_call result;
             }
 
             // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.ymlEMENTED; OWNER=eval; UPDATED=2025-10-14
@@ -4323,6 +4361,402 @@ fn inList(value: Value, set: []*ast.Expr, allocator: std.mem.Allocator, env: Env
     return .{ .Bool = false };
 }
 
+// ---------------------------------------------------------------------------
+// GAP-0282: Timeseries GQL function dispatch
+// ---------------------------------------------------------------------------
+const ts_gql = @import("timeseries/gql_functions.zig");
+
+/// Convert a timeseries gql_functions.Value to the canonical value_types.Value.
+/// Only the subset used by timeseries is converted (Null, Int, Double, Str, Bool, List, Map).
+fn tsValueToCanonical(tv: ts_gql.Value, allocator: std.mem.Allocator) EvalError!Value {
+    return switch (tv) {
+        .Null => .{ .Null = {} },
+        .Int => |v| .{ .Int = v },
+        .Double => |v| .{ .Double = v },
+        .Str => |v| .{ .Str = v },
+        .Bool => |v| .{ .Bool = v },
+        .List => |arr| blk: {
+            const out = allocator.alloc(Value, arr.len) catch return EvalError.OutOfMemory;
+            for (arr, 0..) |item, idx| {
+                out[idx] = try tsValueToCanonical(item, allocator);
+            }
+            break :blk .{ .List = out };
+        },
+        .Map => |map| blk: {
+            var out = std.StringHashMap(Value).init(allocator);
+            var it = map.iterator();
+            while (it.next()) |entry| {
+                out.put(entry.key_ptr.*, try tsValueToCanonical(entry.value_ptr.*, allocator)) catch
+                    return EvalError.OutOfMemory;
+            }
+            break :blk .{ .Map = out };
+        },
+    };
+}
+
+/// Resolve the timeseries store from the Env or global, same as timeseries.value dispatch.
+fn resolveTimeseriesStore(env: Env) ?*TimeseriesStore {
+    // Safety: @constCast is required because the external timeseries
+    // library's getSeries/hashKey methods take *Store (mutable pointer)
+    // even though they only perform read operations.  The Store is
+    // effectively read-only at query time.
+    if (env.timeseries_store) |ptr| return @constCast(ptr);
+    return g_timeseries_store;
+}
+
+/// GAP-0282/0290: Dispatch timeseries.* GQL function calls.
+/// Series-based: last_value, value_at, sample_by, time_bucket, interpolate, moving_avg,
+///   rate, derivative, change_points, extract_features, matrix_profile, z_normalize, invariants.
+/// Array-based (delegated to evalArrayBasedTsFunction): dtw, dtw_derivative, dtw_open_end,
+///   dtw_shape, dtw_soft, cosine_similarity, cross_correlate, sbd.
+fn evalTimeseriesFunction(
+    allocator: std.mem.Allocator,
+    function_name: []const u8,
+    args: []*ast.Expr,
+    env: Env,
+) EvalError!?Value {
+    const ts_module = @import("timeseries/timeseries.zig");
+
+    // All timeseries functions start with "timeseries." prefix (except timeseries.value handled above)
+    if (!std.mem.startsWith(u8, function_name, "timeseries.")) return null;
+    const suffix = function_name["timeseries.".len..];
+
+    // Skip "value" -- already handled in the main dispatch above
+    if (std.mem.eql(u8, suffix, "value")) return null;
+
+    // GAP-0290: Array-based functions take f64 list args directly (no device_id/metric)
+    if (try evalArrayBasedTsFunction(allocator, suffix, args, env)) |result| {
+        return result;
+    }
+
+    const maybe_store = resolveTimeseriesStore(env);
+    const store = maybe_store orelse return @as(?Value, .{ .Null = {} });
+
+    // All timeseries functions require at least 2 args: (device_id, metric)
+    if (args.len < 2) return EvalError.InvalidArgs;
+
+    const device_id_val = try evalExpr(allocator, args[0].*, env);
+    const metric_val = try evalExpr(allocator, args[1].*, env);
+
+    if (device_id_val != .Int or metric_val != .Str) return EvalError.TypeMismatch;
+
+    const key = ts_module.SeriesKey{
+        .device_id = device_id_val.Int,
+        .metric = metric_val.Str,
+    };
+
+    // Build the TSFunctionCall based on the suffix
+    var call: ts_gql.TSFunctionCall = undefined;
+    call.series_key = key;
+
+    if (std.mem.eql(u8, suffix, "last_value")) {
+        if (args.len != 2) return EvalError.InvalidArgs;
+        call.function_type = .last_value;
+        call.params = .{ .last_value = {} };
+    } else if (std.mem.eql(u8, suffix, "value_at")) {
+        if (args.len != 3) return EvalError.InvalidArgs;
+        const ts_val = try evalExpr(allocator, args[2].*, env);
+        if (ts_val != .Int) return EvalError.TypeMismatch;
+        call.function_type = .value_at;
+        call.params = .{ .value_at = .{ .timestamp = ts_val.Int } };
+    } else if (std.mem.eql(u8, suffix, "sample_by")) {
+        // sample_by(device_id, metric, interval_ms, start_ts, end_ts, aggregation)
+        if (args.len != 6) return EvalError.InvalidArgs;
+        const interval = try evalExpr(allocator, args[2].*, env);
+        const start = try evalExpr(allocator, args[3].*, env);
+        const end = try evalExpr(allocator, args[4].*, env);
+        const agg_str = try evalExpr(allocator, args[5].*, env);
+        if (interval != .Int or start != .Int or end != .Int or agg_str != .Str)
+            return EvalError.TypeMismatch;
+        const agg = parseAggregation(agg_str.Str) orelse return EvalError.InvalidArgs;
+        call.function_type = .sample_by;
+        call.params = .{ .sample_by = .{
+            .interval_ms = interval.Int,
+            .start_ts = start.Int,
+            .end_ts = end.Int,
+            .aggregation = agg,
+        } };
+    } else if (std.mem.eql(u8, suffix, "time_bucket")) {
+        // time_bucket(device_id, metric, bucket_ms, start_ts, end_ts)
+        if (args.len != 5) return EvalError.InvalidArgs;
+        const bucket = try evalExpr(allocator, args[2].*, env);
+        const start = try evalExpr(allocator, args[3].*, env);
+        const end = try evalExpr(allocator, args[4].*, env);
+        if (bucket != .Int or start != .Int or end != .Int)
+            return EvalError.TypeMismatch;
+        call.function_type = .time_bucket;
+        call.params = .{ .time_bucket = .{
+            .bucket_ms = bucket.Int,
+            .start_ts = start.Int,
+            .end_ts = end.Int,
+        } };
+    } else if (std.mem.eql(u8, suffix, "interpolate")) {
+        // interpolate(device_id, metric, timestamp, method)
+        if (args.len != 4) return EvalError.InvalidArgs;
+        const ts_val = try evalExpr(allocator, args[2].*, env);
+        const method_val = try evalExpr(allocator, args[3].*, env);
+        if (ts_val != .Int or method_val != .Str) return EvalError.TypeMismatch;
+        const method_str = method_val.Str;
+        call.function_type = .interpolate;
+        call.params = .{ .interpolate = .{
+            .timestamp = ts_val.Int,
+            .method = if (std.mem.eql(u8, method_str, "linear"))
+                .linear
+            else if (std.mem.eql(u8, method_str, "step"))
+                .step
+            else if (std.mem.eql(u8, method_str, "nearest"))
+                .nearest
+            else
+                return EvalError.InvalidArgs,
+        } };
+    } else if (std.mem.eql(u8, suffix, "moving_avg")) {
+        // moving_avg(device_id, metric, window_ms, step_ms)
+        if (args.len != 4) return EvalError.InvalidArgs;
+        const window = try evalExpr(allocator, args[2].*, env);
+        const step = try evalExpr(allocator, args[3].*, env);
+        if (window != .Int or step != .Int) return EvalError.TypeMismatch;
+        call.function_type = .moving_avg;
+        call.params = .{ .moving_avg = .{
+            .window_ms = window.Int,
+            .step_ms = step.Int,
+        } };
+    } else if (std.mem.eql(u8, suffix, "rate")) {
+        // rate(device_id, metric, interval_ms)
+        if (args.len != 3) return EvalError.InvalidArgs;
+        const interval = try evalExpr(allocator, args[2].*, env);
+        if (interval != .Int) return EvalError.TypeMismatch;
+        call.function_type = .rate;
+        call.params = .{ .rate = .{ .interval_ms = interval.Int } };
+    } else if (std.mem.eql(u8, suffix, "derivative")) {
+        // derivative(device_id, metric, order)
+        if (args.len != 3) return EvalError.InvalidArgs;
+        const order_val = try evalExpr(allocator, args[2].*, env);
+        if (order_val != .Int) return EvalError.TypeMismatch;
+        if (order_val.Int < 0 or order_val.Int > 255) return EvalError.InvalidArgs;
+        call.function_type = .derivative;
+        call.params = .{ .derivative = .{ .order = @intCast(order_val.Int) } };
+    } else if (std.mem.eql(u8, suffix, "change_points")) {
+        // GAP-0290: change_points(device_id, metric, start_ts, end_ts, penalty, min_size)
+        if (args.len != 6) return EvalError.InvalidArgs;
+        const start = try evalExpr(allocator, args[2].*, env);
+        const end = try evalExpr(allocator, args[3].*, env);
+        const penalty_val = try evalExpr(allocator, args[4].*, env);
+        const min_size_val = try evalExpr(allocator, args[5].*, env);
+        if (start != .Int or end != .Int or min_size_val != .Int)
+            return EvalError.TypeMismatch;
+        const penalty = switch (penalty_val) {
+            .Double => |d| d,
+            .Int => |i| @as(f64, @floatFromInt(i)),
+            else => return EvalError.TypeMismatch,
+        };
+        if (min_size_val.Int < 1) return EvalError.InvalidArgs;
+        call.function_type = .change_points;
+        call.params = .{ .change_points = .{
+            .start_ts = start.Int,
+            .end_ts = end.Int,
+            .penalty = penalty,
+            .min_size = @intCast(min_size_val.Int),
+        } };
+    } else if (std.mem.eql(u8, suffix, "extract_features")) {
+        // GAP-0290: extract_features(device_id, metric, start_ts, end_ts)
+        if (args.len != 4) return EvalError.InvalidArgs;
+        const start = try evalExpr(allocator, args[2].*, env);
+        const end = try evalExpr(allocator, args[3].*, env);
+        if (start != .Int or end != .Int) return EvalError.TypeMismatch;
+        call.function_type = .extract_features;
+        call.params = .{ .extract_features = .{
+            .start_ts = start.Int,
+            .end_ts = end.Int,
+        } };
+    } else if (std.mem.eql(u8, suffix, "matrix_profile")) {
+        // GAP-0290: matrix_profile(device_id, metric, start_ts, end_ts, subseq_len)
+        if (args.len != 5) return EvalError.InvalidArgs;
+        const start = try evalExpr(allocator, args[2].*, env);
+        const end = try evalExpr(allocator, args[3].*, env);
+        const subseq = try evalExpr(allocator, args[4].*, env);
+        if (start != .Int or end != .Int or subseq != .Int)
+            return EvalError.TypeMismatch;
+        if (subseq.Int < 1) return EvalError.InvalidArgs;
+        call.function_type = .matrix_profile;
+        call.params = .{ .matrix_profile = .{
+            .start_ts = start.Int,
+            .end_ts = end.Int,
+            .subseq_len = @intCast(subseq.Int),
+        } };
+    } else if (std.mem.eql(u8, suffix, "z_normalize")) {
+        // GAP-0290: z_normalize(device_id, metric, start_ts, end_ts)
+        if (args.len != 4) return EvalError.InvalidArgs;
+        const start = try evalExpr(allocator, args[2].*, env);
+        const end = try evalExpr(allocator, args[3].*, env);
+        if (start != .Int or end != .Int) return EvalError.TypeMismatch;
+        call.function_type = .z_normalize;
+        call.params = .{ .z_normalize = .{
+            .start_ts = start.Int,
+            .end_ts = end.Int,
+        } };
+    } else if (std.mem.eql(u8, suffix, "invariants")) {
+        // GAP-0290: invariants(device_id, metric, start_ts, end_ts)
+        if (args.len != 4) return EvalError.InvalidArgs;
+        const start = try evalExpr(allocator, args[2].*, env);
+        const end = try evalExpr(allocator, args[3].*, env);
+        if (start != .Int or end != .Int) return EvalError.TypeMismatch;
+        call.function_type = .invariants;
+        call.params = .{ .invariants = .{
+            .start_ts = start.Int,
+            .end_ts = end.Int,
+        } };
+    } else {
+        return null; // Unknown timeseries function
+    }
+
+    const ts_result = ts_gql.executeFunction(store, call, allocator) catch return EvalError.OutOfMemory;
+    return try tsValueToCanonical(ts_result, allocator);
+}
+
+fn parseAggregation(s: []const u8) ?@import("timeseries/timeseries.zig").lib.store.Aggregation {
+    if (std.mem.eql(u8, s, "avg")) return .avg;
+    if (std.mem.eql(u8, s, "sum")) return .sum;
+    if (std.mem.eql(u8, s, "min")) return .min;
+    if (std.mem.eql(u8, s, "max")) return .max;
+    if (std.mem.eql(u8, s, "count")) return .count;
+    if (std.mem.eql(u8, s, "first")) return .first;
+    if (std.mem.eql(u8, s, "last")) return .last;
+    return null;
+}
+
+/// GAP-0290: Dispatch array-based timeseries functions that take f64 list arguments
+/// directly (no series key). Returns null if the suffix doesn't match any array-based function.
+fn evalArrayBasedTsFunction(
+    allocator: std.mem.Allocator,
+    suffix: []const u8,
+    args: []*ast.Expr,
+    env: Env,
+) EvalError!?Value {
+    // Helper: evaluate a Value and extract []f64 from a List of Int/Double values.
+    const extractF64List = struct {
+        fn run(alloc: std.mem.Allocator, val: Value) EvalError!?[]f64 {
+            if (val != .List) return null;
+            const list = val.List;
+            const out = alloc.alloc(f64, list.len) catch return EvalError.OutOfMemory;
+            for (list, 0..) |item, i| {
+                out[i] = switch (item) {
+                    .Double => |d| d,
+                    .Int => |n| @as(f64, @floatFromInt(n)),
+                    else => {
+                        alloc.free(out);
+                        return EvalError.TypeMismatch;
+                    },
+                };
+            }
+            return out;
+        }
+    }.run;
+
+    if (std.mem.eql(u8, suffix, "dtw")) {
+        // dtw(vals_a, vals_b, window)
+        if (args.len != 3) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const w_val = try evalExpr(allocator, args[2].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        if (w_val != .Int) return EvalError.TypeMismatch;
+        const ts_result = ts_gql.executeDTW(allocator, a_arr, b_arr, @intCast(w_val.Int)) catch return EvalError.OutOfMemory;
+        return try tsValueToCanonical(ts_result, allocator);
+    } else if (std.mem.eql(u8, suffix, "dtw_derivative")) {
+        // dtw_derivative(vals_a, vals_b, window)
+        if (args.len != 3) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const w_val = try evalExpr(allocator, args[2].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        if (w_val != .Int) return EvalError.TypeMismatch;
+        const ts_result = ts_gql.executeDTWDerivative(allocator, a_arr, b_arr, @intCast(w_val.Int)) catch return EvalError.OutOfMemory;
+        return try tsValueToCanonical(ts_result, allocator);
+    } else if (std.mem.eql(u8, suffix, "dtw_open_end")) {
+        // dtw_open_end(vals_a, vals_b)
+        if (args.len != 2) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        const ts_result = ts_gql.executeDTWOpenEnd(allocator, a_arr, b_arr) catch return EvalError.OutOfMemory;
+        return try tsValueToCanonical(ts_result, allocator);
+    } else if (std.mem.eql(u8, suffix, "dtw_shape")) {
+        // dtw_shape(vals_a, vals_b, reach)
+        if (args.len != 3) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const r_val = try evalExpr(allocator, args[2].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        if (r_val != .Int) return EvalError.TypeMismatch;
+        const ts_result = ts_gql.executeDTWShape(allocator, a_arr, b_arr, @intCast(r_val.Int)) catch return EvalError.OutOfMemory;
+        return try tsValueToCanonical(ts_result, allocator);
+    } else if (std.mem.eql(u8, suffix, "dtw_soft")) {
+        // dtw_soft(vals_a, vals_b, gamma)
+        if (args.len != 3) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const g_val = try evalExpr(allocator, args[2].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        const gamma = switch (g_val) {
+            .Double => |d| d,
+            .Int => |i| @as(f64, @floatFromInt(i)),
+            else => return EvalError.TypeMismatch,
+        };
+        const ts_result = ts_gql.executeDTWSoft(allocator, a_arr, b_arr, gamma) catch return EvalError.OutOfMemory;
+        return try tsValueToCanonical(ts_result, allocator);
+    } else if (std.mem.eql(u8, suffix, "cosine_similarity")) {
+        // cosine_similarity(vals_a, vals_b)
+        if (args.len != 2) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        const ts_result = ts_gql.executeCosineSimilarity(a_arr, b_arr);
+        return try tsValueToCanonical(ts_result, allocator);
+    } else if (std.mem.eql(u8, suffix, "cross_correlate")) {
+        // cross_correlate(vals_a, vals_b)
+        if (args.len != 2) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        const ts_result = ts_gql.executeCrossCorrelate(allocator, a_arr, b_arr);
+        return try tsValueToCanonical(ts_result, allocator);
+    } else if (std.mem.eql(u8, suffix, "sbd")) {
+        // sbd(vals_a, vals_b)
+        if (args.len != 2) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        const ts_result = ts_gql.executeSBD(a_arr, b_arr);
+        return try tsValueToCanonical(ts_result, allocator);
+    }
+
+    return null; // Not an array-based function
+}
+
 test "eval: IN/NOT IN with NULL semantics and mixed-type edges" {
     const allocator = std.testing.allocator;
     const env = Env{ .allocator = allocator, .names = &.{ "a", "s" }, .values = &.{ Value{ .Int = 7 }, Value{ .Str = "007" } } };
@@ -4615,4 +5049,105 @@ test "eval: tolower and toupper aliases" {
     const call2 = ast.Expr{ .Call = .{ .name = "toupper", .args = &args2, .distinct = false, .namespace = null } };
     const v2 = try evalExpr(allocator, call2, env);
     try std.testing.expect(v2 == .Str and std.mem.eql(u8, v2.Str, "HELLO"));
+}
+
+// GAP-0280: Verify timeseries.value() uses the global store when Env.timeseries_store is null.
+// This is the server execution path: the Store is set once at startup and shared across
+// all connections.  Without this wiring, timeseries.value() always returns Null on the
+// QUIC/gRPC path.
+test "eval: timeseries.value uses global store fallback" {
+    const allocator = std.testing.allocator;
+    const ts_module = @import("timeseries/timeseries.zig");
+
+    // Create a Store, insert a data point, and publish it as the global store.
+    var store = ts_module.Store.init(allocator);
+    defer store.deinit();
+
+    const key = ts_module.SeriesKey{ .device_id = 42, .metric = "temperature" };
+    try store.insertMany(key, &.{.{ .ts = 1000, .value = 72 }});
+
+    // Set the global -- simulates what server/main.zig does at startup.
+    setGlobalTimeseriesStore(&store);
+    defer setGlobalTimeseriesStore(null);
+
+    // Env has NO per-env timeseries_store -- this is the server path.
+    const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
+
+    // Build the AST for: timeseries.value(42, 'temperature', 1000)
+    var arg_device = ast.Expr{ .Int = 42 };
+    var arg_metric = ast.Expr{ .String = "temperature" };
+    var arg_ts = ast.Expr{ .Int = 1000 };
+    var args = [_]*ast.Expr{ &arg_device, &arg_metric, &arg_ts };
+    const call_expr = ast.Expr{ .Call = .{
+        .name = "timeseries.value",
+        .args = &args,
+        .distinct = false,
+        .namespace = null,
+    } };
+
+    const result = try evalExpr(allocator, call_expr, env);
+    // Must return 72, NOT Null.
+    try std.testing.expect(result == .Int);
+    try std.testing.expectEqual(@as(i64, 72), result.Int);
+}
+
+// GAP-0280: Verify timeseries.value() returns Null when no store is available.
+test "eval: timeseries.value returns null without store" {
+    const allocator = std.testing.allocator;
+
+    // Ensure global is not set.
+    setGlobalTimeseriesStore(null);
+
+    const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
+
+    var arg_device = ast.Expr{ .Int = 1 };
+    var arg_metric = ast.Expr{ .String = "cpu" };
+    var arg_ts = ast.Expr{ .Int = 100 };
+    var args = [_]*ast.Expr{ &arg_device, &arg_metric, &arg_ts };
+    const call_expr = ast.Expr{ .Call = .{
+        .name = "timeseries.value",
+        .args = &args,
+        .distinct = false,
+        .namespace = null,
+    } };
+
+    const result = try evalExpr(allocator, call_expr, env);
+    try std.testing.expect(result == .Null);
+}
+
+// GAP-0280: Verify per-Env timeseries_store takes priority over global.
+test "eval: timeseries.value prefers env store over global" {
+    const allocator = std.testing.allocator;
+    const ts_module = @import("timeseries/timeseries.zig");
+
+    // Global store has value 100 for key (1, "x", 10).
+    var global_store = ts_module.Store.init(allocator);
+    defer global_store.deinit();
+    const gkey = ts_module.SeriesKey{ .device_id = 1, .metric = "x" };
+    try global_store.insertMany(gkey, &.{.{ .ts = 10, .value = 100 }});
+    setGlobalTimeseriesStore(&global_store);
+    defer setGlobalTimeseriesStore(null);
+
+    // Per-env store has value 999 for the same key.
+    var env_store = ts_module.Store.init(allocator);
+    defer env_store.deinit();
+    try env_store.insertMany(gkey, &.{.{ .ts = 10, .value = 999 }});
+
+    const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{}, .timeseries_store = &env_store };
+
+    var arg_device = ast.Expr{ .Int = 1 };
+    var arg_metric = ast.Expr{ .String = "x" };
+    var arg_ts = ast.Expr{ .Int = 10 };
+    var args = [_]*ast.Expr{ &arg_device, &arg_metric, &arg_ts };
+    const call_expr = ast.Expr{ .Call = .{
+        .name = "timeseries.value",
+        .args = &args,
+        .distinct = false,
+        .namespace = null,
+    } };
+
+    const result = try evalExpr(allocator, call_expr, env);
+    // Must return 999 from env store, not 100 from global.
+    try std.testing.expect(result == .Int);
+    try std.testing.expectEqual(@as(i64, 999), result.Int);
 }

@@ -660,6 +660,34 @@ loadtest-regression:
     expire_in: 1 week
 
 # =============================================================================
+# Test Stage - Timeseries Benchmarks (GAP-0287)
+# Runs timeseries ingest and query benchmarks to detect regressions.
+# Starts as warning-only (allow_failure: true) until baseline is stable.
+# =============================================================================
+
+bench-timeseries:
+  stage: test
+  image: $ZIG_IMAGE
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  before_script:
+    - *zig-vendor-cache
+  script:
+    - |
+      echo "=== Running Timeseries Benchmarks ==="
+      zig build bench-timeseries --summary all 2>&1 | tee bench_timeseries_output.log
+      echo "=== Timeseries benchmarks complete ==="
+  allow_failure: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  artifacts:
+    when: always
+    paths:
+      - bench_timeseries_output.log
+    expire_in: 1 week
+
+# =============================================================================
 # Test Stage - Code Coverage Collection (GAP-0251)
 # CANARY: REQ=REQ-CI-COVERAGE-001; FEATURE="CodeCoverageCI"; ASPECT=Core; STATUS=IMPL; OWNER=ci; UPDATED=2026-03-13
 # GAP-0251: Collect line/branch coverage via kcov + Zig DWARF debug info

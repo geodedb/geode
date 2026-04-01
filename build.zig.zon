@@ -200,8 +200,8 @@
 
         // Timeseries - Pattern matching, DTW, matrix profile, PELT change-point detection
         .timeseries = .{
-            .url = "git+https://gitlab.com/devnw/zig/timeseries.git#0103cf25b9239754fa3525ea6f08b826fbc617d1",
-            .hash = "timeseries-0.1.0-iAEwOlA3AwB0QmX0WcYWUljO4_aG4Q2Q8ot-WW919ch7",
+            .url = "git+https://gitlab.com/devnw/zig/timeseries.git#14283384bc8877360a943f8c0607304fd4b77a60",
+            .hash = "timeseries-0.1.0-iAEwOqLoAwDptgxTdefl3MgFtrtTNIiSGIwmokFNGMCs",
         },
 
         // Auth - HMAC chain, API keys, TOTP/MFA primitives

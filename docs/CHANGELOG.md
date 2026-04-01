@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased] - Time-Series Audit and Gap Closure
+
+### Added
+
+- **CANARY Governance Tokens:** 24 CANARY markers added across timeseries source files (GAP-0281)
+- **Legacy GAP ID Mapping:** Documented mapping from Grey Cardinal GAP-004/005/006 to GAP-0279+ numbering (GAP-0288)
+- **Time-Series Audit Report:** `docs/TIMESERIES_AUDIT_REPORT.md` tracking all timeseries gap status
+
+### Fixed
+
+- **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
+- **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
+- **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)
+- **Step/Nearest Interpolation:** Added tests for step and nearest interpolation methods (GAP-0286)
+
+---
+
 ## [v0.18.1] - January 28, 2026
 
 ### Added

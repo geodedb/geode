@@ -1,14 +1,14 @@
 const std = @import("std");
-const geode = @import("geode");
+const timeseries = @import("timeseries_lib");
 
-fn makeStore() geode.timeseries.Store {
-    return geode.timeseries.Store.init(std.testing.allocator);
+fn makeStore() timeseries.Store {
+    return timeseries.Store.init(std.testing.allocator);
 }
 
 test "ts store: last_value/value_before/sample_by integration" {
     var st = makeStore();
     defer st.deinit();
-    const key = geode.timeseries.SeriesKey{ .device_id = 42, .metric = "temp" };
+    const key = timeseries.SeriesKey{ .device_id = 42, .metric = "temp" };
     try st.insertMany(key, &.{ .{ .ts = 0, .value = 10 }, .{ .ts = 5, .value = 20 }, .{ .ts = 10, .value = 30 } });
     const last = st.last(key).?;
     try std.testing.expect(last.ts == 10 and last.value == 30);
