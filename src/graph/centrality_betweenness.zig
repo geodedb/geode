@@ -10,7 +10,7 @@ pub const Params = struct {
 };
 
 pub const Result = struct {
-    node_ids: []u32,
+    node_ids: []u64,
     scores: []f64,
     pub fn deinit(self: *Result, alloc: std.mem.Allocator) void {
         alloc.free(self.node_ids);
@@ -22,9 +22,9 @@ pub const Result = struct {
 // Compute betweenness centrality using Brandes algorithm (O(V * (V + E))). Suitable for test-size graphs.
 pub fn compute(allocator: std.mem.Allocator, g: *const builders.Graph, p: Params) !Result {
     const n = g.nodes.count();
-    if (n == 0) return .{ .node_ids = &[_]u32{}, .scores = &[_]f64{} };
+    if (n == 0) return .{ .node_ids = &[_]u64{}, .scores = &[_]f64{} };
     // Collect node ids sorted
-    var node_ids = try allocator.alloc(u32, n);
+    var node_ids = try allocator.alloc(u64, n);
     errdefer allocator.free(node_ids);
     var it = g.nodes.iterator();
     var i: usize = 0;
@@ -32,33 +32,33 @@ pub fn compute(allocator: std.mem.Allocator, g: *const builders.Graph, p: Params
         node_ids[i] = e.key_ptr.*;
         i += 1;
     }
-    std.sort.sort(u32, node_ids, {}, comptime std.sort.asc(u32));
-    var id_to_index = std.AutoHashMap(u32, u32).init(allocator);
+    std.sort.sort(u64, node_ids, {}, comptime std.sort.asc(u64));
+    var id_to_index = std.AutoHashMap(u64, u64).init(allocator);
     defer id_to_index.deinit();
-    for (node_ids, 0..) |id, idx| id_to_index.put(id, @as(u32, @intCast(idx))) catch {};
+    for (node_ids, 0..) |id, idx| id_to_index.put(id, @as(u64, @intCast(idx))) catch {};
 
     var Cb = try allocator.alloc(f64, n); // centrality scores
     errdefer allocator.free(Cb);
     for (Cb) |*v| v.* = 0;
 
     // Reusable arrays
-    var stack = try std.ArrayList(u32).initCapacity(allocator, n);
+    var stack = try std.ArrayList(u64).initCapacity(allocator, n);
     defer stack.deinit();
-    var P = try allocator.alloc(std.ArrayList(u32), n); // predecessors per node (indices)
+    var P = try allocator.alloc(std.ArrayList(u64), n); // predecessors per node (indices)
     defer {
         var j: usize = 0;
         while (j < n) : (j += 1) P[j].deinit();
         allocator.free(P);
     }
     var j: usize = 0;
-    while (j < n) : (j += 1) P[j] = std.ArrayList(u32).init(allocator);
+    while (j < n) : (j += 1) P[j] = std.ArrayList(u64).init(allocator);
     var sigma = try allocator.alloc(f64, n);
     defer allocator.free(sigma);
     var dist = try allocator.alloc(i32, n);
     defer allocator.free(dist);
     var delta = try allocator.alloc(f64, n);
     defer allocator.free(delta);
-    var queue = try std.ArrayList(u32).initCapacity(allocator, n);
+    var queue = try std.ArrayList(u64).initCapacity(allocator, n);
     defer queue.deinit();
 
     // For each source s
@@ -76,7 +76,7 @@ pub fn compute(allocator: std.mem.Allocator, g: *const builders.Graph, p: Params
 
         sigma[s_idx] = 1;
         dist[s_idx] = 0;
-        try queue.append(@as(u32, @intCast(s_idx)));
+        try queue.append(@as(u64, @intCast(s_idx)));
 
         // BFS (unweighted) layer exploration
         while (queue.items.len > 0) {
@@ -129,7 +129,7 @@ test "TestCANARY_REQ_GQL_067_Betweenness basic star" {
     g.addNode(2);
     g.addNode(3);
     g.addNode(4);
-    var i: u32 = 1;
+    var i: u64 = 1;
     while (i <= 4) : (i += 1) {
         _ = g.addEdge(0, i, 1) catch {};
         _ = g.addEdge(i, 0, 1) catch {};

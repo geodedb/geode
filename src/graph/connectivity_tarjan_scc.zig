@@ -4,8 +4,8 @@ const builders = @import("builders.zig");
 // CANARY: REQ=REQ-GQL-064; FEATURE="Connectivity"; ASPECT=TarjanSCC; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_064_TarjanSCC; BENCH=BenchmarkCANARY_REQ_GQL_064_TarjanSCC; OWNER=graph; UPDATED=2025-09-21
 
 pub const SccResult = struct {
-    components: [][]u32, // array of components (each array owned)
-    order: []u32, // DFS visitation order (node ids)
+    components: [][]u64, // array of components (each array owned)
+    order: []u64, // DFS visitation order (node ids)
 
     pub fn deinit(self: *SccResult, alloc: std.mem.Allocator) void {
         for (self.components) |comp| alloc.free(comp);
@@ -17,20 +17,20 @@ pub const SccResult = struct {
 
 pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !SccResult {
     // Gather node ids from edges & any standalone nodes (Graph currently tracks nodes map)
-    var ids_list = std.ArrayList(u32).init(alloc);
+    var ids_list = std.ArrayList(u64).init(alloc);
     defer ids_list.deinit();
     var node_it = g.nodes.keyIterator();
     while (node_it.next()) |k| try ids_list.append(k.*);
     // Sort for deterministic processing order
-    std.sort.sort(u32, ids_list.items, {}, comptime std.sort.asc(u32));
+    std.sort.sort(u64, ids_list.items, {}, comptime std.sort.asc(u64));
 
     const n = ids_list.items.len;
-    var id_to_index = std.AutoHashMap(u32, usize).init(alloc);
+    var id_to_index = std.AutoHashMap(u64, usize).init(alloc);
     defer id_to_index.deinit();
     for (ids_list.items, 0..) |id, i| try id_to_index.put(id, i);
 
     var index: usize = 0;
-    var stack = std.ArrayList(u32).init(alloc);
+    var stack = std.ArrayList(u64).init(alloc);
     defer stack.deinit();
     const on_stack = try alloc.alloc(bool, n);
     defer alloc.free(on_stack);
@@ -43,15 +43,15 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !SccResult {
     @memset(indices, -1);
     @memset(lowlink, -1);
 
-    var order = try alloc.alloc(u32, n);
+    var order = try alloc.alloc(u64, n);
     var order_count: usize = 0;
 
-    var comps = std.ArrayList([]u32).init(alloc);
+    var comps = std.ArrayList([]u64).init(alloc);
 
     // Build adjacency index for fast iteration (reuse existing g.index if available)
     // We'll iterate edges directly grouping by src id.
     // For performance we precompute slice start positions in edges array keyed by src id.
-    var src_groups = std.AutoHashMap(u32, struct { start: usize, end: usize }).init(alloc);
+    var src_groups = std.AutoHashMap(u64, struct { start: usize, end: usize }).init(alloc);
     defer src_groups.deinit();
     // Build groups in order encountered
     for (g.edges.items, 0..) |e, i_e| {
@@ -62,17 +62,17 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !SccResult {
     const Self = struct {
         alloc: std.mem.Allocator,
         g: builders.Graph,
-        ids: []u32,
-        id_to_index: *std.AutoHashMap(u32, usize),
-        stack: *std.ArrayList(u32),
+        ids: []u64,
+        id_to_index: *std.AutoHashMap(u64, usize),
+        stack: *std.ArrayList(u64),
         on_stack: []bool,
         indices: []i64,
         lowlink: []i64,
         index: *usize,
-        order: []u32,
+        order: []u64,
         order_count: *usize,
-        comps: *std.ArrayList([]u32),
-        src_groups: *std.AutoHashMap(u32, struct { start: usize, end: usize }),
+        comps: *std.ArrayList([]u64),
+        src_groups: *std.AutoHashMap(u64, struct { start: usize, end: usize }),
     };
 
     var self_ctx = Self{
@@ -118,7 +118,7 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !SccResult {
 
             if (self.lowlink[v_idx] == self.indices[v_idx]) {
                 // root of an SCC
-                var comp_ids = std.ArrayList(u32).init(self.alloc);
+                var comp_ids = std.ArrayList(u64).init(self.alloc);
                 defer comp_ids.deinit();
                 while (true) {
                     const w_id = self.stack.pop();
@@ -128,8 +128,8 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !SccResult {
                     if (w_id == self.ids[v_idx]) break;
                 }
                 // sort component for determinism
-                std.sort.sort(u32, comp_ids.items, {}, comptime std.sort.asc(u32));
-                const comp_slice = try self.alloc.alloc(u32, comp_ids.items.len);
+                std.sort.sort(u64, comp_ids.items, {}, comptime std.sort.asc(u64));
+                const comp_slice = try self.alloc.alloc(u64, comp_ids.items.len);
                 @memcpy(comp_slice, comp_ids.items);
                 try self.comps.append(comp_slice);
             }
@@ -141,11 +141,11 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !SccResult {
     }
 
     // Finalize components array
-    const comps_slice = try alloc.alloc([]u32, comps.items.len);
+    const comps_slice = try alloc.alloc([]u64, comps.items.len);
     @memcpy(comps_slice, comps.items);
     comps.deinit();
     if (order_count < order.len) {
-        const trimmed = try alloc.alloc(u32, order_count);
+        const trimmed = try alloc.alloc(u64, order_count);
         @memcpy(trimmed, order[0..order_count]);
         alloc.free(order);
         order = trimmed;

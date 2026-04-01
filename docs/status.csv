@@ -2975,7 +2975,7 @@ REQ-AUDIT-001,AuditLogging,Configuration,TESTED,,,security,2026-01-15,.worktrees
 REQ-AUDIT-001,AuditLogging,Configuration,TESTED,,,security,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-001,AuditLogging,Configuration,TESTED,,,security,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-001,AuditLogging,Configuration,TESTED,,,security,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-001,AuditLogging,Configuration,TESTED,,,security,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-001,AuditLogging,Configuration,TESTED,,,security,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-CLI-001,CLI Audit Configuration,Configuration,TESTED,,,audit,2025-09-30,.claude/worktrees/agent-a10cae4d/src/cli/cli_dispatcher.zig
 REQ-AUDIT-CLI-001,CLI Audit Configuration,Configuration,TESTED,,,audit,2025-09-30,.claude/worktrees/agent-a233c712/src/cli/cli_dispatcher.zig
 REQ-AUDIT-CLI-001,CLI Audit Configuration,Configuration,TESTED,,,audit,2025-09-30,.claude/worktrees/agent-a37683fc/src/cli/cli_dispatcher.zig
@@ -3051,7 +3051,7 @@ REQ-AUDIT-PROC-001,AuditProcedures,EventID,TESTED,,,audit,2026-01-15,.worktrees/
 REQ-AUDIT-PROC-001,AuditProcedures,EventID,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-001,AuditProcedures,EventID,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-001,AuditProcedures,EventID,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-001,AuditProcedures,EventID,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-001,AuditProcedures,EventID,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-002,AuditProcedures,AuthEventLogging,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-002,AuditProcedures,AuthEventLogging,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-002,AuditProcedures,AuthEventLogging,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3070,7 +3070,7 @@ REQ-AUDIT-PROC-002,AuditProcedures,AuthEventLogging,TESTED,,,audit,2026-01-15,.w
 REQ-AUDIT-PROC-002,AuditProcedures,AuthEventLogging,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-002,AuditProcedures,AuthEventLogging,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-002,AuditProcedures,AuthEventLogging,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-002,AuditProcedures,AuthEventLogging,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-002,AuditProcedures,AuthEventLogging,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-003,AuditProcedures,LifecycleEventLogging,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-003,AuditProcedures,LifecycleEventLogging,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-003,AuditProcedures,LifecycleEventLogging,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3089,7 +3089,7 @@ REQ-AUDIT-PROC-003,AuditProcedures,LifecycleEventLogging,TESTED,,,audit,2026-01-
 REQ-AUDIT-PROC-003,AuditProcedures,LifecycleEventLogging,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-003,AuditProcedures,LifecycleEventLogging,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-003,AuditProcedures,LifecycleEventLogging,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-003,AuditProcedures,LifecycleEventLogging,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-003,AuditProcedures,LifecycleEventLogging,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-004,AuditProcedures,RecentEventsQuery,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-004,AuditProcedures,RecentEventsQuery,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-004,AuditProcedures,RecentEventsQuery,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3108,7 +3108,7 @@ REQ-AUDIT-PROC-004,AuditProcedures,RecentEventsQuery,TESTED,,,audit,2026-01-15,.
 REQ-AUDIT-PROC-004,AuditProcedures,RecentEventsQuery,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-004,AuditProcedures,RecentEventsQuery,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-004,AuditProcedures,RecentEventsQuery,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-004,AuditProcedures,RecentEventsQuery,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-004,AuditProcedures,RecentEventsQuery,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-005,AuditProcedures,HashChainVerification,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-005,AuditProcedures,HashChainVerification,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-005,AuditProcedures,HashChainVerification,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3127,7 +3127,7 @@ REQ-AUDIT-PROC-005,AuditProcedures,HashChainVerification,TESTED,,,audit,2026-01-
 REQ-AUDIT-PROC-005,AuditProcedures,HashChainVerification,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-005,AuditProcedures,HashChainVerification,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-005,AuditProcedures,HashChainVerification,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-005,AuditProcedures,HashChainVerification,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-005,AuditProcedures,HashChainVerification,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-006,AuditProcedures,SignatureVerification,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-006,AuditProcedures,SignatureVerification,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-006,AuditProcedures,SignatureVerification,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3146,7 +3146,7 @@ REQ-AUDIT-PROC-006,AuditProcedures,SignatureVerification,TESTED,,,audit,2026-01-
 REQ-AUDIT-PROC-006,AuditProcedures,SignatureVerification,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-006,AuditProcedures,SignatureVerification,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-006,AuditProcedures,SignatureVerification,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-006,AuditProcedures,SignatureVerification,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-006,AuditProcedures,SignatureVerification,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-007,AuditProcedures,MerkleDigests,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-007,AuditProcedures,MerkleDigests,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-007,AuditProcedures,MerkleDigests,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3165,7 +3165,7 @@ REQ-AUDIT-PROC-007,AuditProcedures,MerkleDigests,TESTED,,,audit,2026-01-15,.work
 REQ-AUDIT-PROC-007,AuditProcedures,MerkleDigests,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-007,AuditProcedures,MerkleDigests,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-007,AuditProcedures,MerkleDigests,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-007,AuditProcedures,MerkleDigests,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-007,AuditProcedures,MerkleDigests,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-008,AuditProcedures,IntegrityCheck,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-008,AuditProcedures,IntegrityCheck,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-008,AuditProcedures,IntegrityCheck,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3184,7 +3184,7 @@ REQ-AUDIT-PROC-008,AuditProcedures,IntegrityCheck,TESTED,,,audit,2026-01-15,.wor
 REQ-AUDIT-PROC-008,AuditProcedures,IntegrityCheck,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-008,AuditProcedures,IntegrityCheck,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-008,AuditProcedures,IntegrityCheck,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-008,AuditProcedures,IntegrityCheck,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-008,AuditProcedures,IntegrityCheck,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-009,AuditProcedures,FileOutput,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-009,AuditProcedures,FileOutput,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-009,AuditProcedures,FileOutput,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3203,7 +3203,7 @@ REQ-AUDIT-PROC-009,AuditProcedures,FileOutput,TESTED,,,audit,2026-01-15,.worktre
 REQ-AUDIT-PROC-009,AuditProcedures,FileOutput,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-009,AuditProcedures,FileOutput,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-009,AuditProcedures,FileOutput,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-009,AuditProcedures,FileOutput,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-009,AuditProcedures,FileOutput,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-010,AuditProcedures,AuthCategories,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-010,AuditProcedures,AuthCategories,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-010,AuditProcedures,AuthCategories,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3222,7 +3222,7 @@ REQ-AUDIT-PROC-010,AuditProcedures,AuthCategories,TESTED,,,audit,2026-01-15,.wor
 REQ-AUDIT-PROC-010,AuditProcedures,AuthCategories,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-010,AuditProcedures,AuthCategories,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-010,AuditProcedures,AuthCategories,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-010,AuditProcedures,AuthCategories,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-010,AuditProcedures,AuthCategories,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-011,AuditProcedures,CommandCategories,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-011,AuditProcedures,CommandCategories,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-011,AuditProcedures,CommandCategories,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3241,7 +3241,7 @@ REQ-AUDIT-PROC-011,AuditProcedures,CommandCategories,TESTED,,,audit,2026-01-15,.
 REQ-AUDIT-PROC-011,AuditProcedures,CommandCategories,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-011,AuditProcedures,CommandCategories,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-011,AuditProcedures,CommandCategories,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-011,AuditProcedures,CommandCategories,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-011,AuditProcedures,CommandCategories,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-012,AuditProcedures,DataAccessCategories,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-012,AuditProcedures,DataAccessCategories,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-012,AuditProcedures,DataAccessCategories,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3260,7 +3260,7 @@ REQ-AUDIT-PROC-012,AuditProcedures,DataAccessCategories,TESTED,,,audit,2025-10-1
 REQ-AUDIT-PROC-012,AuditProcedures,DataAccessCategories,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-012,AuditProcedures,DataAccessCategories,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-012,AuditProcedures,DataAccessCategories,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-012,AuditProcedures,DataAccessCategories,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-012,AuditProcedures,DataAccessCategories,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-013,AuditProcedures,LogRotation,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-013,AuditProcedures,LogRotation,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-013,AuditProcedures,LogRotation,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3279,7 +3279,7 @@ REQ-AUDIT-PROC-013,AuditProcedures,LogRotation,TESTED,,,audit,2025-10-19,.worktr
 REQ-AUDIT-PROC-013,AuditProcedures,LogRotation,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-013,AuditProcedures,LogRotation,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-013,AuditProcedures,LogRotation,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-013,AuditProcedures,LogRotation,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-013,AuditProcedures,LogRotation,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-014,AuditProcedures,WindowsEventLog,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-014,AuditProcedures,WindowsEventLog,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-014,AuditProcedures,WindowsEventLog,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3298,7 +3298,7 @@ REQ-AUDIT-PROC-014,AuditProcedures,WindowsEventLog,TESTED,,,audit,2025-10-19,.wo
 REQ-AUDIT-PROC-014,AuditProcedures,WindowsEventLog,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-014,AuditProcedures,WindowsEventLog,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-014,AuditProcedures,WindowsEventLog,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-014,AuditProcedures,WindowsEventLog,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-014,AuditProcedures,WindowsEventLog,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-015,AuditProcedures,SyslogOutput,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-015,AuditProcedures,SyslogOutput,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-015,AuditProcedures,SyslogOutput,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3317,7 +3317,7 @@ REQ-AUDIT-PROC-015,AuditProcedures,SyslogOutput,TESTED,,,audit,2025-10-19,.workt
 REQ-AUDIT-PROC-015,AuditProcedures,SyslogOutput,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-015,AuditProcedures,SyslogOutput,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-015,AuditProcedures,SyslogOutput,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-015,AuditProcedures,SyslogOutput,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-015,AuditProcedures,SyslogOutput,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-016,AuditProcedures,CombinedOutput,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-016,AuditProcedures,CombinedOutput,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-016,AuditProcedures,CombinedOutput,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3336,7 +3336,7 @@ REQ-AUDIT-PROC-016,AuditProcedures,CombinedOutput,TESTED,,,audit,2025-10-19,.wor
 REQ-AUDIT-PROC-016,AuditProcedures,CombinedOutput,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-016,AuditProcedures,CombinedOutput,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-016,AuditProcedures,CombinedOutput,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-016,AuditProcedures,CombinedOutput,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-016,AuditProcedures,CombinedOutput,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-017,AuditProcedures,SIEMCorrelation,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-017,AuditProcedures,SIEMCorrelation,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-017,AuditProcedures,SIEMCorrelation,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3355,7 +3355,7 @@ REQ-AUDIT-PROC-017,AuditProcedures,SIEMCorrelation,TESTED,,,audit,2025-10-19,.wo
 REQ-AUDIT-PROC-017,AuditProcedures,SIEMCorrelation,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-017,AuditProcedures,SIEMCorrelation,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-017,AuditProcedures,SIEMCorrelation,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-017,AuditProcedures,SIEMCorrelation,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-017,AuditProcedures,SIEMCorrelation,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-018,AuditProcedures,SIEMAlerts,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-018,AuditProcedures,SIEMAlerts,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-018,AuditProcedures,SIEMAlerts,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3374,7 +3374,7 @@ REQ-AUDIT-PROC-018,AuditProcedures,SIEMAlerts,TESTED,,,audit,2025-10-19,.worktre
 REQ-AUDIT-PROC-018,AuditProcedures,SIEMAlerts,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-018,AuditProcedures,SIEMAlerts,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-018,AuditProcedures,SIEMAlerts,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-018,AuditProcedures,SIEMAlerts,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-018,AuditProcedures,SIEMAlerts,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-019,AuditProcedures,ComplianceReporting,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-019,AuditProcedures,ComplianceReporting,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-019,AuditProcedures,ComplianceReporting,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3393,7 +3393,7 @@ REQ-AUDIT-PROC-019,AuditProcedures,ComplianceReporting,TESTED,,,audit,2026-01-15
 REQ-AUDIT-PROC-019,AuditProcedures,ComplianceReporting,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-019,AuditProcedures,ComplianceReporting,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-019,AuditProcedures,ComplianceReporting,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-019,AuditProcedures,ComplianceReporting,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-019,AuditProcedures,ComplianceReporting,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-020,AuditProcedures,PowerShellCompatibility,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-020,AuditProcedures,PowerShellCompatibility,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-020,AuditProcedures,PowerShellCompatibility,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3412,7 +3412,7 @@ REQ-AUDIT-PROC-020,AuditProcedures,PowerShellCompatibility,TESTED,,,audit,2026-0
 REQ-AUDIT-PROC-020,AuditProcedures,PowerShellCompatibility,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-020,AuditProcedures,PowerShellCompatibility,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-020,AuditProcedures,PowerShellCompatibility,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-020,AuditProcedures,PowerShellCompatibility,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-020,AuditProcedures,PowerShellCompatibility,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-021,AuditProcedures,RotationContinuity,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-021,AuditProcedures,RotationContinuity,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-021,AuditProcedures,RotationContinuity,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3431,7 +3431,7 @@ REQ-AUDIT-PROC-021,AuditProcedures,RotationContinuity,TESTED,,,audit,2025-10-19,
 REQ-AUDIT-PROC-021,AuditProcedures,RotationContinuity,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-021,AuditProcedures,RotationContinuity,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-021,AuditProcedures,RotationContinuity,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-021,AuditProcedures,RotationContinuity,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-021,AuditProcedures,RotationContinuity,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-022,AuditProcedures,RetentionPolicy,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-022,AuditProcedures,RetentionPolicy,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-022,AuditProcedures,RetentionPolicy,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3450,7 +3450,7 @@ REQ-AUDIT-PROC-022,AuditProcedures,RetentionPolicy,TESTED,,,audit,2025-10-19,.wo
 REQ-AUDIT-PROC-022,AuditProcedures,RetentionPolicy,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-022,AuditProcedures,RetentionPolicy,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-022,AuditProcedures,RetentionPolicy,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-022,AuditProcedures,RetentionPolicy,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-022,AuditProcedures,RetentionPolicy,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-023,AuditProcedures,LogCleanup,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-023,AuditProcedures,LogCleanup,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-023,AuditProcedures,LogCleanup,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3469,7 +3469,7 @@ REQ-AUDIT-PROC-023,AuditProcedures,LogCleanup,TESTED,,,audit,2025-10-19,.worktre
 REQ-AUDIT-PROC-023,AuditProcedures,LogCleanup,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-023,AuditProcedures,LogCleanup,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-023,AuditProcedures,LogCleanup,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-023,AuditProcedures,LogCleanup,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-023,AuditProcedures,LogCleanup,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-024,AuditProcedures,AnomalyDetection,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-024,AuditProcedures,AnomalyDetection,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-024,AuditProcedures,AnomalyDetection,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3488,7 +3488,7 @@ REQ-AUDIT-PROC-024,AuditProcedures,AnomalyDetection,TESTED,,,audit,2025-10-19,.w
 REQ-AUDIT-PROC-024,AuditProcedures,AnomalyDetection,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-024,AuditProcedures,AnomalyDetection,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-024,AuditProcedures,AnomalyDetection,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-024,AuditProcedures,AnomalyDetection,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-024,AuditProcedures,AnomalyDetection,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-025,AuditProcedures,ThreatIndicators,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-025,AuditProcedures,ThreatIndicators,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-025,AuditProcedures,ThreatIndicators,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3507,7 +3507,7 @@ REQ-AUDIT-PROC-025,AuditProcedures,ThreatIndicators,TESTED,,,audit,2025-10-19,.w
 REQ-AUDIT-PROC-025,AuditProcedures,ThreatIndicators,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-025,AuditProcedures,ThreatIndicators,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-025,AuditProcedures,ThreatIndicators,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-025,AuditProcedures,ThreatIndicators,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-025,AuditProcedures,ThreatIndicators,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-026,AuditProcedures,PrivilegeEscalation,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-026,AuditProcedures,PrivilegeEscalation,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-026,AuditProcedures,PrivilegeEscalation,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3526,7 +3526,7 @@ REQ-AUDIT-PROC-026,AuditProcedures,PrivilegeEscalation,TESTED,,,audit,2025-10-19
 REQ-AUDIT-PROC-026,AuditProcedures,PrivilegeEscalation,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-026,AuditProcedures,PrivilegeEscalation,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-026,AuditProcedures,PrivilegeEscalation,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-026,AuditProcedures,PrivilegeEscalation,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-026,AuditProcedures,PrivilegeEscalation,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-027,AuditProcedures,PerformanceTesting,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-027,AuditProcedures,PerformanceTesting,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-027,AuditProcedures,PerformanceTesting,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3545,7 +3545,7 @@ REQ-AUDIT-PROC-027,AuditProcedures,PerformanceTesting,TESTED,,,audit,2025-10-19,
 REQ-AUDIT-PROC-027,AuditProcedures,PerformanceTesting,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-027,AuditProcedures,PerformanceTesting,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-027,AuditProcedures,PerformanceTesting,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-027,AuditProcedures,PerformanceTesting,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-027,AuditProcedures,PerformanceTesting,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-028,AuditProcedures,MemoryUsage,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-028,AuditProcedures,MemoryUsage,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-028,AuditProcedures,MemoryUsage,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3564,7 +3564,7 @@ REQ-AUDIT-PROC-028,AuditProcedures,MemoryUsage,TESTED,,,audit,2025-10-19,.worktr
 REQ-AUDIT-PROC-028,AuditProcedures,MemoryUsage,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-028,AuditProcedures,MemoryUsage,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-028,AuditProcedures,MemoryUsage,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-028,AuditProcedures,MemoryUsage,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-028,AuditProcedures,MemoryUsage,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-029,AuditProcedures,ConcurrentAccess,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-029,AuditProcedures,ConcurrentAccess,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-029,AuditProcedures,ConcurrentAccess,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3583,7 +3583,7 @@ REQ-AUDIT-PROC-029,AuditProcedures,ConcurrentAccess,TESTED,,,audit,2025-10-19,.w
 REQ-AUDIT-PROC-029,AuditProcedures,ConcurrentAccess,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-029,AuditProcedures,ConcurrentAccess,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-029,AuditProcedures,ConcurrentAccess,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-029,AuditProcedures,ConcurrentAccess,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-029,AuditProcedures,ConcurrentAccess,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-030,AuditProcedures,DiskSpaceHandling,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-030,AuditProcedures,DiskSpaceHandling,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-030,AuditProcedures,DiskSpaceHandling,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3602,7 +3602,7 @@ REQ-AUDIT-PROC-030,AuditProcedures,DiskSpaceHandling,TESTED,,,audit,2025-10-19,.
 REQ-AUDIT-PROC-030,AuditProcedures,DiskSpaceHandling,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-030,AuditProcedures,DiskSpaceHandling,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-030,AuditProcedures,DiskSpaceHandling,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-030,AuditProcedures,DiskSpaceHandling,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-030,AuditProcedures,DiskSpaceHandling,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-031,AuditProcedures,CorruptionHandling,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-031,AuditProcedures,CorruptionHandling,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-031,AuditProcedures,CorruptionHandling,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3621,7 +3621,7 @@ REQ-AUDIT-PROC-031,AuditProcedures,CorruptionHandling,TESTED,,,audit,2025-10-19,
 REQ-AUDIT-PROC-031,AuditProcedures,CorruptionHandling,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-031,AuditProcedures,CorruptionHandling,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-031,AuditProcedures,CorruptionHandling,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-031,AuditProcedures,CorruptionHandling,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-031,AuditProcedures,CorruptionHandling,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-032,AuditProcedures,InvalidConfig,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-032,AuditProcedures,InvalidConfig,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-032,AuditProcedures,InvalidConfig,TESTED,,,audit,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3640,7 +3640,7 @@ REQ-AUDIT-PROC-032,AuditProcedures,InvalidConfig,TESTED,,,audit,2025-10-19,.work
 REQ-AUDIT-PROC-032,AuditProcedures,InvalidConfig,TESTED,,,audit,2025-10-19,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-032,AuditProcedures,InvalidConfig,TESTED,,,audit,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-032,AuditProcedures,InvalidConfig,TESTED,,,audit,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-032,AuditProcedures,InvalidConfig,TESTED,,,audit,2025-10-19,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-032,AuditProcedures,InvalidConfig,TESTED,,,audit,2025-10-19,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-033,AuditProcedures,ExportVerification,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-033,AuditProcedures,ExportVerification,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-033,AuditProcedures,ExportVerification,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3659,7 +3659,7 @@ REQ-AUDIT-PROC-033,AuditProcedures,ExportVerification,TESTED,,,audit,2026-01-15,
 REQ-AUDIT-PROC-033,AuditProcedures,ExportVerification,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-033,AuditProcedures,ExportVerification,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-033,AuditProcedures,ExportVerification,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-033,AuditProcedures,ExportVerification,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-033,AuditProcedures,ExportVerification,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-034,AuditProcedures,ForensicPackage,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-034,AuditProcedures,ForensicPackage,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-034,AuditProcedures,ForensicPackage,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3678,7 +3678,7 @@ REQ-AUDIT-PROC-034,AuditProcedures,ForensicPackage,TESTED,,,audit,2026-01-15,.wo
 REQ-AUDIT-PROC-034,AuditProcedures,ForensicPackage,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-034,AuditProcedures,ForensicPackage,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-034,AuditProcedures,ForensicPackage,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-034,AuditProcedures,ForensicPackage,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-034,AuditProcedures,ForensicPackage,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-035,AuditProcedures,ComplianceVerification,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-035,AuditProcedures,ComplianceVerification,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-035,AuditProcedures,ComplianceVerification,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3697,7 +3697,7 @@ REQ-AUDIT-PROC-035,AuditProcedures,ComplianceVerification,TESTED,,,audit,2026-01
 REQ-AUDIT-PROC-035,AuditProcedures,ComplianceVerification,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-035,AuditProcedures,ComplianceVerification,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-035,AuditProcedures,ComplianceVerification,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-035,AuditProcedures,ComplianceVerification,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-035,AuditProcedures,ComplianceVerification,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-036,AuditProcedures,TestCleanup,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-036,AuditProcedures,TestCleanup,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-036,AuditProcedures,TestCleanup,TESTED,,,audit,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -3716,7 +3716,7 @@ REQ-AUDIT-PROC-036,AuditProcedures,TestCleanup,TESTED,,,audit,2026-01-15,.worktr
 REQ-AUDIT-PROC-036,AuditProcedures,TestCleanup,TESTED,,,audit,2026-01-15,.worktrees/graph-storage-integration/src/execution/audit_dispatch.zig
 REQ-AUDIT-PROC-036,AuditProcedures,TestCleanup,TESTED,,,audit,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-AUDIT-PROC-036,AuditProcedures,TestCleanup,TESTED,,,audit,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-AUDIT-PROC-036,AuditProcedures,TestCleanup,TESTED,,,audit,2026-01-15,src/execution/procedure_registry.zig
+REQ-AUDIT-PROC-036,AuditProcedures,TestCleanup,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig
 REQ-AUDIT-PWSH-001,PowerShell Compatibility,PlatformDetection,EXEMPT,,,security,2026-01-13,.claude/worktrees/agent-a10cae4d/src/security/audit.zig
 REQ-AUDIT-PWSH-001,PowerShell Compatibility,PlatformDetection,EXEMPT,,,security,2026-01-13,.claude/worktrees/agent-a233c712/src/security/audit.zig
 REQ-AUDIT-PWSH-001,PowerShell Compatibility,PlatformDetection,EXEMPT,,,security,2026-01-13,.claude/worktrees/agent-a37683fc/src/security/audit.zig
@@ -8269,7 +8269,7 @@ REQ-CDC-PROC-001,CDCProcedures,Enable,TESTED,,,cdc,2026-01-15,.worktrees/audit-m
 REQ-CDC-PROC-001,CDCProcedures,Enable,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-001,CDCProcedures,Enable,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-001,CDCProcedures,Enable,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-001,CDCProcedures,Enable,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-001,CDCProcedures,Enable,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-002,CDCProcedures,Disable,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-002,CDCProcedures,Disable,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-002,CDCProcedures,Disable,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8288,7 +8288,7 @@ REQ-CDC-PROC-002,CDCProcedures,Disable,TESTED,,,cdc,2026-01-15,.worktrees/audit-
 REQ-CDC-PROC-002,CDCProcedures,Disable,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-002,CDCProcedures,Disable,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-002,CDCProcedures,Disable,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-002,CDCProcedures,Disable,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-002,CDCProcedures,Disable,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-003,CDCProcedures,Status,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-003,CDCProcedures,Status,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-003,CDCProcedures,Status,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8307,7 +8307,7 @@ REQ-CDC-PROC-003,CDCProcedures,Status,TESTED,,,cdc,2026-01-15,.worktrees/audit-m
 REQ-CDC-PROC-003,CDCProcedures,Status,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-003,CDCProcedures,Status,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-003,CDCProcedures,Status,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-003,CDCProcedures,Status,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-003,CDCProcedures,Status,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-004,CDCProcedures,ExportDiagnostics,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-004,CDCProcedures,ExportDiagnostics,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-004,CDCProcedures,ExportDiagnostics,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8326,7 +8326,7 @@ REQ-CDC-PROC-004,CDCProcedures,ExportDiagnostics,TESTED,,,cdc,2026-01-15,.worktr
 REQ-CDC-PROC-004,CDCProcedures,ExportDiagnostics,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-004,CDCProcedures,ExportDiagnostics,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-004,CDCProcedures,ExportDiagnostics,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-004,CDCProcedures,ExportDiagnostics,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-004,CDCProcedures,ExportDiagnostics,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-005,CDCProcedures,GetEvents,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-005,CDCProcedures,GetEvents,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-005,CDCProcedures,GetEvents,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8345,7 +8345,7 @@ REQ-CDC-PROC-005,CDCProcedures,GetEvents,TESTED,,,cdc,2026-01-15,.worktrees/audi
 REQ-CDC-PROC-005,CDCProcedures,GetEvents,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-005,CDCProcedures,GetEvents,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-005,CDCProcedures,GetEvents,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-005,CDCProcedures,GetEvents,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-005,CDCProcedures,GetEvents,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-006,CDCProcedures,Pause,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-006,CDCProcedures,Pause,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-006,CDCProcedures,Pause,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8364,7 +8364,7 @@ REQ-CDC-PROC-006,CDCProcedures,Pause,TESTED,,,cdc,2026-01-15,.worktrees/audit-mu
 REQ-CDC-PROC-006,CDCProcedures,Pause,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-006,CDCProcedures,Pause,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-006,CDCProcedures,Pause,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-006,CDCProcedures,Pause,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-006,CDCProcedures,Pause,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-007,CDCProcedures,Resume,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-007,CDCProcedures,Resume,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-007,CDCProcedures,Resume,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8383,7 +8383,7 @@ REQ-CDC-PROC-007,CDCProcedures,Resume,TESTED,,,cdc,2026-01-15,.worktrees/audit-m
 REQ-CDC-PROC-007,CDCProcedures,Resume,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-007,CDCProcedures,Resume,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-007,CDCProcedures,Resume,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-007,CDCProcedures,Resume,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-007,CDCProcedures,Resume,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-008,CDCProcedures,SetGuardrail,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-008,CDCProcedures,SetGuardrail,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-008,CDCProcedures,SetGuardrail,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8402,7 +8402,7 @@ REQ-CDC-PROC-008,CDCProcedures,SetGuardrail,TESTED,,,cdc,2026-01-15,.worktrees/a
 REQ-CDC-PROC-008,CDCProcedures,SetGuardrail,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-008,CDCProcedures,SetGuardrail,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-008,CDCProcedures,SetGuardrail,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-008,CDCProcedures,SetGuardrail,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-008,CDCProcedures,SetGuardrail,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-009,CDCProcedures,GetGuardrailStatus,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-009,CDCProcedures,GetGuardrailStatus,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-009,CDCProcedures,GetGuardrailStatus,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8421,7 +8421,7 @@ REQ-CDC-PROC-009,CDCProcedures,GetGuardrailStatus,TESTED,,,cdc,2026-01-15,.workt
 REQ-CDC-PROC-009,CDCProcedures,GetGuardrailStatus,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-009,CDCProcedures,GetGuardrailStatus,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-009,CDCProcedures,GetGuardrailStatus,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-009,CDCProcedures,GetGuardrailStatus,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-009,CDCProcedures,GetGuardrailStatus,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-010,CDCProcedures,ResetGuardrails,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-010,CDCProcedures,ResetGuardrails,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-010,CDCProcedures,ResetGuardrails,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8440,7 +8440,7 @@ REQ-CDC-PROC-010,CDCProcedures,ResetGuardrails,TESTED,,,cdc,2026-01-15,.worktree
 REQ-CDC-PROC-010,CDCProcedures,ResetGuardrails,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-010,CDCProcedures,ResetGuardrails,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-010,CDCProcedures,ResetGuardrails,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-010,CDCProcedures,ResetGuardrails,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-010,CDCProcedures,ResetGuardrails,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-011,CDCProcedures,GetWatermark,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-011,CDCProcedures,GetWatermark,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-011,CDCProcedures,GetWatermark,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8459,7 +8459,7 @@ REQ-CDC-PROC-011,CDCProcedures,GetWatermark,TESTED,,,cdc,2026-01-15,.worktrees/a
 REQ-CDC-PROC-011,CDCProcedures,GetWatermark,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-011,CDCProcedures,GetWatermark,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-011,CDCProcedures,GetWatermark,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-011,CDCProcedures,GetWatermark,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-011,CDCProcedures,GetWatermark,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-012,CDCProcedures,GetPendingEvents,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-012,CDCProcedures,GetPendingEvents,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-012,CDCProcedures,GetPendingEvents,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8478,7 +8478,7 @@ REQ-CDC-PROC-012,CDCProcedures,GetPendingEvents,TESTED,,,cdc,2026-01-15,.worktre
 REQ-CDC-PROC-012,CDCProcedures,GetPendingEvents,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-012,CDCProcedures,GetPendingEvents,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-012,CDCProcedures,GetPendingEvents,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-012,CDCProcedures,GetPendingEvents,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-012,CDCProcedures,GetPendingEvents,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-013,CDCProcedures,ConfigureAdaptiveFlush,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-013,CDCProcedures,ConfigureAdaptiveFlush,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-013,CDCProcedures,ConfigureAdaptiveFlush,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8497,7 +8497,7 @@ REQ-CDC-PROC-013,CDCProcedures,ConfigureAdaptiveFlush,TESTED,,,cdc,2026-01-15,.w
 REQ-CDC-PROC-013,CDCProcedures,ConfigureAdaptiveFlush,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-013,CDCProcedures,ConfigureAdaptiveFlush,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-013,CDCProcedures,ConfigureAdaptiveFlush,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-013,CDCProcedures,ConfigureAdaptiveFlush,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-013,CDCProcedures,ConfigureAdaptiveFlush,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-014,CDCProcedures,GetFlushMetrics,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-014,CDCProcedures,GetFlushMetrics,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-014,CDCProcedures,GetFlushMetrics,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8516,7 +8516,7 @@ REQ-CDC-PROC-014,CDCProcedures,GetFlushMetrics,TESTED,,,cdc,2026-01-15,.worktree
 REQ-CDC-PROC-014,CDCProcedures,GetFlushMetrics,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-014,CDCProcedures,GetFlushMetrics,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-014,CDCProcedures,GetFlushMetrics,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-014,CDCProcedures,GetFlushMetrics,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-014,CDCProcedures,GetFlushMetrics,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-015,CDCProcedures,GetMalformedRecords,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-015,CDCProcedures,GetMalformedRecords,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-015,CDCProcedures,GetMalformedRecords,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8535,7 +8535,7 @@ REQ-CDC-PROC-015,CDCProcedures,GetMalformedRecords,TESTED,,,cdc,2026-01-15,.work
 REQ-CDC-PROC-015,CDCProcedures,GetMalformedRecords,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-015,CDCProcedures,GetMalformedRecords,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-015,CDCProcedures,GetMalformedRecords,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-015,CDCProcedures,GetMalformedRecords,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-015,CDCProcedures,GetMalformedRecords,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-016,CDCProcedures,GetCorruptionAnalysis,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-016,CDCProcedures,GetCorruptionAnalysis,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-016,CDCProcedures,GetCorruptionAnalysis,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8554,7 +8554,7 @@ REQ-CDC-PROC-016,CDCProcedures,GetCorruptionAnalysis,TESTED,,,cdc,2026-01-15,.wo
 REQ-CDC-PROC-016,CDCProcedures,GetCorruptionAnalysis,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-016,CDCProcedures,GetCorruptionAnalysis,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-016,CDCProcedures,GetCorruptionAnalysis,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-016,CDCProcedures,GetCorruptionAnalysis,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-016,CDCProcedures,GetCorruptionAnalysis,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-017,CDCProcedures,GetOrderedEvents,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-017,CDCProcedures,GetOrderedEvents,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-017,CDCProcedures,GetOrderedEvents,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8573,7 +8573,7 @@ REQ-CDC-PROC-017,CDCProcedures,GetOrderedEvents,TESTED,,,cdc,2026-01-15,.worktre
 REQ-CDC-PROC-017,CDCProcedures,GetOrderedEvents,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-017,CDCProcedures,GetOrderedEvents,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-017,CDCProcedures,GetOrderedEvents,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-017,CDCProcedures,GetOrderedEvents,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-017,CDCProcedures,GetOrderedEvents,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-018,CDCProcedures,CheckDuplicates,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-018,CDCProcedures,CheckDuplicates,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-018,CDCProcedures,CheckDuplicates,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8592,7 +8592,7 @@ REQ-CDC-PROC-018,CDCProcedures,CheckDuplicates,TESTED,,,cdc,2026-01-15,.worktree
 REQ-CDC-PROC-018,CDCProcedures,CheckDuplicates,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-018,CDCProcedures,CheckDuplicates,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-018,CDCProcedures,CheckDuplicates,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-018,CDCProcedures,CheckDuplicates,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-018,CDCProcedures,CheckDuplicates,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-019,CDCProcedures,GetChangeStatus,TESTED,,,cdc,2026-02-04,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-019,CDCProcedures,GetChangeStatus,TESTED,,,cdc,2026-02-04,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-019,CDCProcedures,GetChangeStatus,TESTED,,,cdc,2026-02-04,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8611,7 +8611,7 @@ REQ-CDC-PROC-019,CDCProcedures,GetChangeStatus,TESTED,,,cdc,2026-02-04,.worktree
 REQ-CDC-PROC-019,CDCProcedures,GetChangeStatus,TESTED,,,cdc,2026-02-04,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-019,CDCProcedures,GetChangeStatus,TESTED,,,cdc,2026-02-04,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-019,CDCProcedures,GetChangeStatus,TESTED,,,cdc,2026-02-04,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-019,CDCProcedures,GetChangeStatus,TESTED,,,cdc,2026-02-04,src/execution/procedure_registry.zig
+REQ-CDC-PROC-019,CDCProcedures,GetChangeStatus,TESTED,,,cdc,2026-02-04,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-020,CDCProcedures,ConfigureChangeStream,TESTED,,,cdc,2026-02-04,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-020,CDCProcedures,ConfigureChangeStream,TESTED,,,cdc,2026-02-04,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-020,CDCProcedures,ConfigureChangeStream,TESTED,,,cdc,2026-02-04,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8630,7 +8630,7 @@ REQ-CDC-PROC-020,CDCProcedures,ConfigureChangeStream,TESTED,,,cdc,2026-02-04,.wo
 REQ-CDC-PROC-020,CDCProcedures,ConfigureChangeStream,TESTED,,,cdc,2026-02-04,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-020,CDCProcedures,ConfigureChangeStream,TESTED,,,cdc,2026-02-04,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-020,CDCProcedures,ConfigureChangeStream,TESTED,,,cdc,2026-02-04,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-020,CDCProcedures,ConfigureChangeStream,TESTED,,,cdc,2026-02-04,src/execution/procedure_registry.zig
+REQ-CDC-PROC-020,CDCProcedures,ConfigureChangeStream,TESTED,,,cdc,2026-02-04,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-021,CDCProcedures,SetRetentionPolicy,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-021,CDCProcedures,SetRetentionPolicy,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-021,CDCProcedures,SetRetentionPolicy,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8649,7 +8649,7 @@ REQ-CDC-PROC-021,CDCProcedures,SetRetentionPolicy,TESTED,,,cdc,2026-01-15,.workt
 REQ-CDC-PROC-021,CDCProcedures,SetRetentionPolicy,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-021,CDCProcedures,SetRetentionPolicy,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-021,CDCProcedures,SetRetentionPolicy,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-021,CDCProcedures,SetRetentionPolicy,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-021,CDCProcedures,SetRetentionPolicy,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-022,CDCProcedures,CleanupExpiredEvents,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-022,CDCProcedures,CleanupExpiredEvents,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-022,CDCProcedures,CleanupExpiredEvents,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8668,7 +8668,7 @@ REQ-CDC-PROC-022,CDCProcedures,CleanupExpiredEvents,TESTED,,,cdc,2026-01-15,.wor
 REQ-CDC-PROC-022,CDCProcedures,CleanupExpiredEvents,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-022,CDCProcedures,CleanupExpiredEvents,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-022,CDCProcedures,CleanupExpiredEvents,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-022,CDCProcedures,CleanupExpiredEvents,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-022,CDCProcedures,CleanupExpiredEvents,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-023,CDCProcedures,GetTelemetryMetrics,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-023,CDCProcedures,GetTelemetryMetrics,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-023,CDCProcedures,GetTelemetryMetrics,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8687,7 +8687,7 @@ REQ-CDC-PROC-023,CDCProcedures,GetTelemetryMetrics,TESTED,,,cdc,2026-01-15,.work
 REQ-CDC-PROC-023,CDCProcedures,GetTelemetryMetrics,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-023,CDCProcedures,GetTelemetryMetrics,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-023,CDCProcedures,GetTelemetryMetrics,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-023,CDCProcedures,GetTelemetryMetrics,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-023,CDCProcedures,GetTelemetryMetrics,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-024,CDCProcedures,GetPerformanceAlerts,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-024,CDCProcedures,GetPerformanceAlerts,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-024,CDCProcedures,GetPerformanceAlerts,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8706,7 +8706,7 @@ REQ-CDC-PROC-024,CDCProcedures,GetPerformanceAlerts,TESTED,,,cdc,2026-01-15,.wor
 REQ-CDC-PROC-024,CDCProcedures,GetPerformanceAlerts,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-024,CDCProcedures,GetPerformanceAlerts,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-024,CDCProcedures,GetPerformanceAlerts,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-024,CDCProcedures,GetPerformanceAlerts,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-024,CDCProcedures,GetPerformanceAlerts,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-025,CDCProcedures,Stop,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-025,CDCProcedures,Stop,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-025,CDCProcedures,Stop,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8725,7 +8725,7 @@ REQ-CDC-PROC-025,CDCProcedures,Stop,TESTED,,,cdc,2026-01-15,.worktrees/audit-mul
 REQ-CDC-PROC-025,CDCProcedures,Stop,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-025,CDCProcedures,Stop,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-025,CDCProcedures,Stop,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-025,CDCProcedures,Stop,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-025,CDCProcedures,Stop,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CDC-PROC-026,CDCProcedures,Start,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-CDC-PROC-026,CDCProcedures,Start,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-CDC-PROC-026,CDCProcedures,Start,TESTED,,,cdc,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -8744,7 +8744,7 @@ REQ-CDC-PROC-026,CDCProcedures,Start,TESTED,,,cdc,2026-01-15,.worktrees/audit-mu
 REQ-CDC-PROC-026,CDCProcedures,Start,TESTED,,,cdc,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-CDC-PROC-026,CDCProcedures,Start,TESTED,,,cdc,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-CDC-PROC-026,CDCProcedures,Start,TESTED,,,cdc,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-CDC-PROC-026,CDCProcedures,Start,TESTED,,,cdc,2026-01-15,src/execution/procedure_registry.zig
+REQ-CDC-PROC-026,CDCProcedures,Start,TESTED,,,cdc,2026-01-15,src/execution/storage_dispatch.zig
 REQ-CENT-BETWEEN-001,Centrality,Betweenness,TESTED,,,algo,2026-01-16,.claude/worktrees/agent-a10cae4d/tests/test_gap_0193_batch4_comprehensive.zig
 REQ-CENT-BETWEEN-001,Centrality,Betweenness,TESTED,,,algo,2026-01-16,.claude/worktrees/agent-a233c712/tests/test_gap_0193_batch4_comprehensive.zig
 REQ-CENT-BETWEEN-001,Centrality,Betweenness,TESTED,,,algo,2026-01-16,.claude/worktrees/agent-a37683fc/tests/test_gap_0193_batch4_comprehensive.zig
@@ -17289,7 +17289,6 @@ REQ-FLE-PROC-001,FLEProcedures,Import,TESTED,,,security,2026-01-28,.claude/workt
 REQ-FLE-PROC-001,FLEProcedures,Import,TESTED,,,security,2026-01-28,.worktrees/audit-multi-tenancy/src/execution/procedure_registry.zig
 REQ-FLE-PROC-001,FLEProcedures,Import,TESTED,,,security,2026-01-28,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-FLE-PROC-001,FLEProcedures,Import,TESTED,,,security,2026-01-28,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-FLE-PROC-001,FLEProcedures,Import,TESTED,,,security,2026-01-28,src/execution/procedure_registry.zig
 REQ-FLE-PROC-002,FLEProcedures,ConfigureField,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-FLE-PROC-002,FLEProcedures,ConfigureField,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-FLE-PROC-002,FLEProcedures,ConfigureField,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -17308,7 +17307,7 @@ REQ-FLE-PROC-002,FLEProcedures,ConfigureField,TESTED,,,security,2026-01-28,.work
 REQ-FLE-PROC-002,FLEProcedures,ConfigureField,TESTED,,,security,2026-01-28,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-FLE-PROC-002,FLEProcedures,ConfigureField,TESTED,,,security,2026-01-28,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-FLE-PROC-002,FLEProcedures,ConfigureField,TESTED,,,security,2026-01-28,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-FLE-PROC-002,FLEProcedures,ConfigureField,TESTED,,,security,2026-01-28,src/execution/procedure_registry.zig
+REQ-FLE-PROC-002,FLEProcedures,ConfigureField,TESTED,,,security,2026-01-28,src/execution/storage_dispatch.zig
 REQ-FLE-PROC-003,FLEProcedures,GetFieldConfig,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-FLE-PROC-003,FLEProcedures,GetFieldConfig,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-FLE-PROC-003,FLEProcedures,GetFieldConfig,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -17327,7 +17326,7 @@ REQ-FLE-PROC-003,FLEProcedures,GetFieldConfig,TESTED,,,security,2026-01-28,.work
 REQ-FLE-PROC-003,FLEProcedures,GetFieldConfig,TESTED,,,security,2026-01-28,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-FLE-PROC-003,FLEProcedures,GetFieldConfig,TESTED,,,security,2026-01-28,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-FLE-PROC-003,FLEProcedures,GetFieldConfig,TESTED,,,security,2026-01-28,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-FLE-PROC-003,FLEProcedures,GetFieldConfig,TESTED,,,security,2026-01-28,src/execution/procedure_registry.zig
+REQ-FLE-PROC-003,FLEProcedures,GetFieldConfig,TESTED,,,security,2026-01-28,src/execution/storage_dispatch.zig
 REQ-FLE-PROC-004,FLEProcedures,ListEncryptedFields,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-FLE-PROC-004,FLEProcedures,ListEncryptedFields,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-FLE-PROC-004,FLEProcedures,ListEncryptedFields,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -17346,7 +17345,7 @@ REQ-FLE-PROC-004,FLEProcedures,ListEncryptedFields,TESTED,,,security,2026-01-28,
 REQ-FLE-PROC-004,FLEProcedures,ListEncryptedFields,TESTED,,,security,2026-01-28,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-FLE-PROC-004,FLEProcedures,ListEncryptedFields,TESTED,,,security,2026-01-28,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-FLE-PROC-004,FLEProcedures,ListEncryptedFields,TESTED,,,security,2026-01-28,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-FLE-PROC-004,FLEProcedures,ListEncryptedFields,TESTED,,,security,2026-01-28,src/execution/procedure_registry.zig
+REQ-FLE-PROC-004,FLEProcedures,ListEncryptedFields,TESTED,,,security,2026-01-28,src/execution/storage_dispatch.zig
 REQ-FLE-PRODMODE-001,FLEProductionMode,BuildModeDetection,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a10cae4d/src/security/test_fle_enforcement.zig
 REQ-FLE-PRODMODE-001,FLEProductionMode,BuildModeDetection,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a233c712/src/security/test_fle_enforcement.zig
 REQ-FLE-PRODMODE-001,FLEProductionMode,BuildModeDetection,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a37683fc/src/security/test_fle_enforcement.zig
@@ -29535,7 +29534,7 @@ REQ-GQL-068,ExposedAlgorithms,Centrality,TESTED,,,graph,2026-01-15,.worktrees/au
 REQ-GQL-068,ExposedAlgorithms,Centrality,TESTED,,,graph,2026-01-15,.worktrees/graph-storage-integration/src/execution/algo_dispatch.zig
 REQ-GQL-068,ExposedAlgorithms,Centrality,TESTED,,,graph,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-GQL-068,ExposedAlgorithms,Centrality,TESTED,,,graph,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-GQL-068,ExposedAlgorithms,Centrality,TESTED,,,graph,2026-01-15,src/execution/procedure_registry.zig
+REQ-GQL-068,ExposedAlgorithms,Centrality,TESTED,,,graph,2026-01-15,src/execution/algo_dispatch.zig
 REQ-GQL-068,ExposedAlgorithms,ReExport,TESTED,,,execution,2026-01-03,.claude/worktrees/agent-a10cae4d/src/execution.zig
 REQ-GQL-068,ExposedAlgorithms,ReExport,TESTED,,,execution,2026-01-03,.claude/worktrees/agent-a233c712/src/execution.zig
 REQ-GQL-068,ExposedAlgorithms,ReExport,TESTED,,,execution,2026-01-03,.claude/worktrees/agent-a37683fc/src/execution.zig
@@ -33987,7 +33986,6 @@ REQ-GQL-ALGO,Graph Algorithms,CoreAlgorithms,TESTED,,,graph,2025-09-25,.claude/w
 REQ-GQL-ALGO,Graph Algorithms,CoreAlgorithms,TESTED,,,graph,2025-09-25,.worktrees/audit-multi-tenancy/src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO,Graph Algorithms,CoreAlgorithms,TESTED,,,graph,2025-09-25,.worktrees/session-20260401/src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO,Graph Algorithms,CoreAlgorithms,TESTED,,,graph,2025-09-25,.worktrees/timeseries-gap-close/src/graph/builtin_algorithms.zig
-REQ-GQL-ALGO,Graph Algorithms,CoreAlgorithms,TESTED,,,graph,2025-09-25,src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF,Algorithm Performance,Caching,TESTED,,,graph,2025-10-16,.claude/worktrees/agent-a10cae4d/src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF,Algorithm Performance,Caching,TESTED,,,graph,2025-10-16,.claude/worktrees/agent-a233c712/src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF,Algorithm Performance,Caching,TESTED,,,graph,2025-10-16,.claude/worktrees/agent-a37683fc/src/graph/builtin_algorithms.zig
@@ -34005,7 +34003,6 @@ REQ-GQL-ALGO-PERF,Algorithm Performance,Caching,TESTED,,,graph,2025-10-16,.claud
 REQ-GQL-ALGO-PERF,Algorithm Performance,Caching,TESTED,,,graph,2025-10-16,.worktrees/audit-multi-tenancy/src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF,Algorithm Performance,Caching,TESTED,,,graph,2025-10-16,.worktrees/session-20260401/src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF,Algorithm Performance,Caching,TESTED,,,graph,2025-10-16,.worktrees/timeseries-gap-close/src/graph/builtin_algorithms.zig
-REQ-GQL-ALGO-PERF,Algorithm Performance,Caching,TESTED,,,graph,2025-10-16,src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF,GraphAlgorithmPerformance,Benchmarks,TESTED,,,graph,2026-01-15,.claude/worktrees/agent-a10cae4d/tests/test_gap_analysis_january_2026.zig
 REQ-GQL-ALGO-PERF,GraphAlgorithmPerformance,Benchmarks,TESTED,,,graph,2026-01-15,.claude/worktrees/agent-a233c712/tests/test_gap_analysis_january_2026.zig
 REQ-GQL-ALGO-PERF,GraphAlgorithmPerformance,Benchmarks,TESTED,,,graph,2026-01-15,.claude/worktrees/agent-a37683fc/tests/test_gap_analysis_january_2026.zig
@@ -34061,7 +34058,6 @@ REQ-GQL-ALGO-PERF-001,PageRank Optimization,Performance,TESTED,,,graph,2025-10-1
 REQ-GQL-ALGO-PERF-001,PageRank Optimization,Performance,TESTED,,,graph,2025-10-16,.worktrees/audit-multi-tenancy/src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF-001,PageRank Optimization,Performance,TESTED,,,graph,2025-10-16,.worktrees/session-20260401/src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF-001,PageRank Optimization,Performance,TESTED,,,graph,2025-10-16,.worktrees/timeseries-gap-close/src/graph/builtin_algorithms.zig
-REQ-GQL-ALGO-PERF-001,PageRank Optimization,Performance,TESTED,,,graph,2025-10-16,src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF-002,AlgoPerf,Betweenness,TESTED,,,graph,2026-01-16,.claude/worktrees/agent-a10cae4d/tests/test_gap_0193_batch2_testing.zig
 REQ-GQL-ALGO-PERF-002,AlgoPerf,Betweenness,TESTED,,,graph,2026-01-16,.claude/worktrees/agent-a233c712/tests/test_gap_0193_batch2_testing.zig
 REQ-GQL-ALGO-PERF-002,AlgoPerf,Betweenness,TESTED,,,graph,2026-01-16,.claude/worktrees/agent-a37683fc/tests/test_gap_0193_batch2_testing.zig
@@ -34098,7 +34094,6 @@ REQ-GQL-ALGO-PERF-002,Betweenness Optimization,Performance,TESTED,,,graph,2025-1
 REQ-GQL-ALGO-PERF-002,Betweenness Optimization,Performance,TESTED,,,graph,2025-10-16,.worktrees/audit-multi-tenancy/src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF-002,Betweenness Optimization,Performance,TESTED,,,graph,2025-10-16,.worktrees/session-20260401/src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF-002,Betweenness Optimization,Performance,TESTED,,,graph,2025-10-16,.worktrees/timeseries-gap-close/src/graph/builtin_algorithms.zig
-REQ-GQL-ALGO-PERF-002,Betweenness Optimization,Performance,TESTED,,,graph,2025-10-16,src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF-003,AlgoPerf,Closeness,TESTED,,,graph,2026-01-16,.claude/worktrees/agent-a10cae4d/tests/test_gap_0193_batch2_testing.zig
 REQ-GQL-ALGO-PERF-003,AlgoPerf,Closeness,TESTED,,,graph,2026-01-16,.claude/worktrees/agent-a233c712/tests/test_gap_0193_batch2_testing.zig
 REQ-GQL-ALGO-PERF-003,AlgoPerf,Closeness,TESTED,,,graph,2026-01-16,.claude/worktrees/agent-a37683fc/tests/test_gap_0193_batch2_testing.zig
@@ -34135,7 +34130,6 @@ REQ-GQL-ALGO-PERF-003,Closeness Optimization,Performance,TESTED,,,graph,2025-10-
 REQ-GQL-ALGO-PERF-003,Closeness Optimization,Performance,TESTED,,,graph,2025-10-16,.worktrees/audit-multi-tenancy/src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF-003,Closeness Optimization,Performance,TESTED,,,graph,2025-10-16,.worktrees/session-20260401/src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF-003,Closeness Optimization,Performance,TESTED,,,graph,2025-10-16,.worktrees/timeseries-gap-close/src/graph/builtin_algorithms.zig
-REQ-GQL-ALGO-PERF-003,Closeness Optimization,Performance,TESTED,,,graph,2025-10-16,src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF-004,AlgoPerf,Eigenvector,TESTED,,,graph,2026-01-16,.claude/worktrees/agent-a10cae4d/tests/test_gap_0193_batch2_testing.zig
 REQ-GQL-ALGO-PERF-004,AlgoPerf,Eigenvector,TESTED,,,graph,2026-01-16,.claude/worktrees/agent-a233c712/tests/test_gap_0193_batch2_testing.zig
 REQ-GQL-ALGO-PERF-004,AlgoPerf,Eigenvector,TESTED,,,graph,2026-01-16,.claude/worktrees/agent-a37683fc/tests/test_gap_0193_batch2_testing.zig
@@ -34172,7 +34166,6 @@ REQ-GQL-ALGO-PERF-004,Eigenvector Optimization,Performance,TESTED,,,graph,2025-1
 REQ-GQL-ALGO-PERF-004,Eigenvector Optimization,Performance,TESTED,,,graph,2025-10-16,.worktrees/audit-multi-tenancy/src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF-004,Eigenvector Optimization,Performance,TESTED,,,graph,2025-10-16,.worktrees/session-20260401/src/graph/builtin_algorithms.zig
 REQ-GQL-ALGO-PERF-004,Eigenvector Optimization,Performance,TESTED,,,graph,2025-10-16,.worktrees/timeseries-gap-close/src/graph/builtin_algorithms.zig
-REQ-GQL-ALGO-PERF-004,Eigenvector Optimization,Performance,TESTED,,,graph,2025-10-16,src/graph/builtin_algorithms.zig
 REQ-GQL-ARTICULATION-001,ArticulationPoints,Connectivity,TESTED,,,graph,2026-01-03,.claude/worktrees/agent-a10cae4d/src/execution/centrality_algorithms.zig
 REQ-GQL-ARTICULATION-001,ArticulationPoints,Connectivity,TESTED,,,graph,2026-01-03,.claude/worktrees/agent-a233c712/src/execution/centrality_algorithms.zig
 REQ-GQL-ARTICULATION-001,ArticulationPoints,Connectivity,TESTED,,,graph,2026-01-03,.claude/worktrees/agent-a37683fc/src/execution/centrality_algorithms.zig
@@ -34381,7 +34374,7 @@ REQ-GQL-BICONNECTED-001,BiconnectedComponents,Connectivity,TESTED,,,graph,2026-0
 REQ-GQL-BICONNECTED-001,BiconnectedComponents,Connectivity,TESTED,,,graph,2026-04-01,.worktrees/graph-storage-integration/src/execution/centrality_algorithms.zig
 REQ-GQL-BICONNECTED-001,BiconnectedComponents,Connectivity,TESTED,,,graph,2026-01-03,.worktrees/session-20260401/src/execution/centrality_algorithms.zig
 REQ-GQL-BICONNECTED-001,BiconnectedComponents,Connectivity,TESTED,,,graph,2026-01-03,.worktrees/timeseries-gap-close/src/execution/centrality_algorithms.zig
-REQ-GQL-BICONNECTED-001,BiconnectedComponents,Connectivity,TESTED,,,graph,2026-01-03,src/execution/centrality_algorithms.zig
+REQ-GQL-BICONNECTED-001,BiconnectedComponents,Connectivity,TESTED,,,graph,2026-04-01,src/execution/centrality_algorithms.zig
 REQ-GQL-BOOL-INT-COERCE-001,GQLExpressions,BoolIntCoerce,TESTED,,,engine,2026-01-15,.claude/worktrees/agent-a10cae4d/tests/test_shell_requirements_verification.zig
 REQ-GQL-BOOL-INT-COERCE-001,GQLExpressions,BoolIntCoerce,TESTED,,,engine,2026-01-15,.claude/worktrees/agent-a233c712/tests/test_shell_requirements_verification.zig
 REQ-GQL-BOOL-INT-COERCE-001,GQLExpressions,BoolIntCoerce,TESTED,,,engine,2026-01-15,.claude/worktrees/agent-a37683fc/tests/test_shell_requirements_verification.zig
@@ -36680,7 +36673,9 @@ REQ-GQL-GRAPH-DIAMETER-001,Statistics,Diameter,TESTED,,,graph,2026-01-16,.worktr
 REQ-GQL-GRAPH-DIAMETER-001,Statistics,Diameter,TESTED,,,graph,2026-01-16,.worktrees/timeseries-gap-close/tests/test_gap_0193_batch2_engine.zig
 REQ-GQL-GRAPH-DIAMETER-001,Statistics,Diameter,TESTED,,,graph,2026-01-16,tests/test_gap_0193_batch2_engine.zig
 REQ-GQL-GRAPH-STATS-001,GraphStatistics,CallProcedure,IMPL,,,execution,2026-04-01,.worktrees/graph-storage-integration/src/execution/algo_dispatch.zig
+REQ-GQL-GRAPH-STATS-001,GraphStatistics,CallProcedure,IMPL,,,execution,2026-04-01,src/execution/algo_dispatch.zig
 REQ-GQL-GRAPH-STATS-001,GraphStatistics,ReExport,IMPL,,,execution,2026-04-01,.worktrees/graph-storage-integration/src/execution.zig
+REQ-GQL-GRAPH-STATS-001,GraphStatistics,ReExport,IMPL,,,execution,2026-04-01,src/execution.zig
 REQ-GQL-GRAPHTYPE-001,Graph Type Operations,ComprehensiveTesting,TESTED,,,parser,2025-10-04,.claude/worktrees/agent-a10cae4d/tests/test_graph_type_comprehensive.zig
 REQ-GQL-GRAPHTYPE-001,Graph Type Operations,ComprehensiveTesting,TESTED,,,parser,2025-10-04,.claude/worktrees/agent-a233c712/tests/test_graph_type_comprehensive.zig
 REQ-GQL-GRAPHTYPE-001,Graph Type Operations,ComprehensiveTesting,TESTED,,,parser,2025-10-04,.claude/worktrees/agent-a37683fc/tests/test_graph_type_comprehensive.zig
@@ -42317,7 +42312,7 @@ REQ-GQL-SHORTESTPATH,ShortestPath,BFS,TESTED,,,engine,2025-10-12,.worktrees/audi
 REQ-GQL-SHORTESTPATH,ShortestPath,BFS,IMPL,,,engine,2025-10-12,.worktrees/graph-storage-integration/src/execution/graph_algorithms.zig
 REQ-GQL-SHORTESTPATH,ShortestPath,BFS,TESTED,,,engine,2025-10-12,.worktrees/session-20260401/src/execution/graph_algorithms.zig
 REQ-GQL-SHORTESTPATH,ShortestPath,BFS,TESTED,,,engine,2025-10-12,.worktrees/timeseries-gap-close/src/execution/graph_algorithms.zig
-REQ-GQL-SHORTESTPATH,ShortestPath,BFS,TESTED,,,engine,2025-10-12,src/execution/graph_algorithms.zig
+REQ-GQL-SHORTESTPATH,ShortestPath,BFS,IMPL,,,engine,2025-10-12,src/execution/graph_algorithms.zig
 REQ-GQL-SINGLEHOP-RIGHTNODE,SingleHopRightNodeFilter,LabelFiltering,TESTED,,,engine,2025-12-18,.claude/worktrees/agent-a10cae4d/src/execution/match_operations.zig
 REQ-GQL-SINGLEHOP-RIGHTNODE,SingleHopRightNodeFilter,LabelFiltering,TESTED,,,engine,2025-12-18,.claude/worktrees/agent-a233c712/src/execution/match_operations.zig
 REQ-GQL-SINGLEHOP-RIGHTNODE,SingleHopRightNodeFilter,LabelFiltering,TESTED,,,engine,2025-12-18,.claude/worktrees/agent-a37683fc/src/execution/match_operations.zig
@@ -58098,7 +58093,6 @@ REQ-MULTI-GRAPH-RBAC-WIRE-002,GraphRBACEnforcement,QuicGraphAuth,IMPL,,,security
 REQ-MULTI-GRAPH-RBAC-WIRE-003,GraphRBACEnforcement,GrpcGraphAuth,IMPL,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/transport/grpc_server.zig
 REQ-MULTI-GRAPH-RBAC-WIRE-003,GraphRBACEnforcement,GrpcGraphAuth,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig
 REQ-MULTI-GRAPH-RBAC-WIRE-004,GraphRBACEnforcement,Procedures,IMPL,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/execution/procedure_registry.zig
-REQ-MULTI-GRAPH-RBAC-WIRE-004,GraphRBACEnforcement,Procedures,IMPL,,,security,2026-04-01,src/execution/procedure_registry.zig
 REQ-MULTI-GRAPH-RBAC-WIRE-005,GraphRBACEnforcement,GlobalSingleton,IMPL,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/security/multi_graph_security.zig
 REQ-MULTI-GRAPH-RBAC-WIRE-005,GraphRBACEnforcement,GlobalSingleton,IMPL,,,security,2026-04-01,src/security/multi_graph_security.zig
 REQ-MULTI-GRAPH-SECURITY-001,MultiGraphSecurity,RBACGraphScope,TESTED,,,security,2025-12-20,.claude/worktrees/agent-a10cae4d/src/security/multi_graph_security.zig
@@ -58235,7 +58229,6 @@ REQ-MULTI-TENANT-FLE-002,FLE Multi-Tenancy,PerThreadTenant,IMPL,,,security,2026-
 REQ-MULTI-TENANT-QUOTA-001,PerTenantResourceQuotas,QuotaManager,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/security/tenant_quota.zig
 REQ-MULTI-TENANT-QUOTA-001,PerTenantResourceQuotas,QuotaManager,TESTED,,,security,2026-04-01,src/security/tenant_quota.zig
 REQ-MULTI-TENANT-QUOTA-002,PerTenantResourceQuotas,StoredProcedures,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/execution/procedure_registry.zig
-REQ-MULTI-TENANT-QUOTA-002,PerTenantResourceQuotas,StoredProcedures,TESTED,,,security,2026-04-01,src/execution/procedure_registry.zig
 REQ-MULTI-TENANT-QUOTA-003,PerTenantResourceQuotas,ServerInit,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/server/main.zig
 REQ-MV-CANCEL-001,MVRefreshCancellation,Cancel,TESTED,,,mv,2026-01-09,.claude/worktrees/agent-a10cae4d/src/query/enhanced_materialized_views.zig
 REQ-MV-CANCEL-001,MVRefreshCancellation,Cancel,TESTED,,,mv,2026-01-09,.claude/worktrees/agent-a233c712/src/query/enhanced_materialized_views.zig
@@ -58635,7 +58628,7 @@ REQ-NESTING-REFACTOR-023,NestingReduction,FLEVisibility,TESTED,,,refactor,2026-0
 REQ-NESTING-REFACTOR-023,NestingReduction,FLEVisibility,TESTED,,,refactor,2026-01-30,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-NESTING-REFACTOR-023,NestingReduction,FLEVisibility,TESTED,,,refactor,2026-01-30,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-NESTING-REFACTOR-023,NestingReduction,FLEVisibility,TESTED,,,refactor,2026-01-30,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-NESTING-REFACTOR-023,NestingReduction,FLEVisibility,TESTED,,,refactor,2026-01-30,src/execution/procedure_registry.zig
+REQ-NESTING-REFACTOR-023,NestingReduction,FLEVisibility,TESTED,,,refactor,2026-01-30,src/execution/storage_dispatch.zig
 REQ-NESTING-REFACTOR-024,NestingReduction,FLEConfigParsing,TESTED,,,refactor,2026-01-30,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-NESTING-REFACTOR-024,NestingReduction,FLEConfigParsing,TESTED,,,refactor,2026-01-30,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-NESTING-REFACTOR-024,NestingReduction,FLEConfigParsing,TESTED,,,refactor,2026-01-30,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -58654,7 +58647,7 @@ REQ-NESTING-REFACTOR-024,NestingReduction,FLEConfigParsing,TESTED,,,refactor,202
 REQ-NESTING-REFACTOR-024,NestingReduction,FLEConfigParsing,TESTED,,,refactor,2026-01-30,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-NESTING-REFACTOR-024,NestingReduction,FLEConfigParsing,TESTED,,,refactor,2026-01-30,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-NESTING-REFACTOR-024,NestingReduction,FLEConfigParsing,TESTED,,,refactor,2026-01-30,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-NESTING-REFACTOR-024,NestingReduction,FLEConfigParsing,TESTED,,,refactor,2026-01-30,src/execution/procedure_registry.zig
+REQ-NESTING-REFACTOR-024,NestingReduction,FLEConfigParsing,TESTED,,,refactor,2026-01-30,src/execution/storage_dispatch.zig
 REQ-NESTING-REFACTOR-025,NestingReduction,OrderByParsing,TESTED,,,refactor,2026-01-30,.claude/worktrees/agent-a10cae4d/src/gql/parser.zig
 REQ-NESTING-REFACTOR-025,NestingReduction,OrderByParsing,TESTED,,,refactor,2026-01-30,.claude/worktrees/agent-a233c712/src/gql/parser.zig
 REQ-NESTING-REFACTOR-025,NestingReduction,OrderByParsing,TESTED,,,refactor,2026-01-30,.claude/worktrees/agent-a37683fc/src/gql/parser.zig
@@ -66648,10 +66641,15 @@ REQ-SEC-RBAC-001,Security,RBAC,TESTED,,,security,2026-01-16,.worktrees/timeserie
 REQ-SEC-RBAC-001,Security,RBAC,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-REPLAY-001,Replay Protection,NonceTracker,IMPL,,,security,2026-04-01,.worktrees/session-20260401/docs/superpowers/plans/2026-04-01-security-hardening.md
 REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,PostResultFilter,IMPL,,,security,2026-04-01,.worktrees/graph-storage-integration/src/server/rls_filter.zig
+REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,PostResultFilter,IMPL,,,security,2026-04-01,src/server/rls_filter.zig
 REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,QUICProfileWire,IMPL,,,security,2026-04-01,.worktrees/graph-storage-integration/src/server/quic_connection_handler.zig
+REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,QUICProfileWire,IMPL,,,security,2026-04-01,src/server/quic_connection_handler.zig
 REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,QUICWire,IMPL,,,security,2026-04-01,.worktrees/graph-storage-integration/src/server/quic_connection_handler.zig
+REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,QUICWire,IMPL,,,security,2026-04-01,src/server/quic_connection_handler.zig
 REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,gRPCProfileWire,IMPL,,,security,2026-04-01,.worktrees/graph-storage-integration/src/transport/grpc_server.zig
+REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,gRPCProfileWire,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig
 REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,gRPCRowsWire,IMPL,,,security,2026-04-01,.worktrees/graph-storage-integration/src/transport/grpc_server.zig
+REQ-SEC-RLS-ALGO-001,RLS Algorithm Filtering,gRPCRowsWire,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig
 REQ-SEC-RLS-FED-001,RLS Federation Filtering,PostMergeFilter,IMPL,,,security,2026-04-01,.claude/worktrees/agent-a10cae4d/src/distributed/federation.zig
 REQ-SEC-RLS-FED-001,RLS Federation Filtering,PostMergeFilter,TESTED,,,security,2026-04-01,.claude/worktrees/agent-a10cae4d/src/distributed/federation.zig
 REQ-SEC-RLS-FEDERATION-001,RLS Federation Filter,PostMergeFilter,IMPL,,,security,2026-04-01,.worktrees/session-20260401/docs/superpowers/plans/2026-04-01-security-hardening.md
@@ -66692,9 +66690,8 @@ REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,TESTED,,,security,20
 REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.worktrees/graph-storage-integration/src/server/rls_filter.zig
 REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.worktrees/session-20260401/src/server/rls_filter.zig
 REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.worktrees/timeseries-gap-close/src/server/rls_filter.zig
-REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,TESTED,,,security,2026-04-01,src/server/rls_filter.zig
+REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,src/server/rls_filter.zig
 REQ-SEC-RLS-WIRE-002,RLS Query Enforcement,FilterApplication,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/server/rls_filter.zig
-REQ-SEC-RLS-WIRE-002,RLS Query Enforcement,FilterApplication,TESTED,,,security,2026-04-01,src/server/rls_filter.zig
 REQ-SEC-RLS-WIRE-002,RLS Query Enforcement,QUICImport,IMPL,,,security,2026-03-26,.claude/worktrees/agent-a10cae4d/src/server/quic_connection_handler.zig
 REQ-SEC-RLS-WIRE-002,RLS Query Enforcement,QUICImport,IMPL,,,security,2026-03-26,.claude/worktrees/agent-a233c712/src/server/quic_connection_handler.zig
 REQ-SEC-RLS-WIRE-002,RLS Query Enforcement,QUICImport,IMPL,,,security,2026-03-26,.claude/worktrees/agent-a37683fc/src/server/quic_connection_handler.zig
@@ -66791,13 +66788,11 @@ REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026
 REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026-03-26,.worktrees/timeseries-gap-close/src/execution.zig
 REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026-03-26,src/execution.zig
 REQ-SEC-RLS-WIRE-007,RLS Property Filtering,PropertyPredicate,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/server/rls_filter.zig
-REQ-SEC-RLS-WIRE-007,RLS Property Filtering,PropertyPredicate,TESTED,,,security,2026-04-01,src/server/rls_filter.zig
 REQ-SEC-RLS-WIRE-007,RLS Property Filtering,SharedTypes,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/security/rls_types.zig
 REQ-SEC-RLS-WIRE-007,RLS Property Filtering,SharedTypes,TESTED,,,security,2026-04-01,src/security/rls_types.zig
 REQ-SEC-RLS-WIRE-008,RLS Property Filtering,PolicyCRUD,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/security/rls_types.zig
 REQ-SEC-RLS-WIRE-008,RLS Property Filtering,PolicyCRUD,TESTED,,,security,2026-04-01,src/security/rls_types.zig
 REQ-SEC-RLS-WIRE-009,RLS Property Filtering,StoredProcedures,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/execution/procedure_registry.zig
-REQ-SEC-RLS-WIRE-009,RLS Property Filtering,StoredProcedures,TESTED,,,security,2026-04-01,src/execution/procedure_registry.zig
 REQ-SEC-SESSION-MGT-001,Security,SessionManagement,TESTED,,,security,2026-01-16,.claude/worktrees/agent-a10cae4d/tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-SESSION-MGT-001,Security,SessionManagement,TESTED,,,security,2026-01-16,.claude/worktrees/agent-a233c712/tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-SESSION-MGT-001,Security,SessionManagement,TESTED,,,security,2026-01-16,.claude/worktrees/agent-a37683fc/tests/test_gap_0193_batch4_comprehensive.zig
@@ -72895,7 +72890,7 @@ REQ-TDE-PROC-001,TDEProcedures,KeyHierarchy,TESTED,,,tde,2026-01-15,.worktrees/a
 REQ-TDE-PROC-001,TDEProcedures,KeyHierarchy,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-001,TDEProcedures,KeyHierarchy,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-001,TDEProcedures,KeyHierarchy,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-001,TDEProcedures,KeyHierarchy,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-001,TDEProcedures,KeyHierarchy,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-002,TDEProcedures,KeyRotation,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-002,TDEProcedures,KeyRotation,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-002,TDEProcedures,KeyRotation,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -72914,7 +72909,7 @@ REQ-TDE-PROC-002,TDEProcedures,KeyRotation,TESTED,,,tde,2026-01-15,.worktrees/au
 REQ-TDE-PROC-002,TDEProcedures,KeyRotation,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-002,TDEProcedures,KeyRotation,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-002,TDEProcedures,KeyRotation,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-002,TDEProcedures,KeyRotation,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-002,TDEProcedures,KeyRotation,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-003,TDEProcedures,EncryptionStatus,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-003,TDEProcedures,EncryptionStatus,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-003,TDEProcedures,EncryptionStatus,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -72933,7 +72928,7 @@ REQ-TDE-PROC-003,TDEProcedures,EncryptionStatus,TESTED,,,tde,2026-01-15,.worktre
 REQ-TDE-PROC-003,TDEProcedures,EncryptionStatus,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-003,TDEProcedures,EncryptionStatus,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-003,TDEProcedures,EncryptionStatus,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-003,TDEProcedures,EncryptionStatus,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-003,TDEProcedures,EncryptionStatus,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-004,TDEProcedures,KMSConfiguration,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-004,TDEProcedures,KMSConfiguration,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-004,TDEProcedures,KMSConfiguration,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -72952,7 +72947,7 @@ REQ-TDE-PROC-004,TDEProcedures,KMSConfiguration,TESTED,,,tde,2026-01-15,.worktre
 REQ-TDE-PROC-004,TDEProcedures,KMSConfiguration,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-004,TDEProcedures,KMSConfiguration,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-004,TDEProcedures,KMSConfiguration,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-004,TDEProcedures,KMSConfiguration,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-004,TDEProcedures,KMSConfiguration,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-005,TDEProcedures,EncryptionTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-005,TDEProcedures,EncryptionTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-005,TDEProcedures,EncryptionTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -72971,7 +72966,7 @@ REQ-TDE-PROC-005,TDEProcedures,EncryptionTest,TESTED,,,tde,2026-01-15,.worktrees
 REQ-TDE-PROC-005,TDEProcedures,EncryptionTest,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-005,TDEProcedures,EncryptionTest,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-005,TDEProcedures,EncryptionTest,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-005,TDEProcedures,EncryptionTest,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-005,TDEProcedures,EncryptionTest,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-006,TDEProcedures,DecryptionTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-006,TDEProcedures,DecryptionTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-006,TDEProcedures,DecryptionTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -72990,7 +72985,7 @@ REQ-TDE-PROC-006,TDEProcedures,DecryptionTest,TESTED,,,tde,2026-01-15,.worktrees
 REQ-TDE-PROC-006,TDEProcedures,DecryptionTest,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-006,TDEProcedures,DecryptionTest,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-006,TDEProcedures,DecryptionTest,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-006,TDEProcedures,DecryptionTest,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-006,TDEProcedures,DecryptionTest,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-007,TDEProcedures,EncryptedStateVerification,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-007,TDEProcedures,EncryptedStateVerification,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-007,TDEProcedures,EncryptedStateVerification,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73009,7 +73004,7 @@ REQ-TDE-PROC-007,TDEProcedures,EncryptedStateVerification,TESTED,,,tde,2026-01-1
 REQ-TDE-PROC-007,TDEProcedures,EncryptedStateVerification,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-007,TDEProcedures,EncryptedStateVerification,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-007,TDEProcedures,EncryptedStateVerification,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-007,TDEProcedures,EncryptedStateVerification,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-007,TDEProcedures,EncryptedStateVerification,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-008,TDEProcedures,EncryptionBenchmark,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-008,TDEProcedures,EncryptionBenchmark,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-008,TDEProcedures,EncryptionBenchmark,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73028,7 +73023,7 @@ REQ-TDE-PROC-008,TDEProcedures,EncryptionBenchmark,TESTED,,,tde,2026-01-15,.work
 REQ-TDE-PROC-008,TDEProcedures,EncryptionBenchmark,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-008,TDEProcedures,EncryptionBenchmark,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-008,TDEProcedures,EncryptionBenchmark,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-008,TDEProcedures,EncryptionBenchmark,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-008,TDEProcedures,EncryptionBenchmark,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-009,TDEProcedures,KeyRotationTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-009,TDEProcedures,KeyRotationTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-009,TDEProcedures,KeyRotationTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73047,7 +73042,7 @@ REQ-TDE-PROC-009,TDEProcedures,KeyRotationTest,TESTED,,,tde,2026-01-15,.worktree
 REQ-TDE-PROC-009,TDEProcedures,KeyRotationTest,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-009,TDEProcedures,KeyRotationTest,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-009,TDEProcedures,KeyRotationTest,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-009,TDEProcedures,KeyRotationTest,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-009,TDEProcedures,KeyRotationTest,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-010,TDEProcedures,EncryptedBackup,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-010,TDEProcedures,EncryptedBackup,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-010,TDEProcedures,EncryptedBackup,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73066,7 +73061,7 @@ REQ-TDE-PROC-010,TDEProcedures,EncryptedBackup,TESTED,,,tde,2026-01-15,.worktree
 REQ-TDE-PROC-010,TDEProcedures,EncryptedBackup,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-010,TDEProcedures,EncryptedBackup,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-010,TDEProcedures,EncryptedBackup,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-010,TDEProcedures,EncryptedBackup,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-010,TDEProcedures,EncryptedBackup,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-011,TDEKeyProvider,CloudKMSConfiguration,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-011,TDEKeyProvider,CloudKMSConfiguration,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-011,TDEKeyProvider,CloudKMSConfiguration,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73085,7 +73080,7 @@ REQ-TDE-PROC-011,TDEKeyProvider,CloudKMSConfiguration,TESTED,,,security,2026-01-
 REQ-TDE-PROC-011,TDEKeyProvider,CloudKMSConfiguration,TESTED,,,security,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-011,TDEKeyProvider,CloudKMSConfiguration,TESTED,,,security,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-011,TDEKeyProvider,CloudKMSConfiguration,TESTED,,,security,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-011,TDEKeyProvider,CloudKMSConfiguration,TESTED,,,security,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-011,TDEKeyProvider,CloudKMSConfiguration,TESTED,,,security,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-012,MockKMSProvider,Testing,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-012,MockKMSProvider,Testing,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-012,MockKMSProvider,Testing,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73104,7 +73099,7 @@ REQ-TDE-PROC-012,MockKMSProvider,Testing,TESTED,,,security,2026-01-15,.worktrees
 REQ-TDE-PROC-012,MockKMSProvider,Testing,TESTED,,,security,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-012,MockKMSProvider,Testing,TESTED,,,security,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-012,MockKMSProvider,Testing,TESTED,,,security,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-012,MockKMSProvider,Testing,TESTED,,,security,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-012,MockKMSProvider,Testing,TESTED,,,security,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-037,TDETestProcedures,ConfigureProvider,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-037,TDETestProcedures,ConfigureProvider,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-037,TDETestProcedures,ConfigureProvider,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73123,7 +73118,7 @@ REQ-TDE-PROC-037,TDETestProcedures,ConfigureProvider,TESTED,,,tde,2026-01-15,.wo
 REQ-TDE-PROC-037,TDETestProcedures,ConfigureProvider,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-037,TDETestProcedures,ConfigureProvider,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-037,TDETestProcedures,ConfigureProvider,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-037,TDETestProcedures,ConfigureProvider,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-037,TDETestProcedures,ConfigureProvider,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-038,TDEProcedures,InitKeyHierarchy,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-038,TDEProcedures,InitKeyHierarchy,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-038,TDEProcedures,InitKeyHierarchy,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73142,7 +73137,7 @@ REQ-TDE-PROC-038,TDEProcedures,InitKeyHierarchy,TESTED,,,tde,2025-10-19,.worktre
 REQ-TDE-PROC-038,TDEProcedures,InitKeyHierarchy,TESTED,,,tde,2025-10-19,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-038,TDEProcedures,InitKeyHierarchy,TESTED,,,tde,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-038,TDEProcedures,InitKeyHierarchy,TESTED,,,tde,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-038,TDEProcedures,InitKeyHierarchy,TESTED,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-038,TDEProcedures,InitKeyHierarchy,TESTED,,,tde,2025-10-19,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-038,TDETestProcedures,GetRotationState,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-038,TDETestProcedures,GetRotationState,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-038,TDETestProcedures,GetRotationState,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73161,7 +73156,7 @@ REQ-TDE-PROC-038,TDETestProcedures,GetRotationState,TESTED,,,tde,2026-01-15,.wor
 REQ-TDE-PROC-038,TDETestProcedures,GetRotationState,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-038,TDETestProcedures,GetRotationState,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-038,TDETestProcedures,GetRotationState,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-038,TDETestProcedures,GetRotationState,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-038,TDETestProcedures,GetRotationState,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-039,TDEProcedures,RotateKeys,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-039,TDEProcedures,RotateKeys,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-039,TDEProcedures,RotateKeys,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73180,7 +73175,7 @@ REQ-TDE-PROC-039,TDEProcedures,RotateKeys,TESTED,,,tde,2025-10-19,.worktrees/aud
 REQ-TDE-PROC-039,TDEProcedures,RotateKeys,TESTED,,,tde,2025-10-19,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-039,TDEProcedures,RotateKeys,TESTED,,,tde,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-039,TDEProcedures,RotateKeys,TESTED,,,tde,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-039,TDEProcedures,RotateKeys,TESTED,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-039,TDEProcedures,RotateKeys,TESTED,,,tde,2025-10-19,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-039,TDETestProcedures,ConfigureRotation,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-039,TDETestProcedures,ConfigureRotation,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-039,TDETestProcedures,ConfigureRotation,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73199,7 +73194,7 @@ REQ-TDE-PROC-039,TDETestProcedures,ConfigureRotation,TESTED,,,tde,2026-01-15,.wo
 REQ-TDE-PROC-039,TDETestProcedures,ConfigureRotation,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-039,TDETestProcedures,ConfigureRotation,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-039,TDETestProcedures,ConfigureRotation,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-039,TDETestProcedures,ConfigureRotation,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-039,TDETestProcedures,ConfigureRotation,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-040,TDEProcedures,EncryptionStatus,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-040,TDEProcedures,EncryptionStatus,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-040,TDEProcedures,EncryptionStatus,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73218,7 +73213,7 @@ REQ-TDE-PROC-040,TDEProcedures,EncryptionStatus,TESTED,,,tde,2025-10-19,.worktre
 REQ-TDE-PROC-040,TDEProcedures,EncryptionStatus,TESTED,,,tde,2025-10-19,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-040,TDEProcedures,EncryptionStatus,TESTED,,,tde,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-040,TDEProcedures,EncryptionStatus,TESTED,,,tde,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-040,TDEProcedures,EncryptionStatus,TESTED,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-040,TDEProcedures,EncryptionStatus,TESTED,,,tde,2025-10-19,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73237,7 +73232,7 @@ REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,TESTED,,,tde,2026-01-15,.work
 REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-041,TDEProcedures,ConfigureKMS,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-041,TDEProcedures,ConfigureKMS,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-041,TDEProcedures,ConfigureKMS,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73256,7 +73251,7 @@ REQ-TDE-PROC-041,TDEProcedures,ConfigureKMS,TESTED,,,tde,2025-10-19,.worktrees/a
 REQ-TDE-PROC-041,TDEProcedures,ConfigureKMS,TESTED,,,tde,2025-10-19,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-041,TDEProcedures,ConfigureKMS,TESTED,,,tde,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-041,TDEProcedures,ConfigureKMS,TESTED,,,tde,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-041,TDEProcedures,ConfigureKMS,TESTED,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-041,TDEProcedures,ConfigureKMS,TESTED,,,tde,2025-10-19,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-041,TDETestProcedures,EncryptBackupTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-041,TDETestProcedures,EncryptBackupTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-041,TDETestProcedures,EncryptBackupTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73275,7 +73270,7 @@ REQ-TDE-PROC-041,TDETestProcedures,EncryptBackupTest,TESTED,,,tde,2026-01-15,.wo
 REQ-TDE-PROC-041,TDETestProcedures,EncryptBackupTest,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-041,TDETestProcedures,EncryptBackupTest,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-041,TDETestProcedures,EncryptBackupTest,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-041,TDETestProcedures,EncryptBackupTest,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-041,TDETestProcedures,EncryptBackupTest,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-042,TDEProcedures,VerifyEncryption,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-042,TDEProcedures,VerifyEncryption,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-042,TDEProcedures,VerifyEncryption,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73294,7 +73289,7 @@ REQ-TDE-PROC-042,TDEProcedures,VerifyEncryption,TESTED,,,tde,2025-10-19,.worktre
 REQ-TDE-PROC-042,TDEProcedures,VerifyEncryption,TESTED,,,tde,2025-10-19,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-042,TDEProcedures,VerifyEncryption,TESTED,,,tde,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-042,TDEProcedures,VerifyEncryption,TESTED,,,tde,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-042,TDEProcedures,VerifyEncryption,TESTED,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-042,TDEProcedures,VerifyEncryption,TESTED,,,tde,2025-10-19,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73313,7 +73308,7 @@ REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,TESTED,,,tde,2026-01-15,.worktr
 REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-043,TDETestProcedures,CreateEncryptedBackup,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-043,TDETestProcedures,CreateEncryptedBackup,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-043,TDETestProcedures,CreateEncryptedBackup,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73332,7 +73327,7 @@ REQ-TDE-PROC-043,TDETestProcedures,CreateEncryptedBackup,TESTED,,,tde,2026-01-15
 REQ-TDE-PROC-043,TDETestProcedures,CreateEncryptedBackup,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-043,TDETestProcedures,CreateEncryptedBackup,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-043,TDETestProcedures,CreateEncryptedBackup,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-043,TDETestProcedures,CreateEncryptedBackup,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-043,TDETestProcedures,CreateEncryptedBackup,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-044,TDETestProcedures,RestoreWithKeys,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-044,TDETestProcedures,RestoreWithKeys,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-044,TDETestProcedures,RestoreWithKeys,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73351,7 +73346,7 @@ REQ-TDE-PROC-044,TDETestProcedures,RestoreWithKeys,TESTED,,,tde,2026-01-15,.work
 REQ-TDE-PROC-044,TDETestProcedures,RestoreWithKeys,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-044,TDETestProcedures,RestoreWithKeys,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-044,TDETestProcedures,RestoreWithKeys,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-044,TDETestProcedures,RestoreWithKeys,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-044,TDETestProcedures,RestoreWithKeys,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-045,TDETestProcedures,MeasureOverhead,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-045,TDETestProcedures,MeasureOverhead,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-045,TDETestProcedures,MeasureOverhead,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73370,7 +73365,7 @@ REQ-TDE-PROC-045,TDETestProcedures,MeasureOverhead,TESTED,,,tde,2026-01-15,.work
 REQ-TDE-PROC-045,TDETestProcedures,MeasureOverhead,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-045,TDETestProcedures,MeasureOverhead,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-045,TDETestProcedures,MeasureOverhead,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-045,TDETestProcedures,MeasureOverhead,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-045,TDETestProcedures,MeasureOverhead,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-046,TDETestProcedures,SimulateOLTPWorkload,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-046,TDETestProcedures,SimulateOLTPWorkload,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-046,TDETestProcedures,SimulateOLTPWorkload,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73389,7 +73384,7 @@ REQ-TDE-PROC-046,TDETestProcedures,SimulateOLTPWorkload,TESTED,,,tde,2026-01-15,
 REQ-TDE-PROC-046,TDETestProcedures,SimulateOLTPWorkload,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-046,TDETestProcedures,SimulateOLTPWorkload,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-046,TDETestProcedures,SimulateOLTPWorkload,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-046,TDETestProcedures,SimulateOLTPWorkload,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-046,TDETestProcedures,SimulateOLTPWorkload,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-047,TDETestProcedures,TestKeyZeroization,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-047,TDETestProcedures,TestKeyZeroization,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-047,TDETestProcedures,TestKeyZeroization,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73408,7 +73403,7 @@ REQ-TDE-PROC-047,TDETestProcedures,TestKeyZeroization,TESTED,,,tde,2026-01-15,.w
 REQ-TDE-PROC-047,TDETestProcedures,TestKeyZeroization,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-047,TDETestProcedures,TestKeyZeroization,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-047,TDETestProcedures,TestKeyZeroization,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-047,TDETestProcedures,TestKeyZeroization,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-047,TDETestProcedures,TestKeyZeroization,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-048,TDEProcedures,TestKeyEscrow,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-048,TDEProcedures,TestKeyEscrow,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-048,TDEProcedures,TestKeyEscrow,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73427,7 +73422,7 @@ REQ-TDE-PROC-048,TDEProcedures,TestKeyEscrow,TESTED,,,tde,2025-10-19,.worktrees/
 REQ-TDE-PROC-048,TDEProcedures,TestKeyEscrow,TESTED,,,tde,2025-10-19,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-048,TDEProcedures,TestKeyEscrow,TESTED,,,tde,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-048,TDEProcedures,TestKeyEscrow,TESTED,,,tde,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-048,TDEProcedures,TestKeyEscrow,TESTED,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-048,TDEProcedures,TestKeyEscrow,TESTED,,,tde,2025-10-19,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-048,TDETestProcedures,AuditPlaintextKeys,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-048,TDETestProcedures,AuditPlaintextKeys,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-048,TDETestProcedures,AuditPlaintextKeys,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73446,7 +73441,7 @@ REQ-TDE-PROC-048,TDETestProcedures,AuditPlaintextKeys,TESTED,,,tde,2026-01-15,.w
 REQ-TDE-PROC-048,TDETestProcedures,AuditPlaintextKeys,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-048,TDETestProcedures,AuditPlaintextKeys,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-048,TDETestProcedures,AuditPlaintextKeys,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-048,TDETestProcedures,AuditPlaintextKeys,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-048,TDETestProcedures,AuditPlaintextKeys,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-049,TDEProcedures,TestTransparentEncryption,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-049,TDEProcedures,TestTransparentEncryption,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-049,TDEProcedures,TestTransparentEncryption,TESTED,,,tde,2025-10-19,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73465,7 +73460,7 @@ REQ-TDE-PROC-049,TDEProcedures,TestTransparentEncryption,TESTED,,,tde,2025-10-19
 REQ-TDE-PROC-049,TDEProcedures,TestTransparentEncryption,TESTED,,,tde,2025-10-19,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-049,TDEProcedures,TestTransparentEncryption,TESTED,,,tde,2025-10-19,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-049,TDEProcedures,TestTransparentEncryption,TESTED,,,tde,2025-10-19,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-049,TDEProcedures,TestTransparentEncryption,TESTED,,,tde,2025-10-19,src/execution/procedure_registry.zig
+REQ-TDE-PROC-049,TDEProcedures,TestTransparentEncryption,TESTED,,,tde,2025-10-19,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-049,TDETestProcedures,TestKeyAccessControl,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-049,TDETestProcedures,TestKeyAccessControl,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-049,TDETestProcedures,TestKeyAccessControl,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73484,7 +73479,7 @@ REQ-TDE-PROC-049,TDETestProcedures,TestKeyAccessControl,TESTED,,,tde,2026-01-15,
 REQ-TDE-PROC-049,TDETestProcedures,TestKeyAccessControl,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-049,TDETestProcedures,TestKeyAccessControl,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-049,TDETestProcedures,TestKeyAccessControl,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-049,TDETestProcedures,TestKeyAccessControl,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-049,TDETestProcedures,TestKeyAccessControl,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-050,TDETestProcedures,ConfigureExternalKMS,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-050,TDETestProcedures,ConfigureExternalKMS,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-050,TDETestProcedures,ConfigureExternalKMS,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73503,7 +73498,7 @@ REQ-TDE-PROC-050,TDETestProcedures,ConfigureExternalKMS,TESTED,,,tde,2026-01-15,
 REQ-TDE-PROC-050,TDETestProcedures,ConfigureExternalKMS,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-050,TDETestProcedures,ConfigureExternalKMS,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-050,TDETestProcedures,ConfigureExternalKMS,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-050,TDETestProcedures,ConfigureExternalKMS,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-050,TDETestProcedures,ConfigureExternalKMS,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-051,TDETestProcedures,TestKMSWrapUnwrap,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-051,TDETestProcedures,TestKMSWrapUnwrap,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-051,TDETestProcedures,TestKMSWrapUnwrap,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73522,7 +73517,7 @@ REQ-TDE-PROC-051,TDETestProcedures,TestKMSWrapUnwrap,TESTED,,,tde,2026-01-15,.wo
 REQ-TDE-PROC-051,TDETestProcedures,TestKMSWrapUnwrap,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-051,TDETestProcedures,TestKMSWrapUnwrap,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-051,TDETestProcedures,TestKMSWrapUnwrap,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-051,TDETestProcedures,TestKMSWrapUnwrap,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-051,TDETestProcedures,TestKMSWrapUnwrap,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-052,TDETestProcedures,TestKMSAttestation,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-052,TDETestProcedures,TestKMSAttestation,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-052,TDETestProcedures,TestKMSAttestation,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73541,7 +73536,7 @@ REQ-TDE-PROC-052,TDETestProcedures,TestKMSAttestation,TESTED,,,tde,2026-01-15,.w
 REQ-TDE-PROC-052,TDETestProcedures,TestKMSAttestation,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-052,TDETestProcedures,TestKMSAttestation,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-052,TDETestProcedures,TestKMSAttestation,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-052,TDETestProcedures,TestKMSAttestation,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-052,TDETestProcedures,TestKMSAttestation,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-053,TDETestProcedures,TestPrivilegedUnwrap,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-053,TDETestProcedures,TestPrivilegedUnwrap,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-053,TDETestProcedures,TestPrivilegedUnwrap,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73560,7 +73555,7 @@ REQ-TDE-PROC-053,TDETestProcedures,TestPrivilegedUnwrap,TESTED,,,tde,2026-01-15,
 REQ-TDE-PROC-053,TDETestProcedures,TestPrivilegedUnwrap,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-053,TDETestProcedures,TestPrivilegedUnwrap,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-053,TDETestProcedures,TestPrivilegedUnwrap,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-053,TDETestProcedures,TestPrivilegedUnwrap,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-053,TDETestProcedures,TestPrivilegedUnwrap,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-054,TDETestProcedures,TestKeyRecovery,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-054,TDETestProcedures,TestKeyRecovery,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-054,TDETestProcedures,TestKeyRecovery,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73579,7 +73574,7 @@ REQ-TDE-PROC-054,TDETestProcedures,TestKeyRecovery,TESTED,,,tde,2026-01-15,.work
 REQ-TDE-PROC-054,TDETestProcedures,TestKeyRecovery,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-054,TDETestProcedures,TestKeyRecovery,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-054,TDETestProcedures,TestKeyRecovery,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-054,TDETestProcedures,TestKeyRecovery,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-054,TDETestProcedures,TestKeyRecovery,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-055,TDETestProcedures,EvaluateRotationSchedule,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-055,TDETestProcedures,EvaluateRotationSchedule,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-055,TDETestProcedures,EvaluateRotationSchedule,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73598,7 +73593,7 @@ REQ-TDE-PROC-055,TDETestProcedures,EvaluateRotationSchedule,TESTED,,,tde,2026-01
 REQ-TDE-PROC-055,TDETestProcedures,EvaluateRotationSchedule,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-055,TDETestProcedures,EvaluateRotationSchedule,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-055,TDETestProcedures,EvaluateRotationSchedule,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-055,TDETestProcedures,EvaluateRotationSchedule,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-055,TDETestProcedures,EvaluateRotationSchedule,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-056,TDETestProcedures,TestKMSFailure,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-056,TDETestProcedures,TestKMSFailure,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-056,TDETestProcedures,TestKMSFailure,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73617,7 +73612,7 @@ REQ-TDE-PROC-056,TDETestProcedures,TestKMSFailure,TESTED,,,tde,2026-01-15,.workt
 REQ-TDE-PROC-056,TDETestProcedures,TestKMSFailure,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-056,TDETestProcedures,TestKMSFailure,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-056,TDETestProcedures,TestKMSFailure,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-056,TDETestProcedures,TestKMSFailure,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-056,TDETestProcedures,TestKMSFailure,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-057,TDETestProcedures,TestCorruptedKeyHandling,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-057,TDETestProcedures,TestCorruptedKeyHandling,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-057,TDETestProcedures,TestCorruptedKeyHandling,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73636,7 +73631,7 @@ REQ-TDE-PROC-057,TDETestProcedures,TestCorruptedKeyHandling,TESTED,,,tde,2026-01
 REQ-TDE-PROC-057,TDETestProcedures,TestCorruptedKeyHandling,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-057,TDETestProcedures,TestCorruptedKeyHandling,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-057,TDETestProcedures,TestCorruptedKeyHandling,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-057,TDETestProcedures,TestCorruptedKeyHandling,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-057,TDETestProcedures,TestCorruptedKeyHandling,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-058,TDETestProcedures,CleanupKeyHierarchy,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a10cae4d/src/execution/procedure_registry.zig
 REQ-TDE-PROC-058,TDETestProcedures,CleanupKeyHierarchy,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a233c712/src/execution/procedure_registry.zig
 REQ-TDE-PROC-058,TDETestProcedures,CleanupKeyHierarchy,TESTED,,,tde,2026-01-15,.claude/worktrees/agent-a37683fc/src/execution/procedure_registry.zig
@@ -73655,7 +73650,7 @@ REQ-TDE-PROC-058,TDETestProcedures,CleanupKeyHierarchy,TESTED,,,tde,2026-01-15,.
 REQ-TDE-PROC-058,TDETestProcedures,CleanupKeyHierarchy,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-PROC-058,TDETestProcedures,CleanupKeyHierarchy,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-PROC-058,TDETestProcedures,CleanupKeyHierarchy,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-PROC-058,TDETestProcedures,CleanupKeyHierarchy,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-PROC-058,TDETestProcedures,CleanupKeyHierarchy,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-TENANT-001,PerTenantTDEKeys,KeyDerivation,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/security/tde_key_manager.zig
 REQ-TDE-TENANT-001,PerTenantTDEKeys,KeyDerivation,TESTED,,,security,2026-04-01,src/security/tde_key_manager.zig
 REQ-TDE-TENANT-002,PerTenantTDEKeys,EncryptDecrypt,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/security/tde.zig
@@ -73663,9 +73658,7 @@ REQ-TDE-TENANT-002,PerTenantTDEKeys,EncryptDecrypt,TESTED,,,security,2026-04-01,
 REQ-TDE-TENANT-003,PerTenantTDEFileEncryption,FileIO,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/storage/tde_file_encryption.zig
 REQ-TDE-TENANT-003,PerTenantTDEFileEncryption,FileIO,TESTED,,,security,2026-04-01,src/storage/tde_file_encryption.zig
 REQ-TDE-TENANT-PROC-001,PerTenantTDEKeys,TenantKeyStatus,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/execution/procedure_registry.zig
-REQ-TDE-TENANT-PROC-001,PerTenantTDEKeys,TenantKeyStatus,TESTED,,,security,2026-04-01,src/execution/procedure_registry.zig
 REQ-TDE-TENANT-PROC-002,PerTenantTDEKeys,TenantKeyRotation,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/execution/procedure_registry.zig
-REQ-TDE-TENANT-PROC-002,PerTenantTDEKeys,TenantKeyRotation,TESTED,,,security,2026-04-01,src/execution/procedure_registry.zig
 REQ-TDE-TEST-IMPL,TDETestImplementations,RealFunctionality,EXEMPT,,,tde,2025-11-12,.claude/worktrees/agent-a10cae4d/src/security/tde.zig
 REQ-TDE-TEST-IMPL,TDETestImplementations,RealFunctionality,EXEMPT,,,tde,2025-11-12,.claude/worktrees/agent-a233c712/src/security/tde.zig
 REQ-TDE-TEST-IMPL,TDETestImplementations,RealFunctionality,EXEMPT,,,tde,2025-11-12,.claude/worktrees/agent-a37683fc/src/security/tde.zig
@@ -73703,7 +73696,7 @@ REQ-TDE-TEST-PROCEDURES,TDETestProcedures,RealImplementation,TESTED,,,tde,2026-0
 REQ-TDE-TEST-PROCEDURES,TDETestProcedures,RealImplementation,TESTED,,,tde,2026-01-15,.worktrees/graph-storage-integration/src/execution/storage_dispatch.zig
 REQ-TDE-TEST-PROCEDURES,TDETestProcedures,RealImplementation,TESTED,,,tde,2026-01-15,.worktrees/session-20260401/src/execution/procedure_registry.zig
 REQ-TDE-TEST-PROCEDURES,TDETestProcedures,RealImplementation,TESTED,,,tde,2026-01-15,.worktrees/timeseries-gap-close/src/execution/procedure_registry.zig
-REQ-TDE-TEST-PROCEDURES,TDETestProcedures,RealImplementation,TESTED,,,tde,2026-01-15,src/execution/procedure_registry.zig
+REQ-TDE-TEST-PROCEDURES,TDETestProcedures,RealImplementation,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TEMPORAL-ARITH-001,TemporalArithmeticModule,Extraction,TESTED,,,eval,2026-04-01,.claude/worktrees/nifty-chasing-scroll/src/eval/temporal_arithmetic.zig
 REQ-TEMPORAL-CMP-001,TemporalComparison,DateTimeComparison,TESTED,,,parser,2026-04-01,.claude/worktrees/nifty-chasing-scroll/src/temporal.zig
 REQ-TEMPORAL-FMT-001,TemporalFormatting,DateTimeFormatting,TESTED,,,parser,2026-04-01,.claude/worktrees/nifty-chasing-scroll/src/temporal.zig

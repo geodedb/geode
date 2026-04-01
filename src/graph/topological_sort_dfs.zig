@@ -7,16 +7,16 @@ const Graph = @import("builders.zig").Graph;
 // onto an explicit stack to preserve ascending visitation order where feasible.
 //
 // CANARY: REQ=REQ-GQL-062; FEATURE="TopologicalSortDFS"; ASPECT=Traversal; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_062_TopoDFS; BENCH=BenchmarkCANARY_REQ_GQL_062_TopoDFS; OWNER=graph; UPDATED=2025-09-21
-pub fn topoSortDFS(alloc: Allocator, g: *const Graph) ![]u32 {
+pub fn topoSortDFS(alloc: Allocator, g: *const Graph) ![]u64 {
     const n = g.node_count;
     var state = try alloc.alloc(u8, n); // 0=unvisited,1=visiting,2=done
     @memset(state, 0);
-    var order = try std.ArrayList(u32).initCapacity(alloc, n);
+    var order = try std.ArrayList(u64).initCapacity(alloc, n);
 
     var stack = std.ArrayList(Frame).init(alloc);
     defer stack.deinit();
 
-    var i: u32 = 0;
+    var i: u64 = 0;
     while (i < n) : (i += 1) {
         if (state[i] != 0) continue;
         try pushFrame(&stack, i, 0, false);
@@ -70,14 +70,14 @@ pub fn topoSortDFS(alloc: Allocator, g: *const Graph) ![]u32 {
     return order.toOwnedSlice();
 }
 
-const Frame = struct { v: u32, next_idx: usize, returning: bool };
+const Frame = struct { v: u64, next_idx: usize, returning: bool };
 
-fn pushFrame(stack: *std.ArrayList(Frame), v: u32, next_idx: usize, returning: bool) !void {
+fn pushFrame(stack: *std.ArrayList(Frame), v: u64, next_idx: usize, returning: bool) !void {
     try stack.append(.{ .v = v, .next_idx = next_idx, .returning = returning });
 }
 
 // Convenience wrapper returning allocator-owned slice; caller frees.
-pub fn topologicalSortDFS(alloc: Allocator, g: *const Graph) ![]u32 {
+pub fn topologicalSortDFS(alloc: Allocator, g: *const Graph) ![]u64 {
     return topoSortDFS(alloc, g);
 }
 

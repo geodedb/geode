@@ -18,13 +18,13 @@ pub const ConcurrencySafeGraph = struct {
         self.g.deinit();
     }
 
-    pub fn addNode(self: *ConcurrencySafeGraph, id: u32) void {
+    pub fn addNode(self: *ConcurrencySafeGraph, id: u64) void {
         self.rw.lock();
         defer self.rw.unlock();
         self.g.addNode(id);
     }
 
-    pub fn addEdge(self: *ConcurrencySafeGraph, src: u32, dst: u32, w: builders.Weight) !void {
+    pub fn addEdge(self: *ConcurrencySafeGraph, src: u64, dst: u64, w: builders.Weight) !void {
         self.rw.lock();
         defer self.rw.unlock();
         try self.g.addEdge(src, dst, w);
@@ -32,7 +32,7 @@ pub const ConcurrencySafeGraph = struct {
 
     pub const Edge = builders.Edge;
 
-    pub fn snapshotOutEdges(self: *ConcurrencySafeGraph, allocator: std.mem.Allocator, node: u32) ![]Edge {
+    pub fn snapshotOutEdges(self: *ConcurrencySafeGraph, allocator: std.mem.Allocator, node: u64) ![]Edge {
         self.rw.lockShared();
         const it = self.g.outEdges(node);
         const slice = it.edges; // underlying slice
@@ -64,10 +64,10 @@ test "TestCANARY_REQ_GQL_060_ConcurrencySafe multi-thread writers and readers" {
     // spawn writers adding a chain
     var i: usize = 0;
     while (i < writer_count) : (i += 1) {
-        const base: u32 = @intCast(i * 100);
+        const base: u64 = @intCast(i * 100);
         writers[i] = try std.Thread.spawn(.{}, struct {
-            fn run(cg_ptr: *ConcurrencySafeGraph, base_local: u32) void {
-                var j: u32 = 0;
+            fn run(cg_ptr: *ConcurrencySafeGraph, base_local: u64) void {
+                var j: u64 = 0;
                 while (j < 50) : (j += 1) {
                     cg_ptr.addNode(base_local + j + 1);
                     cg_ptr.addEdge(base_local + j, base_local + j + 1, 1.0) catch {};

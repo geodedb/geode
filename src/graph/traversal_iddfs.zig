@@ -10,18 +10,18 @@ const builders = @import("builders.zig");
 // Time complexity worst-case O(b^d) like DFS; repeated exploration yields overhead ~O(b^d) with small constant due to geometric series.
 
 pub const VisitResult = struct {
-    order: std.ArrayList(u32), // visitation order (pre-order)
+    order: std.ArrayList(u64), // visitation order (pre-order)
 };
 
 fn depthLimited(
     alloc: std.mem.Allocator,
     g: *const builders.Graph,
-    start: u32,
-    limit: u32,
-    visited: *std.AutoHashMap(u32, bool),
-    out: *std.ArrayList(u32),
+    start: u64,
+    limit: u64,
+    visited: *std.AutoHashMap(u64, bool),
+    out: *std.ArrayList(u64),
 ) !void {
-    var stack = std.ArrayList(struct { node: u32, depth: u32 }).init(alloc);
+    var stack = std.ArrayList(struct { node: u64, depth: u64 }).init(alloc);
     defer stack.deinit();
     try stack.append(.{ .node = start, .depth = 0 });
     while (stack.items.len > 0) {
@@ -44,16 +44,16 @@ fn depthLimited(
 pub fn iddfs(
     alloc: std.mem.Allocator,
     g: *const builders.Graph,
-    start: u32,
-    max_depth: u32,
+    start: u64,
+    max_depth: u64,
 ) !VisitResult {
-    var order = std.ArrayList(u32).init(alloc);
+    var order = std.ArrayList(u64).init(alloc);
     errdefer order.deinit();
-    var global_visited = std.AutoHashMap(u32, bool).init(alloc);
+    var global_visited = std.AutoHashMap(u64, bool).init(alloc);
     defer global_visited.deinit();
-    var depth: u32 = 0;
+    var depth: u64 = 0;
     while (depth <= max_depth) : (depth += 1) {
-        var visited_this = std.AutoHashMap(u32, bool).init(alloc);
+        var visited_this = std.AutoHashMap(u64, bool).init(alloc);
         defer visited_this.deinit();
         // We do not carry visited across depth iterations; IDDFS semantics revisit nodes to discover shallower solutions.
         try depthLimited(alloc, g, start, depth, &visited_this, &order);
@@ -65,20 +65,20 @@ pub fn iddfs(
 pub fn iddfsUntil(
     alloc: std.mem.Allocator,
     g: *const builders.Graph,
-    start: u32,
-    max_depth: u32,
-    predicate: fn (u32) bool,
-) !struct { order: std.ArrayList(u32), found: ?u32 } {
-    var order = std.ArrayList(u32).init(alloc);
+    start: u64,
+    max_depth: u64,
+    predicate: fn (u64) bool,
+) !struct { order: std.ArrayList(u64), found: ?u64 } {
+    var order = std.ArrayList(u64).init(alloc);
     errdefer order.deinit();
-    var depth: u32 = 0;
+    var depth: u64 = 0;
     while (depth <= max_depth) : (depth += 1) {
-        var visited = std.AutoHashMap(u32, bool).init(alloc);
+        var visited = std.AutoHashMap(u64, bool).init(alloc);
         defer visited.deinit();
-        var stack = std.ArrayList(struct { node: u32, depth: u32 }).init(alloc);
+        var stack = std.ArrayList(struct { node: u64, depth: u64 }).init(alloc);
         defer stack.deinit();
         try stack.append(.{ .node = start, .depth = 0 });
-        var found: ?u32 = null;
+        var found: ?u64 = null;
         while (stack.items.len > 0) {
             const frame = stack.pop();
             if (visited.contains(frame.node)) continue;

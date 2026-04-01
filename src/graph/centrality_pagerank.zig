@@ -10,9 +10,9 @@ const builders = @import("builders.zig");
 //  - Deterministic ordering by sorted node id ensures stable output vector ordering.
 
 pub const Result = struct {
-    node_ids: []u32, // sorted node ids corresponding to ranks indices
+    node_ids: []u64, // sorted node ids corresponding to ranks indices
     ranks: []f64, // rank scores parallel to node_ids
-    iterations: u32, // iterations executed
+    iterations: u64, // iterations executed
     converged: bool, // true if diff < epsilon
     pub fn deinit(self: *Result, alloc: std.mem.Allocator) void {
         alloc.free(self.node_ids);
@@ -24,29 +24,29 @@ pub const Result = struct {
 pub const Params = struct {
     damping: f64 = 0.85,
     epsilon: f64 = 1e-8,
-    max_iterations: u32 = 100,
+    max_iterations: u64 = 100,
 };
 
 pub fn compute(alloc: std.mem.Allocator, g: *const builders.Graph, p: Params) !Result {
     const n = g.nodes.count();
     if (n == 0) {
-        return .{ .node_ids = &[_]u32{}, .ranks = &[_]f64{}, .iterations = 0, .converged = true };
+        return .{ .node_ids = &[_]u64{}, .ranks = &[_]f64{}, .iterations = 0, .converged = true };
     }
     var it = g.nodes.iterator();
-    var node_ids = try alloc.alloc(u32, n);
+    var node_ids = try alloc.alloc(u64, n);
     errdefer alloc.free(node_ids);
     var i: usize = 0;
     while (it.next()) |entry| {
         node_ids[i] = entry.key_ptr.*;
         i += 1;
     }
-    std.sort.sort(u32, node_ids, {}, comptime std.sort.asc(u32));
+    std.sort.sort(u64, node_ids, {}, comptime std.sort.asc(u64));
 
     // Map id -> dense index
-    var id_to_index = std.AutoHashMap(u32, u32).init(alloc);
+    var id_to_index = std.AutoHashMap(u64, u64).init(alloc);
     defer id_to_index.deinit();
     for (node_ids, 0..) |id, idx| {
-        id_to_index.put(id, @as(u32, @intCast(idx))) catch {};
+        id_to_index.put(id, @as(u64, @intCast(idx))) catch {};
     }
 
     // PERF: PHASE5_PAGERANK_EDGE_CACHE - Pre-compute edge indices to avoid repeated HashMap lookups
@@ -55,16 +55,16 @@ pub fn compute(alloc: std.mem.Allocator, g: *const builders.Graph, p: Params) !R
 
     // Pre-compute edge indices to avoid repeated HashMap lookups in hot loops
     const EdgeIndices = struct {
-        src_idx: u32,
-        dst_idx: u32,
+        src_idx: u64,
+        dst_idx: u64,
     };
 
     var edge_indices_list = try std.ArrayList(EdgeIndices).initCapacity(alloc, g.edges.items.len);
     defer edge_indices_list.deinit();
 
     for (g.edges.items) |e| {
-        const src_id: u32 = @field(e, "src");
-        const dst_id: u32 = @field(e, "dst");
+        const src_id: u64 = @field(e, "src");
+        const dst_id: u64 = @field(e, "dst");
 
         // Only include edges where both nodes are in our node set
         if (id_to_index.get(src_id)) |src_idx| {
@@ -80,7 +80,7 @@ pub fn compute(alloc: std.mem.Allocator, g: *const builders.Graph, p: Params) !R
     const edge_indices = edge_indices_list.items;
 
     // Outdegree counts using pre-computed indices (no HashMap lookups)
-    var outdeg = try alloc.alloc(u32, n);
+    var outdeg = try alloc.alloc(u64, n);
     defer alloc.free(outdeg);
     @memset(outdeg, 0);
     for (edge_indices) |edge_idx| {
@@ -88,14 +88,14 @@ pub fn compute(alloc: std.mem.Allocator, g: *const builders.Graph, p: Params) !R
     }
 
     // Build inbound adjacency lists using pre-computed indices (no HashMap lookups)
-    var inbound = try alloc.alloc(std.ArrayList(u32), n);
+    var inbound = try alloc.alloc(std.ArrayList(u64), n);
     defer {
         var j: usize = 0;
         while (j < n) : (j += 1) inbound[j].deinit();
         alloc.free(inbound);
     }
     var j: usize = 0;
-    while (j < n) : (j += 1) inbound[j] = std.ArrayList(u32).init(alloc);
+    while (j < n) : (j += 1) inbound[j] = std.ArrayList(u64).init(alloc);
     for (edge_indices) |edge_idx| {
         inbound[edge_idx.dst_idx].append(edge_idx.src_idx) catch {};
     }
@@ -108,7 +108,7 @@ pub fn compute(alloc: std.mem.Allocator, g: *const builders.Graph, p: Params) !R
     var new_ranks = try alloc.alloc(f64, n);
     defer alloc.free(new_ranks);
 
-    var iter: u32 = 0;
+    var iter: u64 = 0;
     var converged = false;
     while (iter < p.max_iterations) : (iter += 1) {
         // Sum ranks of dangling nodes

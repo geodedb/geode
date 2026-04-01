@@ -25,7 +25,7 @@ pub const Options = struct {
 };
 
 pub const Result = struct {
-    node_ids: []u32,
+    node_ids: []u64,
     scores: []f64,
     pub fn deinit(self: *Result, allocator: std.mem.Allocator) void {
         allocator.free(self.node_ids);
@@ -65,12 +65,12 @@ pub fn compute(allocator: std.mem.Allocator, g: *builders.Graph, opts: Options) 
 
     // Build id->index maps (assume graphs identical ordering by node id sets)
     const n = g.nodes.items.len;
-    var res_ids = try allocator.alloc(u32, n);
+    var res_ids = try allocator.alloc(u64, n);
     var scores = try allocator.alloc(f64, n);
     @memset(scores, 0);
-    var map = std.AutoHashMap(u32, usize).init(allocator);
+    var map = std.AutoHashMap(u64, usize).init(allocator);
     defer map.deinit();
-    try map.ensureTotalCapacity(@as(u32, @intCast(n)));
+    try map.ensureTotalCapacity(@as(u64, @intCast(n)));
 
     var i: usize = 0;
     while (i < n) : (i += 1) {
@@ -119,7 +119,7 @@ test "Grey Cardinal Composite: basic weighting" {
     var g = builders.Graph.init(std.testing.allocator);
     defer g.deinit();
     // Simple graph: path of 5 plus extra leaf on middle to differentiate metrics
-    var i: u32 = 0;
+    var i: u64 = 0;
     while (i < 6) : (i += 1) g.addNode(i);
     _ = g.addEdge(0, 1, 1) catch {};
     _ = g.addEdge(1, 0, 1) catch {};

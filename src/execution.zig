@@ -68,6 +68,21 @@ pub const executeIntersect = set_operations.executeIntersect;
 pub const executeExcept = set_operations.executeExcept;
 pub const executeUnionWithContext = set_operations.executeUnionWithContext;
 
+// Re-export centrality algorithm helper functions (exposed for unit testing)
+pub const safeU64ToValue = centrality_algorithms.safeU64ToValue;
+pub const precomputeAdjacency = centrality_algorithms.precomputeAdjacency;
+pub const deinitAdjacency = centrality_algorithms.deinitAdjacency;
+pub const NeighborSet = centrality_algorithms.NeighborSet;
+pub const buildNeighborSets = centrality_algorithms.buildNeighborSets;
+pub const deinitNeighborSets = centrality_algorithms.deinitNeighborSets;
+
+// Re-export graph algorithm helper functions (exposed for unit testing)
+pub const nodeHasAllLabels = graph_algorithms.nodeHasAllLabels;
+pub const propertyToValue = graph_algorithms.propertyToValue;
+pub const findBoundNodeId = graph_algorithms.findBoundNodeId;
+pub const findBoundNode = graph_algorithms.findBoundNode;
+pub const findEdgeBetween = graph_algorithms.findEdgeBetween;
+
 // Re-export centrality algorithm functions for backward compatibility (M1 Phase 3 extraction)
 pub const getNeighbors = centrality_algorithms.getNeighbors;
 pub const executeDegreeCentrality = centrality_algorithms.executeDegreeCentrality;
@@ -87,6 +102,17 @@ pub const executeLeidenCommunities = centrality_algorithms.executeLeidenCommunit
 pub const executeArticulationPoints = centrality_algorithms.executeArticulationPoints;
 pub const executeBridges = centrality_algorithms.executeBridges;
 pub const executeBiconnectedComponents = centrality_algorithms.executeBiconnectedComponents;
+// CANARY: REQ=REQ-GQL-GRAPH-STATS-001; FEATURE="GraphStatistics"; ASPECT=ReExport; STATUS=IMPL; OWNER=execution; UPDATED=2026-04-01
+pub const executeGraphDensity = centrality_algorithms.executeGraphDensity;
+pub const executeGraphDiameter = centrality_algorithms.executeGraphDiameter;
+pub const executeMeanDistance = centrality_algorithms.executeMeanDistance;
+pub const executeGlobalClusteringCoefficient = centrality_algorithms.executeGlobalClusteringCoefficient;
+pub const executeKatzCentrality = centrality_algorithms.executeKatzCentrality;
+pub const executeHITS = centrality_algorithms.executeHITS;
+pub const executeTriangleCounting = centrality_algorithms.executeTriangleCounting;
+pub const executeLocalClusteringCoefficient = centrality_algorithms.executeLocalClusteringCoefficient;
+pub const executeKCore = centrality_algorithms.executeKCore;
+pub const executeKShell = centrality_algorithms.executeKShell;
 
 // Re-export CRUD operation functions for backward compatibility (M1 Phase 4 extraction)
 pub const executeCreateForBatch = crud_operations.executeCreateForBatch;
@@ -158,6 +184,7 @@ pub const executeReturnClauseWithParams = return_and_sorting.executeReturnClause
 pub const executeQueryChain = query_execution.executeQueryChain;
 pub const executeQueryWithBindingsImpl = query_execution.executeQueryWithBindingsImpl;
 pub const executeQueryWithContext = query_execution.executeQueryWithContext;
+pub const executeLegacyQueryWithResolvedParams = query_execution.executeLegacyQueryWithResolvedParams;
 
 // Re-export value utilities for backward compatibility (M1 Phase 12 extraction)
 pub const duplicateResult = value_utilities.duplicateResult;

@@ -1901,6 +1901,16 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                     };
                     defer exec_result.deinit(allocator);
 
+                    // CANARY: REQ=REQ-SEC-RLS-ALGO-001; FEATURE="RLS Algorithm Filtering"; ASPECT=gRPCProfileWire; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+                    // Algorithm RLS filter BEFORE lock release — requires store access.
+                    const store_ptr = graph_store.getGlobalStore(allocator);
+                    if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
+                        if (state.authenticated_user) |auth_user| {
+                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                            _ = rls_filter.applyAlgorithmRLSFilter(allocator, &exec_result, rls_engine, store_ptr, auth_user, rls_graph);
+                        }
+                    }
+
                     // #564: Release lock after execution, before serialization/network I/O
                     if (needs_store_lock) {
                         if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
@@ -1918,8 +1928,6 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                             _ = rls_filter.applyRLSFilter(allocator, &exec_result, rls_engine, auth_user, rls_graph);
                         }
                     }
-
-                    const store_ptr = graph_store.getGlobalStore(allocator);
                     const profile_msg = try profile_payload.buildProfilePayload(allocator, traits, exec_result.rows.len, .{
                         .compact = store.config.compact_profile,
                         .include_mem_curve = store.config.memcurve_profile,
@@ -1951,6 +1959,18 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                     };
                     var store_result = false;
                     defer if (!store_result) exec_result.deinit(allocator);
+
+                    // CANARY: REQ=REQ-SEC-RLS-ALGO-001; FEATURE="RLS Algorithm Filtering"; ASPECT=gRPCRowsWire; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+                    // Algorithm RLS filter BEFORE lock release — requires store access.
+                    {
+                        const algo_store = graph_store.getGlobalStore(allocator);
+                        if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
+                            if (state.authenticated_user) |auth_user| {
+                                const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                                _ = rls_filter.applyAlgorithmRLSFilter(allocator, &exec_result, rls_engine, algo_store, auth_user, rls_graph);
+                            }
+                        }
+                    }
 
                     // #564: Release lock after execution, before serialization/network I/O
                     if (needs_store_lock) {

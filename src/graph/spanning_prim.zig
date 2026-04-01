@@ -7,7 +7,7 @@ const builders = @import("builders.zig");
 
 pub const MstResult = struct {
     total_weight: f64,
-    edges: []const struct { u: u32, v: u32, w: f64 },
+    edges: []const struct { u: u64, v: u64, w: f64 },
     forest: bool,
     pub fn deinit(self: *MstResult, alloc: std.mem.Allocator) void {
         alloc.free(self.edges);
@@ -15,9 +15,9 @@ pub const MstResult = struct {
     }
 };
 
-const Edge = struct { u: u32, v: u32, w: f64 };
+const Edge = struct { u: u64, v: u64, w: f64 };
 
-const HeapItem = struct { w: f64, u: u32, v: u32 };
+const HeapItem = struct { w: f64, u: u64, v: u64 };
 
 fn less(_: void, a: HeapItem, b: HeapItem) std.math.Order {
     if (a.w < b.w) return .lt;
@@ -33,14 +33,14 @@ fn less(_: void, a: HeapItem, b: HeapItem) std.math.Order {
 pub fn compute(alloc: std.mem.Allocator, g: *const builders.Graph) !MstResult {
     const node_count = g.nodes.count();
     var nodes_iter = g.nodes.iterator();
-    var node_ids = try alloc.alloc(u32, node_count);
+    var node_ids = try alloc.alloc(u64, node_count);
     defer alloc.free(node_ids);
     var idx: usize = 0;
     while (nodes_iter.next()) |entry| {
         node_ids[idx] = entry.key_ptr.*;
         idx += 1;
     }
-    std.sort.sort(u32, node_ids, {}, comptime std.sort.asc(u32));
+    std.sort.sort(u64, node_ids, {}, comptime std.sort.asc(u64));
     if (node_ids.len == 0) return .{ .total_weight = 0, .edges = &[_]Edge{}, .forest = false };
 
     // Build adjacency list (treat undirected) from builders.Graph edges
@@ -50,10 +50,10 @@ pub fn compute(alloc: std.mem.Allocator, g: *const builders.Graph) !MstResult {
         while (i < adj.len) : (i += 1) adj[i].deinit();
         alloc.free(adj);
     }
-    var id_to_index = std.AutoHashMap(u32, u32).init(alloc);
+    var id_to_index = std.AutoHashMap(u64, u64).init(alloc);
     defer id_to_index.deinit();
     for (node_ids, 0..) |nid, i| {
-        id_to_index.put(nid, @as(u32, @intCast(i))) catch {};
+        id_to_index.put(nid, @as(u64, @intCast(i))) catch {};
         adj[i] = std.ArrayList(Edge).init(alloc);
     }
 

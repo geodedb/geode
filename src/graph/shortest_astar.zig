@@ -10,11 +10,11 @@ const dijkstra = @import("shortest_dijkstra.zig");
 // UA005/UA006 style policy (prefer lower parent id on distance ties / equal f scores).
 
 pub const AStarResult = struct {
-    order: []u32, // visitation (expansion) order of vertex ids
+    order: []u64, // visitation (expansion) order of vertex ids
     parents: []i32, // parent vertex id (-1 for source)
     g_scores: []f64, // distance from source
     found: bool, // whether target reached
-    target: ?u32, // target id if provided
+    target: ?u64, // target id if provided
     final_distance: f64,
 
     pub fn deinit(self: *AStarResult, alloc: std.mem.Allocator) void {
@@ -28,12 +28,12 @@ pub const AStarResult = struct {
 pub fn compute(
     alloc: std.mem.Allocator,
     g: builders.Graph,
-    source: u32,
-    target: ?u32,
-    heuristic: ?fn (v: u32, target: u32) f64,
+    source: u64,
+    target: ?u64,
+    heuristic: ?fn (v: u64, target: u64) f64,
 ) !AStarResult {
     // Collect node ids
-    var node_set = std.AutoHashMap(u32, void).init(alloc);
+    var node_set = std.AutoHashMap(u64, void).init(alloc);
     defer node_set.deinit();
     try node_set.put(source, {});
     if (target) |t| try node_set.put(t, {});
@@ -42,15 +42,15 @@ pub fn compute(
         try node_set.put(e.dst, {});
     }
     const n = node_set.count();
-    var ids = try alloc.alloc(u32, n);
+    var ids = try alloc.alloc(u64, n);
     errdefer alloc.free(ids);
     {
         var it = node_set.keyIterator();
         var idx: usize = 0;
         while (it.next()) |k| : (idx += 1) ids[idx] = k.*;
     }
-    std.sort.sort(u32, ids, {}, comptime std.sort.asc(u32));
-    var id_to_dense = std.AutoHashMap(u32, usize).init(alloc);
+    std.sort.sort(u64, ids, {}, comptime std.sort.asc(u64));
+    var id_to_dense = std.AutoHashMap(u64, usize).init(alloc);
     defer id_to_dense.deinit();
     for (ids, 0..) |id, i| try id_to_dense.put(id, i);
 
@@ -103,7 +103,7 @@ pub fn compute(
     try open.add(.{ .f = f_scores[source_dense], .g = 0, .v = source_dense });
     in_open[source_dense] = true;
 
-    var visit_order = try alloc.alloc(u32, n);
+    var visit_order = try alloc.alloc(u64, n);
     errdefer alloc.free(visit_order);
     var visit_len: usize = 0;
     var found = false;
@@ -142,7 +142,7 @@ pub fn compute(
     }
 
     if (visit_len < visit_order.len) {
-        const trimmed = try alloc.alloc(u32, visit_len);
+        const trimmed = try alloc.alloc(u64, visit_len);
         @memcpy(trimmed, visit_order[0..visit_len]);
         alloc.free(visit_order);
         visit_order = trimmed;
@@ -173,7 +173,7 @@ test "TestCANARY_REQ_GQL_063_AStar basic heuristic vs Dijkstra" {
     try g.addEdge(3, 4, 1);
     // Heuristic: straight-line guess (here trivial 0 to keep admissible)
     const h = struct {
-        pub fn h(v: u32, t: u32) f64 {
+        pub fn h(v: u64, t: u64) f64 {
             _ = v;
             _ = t;
             return 0.0;
@@ -186,7 +186,7 @@ test "TestCANARY_REQ_GQL_063_AStar basic heuristic vs Dijkstra" {
     var dres = try dijkstra.compute(std.testing.allocator, g, 1, 4);
     defer dres.deinit(std.testing.allocator);
     // locate 4 in dense mapping from dijkstra result: build distance map
-    var dist_map = std.AutoHashMap(u32, u64).init(std.testing.allocator);
+    var dist_map = std.AutoHashMap(u64, u64).init(std.testing.allocator);
     defer dist_map.deinit();
     var idx2: usize = 0;
     while (idx2 < dres.order.len) : (idx2 += 1) {

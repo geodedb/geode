@@ -1996,6 +1996,15 @@ fn handleClientMessage(
                     const profile_edge_count: u64 = @intCast(store.getEdgeCount());
                     const profile_is_dirty = store.isDirty();
 
+                    // CANARY: REQ=REQ-SEC-RLS-ALGO-001; FEATURE="RLS Algorithm Filtering"; ASPECT=QUICProfileWire; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+                    // Algorithm RLS filter on PROFILE path — requires store lock.
+                    if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
+                        if (state.authenticated_user) |auth_user| {
+                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                            _ = rls_filter.applyAlgorithmRLSFilter(gpa, &exec_result, rls_engine, store, auth_user, rls_graph);
+                        }
+                    }
+
                     // #52: Release lock before serialization and network send.
                     // exec_result is a thread-local copy; store stats are captured above.
                     if (needs_store_lock) {
@@ -2041,6 +2050,17 @@ fn handleClientMessage(
                     };
                     var store_result = false;
                     defer if (!store_result) exec_result.deinit(gpa);
+
+                    // CANARY: REQ=REQ-SEC-RLS-ALGO-001; FEATURE="RLS Algorithm Filtering"; ASPECT=QUICWire; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+                    // S1: Algorithm RLS filter BEFORE lock release — requires store access
+                    // to look up node labels for integer nodeId values in algorithm results.
+                    // Must run while store read lock is held for thread-safe HashMap access.
+                    if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
+                        if (state.authenticated_user) |auth_user| {
+                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                            _ = rls_filter.applyAlgorithmRLSFilter(gpa, &exec_result, rls_engine, store, auth_user, rls_graph);
+                        }
+                    }
 
                     // #52: Release lock immediately after execution completes.
                     // exec_result is a thread-local copy (owned data, freed by connection allocator).

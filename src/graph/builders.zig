@@ -7,22 +7,22 @@ const std = @import("std");
 //  - addEdge(src,dst,weight)
 //  - outEdges(id) iteration
 //  - stable storage in contiguous arrays ( SoA )
-// Chosen structure: node ids assumed dense-ish u32; edges stored in single array with offset index per node.
+// Chosen structure: node ids u64 matching production GraphStore; edges stored in single array with offset index per node.
 // For simplicity we rebuild adjacency offsets after each edge add (O(E)) acceptable for small test scale.
 
 pub const Weight = f64;
 
-pub const Edge = struct { src: u32, dst: u32, w: Weight };
+pub const Edge = struct { src: u64, dst: u64, w: Weight };
 
 pub const Graph = struct {
     allocator: std.mem.Allocator,
-    nodes: std.AutoHashMap(u32, void),
+    nodes: std.AutoHashMap(u64, void),
     edges: std.ArrayList(Edge),
     // adjacency index: node -> slice range (start,end)
-    index: std.AutoHashMap(u32, struct { start: usize, end: usize }),
+    index: std.AutoHashMap(u64, struct { start: usize, end: usize }),
 
     pub fn init(allocator: std.mem.Allocator) Graph {
-        return .{ .allocator = allocator, .nodes = std.AutoHashMap(u32, void).init(allocator), .edges = std.ArrayList(Edge).empty, .index = std.AutoHashMap(u32, struct { start: usize, end: usize }).init(allocator) };
+        return .{ .allocator = allocator, .nodes = std.AutoHashMap(u64, void).init(allocator), .edges = std.ArrayList(Edge).empty, .index = std.AutoHashMap(u64, struct { start: usize, end: usize }).init(allocator) };
     }
 
     pub fn deinit(self: *Graph) void {
@@ -31,13 +31,13 @@ pub const Graph = struct {
         self.index.deinit();
     }
 
-    pub fn addNode(self: *Graph, id: u32) void {
+    pub fn addNode(self: *Graph, id: u64) void {
         _ = self.nodes.put(id, {}) catch {};
         // ensure index entry exists
         if (!self.index.contains(id)) self.index.put(id, .{ .start = 0, .end = 0 }) catch {};
     }
 
-    pub fn addEdge(self: *Graph, src: u32, dst: u32, w: Weight) !void {
+    pub fn addEdge(self: *Graph, src: u64, dst: u64, w: Weight) !void {
         if (!self.nodes.contains(src)) self.addNode(src);
         if (!self.nodes.contains(dst)) self.addNode(dst);
         try self.edges.append(self.allocator, .{ .src = src, .dst = dst, .w = w });
@@ -46,7 +46,7 @@ pub const Graph = struct {
 
     fn rebuildIndex(self: *Graph) !void {
         // Group edges by source node for standard outgoing adjacency semantics.
-        var temp = std.AutoHashMap(u32, std.ArrayList(Edge)).init(self.allocator);
+        var temp = std.AutoHashMap(u64, std.ArrayList(Edge)).init(self.allocator);
         defer {
             var it = temp.iterator();
             while (it.next()) |entry| entry.value_ptr.deinit(self.allocator);
@@ -88,7 +88,7 @@ pub const Graph = struct {
         }
     };
 
-    pub fn outEdges(self: *const Graph, node: u32) OutEdgeIter {
+    pub fn outEdges(self: *const Graph, node: u64) OutEdgeIter {
         if (self.index.get(node)) |rng| {
             return .{ .edges = self.edges.items[rng.start..rng.end] };
         }

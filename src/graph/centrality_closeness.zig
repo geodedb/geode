@@ -14,7 +14,7 @@ pub const Params = struct {
 };
 
 pub const Result = struct {
-    node_ids: []u32,
+    node_ids: []u64,
     scores: []f64,
     pub fn deinit(self: *Result, allocator: std.mem.Allocator) void {
         allocator.free(self.node_ids);
@@ -25,8 +25,8 @@ pub const Result = struct {
 
 pub fn compute(allocator: std.mem.Allocator, g: *const builders.Graph, p: Params) !Result {
     const n = g.nodes.count();
-    if (n == 0) return .{ .node_ids = &[_]u32{}, .scores = &[_]f64{} };
-    var node_ids = try allocator.alloc(u32, n);
+    if (n == 0) return .{ .node_ids = &[_]u64{}, .scores = &[_]f64{} };
+    var node_ids = try allocator.alloc(u64, n);
     errdefer allocator.free(node_ids);
     var it = g.nodes.iterator();
     var idx: usize = 0;
@@ -34,17 +34,17 @@ pub fn compute(allocator: std.mem.Allocator, g: *const builders.Graph, p: Params
         node_ids[idx] = e.key_ptr.*;
         idx += 1;
     }
-    std.sort.sort(u32, node_ids, {}, comptime std.sort.asc(u32));
-    var id_to_index = std.AutoHashMap(u32, u32).init(allocator);
+    std.sort.sort(u64, node_ids, {}, comptime std.sort.asc(u64));
+    var id_to_index = std.AutoHashMap(u64, u64).init(allocator);
     defer id_to_index.deinit();
-    for (node_ids, 0..) |id, i| id_to_index.put(id, @as(u32, @intCast(i))) catch {};
+    for (node_ids, 0..) |id, i| id_to_index.put(id, @as(u64, @intCast(i))) catch {};
 
     var scores = try allocator.alloc(f64, n);
     errdefer allocator.free(scores);
 
     var dist = try allocator.alloc(i32, n);
     defer allocator.free(dist);
-    var queue = try std.ArrayList(u32).initCapacity(allocator, n);
+    var queue = try std.ArrayList(u64).initCapacity(allocator, n);
     defer queue.deinit();
 
     var s_idx: usize = 0;
@@ -54,8 +54,8 @@ pub fn compute(allocator: std.mem.Allocator, g: *const builders.Graph, p: Params
         while (i < n) : (i += 1) dist[i] = -1;
         queue.clearRetainingCapacity();
         dist[s_idx] = 0;
-        try queue.append(@as(u32, @intCast(s_idx)));
-        var reach_count: u32 = 1;
+        try queue.append(@as(u64, @intCast(s_idx)));
+        var reach_count: u64 = 1;
         var sum_dist: f64 = 0;
         var harmonic_sum: f64 = 0;
         while (queue.items.len > 0) {
@@ -99,7 +99,7 @@ test "TestCANARY_REQ_GQL_067_Closeness basic path" {
     var g = builders.Graph.init(std.testing.allocator);
     defer g.deinit();
     // Path 0-1-2-3-4
-    var i: u32 = 0;
+    var i: u64 = 0;
     while (i <= 4) : (i += 1) g.addNode(i);
     i = 0;
     while (i < 4) : (i += 1) {

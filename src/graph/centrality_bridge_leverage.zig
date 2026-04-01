@@ -16,7 +16,7 @@ pub const Options = struct {
 };
 
 pub const Result = struct {
-    node_ids: []u32,
+    node_ids: []u64,
     scores: []f64,
     pub fn deinit(self: *Result, allocator: std.mem.Allocator) void {
         allocator.free(self.node_ids);
@@ -49,20 +49,20 @@ fn UF(comptime N: usize) type {
 
 pub fn compute(allocator: std.mem.Allocator, g: *builders.Graph, opts: Options) !Result {
     const n = g.nodes.items.len;
-    var node_ids = try allocator.alloc(u32, n);
+    var node_ids = try allocator.alloc(u64, n);
     var scores = try allocator.alloc(f64, n);
     // Precompute degrees
-    var degrees = try allocator.alloc(u32, n);
+    var degrees = try allocator.alloc(u64, n);
     defer allocator.free(degrees);
     var idx: usize = 0;
     while (idx < n) : (idx += 1) {
         node_ids[idx] = g.nodes.items[idx].id;
-        degrees[idx] = @as(u32, @intCast(g.nodes.items[idx].out_degree));
+        degrees[idx] = @as(u64, @intCast(g.nodes.items[idx].out_degree));
     }
     // Map id->index (assuming contiguous small id set not guaranteed; build hash map)
-    var map = std.AutoHashMap(u32, usize).init(allocator);
+    var map = std.AutoHashMap(u64, usize).init(allocator);
     defer map.deinit();
-    try map.ensureTotalCapacity(@as(u32, @intCast(n)));
+    try map.ensureTotalCapacity(@as(u64, @intCast(n)));
     idx = 0;
     while (idx < n) : (idx += 1) try map.put(node_ids[idx], idx);
 
@@ -80,7 +80,7 @@ pub fn compute(allocator: std.mem.Allocator, g: *builders.Graph, opts: Options) 
             // Fallback: treat diversity=1 to bound cost
             var leverage: i64 = 0;
             var e_it = v_node.first_out_edge;
-            var count: u32 = 0;
+            var count: u64 = 0;
             while (e_it) |edge_ptr| : (e_it = edge_ptr.next_out) {
                 const tgt_idx = map.get(edge_ptr.to) orelse continue;
                 leverage += @as(i64, @intCast(deg_v)) - @as(i64, @intCast(degrees[tgt_idx]));
@@ -91,7 +91,7 @@ pub fn compute(allocator: std.mem.Allocator, g: *builders.Graph, opts: Options) 
             continue;
         }
         // Collect neighbor ids & map to 0..k-1
-        var neigh_buf = try allocator.alloc(u32, neighbor_count);
+        var neigh_buf = try allocator.alloc(u64, neighbor_count);
         defer allocator.free(neigh_buf);
         var pos: usize = 0;
         var e_it2 = v_node.first_out_edge;
@@ -106,9 +106,9 @@ pub fn compute(allocator: std.mem.Allocator, g: *builders.Graph, opts: Options) 
         while (pos < neighbor_count) : (pos += 1) neigh_index[pos] = @as(u16, @intCast(pos));
 
         // For edges among neighbors, we need quick membership check -> hash set
-        var neigh_set = std.AutoHashMap(u32, u16).init(allocator);
+        var neigh_set = std.AutoHashMap(u64, u16).init(allocator);
         defer neigh_set.deinit();
-        try neigh_set.ensureTotalCapacity(@as(u32, @intCast(neighbor_count)));
+        try neigh_set.ensureTotalCapacity(@as(u64, @intCast(neighbor_count)));
         pos = 0;
         while (pos < neighbor_count) : (pos += 1) try neigh_set.put(neigh_buf[pos], @as(u16, @intCast(pos)));
 
@@ -194,7 +194,7 @@ test "TestCANARY_REQ_GQL_067_BridgeLeverage basic bridge" {
     var g = builders.Graph.init(std.testing.allocator);
     defer g.deinit();
     // Two triangles connected by single bridge node 0: (0-1-2-0) and (0-3-4-0)
-    var i: u32 = 0;
+    var i: u64 = 0;
     while (i < 5) : (i += 1) g.addNode(i);
     // triangle 1
     _ = g.addEdge(0, 1, 1) catch {};

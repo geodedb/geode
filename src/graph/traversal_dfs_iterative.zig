@@ -12,7 +12,7 @@ const builders = @import("builders.zig");
 
 pub const DFSIterative = struct {
     pub fn traverse(alloc: std.mem.Allocator, g: *const builders.Graph, start: u64) ![]u64 {
-        if (!g.nodes.contains(@as(u32, @intCast(start)))) {
+        if (!g.nodes.contains(start)) {
             return try alloc.alloc(u64, 0);
         }
         var visited = std.AutoHashMap(u64, void).init(alloc);
@@ -31,7 +31,7 @@ pub const DFSIterative = struct {
             const v = stack.pop();
             // Iterate adjacency slice to collect unseen children; to preserve stable ordering
             // we push them in reverse so earliest neighbor is processed first when popped.
-            var edges_iter = g.outEdges(@as(u32, @intCast(v)));
+            var edges_iter = g.outEdges(v);
             // Collect neighbors into a temporary array to reverse-push.
             var neigh = std.ArrayList(u64).init(alloc);
             defer neigh.deinit();

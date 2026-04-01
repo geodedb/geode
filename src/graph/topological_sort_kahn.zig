@@ -5,9 +5,9 @@ const builders = @import("builders.zig");
 
 pub const Error = error{CycleDetected} || std.mem.Allocator.Error;
 
-pub fn sort(allocator: std.mem.Allocator, g: *const builders.Graph) Error![]u32 {
+pub fn sort(allocator: std.mem.Allocator, g: *const builders.Graph) Error![]u64 {
     // Compute indegree
-    var indeg = std.AutoHashMap(u32, u32).init(allocator);
+    var indeg = std.AutoHashMap(u64, u64).init(allocator);
     errdefer indeg.deinit();
     var it_nodes = g.nodes.iterator();
     while (it_nodes.next()) |entry| try indeg.put(entry.key_ptr.*, 0);
@@ -16,12 +16,12 @@ pub fn sort(allocator: std.mem.Allocator, g: *const builders.Graph) Error![]u32 
         try indeg.put(e.dst, cur + 1);
     }
     // Min-heap (actually simple array + sort each iteration acceptable small scale) of zero indegree nodes for deterministic ordering
-    var zeros = std.ArrayList(u32).init(allocator);
+    var zeros = std.ArrayList(u64).init(allocator);
     errdefer zeros.deinit();
     var it_nodes2 = g.nodes.iterator();
     while (it_nodes2.next()) |entry| if ((indeg.get(entry.key_ptr.*) orelse 0) == 0) try zeros.append(entry.key_ptr.*);
-    std.sort.heap(u32, zeros.items, {}, comptime std.sort.asc(u32));
-    var out = std.ArrayList(u32).init(allocator);
+    std.sort.heap(u64, zeros.items, {}, comptime std.sort.asc(u64));
+    var out = std.ArrayList(u64).init(allocator);
     errdefer out.deinit();
     while (zeros.items.len > 0) {
         const v = zeros.pop(); // pop largest; maintain min behavior by reverse append then sort, simpler: we popped largest, so resort
@@ -35,7 +35,7 @@ pub fn sort(allocator: std.mem.Allocator, g: *const builders.Graph) Error![]u32 
                 try zeros.append(edge.dst);
             } else try indeg.put(edge.dst, curd - 1);
         }
-        std.sort.heap(u32, zeros.items, {}, comptime std.sort.asc(u32));
+        std.sort.heap(u64, zeros.items, {}, comptime std.sort.asc(u64));
     }
     if (out.items.len != g.nodes.count()) return error.CycleDetected;
     return out.toOwnedSlice();
@@ -52,7 +52,7 @@ test "TestCANARY_REQ_GQL_062_TopoKahn basic DAG" {
     defer std.testing.allocator.free(order);
     try std.testing.expect(order.len == 3);
     // Order must respect 1 before 2 before 3
-    var pos = std.AutoHashMap(u32, usize).init(std.testing.allocator);
+    var pos = std.AutoHashMap(u64, usize).init(std.testing.allocator);
     defer pos.deinit();
     for (order, 0..) |v, i| try pos.put(v, i);
     try std.testing.expect((pos.get(1) orelse 9) < (pos.get(2) orelse 9));

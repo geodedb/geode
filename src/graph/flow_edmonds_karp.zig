@@ -2,14 +2,14 @@
 const std = @import("std");
 const builders = @import("builders.zig");
 
-fn key(src: u32, dst: u32) u64 {
-    return (@as(u64, src) << 32) | @as(u64, dst);
+fn key(src: u64, dst: u64) u128 {
+    return (@as(u128, src) << 64) | @as(u128, dst);
 }
 
-pub fn maxFlow(alloc: std.mem.Allocator, g: *const builders.Graph, source: u32, sink: u32) !f64 {
+pub fn maxFlow(alloc: std.mem.Allocator, g: *const builders.Graph, source: u64, sink: u64) !f64 {
     if (source == sink) return 0;
     if (!g.nodes.contains(source) or !g.nodes.contains(sink)) return 0;
-    var cap = std.AutoHashMap(u64, f64).init(alloc);
+    var cap = std.AutoHashMap(u128, f64).init(alloc);
     defer cap.deinit();
     for (g.edges.items) |e| {
         const k = key(e.src, e.dst);
@@ -21,11 +21,11 @@ pub fn maxFlow(alloc: std.mem.Allocator, g: *const builders.Graph, source: u32, 
     }
     var flow: f64 = 0;
     while (true) {
-        var parent = std.AutoHashMap(u32, u32).init(alloc);
+        var parent = std.AutoHashMap(u64, u64).init(alloc);
         defer parent.deinit();
-        var edge_cap = std.AutoHashMap(u32, f64).init(alloc);
+        var edge_cap = std.AutoHashMap(u64, f64).init(alloc);
         defer edge_cap.deinit();
-        var queue = std.ArrayList(u32).init(alloc);
+        var queue = std.ArrayList(u64).init(alloc);
         defer queue.deinit();
         try queue.append(source);
         try parent.put(source, source);
@@ -33,7 +33,7 @@ pub fn maxFlow(alloc: std.mem.Allocator, g: *const builders.Graph, source: u32, 
         var found = false;
         while (queue.items.len > 0 and !found) {
             const v = queue.items[0];
-            std.mem.copy(u32, queue.items[0 .. queue.items.len - 1], queue.items[1..]);
+            std.mem.copy(u64, queue.items[0 .. queue.items.len - 1], queue.items[1..]);
             _ = queue.pop();
             var out_it = g.outEdges(v);
             while (out_it.next()) |e| {

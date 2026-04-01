@@ -19,7 +19,7 @@ const Env = value_types.Env;
 // Helper functions extracted to reduce nesting levels (#412)
 
 /// Check if a node has all the required labels
-fn nodeHasAllLabels(node_labels: []const []const u8, required_labels: []const []const u8) bool {
+pub fn nodeHasAllLabels(node_labels: []const []const u8, required_labels: []const []const u8) bool {
     for (required_labels) |required_label| {
         var found = false;
         for (node_labels) |node_label| {
@@ -34,7 +34,7 @@ fn nodeHasAllLabels(node_labels: []const []const u8, required_labels: []const []
 }
 
 /// Convert a property value from storage format to Value type
-fn propertyToValue(node_prop_val: graph_store.PropertyValue) Value {
+pub fn propertyToValue(node_prop_val: graph_store.PropertyValue) Value {
     return switch (node_prop_val) {
         .String => |s| Value{ .Str = s },
         .Int => |i| Value{ .Int = i },
@@ -65,8 +65,30 @@ fn nodeMatchesProperties(
     return true;
 }
 
+/// Find an edge between two nodes using adjacency indexes (O(degree) instead of O(E)).
+/// Checks both directions (from_id -> to_id and to_id -> from_id).
+pub fn findEdgeBetween(store: *graph_store.GraphStore, from_id: u64, to_id: u64) ?*const graph_store.Edge {
+    // Check outgoing edges from from_id
+    if (store.getOutgoingEdgeIds(from_id)) |out_edge_ids| {
+        for (out_edge_ids) |edge_id| {
+            if (store.edges.getPtr(edge_id)) |edge_ptr| {
+                if (edge_ptr.to_id == to_id) return edge_ptr;
+            }
+        }
+    }
+    // Check outgoing edges from to_id (reverse direction)
+    if (store.getOutgoingEdgeIds(to_id)) |out_edge_ids| {
+        for (out_edge_ids) |edge_id| {
+            if (store.edges.getPtr(edge_id)) |edge_ptr| {
+                if (edge_ptr.to_id == from_id) return edge_ptr;
+            }
+        }
+    }
+    return null;
+}
+
 /// Find a bound node's ID in the environment by variable name
-fn findBoundNodeId(name: []const u8, env: Env) ?u64 {
+pub fn findBoundNodeId(name: []const u8, env: Env) ?u64 {
     for (env.names, 0..) |env_name, i| {
         if (std.mem.eql(u8, env_name, name)) {
             const val = env.values[i];
@@ -78,7 +100,7 @@ fn findBoundNodeId(name: []const u8, env: Env) ?u64 {
 }
 
 /// Find a bound node in the environment by variable name
-fn findBoundNode(name: []const u8, env: Env) ?*const graph_store.Node {
+pub fn findBoundNode(name: []const u8, env: Env) ?*const graph_store.Node {
     for (env.names, 0..) |env_name, i| {
         if (std.mem.eql(u8, env_name, name)) {
             const val = env.values[i];
@@ -136,7 +158,9 @@ fn evaluateWhereFilter(
 
     if (target_name != null and target_node_ptr != null) {
         const new_names = allocator.alloc([]const u8, base_env.names.len + 1) catch return false;
+        defer allocator.free(new_names);
         const new_values = allocator.alloc(Value, base_env.values.len + 1) catch return false;
+        defer allocator.free(new_values);
         @memcpy(new_names[0..base_env.names.len], base_env.names);
         @memcpy(new_values[0..base_env.values.len], base_env.values);
         new_names[base_env.names.len] = target_name.?;
@@ -188,52 +212,54 @@ fn countVariableLengthPathMatches(
     try queue.append(allocator, QueueItem{ .node_id = bound_node.id, .depth = 0 });
     try visited.put(bound_node.id, 0);
 
-    while (queue.items.len > 0) {
-        const current = queue.orderedRemove(0);
+    var front: usize = 0;
+    while (front < queue.items.len) {
+        const current = queue.items[front];
+        front += 1;
         if (current.depth >= max_len) continue;
 
-        // Find all edges from current node
-        var edge_iter = store.edges.iterator();
-        while (edge_iter.next()) |edge_entry| {
-            const edge = edge_entry.value_ptr.*;
-            if (edge.from_id != current.node_id) continue;
+        // Find outgoing edges from current node using adjacency index (O(degree) instead of O(E))
+        if (store.getOutgoingEdgeIds(current.node_id)) |out_edge_ids| {
+            for (out_edge_ids) |edge_id| {
+                const edge = store.edges.get(edge_id) orelse continue;
 
-            // Filter by relationship type if specified
-            if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) continue;
+                // Filter by relationship type if specified
+                if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) continue;
 
-            const next_depth = current.depth + 1;
-            const next_node_id = edge.to_id;
+                const next_depth = current.depth + 1;
+                const next_node_id = edge.to_id;
 
-            // Skip if already visited at same or lower depth
-            if (visited.get(next_node_id)) |prev_depth| {
-                if (prev_depth <= next_depth) continue;
-            }
-            try visited.put(next_node_id, next_depth);
+                // Skip if already visited at same or lower depth
+                if (visited.get(next_node_id)) |prev_depth| {
+                    if (prev_depth <= next_depth) continue;
+                }
+                try visited.put(next_node_id, next_depth);
 
-            // Add to queue for further exploration
-            if (next_depth < max_len) {
-                queue.append(allocator, QueueItem{ .node_id = next_node_id, .depth = next_depth }) catch {};
-            }
-
-            // Check if this node is within valid depth range and matches target pattern
-            if (next_depth >= min_len and next_depth <= max_len) {
-                // If target is bound, only match that specific node
-                if (target_bound_id) |tid| {
-                    if (next_node_id != tid) continue;
+                // Add to queue for further exploration
+                if (next_depth < max_len) {
+                    try queue.append(allocator, QueueItem{ .node_id = next_node_id, .depth = next_depth });
                 }
 
-                if (store.nodes.get(next_node_id)) |target_node| {
-                    // Check label constraints on target using helper
-                    if (!nodeHasAllLabels(target_node.labels, target_pattern.labels)) continue;
+                // Check if this node is within valid depth range and matches target pattern
+                if (next_depth >= min_len and next_depth <= max_len) {
+                    // If target is bound, only match that specific node
+                    if (target_bound_id) |tid| {
+                        if (next_node_id != tid) continue;
+                    }
 
-                    // Check WHERE filter if present
-                    if (where_filter) |wf| {
-                        const target_node_ptr = store.nodes.getPtr(next_node_id) orelse continue;
-                        if (evaluateWhereFilter(wf, env, target_pattern.name, target_node_ptr, allocator)) {
+                    if (store.nodes.get(next_node_id)) |target_node| {
+                        // Check label constraints on target using helper
+                        if (!nodeHasAllLabels(target_node.labels, target_pattern.labels)) continue;
+
+                        // Check WHERE filter if present
+                        if (where_filter) |wf| {
+                            const target_node_ptr = store.nodes.getPtr(next_node_id) orelse continue;
+                            if (evaluateWhereFilter(wf, env, target_pattern.name, target_node_ptr, allocator)) {
+                                count += 1;
+                            }
+                        } else {
                             count += 1;
                         }
-                    } else {
-                        count += 1;
                     }
                 }
             }
@@ -259,39 +285,38 @@ fn countSingleHopMatches(
     // Check if the target node is also bound in the environment
     const target_bound_id: ?u64 = if (target_pattern.name) |tn| findBoundNodeId(tn, env) else null;
 
-    var edge_iter = store.edges.iterator();
-    while (edge_iter.next()) |edge_entry| {
-        const edge = edge_entry.value_ptr.*;
+    // Use adjacency index for O(degree) lookup instead of full edge scan O(E)
+    if (store.getOutgoingEdgeIds(bound_node.id)) |out_edge_ids| {
+        for (out_edge_ids) |edge_id| {
+            const edge = store.edges.get(edge_id) orelse continue;
 
-        // Check if edge starts from our bound node
-        if (edge.from_id != bound_node.id) continue;
+            // Filter by relationship type if specified
+            if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) continue;
 
-        // Filter by relationship type if specified
-        if (rel_type != null and !std.mem.eql(u8, edge.label, rel_type.?)) continue;
-
-        // If target node is bound, only match edges to that specific node
-        if (target_bound_id) |tid| {
-            if (edge.to_id != tid) continue;
-        }
-
-        // Check target node pattern (right side of the hop)
-        if (store.nodes.get(edge.to_id)) |target_node| {
-            // Check label constraints on target using helper
-            if (!nodeHasAllLabels(target_node.labels, target_pattern.labels)) continue;
-
-            // Check property constraints on target using helper
-            if (target_pattern.props) |props| {
-                if (!nodeMatchesProperties(target_node.properties, props, env, allocator)) continue;
+            // If target node is bound, only match edges to that specific node
+            if (target_bound_id) |tid| {
+                if (edge.to_id != tid) continue;
             }
 
-            // Check WHERE filter if present
-            if (where_filter) |wf| {
-                const target_node_ptr = store.nodes.getPtr(edge.to_id) orelse continue;
-                if (evaluateWhereFilter(wf, env, target_pattern.name, target_node_ptr, allocator)) {
+            // Check target node pattern (right side of the hop)
+            if (store.nodes.get(edge.to_id)) |target_node| {
+                // Check label constraints on target using helper
+                if (!nodeHasAllLabels(target_node.labels, target_pattern.labels)) continue;
+
+                // Check property constraints on target using helper
+                if (target_pattern.props) |props| {
+                    if (!nodeMatchesProperties(target_node.properties, props, env, allocator)) continue;
+                }
+
+                // Check WHERE filter if present
+                if (where_filter) |wf| {
+                    const target_node_ptr = store.nodes.getPtr(edge.to_id) orelse continue;
+                    if (evaluateWhereFilter(wf, env, target_pattern.name, target_node_ptr, allocator)) {
+                        count += 1;
+                    }
+                } else {
                     count += 1;
                 }
-            } else {
-                count += 1;
             }
         }
     }
@@ -412,7 +437,9 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                         if (node_pattern.name) |pattern_name| {
                             // Use entry.value_ptr for the node pointer
                             const new_names = allocator.alloc([]const u8, env.names.len + 1) catch continue;
+                            defer allocator.free(new_names);
                             const new_values = allocator.alloc(Value, env.values.len + 1) catch continue;
+                            defer allocator.free(new_values);
                             @memcpy(new_names[0..env.names.len], env.names);
                             @memcpy(new_values[0..env.values.len], env.values);
                             new_names[env.names.len] = pattern_name;
@@ -589,7 +616,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
 }
 
 /// Find shortest path between nodes using BFS
-/// CANARY: REQ=REQ-GQL-SHORTESTPATH; FEATURE="ShortestPath"; ASPECT=BFS; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.ymlEMENTED; OWNER=engine; UPDATED=2025-10-12
+/// CANARY: REQ=REQ-GQL-SHORTESTPATH; FEATURE="ShortestPath"; ASPECT=BFS; STATUS=IMPL; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2025-10-12
 pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern, all: bool, env: Env) !Value {
     const store = graph_store.getGlobalStore(allocator);
 
@@ -673,8 +700,10 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
 
     var shortest_depth: ?u32 = null;
 
-    while (queue.items.len > 0) {
-        const current = queue.orderedRemove(0);
+    var bfs_front: usize = 0;
+    while (bfs_front < queue.items.len) {
+        const current = queue.items[bfs_front];
+        bfs_front += 1;
 
         // If we've found a shorter path already, stop exploring longer paths
         if (shortest_depth != null and current.depth > shortest_depth.?) {
@@ -689,28 +718,35 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
             continue;
         }
 
-        // Explore neighbors
-        var edge_iter = store.edges.iterator();
-        while (edge_iter.next()) |entry| {
-            const edge = entry.value_ptr.*;
-
-            var neighbor_id: ?u64 = null;
-
-            // Check outgoing edges
-            if (edge.from_id == current.node_id) {
-                neighbor_id = edge.to_id;
+        // Explore neighbors using adjacency indexes (O(degree) instead of O(E))
+        // Always check outgoing edges
+        if (store.getOutgoingEdgeIds(current.node_id)) |out_edge_ids| {
+            for (out_edge_ids) |edge_id| {
+                const edge = store.edges.get(edge_id) orelse continue;
+                const neighbor_id = edge.to_id;
+                if (!visited.contains(neighbor_id)) {
+                    const neighbor_node = try allocator.create(PathNode);
+                    neighbor_node.* = .{ .node_id = neighbor_id, .parent = current, .depth = current.depth + 1 };
+                    try all_nodes.append(allocator, neighbor_node);
+                    try queue.append(allocator, neighbor_node);
+                    try visited.put(neighbor_id, true);
+                }
             }
-            // For undirected, also check incoming edges
-            if (hop.rel.dir == .undirected and edge.to_id == current.node_id) {
-                neighbor_id = edge.from_id;
-            }
-
-            if (neighbor_id != null and !visited.contains(neighbor_id.?)) {
-                const neighbor_node = try allocator.create(PathNode);
-                neighbor_node.* = .{ .node_id = neighbor_id.?, .parent = current, .depth = current.depth + 1 };
-                try all_nodes.append(allocator, neighbor_node);
-                try queue.append(allocator, neighbor_node);
-                try visited.put(neighbor_id.?, true);
+        }
+        // For undirected, also check incoming edges
+        if (hop.rel.dir == .undirected) {
+            if (store.getIncomingEdgeIds(current.node_id)) |in_edge_ids| {
+                for (in_edge_ids) |edge_id| {
+                    const edge = store.edges.get(edge_id) orelse continue;
+                    const neighbor_id = edge.from_id;
+                    if (!visited.contains(neighbor_id)) {
+                        const neighbor_node = try allocator.create(PathNode);
+                        neighbor_node.* = .{ .node_id = neighbor_id, .parent = current, .depth = current.depth + 1 };
+                        try all_nodes.append(allocator, neighbor_node);
+                        try queue.append(allocator, neighbor_node);
+                        try visited.put(neighbor_id, true);
+                    }
+                }
             }
         }
     }
@@ -734,9 +770,10 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
             defer node_ids.deinit(allocator);
 
             while (current_node != null) {
-                try node_ids.insert(allocator, 0, current_node.?.node_id);
+                try node_ids.append(allocator, current_node.?.node_id);
                 current_node = current_node.?.parent;
             }
+            std.mem.reverse(u64, node_ids.items);
 
             // Build path with actual nodes and edges
             for (node_ids.items, 0..) |node_id, idx| {
@@ -744,21 +781,12 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                     try path_nodes.append(allocator, node_ptr);
                 }
 
-                // Add edges between consecutive nodes
-                // Always check both directions since BFS can traverse edges either way
+                // Add edges between consecutive nodes using adjacency index
                 if (idx > 0) {
                     const prev_id = node_ids.items[idx - 1];
-                    var edge_iter = store.edges.iterator();
-                    while (edge_iter.next()) |entry| {
-                        const edge_ptr = entry.value_ptr;
-                        const edge = edge_ptr.*;
-                        // Check both directions - BFS may traverse edges in either direction
-                        if ((edge.from_id == prev_id and edge.to_id == node_id) or
-                            (edge.to_id == prev_id and edge.from_id == node_id))
-                        {
-                            try path_edges.append(allocator, edge_ptr);
-                            break;
-                        }
+                    const found_edge = findEdgeBetween(store, prev_id, node_id);
+                    if (found_edge) |edge_ptr| {
+                        try path_edges.append(allocator, edge_ptr);
                     }
                 }
             }
@@ -781,9 +809,10 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         defer node_ids.deinit(allocator);
 
         while (current_node != null) {
-            try node_ids.insert(allocator, 0, current_node.?.node_id);
+            try node_ids.append(allocator, current_node.?.node_id);
             current_node = current_node.?.parent;
         }
+        std.mem.reverse(u64, node_ids.items);
 
         // Build path with actual nodes and edges
         for (node_ids.items, 0..) |node_id, idx| {
@@ -791,21 +820,12 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                 try path_nodes.append(allocator, node_ptr);
             }
 
-            // Add edges between consecutive nodes
-            // Always check both directions since BFS can traverse edges either way
+            // Add edges between consecutive nodes using adjacency index
             if (idx > 0) {
                 const prev_id = node_ids.items[idx - 1];
-                var edge_iter = store.edges.iterator();
-                while (edge_iter.next()) |entry| {
-                    const edge_ptr = entry.value_ptr;
-                    const edge = edge_ptr.*;
-                    // Check both directions - BFS may traverse edges in either direction
-                    if ((edge.from_id == prev_id and edge.to_id == node_id) or
-                        (edge.to_id == prev_id and edge.from_id == node_id))
-                    {
-                        try path_edges.append(allocator, edge_ptr);
-                        break;
-                    }
+                const found_edge = findEdgeBetween(store, prev_id, node_id);
+                if (found_edge) |edge_ptr| {
+                    try path_edges.append(allocator, edge_ptr);
                 }
             }
         }
@@ -893,78 +913,83 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
             }
         }
 
-        // For each source node, find connected nodes
+        // For each source node, find connected nodes using adjacency indexes (O(degree) instead of O(E))
         for (source_nodes.items) |source_node| {
-            var edge_iter = store.edges.iterator();
-            while (edge_iter.next()) |edge_entry| {
-                const edge_ptr = edge_entry.value_ptr;
-                const edge = edge_ptr.*;
+            // Check outgoing edges (for .right and .undirected directions)
+            if (hop.rel.dir == .right or hop.rel.dir == .undirected) {
+                if (store.getOutgoingEdgeIds(source_node.id)) |out_edge_ids| {
+                    for (out_edge_ids) |edge_id| {
+                        const edge_ptr = store.edges.getPtr(edge_id) orelse continue;
+                        const target_id = edge_ptr.to_id;
 
-                // Check if this edge connects to our source node
-                var target_id: ?u64 = null;
-                const matches_direction = blk: {
-                    switch (hop.rel.dir) {
-                        .right => {
-                            if (edge.from_id == source_node.id) {
-                                target_id = edge.to_id;
-                                break :blk true;
-                            }
-                        },
-                        .left => {
-                            if (edge.to_id == source_node.id) {
-                                target_id = edge.from_id;
-                                break :blk true;
-                            }
-                        },
-                        .undirected => {
-                            if (edge.from_id == source_node.id) {
-                                target_id = edge.to_id;
-                                break :blk true;
-                            } else if (edge.to_id == source_node.id) {
-                                target_id = edge.from_id;
-                                break :blk true;
-                            }
-                        },
-                    }
-                    break :blk false;
-                };
+                        const target_node_ptr = store.nodes.getPtr(target_id) orelse continue;
+                        const target_node = target_node_ptr.*;
 
-                if (!matches_direction or target_id == null) continue;
+                        // CANARY: REQ=REQ-NESTING-REFACTOR-010; FEATURE="NestingReduction"; ASPECT=TargetNodeMatch; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
+                        // Check if target node matches the right pattern using helper
+                        if (!nodeHasAllLabels(target_node.labels, hop.right.labels)) continue;
 
-                // Get target node
-                const target_node_ptr = store.nodes.getPtr(target_id.?) orelse continue;
-                const target_node = target_node_ptr.*;
+                        // Create environment with bindings
+                        var new_env = env;
+                        if (hop.left.name) |left_name| {
+                            new_env = try env.withBinding(allocator, left_name, Value{ .Node = source_node });
+                        }
+                        if (hop.right.name) |right_name| {
+                            new_env = try new_env.withBinding(allocator, right_name, Value{ .Node = target_node_ptr });
+                        } else {
+                            new_env = try new_env.withBinding(allocator, "__pattern_target__", Value{ .Node = target_node_ptr });
+                        }
+                        if (hop.rel.name) |rel_name| {
+                            new_env = try new_env.withBinding(allocator, rel_name, Value{ .Edge = edge_ptr });
+                        }
 
-                // CANARY: REQ=REQ-NESTING-REFACTOR-010; FEATURE="NestingReduction"; ASPECT=TargetNodeMatch; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
-                // Check if target node matches the right pattern using helper
-                if (!nodeHasAllLabels(target_node.labels, hop.right.labels)) continue;
+                        if (where_filter) |filter| {
+                            const filter_result = try eval.evalExpr(allocator, filter.*, new_env);
+                            if (filter_result != .Bool or !filter_result.Bool) continue;
+                        }
 
-                // Create environment with bindings
-                var new_env = env;
-                if (hop.left.name) |left_name| {
-                    new_env = try env.withBinding(allocator, left_name, Value{ .Node = source_node });
-                }
-                if (hop.right.name) |right_name| {
-                    new_env = try new_env.withBinding(allocator, right_name, Value{ .Node = target_node_ptr });
-                } else {
-                    // For shorthand syntax [(a)--()], bind target to synthetic variable
-                    new_env = try new_env.withBinding(allocator, "__pattern_target__", Value{ .Node = target_node_ptr });
-                }
-                if (hop.rel.name) |rel_name| {
-                    new_env = try new_env.withBinding(allocator, rel_name, Value{ .Edge = edge_ptr });
-                }
-
-                // Apply WHERE filter if present
-                if (where_filter) |filter| {
-                    const filter_result = try eval.evalExpr(allocator, filter.*, new_env);
-                    if (filter_result != .Bool or !filter_result.Bool) {
-                        continue;
+                        const map_result = try eval.evalExpr(allocator, map_expr, new_env);
+                        try results.append(allocator, map_result);
                     }
                 }
+            }
 
-                // Evaluate map expression
-                const map_result = try eval.evalExpr(allocator, map_expr, new_env);
-                try results.append(allocator, map_result);
+            // Check incoming edges (for .left and .undirected directions)
+            if (hop.rel.dir == .left or hop.rel.dir == .undirected) {
+                if (store.getIncomingEdgeIds(source_node.id)) |in_edge_ids| {
+                    for (in_edge_ids) |edge_id| {
+                        const edge_ptr = store.edges.getPtr(edge_id) orelse continue;
+                        const target_id = edge_ptr.from_id;
+
+                        const target_node_ptr = store.nodes.getPtr(target_id) orelse continue;
+                        const target_node = target_node_ptr.*;
+
+                        // Check if target node matches the right pattern using helper
+                        if (!nodeHasAllLabels(target_node.labels, hop.right.labels)) continue;
+
+                        // Create environment with bindings
+                        var new_env = env;
+                        if (hop.left.name) |left_name| {
+                            new_env = try env.withBinding(allocator, left_name, Value{ .Node = source_node });
+                        }
+                        if (hop.right.name) |right_name| {
+                            new_env = try new_env.withBinding(allocator, right_name, Value{ .Node = target_node_ptr });
+                        } else {
+                            new_env = try new_env.withBinding(allocator, "__pattern_target__", Value{ .Node = target_node_ptr });
+                        }
+                        if (hop.rel.name) |rel_name| {
+                            new_env = try new_env.withBinding(allocator, rel_name, Value{ .Edge = edge_ptr });
+                        }
+
+                        if (where_filter) |filter| {
+                            const filter_result = try eval.evalExpr(allocator, filter.*, new_env);
+                            if (filter_result != .Bool or !filter_result.Bool) continue;
+                        }
+
+                        const map_result = try eval.evalExpr(allocator, map_expr, new_env);
+                        try results.append(allocator, map_result);
+                    }
+                }
             }
         }
     }

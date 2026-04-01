@@ -7,12 +7,12 @@ const std = @import("std");
 /// 1. Local optimization: Each node moves to neighboring community that maximizes modularity gain
 /// 2. Aggregation: Communities become super-nodes in a new condensed graph
 /// Reference: Blondel et al., "Fast unfolding of communities in large networks" (2008)
-pub fn detect(allocator: std.mem.Allocator, graph: [][]u32, resolution: f64, tolerance: f64) ![]u32 {
+pub fn detect(allocator: std.mem.Allocator, graph: [][]u64, resolution: f64, tolerance: f64) ![]u64 {
     const n = graph.len;
-    if (n == 0) return &[_]u32{};
+    if (n == 0) return &[_]u64{};
 
     // Initialize each node in its own community
-    var communities = try allocator.alloc(u32, n);
+    var communities = try allocator.alloc(u64, n);
     for (communities, 0..) |*comm, i| {
         comm.* = @intCast(i);
     }
@@ -52,7 +52,7 @@ pub fn detect(allocator: std.mem.Allocator, graph: [][]u32, resolution: f64, tol
             const ki = degrees[i];
 
             // Calculate weights to neighboring communities
-            var neighbor_comms = std.AutoHashMap(u32, f64).init(allocator);
+            var neighbor_comms = std.AutoHashMap(u64, f64).init(allocator);
             defer neighbor_comms.deinit();
 
             for (graph[i]) |neighbor| {
@@ -101,9 +101,9 @@ pub fn detect(allocator: std.mem.Allocator, graph: [][]u32, resolution: f64, tol
     }
 
     // Renumber communities to be contiguous (0, 1, 2, ...)
-    var comm_map = std.AutoHashMap(u32, u32).init(allocator);
+    var comm_map = std.AutoHashMap(u64, u64).init(allocator);
     defer comm_map.deinit();
-    var next_id: u32 = 0;
+    var next_id: u64 = 0;
 
     for (communities) |comm| {
         if (!comm_map.contains(comm)) {
@@ -122,7 +122,7 @@ pub fn detect(allocator: std.mem.Allocator, graph: [][]u32, resolution: f64, tol
 
 /// GAP-0078: Calculate modularity score for a given community assignment
 // CANARY: REQ=REQ-GRAPH-LOUVAIN-002; FEATURE="ModularityScore"; ASPECT=GraphAnalytics; STATUS=TESTED; TEST=src/graph/community_louvain.zig; OWNER=graph; UPDATED=2026-01-25
-pub fn modularity(graph: [][]u32, communities: []u32, resolution: f64) f64 {
+pub fn modularity(graph: [][]u64, communities: []u64, resolution: f64) f64 {
     const n = graph.len;
     if (n == 0 or communities.len != n) return 0;
 
@@ -157,13 +157,13 @@ test "Louvain detects simple community structure" {
 
     // Simple test graph with two obvious communities:
     // 0-1-2 (clique 1), 3-4-5 (clique 2), connected by edge 2-3
-    var graph_data = [_][]u32{
-        &[_]u32{ 1, 2 }, // 0: connected to 1, 2
-        &[_]u32{ 0, 2 }, // 1: connected to 0, 2
-        &[_]u32{ 0, 1, 3 }, // 2: connected to 0, 1, 3 (bridge)
-        &[_]u32{ 2, 4, 5 }, // 3: connected to 2, 4, 5 (bridge)
-        &[_]u32{ 3, 5 }, // 4: connected to 3, 5
-        &[_]u32{ 3, 4 }, // 5: connected to 3, 4
+    var graph_data = [_][]u64{
+        &[_]u64{ 1, 2 }, // 0: connected to 1, 2
+        &[_]u64{ 0, 2 }, // 1: connected to 0, 2
+        &[_]u64{ 0, 1, 3 }, // 2: connected to 0, 1, 3 (bridge)
+        &[_]u64{ 2, 4, 5 }, // 3: connected to 2, 4, 5 (bridge)
+        &[_]u64{ 3, 5 }, // 4: connected to 3, 5
+        &[_]u64{ 3, 4 }, // 5: connected to 3, 4
     };
 
     const communities = try detect(allocator, &graph_data, 1.0, 0.0001);

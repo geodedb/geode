@@ -4,8 +4,8 @@ const builders = @import("builders.zig");
 // CANARY: REQ=REQ-GQL-064; FEATURE="Connectivity"; ASPECT=BiconnectedComponents; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_064_Biconnected; BENCH=BenchmarkCANARY_REQ_GQL_064_Biconnected; OWNER=graph; UPDATED=2025-09-20
 
 pub const BiconnectedResult = struct {
-    articulation: []u32, // articulation point vertex ids (sorted)
-    components: [][]u32, // each biconnected component as sorted vertex id list
+    articulation: []u64, // articulation point vertex ids (sorted)
+    components: [][]u64, // each biconnected component as sorted vertex id list
 
     pub fn deinit(self: *BiconnectedResult, alloc: std.mem.Allocator) void {
         for (self.components) |comp| alloc.free(comp);
@@ -17,19 +17,19 @@ pub const BiconnectedResult = struct {
 
 pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !BiconnectedResult {
     const Helper = struct {
-        const Edge = struct { u: u32, v: u32 };
+        const Edge = struct { u: u64, v: u64 };
         const Ctx = struct {
             alloc: std.mem.Allocator,
-            adj: *std.AutoHashMap(u32, std.ArrayList(u32)),
+            adj: *std.AutoHashMap(u64, std.ArrayList(u64)),
             disc: []i64,
             low: []i64,
             parent: []i32,
             is_art: []bool,
             edge_stack: *std.ArrayList(Edge),
-            comps: *std.ArrayList([]u32),
-            index_map: *std.AutoHashMap(u32, usize),
+            comps: *std.ArrayList([]u64),
+            index_map: *std.AutoHashMap(u64, usize),
             time_ptr: *i64,
-            fn dfs(self: *Ctx, u_id: u32) !void {
+            fn dfs(self: *Ctx, u_id: u64) !void {
                 const u_idx = self.index_map.get(u_id).?;
                 self.disc[u_idx] = self.time_ptr.*;
                 self.low[u_idx] = self.time_ptr.*;
@@ -46,17 +46,17 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !BiconnectedResult {
                             self.low[u_idx] = @min(self.low[u_idx], self.low[v_idx]);
                             if ((self.parent[u_idx] == -1 and child_count > 1) or (self.parent[u_idx] != -1 and self.low[v_idx] >= self.disc[u_idx])) {
                                 self.is_art[u_idx] = true;
-                                var comp = std.ArrayList(u32).init(self.alloc);
+                                var comp = std.ArrayList(u64).init(self.alloc);
                                 defer comp.deinit();
                                 while (self.edge_stack.popOrNull()) |edge| {
                                     try comp.append(edge.u);
                                     try comp.append(edge.v);
                                     if (edge.u == u_id and edge.v == v_id) break;
                                 }
-                                std.sort.sort(u32, comp.items, {}, std.sort.asc(u32));
-                                var unique = try self.alloc.alloc(u32, comp.items.len);
+                                std.sort.sort(u64, comp.items, {}, std.sort.asc(u64));
+                                var unique = try self.alloc.alloc(u64, comp.items.len);
                                 var count: usize = 0;
-                                var last: ?u32 = null;
+                                var last: ?u64 = null;
                                 for (comp.items) |nid| {
                                     if (last == null or last.? != nid) {
                                         unique[count] = nid;
@@ -65,12 +65,12 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !BiconnectedResult {
                                     }
                                 }
                                 const final = unique[0..count];
-                                const final_owned = try self.alloc.alloc(u32, count);
+                                const final_owned = try self.alloc.alloc(u64, count);
                                 @memcpy(final_owned, final);
                                 self.alloc.free(unique);
                                 try self.comps.append(final_owned);
                             }
-                        } else if (v_id != @as(u32, @intCast(self.parent[u_idx]))) {
+                        } else if (v_id != @as(u64, @intCast(self.parent[u_idx]))) {
                             if (self.disc[v_idx] < self.disc[u_idx]) {
                                 try self.edge_stack.append(.{ .u = u_id, .v = v_id });
                             }
@@ -82,20 +82,20 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !BiconnectedResult {
         };
     };
 
-    var adj = std.AutoHashMap(u32, std.ArrayList(u32)).init(alloc);
+    var adj = std.AutoHashMap(u64, std.ArrayList(u64)).init(alloc);
     defer {
         var it = adj.iterator();
         while (it.next()) |entry| entry.value_ptr.deinit();
         adj.deinit();
     }
-    for (g.nodes.items) |n| try adj.put(n.id, std.ArrayList(u32).init(alloc));
+    for (g.nodes.items) |n| try adj.put(n.id, std.ArrayList(u64).init(alloc));
     for (g.edges.items) |e| {
         if (adj.getPtr(e.src)) |l| try l.append(e.dst);
         if (adj.getPtr(e.dst)) |l2| try l2.append(e.src);
     }
 
     const total_nodes = g.nodes.items.len;
-    var index_map = std.AutoHashMap(u32, usize).init(alloc);
+    var index_map = std.AutoHashMap(u64, usize).init(alloc);
     defer index_map.deinit();
     for (g.nodes.items, 0..) |ninfo, idx| try index_map.put(ninfo.id, idx);
 
@@ -119,7 +119,7 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !BiconnectedResult {
     var edge_stack = std.ArrayList(Helper.Edge).init(alloc);
     defer edge_stack.deinit();
     var time: i64 = 0;
-    var comps = std.ArrayList([]u32).init(alloc);
+    var comps = std.ArrayList([]u64).init(alloc);
     errdefer {
         for (comps.items) |c| alloc.free(c);
         comps.deinit();
@@ -130,16 +130,16 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !BiconnectedResult {
         const idx = index_map.get(ninfo.id).?;
         if (disc[idx] == -1) try ctx.dfs(ninfo.id);
         if (edge_stack.items.len > 0) {
-            var comp = std.ArrayList(u32).init(alloc);
+            var comp = std.ArrayList(u64).init(alloc);
             defer comp.deinit();
             while (edge_stack.popOrNull()) |edge| {
                 try comp.append(edge.u);
                 try comp.append(edge.v);
             }
-            std.sort.sort(u32, comp.items, {}, std.sort.asc(u32));
-            var unique = try alloc.alloc(u32, comp.items.len);
+            std.sort.sort(u64, comp.items, {}, std.sort.asc(u64));
+            var unique = try alloc.alloc(u64, comp.items.len);
             var count: usize = 0;
-            var last: ?u32 = null;
+            var last: ?u64 = null;
             for (comp.items) |nid| {
                 if (last == null or last.? != nid) {
                     unique[count] = nid;
@@ -147,20 +147,20 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !BiconnectedResult {
                     last = nid;
                 }
             }
-            const final_owned = try alloc.alloc(u32, count);
+            const final_owned = try alloc.alloc(u64, count);
             @memcpy(final_owned, unique[0..count]);
             alloc.free(unique);
             try comps.append(final_owned);
         }
     }
 
-    var art_vec = std.ArrayList(u32).init(alloc);
+    var art_vec = std.ArrayList(u64).init(alloc);
     defer art_vec.deinit();
     for (g.nodes.items, 0..) |ninfo, idx| if (is_art[idx]) try art_vec.append(ninfo.id);
-    std.sort.sort(u32, art_vec.items, {}, std.sort.asc(u32));
-    const articulation = try alloc.alloc(u32, art_vec.items.len);
+    std.sort.sort(u64, art_vec.items, {}, std.sort.asc(u64));
+    const articulation = try alloc.alloc(u64, art_vec.items.len);
     @memcpy(articulation, art_vec.items);
-    const comps_owned = try alloc.alloc([]u32, comps.items.len);
+    const comps_owned = try alloc.alloc([]u64, comps.items.len);
     @memcpy(comps_owned, comps.items);
     comps.deinit();
     return .{ .articulation = articulation, .components = comps_owned };

@@ -4,7 +4,7 @@ const builders = @import("builders.zig");
 // CANARY: REQ=REQ-GQL-064; FEATURE="Connectivity"; ASPECT=KosarajuValidation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_064_Kosaraju; BENCH=BenchmarkCANARY_REQ_GQL_064_Kosaraju; OWNER=graph; UPDATED=2025-09-20
 
 pub const SccSet = struct {
-    components: [][]u32,
+    components: [][]u64,
     pub fn deinit(self: *SccSet, alloc: std.mem.Allocator) void {
         for (self.components) |c| alloc.free(c);
         alloc.free(self.components);
@@ -14,19 +14,19 @@ pub const SccSet = struct {
 
 pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !SccSet {
     // Collect node ids
-    var nodes_list = std.ArrayList(u32).init(alloc);
+    var nodes_list = std.ArrayList(u64).init(alloc);
     defer nodes_list.deinit();
     var it = g.nodes.keyIterator();
     while (it.next()) |k| try nodes_list.append(k.*);
-    std.sort.sort(u32, nodes_list.items, {}, comptime std.sort.asc(u32));
+    std.sort.sort(u64, nodes_list.items, {}, comptime std.sort.asc(u64));
     const n = nodes_list.items.len;
 
-    var id_to_index = std.AutoHashMap(u32, usize).init(alloc);
+    var id_to_index = std.AutoHashMap(u64, usize).init(alloc);
     defer id_to_index.deinit();
     for (nodes_list.items, 0..) |id, i| try id_to_index.put(id, i);
 
     // Build forward adjacency grouped by src
-    var fwd = std.AutoHashMap(u32, struct { start: usize, end: usize }).init(alloc);
+    var fwd = std.AutoHashMap(u64, struct { start: usize, end: usize }).init(alloc);
     defer fwd.deinit();
     for (g.edges.items, 0..) |e, pos| {
         const gop = try fwd.getOrPut(e.src);
@@ -34,7 +34,7 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !SccSet {
     }
 
     // Build reverse adjacency grouped by dst (treat dst as src in transpose)
-    var rev = std.AutoHashMap(u32, struct { start: usize, end: usize }).init(alloc);
+    var rev = std.AutoHashMap(u64, struct { start: usize, end: usize }).init(alloc);
     defer rev.deinit();
     for (g.edges.items, 0..) |e, pos| {
         const gop = try rev.getOrPut(e.dst);
@@ -45,16 +45,16 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !SccSet {
     const visited = try alloc.alloc(bool, n);
     defer alloc.free(visited);
     @memset(visited, false);
-    var order = std.ArrayList(u32).init(alloc);
+    var order = std.ArrayList(u64).init(alloc);
     defer order.deinit();
 
     const Self1 = struct {
         g: builders.Graph,
-        nodes: []u32,
-        id_to_index: *std.AutoHashMap(u32, usize),
-        adj: *std.AutoHashMap(u32, struct { start: usize, end: usize }),
+        nodes: []u64,
+        id_to_index: *std.AutoHashMap(u64, usize),
+        adj: *std.AutoHashMap(u64, struct { start: usize, end: usize }),
         visited: []bool,
-        order: *std.ArrayList(u32),
+        order: *std.ArrayList(u64),
     };
 
     const dfs1 = struct {
@@ -80,7 +80,7 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !SccSet {
 
     // Second pass on transpose in reverse finish order
     @memset(visited, false);
-    var comps = std.ArrayList([]u32).init(alloc);
+    var comps = std.ArrayList([]u64).init(alloc);
     defer {
         if (@errorReturnTrace()) |_| {
             for (comps.items) |c| alloc.free(c);
@@ -90,11 +90,11 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !SccSet {
 
     const Self2 = struct {
         g: builders.Graph,
-        nodes: []u32,
-        id_to_index: *std.AutoHashMap(u32, usize),
-        adj: *std.AutoHashMap(u32, struct { start: usize, end: usize }),
+        nodes: []u64,
+        id_to_index: *std.AutoHashMap(u64, usize),
+        adj: *std.AutoHashMap(u64, struct { start: usize, end: usize }),
         visited: []bool,
-        gather: *std.ArrayList(u32),
+        gather: *std.ArrayList(u64),
     };
 
     const dfs2 = struct {
@@ -123,19 +123,19 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph) !SccSet {
         const vid = order.items[@intCast(i)];
         const v_idx = id_to_index.get(vid).?;
         if (!visited[v_idx]) {
-            var gather = std.ArrayList(u32).init(alloc);
+            var gather = std.ArrayList(u64).init(alloc);
             ctx2.gather = &gather;
             try dfs2(&ctx2, v_idx);
             // sort component for determinism
-            std.sort.sort(u32, gather.items, {}, comptime std.sort.asc(u32));
-            const comp_slice = try alloc.alloc(u32, gather.items.len);
+            std.sort.sort(u64, gather.items, {}, comptime std.sort.asc(u64));
+            const comp_slice = try alloc.alloc(u64, gather.items.len);
             @memcpy(comp_slice, gather.items);
             try comps.append(comp_slice);
             gather.deinit();
         }
     }
 
-    const comps_slice = try alloc.alloc([]u32, comps.items.len);
+    const comps_slice = try alloc.alloc([]u64, comps.items.len);
     @memcpy(comps_slice, comps.items);
     comps.deinit();
     return .{ .components = comps_slice };

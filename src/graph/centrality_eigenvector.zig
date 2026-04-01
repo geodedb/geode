@@ -7,14 +7,14 @@ const builders = @import("builders.zig");
 // We treat multiple edges as additive (weight = edge.w, default 1). If all weights 1, reduces to standard.
 
 pub const Params = struct {
-    max_iterations: u32 = 100,
+    max_iterations: u64 = 100,
     epsilon: f64 = 1e-9,
 };
 
 pub const Result = struct {
-    node_ids: []u32,
+    node_ids: []u64,
     scores: []f64, // L2-normalized
-    iterations: u32,
+    iterations: u64,
     converged: bool,
     pub fn deinit(self: *Result, alloc: std.mem.Allocator) void {
         alloc.free(self.node_ids);
@@ -25,22 +25,22 @@ pub const Result = struct {
 
 pub fn compute(alloc: std.mem.Allocator, g: *const builders.Graph, p: Params) !Result {
     const n = g.nodes.count();
-    if (n == 0) return .{ .node_ids = &[_]u32{}, .scores = &[_]f64{}, .iterations = 0, .converged = true };
+    if (n == 0) return .{ .node_ids = &[_]u64{}, .scores = &[_]f64{}, .iterations = 0, .converged = true };
     var it = g.nodes.iterator();
-    var node_ids = try alloc.alloc(u32, n);
+    var node_ids = try alloc.alloc(u64, n);
     errdefer alloc.free(node_ids);
     var i: usize = 0;
     while (it.next()) |entry| {
         node_ids[i] = entry.key_ptr.*;
         i += 1;
     }
-    std.sort.sort(u32, node_ids, {}, comptime std.sort.asc(u32));
-    var id_to_index = std.AutoHashMap(u32, u32).init(alloc);
+    std.sort.sort(u64, node_ids, {}, comptime std.sort.asc(u64));
+    var id_to_index = std.AutoHashMap(u64, u64).init(alloc);
     defer id_to_index.deinit();
-    for (node_ids, 0..) |id, idx| id_to_index.put(id, @as(u32, @intCast(idx))) catch {};
+    for (node_ids, 0..) |id, idx| id_to_index.put(id, @as(u64, @intCast(idx))) catch {};
 
     // Build inbound adjacency lists (store (src_idx, weight)).
-    const Pair = struct { src: u32, w: f64 };
+    const Pair = struct { src: u64, w: f64 };
     var inbound = try alloc.alloc(std.ArrayList(Pair), n);
     defer {
         var j: usize = 0;
@@ -65,7 +65,7 @@ pub fn compute(alloc: std.mem.Allocator, g: *const builders.Graph, p: Params) !R
     var k: usize = 0;
     while (k < n) : (k += 1) vec[k] = 1.0 / @as(f64, @floatFromInt(n));
 
-    var iter: u32 = 0;
+    var iter: u64 = 0;
     var converged = false;
     while (iter < p.max_iterations) : (iter += 1) {
         // Multiply: next = A^T * vec
@@ -121,7 +121,7 @@ test "TestCANARY_REQ_GQL_067_Eigenvector basic" {
     g.addNode(2);
     g.addNode(3);
     g.addNode(4);
-    var i: u32 = 1;
+    var i: u64 = 1;
     while (i <= 4) : (i += 1) {
         _ = g.addEdge(0, i, 1) catch {};
         _ = g.addEdge(i, 0, 1) catch {};

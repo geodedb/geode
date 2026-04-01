@@ -311,6 +311,12 @@ pub const graph = struct {
     pub const string_search = struct {
         pub const kmp = @import("graph/string_search_kmp.zig");
     };
+    // Connectivity and spanning tree algorithms
+    pub const connectivity_kosaraju = @import("graph/connectivity_kosaraju.zig");
+    pub const connectivity_biconnected = @import("graph/connectivity_biconnected.zig");
+    pub const connectivity_bridges_articulation = @import("graph/connectivity_bridges_articulation.zig");
+    pub const spanning_prim = @import("graph/spanning_prim.zig");
+    pub const spanning_kruskal = @import("graph/spanning_kruskal.zig");
 };
 
 // Multitenancy and GPU feature flagger re-exports so tests/benchmarks can import via the geode package
@@ -355,7 +361,6 @@ pub const security = struct {
 pub const fts_advanced_stub = @import("fts/advanced.zig");
 pub const parallel_exec_stub = @import("execution/parallel.zig");
 pub const cbo_api_stub = @import("planner/cbo.zig");
-pub const graph_algos_stub = @import("graph/algorithms.zig");
 
 // Distributed consensus primitives (Raft) for tests/benchmarks
 // (Removed distributed.raft re-export to avoid duplicate module inclusion with separate distributed module import)

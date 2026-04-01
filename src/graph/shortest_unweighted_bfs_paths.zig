@@ -18,15 +18,15 @@ pub const UnweightedBFSPaths = struct {
         distances: []u64, // same length; hop count from start
     };
 
-    pub fn compute(alloc: std.mem.Allocator, g: *const builders.Graph, start: u32) !Result {
-        if (!g.nodes.contains(start)) { // nodes hash map keyed by u32
+    pub fn compute(alloc: std.mem.Allocator, g: *const builders.Graph, start: u64) !Result {
+        if (!g.nodes.contains(start)) { // nodes hash map keyed by u64
             return Result{
                 .order = try alloc.alloc(u64, 0),
                 .parents = try alloc.alloc(u64, 0),
                 .distances = try alloc.alloc(u64, 0),
             };
         }
-        var visited = std.AutoHashMap(u32, usize).init(alloc); // vertex id -> index in arrays
+        var visited = std.AutoHashMap(u64, usize).init(alloc); // vertex id -> index in arrays
         errdefer visited.deinit();
 
         var order_list = std.ArrayList(u64).init(alloc);
@@ -41,7 +41,7 @@ pub const UnweightedBFSPaths = struct {
         try parents_list.append(std.math.maxInt(u64));
         try dist_list.append(0);
 
-        var queue = std.ArrayList(u32).init(alloc);
+        var queue = std.ArrayList(u64).init(alloc);
         errdefer queue.deinit();
         try queue.append(start);
 

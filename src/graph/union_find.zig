@@ -9,14 +9,14 @@ const std = @import("std");
 //  - componentCount() tracks remaining disjoint sets
 
 pub const UnionFind = struct {
-    parents: []u32,
+    parents: []u64,
     rank: []u8,
-    count: u32,
+    count: u64,
 
-    pub fn init(alloc: std.mem.Allocator, n: u32) !UnionFind {
-        var p = try alloc.alloc(u32, n);
+    pub fn init(alloc: std.mem.Allocator, n: u64) !UnionFind {
+        var p = try alloc.alloc(u64, n);
         var r = try alloc.alloc(u8, n);
-        var i: u32 = 0;
+        var i: u64 = 0;
         while (i < n) : (i += 1) {
             p[i] = i;
             r[i] = 0;
@@ -30,16 +30,16 @@ pub const UnionFind = struct {
         self.* = undefined;
     }
 
-    pub fn find(self: *UnionFind, x: u32) u32 {
+    pub fn find(self: *UnionFind, x: u64) u64 {
         return self.compress(x);
     }
 
-    fn compress(self: *UnionFind, x: u32) u32 {
+    fn compress(self: *UnionFind, x: u64) u64 {
         if (self.parents[x] != x) self.parents[x] = self.compress(self.parents[x]);
         return self.parents[x];
     }
 
-    pub fn unite(self: *UnionFind, a: u32, b: u32) bool {
+    pub fn unite(self: *UnionFind, a: u64, b: u64) bool {
         const ra = self.find(a);
         const rb = self.find(b);
         if (ra == rb) return false;
@@ -58,7 +58,7 @@ pub const UnionFind = struct {
         return true;
     }
 
-    pub fn componentCount(self: *const UnionFind) u32 {
+    pub fn componentCount(self: *const UnionFind) u64 {
         return self.count;
     }
 };

@@ -347,6 +347,7 @@ pub const Graph = struct {
     }
 
     pub fn getEntity(self: *Graph, id: i64) !Entity {
+        if (id < 0) return error.EntityNotFound;
         const uid = @as(u64, @intCast(id));
         if (self.nodes.get(uid)) |node| {
             return .{ .node = node };

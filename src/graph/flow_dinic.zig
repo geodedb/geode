@@ -3,14 +3,14 @@ const builders = @import("builders.zig");
 
 // CANARY: REQ=REQ-GQL-066; FEATURE="Flow/Matching"; ASPECT=Dinic; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_066_DinicBasic; BENCH=BenchmarkCANARY_REQ_GQL_066_Dinic; OWNER=graph; UPDATED=2025-09-21
 
-fn key(src: u32, dst: u32) u64 {
-    return (@as(u64, src) << 32) | @as(u64, dst);
+fn key(src: u64, dst: u64) u128 {
+    return (@as(u128, src) << 64) | @as(u128, dst);
 }
 
-pub fn maxFlow(alloc: std.mem.Allocator, g: *const builders.Graph, source: u32, sink: u32) !f64 {
+pub fn maxFlow(alloc: std.mem.Allocator, g: *const builders.Graph, source: u64, sink: u64) !f64 {
     if (source == sink) return 0;
     if (!g.nodes.contains(source) or !g.nodes.contains(sink)) return 0;
-    var cap = std.AutoHashMap(u64, f64).init(alloc);
+    var cap = std.AutoHashMap(u128, f64).init(alloc);
     defer cap.deinit();
     // Build residual capacities
     for (g.edges.items) |e| {
@@ -25,11 +25,15 @@ pub fn maxFlow(alloc: std.mem.Allocator, g: *const builders.Graph, source: u32, 
     var flow: f64 = 0;
     const inf = std.math.inf(f64);
     // Level graph + blocking flow loop
-    while (true) {
+    // Safety bound: Dinic's runs at most O(V^2) phases on integer capacities;
+    // cap at 10 000 iterations to guard against non-termination with
+    // floating-point residual capacities.
+    var phase: u64 = 0;
+    while (phase < 10_000) : (phase += 1) {
         // BFS build levels
-        var level = std.AutoHashMap(u32, u32).init(alloc);
+        var level = std.AutoHashMap(u64, u64).init(alloc);
         defer level.deinit();
-        var q = std.ArrayList(u32).init(alloc);
+        var q = std.ArrayList(u64).init(alloc);
         defer q.deinit();
         try q.append(source);
         try level.put(source, 0);
@@ -52,14 +56,14 @@ pub fn maxFlow(alloc: std.mem.Allocator, g: *const builders.Graph, source: u32, 
         if (!sink_reached) break; // no more augmenting paths in level graph
 
         // DFS blocking flows - store per-node edge iteration state (iterators recreated each call)
-        var stack = std.ArrayList(struct { v: u32, pushed: bool, send: f64 }).init(alloc);
+        var stack = std.ArrayList(struct { v: u64, pushed: bool, send: f64 }).init(alloc);
         defer stack.deinit();
         // We'll implement recursive-style DFS iteratively.
-        var path = std.ArrayList(u32).init(alloc); // for debug / potential capture (not used in result)
+        var path = std.ArrayList(u64).init(alloc); // for debug / potential capture (not used in result)
         defer path.deinit();
 
         // To avoid recreating iterators too often, we keep adjacency cursor index per vertex.
-        var cursor = std.AutoHashMap(u32, usize).init(alloc);
+        var cursor = std.AutoHashMap(u64, usize).init(alloc);
         defer cursor.deinit();
 
         while (true) {
@@ -76,7 +80,7 @@ pub fn maxFlow(alloc: std.mem.Allocator, g: *const builders.Graph, source: u32, 
                     const send_amt = top.send;
                     if (send_amt <= 0 or send_amt == inf) break; // nothing meaningful
                     // Walk path to apply residual adjustments
-                    var prev: ?u32 = null;
+                    var prev: ?u64 = null;
                     // Reconstruct by scanning stack order
                     var i: usize = 0;
                     while (i < stack.items.len) : (i += 1) {

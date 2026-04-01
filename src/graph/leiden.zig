@@ -42,6 +42,48 @@ pub const LeidenDetector = struct {
         self_loops: f64,
     };
 
+    /// Neighbor entry in the adjacency index.
+    const Neighbor = struct {
+        id: u64,
+        weight: f64,
+    };
+
+    /// Pre-built adjacency index: node_id -> list of (neighbor_id, weight) pairs.
+    /// Built once from the edge list, then used by all inner functions to avoid
+    /// O(E) scans when only O(degree) work is needed.
+    const AdjacencyIndex = std.AutoHashMap(u64, std.ArrayList(Neighbor));
+
+    fn buildAdjacency(allocator: Allocator, graph: Graph) !AdjacencyIndex {
+        var adj = AdjacencyIndex.init(allocator);
+        errdefer {
+            var it = adj.iterator();
+            while (it.next()) |entry| entry.value_ptr.deinit();
+            adj.deinit();
+        }
+        // Ensure capacity for every node so getOrPut never fails on resize mid-loop.
+        try adj.ensureTotalCapacity(@intCast(graph.nodes.len));
+        for (graph.nodes) |node| {
+            try adj.put(node, std.ArrayList(Neighbor).init(allocator));
+        }
+        for (graph.edges) |edge| {
+            if (adj.getPtr(edge.source)) |list| {
+                try list.append(.{ .id = edge.target, .weight = edge.weight });
+            }
+            if (edge.source != edge.target) {
+                if (adj.getPtr(edge.target)) |list| {
+                    try list.append(.{ .id = edge.source, .weight = edge.weight });
+                }
+            }
+        }
+        return adj;
+    }
+
+    fn deinitAdjacency(adj: *AdjacencyIndex) void {
+        var it = adj.iterator();
+        while (it.next()) |entry| entry.value_ptr.deinit();
+        adj.deinit();
+    }
+
     pub fn init(allocator: Allocator, resolution: f64) LeidenDetector {
         var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
         return .{
@@ -55,6 +97,10 @@ pub const LeidenDetector = struct {
 
     // Main Leiden algorithm
     pub fn detectCommunities(self: *LeidenDetector, graph: Graph) !Result {
+        // Build adjacency index once -- O(V+E) -- then used by all inner functions
+        var adj = try buildAdjacency(self.allocator, graph);
+        defer deinitAdjacency(&adj);
+
         // Initialize node info
         var node_info = std.AutoHashMap(u64, NodeInfo).init(self.allocator);
         defer node_info.deinit();
@@ -89,18 +135,20 @@ pub const LeidenDetector = struct {
             });
         }
 
-        // Calculate node degrees
-        for (graph.edges) |edge| {
-            if (node_info.getPtr(edge.source)) |info| {
-                info.degree += edge.weight;
-                if (edge.source == edge.target) {
-                    info.self_loops += edge.weight;
+        // Calculate node degrees from adjacency index -- O(V+E)
+        for (graph.nodes) |node| {
+            const neighbors = adj.get(node) orelse continue;
+            var degree: f64 = 0;
+            var self_loops: f64 = 0;
+            for (neighbors.items) |nb| {
+                degree += nb.weight;
+                if (nb.id == node) {
+                    self_loops += nb.weight;
                 }
             }
-            if (edge.target != edge.source) {
-                if (node_info.getPtr(edge.target)) |info| {
-                    info.degree += edge.weight;
-                }
+            if (node_info.getPtr(node)) |info| {
+                info.degree = degree;
+                info.self_loops = self_loops;
             }
         }
 
@@ -112,14 +160,14 @@ pub const LeidenDetector = struct {
             iterations += 1;
 
             // Phase 1: Local node movements (fast local search)
-            const moved = try self.localMoveNodes(&node_info, &communities, graph);
+            const moved = try self.localMoveNodes(&node_info, &communities, graph, &adj);
             if (!moved) break;
 
             // Phase 2: Network aggregation
             try self.aggregateNetwork(&node_info, &communities, graph);
 
             // Phase 3: Refinement (unique to Leiden)
-            try self.refinePartition(&node_info, &communities, graph);
+            try self.refinePartition(&node_info, &communities, graph, &adj);
 
             // Check for convergence
             const current_modularity = try self.calculateModularity(&node_info, graph);
@@ -156,6 +204,7 @@ pub const LeidenDetector = struct {
         node_info: *std.AutoHashMap(u64, NodeInfo),
         communities: *std.AutoHashMap(u64, *Community),
         graph: Graph,
+        adj: *const AdjacencyIndex,
     ) !bool {
         var moved = false;
         var nodes_to_move = try std.ArrayList(u64).initCapacity(self.allocator, 0);
@@ -172,20 +221,15 @@ pub const LeidenDetector = struct {
             var best_community = info.community;
             var best_gain: f64 = 0;
 
-            // Get neighboring communities
+            // Get neighboring communities using adjacency index -- O(degree)
             var neighbor_comms = std.AutoHashMap(u64, f64).init(self.allocator);
             defer neighbor_comms.deinit();
 
-            for (graph.edges) |edge| {
-                if (edge.source == node) {
-                    const target_info = node_info.get(edge.target) orelse continue;
-                    const weight = neighbor_comms.get(target_info.community) orelse 0;
-                    try neighbor_comms.put(target_info.community, weight + edge.weight);
-                }
-                if (edge.target == node and edge.source != edge.target) {
-                    const source_info = node_info.get(edge.source) orelse continue;
-                    const weight = neighbor_comms.get(source_info.community) orelse 0;
-                    try neighbor_comms.put(source_info.community, weight + edge.weight);
+            if (adj.get(node)) |neighbors| {
+                for (neighbors.items) |nb| {
+                    const nb_info = node_info.get(nb.id) orelse continue;
+                    const weight = neighbor_comms.get(nb_info.community) orelse 0;
+                    try neighbor_comms.put(nb_info.community, weight + nb.weight);
                 }
             }
 
@@ -344,6 +388,7 @@ pub const LeidenDetector = struct {
         node_info: *std.AutoHashMap(u64, NodeInfo),
         communities: *std.AutoHashMap(u64, *Community),
         graph: Graph,
+        adj: *const AdjacencyIndex,
     ) !void {
         // Refinement phase unique to Leiden algorithm
         // Ensures communities are well-connected subgraphs
@@ -354,10 +399,10 @@ pub const LeidenDetector = struct {
             if (comm.nodes.items.len <= 1) continue;
 
             // Check if community is well-connected
-            const is_connected = try self.isWellConnected(comm, node_info, graph);
+            const is_connected = try self.isWellConnected(comm, node_info, adj);
             if (!is_connected) {
                 // Split disconnected community
-                try self.splitCommunity(comm, node_info, communities, graph);
+                try self.splitCommunity(comm, node_info, communities, graph, adj);
             }
         }
     }
@@ -366,13 +411,20 @@ pub const LeidenDetector = struct {
         self: *LeidenDetector,
         community: *Community,
         node_info: *std.AutoHashMap(u64, NodeInfo),
-        graph: Graph,
+        adj: *const AdjacencyIndex,
     ) !bool {
         _ = node_info;
 
         if (community.nodes.items.len <= 1) return true;
 
-        // Simple connectivity check using BFS
+        // Build a set of community members for O(1) membership tests
+        var comm_set = std.AutoHashMap(u64, void).init(self.allocator);
+        defer comm_set.deinit();
+        for (community.nodes.items) |node| {
+            try comm_set.put(node, {});
+        }
+
+        // Simple connectivity check using BFS with adjacency index
         var visited = std.AutoHashMap(u64, void).init(self.allocator);
         defer visited.deinit();
 
@@ -387,29 +439,12 @@ pub const LeidenDetector = struct {
         while (queue.items.len > 0) {
             const current = queue.orderedRemove(0);
 
-            // Find neighbors in same community
-            for (graph.edges) |edge| {
-                var neighbor: ?u64 = null;
-                if (edge.source == current) {
-                    neighbor = edge.target;
-                } else if (edge.target == current) {
-                    neighbor = edge.source;
-                }
-
-                if (neighbor) |n| {
-                    // Check if neighbor is in same community
-                    var in_community = false;
-                    for (community.nodes.items) |node| {
-                        if (node == n) {
-                            in_community = true;
-                            break;
-                        }
-                    }
-
-                    if (in_community and !visited.contains(n)) {
-                        try visited.put(n, {});
-                        try queue.append(n);
-                    }
+            // Find neighbors in same community using adjacency index -- O(degree)
+            const neighbors = adj.get(current) orelse continue;
+            for (neighbors.items) |nb| {
+                if (comm_set.contains(nb.id) and !visited.contains(nb.id)) {
+                    try visited.put(nb.id, {});
+                    try queue.append(nb.id);
                 }
             }
         }
@@ -424,15 +459,18 @@ pub const LeidenDetector = struct {
         node_info: *std.AutoHashMap(u64, NodeInfo),
         communities: *std.AutoHashMap(u64, *Community),
         graph: Graph,
+        adj: *const AdjacencyIndex,
     ) !void {
-        // Build adjacency list for nodes within this community
+        _ = graph;
+
+        // Build set of community members for O(1) membership tests
         var community_nodes = std.AutoHashMap(u64, void).init(self.allocator);
         defer community_nodes.deinit();
         for (community.nodes.items) |node| {
             try community_nodes.put(node, {});
         }
 
-        // Find connected components using BFS
+        // Find connected components using BFS with adjacency index
         var visited = std.AutoHashMap(u64, void).init(self.allocator);
         defer visited.deinit();
 
@@ -460,20 +498,12 @@ pub const LeidenDetector = struct {
                 const current = queue.orderedRemove(0);
                 try component.append(current);
 
-                // Find neighbors within community
-                for (graph.edges) |edge| {
-                    var neighbor: ?u64 = null;
-                    if (edge.source == current and community_nodes.contains(edge.target)) {
-                        neighbor = edge.target;
-                    } else if (edge.target == current and community_nodes.contains(edge.source)) {
-                        neighbor = edge.source;
-                    }
-
-                    if (neighbor) |n| {
-                        if (!visited.contains(n)) {
-                            try visited.put(n, {});
-                            try queue.append(n);
-                        }
+                // Find neighbors within community using adjacency index -- O(degree)
+                const neighbors = adj.get(current) orelse continue;
+                for (neighbors.items) |nb| {
+                    if (community_nodes.contains(nb.id) and !visited.contains(nb.id)) {
+                        try visited.put(nb.id, {});
+                        try queue.append(nb.id);
                     }
                 }
             }
@@ -495,6 +525,13 @@ pub const LeidenDetector = struct {
             // Generate new community ID from first node in component
             const new_id = component.items[0];
 
+            // Build component member set for O(1) lookups
+            var comp_set = std.AutoHashMap(u64, void).init(self.allocator);
+            defer comp_set.deinit();
+            for (component.items) |node| {
+                try comp_set.put(node, {});
+            }
+
             var new_comm = try self.allocator.create(Community);
             new_comm.* = .{
                 .id = new_id,
@@ -503,7 +540,7 @@ pub const LeidenDetector = struct {
                 .total_weight = 0,
             };
 
-            // Move nodes to new community
+            // Move nodes to new community and calculate weights from adjacency
             for (component.items) |node| {
                 try new_comm.nodes.append(node);
 
@@ -511,42 +548,37 @@ pub const LeidenDetector = struct {
                 if (node_info.getPtr(node)) |info| {
                     info.community = new_id;
                 }
-            }
 
-            // Calculate internal weight for new community
-            for (graph.edges) |edge| {
-                var source_in = false;
-                var target_in = false;
-                for (component.items) |node| {
-                    if (edge.source == node) source_in = true;
-                    if (edge.target == node) target_in = true;
-                }
-                if (source_in and target_in) {
-                    new_comm.internal_weight += edge.weight;
-                }
-                if (source_in or target_in) {
-                    new_comm.total_weight += edge.weight;
+                // Accumulate weights from this node's edges
+                const neighbors = adj.get(node) orelse continue;
+                for (neighbors.items) |nb| {
+                    new_comm.total_weight += nb.weight;
+                    if (comp_set.contains(nb.id)) {
+                        new_comm.internal_weight += nb.weight;
+                    }
                 }
             }
 
             try communities.put(new_id, new_comm);
         }
 
-        // Recalculate weights for original community
+        // Recalculate weights for original community using adjacency index
+        // Build member set for the (now reduced) original community
+        var orig_set = std.AutoHashMap(u64, void).init(self.allocator);
+        defer orig_set.deinit();
+        for (community.nodes.items) |node| {
+            try orig_set.put(node, {});
+        }
+
         community.internal_weight = 0;
         community.total_weight = 0;
-        for (graph.edges) |edge| {
-            var source_in = false;
-            var target_in = false;
-            for (community.nodes.items) |node| {
-                if (edge.source == node) source_in = true;
-                if (edge.target == node) target_in = true;
-            }
-            if (source_in and target_in) {
-                community.internal_weight += edge.weight;
-            }
-            if (source_in or target_in) {
-                community.total_weight += edge.weight;
+        for (community.nodes.items) |node| {
+            const neighbors = adj.get(node) orelse continue;
+            for (neighbors.items) |nb| {
+                community.total_weight += nb.weight;
+                if (orig_set.contains(nb.id)) {
+                    community.internal_weight += nb.weight;
+                }
             }
         }
     }

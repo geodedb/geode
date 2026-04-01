@@ -4,7 +4,7 @@ const builders = @import("builders.zig");
 // CANARY: REQ=REQ-GQL-063; FEATURE="Shortest Paths"; ASPECT=Dijkstra; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_063_Dijkstra; BENCH=BenchmarkCANARY_REQ_GQL_063_Dijkstra; OWNER=graph; UPDATED=2025-09-20
 
 pub const DijkstraResult = struct {
-    order: []u32, // visitation order
+    order: []u64, // visitation order
     parents: []i32, // parent vertex id (-1 for source or unreachable)
     distances: []u64, // distance from source (u64 to avoid overflow on accumulation)
 
@@ -20,10 +20,10 @@ pub const ComputeOptions = struct {
     max_nodes_hint: usize = 0,
 };
 
-pub fn compute(alloc: std.mem.Allocator, g: builders.Graph, source: u32, target: ?u32) !DijkstraResult {
+pub fn compute(alloc: std.mem.Allocator, g: builders.Graph, source: u64, target: ?u64) !DijkstraResult {
     // Build adjacency snapshot from graph edges. Graph is assumed to have contiguous or sparse ids.
     // We'll first gather unique node ids from edges + source/target.
-    var node_set = std.AutoHashMap(u32, void).init(alloc);
+    var node_set = std.AutoHashMap(u64, void).init(alloc);
     defer node_set.deinit();
 
     try node_set.put(source, {});
@@ -34,17 +34,17 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph, source: u32, target:
     }
 
     const node_count = node_set.count();
-    var ids = try alloc.alloc(u32, node_count);
+    var ids = try alloc.alloc(u64, node_count);
     errdefer alloc.free(ids);
     {
         var it = node_set.keyIterator();
         var idx: usize = 0;
         while (it.next()) |k| : (idx += 1) ids[idx] = k.*;
     }
-    std.sort.sort(u32, ids, {}, comptime std.sort.asc(u32));
+    std.sort.sort(u64, ids, {}, comptime std.sort.asc(u64));
 
     // map id->dense index
-    var id_to_dense = std.AutoHashMap(u32, usize).init(alloc);
+    var id_to_dense = std.AutoHashMap(u64, usize).init(alloc);
     defer id_to_dense.deinit();
     for (ids, 0..) |id, i| try id_to_dense.put(id, i);
 
@@ -71,7 +71,7 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph, source: u32, target:
     errdefer alloc.free(distances);
     var parents = try alloc.alloc(i32, node_count);
     errdefer alloc.free(parents);
-    var visited_order = try alloc.alloc(u32, node_count);
+    var visited_order = try alloc.alloc(u64, node_count);
     errdefer alloc.free(visited_order);
 
     // Init
@@ -117,7 +117,7 @@ pub fn compute(alloc: std.mem.Allocator, g: builders.Graph, source: u32, target:
 
     // shrink visitation order
     if (visit_count < visited_order.len) {
-        const trimmed = try alloc.alloc(u32, visit_count);
+        const trimmed = try alloc.alloc(u64, visit_count);
         @memcpy(trimmed, visited_order[0..visit_count]);
         alloc.free(visited_order);
         visited_order = trimmed;

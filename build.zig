@@ -758,6 +758,13 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.linkLibC();
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
 
+    // Graph algorithm unit tests for centrality_algorithms.zig and graph_algorithms.zig helpers
+    const algo_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_algo_unit.zig"), .target = target, .optimize = optimize }) });
+    algo_unit_tests.root_module.addImport("geode", root_mod);
+    algo_unit_tests.root_module.addImport("json", json_mod);
+    algo_unit_tests.linkLibC();
+    const run_algo_unit_tests = b.addRunArtifact(algo_unit_tests);
+
     // Storage migration removed (Phase 2: engine-backed persistence)
 
     const match_call_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_match_call_integration.zig"), .target = target, .optimize = optimize }) });
@@ -1078,6 +1085,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_string_func_tests.step);
     test_step.dependOn(&run_graph_algo_tests.step);
     test_step.dependOn(&run_graph_store_unit_tests.step);
+    test_step.dependOn(&run_algo_unit_tests.step);
     // Storage migration tests removed (Phase 2: engine-backed persistence)
     test_step.dependOn(&run_match_call_tests.step);
     test_step.dependOn(&run_multihop_tests.step);
