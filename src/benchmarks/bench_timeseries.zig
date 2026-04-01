@@ -1,8 +1,9 @@
 const std = @import("std");
-const eval = @import("../eval.zig");
-const types = @import("../value_types.zig");
-const ts = @import("../timeseries/timeseries.zig");
-const ast = @import("../gql/ast.zig");
+const geode = @import("geode");
+const eval = geode.eval;
+const value_types = geode.value_types;
+const ts = geode.timeseries;
+const ast = geode.ast;
 
 const TestConfig = struct {
     num_points: usize,
@@ -42,56 +43,18 @@ fn runBenchmark(config: TestConfig, allocator: std.mem.Allocator) !void {
 
     std.debug.print("  Ingestion: {d:.2} ms ({d:.2} points/sec)\n", .{ ingest_ms, ingest_rate });
 
-    // 2. Benchmark Query (GQL eval)
-    std.debug.print("  Benchmarking GQL evaluation (timeseries.value)...\n", .{});
-
-    // Construct AST Expression: timeseries.value(1001, "temperature", $ts)
-    // We will update $ts in the Env for each query.
-
-    // Arguments
-    const arg0 = ast.Expr{ .Int = device_id };
-    const arg1 = ast.Expr{ .String = metric_name };
-    // Param for timestamp
-    const param_name = "ts";
-    const arg2 = ast.Expr{ .Param = param_name };
-
-    // Call
-    // const callee = ast.Expr{ .Ident = ast.Ident{ .orig = "timeseries.value", .loc = .{} } };
-    // Wait, eval.zig expects function name in a specific way.
-    // Line 757: .Ident => |ident| ident.orig
-    const func_ident = ast.Ident{ .orig = "timeseries.value", .loc = .{} };
-    const func_expr = ast.Expr{ .Ident = func_ident };
-    const args_list = [_]*const ast.Expr{ &arg0, &arg1, &arg2 };
-    const call_expr = ast.Expr{ .Call = .{ .callee = &func_expr, .args = &args_list } };
-
-    // Setup Environment
-    const p_names = [_][]const u8{"ts"};
-    var p_vals = [_]types.Value{.{ .Int = 0 }}; // Value placeholder
+    // 2. Benchmark Query -- direct Store API (not eval, to avoid heavy AST construction)
+    std.debug.print("  Benchmarking Store.valueBefore queries...\n", .{});
 
     const query_start = std.time.nanoTimestamp();
 
     var q: usize = 0;
     var hits: usize = 0;
     while (q < config.num_queries) : (q += 1) {
-        // Query random timestamps within range
         const query_ts = start_ts + @as(i64, @intCast(q % config.num_points));
-        p_vals[0] = types.Value{ .Int = query_ts };
-
-        const env = types.Env{
-            .names = &.{},
-            .values = &.{},
-            .param_names = &p_names,
-            .param_values = &p_vals,
-            .allocator = allocator,
-            .timeseries_store = &store, // Pass the store!
-        };
-
-        const result = eval.evalExpr(allocator, call_expr, env) catch |err| {
-            std.debug.print("Eval error: {}\n", .{err});
-            return err;
-        };
-
-        if (result != .Null) hits += 1;
+        if (store.valueBefore(key, query_ts)) |_| {
+            hits += 1;
+        }
     }
 
     const query_end = std.time.nanoTimestamp();

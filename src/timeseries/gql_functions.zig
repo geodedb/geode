@@ -1,6 +1,5 @@
 const std = @import("std");
 const timeseries = @import("timeseries.zig");
-const chunk_storage = @import("chunk_storage.zig");
 
 /// Temporary Value type for testing (will be replaced by protocol.Value)
 pub const Value = union(enum) {
@@ -12,6 +11,28 @@ pub const Value = union(enum) {
     array: []Value,
     object: std.StringHashMap(Value),
 };
+
+/// Recursively free all heap memory owned by a Value.
+pub fn deinitValue(val: *Value, allocator: std.mem.Allocator) void {
+    switch (val.*) {
+        .array => |arr| {
+            for (arr) |*item| {
+                var v = item.*;
+                deinitValue(&v, allocator);
+            }
+            allocator.free(arr);
+        },
+        .object => |*obj| {
+            var it = obj.iterator();
+            while (it.next()) |entry| {
+                var v = entry.value_ptr.*;
+                deinitValue(&v, allocator);
+            }
+            obj.deinit();
+        },
+        else => {},
+    }
+}
 
 /// Temporary Expression type for testing (will be replaced by parser.Expression)
 pub const Expression = union(enum) {
@@ -49,7 +70,7 @@ pub const TSFunctionParams = union(TSFunctionType) {
         interval_ms: i64,
         start_ts: i64,
         end_ts: i64,
-        aggregation: enum { avg, sum, min, max, count, first, last },
+        aggregation: timeseries.lib.store.Aggregation,
     },
     time_bucket: struct {
         bucket_ms: i64,
@@ -111,7 +132,7 @@ pub fn executeFunction(
             );
             defer allocator.free(samples);
 
-            var array = std.ArrayList(Value).init(allocator);
+            var array: std.ArrayList(Value) = .{};
             for (samples) |sample| {
                 var obj = std.StringHashMap(Value).init(allocator);
                 try obj.put("ts", Value{ .integer = sample.ts });
@@ -119,23 +140,23 @@ pub fn executeFunction(
                     Value{ .integer = v }
                 else
                     Value{ .null = {} });
-                try array.append(Value{ .object = obj });
+                try array.append(allocator, Value{ .object = obj });
             }
 
-            return Value{ .array = try array.toOwnedSlice() };
+            return Value{ .array = try array.toOwnedSlice(allocator) };
         },
 
         .time_bucket => |params| {
             const buckets = try store.timeBucketAvg(
                 call.series_key,
-                params.bucket_ms / 1000, // Convert to seconds
+                @divTrunc(params.bucket_ms, 1000), // Convert to seconds
                 params.start_ts,
                 params.end_ts,
                 allocator,
             );
             defer allocator.free(buckets);
 
-            var array = std.ArrayList(Value).init(allocator);
+            var array: std.ArrayList(Value) = .{};
             for (buckets) |bucket| {
                 var obj = std.StringHashMap(Value).init(allocator);
                 try obj.put("ts", Value{ .integer = bucket.ts });
@@ -143,10 +164,10 @@ pub fn executeFunction(
                     Value{ .integer = v }
                 else
                     Value{ .null = {} });
-                try array.append(Value{ .object = obj });
+                try array.append(allocator, Value{ .object = obj });
             }
 
-            return Value{ .array = try array.toOwnedSlice() };
+            return Value{ .array = try array.toOwnedSlice(allocator) };
         },
 
         .interpolate => |params| {
@@ -167,7 +188,7 @@ pub fn executeFunction(
                 var left: ?timeseries.Point = null;
                 var right: ?timeseries.Point = null;
 
-                for (items, 0..) |point, i| {
+                for (items) |point| {
                     if (point.ts == params.timestamp) {
                         return Value{
                             .object = try createPointObject(point, allocator),
@@ -227,8 +248,8 @@ pub fn executeFunction(
                 const items = series.points.items;
                 if (items.len == 0) return Value{ .null = {} };
 
-                var results = std.ArrayList(Value).init(allocator);
-                const half_window = params.window_ms / 2;
+                var results: std.ArrayList(Value) = .{};
+                const half_window = @divTrunc(params.window_ms, 2);
 
                 var current_ts = items[0].ts;
                 const end_ts = items[items.len - 1].ts;
@@ -251,11 +272,11 @@ pub fn executeFunction(
                         var obj = std.StringHashMap(Value).init(allocator);
                         try obj.put("ts", Value{ .integer = current_ts });
                         try obj.put("avg", Value{ .integer = @intCast(avg) });
-                        try results.append(Value{ .object = obj });
+                        try results.append(allocator, Value{ .object = obj });
                     }
                 }
 
-                return Value{ .array = try results.toOwnedSlice() };
+                return Value{ .array = try results.toOwnedSlice(allocator) };
             }
             return Value{ .null = {} };
         },
@@ -267,7 +288,7 @@ pub fn executeFunction(
                 const items = series.points.items;
                 if (items.len < 2) return Value{ .null = {} };
 
-                var results = std.ArrayList(Value).init(allocator);
+                var results: std.ArrayList(Value) = .{};
 
                 var i: usize = 1;
                 while (i < items.len) : (i += 1) {
@@ -284,11 +305,11 @@ pub fn executeFunction(
                         var obj = std.StringHashMap(Value).init(allocator);
                         try obj.put("ts", Value{ .integer = curr.ts });
                         try obj.put("rate", Value{ .float = rate });
-                        try results.append(Value{ .object = obj });
+                        try results.append(allocator, Value{ .object = obj });
                     }
                 }
 
-                return Value{ .array = try results.toOwnedSlice() };
+                return Value{ .array = try results.toOwnedSlice(allocator) };
             }
             return Value{ .null = {} };
         },
@@ -302,7 +323,7 @@ pub fn executeFunction(
 
                 // For now, just calculate first order derivative
                 if (params.order == 1) {
-                    var results = std.ArrayList(Value).init(allocator);
+                    var results: std.ArrayList(Value) = .{};
 
                     var i: usize = 1;
                     while (i < items.len) : (i += 1) {
@@ -317,11 +338,11 @@ pub fn executeFunction(
                             var obj = std.StringHashMap(Value).init(allocator);
                             try obj.put("ts", Value{ .integer = curr.ts });
                             try obj.put("derivative", Value{ .float = derivative });
-                            try results.append(Value{ .object = obj });
+                            try results.append(allocator, Value{ .object = obj });
                         }
                     }
 
-                    return Value{ .array = try results.toOwnedSlice() };
+                    return Value{ .array = try results.toOwnedSlice(allocator) };
                 }
             }
             return Value{ .null = {} };

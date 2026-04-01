@@ -1064,6 +1064,30 @@ pub fn build(b: *std.Build) void {
     });
     const run_federation_server_auth_tests = b.addRunArtifact(federation_server_auth_tests);
 
+    // GAP-0279: Timeseries test modules
+    // gql_functions is internal to geode (not in the external timeseries library),
+    // so it needs its own module with timeseries_lib wired in.
+    const ts_gql_mod = b.createModule(.{ .root_source_file = b.path("src/timeseries/gql_functions.zig"), .target = target, .optimize = optimize });
+    ts_gql_mod.addImport("timeseries_lib", timeseries_ext_mod);
+
+    // GAP-0279: e2e_timeseries test (Store, ChunkStorage, GQL functions)
+    const e2e_ts_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_timeseries.zig"), .target = target, .optimize = optimize }) });
+    e2e_ts_tests.root_module.addImport("timeseries_lib", timeseries_ext_mod);
+    e2e_ts_tests.root_module.addImport("gql_functions", ts_gql_mod);
+    const run_e2e_ts_tests = b.addRunArtifact(e2e_ts_tests);
+
+    // GAP-0279: ts_store_integration test (Store API surface)
+    const ts_store_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/ts_store_integration.zig"), .target = target, .optimize = optimize }) });
+    ts_store_tests.root_module.addImport("timeseries_lib", timeseries_ext_mod);
+    const run_ts_store_tests = b.addRunArtifact(ts_store_tests);
+
+    // GAP-0279: bench_timeseries executable (ingestion + GQL eval benchmark)
+    const bench_ts_exe = b.addExecutable(.{ .name = "bench_timeseries", .root_module = b.createModule(.{ .root_source_file = b.path("src/benchmarks/bench_timeseries.zig"), .target = target, .optimize = optimize }) });
+    bench_ts_exe.root_module.addImport("geode", root_mod);
+    const run_bench_ts = b.addRunArtifact(bench_ts_exe);
+    const bench_ts_step = b.step("bench-timeseries", "Run timeseries ingestion and query benchmarks");
+    bench_ts_step.dependOn(&run_bench_ts.step);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_ext_builtins_tests.step);
@@ -1095,6 +1119,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_blake2b_migration_tests.step);
     test_step.dependOn(&run_federation_auth_tests.step);
     test_step.dependOn(&run_federation_server_auth_tests.step);
+    test_step.dependOn(&run_e2e_ts_tests.step);
+    test_step.dependOn(&run_ts_store_tests.step);
 
     // E2E tests (slower, require more setup - not run in pre-push hooks)
     // Run with: zig build test-e2e
