@@ -1,21 +1,150 @@
 # Gap Analysis
 
-Last updated: 2026-03-30
-Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270–0272 closure (2026-03-30)
+Last updated: 2026-04-01
+Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270–0272 closure (2026-03-30) + **multi-tenancy system audit (2026-04-01, 16-agent pipeline)**
 
 ## Summary
 
-- **Total open gaps:** 9
-- **Critical:** 1 (GAP-0256)
-- **High:** 2 (GAP-0255, GAP-0275)
-- **Medium:** 2 (GAP-0246 blocked, GAP-0247 blocked)
+- **Total open gaps:** 26
+- **Critical:** 3 (GAP-0256, GAP-0279, GAP-0280)
+- **High:** 10 (GAP-0255, GAP-0275, GAP-0281, GAP-0282, GAP-0283, GAP-0284, GAP-0285, GAP-0286, GAP-0287, GAP-0288)
+- **Medium:** 9 (GAP-0246 blocked, GAP-0247 blocked, GAP-0289, GAP-0290, GAP-0291, GAP-0292, GAP-0293, GAP-0294, GAP-0295)
 - **Low:** 0
 - **Blocked (external dependency):** 3 (GAP-0246, GAP-0247, GAP-0256)
 - **Won't Do:** 1 (GAP-0258)
-- **Opened this session (2026-03-30):** GAP-0273, GAP-0274, GAP-0275, GAP-0276, GAP-0277, GAP-0278
-- **Closed this session (2026-03-30):** GAP-0270, GAP-0271, GAP-0272, GAP-0273, GAP-0274, GAP-0276, GAP-0277, GAP-0278
+- **Opened this session (2026-04-01):** GAP-0279 through GAP-0295 (17 multi-tenancy gaps)
+- **Opened (2026-03-30):** GAP-0273, GAP-0274, GAP-0275, GAP-0276, GAP-0277, GAP-0278
+- **Closed (2026-03-30):** GAP-0270, GAP-0271, GAP-0272, GAP-0273, GAP-0274, GAP-0276, GAP-0277, GAP-0278
 - **Closed (2026-03-28):** GAP-0264, GAP-0266, GAP-0261, GAP-0263, GAP-0265, GAP-0267, GAP-0268, GAP-0269, GAP-0262
 - **Closed (2026-03-13):** GAP-0248, GAP-0249, GAP-0250, GAP-0251, GAP-0252, GAP-0253
+
+## Multi-Tenancy Audit Gaps (2026-04-01)
+
+> Full report: [MULTI_TENANCY_AUDIT_REPORT.md](MULTI_TENANCY_AUDIT_REPORT.md)
+
+### GAP-0279: Cross-tenant data isolation NOT enforced (CRITICAL)
+
+- **Category:** Security / Multi-Tenancy
+- **Severity:** Critical (P0)
+- **CWE:** CWE-284 (Improper Access Control)
+- **Evidence:** `src/graph_store.zig:305,367-368,3738` — GraphStore is singleton; `tenant_id` is a single mutable field; `setTenant()` mutates global
+- **Impact:** All sessions share one GraphStore. No isolation boundary between tenants.
+- **Fix:** Per-tenant graph namespacing or per-tenant GraphStore instances
+
+### GAP-0280: RLS expression engine is dead code (CRITICAL)
+
+- **Category:** Security / RLS
+- **Severity:** Critical (P0)
+- **CWE:** CWE-863 (Incorrect Authorization)
+- **Evidence:** `src/security/rls_core.zig` — 2,674 lines never imported by production code; `src/execution.zig:383` — `rls_engine: ?*anyopaque = null` placeholder never populated
+- **Impact:** Documented "Enhanced RLS" is non-functional. Only label-based post-filter runs.
+- **Fix:** Wire expression engine or document as incomplete
+
+### GAP-0281: FLE hooks hardcode tenant_id="default" (HIGH)
+
+- **Category:** Security / FLE
+- **Severity:** High (P1)
+- **Evidence:** `src/execution/fle_hooks.zig:44,91,139` — `.tenant_id = "default"`
+- **Impact:** All tenants share FLE encryption namespace
+
+### GAP-0282: Audit events always set tenant_id=null (HIGH)
+
+- **Category:** Security / Audit
+- **Severity:** High (P1)
+- **Evidence:** `src/security/audit.zig:507,535` — `.tenant_id = null`; AuditLogger orphaned after init
+- **Impact:** No per-tenant audit segregation
+
+### GAP-0283: GraphRBACPolicy never instantiated in production (HIGH)
+
+- **Category:** Security / AuthZ
+- **Severity:** High (P1)
+- **CWE:** CWE-862 (Missing Authorization)
+- **Evidence:** `src/security/multi_graph_security.zig` — zero imports from production code
+- **Impact:** Graph-level authorization not enforced
+
+### GAP-0284: gRPC missing 6 security features QUIC has (HIGH)
+
+- **Category:** Security / Transport Parity
+- **Severity:** High (P1)
+- **Evidence:** `src/transport/grpc_server.zig` missing: federation auth, FLE role binding, mTLS, password reset enforcement, ALTER USER, shared caches
+- **Impact:** Security bypass via transport selection
+
+### GAP-0285: FLE global mutable role race condition (HIGH)
+
+- **Category:** Security / Thread Safety
+- **Severity:** High (P1)
+- **CWE:** CWE-362
+- **Evidence:** `src/fle_integration.zig:41-48` — process-global `global_current_user_role`
+- **Impact:** Cross-tenant FLE decryption via TOCTOU race
+
+### GAP-0286: gRPC rate limiter uses username not IP (HIGH)
+
+- **Category:** Security / Brute-Force
+- **Severity:** High (P1)
+- **CWE:** CWE-307
+- **Evidence:** `src/transport/grpc_server.zig:997` — `client_key = req.username`
+- **Impact:** Brute-force attacks via gRPC are unthrottled
+
+### GAP-0287: Broken IP CIDR matching in RLS (HIGH)
+
+- **Category:** Bug / Security
+- **Severity:** High (P1)
+- **CWE:** CWE-183
+- **Evidence:** `src/security/rls_core.zig:1403-1406` — string `startsWith`; `rls_enhanced.zig:724-731` — character bytes not octets
+- **Impact:** Currently mitigated (dead code), but will silently allow unauthorized IPs if wired
+
+### GAP-0288: Documentation overstates multi-tenancy implementation (HIGH)
+
+- **Category:** Documentation
+- **Severity:** High (P1)
+- **Evidence:** `docs/FEATURES_OVERVIEW.md:85-90` — marks multi-tenancy complete; `CLAUDE.md` — claims PRODUCTION READY
+- **Impact:** Users misled about security posture
+
+### GAP-0289: No per-tenant resource quotas (MEDIUM)
+
+- **Category:** Feature / Multi-Tenancy
+- **Severity:** Medium (P2)
+- **Impact:** Noisy-neighbor; one tenant can exhaust all resources
+
+### GAP-0290: No per-tenant TDE encryption keys (MEDIUM)
+
+- **Category:** Security / Encryption
+- **Severity:** Medium (P2)
+- **Impact:** Single TDE key compromise affects all tenants
+
+### GAP-0291: tenant_id stored but never enforced (MEDIUM)
+
+- **Category:** Security / Multi-Tenancy
+- **Severity:** Medium (P2)
+- **CWE:** CWE-863
+- **Evidence:** `src/server/quic_connection_handler.zig:1377-1384`
+
+### GAP-0292: getAllNodes() returns cross-graph data (MEDIUM)
+
+- **Category:** Security / Data Isolation
+- **Severity:** Medium (P2)
+- **CWE:** CWE-200
+- **Evidence:** `src/graph_store.zig:1190-1199`
+
+### GAP-0293: Plaintext password retained in session state (MEDIUM)
+
+- **Category:** Security / Credentials
+- **Severity:** Medium (P2)
+- **CWE:** CWE-256
+- **Evidence:** `src/server/quic_connection_handler.zig:1372`
+
+### GAP-0294: Fail-open RLS expression evaluation (MEDIUM)
+
+- **Category:** Security / RLS
+- **Severity:** Medium (P2)
+- **CWE:** CWE-285
+- **Evidence:** `src/security/rls_enhanced.zig:513-514` — `return true` for unrecognized expressions
+
+### GAP-0295: graph_bound only blocks USE GRAPH, not cross-graph reads (MEDIUM)
+
+- **Category:** Security / Isolation
+- **Severity:** Medium (P2)
+- **Evidence:** `src/server/server_state.zig:356-357`
 
 GitLab is the source of truth for all gap status and tracking. This document contains **OPEN gaps only**. Resolved items are in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
 
