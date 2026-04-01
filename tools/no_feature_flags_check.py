@@ -29,6 +29,8 @@ SKIP_PATTERNS = {
     "/kb/reviews/",  # Skip review documentation
     "/docs/",  # Skip documentation
     "/docker/zig-packages/",  # Skip vendored Zig dependency cache
+    "/.worktrees/",  # Skip git worktrees (gitignored)
+    "/.claude/worktrees/",  # Skip Claude agent worktrees (gitignored)
 }
 
 

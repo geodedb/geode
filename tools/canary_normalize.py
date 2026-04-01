@@ -288,7 +288,14 @@ def main():
 
     for root, _, files in os.walk(args.repo):
         # Skip hidden directories and vendor directories
-        if "/.git" in root or "/vendor" in root or "/zig-cache" in root or "/zig-out" in root:
+        if (
+            "/.git" in root
+            or "/vendor" in root
+            or "/zig-cache" in root
+            or "/zig-out" in root
+            or "/.worktrees" in root
+            or "/.claude/worktrees" in root
+        ):
             continue
 
         for file in files:

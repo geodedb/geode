@@ -33,8 +33,16 @@ def find_canary_markers(repo_path: Path) -> list[dict[str, str]]:
     extensions = {".zig", ".py", ".md", ".sh", ".yaml", ".yml"}
 
     for root, _, files in os.walk(repo_path):
-        # Skip hidden directories and vendor directories
-        if "/.git" in root or "/vendor" in root or "/zig-cache" in root or "/zig-packages" in root:
+        # Skip hidden directories, vendor directories, and worktrees
+        if (
+            "/.git" in root
+            or "/vendor" in root
+            or "/zig-cache" in root
+            or "/zig-packages" in root
+            or "/.worktrees" in root
+            or "/.claude/worktrees" in root
+            or "/zig-out" in root
+        ):
             continue
 
         for file in files:

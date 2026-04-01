@@ -125,6 +125,8 @@ def main():
             or "/zig-cache" in root
             or "/zig-out" in root
             or "/zig-packages" in root
+            or "/.worktrees" in root
+            or "/.claude/worktrees" in root
         ):
             continue
 
