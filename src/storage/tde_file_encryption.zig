@@ -213,6 +213,91 @@ pub fn readDecryptedFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return try decrypt(allocator, raw_data[0..read_bytes]);
 }
 
+// =============================================================================
+// Per-Tenant TDE File Encryption (GAP-0290)
+// =============================================================================
+// CANARY: REQ=REQ-TDE-TENANT-003; FEATURE="PerTenantTDEFileEncryption"; ASPECT=FileIO; STATUS=TESTED; TEST=src/storage/tde_file_encryption.zig; OWNER=security; UPDATED=2026-04-01
+
+/// Encrypt data using a per-tenant derived key via HKDF-SHA256.
+///
+/// Derives a unique AES-256-GCM key for the given tenant_id from the master key.
+/// Layout: [MAGIC(8)][nonce(12)][tag(16)][ciphertext]
+///
+/// If tenant_id is empty, uses the master key directly (backwards compatible).
+pub fn encryptWithTenantKey(allocator: std.mem.Allocator, plaintext: []const u8, tenant_id: []const u8) ![]u8 {
+    const key_opt = try loadKey(allocator);
+    if (key_opt == null) {
+        // TDE not enabled, return copy of plaintext
+        const copy = try allocator.alloc(u8, plaintext.len);
+        @memcpy(copy, plaintext);
+        return copy;
+    }
+    const master_key = key_opt.?;
+
+    // Derive tenant-specific key if tenant_id is provided
+    const effective_key = if (tenant_id.len > 0)
+        deriveTenantFileKey(master_key, tenant_id)
+    else
+        master_key;
+
+    return try encryptWithKey(allocator, plaintext, effective_key);
+}
+
+/// Decrypt data using a per-tenant derived key via HKDF-SHA256.
+///
+/// Uses the same HKDF derivation as encryptWithTenantKey. Data encrypted under
+/// one tenant's key cannot be decrypted with another tenant's key.
+pub fn decryptWithTenantKey(allocator: std.mem.Allocator, data: []const u8, tenant_id: []const u8) ![]u8 {
+    if (!isEncrypted(data)) {
+        const copy = try allocator.alloc(u8, data.len);
+        @memcpy(copy, data);
+        return copy;
+    }
+
+    const key_opt = try loadKey(allocator);
+    if (key_opt == null) {
+        log.err("TDE: File is encrypted but GEODE_TDE_KEY not set", &.{});
+        return TdeError.KeyRequired;
+    }
+    const master_key = key_opt.?;
+
+    const effective_key = if (tenant_id.len > 0)
+        deriveTenantFileKey(master_key, tenant_id)
+    else
+        master_key;
+
+    return try decryptWithKey(allocator, data, effective_key);
+}
+
+/// Derive a per-tenant file encryption key using HKDF-SHA256.
+/// Uses distinct salt from FLE to ensure domain separation.
+fn deriveTenantFileKey(master_key: [KEY_BYTES]u8, tenant_id: []const u8) [KEY_BYTES]u8 {
+    const Sha256 = std.crypto.hash.sha2.Sha256;
+    const Hmac = std.crypto.auth.hmac.Hmac(Sha256);
+
+    const salt = "geode-tde-tenant-salt-v1";
+
+    // Build info string
+    var info_buf: [512]u8 = undefined;
+    const info = std.fmt.bufPrint(&info_buf, "geode/tde/tenant/{s}", .{tenant_id}) catch
+        std.fmt.bufPrint(&info_buf, "geode/tde/tenant/truncated", .{}) catch unreachable;
+
+    // HKDF-Extract
+    var prk: [32]u8 = undefined;
+    Hmac.create(&prk, &master_key, salt);
+
+    // HKDF-Expand (single block, 32 bytes)
+    var expand_input: [512 + 1]u8 = undefined;
+    @memcpy(expand_input[0..info.len], info);
+    expand_input[info.len] = 0x01;
+
+    var derived: [KEY_BYTES]u8 = undefined;
+    Hmac.create(&derived, expand_input[0 .. info.len + 1], &prk);
+
+    std.crypto.secureZero(u8, &prk);
+    return derived;
+}
+
 // Unit tests
 test "tde encrypt/decrypt roundtrip" {
     const allocator = std.testing.allocator;
@@ -259,4 +344,47 @@ test "tde detect unencrypted data" {
 
     const with_wrong_magic = "WRONGMAG" ++ "rest of data";
     try std.testing.expect(!isEncrypted(with_wrong_magic));
+}
+
+// Per-tenant file encryption tests (GAP-0290)
+
+test "deriveTenantFileKey - different tenants produce different keys" {
+    const master: [KEY_BYTES]u8 = [_]u8{0x42} ** KEY_BYTES;
+
+    const key_a = deriveTenantFileKey(master, "alpha");
+    const key_b = deriveTenantFileKey(master, "beta");
+
+    try std.testing.expect(!std.mem.eql(u8, &key_a, &key_b));
+}
+
+test "deriveTenantFileKey - deterministic for same inputs" {
+    const master: [KEY_BYTES]u8 = [_]u8{0xAB} ** KEY_BYTES;
+
+    const key1 = deriveTenantFileKey(master, "tenant-123");
+    const key2 = deriveTenantFileKey(master, "tenant-123");
+
+    try std.testing.expectEqualSlices(u8, &key1, &key2);
+}
+
+test "per-tenant file encryption - cross-tenant isolation" {
+    const master: [KEY_BYTES]u8 = [_]u8{0xCD} ** KEY_BYTES;
+    const allocator = std.testing.allocator;
+
+    const key_a = deriveTenantFileKey(master, "tenant-a");
+    const key_b = deriveTenantFileKey(master, "tenant-b");
+
+    const plaintext = "sensitive tenant data";
+
+    // Encrypt with tenant A's key
+    const encrypted = try encryptWithKey(allocator, plaintext, key_a);
+    defer allocator.free(encrypted);
+
+    // Decrypt with tenant A's key succeeds
+    const decrypted_a = try decryptWithKey(allocator, encrypted, key_a);
+    defer allocator.free(decrypted_a);
+    try std.testing.expectEqualStrings(plaintext, decrypted_a);
+
+    // Decrypt with tenant B's key fails
+    const result = decryptWithKey(allocator, encrypted, key_b);
+    try std.testing.expectError(TdeError.DecryptionFailed, result);
 }

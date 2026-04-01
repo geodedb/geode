@@ -3714,6 +3714,98 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .rows = rows,
             .flags = std.ArrayList([]const u8).empty,
         };
+    } else if (std.mem.eql(u8, proc_name, "tde.tenant_key_status")) {
+        // CANARY: REQ=REQ-TDE-TENANT-PROC-001; FEATURE="PerTenantTDEKeys"; ASPECT=TenantKeyStatus; STATUS=TESTED; TEST=src/security/tde_key_manager.zig; OWNER=security; UPDATED=2026-04-01
+        // tde.tenant_key_status(tenant_id) -> tenant_id, has_derived_key, key_version, derivation_method
+        const args = switch (call_stmt.procedure) {
+            .Call => |call| call.args,
+            else => &[_]*ast.Expr{},
+        };
+
+        const tenant_id = if (args.len > 0 and args[0].* == .String) args[0].String else "default";
+
+        const result = tde_mod.getTenantKeyStatus(allocator, tenant_id) catch |err| {
+            const columns = try allocator.alloc([]const u8, 2);
+            columns[0] = try allocator.dupe(u8, "success");
+            columns[1] = try allocator.dupe(u8, "error");
+
+            const rows = try allocator.alloc([]Value, 1);
+            const row = try allocator.alloc(Value, 2);
+            row[0] = Value{ .Bool = false };
+            row[1] = Value{ .Str = try allocator.dupe(u8, @errorName(err)) };
+            rows[0] = row;
+
+            return ExecutionResult{
+                .columns = columns,
+                .rows = rows,
+                .flags = std.ArrayList([]const u8).empty,
+            };
+        };
+
+        const columns = try allocator.alloc([]const u8, 4);
+        columns[0] = try allocator.dupe(u8, "tenant_id");
+        columns[1] = try allocator.dupe(u8, "has_derived_key");
+        columns[2] = try allocator.dupe(u8, "key_version");
+        columns[3] = try allocator.dupe(u8, "derivation_method");
+
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 4);
+        row[0] = Value{ .Str = result.tenant_id };
+        row[1] = Value{ .Bool = result.has_derived_key };
+        row[2] = Value{ .Int = @as(i64, result.key_version) };
+        row[3] = Value{ .Str = result.derivation_method };
+        rows[0] = row;
+
+        return ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = std.ArrayList([]const u8).empty,
+        };
+    } else if (std.mem.eql(u8, proc_name, "tde.rotate_tenant_key")) {
+        // CANARY: REQ=REQ-TDE-TENANT-PROC-002; FEATURE="PerTenantTDEKeys"; ASPECT=TenantKeyRotation; STATUS=TESTED; TEST=src/security/tde_key_manager.zig; OWNER=security; UPDATED=2026-04-01
+        // tde.rotate_tenant_key(tenant_id) -> tenant_id, new_version, success
+        const args = switch (call_stmt.procedure) {
+            .Call => |call| call.args,
+            else => &[_]*ast.Expr{},
+        };
+
+        const tenant_id = if (args.len > 0 and args[0].* == .String) args[0].String else "default";
+
+        const new_version = tde_mod.rotateTenantKey(allocator, tenant_id) catch |err| {
+            const columns = try allocator.alloc([]const u8, 2);
+            columns[0] = try allocator.dupe(u8, "success");
+            columns[1] = try allocator.dupe(u8, "error");
+
+            const rows = try allocator.alloc([]Value, 1);
+            const row = try allocator.alloc(Value, 2);
+            row[0] = Value{ .Bool = false };
+            row[1] = Value{ .Str = try allocator.dupe(u8, @errorName(err)) };
+            rows[0] = row;
+
+            return ExecutionResult{
+                .columns = columns,
+                .rows = rows,
+                .flags = std.ArrayList([]const u8).empty,
+            };
+        };
+
+        const columns = try allocator.alloc([]const u8, 3);
+        columns[0] = try allocator.dupe(u8, "tenant_id");
+        columns[1] = try allocator.dupe(u8, "new_version");
+        columns[2] = try allocator.dupe(u8, "success");
+
+        const rows = try allocator.alloc([]Value, 1);
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Str = try allocator.dupe(u8, tenant_id) };
+        row[1] = Value{ .Int = @as(i64, new_version) };
+        row[2] = Value{ .Bool = true };
+        rows[0] = row;
+
+        return ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = std.ArrayList([]const u8).empty,
+        };
 
         // ========== END TDE TEST PROCEDURES ==========
 

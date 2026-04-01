@@ -385,6 +385,113 @@ pub fn deriveBackupKey(allocator: std.mem.Allocator, key_id: u32) !key_manager.D
     return key_manager.deriveBackupKey(allocator, key_id);
 }
 
+// =============================================================================
+// Per-Tenant TDE Encryption (GAP-0290)
+// =============================================================================
+// CANARY: REQ=REQ-TDE-TENANT-002; FEATURE="PerTenantTDEKeys"; ASPECT=EncryptDecrypt; STATUS=TESTED; TEST=src/security/tde_key_manager.zig; OWNER=security; UPDATED=2026-04-01
+
+/// Global TenantKeyManager instance, lazily initialized from master key.
+var global_tenant_key_mgr: ?key_manager.TenantKeyManager = null;
+var tenant_key_mgr_mu: std.Thread.Mutex = .{};
+
+/// Get or initialize the global TenantKeyManager.
+/// Thread-safe: uses a mutex to prevent double-init.
+fn getOrInitTenantKeyManager(allocator: std.mem.Allocator) !*key_manager.TenantKeyManager {
+    tenant_key_mgr_mu.lock();
+    defer tenant_key_mgr_mu.unlock();
+
+    if (global_tenant_key_mgr != null) {
+        return &global_tenant_key_mgr.?;
+    }
+
+    const master_key = try loadRawKey(allocator) orelse return error.KeyNotLoaded;
+    global_tenant_key_mgr = key_manager.TenantKeyManager.init(allocator, master_key);
+    return &global_tenant_key_mgr.?;
+}
+
+/// Encrypt data using a per-tenant derived key.
+///
+/// Derives a unique AES-256-GCM key for the given tenant_id via HKDF-SHA256
+/// from the master TDE key. The derived key is cached for subsequent operations.
+///
+/// If tenant_id is empty, falls back to the master key (backwards compatible).
+pub fn encryptForTenant(allocator: std.mem.Allocator, plaintext: []const u8, aad: []const u8, tenant_id: []const u8) !Ciphertext {
+    if (!enabled()) return error.FeatureDisabled;
+
+    // Empty tenant_id means use master key directly (backwards compatible)
+    if (tenant_id.len == 0) {
+        return encrypt(allocator, plaintext, aad);
+    }
+
+    var mgr = try getOrInitTenantKeyManager(allocator);
+    const entry = try mgr.getKeyForTenant(tenant_id);
+
+    var nonce: [NonceBytes]u8 = undefined;
+    nonce_gen.generateSecureNonce(&nonce);
+
+    const out_buf = try allocator.alloc(u8, plaintext.len);
+    var tag: [TagBytes]u8 = undefined;
+    crypto.aead.aes_gcm.Aes256Gcm.encrypt(out_buf, &tag, plaintext, aad, nonce, entry.key);
+    return .{ .nonce = nonce, .tag = tag, .data = out_buf };
+}
+
+/// Decrypt data using a per-tenant derived key.
+///
+/// Uses the same HKDF derivation as encryptForTenant. Data encrypted under
+/// one tenant's key cannot be decrypted with another tenant's key.
+pub fn decryptForTenant(allocator: std.mem.Allocator, ct: Ciphertext, aad: []const u8, tenant_id: []const u8) ![]u8 {
+    if (!enabled()) return error.FeatureDisabled;
+
+    if (tenant_id.len == 0) {
+        return decrypt(allocator, ct, aad);
+    }
+
+    var mgr = try getOrInitTenantKeyManager(allocator);
+    const entry = try mgr.getKeyForTenant(tenant_id);
+
+    const out = try allocator.alloc(u8, ct.data.len);
+    crypto.aead.aes_gcm.Aes256Gcm.decrypt(out, ct.data, ct.tag, aad, ct.nonce, entry.key) catch |e| {
+        allocator.free(out);
+        return e;
+    };
+    return out;
+}
+
+/// Get the key status for a specific tenant (for stored procedure).
+pub fn getTenantKeyStatus(allocator: std.mem.Allocator, tenant_id: []const u8) !key_manager.TenantKeyStatusResult {
+    if (!enabled()) return error.FeatureDisabled;
+
+    var mgr = try getOrInitTenantKeyManager(allocator);
+    const version = mgr.getTenantKeyVersion(tenant_id);
+
+    return .{
+        .tenant_id = try allocator.dupe(u8, tenant_id),
+        .has_derived_key = version != null,
+        .key_version = version orelse 0,
+        .derivation_method = try allocator.dupe(u8, "HKDF-SHA256"),
+    };
+}
+
+/// Rotate the TDE key for a specific tenant (for stored procedure).
+/// Returns the new version number.
+pub fn rotateTenantKey(allocator: std.mem.Allocator, tenant_id: []const u8) !u16 {
+    if (!enabled()) return error.FeatureDisabled;
+
+    var mgr = try getOrInitTenantKeyManager(allocator);
+    return mgr.rotateTenantKey(tenant_id);
+}
+
+/// Deinitialize the global tenant key manager (cleanup on shutdown).
+pub fn deinitTenantKeyManager() void {
+    tenant_key_mgr_mu.lock();
+    defer tenant_key_mgr_mu.unlock();
+
+    if (global_tenant_key_mgr) |*mgr| {
+        mgr.deinit();
+        global_tenant_key_mgr = null;
+    }
+}
+
 /// Shamir's Secret Sharing over GF(256) using irreducible polynomial x^8 + x^4 + x^3 + x + 1
 /// GAP-0070: Proper polynomial-based threshold secret sharing
 // CANARY: REQ=REQ-GQL-TDE-SSS-001; FEATURE="ShamirSecretSharing"; ASPECT=KeyEscrow; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10

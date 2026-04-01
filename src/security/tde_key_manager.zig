@@ -505,6 +505,174 @@ pub fn cleanupKeyHierarchy(_: std.mem.Allocator) !CleanupKeyHierarchyResult {
 }
 
 // =============================================================================
+// Per-Tenant TDE Key Derivation (GAP-0290)
+// =============================================================================
+// CANARY: REQ=REQ-TDE-TENANT-001; FEATURE="PerTenantTDEKeys"; ASPECT=KeyDerivation; STATUS=TESTED; TEST=src/security/tde_key_manager.zig; OWNER=security; UPDATED=2026-04-01
+
+/// Fixed salt for per-tenant TDE key derivation (domain separation from FLE keys)
+const tenant_tde_salt = "geode-tde-tenant-salt-v1";
+
+/// Derive a per-tenant TDE encryption key from the master key using HKDF-SHA256.
+///
+/// Uses the same HKDF construction as FLE's key hierarchy (RFC 5869) but with
+/// a distinct salt ("geode-tde-tenant-salt-v1") to ensure domain separation.
+///
+/// The derivation is deterministic: same master_key + tenant_id always produces
+/// the same derived key. No additional key storage is needed.
+///
+/// For key rotation, pass a version > 1 which appends ":v{version}" to the
+/// HKDF info string, producing a distinct key per version.
+pub fn deriveTenantTdeKey(master_key: *const [KeyBytes]u8, tenant_id: []const u8, version: u16) [KeyBytes]u8 {
+    const Sha256 = std.crypto.hash.sha2.Sha256;
+    const Hmac = std.crypto.auth.hmac.Hmac(Sha256);
+
+    // Build info string: "geode/tde/tenant/{tenant_id}" or "geode/tde/tenant/{tenant_id}:v{version}"
+    var info_buf: [512]u8 = undefined;
+    const info = if (version <= 1)
+        std.fmt.bufPrint(&info_buf, "geode/tde/tenant/{s}", .{tenant_id}) catch
+            // Fallback: truncate tenant_id if too long for buffer
+            std.fmt.bufPrint(&info_buf, "geode/tde/tenant/truncated", .{}) catch unreachable
+    else
+        std.fmt.bufPrint(&info_buf, "geode/tde/tenant/{s}:v{d}", .{ tenant_id, version }) catch
+            std.fmt.bufPrint(&info_buf, "geode/tde/tenant/truncated:v{d}", .{version}) catch unreachable;
+
+    // HKDF-Extract: PRK = HMAC-SHA256(salt, IKM)
+    var prk: [32]u8 = undefined;
+    Hmac.create(&prk, master_key, tenant_tde_salt);
+
+    // HKDF-Expand: OKM = HMAC(PRK, info || 0x01)
+    // Only need 32 bytes (one block), so single expand iteration suffices
+    var expand_input: [512 + 1]u8 = undefined;
+    @memcpy(expand_input[0..info.len], info);
+    expand_input[info.len] = 0x01;
+
+    var derived: [KeyBytes]u8 = undefined;
+    Hmac.create(&derived, expand_input[0 .. info.len + 1], &prk);
+
+    // Zeroize PRK
+    std.crypto.secureZero(u8, &prk);
+
+    return derived;
+}
+
+/// Thread-safe cache of per-tenant derived TDE keys.
+///
+/// Keys are derived on first access using HKDF-SHA256 from the master key
+/// and cached in memory for subsequent lookups. The cache stores owned copies
+/// of tenant_id strings so callers need not keep them alive.
+pub const TenantKeyManager = struct {
+    master_key: [KeyBytes]u8,
+    tenant_keys: std.StringHashMap(TenantKeyEntry),
+    mu: std.Thread.Mutex,
+    allocator: std.mem.Allocator,
+
+    const TenantKeyEntry = struct {
+        key: [KeyBytes]u8,
+        version: u16,
+    };
+
+    pub fn init(allocator: std.mem.Allocator, master_key: [KeyBytes]u8) TenantKeyManager {
+        return .{
+            .master_key = master_key,
+            .tenant_keys = std.StringHashMap(TenantKeyEntry).init(allocator),
+            .mu = .{},
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *TenantKeyManager) void {
+        // Zeroize all cached keys before freeing
+        var it = self.tenant_keys.iterator();
+        while (it.next()) |entry| {
+            std.crypto.secureZero(u8, &entry.value_ptr.key);
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.tenant_keys.deinit();
+
+        // Zeroize master key
+        std.crypto.secureZero(u8, &self.master_key);
+    }
+
+    /// Get the TDE encryption key for a tenant. Derives and caches on first access.
+    pub fn getKeyForTenant(self: *TenantKeyManager, tenant_id: []const u8) !TenantKeyEntry {
+        self.mu.lock();
+        defer self.mu.unlock();
+
+        if (self.tenant_keys.get(tenant_id)) |entry| {
+            return entry;
+        }
+
+        // Derive key and cache it
+        const version: u16 = 1;
+        const derived = deriveTenantTdeKey(&self.master_key, tenant_id, version);
+
+        // Store owned copy of tenant_id
+        const owned_id = try self.allocator.dupe(u8, tenant_id);
+        errdefer self.allocator.free(owned_id);
+
+        const entry = TenantKeyEntry{ .key = derived, .version = version };
+        try self.tenant_keys.put(owned_id, entry);
+
+        return entry;
+    }
+
+    /// Rotate the key for a specific tenant by incrementing its version.
+    /// Returns the new version number.
+    pub fn rotateTenantKey(self: *TenantKeyManager, tenant_id: []const u8) !u16 {
+        self.mu.lock();
+        defer self.mu.unlock();
+
+        const current_version: u16 = if (self.tenant_keys.get(tenant_id)) |entry|
+            entry.version
+        else
+            1;
+
+        const new_version = current_version + 1;
+        const derived = deriveTenantTdeKey(&self.master_key, tenant_id, new_version);
+
+        // Check if key exists -- if so, update in-place
+        if (self.tenant_keys.getPtr(tenant_id)) |entry_ptr| {
+            std.crypto.secureZero(u8, &entry_ptr.key);
+            entry_ptr.key = derived;
+            entry_ptr.version = new_version;
+        } else {
+            // New entry
+            const owned_id = try self.allocator.dupe(u8, tenant_id);
+            errdefer self.allocator.free(owned_id);
+            try self.tenant_keys.put(owned_id, .{ .key = derived, .version = new_version });
+        }
+
+        return new_version;
+    }
+
+    /// Check if a tenant has a cached key and return its version, or null.
+    pub fn getTenantKeyVersion(self: *TenantKeyManager, tenant_id: []const u8) ?u16 {
+        self.mu.lock();
+        defer self.mu.unlock();
+
+        if (self.tenant_keys.get(tenant_id)) |entry| {
+            return entry.version;
+        }
+        return null;
+    }
+
+    /// Return the number of cached tenant keys.
+    pub fn cachedKeyCount(self: *TenantKeyManager) usize {
+        self.mu.lock();
+        defer self.mu.unlock();
+        return self.tenant_keys.count();
+    }
+};
+
+/// Tenant key status result (for stored procedure)
+pub const TenantKeyStatusResult = struct {
+    tenant_id: []const u8,
+    has_derived_key: bool,
+    key_version: u16,
+    derivation_method: []const u8,
+};
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -611,4 +779,132 @@ test "cleanupKeyHierarchy - resets state" {
 
     try testing.expectEqual(@as(i64, 3), result.keys_zeroized);
     try testing.expect(result.hierarchy_cleared);
+}
+
+// =============================================================================
+// Per-Tenant TDE Key Derivation Tests (GAP-0290)
+// =============================================================================
+
+test "deriveTenantTdeKey - different tenants produce different keys" {
+    const master_key: [KeyBytes]u8 = [_]u8{0x42} ** KeyBytes;
+
+    const key_a = deriveTenantTdeKey(&master_key, "tenant-alpha", 1);
+    const key_b = deriveTenantTdeKey(&master_key, "tenant-beta", 1);
+
+    // Keys must differ for different tenant IDs
+    try std.testing.expect(!std.mem.eql(u8, &key_a, &key_b));
+}
+
+test "deriveTenantTdeKey - same tenant produces same key (deterministic)" {
+    const master_key: [KeyBytes]u8 = [_]u8{0xAB} ** KeyBytes;
+
+    const key1 = deriveTenantTdeKey(&master_key, "tenant-123", 1);
+    const key2 = deriveTenantTdeKey(&master_key, "tenant-123", 1);
+
+    try std.testing.expectEqualSlices(u8, &key1, &key2);
+}
+
+test "deriveTenantTdeKey - different versions produce different keys" {
+    const master_key: [KeyBytes]u8 = [_]u8{0xCD} ** KeyBytes;
+
+    const key_v1 = deriveTenantTdeKey(&master_key, "tenant-xyz", 1);
+    const key_v2 = deriveTenantTdeKey(&master_key, "tenant-xyz", 2);
+
+    try std.testing.expect(!std.mem.eql(u8, &key_v1, &key_v2));
+}
+
+test "deriveTenantTdeKey - different master keys produce different tenant keys" {
+    const master_a: [KeyBytes]u8 = [_]u8{0x11} ** KeyBytes;
+    const master_b: [KeyBytes]u8 = [_]u8{0x22} ** KeyBytes;
+
+    const key_a = deriveTenantTdeKey(&master_a, "same-tenant", 1);
+    const key_b = deriveTenantTdeKey(&master_b, "same-tenant", 1);
+
+    try std.testing.expect(!std.mem.eql(u8, &key_a, &key_b));
+}
+
+test "TenantKeyManager - caches and returns correct keys" {
+    const allocator = std.testing.allocator;
+    const master_key: [KeyBytes]u8 = [_]u8{0x55} ** KeyBytes;
+
+    var mgr = TenantKeyManager.init(allocator, master_key);
+    defer mgr.deinit();
+
+    // First access derives the key
+    const entry_a = try mgr.getKeyForTenant("tenant-a");
+    try std.testing.expectEqual(@as(u16, 1), entry_a.version);
+
+    // Second access returns cached key
+    const entry_a2 = try mgr.getKeyForTenant("tenant-a");
+    try std.testing.expectEqualSlices(u8, &entry_a.key, &entry_a2.key);
+
+    // Different tenant gets different key
+    const entry_b = try mgr.getKeyForTenant("tenant-b");
+    try std.testing.expect(!std.mem.eql(u8, &entry_a.key, &entry_b.key));
+
+    // Cached count
+    try std.testing.expectEqual(@as(usize, 2), mgr.cachedKeyCount());
+}
+
+test "TenantKeyManager - rotate tenant key" {
+    const allocator = std.testing.allocator;
+    const master_key: [KeyBytes]u8 = [_]u8{0x77} ** KeyBytes;
+
+    var mgr = TenantKeyManager.init(allocator, master_key);
+    defer mgr.deinit();
+
+    // Get initial key
+    const entry_v1 = try mgr.getKeyForTenant("rotate-me");
+    try std.testing.expectEqual(@as(u16, 1), entry_v1.version);
+
+    // Rotate
+    const new_version = try mgr.rotateTenantKey("rotate-me");
+    try std.testing.expectEqual(@as(u16, 2), new_version);
+
+    // Key should now be different
+    const entry_v2 = try mgr.getKeyForTenant("rotate-me");
+    try std.testing.expectEqual(@as(u16, 2), entry_v2.version);
+    try std.testing.expect(!std.mem.eql(u8, &entry_v1.key, &entry_v2.key));
+}
+
+test "TenantKeyManager - getTenantKeyVersion" {
+    const allocator = std.testing.allocator;
+    const master_key: [KeyBytes]u8 = [_]u8{0x88} ** KeyBytes;
+
+    var mgr = TenantKeyManager.init(allocator, master_key);
+    defer mgr.deinit();
+
+    // No key cached yet
+    try std.testing.expect(mgr.getTenantKeyVersion("unknown") == null);
+
+    // After access
+    _ = try mgr.getKeyForTenant("known");
+    try std.testing.expectEqual(@as(u16, 1), mgr.getTenantKeyVersion("known").?);
+}
+
+test "per-tenant key isolates encryption - tenant A cannot decrypt tenant B data" {
+    const crypto = std.crypto;
+    const master_key: [KeyBytes]u8 = [_]u8{0x99} ** KeyBytes;
+
+    const key_a = deriveTenantTdeKey(&master_key, "tenant-a", 1);
+    const key_b = deriveTenantTdeKey(&master_key, "tenant-b", 1);
+
+    // Encrypt with tenant A's key
+    const plaintext = "secret data for tenant A";
+    var nonce: [12]u8 = undefined;
+    std.crypto.random.bytes(&nonce);
+    var ciphertext: [plaintext.len]u8 = undefined;
+    var tag: [16]u8 = undefined;
+    crypto.aead.aes_gcm.Aes256Gcm.encrypt(&ciphertext, &tag, plaintext, &.{}, nonce, key_a);
+
+    // Decrypt with tenant A's key should succeed
+    var decrypted_a: [plaintext.len]u8 = undefined;
+    crypto.aead.aes_gcm.Aes256Gcm.decrypt(&decrypted_a, &ciphertext, tag, &.{}, nonce, key_a) catch
+        return error.UnexpectedDecryptionFailure;
+    try std.testing.expectEqualStrings(plaintext, &decrypted_a);
+
+    // Decrypt with tenant B's key must fail
+    var decrypted_b: [plaintext.len]u8 = undefined;
+    const result = crypto.aead.aes_gcm.Aes256Gcm.decrypt(&decrypted_b, &ciphertext, tag, &.{}, nonce, key_b);
+    try std.testing.expectError(error.AuthenticationFailed, result);
 }
