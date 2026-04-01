@@ -3518,6 +3518,7 @@ REQ-SEC-INPUT-VAL-001,Security,InputValidation,TESTED,,,security,2026-01-16,test
 REQ-SEC-KMS-001,Security,KMS,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-MFA-001,Security,MFA,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-NETWORK-001,Security,NetworkSecurity,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
+REQ-SEC-NONCE-001,Nonce Replay Protection,NonceTracker,IMPL,,,security,2026-04-01,src/distributed/nonce_tracker.zig
 REQ-SEC-PERMISSION-CHECK-001,Security,PermissionCheck,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-POLICY-EVAL-001,Security,PolicyEvaluation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-RAFT-ATOMIC-001,Atomic Raft State Persistence,TOCTOU,IMPL,,,security,2026-04-01,docs/superpowers/plans/2026-04-01-security-hardening.md

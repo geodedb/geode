@@ -7,6 +7,7 @@ const dist_schema = @import("distributed_schema");
 const protobuf = @import("protobuf");
 const fd = protobuf.fd;
 const quic = @import("transport/quic");
+const NonceTracker = @import("nonce_tracker.zig").NonceTracker;
 
 const logging = @import("logging");
 const log = logging.scoped("cluster");
@@ -179,6 +180,8 @@ pub const ClusterCoordinator = struct {
     cluster_state: ClusterState,
     network_transport: NetworkTransport,
     health_monitor: HealthMonitor,
+    /// SEC-D009: Nonce tracker for Raft frame replay protection.
+    raft_nonce_tracker: NonceTracker,
     message_callback: ?*const fn (*ClusterCoordinator, *const Message) void = null,
     // PERF-D006: Connection semaphore to limit concurrent cluster threads
     active_connections: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -355,10 +358,12 @@ pub const ClusterCoordinator = struct {
             .cluster_state = try initClusterState(allocator),
             .network_transport = try initNetworkTransport(allocator, config),
             .health_monitor = try initHealthMonitor(allocator, config),
+            .raft_nonce_tracker = try NonceTracker.init(allocator, 10000),
         };
     }
 
     pub fn deinit(self: *ClusterCoordinator) void {
+        self.raft_nonce_tracker.deinit();
         self.raft.deinit();
         self.allocator.destroy(self.raft);
         for (self.cluster_state.nodes.items) |*node| {
@@ -500,6 +505,15 @@ pub const ClusterCoordinator = struct {
                 else => return err,
             };
             defer frame_res.deinit(self.allocator);
+
+            // SEC-D009: Validate nonce to prevent replay attacks.
+            if (!self.raft_nonce_tracker.checkAndRecord(frame_res.nonce)) {
+                log.warn("Raft frame rejected: replay or missing nonce", &.{
+                    Attr.uint("from", frame_res.from),
+                    Attr.uint("nonce", frame_res.nonce),
+                });
+                continue;
+            }
 
             self.raft.handleMessage(frame_res.from, frame_res.body) catch |e| {
                 log.err("Raft handleMessage error", &.{
