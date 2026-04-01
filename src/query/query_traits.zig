@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
+const procedure_access = @import("../execution/procedure_access.zig");
 
 pub const QueryKind = enum { rows, explain, profile };
 pub const UnionMode = enum { none, all, distinct, intersect, except };
@@ -211,10 +212,7 @@ pub fn isMutatingStatement(stmt: *const ast.Statement) bool {
         // Backup/restore mutate on-disk state
         .Backup, .Restore => true,
         // CALL may invoke mutating procedures / subqueries
-        .Call => |c| switch (c) {
-            .Procedure => true,
-            .Subquery => |sq| isMutatingStatement(sq.statement),
-        },
+        .Call => |c| isMutatingCallStatement(&c),
         // PROFILE executes its inner statement — check it
         .Profile => |prof| isMutatingStatement(prof.query),
         // EXPLAIN never executes
@@ -243,6 +241,13 @@ pub fn isMutatingStatement(stmt: *const ast.Statement) bool {
         .Intersect, .Except => |bs| isQueryMutating(&bs.left) or isQueryMutating(&bs.right),
         // Everything else (For, Show, etc.) is read-only
         else => false,
+    };
+}
+
+pub fn isMutatingCallStatement(call_stmt: *const ast.CallStatement) bool {
+    return switch (call_stmt.*) {
+        .Procedure => |proc| procedure_access.classifyCallProcedure(proc) == .mutating,
+        .Subquery => |sq| isMutatingStatement(sq.statement),
     };
 }
 
@@ -321,4 +326,16 @@ test "isMutatingProgram: EXPLAIN is not a mutation" {
     const prog, var arena = try parseProgram("EXPLAIN MATCH (n:Person) RETURN n");
     defer arena.deinit();
     try std.testing.expect(!isMutatingProgram(&prog));
+}
+
+test "isMutatingProgram: read-only CALL procedure is not a mutation" {
+    const prog, var arena = try parseProgram("CALL degree()");
+    defer arena.deinit();
+    try std.testing.expect(!isMutatingProgram(&prog));
+}
+
+test "isMutatingProgram: mutating CALL procedure is a mutation" {
+    const prog, var arena = try parseProgram("CALL geode.auth.user_create('alice', 'p4ssw0rd1')");
+    defer arena.deinit();
+    try std.testing.expect(isMutatingProgram(&prog));
 }

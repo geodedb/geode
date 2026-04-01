@@ -2451,6 +2451,7 @@ REQ-GRAPH-META-001,GraphMetadataPersistence,AddGraph,EXEMPT,,,catalog,2026-03-29
 REQ-GRAPH-META-002,GraphMetadataPersistence,RemoveGraph,EXEMPT,,,catalog,2026-01-09,src/schema/catalog.zig
 REQ-GRAPH-META-003,GraphMetadataPersistence,GraphExists,EXEMPT,,,catalog,2026-01-09,src/schema/catalog.zig
 REQ-GRAPH-PERSIST-005,NamedGraphPersistence,CatalogTests,TESTED,,,schema,2026-01-29,src/schema/catalog.zig
+REQ-GRAPH-STORAGE-CALL-001,ProcedureAccessClassification,Execution,IMPL,,,execution,2026-04-01,src/execution/procedure_access.zig
 REQ-GRAPH-TRAVERSE-001,Graph,GraphTraversal,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-GRAPH-TYPE-REGISTRY-001,GraphTypeRegistry,TypeDefinition,EXEMPT,,,catalog,2026-01-10,src/server/server_state.zig
 REQ-GRAPH-TYPE-REGISTRY-001,GraphTypeRegistry,TypeManagement,EXEMPT,,,catalog,2026-01-10,src/server/server_state.zig

@@ -3529,6 +3529,7 @@ fn syncGlobalAdapterForDataDir(data_dir: ?[]const u8) void {
 // Global instance that persists across queries
 var global_store: ?GraphStore = null;
 var global_arena: ?std.heap.ArenaAllocator = null;
+threadlocal var g_active_query_read_store: ?*GraphStore = null;
 // Atomic flag: readers use .acquire to see all writes that happened before
 // the store was published; the writer uses .release after full initialization.
 var initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
@@ -3769,13 +3770,59 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
     @constCast(&store_ptr.dirty).store(false, .release);
 }
 
+pub fn pushActiveQueryReadStore(store: *GraphStore) ?*GraphStore {
+    const previous = g_active_query_read_store;
+    g_active_query_read_store = store;
+    return previous;
+}
+
+pub fn popActiveQueryReadStore(previous: ?*GraphStore) void {
+    g_active_query_read_store = previous;
+}
+
+pub const QueryReadSession = struct {
+    arena: std.heap.ArenaAllocator,
+    snapshot: GraphStore,
+
+    pub fn initIfAvailable(allocator: std.mem.Allocator, source_store: *GraphStore) !?QueryReadSession {
+        if (global_adapter == null) return null;
+
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        errdefer arena.deinit();
+
+        var snapshot = try GraphStore.initWithTenant(
+            arena.allocator(),
+            source_store.tenant_id,
+            source_store.schema_name,
+        );
+        errdefer snapshot.deinit();
+
+        snapshot.data_dir = source_store.data_dir;
+        try snapshot.loadFromFile();
+
+        return .{
+            .arena = arena,
+            .snapshot = snapshot,
+        };
+    }
+
+    pub fn deinit(self: *QueryReadSession) void {
+        self.snapshot.deinit();
+        self.arena.deinit();
+    }
+
+    pub fn store(self: *QueryReadSession) *GraphStore {
+        return &self.snapshot;
+    }
+};
+
 /// GAP-0259/0260: Persistence is handled solely by the background loop (1s poll).
 /// Worker threads no longer call saveIfDirty() directly — the dirty flag set by
 /// mutations under the write lock is sufficient for the loop to detect changes.
 ///
 /// CANARY: REQ=REQ-PERF-WAL-004; FEATURE="WriteAheadLog"; ASPECT=PersistenceLoop; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
 /// Issue #445: When WAL is enabled, the persistence loop syncs the WAL (fsync) on every
-pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
+fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
     // P2-3: Initialize global allocator on first use
     if (!global_allocator_init) {
         global_allocator_init = true;
@@ -3889,6 +3936,17 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
     // Release store: all writes above are visible to threads that see initialized=true.
     initialized.store(true, .release);
     return &global_store.?;
+}
+
+pub fn getWritableGlobalStore(allocator: std.mem.Allocator) *GraphStore {
+    return getPrimaryGlobalStore(allocator);
+}
+
+pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
+    if (g_active_query_read_store) |snapshot| {
+        return snapshot;
+    }
+    return getPrimaryGlobalStore(allocator);
 }
 
 /// Initialize the global store with engine-backed storage adapter.
@@ -4089,4 +4147,41 @@ test "getGlobalStore initializes adapter from data dir override" {
 
     const adapter = getGlobalAdapter() orelse return error.AdapterNotInitialized;
     try testing.expectEqualStrings(dir_path, adapter.data_dir);
+}
+
+test "QueryReadSession reloads persisted state instead of compatibility cache" {
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(dir_path);
+
+    const store = try initGlobalStore(testing.allocator, dir_path);
+
+    var labels = [_][]const u8{"Person"};
+    const node_id = try store.createNodeWithGraph(&labels, "default");
+    try store.setNodeProperty(node_id, "name", .{ .String = "persisted" });
+
+    const adapter = getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    try adapter.checkpointAll();
+
+    try store.setNodePropertyNoSave(node_id, "name", .{ .String = "stale-cache" });
+
+    var read_session = (try QueryReadSession.initIfAvailable(testing.allocator, store)) orelse {
+        return error.AdapterNotInitialized;
+    };
+    defer read_session.deinit();
+
+    const snapshot_node = read_session.store().getNodePtr(node_id) orelse return error.NodeNotFound;
+    const snapshot_name = snapshot_node.properties.get("name") orelse return error.PropertyNotFound;
+    try testing.expect(snapshot_name == .String);
+    try testing.expectEqualStrings("persisted", snapshot_name.String);
+
+    const live_node = store.getNodePtr(node_id) orelse return error.NodeNotFound;
+    const live_name = live_node.properties.get("name") orelse return error.PropertyNotFound;
+    try testing.expect(live_name == .String);
+    try testing.expectEqualStrings("stale-cache", live_name.String);
 }
