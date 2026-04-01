@@ -230,17 +230,69 @@ pub const PersistentStorage = struct {
 
     pub fn close(_: *PersistentStorage) void {}
 
-    pub fn getCurrentTerm(_: *PersistentStorage) !?u64 {
-        return null;
+    /// Read the persisted current term from {data_dir}/current_term.
+    /// Returns null when the file does not exist (first boot).
+    pub fn getCurrentTerm(self: *PersistentStorage) !?u64 {
+        var dir = std.fs.cwd().openDir(self.data_dir, .{}) catch return null;
+        defer dir.close();
+        const f = dir.openFile("current_term", .{}) catch return null;
+        defer f.close();
+        var buf: [32]u8 = undefined;
+        const n = try f.readAll(&buf);
+        if (n == 0) return null;
+        const trimmed = std.mem.trim(u8, buf[0..n], " \n\r\t");
+        return std.fmt.parseInt(u64, trimmed, 10) catch null;
     }
-    pub fn saveCurrentTerm(_: *PersistentStorage, _: u64) !void {}
-    pub fn getVotedFor(_: *PersistentStorage) !?u64 {
-        return null;
+
+    /// Persist current term to {data_dir}/current_term.
+    pub fn saveCurrentTerm(self: *PersistentStorage, term: u64) !void {
+        std.fs.cwd().makePath(self.data_dir) catch {};
+        var dir = try std.fs.cwd().openDir(self.data_dir, .{});
+        defer dir.close();
+        const term_str = try std.fmt.allocPrint(self.allocator, "{d}", .{term});
+        defer self.allocator.free(term_str);
+        const f = try dir.createFile("current_term", .{});
+        defer f.close();
+        try f.writeAll(term_str);
     }
-    pub fn saveVotedFor(_: *PersistentStorage, _: ?u64) !void {}
+
+    /// Read the persisted voted_for from {data_dir}/voted_for.
+    /// Returns null when the file does not exist (no vote cast).
+    pub fn getVotedFor(self: *PersistentStorage) !?u64 {
+        var dir = std.fs.cwd().openDir(self.data_dir, .{}) catch return null;
+        defer dir.close();
+        const f = dir.openFile("voted_for", .{}) catch return null;
+        defer f.close();
+        var buf: [32]u8 = undefined;
+        const n = try f.readAll(&buf);
+        if (n == 0) return null;
+        const trimmed = std.mem.trim(u8, buf[0..n], " \n\r\t");
+        return std.fmt.parseInt(u64, trimmed, 10) catch null;
+    }
+
+    /// Persist voted_for to {data_dir}/voted_for.
+    /// When value is null the file is deleted (vote retracted).
+    pub fn saveVotedFor(self: *PersistentStorage, voted_for: ?u64) !void {
+        std.fs.cwd().makePath(self.data_dir) catch {};
+        var dir = try std.fs.cwd().openDir(self.data_dir, .{});
+        defer dir.close();
+        if (voted_for) |v| {
+            const v_str = try std.fmt.allocPrint(self.allocator, "{d}", .{v});
+            defer self.allocator.free(v_str);
+            const f = try dir.createFile("voted_for", .{});
+            defer f.close();
+            try f.writeAll(v_str);
+        } else {
+            dir.deleteFile("voted_for") catch {};
+        }
+    }
+
+    /// Log entry persistence is not yet implemented (complex WAL required).
     pub fn getLogEntries(_: *PersistentStorage) !?[]LogEntry {
         return null;
     }
+
+    /// Log entry persistence is not yet implemented (complex WAL required).
     pub fn appendLogEntry(_: *PersistentStorage, _: LogEntry) !void {}
 };
 
@@ -896,4 +948,43 @@ test "raft_consensus: basic init and deinit" {
         allocator.destroy(node);
     }
     try std.testing.expectEqual(State.follower, node.state);
+}
+
+test "PersistentStorage: round-trip currentTerm and votedFor" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(dir_path);
+
+    // -- currentTerm --
+    var ps = try PersistentStorage.init(allocator, dir_path);
+
+    // Before any write, should return null
+    const initial_term = try ps.getCurrentTerm();
+    try std.testing.expect(initial_term == null);
+
+    // Save and re-read
+    try ps.saveCurrentTerm(42);
+    const read_term = try ps.getCurrentTerm();
+    try std.testing.expectEqual(@as(?u64, 42), read_term);
+
+    // Overwrite
+    try ps.saveCurrentTerm(99);
+    const read_term2 = try ps.getCurrentTerm();
+    try std.testing.expectEqual(@as(?u64, 99), read_term2);
+
+    // -- votedFor --
+    const initial_vote = try ps.getVotedFor();
+    try std.testing.expect(initial_vote == null);
+
+    try ps.saveVotedFor(7);
+    const read_vote = try ps.getVotedFor();
+    try std.testing.expectEqual(@as(?u64, 7), read_vote);
+
+    // Clear vote (null)
+    try ps.saveVotedFor(null);
+    const cleared_vote = try ps.getVotedFor();
+    try std.testing.expect(cleared_vote == null);
 }
