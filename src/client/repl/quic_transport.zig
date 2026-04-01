@@ -242,6 +242,10 @@ fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.T
 
     // Create transport connection with background keepalive.
     const impl = try allocator.create(QuicTransportConnection);
+    errdefer {
+        impl.stopKeepalive();
+        allocator.destroy(impl);
+    }
     impl.* = .{
         .allocator = allocator,
         .client = client,
