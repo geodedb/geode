@@ -157,7 +157,6 @@ pub fn decryptWithKey(allocator: std.mem.Allocator, data: []const u8, key: [KEY_
     const aad: []const u8 = &[_]u8{};
     crypto.aead.aes_gcm.Aes256Gcm.decrypt(plaintext, ciphertext, tag, aad, nonce, key) catch {
         log.err("TDE: Decryption failed - wrong key or corrupted data", &.{});
-        allocator.free(plaintext);
         return TdeError.DecryptionFailed;
     };
 

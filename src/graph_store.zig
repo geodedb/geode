@@ -2133,14 +2133,33 @@ pub const GraphStore = struct {
             else => value,
         };
 
-        if (global_vtable) |vt| {
-            if (vt.setEdgePropertyFn) |f| {
-                const edge = self.edges.get(edge_id) orelse return error.EdgeNotFound;
-                const slot_from = try self.requireNodeSlot(edge.graph_name, edge.from_id);
-                const slot_to = try self.requireNodeSlot(edge.graph_name, edge.to_id);
-                const slot_edge = try self.requireEdgeSlot(edge.graph_name, edge_id);
-                try f(vt.ctx, edge.graph_name, slot_from, slot_to, slot_edge, key, effective_value);
-            }
+        blk_adapter: {
+            const vt = global_vtable orelse break :blk_adapter;
+            const f = vt.setEdgePropertyFn orelse break :blk_adapter;
+            const edge = self.edges.get(edge_id) orelse break :blk_adapter;
+            const slot_from = self.requireNodeSlot(edge.graph_name, edge.from_id) catch |err| {
+                log.debug("adapter edge endpoint-slot lookup failed during setEdgeProperty", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+                break :blk_adapter;
+            };
+            const slot_to = self.requireNodeSlot(edge.graph_name, edge.to_id) catch |err| {
+                log.debug("adapter edge endpoint-slot lookup failed during setEdgeProperty", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+                break :blk_adapter;
+            };
+            const slot_edge = self.requireEdgeSlot(edge.graph_name, edge_id) catch |err| {
+                log.debug("adapter edge-slot lookup failed during setEdgeProperty", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+                break :blk_adapter;
+            };
+            f(vt.ctx, edge.graph_name, slot_from, slot_to, slot_edge, key, effective_value) catch |err| {
+                log.debug("adapter setEdgeProperty failed", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+            };
         }
         if (self.edges.getPtr(edge_id)) |edge| {
             const value_copy = try copyPropertyValue(self, effective_value);

@@ -1384,7 +1384,7 @@ REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01
 REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a233c712/src/distributed/twophase.zig
 REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,IMPL,,,distributed,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/twophase.zig
 REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a52e4e80/src/distributed/twophase.zig
-REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a5a9afc0/src/distributed/twophase.zig
+REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a5a9afc0/src/distributed/twophase_participant.zig
 REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a6b71590/src/distributed/twophase.zig
 REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a7d807cd/src/distributed/twophase.zig
 REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-aa33b679/src/distributed/twophase.zig
@@ -1422,7 +1422,7 @@ REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,20
 REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a233c712/src/distributed/twophase.zig
 REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,IMPL,,,distributed,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/twophase.zig
 REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a52e4e80/src/distributed/twophase.zig
-REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a5a9afc0/src/distributed/twophase.zig
+REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a5a9afc0/src/distributed/twophase_participant.zig
 REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a6b71590/src/distributed/twophase.zig
 REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a7d807cd/src/distributed/twophase.zig
 REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-aa33b679/src/distributed/twophase.zig
@@ -1479,7 +1479,7 @@ REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,202
 REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a233c712/src/distributed/twophase.zig
 REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,IMPL,,,distributed,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/twophase.zig
 REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a52e4e80/src/distributed/twophase.zig
-REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a5a9afc0/src/distributed/twophase.zig
+REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a5a9afc0/src/distributed/twophase_participant.zig
 REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a6b71590/src/distributed/twophase.zig
 REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a7d807cd/src/distributed/twophase.zig
 REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-aa33b679/src/distributed/twophase.zig
@@ -12401,7 +12401,7 @@ REQ-DIST-ORDERBY-001,Distributed ORDER BY,QueryCorrectness,TESTED,,,distributed,
 REQ-DIST-ORDERBY-001,Distributed ORDER BY,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a233c712/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ORDERBY-001,Distributed ORDER BY,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a37683fc/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ORDERBY-001,Distributed ORDER BY,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a52e4e80/src/distributed/enhanced_query_coordinator.zig
-REQ-DIST-ORDERBY-001,Distributed ORDER BY,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a5a9afc0/src/distributed/enhanced_query_coordinator.zig
+REQ-DIST-ORDERBY-001,Distributed ORDER BY,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a5a9afc0/src/distributed/merge_strategies.zig
 REQ-DIST-ORDERBY-001,Distributed ORDER BY,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a6b71590/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ORDERBY-001,Distributed ORDER BY,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a7d807cd/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ORDERBY-001,Distributed ORDER BY,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-aa33b679/src/distributed/enhanced_query_coordinator.zig
@@ -12439,7 +12439,7 @@ REQ-DIST-ORDERBY-003,ORDER BY Sort Context,QueryCorrectness,TESTED,,,distributed
 REQ-DIST-ORDERBY-003,ORDER BY Sort Context,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a233c712/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ORDERBY-003,ORDER BY Sort Context,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a37683fc/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ORDERBY-003,ORDER BY Sort Context,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a52e4e80/src/distributed/enhanced_query_coordinator.zig
-REQ-DIST-ORDERBY-003,ORDER BY Sort Context,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a5a9afc0/src/distributed/enhanced_query_coordinator.zig
+REQ-DIST-ORDERBY-003,ORDER BY Sort Context,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a5a9afc0/src/distributed/merge_strategies.zig
 REQ-DIST-ORDERBY-003,ORDER BY Sort Context,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a6b71590/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ORDERBY-003,ORDER BY Sort Context,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a7d807cd/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ORDERBY-003,ORDER BY Sort Context,QueryCorrectness,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-aa33b679/src/distributed/enhanced_query_coordinator.zig
@@ -12483,6 +12483,7 @@ REQ-DIST-PLANNER-008,DistributedQueryPlanner,SortPlanning,IMPL,,,distributed,202
 REQ-DIST-PLANNER-009,DistributedQueryPlanner,UnionPlanning,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/docs/superpowers/plans/2026-04-01-distributed-query-planner.md
 REQ-DIST-PLANNER-ESTIMATE-001,DistributedQueryPlanner,RowEstimation,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/docs/superpowers/plans/2026-04-01-distributed-query-planner.md
 REQ-DIST-PLANNER-REWRITE-001,DistributedQueryPlanner,ShardQueryGeneration,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/docs/superpowers/plans/2026-04-01-distributed-query-planner.md
+REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,MergeStrategies,TESTED,,,dist,2025-10-05,.claude/worktrees/agent-a5a9afc0/src/distributed/merge_strategies.zig
 REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,QueryCoordination,TESTED,,,dist,2025-10-05,.claude/worktrees/agent-a10cae4d/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,QueryCoordination,TESTED,,,dist,2025-10-05,.claude/worktrees/agent-a233c712/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,QueryCoordination,IMPL,,,dist,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/enhanced_query_coordinator.zig
@@ -12716,7 +12717,7 @@ REQ-DIST-ROW-SORT-001,Distributed Row Sorting,Distributed,TESTED,,,distributed,2
 REQ-DIST-ROW-SORT-001,Distributed Row Sorting,Distributed,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a233c712/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ROW-SORT-001,Distributed Row Sorting,Distributed,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a37683fc/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ROW-SORT-001,Distributed Row Sorting,Distributed,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a52e4e80/src/distributed/enhanced_query_coordinator.zig
-REQ-DIST-ROW-SORT-001,Distributed Row Sorting,Distributed,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a5a9afc0/src/distributed/enhanced_query_coordinator.zig
+REQ-DIST-ROW-SORT-001,Distributed Row Sorting,Distributed,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a5a9afc0/src/distributed/merge_strategies.zig
 REQ-DIST-ROW-SORT-001,Distributed Row Sorting,Distributed,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a6b71590/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ROW-SORT-001,Distributed Row Sorting,Distributed,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a7d807cd/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ROW-SORT-001,Distributed Row Sorting,Distributed,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-aa33b679/src/distributed/enhanced_query_coordinator.zig
@@ -58224,6 +58225,7 @@ REQ-MULTI-TENANT-005,PerTenantIsolation,MatchFiltering,TESTED,,,enterprise,2026-
 REQ-MULTI-TENANT-005,PerTenantIsolation,UnitTest,TESTED,,,enterprise,2026-04-01,.worktrees/audit-multi-tenancy/src/graph_store.zig
 REQ-MULTI-TENANT-005,PerTenantIsolation,UnitTest,TESTED,,,enterprise,2026-04-01,src/graph_store.zig
 REQ-MULTI-TENANT-FLE-001,FLE Multi-Tenancy,ExecutionContext,IMPL,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/execution.zig
+REQ-MULTI-TENANT-FLE-001,FLE Multi-Tenancy,ExecutionContext,IMPL,,,security,2026-04-01,src/execution.zig
 REQ-MULTI-TENANT-FLE-002,FLE Multi-Tenancy,PerThreadTenant,IMPL,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/fle_integration.zig
 REQ-MULTI-TENANT-FLE-002,FLE Multi-Tenancy,PerThreadTenant,IMPL,,,security,2026-04-01,src/fle_integration.zig
 REQ-MULTI-TENANT-QUOTA-001,PerTenantResourceQuotas,QuotaManager,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/security/tenant_quota.zig

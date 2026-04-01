@@ -412,6 +412,9 @@ pub const ExecutionContext = struct {
     // Set at server startup and shared across all connections (read-only during queries).
     // CANARY: REQ=REQ-TIMESERIES-WIRE-002; FEATURE="TimeseriesServerWiring"; ASPECT=ExecutionContext; STATUS=TESTED; TEST=src/eval.zig; OWNER=engine; UPDATED=2026-04-01
     timeseries_store: ?*@import("timeseries/timeseries.zig").Store = null,
+    // CANARY: REQ=REQ-MULTI-TENANT-FLE-001; FEATURE="FLE Multi-Tenancy"; ASPECT=ExecutionContext; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+    // GAP-0281: Session tenant_id threaded through to FLE encryption hooks
+    tenant_id: ?[]const u8 = null,
 };
 
 threadlocal var g_active_context: ?*const ExecutionContext = null;
@@ -454,6 +457,43 @@ pub const ExecutionError = error{
     GraphNotFound,
 };
 
+/// Tracks ownership of graph nodes and edges materialized during query execution.
+/// Ensures heap-allocated entities are freed when the result is destroyed.
+pub const OwnedGraphEntities = struct {
+    nodes: std.ArrayList(*graph_store.Node),
+    edges: std.ArrayList(*graph_store.Edge),
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) !*OwnedGraphEntities {
+        const self = try allocator.create(OwnedGraphEntities);
+        self.* = OwnedGraphEntities{
+            .nodes = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0),
+            .edges = try std.ArrayList(*graph_store.Edge).initCapacity(allocator, 0),
+            .allocator = allocator,
+        };
+        return self;
+    }
+
+    pub fn trackNode(self: *OwnedGraphEntities, node: *graph_store.Node) !void {
+        try self.nodes.append(self.allocator, node);
+    }
+
+    pub fn trackEdge(self: *OwnedGraphEntities, edge: *graph_store.Edge) !void {
+        try self.edges.append(self.allocator, edge);
+    }
+
+    pub fn deinit(self: *OwnedGraphEntities) void {
+        for (self.nodes.items) |node| {
+            self.allocator.destroy(node);
+        }
+        self.nodes.deinit(self.allocator);
+        for (self.edges.items) |edge| {
+            self.allocator.destroy(edge);
+        }
+        self.edges.deinit(self.allocator);
+    }
+};
+
 pub const ExecutionResult = struct {
     columns: [][]const u8,
     rows: [][]Value,
@@ -464,6 +504,8 @@ pub const ExecutionResult = struct {
     // PERF: PHASE5_COLUMN_BATCH_ALLOC - Batch column string allocation optimization
     // CANARY: REQ=REQ-PERF-PHASE5-001; FEATURE="ColumnOptimization"; ASPECT=BATCH_ALLOC; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
     column_buffer: ?[]u8 = null, // Single buffer for all column strings (reduces N allocations to 1)
+    // Tracks ownership of materialized graph entities (nodes/edges) for lifetime management
+    owned_graph_entities: ?*OwnedGraphEntities = null,
 
     pub fn deinit(self: *ExecutionResult, allocator: std.mem.Allocator) void {
         // Free column buffer if present (Phase 5 optimization)
@@ -501,6 +543,12 @@ pub const ExecutionResult = struct {
         if (self.variable_bindings) |bindings| {
             bindings.deinit();
             allocator.destroy(bindings);
+        }
+
+        // Free owned graph entities if present
+        if (self.owned_graph_entities) |entities| {
+            entities.deinit();
+            entities.allocator.destroy(entities);
         }
     }
 
