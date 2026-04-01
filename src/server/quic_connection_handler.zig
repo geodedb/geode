@@ -969,7 +969,7 @@ pub fn handleQuicConnection(
     };
     conn_state.captureFromState(&state) catch |err| {
         // S7: Do NOT allow unauthenticated streams — close connection on capture failure
-        log.err("Failed to capture connection state for multiplexing: {}", .{err});
+        log.err("Failed to capture connection state for multiplexing", &.{Attr.string("error", @errorName(err))});
         return;
     };
     // First stream counts as active.
@@ -2050,6 +2050,7 @@ fn handleClientMessage(
                     };
                     var store_result = false;
                     defer if (!store_result) exec_result.deinit(gpa);
+                    const store = graph_store.getGlobalStore(gpa);
 
                     // CANARY: REQ=REQ-SEC-RLS-ALGO-001; FEATURE="RLS Algorithm Filtering"; ASPECT=QUICWire; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
                     // S1: Algorithm RLS filter BEFORE lock release — requires store access

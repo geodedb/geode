@@ -991,7 +991,7 @@ fn getPeerIp(trans: *GrpcTransport) [45]u8 {
         return buf;
     };
     const net_addr = std.net.Address.initPosix(@ptrCast(&addr));
-    const formatted = std.fmt.bufPrint(&buf, "{}", .{net_addr}) catch {
+    const formatted = std.fmt.bufPrint(&buf, "{f}", .{net_addr}) catch {
         @memcpy(buf[0..7], "unknown");
         return buf;
     };
@@ -1295,8 +1295,8 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                     // GAP-0283: Graph-scoped RBAC authorization check before binding (parity with QUIC handler).
                     // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-003; FEATURE="GraphRBACEnforcement"; ASPECT=GrpcGraphAuth; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
                     const rbac_allowed = rbac_blk: {
-                        if (auth_result.role) |r| {
-                            if (r == .Admin) break :rbac_blk true;
+                        if (auth_result.role == .Admin) {
+                            break :rbac_blk true;
                         }
                         if (multi_graph_security.getGlobalPolicy()) |rbac| {
                             const uid = std.hash.Wyhash.hash(0, req.username);
@@ -1763,7 +1763,9 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
             if (grpc_query_tenant) |tid| {
                 if (tenant_quota.getGlobalQuotaManager()) |qm| {
                     qm.acquireQuery(tid) catch {
-                        return buildErrorResponse(allocator, "42000", "Query quota exceeded for tenant", &.{}, &.{});
+                        var resp = try buildErrorResponse(allocator, "42000", "Query quota exceeded for tenant", &.{}, &.{});
+                        defer resp.deinit(allocator);
+                        return encodeMessage(allocator, resp);
                     };
                     grpc_query_quota_acquired = true;
                 }
