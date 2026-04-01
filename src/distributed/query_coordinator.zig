@@ -13,6 +13,9 @@ const logging = @import("logging");
 const log = logging.scoped("query_coordinator");
 const Attr = logging.Attr;
 
+/// Deprecated: Use EnhancedQueryCoordinator for production deployments.
+/// EnhancedQueryCoordinator is a superset that adds caching, optimization, and Top-K push-down.
+///
 /// Distributed query coordinator
 /// Handles scatter-gather pattern for federated queries
 /// GAP-0077: Now uses statistics registry for row estimates
