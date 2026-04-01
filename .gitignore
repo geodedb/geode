@@ -227,3 +227,4 @@ geodetestlab/**/*.egg-info/
 reports/
 *.backup
 scratch_*.zig
+.worktrees/
