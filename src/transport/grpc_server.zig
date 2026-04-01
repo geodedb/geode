@@ -512,7 +512,7 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
     // Standard gRPC: route by method path from HEADERS frame.
     if (method.len > 0) {
         if (std.mem.endsWith(u8, method, "/Handshake")) {
-            const resp = try handleHandshake(request_bytes, allocator);
+            const resp = try handleHandshake(request_bytes, trans, allocator);
             defer allocator.free(resp);
             return sendUnaryResponse(trans, resp);
         } else if (std.mem.endsWith(u8, method, "/Execute")) {
@@ -571,7 +571,7 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
     }
 
     // Fallback: legacy ClientPacket-wrapped messages (custom gRPC clients)
-    const resp = try handleLegacyPacket(request_bytes, allocator);
+    const resp = try handleLegacyPacket(request_bytes, trans, allocator);
     defer allocator.free(resp);
     return sendUnaryResponse(trans, resp);
 }
@@ -772,7 +772,7 @@ fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allo
     };
 }
 
-fn handleLegacyPacket(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+fn handleLegacyPacket(request_bytes: []const u8, trans: *GrpcTransport, allocator: std.mem.Allocator) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var packet = protobuf.decode(schema.ClientPacket, &reader, allocator) catch |err| {
         log.err("Failed to decode gRPC packet", &.{Attr.string("error", @errorName(err))});
@@ -788,7 +788,7 @@ fn handleLegacyPacket(request_bytes: []const u8, allocator: std.mem.Allocator) !
         .hello => |req| blk: {
             const req_bytes = try encodeMessage(allocator, req);
             defer allocator.free(req_bytes);
-            const resp_bytes = try handleHandshake(req_bytes, allocator);
+            const resp_bytes = try handleHandshake(req_bytes, trans, allocator);
             defer allocator.free(resp_bytes);
 
             var resp_reader: std.Io.Reader = .fixed(resp_bytes);
@@ -955,7 +955,32 @@ fn handlePing(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
     return encodeMessage(allocator, response);
 }
 
-fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+/// Extract peer IP address string from a gRPC transport's underlying socket.
+/// Returns a stack-allocated formatted IP string, or "unknown" on failure.
+fn getPeerIp(trans: *GrpcTransport) [45]u8 {
+    var buf: [45]u8 = .{0} ** 45;
+    var addr: std.posix.sockaddr.storage = undefined;
+    var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.storage);
+    std.posix.getpeername(trans.stream.handle, @ptrCast(&addr), &addr_len) catch {
+        @memcpy(buf[0..7], "unknown");
+        return buf;
+    };
+    const net_addr = std.net.Address.initPosix(@ptrCast(&addr));
+    const formatted = std.fmt.bufPrint(&buf, "{}", .{net_addr}) catch {
+        @memcpy(buf[0..7], "unknown");
+        return buf;
+    };
+    // Null-terminate after the formatted portion (already zero-initialized)
+    _ = formatted;
+    return buf;
+}
+
+/// Return a slice of the peer IP buffer up to the first null byte.
+fn peerIpSlice(buf: *const [45]u8) []const u8 {
+    return std.mem.sliceTo(buf, 0);
+}
+
+fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: std.mem.Allocator) ![]u8 {
     log.debug("gRPC Handshake", &.{Attr.uint("request_bytes_len", request_bytes.len)});
 
     var reader: std.Io.Reader = .fixed(request_bytes);
@@ -992,10 +1017,14 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
     try caps.append(allocator, try allocator.dupe(u8, "TLS1.3"));
 
     if (user_mgmt.isAuthEnabled()) {
+        // S12: Use peer IP as rate limiter key (not attacker-controlled username).
+        // This matches the QUIC handler which uses peer_ip at quic_connection_handler.zig:1301.
+        const peer_ip_buf = getPeerIp(trans);
+        const peer_ip = peerIpSlice(&peer_ip_buf);
+
         // S6: Check auth rate limiter before authentication attempt (parity with QUIC handler).
         if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
-            const client_key = if (req.username.len > 0) req.username else "unknown";
-            if (limiter.isLocked(client_key)) {
+            if (limiter.isLocked(peer_ip)) {
                 const resp = schema.HelloResponse{
                     .success = false,
                     .session_id = "",
@@ -1009,8 +1038,7 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
         if (req.username.len == 0 or req.password.len == 0) {
             // S6: Record failure for empty credentials.
             if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
-                const client_key = if (req.username.len > 0) req.username else "unknown";
-                limiter.recordFailure(client_key);
+                limiter.recordFailure(peer_ip);
             }
             const resp = schema.HelloResponse{
                 .success = false,
@@ -1023,7 +1051,7 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
         const auth_result = user_mgmt.authenticate(req.username, req.password) catch {
             // S6: Record failure for bad credentials.
             if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
-                limiter.recordFailure(req.username);
+                limiter.recordFailure(peer_ip);
             }
             const resp = schema.HelloResponse{
                 .success = false,
@@ -1036,7 +1064,7 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
 
         // S6: Successful authentication — reset failure counter.
         if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
-            limiter.recordSuccess(req.username);
+            limiter.recordSuccess(peer_ip);
         }
         // CANARY: REQ=REQ-DSN-GRAPH-BIND-005; FEATURE="DSNGraphBinding"; ASPECT=GrpcGraphResolution; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
         // Resolve graph from HELLO request — validate, auto-create, bind session

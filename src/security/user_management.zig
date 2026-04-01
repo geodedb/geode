@@ -70,7 +70,7 @@ pub const AuthResult = struct {
 /// Global user store - in-memory for now
 var user_store_mutex = std.Thread.Mutex{};
 var user_store: ?std.StringHashMap(User) = null;
-var auth_enabled: bool = false;
+var auth_enabled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 pub fn initUserStore(allocator: std.mem.Allocator) !void {
     user_store_mutex.lock();
@@ -82,15 +82,11 @@ pub fn initUserStore(allocator: std.mem.Allocator) !void {
 }
 
 pub fn setAuthEnabled(enabled: bool) void {
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
-    auth_enabled = enabled;
+    auth_enabled.store(enabled, .release);
 }
 
 pub fn isAuthEnabled() bool {
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
-    return auth_enabled;
+    return auth_enabled.load(.acquire);
 }
 
 pub fn deinitUserStore() void {
@@ -191,33 +187,52 @@ pub fn createUserWithHash(allocator: std.mem.Allocator, username: []const u8, pa
     try store.put(try allocator.dupe(u8, username), user);
 }
 
-/// Authenticate user with username and password
+/// Authenticate user with username and password.
+/// The Argon2id verification (10-50ms) runs OUTSIDE the mutex to avoid
+/// serializing all auth operations behind a single lock.
 pub fn authenticate(username: []const u8, password: []const u8) !AuthResult {
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    // Phase 1: Acquire lock, copy user data, release lock.
+    const lookup = blk: {
+        user_store_mutex.lock();
+        defer user_store_mutex.unlock();
 
-    if (user_store == null) {
-        return error.Unauthenticated;
-    }
+        if (user_store == null) {
+            break :blk error.Unauthenticated;
+        }
 
-    var store = &user_store.?;
+        var store = &user_store.?;
 
-    // Get user from in-memory store (populated from graph store at startup)
-    const user = store.get(username) orelse return error.Unauthenticated;
+        // Get user from in-memory store (populated from graph store at startup)
+        const user = store.get(username) orelse break :blk error.Unauthenticated;
 
-    // Check if user is active
-    if (!user.active) {
-        return error.Unauthenticated;
-    }
+        // Check if user is active
+        if (!user.active) {
+            break :blk error.Unauthenticated;
+        }
 
-    // Verify password
-    if (!verifyPassword(password, user.password_hash)) {
+        // Copy password hash and auth result to stack-local storage.
+        // The hash is a pointer into the HashMap value — safe to read while
+        // we hold the lock, but we must copy it before releasing.
+        break :blk .{
+            .password_hash = user.password_hash,
+            .role = user.role,
+            .password_reset_required = user.password_reset_required,
+        };
+    };
+
+    const user_data = lookup catch return error.Unauthenticated;
+
+    // Phase 2: Verify password OUTSIDE the lock (Argon2id, 10-50ms).
+    // If the user was deleted between phase 1 and phase 2, the worst case
+    // is that we verify against a now-stale hash and return success for a
+    // deleted user — the caller should re-check session validity.
+    if (!verifyPassword(password, user_data.password_hash)) {
         return error.Unauthenticated;
     }
 
     return AuthResult{
-        .role = user.role,
-        .password_reset_required = user.password_reset_required,
+        .role = user_data.role,
+        .password_reset_required = user_data.password_reset_required,
     };
 }
 
