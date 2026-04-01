@@ -1166,18 +1166,7 @@ pub fn executeCreateQuery(
                     // Evaluate the properties expression (should be a map literal)
                     const props_value = try eval.evalExpr(allocator, all_props.properties, env);
 
-                    // Clear all existing properties by getting node and manually clearing
-                    if (store.nodes.getPtr(node_id)) |node| {
-                        var prop_iter = node.properties.iterator();
-                        while (prop_iter.next()) |prop_entry| {
-                            allocator.free(prop_entry.key_ptr.*);
-                            switch (prop_entry.value_ptr.*) {
-                                .String => |s| allocator.free(s),
-                                else => {},
-                            }
-                        }
-                        node.properties.clearRetainingCapacity();
-                    }
+                    try store.clearNodeProperties(node_id);
 
                     // Set new properties from the map
                     if (props_value == .Map) {
@@ -2081,18 +2070,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                                 // Evaluate the properties expression (should be a map literal)
                                 const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
 
-                                // Clear all existing properties by getting node and manually clearing
-                                if (store.nodes.getPtr(node_id)) |node_ptr| {
-                                    var prop_iter = node_ptr.properties.iterator();
-                                    while (prop_iter.next()) |prop_entry| {
-                                        allocator.free(prop_entry.key_ptr.*);
-                                        switch (prop_entry.value_ptr.*) {
-                                            .String => |s| allocator.free(s),
-                                            else => {},
-                                        }
-                                    }
-                                    node_ptr.properties.clearRetainingCapacity();
-                                }
+                                try store.clearNodeProperties(node_id);
 
                                 // Set new properties from the map
                                 if (props_value == .Map) {
@@ -2190,18 +2168,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                                 // Evaluate the properties expression (should be a map literal)
                                 const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
 
-                                // Clear all existing properties by getting node and manually clearing
-                                if (store.nodes.getPtr(node_id)) |node_ptr| {
-                                    var prop_iter = node_ptr.properties.iterator();
-                                    while (prop_iter.next()) |prop_entry| {
-                                        allocator.free(prop_entry.key_ptr.*);
-                                        switch (prop_entry.value_ptr.*) {
-                                            .String => |s| allocator.free(s),
-                                            else => {},
-                                        }
-                                    }
-                                    node_ptr.properties.clearRetainingCapacity();
-                                }
+                                try store.clearNodeProperties(node_id);
 
                                 // Set new properties from the map
                                 if (props_value == .Map) {
@@ -2546,6 +2513,16 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                 }
             }
 
+            if (!d.detach) {
+                for (nodes_to_delete.items) |node_id| {
+                    const has_outgoing = if (store.getOutgoingEdgeIds(node_id)) |ids| ids.len > 0 else false;
+                    const has_incoming = if (store.getIncomingEdgeIds(node_id)) |ids| ids.len > 0 else false;
+                    if (has_outgoing or has_incoming) {
+                        return error.NodeHasEdges;
+                    }
+                }
+            }
+
             // Delete the collected nodes
             for (nodes_to_delete.items) |node_id| {
                 if (d.detach) {
@@ -2575,10 +2552,13 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                         }
                     }
                     for (edges_to_delete.items) |edge_id| {
-                        store.deleteEdgeNoSave(edge_id);
+                        if (store.getEdgePtr(edge_id) != null) {
+                            store.deleteEdge(edge_id);
+                        }
                     }
                 }
-                if (store.nodes.fetchRemove(node_id)) |_| {
+                store.deleteNode(node_id);
+                if (store.getNodePtr(node_id) == null) {
                     deleted_count += 1;
                 }
             }
@@ -2662,8 +2642,10 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
 
                     // Delete the collected edges (with adjacency index cleanup)
                     for (edges_to_delete.items) |edge_id| {
-                        if (store.edges.get(edge_id) != null) {
-                            store.deleteEdgeNoSave(edge_id);
+                        if (store.getEdgePtr(edge_id) != null) {
+                            store.deleteEdge(edge_id);
+                        }
+                        if (store.getEdgePtr(edge_id) == null) {
                             deleted_count += 1;
                         }
                     }
@@ -2679,6 +2661,27 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
         // MATCH statement (query-level delete_items path). For standalone DELETE
         // statements, attempt to resolve items via context bindings.
         if (context.bindings) |bindings| {
+            if (!d.detach) {
+                for (d.items) |item| {
+                    const var_name = switch (item) {
+                        .Variable => |n| n,
+                        .Node => |n| n,
+                        .Relationship => |n| n,
+                    };
+                    if (bindings.get(var_name)) |binding| {
+                        switch (binding) {
+                            .node_id => |nid| {
+                                const has_outgoing = if (store.getOutgoingEdgeIds(nid)) |ids| ids.len > 0 else false;
+                                const has_incoming = if (store.getIncomingEdgeIds(nid)) |ids| ids.len > 0 else false;
+                                if (has_outgoing or has_incoming) {
+                                    return error.NodeHasEdges;
+                                }
+                            },
+                            .edge_id => {},
+                        }
+                    }
+                }
+            }
             for (d.items) |item| {
                 const var_name = switch (item) {
                     .Variable => |n| n,
@@ -2714,16 +2717,21 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                                     }
                                 }
                                 for (edges_to_remove.items) |eid| {
-                                    store.deleteEdgeNoSave(eid);
+                                    if (store.getEdgePtr(eid) != null) {
+                                        store.deleteEdge(eid);
+                                    }
                                 }
                             }
-                            if (store.nodes.fetchRemove(nid)) |_| {
+                            store.deleteNode(nid);
+                            if (store.getNodePtr(nid) == null) {
                                 deleted_count += 1;
                             }
                         },
                         .edge_id => |eid| {
-                            if (store.edges.get(eid) != null) {
-                                store.deleteEdgeNoSave(eid);
+                            if (store.getEdgePtr(eid) != null) {
+                                store.deleteEdge(eid);
+                            }
+                            if (store.getEdgePtr(eid) == null) {
                                 deleted_count += 1;
                             }
                         },
