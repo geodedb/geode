@@ -59,6 +59,7 @@ pub const Metrics = struct {
     applied_total: u64 = 0,
     failed_total: u64 = 0,
     drift_detected_total: u64 = 0,
+    /// Reserved for future distributed lock contention tracking. Currently never incremented.
     lock_steal_attempts_total: u64 = 0,
 };
 
@@ -317,6 +318,7 @@ fn joinPath(alloc: std.mem.Allocator, cfg: MigrationConfig, name: []const u8) ![
 var migration_mutex: std.Thread.Mutex = .{};
 var global_lock: ?LockHandle = null;
 
+/// Acquires the migration lock with the given TTL in milliseconds. Thread-safe.
 pub fn acquireLock(_: std.mem.Allocator, ttl_ms: u64) MigrationError!LockHandle {
     migration_mutex.lock();
     defer migration_mutex.unlock();
@@ -333,6 +335,7 @@ pub fn acquireLock(_: std.mem.Allocator, ttl_ms: u64) MigrationError!LockHandle 
     return handle;
 }
 
+/// Extends the lock TTL. Returns error if the lock has expired or is not held.
 pub fn heartbeatLock(h: *LockHandle) MigrationError!void {
     migration_mutex.lock();
     defer migration_mutex.unlock();
@@ -346,6 +349,7 @@ pub fn heartbeatLock(h: *LockHandle) MigrationError!void {
     } else return error.NoLockHeld;
 }
 
+/// Releases the migration lock. Returns error if the lock is not held by this handle.
 pub fn releaseLock(h: *LockHandle) MigrationError!void {
     migration_mutex.lock();
     defer migration_mutex.unlock();
@@ -461,6 +465,7 @@ pub fn applyDownMigrations(
     try saveLedger(alloc, cfg, &ledger);
 }
 
+/// Returns a list of all discovered migration files with their applied status.
 pub fn statusReport(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError![]StatusRow {
     var ledger = try loadLedger(alloc, cfg);
     defer ledger.deinit();
@@ -531,6 +536,7 @@ pub fn statusReport(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationErr
     return slice;
 }
 
+/// Frees all heap-allocated names and the slice returned by statusReport.
 pub fn freeStatusRows(alloc: std.mem.Allocator, rows: []StatusRow) void {
     for (rows) |row| alloc.free(row.name);
     alloc.free(rows);
@@ -541,6 +547,7 @@ pub fn freeStatusRows(alloc: std.mem.Allocator, rows: []StatusRow) void {
 pub const PolicyMode = enum { strict, lenient };
 var policy_mode: PolicyMode = .lenient;
 
+/// Sets the migration policy mode ("STRICT" or "LENIENT").
 pub fn enforcePolicy(mode: []const u8) MigrationError!void {
     migration_mutex.lock();
     defer migration_mutex.unlock();
@@ -554,12 +561,14 @@ pub fn enforcePolicy(mode: []const u8) MigrationError!void {
     return error.NotImplemented;
 }
 
+/// Returns true if the current policy mode is STRICT.
 pub fn isStrictPolicy() bool {
     migration_mutex.lock();
     defer migration_mutex.unlock();
     return policy_mode == .strict;
 }
 
+/// Validates ledger checksums against a manifest string (version checksum per line).
 pub fn checksumValidate(alloc: std.mem.Allocator, cfg: MigrationConfig, manifest: []const u8) MigrationError!bool {
     var ledger = try loadLedger(alloc, cfg);
     defer ledger.deinit();
@@ -592,6 +601,7 @@ pub fn checksumValidate(alloc: std.mem.Allocator, cfg: MigrationConfig, manifest
     return matched == applied_count;
 }
 
+/// Compares the current ledger fingerprint against the stored baseline; returns false on drift.
 pub fn driftCheck(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!bool {
     var ledger = try loadLedger(alloc, cfg);
     defer ledger.deinit();
@@ -607,6 +617,7 @@ pub fn driftCheck(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError
 
 // ------------------ Planning ------------------
 
+/// Returns a dry-run plan showing which migrations would be applied up and which could roll back.
 pub fn planDryRun(alloc: std.mem.Allocator, cfg: MigrationConfig, names: []const []const u8) MigrationError!MigrationPlan {
     var ledger = try loadLedger(alloc, cfg);
     defer ledger.deinit();
@@ -679,6 +690,7 @@ fn getOrInitResume(alloc: std.mem.Allocator, token: []const u8) MigrationError!*
     return &resume_slots[resume_slots_len - 1];
 }
 
+/// Advances the resume state for a data migration token by one batch. Thread-safe.
 pub fn resumeDataMigration(alloc: std.mem.Allocator, token: []const u8) MigrationError!ResumeState {
     migration_mutex.lock();
     defer migration_mutex.unlock();
@@ -692,14 +704,18 @@ pub fn resumeDataMigration(alloc: std.mem.Allocator, token: []const u8) Migratio
 
 // ------------------ Metrics ------------------
 
+/// Returns a snapshot of migration metrics from the ledger.
 pub fn metricsSnapshot(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Metrics {
     var ledger = try loadLedger(alloc, cfg);
     defer ledger.deinit();
     return ledger.metrics;
 }
 
-pub fn testSimulateDrift() void {
-    if (!builtin.is_test) return;
+/// Deliberately corrupts the baseline fingerprint to trigger drift detection in tests.
+/// Only available in test builds; compiles to nothing in release.
+pub const testSimulateDrift = if (builtin.is_test) testSimulateDriftImpl else @compileError("testSimulateDrift is test-only");
+
+fn testSimulateDriftImpl() void {
     baseline_override = (baseline_override orelse 0xcbf29ce484222325) ^ 0x9e3779b97f4a7c15;
 }
 
