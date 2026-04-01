@@ -372,13 +372,30 @@ pub const Catalog = struct {
                         entry.value_ptr.* = new_uuid;
                     }
                 } else {
-                    // Known UUID — open existing storage directory
-                    store.openOrCreateGraphWithUuid(graph_name, uuid) catch |err| {
-                        log.err("Failed to open graph with UUID", &.{
+                    // Known UUID — open existing storage directory.
+                    // Retry once on failure: the adapter may not have been fully
+                    // ready on the first attempt (e.g. engine still flushing WAL).
+                    var graph_opened = false;
+                    var open_attempts: u8 = 0;
+                    while (open_attempts < 2) : (open_attempts += 1) {
+                        store.openOrCreateGraphWithUuid(graph_name, uuid) catch |err| {
+                            log.err("Failed to open graph with UUID (attempt {d}/2)", &.{
+                                Attr.int("attempt", open_attempts + 1),
+                                Attr.string("name", graph_name),
+                                Attr.string("error", @errorName(err)),
+                            });
+                            // Brief pause before retry to allow adapter to settle
+                            if (open_attempts == 0) std.Thread.sleep(10_000_000);
+                            continue;
+                        };
+                        graph_opened = true;
+                        break;
+                    }
+                    if (!graph_opened) {
+                        log.err("Graph loading failed after retries — data for this graph will be missing", &.{
                             Attr.string("name", graph_name),
-                            Attr.string("error", @errorName(err)),
                         });
-                    };
+                    }
                 }
             }
         }
