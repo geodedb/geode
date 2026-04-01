@@ -58,10 +58,10 @@ REQ-0003,Engine Contract Requirements,Execution,TESTED,,,execution,2026-01-15,sr
 REQ-0004,Transactions & Storage Requirements,Storage,TESTED,,,storage,2026-01-15,src/transactions/transaction_manager.zig
 REQ-0005,Security Requirements,Security,TESTED,,,security,2026-01-15,src/security/geode_auth_lib.zig
 REQ-0006,Distributed Consensus,RaftImplementation,TESTED,,,dist,2026-01-16,src/dist/scaffold.zig
-REQ-0006,Distributed Query Federation,ConcurrentExecution,TESTED,,,distributed,2026-04-01,src/distributed/query_coordinator.zig
-REQ-0006,Distributed Query Federation,Metrics,TESTED,,,distributed,2026-04-01,src/distributed/query_coordinator.zig
+REQ-0006,Distributed Query Federation,ConcurrentExecution,EXEMPT,,,distributed,2026-01-14,src/distributed/query_coordinator.zig
+REQ-0006,Distributed Query Federation,Metrics,EXEMPT,,,distributed,2026-01-14,src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,ParallelScatter,EXEMPT,,,distributed,2026-01-14,src/distributed/federation.zig
-REQ-0006,Distributed Query Federation,UnitTests,TESTED,,,distributed,2026-04-01,src/distributed/query_coordinator.zig
+REQ-0006,Distributed Query Federation,UnitTests,EXEMPT,,,distributed,2026-01-14,src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,Verification,TESTED,,,distributed,2026-01-15,tests/test_requirement_traceability.zig
 REQ-0006,Distributed RPC,NetworkTransport,TESTED,,,dist,2026-01-16,src/dist/rpc.zig
 REQ-0006,DistributedQuery,Federation,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_testing.zig
@@ -72,19 +72,22 @@ REQ-0009,Performance Budget Enforcement,CI,TESTED,,,ci,2026-01-30,.gitlab-ci.yml
 REQ-0009,Performance Targets,Benchmark,BENCHED,,,ops-team,2026-01-15,benchmarks/benchmark_monitoring_metrics_variance_unified.zig
 REQ-2PC-001,2PC,PreparePhase,TESTED,,,distributed,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-2PC-002,2PC,CommitPhase,TESTED,,,distributed,2026-01-15,tests/test_gap_0193_final_batch.zig
-REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,IMPL,,,distributed,2026-01-10,src/distributed/twophase.zig
+REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01-10,src/distributed/twophase.zig
+REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01-10,src/distributed/twophase_participant.zig
 REQ-2PC-COMMIT-001,2PC,Commit,TESTED,,,txn,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
-REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,IMPL,,,distributed,2026-01-10,src/distributed/twophase.zig
+REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,2026-01-10,src/distributed/twophase.zig
+REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,2026-01-10,src/distributed/twophase_participant.zig
 REQ-2PC-COORD-001,2PC,Coordinator,TESTED,,,txn,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-2PC-PARTICIPANT-001,2PC,Participant,TESTED,,,txn,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
-REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,IMPL,,,distributed,2026-01-10,src/distributed/twophase.zig
+REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,src/distributed/twophase.zig
+REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,src/distributed/twophase_participant.zig
 REQ-2PC-PREPARE-001,2PC,Prepare,TESTED,,,txn,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-2PC-ROLLBACK-001,2PC,Rollback,TESTED,,,txn,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
-REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,IMPL,,,distributed,2026-04-01,src/distributed/twophase.zig
+REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,EXEMPT,,,distributed,2026-01-09,src/distributed/twophase.zig
 REQ-2PC-TLS-001,2PC,TLSSecurity,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_security.zig
-REQ-2PC-TLS-001,2PC TLS,Security,IMPL,,,distributed,2026-01-13,src/distributed/twophase.zig
+REQ-2PC-TLS-001,2PC TLS,Security,EXEMPT,,,distributed,2026-01-13,src/distributed/twophase.zig
 REQ-2PC-TLS-002,2PC,TLSOneShot,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_security.zig
-REQ-2PC-TLS-002,2PC TLS One-shot,Security,IMPL,,,distributed,2026-01-13,src/distributed/twophase.zig
+REQ-2PC-TLS-002,2PC TLS One-shot,Security,EXEMPT,,,distributed,2026-01-13,src/distributed/twophase.zig
 REQ-ABAC-WIRE-001,ABAC Enforcement,ServerInit,TESTED,,,security,2026-01-15,src/server/server_init.zig
 REQ-ABAC-WIRE-001,ABAC Enforcement,ServerIntegration,TESTED,,,security,2026-01-15,src/server/server_state.zig
 REQ-ABAC-WIRE-002,ABAC Enforcement,SecurityManager,TESTED,,,security,2026-01-15,src/server/server_state.zig
@@ -569,7 +572,6 @@ REQ-CLIENT-ENV-001,ClientEnvironmentVariables,IntegrationTests,TESTED,,,clients,
 REQ-CLIENT-INTEGRATION-001,RustClientIntegration,QUICTransport,TESTED,,,clients,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-CLIENT-INTEGRATION-001,range() function,BuiltinFunctions,TESTED,,,eval,2025-11-15,src/eval.zig
 REQ-CLIENT-INTEGRATION-001,range() function,BuiltinFunctions,TESTED,,,eval,2025-11-15,src/eval/call_handlers.zig
-REQ-CLUSTER-AUTH-001,ClusterAuth,SharedModule,TESTED,,,security,2026-04-01,src/distributed/cluster_auth.zig
 REQ-CODEQUALITY-001,CodeQuality,ErrorHandling,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig
 REQ-CODEQUALITY-002,CodeQuality,MemoryManagement,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig
 REQ-CODEQUALITY-003,CodeQuality,NamingConventions,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig
@@ -631,74 +633,45 @@ REQ-DEFAULT-PASSWORD-001,Secure Default Password,Security,TESTED,,,security,2026
 REQ-DELETE-PROPS-001,DeletePropertyFilter,PropertyMatching,TESTED,,,crud_operations,2026-02-02,src/execution/crud_operations.zig
 REQ-DELETE-PROPS-002,DeletePropertyFilter,PropertyEvaluation,TESTED,,,crud_operations,2026-02-02,src/execution/crud_operations.zig
 REQ-DELETE-WHERE-001,DeleteWhereEvaluation,WhereClause,TESTED,,,crud_operations,2026-01-09,src/execution/crud_operations.zig
-REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-performance.md
-REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,IMPL,,,distributed,2026-04-01,src/distributed/twophase.zig
-REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,IMPL,,,distributed,2026-04-01,src/distributed/twophase.zig
-REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,IMPL,,,distributed,2026-04-01,src/distributed/twophase.zig
-REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,IMPL,,,distributed,2026-04-01,src/distributed/twophase.zig
-REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,IMPL,,,distributed,2026-04-01,src/distributed/twophase.zig
-REQ-DIST-2PC-UNDO-001,2PC Undo Operations,CreateReversal,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-replication-and-2pc-undo.md
-REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,IMPL,,,distributed,2026-04-01,src/distributed/cluster.zig
-REQ-DIST-CLUSTER-002,ClusterReplication,SnapshotSerialization,IMPL,,,distributed,2026-04-01,src/graph_store.zig
-REQ-DIST-CLUSTER-002,ClusterReplicationSnapshot,Serialization,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-replication-and-2pc-undo.md
-REQ-DIST-CLUSTER-002,ClusterReplicationSnapshot,Transport,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-replication-and-2pc-undo.md
-REQ-DIST-CLUSTER-002,DistributedCluster,Replication,IMPL,,,distributed,2026-04-01,src/distributed/cluster.zig
-REQ-DIST-CLUSTER-003,DistributedCluster,Rebalance,IMPL,,,distributed,2026-04-01,src/distributed/cluster.zig
-REQ-DIST-CLUSTER-004,DistributedCluster,Topology,IMPL,,,distributed,2026-04-01,src/distributed/cluster.zig
+REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,EXEMPT,,,distributed,2026-01-08,src/distributed/twophase.zig
+REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,EXEMPT,,,distributed,2026-01-08,src/distributed/twophase.zig
+REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,EXEMPT,,,distributed,2026-01-08,src/distributed/twophase.zig
+REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,EXEMPT,,,distributed,2026-01-08,src/distributed/twophase.zig
+REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,EXEMPT,,,distributed,2026-01-09,src/distributed/twophase.zig
+REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,EXEMPT,,,distributed,2026-01-09,src/distributed/cluster.zig
+REQ-DIST-CLUSTER-002,DistributedCluster,Replication,EXEMPT,,,distributed,2026-01-09,src/distributed/cluster.zig
+REQ-DIST-CLUSTER-003,DistributedCluster,Rebalance,EXEMPT,,,distributed,2026-01-09,src/distributed/cluster.zig
+REQ-DIST-CLUSTER-004,DistributedCluster,Topology,EXEMPT,,,distributed,2026-01-09,src/distributed/cluster.zig
 REQ-DIST-CMP-001,Distributed Value Comparison,Distributed,TESTED,,,protocol,2026-02-03,src/protocol.zig
 REQ-DIST-CONN-001,Distributed Query Connection,ConnectionInit,TESTED,,,distributed,2026-01-10,src/distributed/query_transport.zig
-REQ-DIST-FED-PARALLEL-001,Parallel Federation Ops,RemoteExecution,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
 REQ-DIST-FRAG-001,Fragment Serialization,Core,TESTED,,,distributed,2026-01-25,src/distributed/enhanced_query_transport.zig
 REQ-DIST-FRAG-002,Fragment Deserialization,Core,TESTED,,,distributed,2026-01-25,src/distributed/enhanced_query_transport.zig
 REQ-DIST-FRAG-003,Fragment Serialization Tests,Testing,TESTED,,,distributed,2026-01-25,src/distributed/enhanced_query_transport.zig
 REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,EXEMPT,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,EXEMPT,,,distributed,2026-01-08,src/distributed/sharding.zig
-REQ-DIST-HASH-AGG-001,DistributedHashAggregate,ValueAccumulation,TESTED,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-federation-correctness.md
-REQ-DIST-HASH-AGG-001,DistributedHashAggregate,ValueAccumulation,IMPL,,,distributed,2026-04-01,src/distributed/enhanced_query_coordinator.zig
-REQ-DIST-HASH-AGG-001,DistributedHashAggregate,ValueAccumulation,TESTED,,,distributed,2026-04-01,tests/test_federation_merge_correctness.zig
 REQ-DIST-LB-001,Load Balancing,ShardSelection,TESTED,,,distributed,2026-01-08,src/distributed/enhanced_query_transport.zig
 REQ-DIST-LOCAL-001,DistributedLocalExecution,Distributed,TESTED,,,distributed,2026-01-25,src/distributed/query_coordinator.zig
 REQ-DIST-MIGRATE-002,Shard Data Migration,PartialMigration,EXEMPT,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-MIGRATE-003,Shard Data Migration,FullMigration,EXEMPT,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-MIGRATION-001,Shard Data Migration,Migration,TESTED,,,distributed,2026-01-16,src/distributed/sharding.zig
 REQ-DIST-MIGRATION-002,Migration State,ProgressTracking,TESTED,,,distributed,2026-01-16,src/distributed/sharding.zig
-REQ-DIST-ORDERBY-001,Distributed ORDER BY,QueryCorrectness,TESTED,,,distributed,2026-01-25,src/distributed/enhanced_query_coordinator.zig
+REQ-DIST-ORDERBY-001,Distributed ORDER BY,QueryCorrectness,TESTED,,,distributed,2026-01-25,src/distributed/merge_strategies.zig
 REQ-DIST-ORDERBY-002,Distributed ORDER BY Sort,QueryCorrectness,TESTED,,,distributed,2026-01-25,src/distributed/enhanced_query_coordinator.zig
-REQ-DIST-ORDERBY-003,ORDER BY Sort Context,QueryCorrectness,TESTED,,,distributed,2026-01-25,src/distributed/enhanced_query_coordinator.zig
-REQ-DIST-PLAN-001,DistributedQueryPlanning,Orchestration,IMPL,,,distributed,2026-04-01,src/distributed/query_planner.zig
-REQ-DIST-PLAN-002,ShardRowEstimation,CBO,IMPL,,,distributed,2026-04-01,src/distributed/query_planner.zig
-REQ-DIST-PLAN-003,ShardQueryGeneration,QueryRouting,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
-REQ-DIST-PLAN-004,ShardPruning,QueryRouting,IMPL,,,distributed,2026-04-01,src/distributed/query_planner.zig
-REQ-DIST-PLAN-005,ShardLocalOptimization,QueryPlanning,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
-REQ-DIST-PLAN-006,DistributedJoin,QueryPlanning,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
-REQ-DIST-PLAN-007,DistributedAggregation,QueryPlanning,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
-REQ-DIST-PLAN-008,DistributedSort,QueryPlanning,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
-REQ-DIST-PLAN-009,DistributedUnion,QueryPlanning,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
-REQ-DIST-PLANNER-001,DistributedQueryPlanner,PlanGeneration,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
-REQ-DIST-PLANNER-002,DistributedQueryPlanner,DistributionAnalysis,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
-REQ-DIST-PLANNER-003,DistributedQueryPlanner,ShardPlanning,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
-REQ-DIST-PLANNER-004,DistributedQueryPlanner,CoordinatorOps,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
-REQ-DIST-PLANNER-005,DistributedQueryPlanner,InterShardOptimization,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
-REQ-DIST-PLANNER-006,DistributedQueryPlanner,JoinPlanning,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
-REQ-DIST-PLANNER-007,DistributedQueryPlanner,AggregationPlanning,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
-REQ-DIST-PLANNER-008,DistributedQueryPlanner,SortPlanning,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
-REQ-DIST-PLANNER-009,DistributedQueryPlanner,UnionPlanning,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
-REQ-DIST-PLANNER-ESTIMATE-001,DistributedQueryPlanner,RowEstimation,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
-REQ-DIST-PLANNER-REWRITE-001,DistributedQueryPlanner,ShardQueryGeneration,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
-REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,QueryCoordination,IMPL,,,dist,2026-04-01,src/distributed/enhanced_query_coordinator.zig
-REQ-DIST-QUERY-COORD-002,Query Optimization,DistributedOptimization,IMPL,,,dist,2026-04-01,src/distributed/enhanced_query_coordinator.zig
+REQ-DIST-ORDERBY-003,ORDER BY Sort Context,QueryCorrectness,TESTED,,,distributed,2026-01-25,src/distributed/merge_strategies.zig
+REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,MergeStrategies,TESTED,,,dist,2025-10-05,src/distributed/merge_strategies.zig
+REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,QueryCoordination,TESTED,,,dist,2025-10-05,src/distributed/enhanced_query_coordinator.zig
+REQ-DIST-QUERY-COORD-002,Query Optimization,DistributedOptimization,TESTED,,,dist,2025-10-05,src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-QUERY-COORD-INT-001,Distributed Query Coordination Integration Tests,IntegrationTests,EXEMPT,,,dist,2025-10-05,tests/test_distributed_query_coordination_integration.zig
 REQ-DIST-QUERY-COORD-TEST-001,DistQueryCoord,CoordinationTests,TESTED,,,dist,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-DIST-QUERY-COORD-TEST-001,Distributed Query Coordination Tests,UnitTests,EXEMPT,,,dist,2025-10-05,tests/test_distributed_query_coordination.zig
-REQ-DIST-QUERY-PLANNER-001,DistributedQueryPlanner,Module,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
-REQ-DIST-QUERY-TRANSPORT-001,Distributed Query Transport,QueryTransport,IMPL,,,dist,2026-04-01,src/distributed/query_transport.zig
-REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,IMPL,,,dist,2026-04-01,src/distributed/query_transport.zig
+REQ-DIST-QUERY-TRANSPORT-001,Distributed Query Transport,QueryTransport,TESTED,,,dist,2025-10-05,src/distributed/query_transport.zig
+REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,TESTED,,,dist,2025-10-05,src/distributed/query_transport.zig
 REQ-DIST-RANGE-001,Key Range Operations,RangeOverlap,EXEMPT,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-RANGE-SHARD-001,Range-Based Sharding,ShardLookup,EXEMPT,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-REGISTRY-001,Node Registry,NodeLookup,EXEMPT,,,distributed,2026-01-10,src/distributed/query_transport.zig
 REQ-DIST-ROW-CMP-001,Distributed Row Comparison,Distributed,TESTED,,,protocol,2026-02-03,src/protocol.zig
 REQ-DIST-ROW-CMP-002,Distributed Row Comparison,Distributed,TESTED,,,distributed,2026-01-25,src/distributed/query_coordinator.zig
-REQ-DIST-ROW-SORT-001,Distributed Row Sorting,Distributed,TESTED,,,distributed,2026-01-25,src/distributed/enhanced_query_coordinator.zig
+REQ-DIST-ROW-SORT-001,Distributed Row Sorting,Distributed,TESTED,,,distributed,2026-01-25,src/distributed/merge_strategies.zig
 REQ-DIST-SPLIT-001,Shard Split Point,SplitPoint,EXEMPT,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-STATS-001,DistributedStatsIntegration,QueryPlanning,TESTED,,,distributed,2026-01-25,src/distributed/query_coordinator.zig
 REQ-DIST-STATS-002,ShardRowEstimate,QueryPlanning,TESTED,,,distributed,2026-01-25,src/distributed/query_coordinator.zig
@@ -730,11 +703,11 @@ REQ-DISTRIBUTED-INDEX-OPTIMIZER-REGRESSION-001,Distributed IndexOptimizer Regres
 REQ-DISTRIBUTED-INTEGRATION-001,Distributed Query Integration,ServerIntegration,TESTED,,,distributed,2025-10-05,tests/integration_distributed_query_planner.zig
 REQ-DISTRIBUTED-INTEGRATION-002,Distributed Query Integration,QueryPlanningFlow,TESTED,,,distributed,2025-10-05,tests/integration_distributed_query_planner.zig
 REQ-DISTRIBUTED-INTEGRATION-003,Distributed Query Integration,FederatedOptimization,TESTED,,,distributed,2025-10-05,tests/integration_distributed_query_planner.zig
-REQ-DISTRIBUTED-QUERY-004,Enhanced Query Transport Integration,NetworkTransport,IMPL,,,distributed,2026-04-01,src/distributed/enhanced_query_transport.zig
+REQ-DISTRIBUTED-QUERY-004,Enhanced Query Transport Integration,NetworkTransport,TESTED,,,distributed,2025-10-05,src/distributed/enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-004,Enhanced Query Transport Integration,NetworkTransport,TESTED,,,distributed,2025-10-05,tests/test_enhanced_query_transport.zig
-REQ-DISTRIBUTED-QUERY-005,Cross-Shard Query Coordination,QueryCoordination,IMPL,,,distributed,2026-04-01,src/distributed/enhanced_query_transport.zig
+REQ-DISTRIBUTED-QUERY-005,Cross-Shard Query Coordination,QueryCoordination,TESTED,,,distributed,2025-10-05,src/distributed/enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-005,Cross-Shard Query Coordination,QueryCoordination,TESTED,,,distributed,2025-10-05,tests/test_enhanced_query_transport.zig
-REQ-DISTRIBUTED-QUERY-006,Shard-Aware Query Execution,ShardOptimization,IMPL,,,distributed,2026-04-01,src/distributed/enhanced_query_transport.zig
+REQ-DISTRIBUTED-QUERY-006,Shard-Aware Query Execution,ShardOptimization,TESTED,,,distributed,2025-10-05,src/distributed/enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-006,Shard-Aware Query Execution,ShardOptimization,TESTED,,,distributed,2025-10-05,tests/test_enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-007,Distributed Query MVCC Integration,DistributedTransactions,TESTED,,,distributed,2025-10-05,tests/test_distributed_query_mvcc_integration.zig
 REQ-DISTRIBUTED-QUERY-008,Cross-Shard Phantom Read Prevention,DistributedIsolation,TESTED,,,distributed,2025-10-05,tests/test_distributed_query_mvcc_integration.zig
@@ -850,8 +823,6 @@ REQ-EXPR-TYPE-003,ExprTypeCoverage,Types,TESTED,,,exec,2026-01-25,src/server/gra
 REQ-FED-001,Federation,QueryFederation,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-FED-QUIC-001,FederationQUICConnection,Connection,TESTED,,,federation,2026-01-10,src/distributed/federation.zig
 REQ-FED-TLS-001,Federation TLS,Security,TESTED,,,distributed,2026-01-13,src/distributed/federation.zig
-REQ-FED-UNION-DISTINCT-001,FederationUnionDistinct,Deduplication,TESTED,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-federation-correctness.md
-REQ-FED-UNION-DISTINCT-001,FederationUnionDistinct,Deduplication,TESTED,,,distributed,2026-04-01,tests/test_federation_merge_correctness.zig
 REQ-FEDERATION-INDEX-REC-001,FederationIndexRecommendations,Index,TESTED,,,distributed,2026-01-25,src/server/index_optimizer.zig
 REQ-FEDERATION-QUERY-001,Federation,FederatedQuery,TESTED,,,federation,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-FINAL-001,FinalSort,SortExecution,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
@@ -1350,6 +1321,7 @@ REQ-GQL-024,FederationLatencyAggregates,VarianceEnvelope,BENCHED,,,federation,20
 REQ-GQL-024,FederationMismatchFlag,Federation,TESTED,,,federation,2025-09-23,src/distributed/federation.zig
 REQ-GQL-024,FederationMismatchFlag,Federation,TESTED,,,federation,2025-09-23,src/distributed/federation.zig
 REQ-GQL-024,FederationMismatchFlag,Federation,TESTED,,,federation,2025-09-23,src/distributed/federation_flag.zig
+REQ-GQL-024,FederationMismatchFlag,Federation,TESTED,,,federation,2025-09-23,src/distributed/federation_root.zig
 REQ-GQL-024,FederationMismatchFlag,Federation,TESTED,,,federation,2025-09-23,tests/e2e_federation_mismatch_flag.zig
 REQ-GQL-024,FederationMismatchFlag,LatencyAggregateArchive,TESTED,,,federation,2025-09-26,src/tools/fed_latency_aggregate.zig
 REQ-GQL-024,FederationMismatchFlag,LatencyAggregateGovernanceSummary,TESTED,,,federation,2025-09-26,src/tools/fed_latency_governance.zig
@@ -2483,6 +2455,7 @@ REQ-GRAPH-META-001,GraphMetadataPersistence,AddGraph,EXEMPT,,,catalog,2026-03-29
 REQ-GRAPH-META-002,GraphMetadataPersistence,RemoveGraph,EXEMPT,,,catalog,2026-01-09,src/schema/catalog.zig
 REQ-GRAPH-META-003,GraphMetadataPersistence,GraphExists,EXEMPT,,,catalog,2026-01-09,src/schema/catalog.zig
 REQ-GRAPH-PERSIST-005,NamedGraphPersistence,CatalogTests,TESTED,,,schema,2026-01-29,src/schema/catalog.zig
+REQ-GRAPH-STORAGE-CALL-001,ProcedureAccessClassification,Execution,IMPL,,,execution,2026-04-01,src/execution/procedure_access.zig
 REQ-GRAPH-TRAVERSE-001,Graph,GraphTraversal,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-GRAPH-TYPE-REGISTRY-001,GraphTypeRegistry,TypeDefinition,EXEMPT,,,catalog,2026-01-10,src/server/server_state.zig
 REQ-GRAPH-TYPE-REGISTRY-001,GraphTypeRegistry,TypeManagement,EXEMPT,,,catalog,2026-01-10,src/server/server_state.zig
@@ -3513,7 +3486,6 @@ REQ-S3-BACKUP-001,S3 Cloud Backup,Unit,TESTED,,,storage,2025-10-05,tests/test_s3
 REQ-SEC-ABAC-001,Security,ABAC,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-ACCESS-001,Security,AccessControl,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-SEC-ACCESS-CTRL-001,Security,AccessControl,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
-REQ-SEC-ATOMIC-WRITE-001,Atomic Raft File Write,Persistence,TESTED,,,security,2026-04-01,src/distributed/raft_persistent.zig
 REQ-SEC-AUDIT-LOG-001,Security,AuditLog,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-AUDIT-TRAIL-001,Security,AuditTrail,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-AUTH-TOKEN-001,Security,AuthToken,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
@@ -3527,10 +3499,8 @@ REQ-SEC-INPUT-VAL-001,Security,InputValidation,TESTED,,,security,2026-01-16,test
 REQ-SEC-KMS-001,Security,KMS,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-MFA-001,Security,MFA,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-NETWORK-001,Security,NetworkSecurity,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
-REQ-SEC-NONCE-001,Nonce Replay Protection,NonceTracker,IMPL,,,security,2026-04-01,src/distributed/nonce_tracker.zig
 REQ-SEC-PERMISSION-CHECK-001,Security,PermissionCheck,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-POLICY-EVAL-001,Security,PolicyEvaluation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
-REQ-SEC-RAFT-ATOMIC-001,Atomic Raft State Persistence,TOCTOU,IMPL,,,security,2026-04-01,docs/superpowers/plans/2026-04-01-security-hardening.md
 REQ-SEC-RATE-LIMIT-001,AuthRateLimiting,PerIPRateLimit,TESTED,,,security,2026-03-26,src/server/auth_rate_limiter.zig
 REQ-SEC-RATE-LIMIT-002,AuthRateLimiting,PeerIPExtraction,IMPL,,,transport,2026-03-26,src/transport/quic.zig
 REQ-SEC-RATE-LIMIT-003,AuthRateLimiting,GlobalInstance,IMPL,,,security,2026-03-26,src/server/quic_connection_handler.zig
@@ -3539,8 +3509,6 @@ REQ-SEC-RATE-LIMIT-005,AuthRateLimiting,PeerIPExtraction,IMPL,,,security,2026-03
 REQ-SEC-RATE-LIMIT-006,AuthRateLimiting,HelloCheck,IMPL,,,security,2026-03-26,src/server/quic_connection_handler.zig
 REQ-SEC-RATE-LIMIT-007,AuthRateLimiting,ServerInit,IMPL,,,security,2026-03-26,src/server/main.zig
 REQ-SEC-RBAC-001,Security,RBAC,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
-REQ-SEC-REPLAY-001,Replay Protection,NonceTracker,IMPL,,,security,2026-04-01,docs/superpowers/plans/2026-04-01-security-hardening.md
-REQ-SEC-RLS-FEDERATION-001,RLS Federation Filter,PostMergeFilter,IMPL,,,security,2026-04-01,docs/superpowers/plans/2026-04-01-security-hardening.md
 REQ-SEC-RLS-POLICY-001,Security,RLSPolicy,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,src/server/rls_filter.zig
 REQ-SEC-RLS-WIRE-002,RLS Query Enforcement,QUICImport,IMPL,,,security,2026-03-26,src/server/quic_connection_handler.zig
@@ -3551,7 +3519,6 @@ REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026
 REQ-SEC-SESSION-MGT-001,Security,SessionManagement,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-SESSION-TIMEOUT-001,Security,SessionTimeout,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-TDE-001,Security,TDE,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
-REQ-SEC-TENANT-FED-001,Federation Tenant Propagation,HelloRequest,TESTED,,,security,2026-04-01,src/distributed/test_federation_auth.zig
 REQ-SEC-TENANT-ISO-001,Security,TenantIsolation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-TXN-001,Security,TransactionSecurity,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-SECURITY-001,Security,AuthValidation,TESTED,,,security,2026-01-15,tests/test_gap_0193_final_batch.zig
@@ -3621,7 +3588,7 @@ REQ-SESSION-SECURITY-002,SessionSecurity,SessionTimeout,TESTED,,,security,2026-0
 REQ-SESSION-SECURITY-003,SessionSecurity,SessionIsolation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-SET-RETURN-FIX-001,GQLSetOperations,ReturnFix,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig
 REQ-SET-RETURN-FIX-001,SetReturnFix,NoReturnClause,TESTED,,,engine,2025-12-23,src/execution/match_operations.zig
-REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,IMPL,,,distributed,2026-04-01,src/distributed/query_coordinator.zig
+REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,EXEMPT,,,distributed,2026-01-09,src/distributed/query_coordinator.zig
 REQ-SHELL-AUTH-001,ShellAuthRequired,HelloAuthCheck,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
 REQ-SHELL-AUTH-002,ShellAuthCredentials,OptionsFields,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
 REQ-SHELL-AUTH-003,ShellAuthHandshake,HelloWithCredentials,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
@@ -4041,7 +4008,6 @@ REQ-TXN-UNDO-018,TransactionUndoLog,ExecuteCreateUndoLog,TESTED,,,engine,2026-01
 REQ-TXN-UNDO-018,TransactionUndoLog,UndoCheckpoint,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-TXN-UNDO-019,TransactionUndoLog,SavepointSupport,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-TXN-UNDO-020,TransactionUndoLog,NestedTransaction,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
-REQ-TXN-UNDO-020,TransactionUndoLog,RollbackUseGraphStore,TESTED,,,engine,2025-12-23,src/txn_undo_log.zig
 REQ-TXN-UNDO-020,TransactionUndoLog,RollbackUseGraphStore,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-TXN-UNDO-020,TransactionUndoLog,RollbackUseGraphStore,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-TXN-UNDO-021,TransactionUndoLog,ConcurrentTransactions,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
