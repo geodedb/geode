@@ -707,7 +707,7 @@ pub fn freePlan(alloc: std.mem.Allocator, plan: *const MigrationPlan) void {
 
 // ------------------ Resume Token Data Migration ------------------
 
-var resume_slots: [8]ResumeState = .{.{ .token = "", .total_batches = 0, .completed_batches = 0, .done = true }} ** 8;
+var resume_slots: [8]ResumeState = [_]ResumeState{.{ .token = "", .total_batches = 0, .completed_batches = 0, .done = true }} ** 8;
 var resume_slots_len: usize = 0;
 
 fn getOrInitResume(alloc: std.mem.Allocator, token: []const u8) MigrationError!*ResumeState {
@@ -1410,4 +1410,71 @@ test "metricsSnapshot returns ledger metrics plus lock steal count" {
     migration_mutex.lock();
     lock_steal_count = 0;
     migration_mutex.unlock();
+}
+
+test "acquireLock serializes concurrent access" {
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+
+    var acquired_count = std.atomic.Value(u32).init(0);
+
+    const thread_fn = struct {
+        fn run(count: *std.atomic.Value(u32)) void {
+            const result = acquireLock(std.testing.allocator, 60_000);
+            if (result) |_| {
+                _ = count.fetchAdd(1, .monotonic);
+            } else |_| {}
+        }
+    }.run;
+
+    var threads: [4]std.Thread = undefined;
+    for (&threads) |*t| {
+        t.* = try std.Thread.spawn(.{}, thread_fn, .{&acquired_count});
+    }
+    for (threads) |t| t.join();
+
+    try std.testing.expectEqual(@as(u32, 1), acquired_count.load(.monotonic));
+
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+}
+
+test "resumeDataMigration advances batches to completion" {
+    const alloc = std.testing.allocator;
+    defer resetResumeSlots(alloc);
+
+    const s1 = try resumeDataMigration(alloc, "token-1");
+    try std.testing.expectEqual(@as(u32, 1), s1.completed_batches);
+    try std.testing.expectEqual(@as(u32, 5), s1.total_batches);
+    try std.testing.expect(!s1.done);
+
+    _ = try resumeDataMigration(alloc, "token-1");
+    _ = try resumeDataMigration(alloc, "token-1");
+    _ = try resumeDataMigration(alloc, "token-1");
+    const s5 = try resumeDataMigration(alloc, "token-1");
+    try std.testing.expectEqual(@as(u32, 5), s5.completed_batches);
+    try std.testing.expect(s5.done);
+
+    const s6 = try resumeDataMigration(alloc, "token-1");
+    try std.testing.expectEqual(@as(u32, 5), s6.completed_batches);
+    try std.testing.expect(s6.done);
+}
+
+test "resumeDataMigration returns ResumeSlotsFull when all 8 slots used" {
+    const alloc = std.testing.allocator;
+    defer resetResumeSlots(alloc);
+
+    var i: usize = 0;
+    while (i < 8) : (i += 1) {
+        var buf: [16]u8 = undefined;
+        const token = std.fmt.bufPrint(&buf, "token-{d}", .{i}) catch unreachable;
+        _ = try resumeDataMigration(alloc, token);
+    }
+
+    const result = resumeDataMigration(alloc, "token-overflow");
+    try std.testing.expectError(error.ResumeSlotsFull, result);
 }
