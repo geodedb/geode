@@ -116,6 +116,7 @@ pub const planner_pipeline = @import("planner/pipeline.zig");
 pub const temporal = @import("temporal.zig");
 // Query analysis helpers (EXPLAIN/PROFILE traits)
 pub const query_traits = @import("query/query_traits.zig");
+pub const planned_read_runtime = @import("execution/planned_read_runtime.zig");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");

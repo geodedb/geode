@@ -33,6 +33,7 @@ const allocateColumnStrings = execution.allocateColumnStrings;
 
 // Import for unique column name generation
 const match_operations = @import("match_operations.zig");
+const planned_read_runtime = @import("planned_read_runtime.zig");
 const return_and_sorting = @import("return_and_sorting.zig");
 const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 
@@ -1596,6 +1597,10 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     const is_chaining_return = if (q.with_clause) |wc| q.ret.items.ptr == wc.items.ptr and q.ret.items.len == wc.items.len else false;
     if (!is_chaining_return) {
         try validateGroupBy(q.ret, q.group_by);
+    }
+
+    if (try planned_read_runtime.executeIfSupported(allocator, &q, context, param_names.items, param_values.items)) |planned_result| {
+        return planned_result;
     }
 
     // Check if there's BOTH a MATCH and CREATE pattern (MATCH ... CREATE)

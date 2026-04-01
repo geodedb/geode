@@ -423,6 +423,81 @@ pub const ExecutionError = error{
     GraphNotFound,
 };
 
+pub const OwnedGraphEntities = struct {
+    allocator: std.mem.Allocator,
+    nodes: std.ArrayList(*graph_store.Node),
+    edges: std.ArrayList(*graph_store.Edge),
+
+    pub fn init(allocator: std.mem.Allocator) !*OwnedGraphEntities {
+        const self = try allocator.create(OwnedGraphEntities);
+        self.* = .{
+            .allocator = allocator,
+            .nodes = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0),
+            .edges = try std.ArrayList(*graph_store.Edge).initCapacity(allocator, 0),
+        };
+        return self;
+    }
+
+    pub fn trackNode(self: *OwnedGraphEntities, node: *graph_store.Node) !void {
+        try self.nodes.append(self.allocator, node);
+    }
+
+    pub fn trackEdge(self: *OwnedGraphEntities, edge: *graph_store.Edge) !void {
+        try self.edges.append(self.allocator, edge);
+    }
+
+    pub fn deinit(self: *OwnedGraphEntities) void {
+        for (self.nodes.items) |node| {
+            destroyOwnedNode(self.allocator, node);
+        }
+        self.nodes.deinit(self.allocator);
+
+        for (self.edges.items) |edge| {
+            destroyOwnedEdge(self.allocator, edge);
+        }
+        self.edges.deinit(self.allocator);
+
+        self.allocator.destroy(self);
+    }
+};
+
+fn freeOwnedPropertyValue(allocator: std.mem.Allocator, value: graph_store.PropertyValue) void {
+    switch (value) {
+        .String => |text| allocator.free(text),
+        else => {},
+    }
+}
+
+pub fn destroyOwnedNode(allocator: std.mem.Allocator, node: *graph_store.Node) void {
+    for (node.labels) |label| {
+        allocator.free(label);
+    }
+    allocator.free(node.labels);
+
+    var iter = node.properties.iterator();
+    while (iter.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        freeOwnedPropertyValue(allocator, entry.value_ptr.*);
+    }
+    node.properties.deinit();
+
+    allocator.free(node.graph_name);
+    allocator.destroy(node);
+}
+
+pub fn destroyOwnedEdge(allocator: std.mem.Allocator, edge: *graph_store.Edge) void {
+    var iter = edge.properties.iterator();
+    while (iter.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        freeOwnedPropertyValue(allocator, entry.value_ptr.*);
+    }
+    edge.properties.deinit();
+
+    allocator.free(edge.label);
+    allocator.free(edge.graph_name);
+    allocator.destroy(edge);
+}
+
 pub const ExecutionResult = struct {
     columns: [][]const u8,
     rows: [][]Value,
@@ -430,6 +505,7 @@ pub const ExecutionResult = struct {
     owns_value_memory: bool = false, // Set to true when values were duplicated and need freeing
     // Variable bindings from CREATE patterns (for passing to UNION parts)
     variable_bindings: ?*std.StringHashMap(u64) = null,
+    owned_graph_entities: ?*OwnedGraphEntities = null,
     // PERF: PHASE5_COLUMN_BATCH_ALLOC - Batch column string allocation optimization
     // CANARY: REQ=REQ-PERF-PHASE5-001; FEATURE="ColumnOptimization"; ASPECT=BATCH_ALLOC; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
     column_buffer: ?[]u8 = null, // Single buffer for all column strings (reduces N allocations to 1)
@@ -470,6 +546,10 @@ pub const ExecutionResult = struct {
         if (self.variable_bindings) |bindings| {
             bindings.deinit();
             allocator.destroy(bindings);
+        }
+
+        if (self.owned_graph_entities) |owned| {
+            owned.deinit();
         }
     }
 

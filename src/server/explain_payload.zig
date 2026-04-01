@@ -1,4 +1,5 @@
 const std = @import("std");
+const planned_read_runtime = @import("../execution/planned_read_runtime.zig");
 const cost_seed = @import("../planner/cost_seed.zig");
 const query_traits = @import("../query/query_traits.zig");
 const schema = @import("schema");
@@ -80,6 +81,45 @@ pub fn buildExplainJson(
     var payload = try buildExplainPayload(allocator, traits, union_part_count, calibrated);
     defer payload.deinit(allocator);
     return try explainPayloadToJson(allocator, payload);
+}
+
+pub fn buildExplainPayloadFromPlan(
+    allocator: std.mem.Allocator,
+    plan: planned_read_runtime.Plan,
+) !schema.ExplainPayload {
+    var op_list = std.ArrayList(schema.ExplainOp).initCapacity(allocator, plan.ops.len) catch return error.OutOfMemory;
+    errdefer {
+        for (op_list.items) |*item| item.deinit(allocator);
+        op_list.deinit(allocator);
+    }
+
+    for (plan.ops, 0..) |op, idx| {
+        try op_list.append(allocator, .{
+            .idx = @intCast(idx),
+            .kind = try allocator.dupe(u8, plannedOpName(op.kind)),
+            .est_rows = @intCast(@min(op.est_rows, @as(u64, @intCast(std.math.maxInt(i64))))),
+            .cost = 0,
+        });
+    }
+
+    return schema.ExplainPayload{
+        .schema = try allocator.dupe(u8, "planned_explain.v1"),
+        .ops = op_list,
+        .totals = .{
+            .est_rows = if (plan.ops.len > 0) @intCast(@min(plan.ops[0].est_rows, @as(u64, @intCast(std.math.maxInt(i64))))) else 0,
+            .cost = 0,
+        },
+        .properties = .{
+            .ordered = planHasOp(plan.ops, .Sort),
+            .limit = 0,
+            .offset = 0,
+            .distinct = planHasOp(plan.ops, .Distinct),
+            .union_mode = try allocator.dupe(u8, ""),
+            .union_part_count = 0,
+        },
+        .calibration = null,
+        .profile_version = 2,
+    };
 }
 
 pub fn explainPayloadToJson(allocator: std.mem.Allocator, payload: schema.ExplainPayload) ![]u8 {
@@ -201,4 +241,28 @@ fn unionModeToString(mode: query_traits.UnionMode) []const u8 {
         .except => "EXCEPT",
         .none => "NONE",
     };
+}
+
+fn plannedOpName(kind: planned_read_runtime.OpKind) []const u8 {
+    return switch (kind) {
+        .ConstProjection => "ConstProjection",
+        .AllNodesScan => "AllNodesScan",
+        .LabelScan => "LabelScan",
+        .ExpandOut => "ExpandOut",
+        .ExpandIn => "ExpandIn",
+        .ExpandEither => "ExpandEither",
+        .Filter => "Filter",
+        .Aggregate => "Aggregate",
+        .Project => "Project",
+        .Distinct => "Distinct",
+        .Limit => "Limit",
+        .Sort => "Sort",
+    };
+}
+
+fn planHasOp(ops: []const planned_read_runtime.PlanOp, kind: planned_read_runtime.OpKind) bool {
+    for (ops) |op| {
+        if (op.kind == kind) return true;
+    }
+    return false;
 }

@@ -3,6 +3,7 @@ const geode = @import("geode");
 
 const execution = geode.execution;
 const graph_store = geode.graph_store;
+const Value = geode.value_types.Value;
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="MATCHExecutorBasic"; ASPECT=Unit; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_MatchSingleHop; OWNER=engine; UPDATED=2025-09-24
 
@@ -49,6 +50,20 @@ const Harness = struct {
     }
 };
 
+fn expectValueStr(value: Value, expected: []const u8) !void {
+    switch (value) {
+        .Str => |actual| try std.testing.expectEqualStrings(expected, actual),
+        else => return error.UnexpectedValueTag,
+    }
+}
+
+fn expectValueInt(value: Value, expected: i64) !void {
+    switch (value) {
+        .Int => |actual| try std.testing.expectEqual(expected, actual),
+        else => return error.UnexpectedValueTag,
+    }
+}
+
 test "TestCANARY_REQ_GQL_017_MatchSingleHop" {
     const allocator = std.testing.allocator;
     var h = try Harness.init(allocator);
@@ -70,6 +85,116 @@ test "TestCANARY_REQ_GQL_017_MatchSingleHop" {
     try std.testing.expect(res.rows[0].len == 2);
     try std.testing.expect(std.meta.activeTag(res.rows[0][0]) == .Node);
     try std.testing.expect(std.meta.activeTag(res.rows[0][1]) == .Node);
+}
+
+// CANARY: REQ=REQ-PLANNER-EXEC-001; FEATURE="PlannedReadRuntime"; ASPECT=Execution; STATUS=TESTED; TEST=tests/unit_match_executor.zig; OWNER=engine; UPDATED=2026-04-01
+test "TestCANARY_REQ_PLANNER_EXEC_001_PlannedReadRuntimeExecutesSingleHop" {
+    const allocator = std.testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    const store = graph_store.getGlobalStore(allocator);
+    const alice = try store.createNode(&.{ "Person" });
+    try store.setNodeProperty(alice, "name", .{ .String = "Alice" });
+    try store.setNodeProperty(alice, "age", .{ .Int = 30 });
+    const bob = try store.createNode(&.{ "Person" });
+    try store.setNodeProperty(bob, "name", .{ .String = "Bob" });
+    try store.setNodeProperty(bob, "age", .{ .Int = 41 });
+    _ = try store.createEdge(alice, bob, "KNOWS");
+
+    var res = try h.exec("MATCH (a:Person {age: 30})-[:KNOWS]->(b:Person) RETURN b.name AS name ORDER BY name LIMIT 1");
+    defer res.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), res.rows.len);
+    try expectValueStr(res.rows[0][0], "Bob");
+}
+
+// CANARY: REQ=REQ-PLANNER-EXEC-002; FEATURE="PlannedReadRuntime"; ASPECT=ExplainProfile; STATUS=TESTED; TEST=tests/unit_match_executor.zig; OWNER=engine; UPDATED=2026-04-01
+test "TestCANARY_REQ_PLANNER_EXEC_002_ExplainAndProfileUseConcretePlan" {
+    const allocator = std.testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    const store = graph_store.getGlobalStore(allocator);
+    const alice = try store.createNode(&.{ "Person" });
+    try store.setNodeProperty(alice, "age", .{ .Int = 30 });
+    const bob = try store.createNode(&.{ "Person" });
+    try store.setNodeProperty(bob, "age", .{ .Int = 35 });
+    _ = try store.createEdge(alice, bob, "KNOWS");
+
+    var explain = try h.exec("EXPLAIN MATCH (a:Person {age: 30})-[:KNOWS]->(b:Person) RETURN b");
+    defer explain.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), explain.rows.len);
+    try expectValueStr(explain.rows[0][0], "LabelScan");
+    try expectValueStr(explain.rows[1][0], "ExpandOut");
+    try expectValueStr(explain.rows[2][0], "Project");
+
+    var profile = try h.exec("PROFILE MATCH (a:Person {age: 30})-[:KNOWS]->(b:Person) RETURN b.name AS name LIMIT 1");
+    defer profile.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 5), profile.rows.len);
+    try expectValueStr(profile.rows[0][1], "planned_query_profile");
+    try expectValueInt(profile.rows[1][1], 1);
+    try expectValueInt(profile.rows[4][1], 4);
+}
+
+// CANARY: REQ=REQ-PLANNER-EXEC-003; FEATURE="PlannedReadRuntime"; ASPECT=WithAggregation; STATUS=TESTED; TEST=tests/unit_match_executor.zig; OWNER=engine; UPDATED=2026-04-01
+test "TestCANARY_REQ_PLANNER_EXEC_003_PlannedReadRuntimeSupportsWithAggregation" {
+    const allocator = std.testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    const store = graph_store.getGlobalStore(allocator);
+    const alice = try store.createNode(&.{ "Person" });
+    try store.setNodeProperty(alice, "name", .{ .String = "Alice" });
+    const bob = try store.createNode(&.{ "Person" });
+    try store.setNodeProperty(bob, "name", .{ .String = "Bob" });
+    const carol = try store.createNode(&.{ "Person" });
+    try store.setNodeProperty(carol, "name", .{ .String = "Carol" });
+    const dana = try store.createNode(&.{ "Person" });
+    try store.setNodeProperty(dana, "name", .{ .String = "Dana" });
+
+    _ = try store.createEdge(alice, bob, "KNOWS");
+    _ = try store.createEdge(alice, carol, "KNOWS");
+    _ = try store.createEdge(dana, bob, "KNOWS");
+
+    var res = try h.exec(
+        "MATCH (p:Person)-[:KNOWS]->(f:Person) " ++
+            "WITH p.name AS person, count(f) AS friends " ++
+            "WHERE friends >= 2 " ++
+            "RETURN person, friends",
+    );
+    defer res.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), res.rows.len);
+    try expectValueStr(res.rows[0][0], "Alice");
+    try expectValueInt(res.rows[0][1], 2);
+}
+
+// CANARY: REQ=REQ-PLANNER-EXEC-004; FEATURE="PlannedReadRuntime"; ASPECT=WithDistinct; STATUS=TESTED; TEST=tests/unit_match_executor.zig; OWNER=engine; UPDATED=2026-04-01
+test "TestCANARY_REQ_PLANNER_EXEC_004_PlannedReadRuntimeSupportsWithDistinct" {
+    const allocator = std.testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    const store = graph_store.getGlobalStore(allocator);
+    const alice = try store.createNode(&.{ "Person" });
+    const dana = try store.createNode(&.{ "Person" });
+    const bob = try store.createNode(&.{ "Person" });
+    try store.setNodeProperty(bob, "name", .{ .String = "Bob" });
+    _ = try store.createEdge(alice, bob, "KNOWS");
+    _ = try store.createEdge(dana, bob, "KNOWS");
+
+    var res = try h.exec(
+        "MATCH (p:Person)-[:KNOWS]->(f:Person) " ++
+            "WITH DISTINCT f.name AS name " ++
+            "RETURN name",
+    );
+    defer res.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), res.rows.len);
+    try expectValueStr(res.rows[0][0], "Bob");
 }
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=Unit; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_InvalidHopBounds; OWNER=engine; UPDATED=2025-09-24

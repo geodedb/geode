@@ -21,6 +21,7 @@ const BackupConfig = @import("storage/backup").BackupConfig;
 const txn_undo_log = geode.txn_undo_log;
 const diagnostics = geode.diagnostics;
 const user_mgmt = geode.user_management;
+const planned_read_runtime = geode.planned_read_runtime;
 // Issue #444: Import AST cache to wire into parse hot path
 const query_ast_cache = @import("query_ast_cache.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
@@ -1771,12 +1772,24 @@ fn handleClientMessage(
 
             switch (analysis.kind) {
                 .explain => {
-                    const explain_msg = try explain_payload.buildExplainPayload(
-                        gpa,
-                        traits,
-                        analysis.union_part_count,
-                        normalized.explain_calibrated,
-                    );
+                    const explain_msg = blk: {
+                        if (analysis.target) |target| {
+                            if (target.* == .Query) {
+                                var planned_query = target.Query;
+                                if (try planned_read_runtime.buildPlanIfSupported(gpa, &planned_query, exec_context)) |plan| {
+                                    var owned_plan = plan;
+                                    defer owned_plan.deinit(gpa);
+                                    break :blk try explain_payload.buildExplainPayloadFromPlan(gpa, owned_plan);
+                                }
+                            }
+                        }
+                        break :blk try explain_payload.buildExplainPayload(
+                            gpa,
+                            traits,
+                            analysis.union_part_count,
+                            normalized.explain_calibrated,
+                        );
+                    };
 
                     const status = try proto_util.buildStatus(gpa, "00000", flags.items);
                     const resp = schema.ExecutionResponse{
@@ -1790,6 +1803,65 @@ fn handleClientMessage(
                         try sendExecuteError(gpa, stream, "0A000", "PROFILE target missing", &.{}, &.{});
                         return;
                     };
+
+                    if (target_stmt.* == .Query) {
+                        var planned_query = target_stmt.Query;
+                        if (try planned_read_runtime.executeProfiledIfSupported(
+                            gpa,
+                            &planned_query,
+                            exec_context,
+                            bindings.names,
+                            bindings.values,
+                            true,
+                        )) |planned| {
+                            var owned_planned = planned;
+                            defer owned_planned.deinitMetadata(gpa);
+                            defer owned_planned.result.deinit(gpa);
+
+                            for (flags.items) |flag| {
+                                try appendFlagToResult(gpa, &owned_planned.result, flag);
+                            }
+
+                            const store = graph_store.getGlobalStore(gpa);
+                            const profile_node_count: u64 = @intCast(store.getNodeCount());
+                            const profile_edge_count: u64 = @intCast(store.getEdgeCount());
+                            const profile_is_dirty = store.isDirty();
+
+                            if (needs_store_lock) {
+                                if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
+                                lock_released = true;
+                            }
+
+                            if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
+                                if (state.authenticated_user) |auth_user| {
+                                    const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                                    _ = rls_filter.applyRLSFilter(gpa, &owned_planned.result, rls_engine, auth_user, rls_graph);
+                                }
+                            }
+
+                            const profile_msg = try profile_payload.buildProfilePayloadFromTrace(gpa, owned_planned.plan, owned_planned.trace, .{
+                                .compact = compact_profile,
+                                .include_mem_curve = memcurve_profile,
+                                .disable_estimates = disable_estimates,
+                                .spill_threshold = state.query_mem_limit_bytes,
+                                .committed_txns = state.global_commit_ts,
+                                .graph_store_nodes = profile_node_count,
+                                .graph_store_edges = profile_edge_count,
+                                .graph_store_dirty = profile_is_dirty,
+                                .flagger_findings = owned_planned.result.flags.items,
+                                .union_part_count = analysis.union_part_count,
+                            });
+
+                            const status = try proto_util.buildStatus(gpa, "00000", owned_planned.result.flags.items);
+                            const resp = schema.ExecutionResponse{
+                                .status = status,
+                                .payload = .{ .profile = profile_msg },
+                            };
+                            try sendQuicMessage(gpa, stream, .{ .execute = resp });
+                            return;
+                        }
+                    }
+
                     var exec_result = execution.executeStatementWithContext(gpa, target_stmt.*, exec_context) catch |err| {
                         const info = proto_util.mapError(err);
                         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
