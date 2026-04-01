@@ -5,14 +5,14 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 
 ## Summary
 
-- **Total open gaps:** 26
-- **Critical:** 3 (GAP-0256, GAP-0279, GAP-0280)
-- **High:** 10 (GAP-0255, GAP-0275, GAP-0281, GAP-0282, GAP-0283, GAP-0284, GAP-0285, GAP-0286, GAP-0287, GAP-0288)
-- **Medium:** 9 (GAP-0246 blocked, GAP-0247 blocked, GAP-0289, GAP-0290, GAP-0291, GAP-0292, GAP-0293, GAP-0294, GAP-0295)
+- **Total open gaps:** 9
+- **Critical:** 1 (GAP-0256 blocked)
+- **High:** 2 (GAP-0255, GAP-0275)
+- **Medium:** 5 (GAP-0246 blocked, GAP-0247 blocked, GAP-0287, GAP-0289 won't-do, GAP-0290 won't-do)
 - **Low:** 0
 - **Blocked (external dependency):** 3 (GAP-0246, GAP-0247, GAP-0256)
-- **Won't Do:** 1 (GAP-0258)
-- **Opened this session (2026-04-01):** GAP-0279 through GAP-0295 (17 multi-tenancy gaps)
+- **Won't Do:** 3 (GAP-0258, GAP-0289, GAP-0290)
+- **Closed this session (2026-04-01):** GAP-0279, GAP-0280, GAP-0281, GAP-0282, GAP-0283, GAP-0284, GAP-0285, GAP-0286, GAP-0288, GAP-0291, GAP-0292, GAP-0293, GAP-0294, GAP-0295 (14 gaps closed)
 - **Opened (2026-03-30):** GAP-0273, GAP-0274, GAP-0275, GAP-0276, GAP-0277, GAP-0278
 - **Closed (2026-03-30):** GAP-0270, GAP-0271, GAP-0272, GAP-0273, GAP-0274, GAP-0276, GAP-0277, GAP-0278
 - **Closed (2026-03-28):** GAP-0264, GAP-0266, GAP-0261, GAP-0263, GAP-0265, GAP-0267, GAP-0268, GAP-0269, GAP-0262
@@ -22,7 +22,7 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 
 > Full report: [MULTI_TENANCY_AUDIT_REPORT.md](MULTI_TENANCY_AUDIT_REPORT.md)
 
-### GAP-0279: Cross-tenant data isolation NOT enforced (CRITICAL)
+### GAP-0279: Cross-tenant data isolation NOT enforced — **CLOSED (2026-04-01)**
 
 - **Category:** Security / Multi-Tenancy
 - **Severity:** Critical (P0)
@@ -31,7 +31,7 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 - **Impact:** All sessions share one GraphStore. No isolation boundary between tenants.
 - **Fix:** Per-tenant graph namespacing or per-tenant GraphStore instances
 
-### GAP-0280: RLS expression engine is dead code (CRITICAL)
+### GAP-0280: RLS expression engine is dead code — **CLOSED (2026-04-01)**
 
 - **Category:** Security / RLS
 - **Severity:** Critical (P0)
@@ -54,7 +54,7 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 - **Evidence:** `src/security/audit.zig:507,535` — `.tenant_id = null`; AuditLogger orphaned after init
 - **Impact:** No per-tenant audit segregation
 
-### GAP-0283: GraphRBACPolicy never instantiated in production (HIGH)
+### GAP-0283: GraphRBACPolicy never instantiated in production — **CLOSED (2026-04-01)**
 
 - **Category:** Security / AuthZ
 - **Severity:** High (P1)
@@ -62,7 +62,7 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 - **Evidence:** `src/security/multi_graph_security.zig` — zero imports from production code
 - **Impact:** Graph-level authorization not enforced
 
-### GAP-0284: gRPC missing 6 security features QUIC has (HIGH)
+### GAP-0284: gRPC missing 6 security features QUIC has — **CLOSED (2026-04-01)**
 
 - **Category:** Security / Transport Parity
 - **Severity:** High (P1)
