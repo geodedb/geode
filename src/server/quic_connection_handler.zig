@@ -1460,15 +1460,6 @@ fn handleClientMessage(
                         } else !user_mgmt.isAuthEnabled(); // No auth = allow
 
                         if (can_create) {
-                            // Auto-create the graph
-                            cat.addGraph(requested_graph) catch |err| {
-                                if (err != error.GraphAlreadyExists) {
-                                    log.err("Failed to add graph to catalog", &.{
-                                        Attr.string("graph", requested_graph),
-                                        Attr.string("error", @errorName(err)),
-                                    });
-                                }
-                            };
                             _ = store.createGraph(requested_graph) catch |err| {
                                 log.err("Graph auto-creation failed", &.{
                                     Attr.string("graph", requested_graph),
@@ -1483,10 +1474,31 @@ fn handleClientMessage(
                                 try sendQuicMessage(gpa, stream, resp);
                                 return;
                             };
-                            // Persist UUID so graph survives restarts
-                            if (graph_store.GraphStore.getGraphUuid(requested_graph)) |uuid| {
-                                cat.updateGraphUuid(requested_graph, uuid);
-                            }
+                            const uuid = graph_store.GraphStore.getGraphUuid(requested_graph) orelse {
+                                const resp = schema.QuicServerMessage{ .hello = .{
+                                    .success = false,
+                                    .session_id = try gpa.dupe(u8, ""),
+                                    .error_message = try gpa.dupe(u8, "Graph created without persistent UUID"),
+                                    .capabilities = caps,
+                                } };
+                                try sendQuicMessage(gpa, stream, resp);
+                                return;
+                            };
+                            cat.addGraphWithUuid(requested_graph, uuid) catch |err| {
+                                store.dropGraph(requested_graph) catch {};
+                                log.err("Failed to persist auto-created graph in catalog", &.{
+                                    Attr.string("graph", requested_graph),
+                                    Attr.string("error", @errorName(err)),
+                                });
+                                const resp = schema.QuicServerMessage{ .hello = .{
+                                    .success = false,
+                                    .session_id = try gpa.dupe(u8, ""),
+                                    .error_message = try gpa.dupe(u8, "Failed to persist graph metadata"),
+                                    .capabilities = caps,
+                                } };
+                                try sendQuicMessage(gpa, stream, resp);
+                                return;
+                            };
 
                             if (state.exec_session) |*sess| {
                                 if (sess.graph) |old| gpa.free(old);

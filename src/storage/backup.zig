@@ -170,9 +170,8 @@ pub const BackupManager = struct {
         // Persist via adapter checkpoint (no-op for file-based — adapter owns storage).
         try self.store.saveToFile();
 
-        // Read per-graph storage layout (graph_registry.dat + graphs/*.dat).
-        // Falls back to legacy monolithic graph_store.dat if the per-graph directory
-        // layout is not present (migration path).
+        // Read the current per-graph storage layout (`graph_registry.dat` plus
+        // the recursive `graphs/<uuid>/...` tree).
         const data_dir = blk: {
             if (graph_store.getDataDirOverride()) |ov| {
                 break :blk try self.allocator.dupe(u8, ov);
@@ -184,13 +183,7 @@ pub const BackupManager = struct {
         };
         defer self.allocator.free(data_dir);
 
-        // Try per-graph archive first; fall back to legacy monolithic file.
-        const payload = readPerGraphStoragePayload(self.allocator, data_dir) catch |pg_err| blk: {
-            log.warn("Per-graph payload read failed, trying legacy path", &.{
-                Attr.string("error", @errorName(pg_err)),
-            });
-            break :blk try readGraphStorePayload(self.allocator);
-        };
+        const payload = try readPerGraphStoragePayload(self.allocator, data_dir);
         defer self.allocator.free(payload);
 
         const compressed = try compressData(payload, self.config.compression, self.allocator);
@@ -296,13 +289,16 @@ pub const BackupManager = struct {
 
         graph_store.setDataDirOverride(self.allocator, restore_dir);
 
-        // Check if this is a per-graph archive or legacy monolithic format.
         if (decompressed.len >= 8 and std.mem.eql(u8, decompressed[0..8], "GEODBAK1")) {
             try restorePerGraphPayload(self.allocator, restore_dir, decompressed);
+        } else {
+            return error.UnsupportedBackupFormat;
         }
-        // Legacy monolithic format backups are no longer supported for restore.
 
-        try self.store.loadFromFile();
+        const active_data_dir = if (graph_store.getDataDirOverride()) |ov| ov else self.store.data_dir;
+        if (active_data_dir.len > 0 and std.mem.eql(u8, active_data_dir, restore_dir)) {
+            try self.store.loadFromFile();
+        }
     }
 
     /// Apply retention policy and remove old backups.
@@ -401,12 +397,6 @@ fn generateBackupId() u64 {
     return rng.random().int(u64);
 }
 
-/// DEPRECATED: Legacy monolithic payload reader. Returns empty payload since
-/// graph_store.dat is no longer written. Callers should use readPerGraphStoragePayload.
-fn readGraphStorePayload(allocator: std.mem.Allocator) ![]u8 {
-    return try allocator.alloc(u8, 0);
-}
-
 /// Append a single file entry (name + data) into the archive buffer.
 fn appendFileEntry(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, file_path: []const u8, archive_name: []const u8) !void {
     const file = try std.fs.cwd().openFile(file_path, .{ .mode = .read_only });
@@ -422,8 +412,48 @@ fn appendFileEntry(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, fil
     try buffer.appendSlice(allocator, data);
 }
 
-/// Read all per-graph storage files (graph_registry.dat + graphs/*.dat) into
-/// a simple archive payload:
+fn appendDirectoryTree(
+    buffer: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    archive_prefix: []const u8,
+) !u32 {
+    var file_count: u32 = 0;
+
+    var dir = std.fs.cwd().openDir(root_path, .{ .iterate = true }) catch |err| {
+        if (err == error.FileNotFound) return 0;
+        return err;
+    };
+    defer dir.close();
+
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ root_path, entry.name });
+        defer allocator.free(full_path);
+
+        const archive_name = if (archive_prefix.len == 0)
+            try allocator.dupe(u8, entry.name)
+        else
+            try std.fmt.allocPrint(allocator, "{s}/{s}", .{ archive_prefix, entry.name });
+        defer allocator.free(archive_name);
+
+        switch (entry.kind) {
+            .file => {
+                try appendFileEntry(buffer, allocator, full_path, archive_name);
+                file_count += 1;
+            },
+            .directory => {
+                file_count += try appendDirectoryTree(buffer, allocator, full_path, archive_name);
+            },
+            else => {},
+        }
+    }
+
+    return file_count;
+}
+
+/// Read all per-graph storage files (`graph_registry.dat` plus the full
+/// recursive `graphs/<uuid>/...` tree) into a simple archive payload:
 ///   magic "GEODBAK1" (8 bytes) | version u32 | file_count u32 |
 ///   (name_len u32 | name [name_len]u8 | data_len u64 | data [data_len]u8)*
 // CANARY: REQ=REQ-BACKUP-PER-GRAPH-001; FEATURE="PerGraphBackup"; ASPECT=Storage; STATUS=TESTED; OWNER=storage; UPDATED=2026-03-16
@@ -451,35 +481,10 @@ fn readPerGraphStoragePayload(allocator: std.mem.Allocator, data_dir: []const u8
         file_count += 1;
     }
 
-    // Include all *.dat files from graphs/ subdirectory.
+    // Include the full graph-storage directory tree rooted at graphs/.
     const graphs_dir_path = try std.fmt.allocPrint(allocator, "{s}/graphs", .{data_dir});
     defer allocator.free(graphs_dir_path);
-
-    var graph_names: std.ArrayList([]u8) = .{};
-    defer {
-        for (graph_names.items) |name| allocator.free(name);
-        graph_names.deinit(allocator);
-    }
-
-    if (std.fs.cwd().openDir(graphs_dir_path, .{ .iterate = true })) |graphs_dir| {
-        var dir = graphs_dir;
-        defer dir.close();
-        var iter = dir.iterate();
-        while (try iter.next()) |entry| {
-            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".dat")) {
-                try graph_names.append(allocator, try allocator.dupe(u8, entry.name));
-            }
-        }
-    } else |_| {}
-
-    for (graph_names.items) |name| {
-        const full_path = try std.fmt.allocPrint(allocator, "{s}/graphs/{s}", .{ data_dir, name });
-        defer allocator.free(full_path);
-        const archive_name = try std.fmt.allocPrint(allocator, "graphs/{s}", .{name});
-        defer allocator.free(archive_name);
-        try appendFileEntry(&buffer, allocator, full_path, archive_name);
-        file_count += 1;
-    }
+    file_count += try appendDirectoryTree(&buffer, allocator, graphs_dir_path, "graphs");
 
     // Patch file_count into the header.
     const count_bytes = std.mem.toBytes(file_count);
@@ -489,7 +494,7 @@ fn readPerGraphStoragePayload(allocator: std.mem.Allocator, data_dir: []const u8
 }
 
 /// Restore a per-graph archive payload into restore_dir, recreating
-/// graph_registry.dat and graphs/*.dat files.
+/// `graph_registry.dat` and the recursive `graphs/<uuid>/...` tree.
 // CANARY: REQ=REQ-BACKUP-PER-GRAPH-002; FEATURE="PerGraphRestore"; ASPECT=Storage; STATUS=TESTED; OWNER=storage; UPDATED=2026-03-16
 fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8, payload: []const u8) !void {
     if (payload.len < 16) return error.InvalidBackupFile;

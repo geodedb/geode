@@ -18,6 +18,7 @@ const catalog = @import("catalog.zig");
 const fle_catalog = @import("fle_catalog.zig");
 const annotations = @import("annotations.zig");
 const constraint_manager = @import("constraint_manager.zig");
+const graph_store = @import("../graph_store.zig");
 
 // ============================================================================
 // Re-export core types for convenience
@@ -120,7 +121,11 @@ pub const SchemaManager = struct {
     ///
     /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-011; FEATURE="Graph Creation"; ASPECT=Graph; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn createGraph(self: *SchemaManager, graph_name: []const u8) !void {
-        try self.db_catalog.addGraph(graph_name);
+        const store = graph_store.getGlobalStore(self.allocator);
+        try store.createGraph(graph_name);
+        errdefer store.dropGraph(graph_name) catch {};
+        const uuid = graph_store.GraphStore.getGraphUuid(graph_name) orelse return error.GraphUuidUnavailable;
+        try self.db_catalog.addGraphWithUuid(graph_name, uuid);
     }
 
     /// Check if graph exists
