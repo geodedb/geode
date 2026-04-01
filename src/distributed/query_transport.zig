@@ -600,8 +600,9 @@ const Connection = struct {
         try self.quic_client.?.waitForHandshake(5);
         self.stream = try self.quic_client.?.getStream();
 
-        // HELLO handshake
-        const hello_req = schema.HelloRequest{
+        // HELLO handshake with cluster token authentication
+        const cluster_auth = @import("cluster_auth.zig");
+        const hello_req = cluster_auth.buildClusterHelloRequest(self.allocator) catch schema.HelloRequest{
             .username = "",
             .password = "",
             .tenant_id = null,
