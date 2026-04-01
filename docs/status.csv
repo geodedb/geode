@@ -842,7 +842,6 @@ REQ-FED-001,Federation,QueryFederation,TESTED,,,distributed,2026-01-16,tests/tes
 REQ-FED-QUIC-001,FederationQUICConnection,Connection,TESTED,,,federation,2026-01-10,src/distributed/federation.zig
 REQ-FED-TLS-001,Federation TLS,Security,TESTED,,,distributed,2026-01-13,src/distributed/federation.zig
 REQ-FED-UNION-DISTINCT-001,FederationUnionDistinct,Deduplication,TESTED,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-federation-correctness.md
-REQ-FED-UNION-DISTINCT-001,FederationUnionDistinct,Deduplication,IMPL,,,distributed,2026-04-01,src/distributed/federation.zig
 REQ-FED-UNION-DISTINCT-001,FederationUnionDistinct,Deduplication,TESTED,,,distributed,2026-04-01,tests/test_federation_merge_correctness.zig
 REQ-FEDERATION-INDEX-REC-001,FederationIndexRecommendations,Index,TESTED,,,distributed,2026-01-25,src/server/index_optimizer.zig
 REQ-FEDERATION-QUERY-001,Federation,FederatedQuery,TESTED,,,federation,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
@@ -3544,6 +3543,8 @@ REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026
 REQ-SEC-SESSION-MGT-001,Security,SessionManagement,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-SESSION-TIMEOUT-001,Security,SessionTimeout,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-TDE-001,Security,TDE,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
+REQ-SEC-TENANT-FED-001,Federation Tenant Propagation,HelloRequest,IMPL,,,security,2026-04-01,src/distributed/federation.zig
+REQ-SEC-TENANT-FED-001,Federation Tenant Propagation,HelloRequest,TESTED,,,security,2026-04-01,src/distributed/test_federation_auth.zig
 REQ-SEC-TENANT-ISO-001,Security,TenantIsolation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-TXN-001,Security,TransactionSecurity,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-SECURITY-001,Security,AuthValidation,TESTED,,,security,2026-01-15,tests/test_gap_0193_final_batch.zig
