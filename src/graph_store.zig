@@ -3445,6 +3445,11 @@ var global_arena: ?std.heap.ArenaAllocator = null;
 var initialized = false;
 var last_data_dir: ?[]u8 = null;
 
+/// Mutex protecting the re-initialization path in getGlobalStore.
+/// Without this, concurrent callers can race: one thread tears down the store
+/// while another reads a half-initialized global_store, yielding empty results.
+var g_init_mutex: std.Thread.Mutex = .{};
+
 /// GAP-0259/0260: RwLock replaces Mutex so query threads (shared readers) don't
 /// block each other — only the persistence thread takes an exclusive write lock.
 /// CANARY: REQ=REQ-GAP-0259-RWLOCK-001; FEATURE="AsyncPersistence"; ASPECT=RwLockMigration; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-13
@@ -3706,6 +3711,22 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
         }
     } else if (last_data_dir != null) {
         needs_reinit = true;
+    }
+
+    // Fast path: already initialized and no reinit needed — no lock required.
+    if (initialized and !needs_reinit) {
+        return &global_store.?;
+    }
+
+    // Slow path: acquire init mutex so concurrent threads cannot race during
+    // re-initialization (one tears down while another reads half-init state).
+    g_init_mutex.lock();
+    defer g_init_mutex.unlock();
+
+    // Double-check under lock: another thread may have completed init while
+    // we were waiting for the mutex.
+    if (initialized and !needs_reinit) {
+        return &global_store.?;
     }
 
     // Reinitialize if data dir changed or not initialized yet
