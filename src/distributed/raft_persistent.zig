@@ -78,7 +78,7 @@ pub const RaftNode = struct {
             .voted_for = null,
             .commit_index = 0,
             .last_applied = 0,
-            .cluster = .{ .members = std.ArrayList(Member).init(allocator) },
+            .cluster = .{ .members = std.ArrayList(Member).empty },
             .snapshot = null,
         };
 
@@ -138,6 +138,8 @@ pub const RaftNode = struct {
         } else |_| {}
     }
 
+    // SEC-D014: Atomic file write — write to temp file, fsync, then rename.
+    // This ensures that either the old or new file exists, never a partial write.
     fn savePersistentState(self: *RaftNode) !void {
         std.fs.cwd().makePath(self.storage_path) catch {};
         var dir = try std.fs.cwd().openDir(self.storage_path, .{});
@@ -146,8 +148,106 @@ pub const RaftNode = struct {
         const term_str = try std.fmt.allocPrint(self.allocator, "{d}", .{self.current_term});
         defer self.allocator.free(term_str);
 
-        const f = try dir.createFile("current_term", .{});
-        defer f.close();
-        try f.writeAll(term_str);
+        try atomicWriteFile(dir, "current_term", term_str);
+    }
+
+    /// Write `data` to `name` atomically via write-to-temp-then-rename.
+    fn atomicWriteFile(dir: std.fs.Dir, name: []const u8, data: []const u8) !void {
+        // Temp file name: original name + ".tmp" suffix.
+        var tmp_buf: [256]u8 = undefined;
+        const tmp_name = std.fmt.bufPrint(&tmp_buf, "{s}.tmp", .{name}) catch return error.FileNotFound;
+
+        // Write to temp file.
+        const f = try dir.createFile(tmp_name, .{});
+        errdefer {
+            f.close();
+            dir.deleteFile(tmp_name) catch {};
+        }
+        try f.writeAll(data);
+
+        // fsync to ensure data is durable on disk before rename.
+        try f.sync();
+        f.close();
+
+        // Atomic rename: replaces the target file in one operation.
+        try dir.rename(tmp_name, name);
     }
 };
+
+// ---- Tests ----
+// CANARY: REQ=REQ-SEC-ATOMIC-WRITE-001; FEATURE="Atomic Raft File Write"; ASPECT=Persistence; STATUS=TESTED; TEST=raft_persistent_atomic_write; OWNER=security; UPDATED=2026-04-01
+
+test "raft_persistent: atomic write creates file with correct content" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try RaftNode.atomicWriteFile(tmp.dir, "test_file", "hello123");
+
+    // Verify the file exists and has the correct content.
+    const f = try tmp.dir.openFile("test_file", .{});
+    defer f.close();
+    var buf: [64]u8 = undefined;
+    const n = try f.readAll(&buf);
+    try std.testing.expectEqualStrings("hello123", buf[0..n]);
+
+    // Verify that the temp file does NOT exist (it was renamed).
+    if (tmp.dir.openFile("test_file.tmp", .{})) |tf| {
+        tf.close();
+        return error.TestUnexpectedResult; // temp file should not exist
+    } else |err| {
+        try std.testing.expect(err == error.FileNotFound);
+    }
+}
+
+test "raft_persistent: atomic write overwrites existing file" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Write initial content.
+    try RaftNode.atomicWriteFile(tmp.dir, "state", "old_data");
+
+    // Overwrite with new content.
+    try RaftNode.atomicWriteFile(tmp.dir, "state", "new_data");
+
+    const f = try tmp.dir.openFile("state", .{});
+    defer f.close();
+    var buf: [64]u8 = undefined;
+    const n = try f.readAll(&buf);
+    try std.testing.expectEqualStrings("new_data", buf[0..n]);
+}
+
+test "raft_persistent: savePersistentState writes current_term atomically" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Build a path string for the RaftNode.
+    const path = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}",
+        .{&tmp.sub_path},
+    );
+    defer std.testing.allocator.free(path);
+
+    var node = (try RaftNode.raftOpen(std.testing.allocator, path));
+    node.current_term = 42;
+    try node.savePersistentState();
+
+    // Verify the file.
+    const f = try tmp.dir.openFile("current_term", .{});
+    defer f.close();
+    var buf: [64]u8 = undefined;
+    const n = try f.readAll(&buf);
+    try std.testing.expectEqualStrings("42", buf[0..n]);
+
+    // No temp file should remain.
+    if (tmp.dir.openFile("current_term.tmp", .{})) |tf| {
+        tf.close();
+        return error.TestUnexpectedResult;
+    } else |err| {
+        try std.testing.expect(err == error.FileNotFound);
+    }
+
+    // Cleanup: destroy the node.
+    node.cluster.members.deinit(std.testing.allocator);
+    std.testing.allocator.destroy(node);
+}
