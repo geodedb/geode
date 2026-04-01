@@ -37,36 +37,45 @@ pub fn setHasEncryptedFields(has_fields: bool) void {
     fle_has_encrypted_fields = has_fields;
 }
 
-// Global current user role for RBAC (thread-local in multi-threaded env)
-var global_current_user_role: ?[]const u8 = null;
+// GAP-0285/S3: Per-thread user role map replaces process-global variable.
+// Previous implementation used a single `global_current_user_role` variable
+// protected by a mutex, which caused TOCTOU race conditions: concurrent
+// connections would overwrite each other's role, enabling cross-tenant FLE
+// decryption (CVSS 8.5). Now keyed by thread ID so each connection handler
+// thread maintains its own independent role state.
+// CANARY: REQ=REQ-FLE-ROLE-ISOLATION-001; FEATURE="FLERoleIsolation"; ASPECT=PerThreadRole; STATUS=TESTED; OWNER=security; UPDATED=2026-04-01
+var per_thread_roles: std.AutoHashMap(std.Thread.Id, []const u8) = std.AutoHashMap(std.Thread.Id, []const u8).init(std.heap.c_allocator);
 
-/// Set the current user role for RBAC checks
-/// This should be called at the start of a session/transaction
+/// Set the current user role for RBAC checks (per-thread, safe for concurrent connections).
+/// This should be called at the start of a session/transaction.
 pub fn setCurrentUserRole(role: ?[]const u8) void {
     global_mutex.lock();
     defer global_mutex.unlock();
-    global_current_user_role = role;
+    const tid = std.Thread.getCurrentId();
+    if (role) |r| {
+        per_thread_roles.put(tid, r) catch {
+            // On allocation failure, remove any stale entry (fail-secure: no role = deny)
+            _ = per_thread_roles.remove(tid);
+        };
+    } else {
+        _ = per_thread_roles.remove(tid);
+    }
 }
 
-/// Get the current user role
-/// Checks environment variable GEODE_CURRENT_ROLE first, then falls back to global variable
-// P2-3: Use static GPA for env var reading
-var role_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
-var role_gpa_init = false;
-
+/// Get the current user role.
+/// Checks environment variable GEODE_CURRENT_ROLE first (non-allocating via std.posix.getenv),
+/// then falls back to per-thread role state.
+/// P4 fix: uses std.posix.getenv instead of getEnvVarOwned to avoid heap allocation leak.
 pub fn getCurrentUserRole() ?[]const u8 {
-    // Check environment variable first (for CLI testing across process boundaries)
-    if (!role_gpa_init) {
-        role_gpa_init = true;
-    }
-    if (std.process.getEnvVarOwned(role_gpa.allocator(), "GEODE_CURRENT_ROLE")) |env_role| {
+    // Check environment variable first (for CLI testing across process boundaries).
+    // std.posix.getenv returns a slice into the process environment block -- no allocation.
+    if (std.posix.getenv("GEODE_CURRENT_ROLE")) |env_role| {
         return env_role;
-    } else |_| {
-        // Fall back to global variable
-        global_mutex.lock();
-        defer global_mutex.unlock();
-        return global_current_user_role;
     }
+    // Fall back to per-thread role
+    global_mutex.lock();
+    defer global_mutex.unlock();
+    return per_thread_roles.get(std.Thread.getCurrentId());
 }
 
 pub const EncryptionContext = struct {

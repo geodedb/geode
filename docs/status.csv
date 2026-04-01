@@ -913,6 +913,7 @@ REQ-FLE-PROC-003,FLEProcedures,GetFieldConfig,TESTED,,,security,2026-01-28,src/e
 REQ-FLE-PROC-004,FLEProcedures,ListEncryptedFields,TESTED,,,security,2026-01-28,src/execution/procedure_registry.zig
 REQ-FLE-PRODMODE-001,FLEProductionMode,BuildModeDetection,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-PRODMODE-002,FLEProductionMode,TestModeFlag,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
+REQ-FLE-ROLE-ISOLATION-001,FLERoleIsolation,PerThreadRole,TESTED,,,security,2026-04-01,src/fle_integration.zig
 REQ-FLE-ROTATION-001,FLEKeyRotation,Encryption,TESTED,,,security,2026-01-10,src/fle_integration.zig
 REQ-FLE-ROTATION-002,FLEKeyRotation,KeyManagement,TESTED,,,security,2026-01-10,src/fle_integration.zig
 REQ-FLE-SCHEMA-001,FieldLevelEncryption,SCHEMA,TESTED,,,security,2026-01-15,src/schema/annotations.zig
