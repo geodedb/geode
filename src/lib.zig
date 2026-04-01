@@ -339,6 +339,8 @@ pub const mfa_stub = @import("mfa");
 // Top-level security module exports for tests
 pub const auth = @import("geode_auth");
 pub const multi_graph_security = @import("security/multi_graph_security.zig");
+// GAP-0289: Per-tenant resource quota manager
+pub const tenant_quota = @import("security/tenant_quota.zig");
 
 // Security modules for enhanced RLS and compliance features
 pub const security = struct {
@@ -346,6 +348,7 @@ pub const security = struct {
     pub const auth = @import("geode_auth");
     pub const multi_graph_security = @import("security/multi_graph_security.zig");
     pub const audit = @import("security/audit.zig");
+    pub const tenant_quota = @import("security/tenant_quota.zig");
 };
 pub const fts_advanced_stub = @import("fts/advanced.zig");
 pub const parallel_exec_stub = @import("execution/parallel.zig");

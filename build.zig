@@ -1022,6 +1022,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_secure_zero_tests = b.addRunArtifact(secure_zero_tests);
 
+    // GAP-0289: Per-tenant resource quotas — connection and query limits
+    const tenant_quota_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/security/tenant_quota.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    tenant_quota_tests.root_module.addImport("logging", logging_mod);
+    const run_tenant_quota_tests = b.addRunArtifact(tenant_quota_tests);
+
     // GAP-0436: Security test — JSONB parser must reject deeply nested input to prevent DoS
     const jsonb_depth_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -1089,6 +1100,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_auth_security_tests.step);
     test_step.dependOn(&run_random_security_tests.step);
     test_step.dependOn(&run_secure_zero_tests.step);
+    test_step.dependOn(&run_tenant_quota_tests.step);
     test_step.dependOn(&run_jsonb_depth_tests.step);
     test_step.dependOn(&run_blake2b_migration_tests.step);
     test_step.dependOn(&run_federation_auth_tests.step);

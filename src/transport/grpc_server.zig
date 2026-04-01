@@ -33,6 +33,8 @@ const rls_filter = @import("../server/rls_filter.zig");
 const auth_rate_limiter_mod = @import("../server/auth_rate_limiter.zig");
 // GAP-0283: Graph-scoped RBAC enforcement (parity with QUIC handler).
 const multi_graph_security = geode.multi_graph_security;
+// GAP-0289: Per-tenant resource quotas (parity with QUIC handler).
+const tenant_quota = geode.tenant_quota;
 
 const logging = @import("logging");
 const log = logging.scoped("grpc");
@@ -136,6 +138,10 @@ const SessionStore = struct {
         // GAP-0284: Persist password_reset_required flag so execute handler can enforce it.
         state.password_reset_required = pwd_reset_required;
         if (tenant_id) |tenant| {
+            // GAP-0289: Enforce per-tenant connection quota before registering the session.
+            if (tenant_quota.getGlobalQuotaManager()) |qm| {
+                qm.acquireConnection(tenant) catch return error.OutOfMemory; // quota exceeded
+            }
             state.session_config = server_state.SessionConfiguration.init(self.allocator);
             state.session_config.?.tenant_id = try self.allocator.dupe(u8, tenant);
         }
@@ -216,6 +222,14 @@ fn deinitServerState(state: *server_state.ServerState) void {
     const alloc = state.allocator;
     state.resetResult();
     if (state.exec_session) |*sess| sess.deinit();
+    // GAP-0289: Release per-tenant connection quota before freeing session config.
+    if (state.session_config) |cfg| {
+        if (cfg.tenant_id) |tid| {
+            if (tenant_quota.getGlobalQuotaManager()) |qm| {
+                qm.releaseConnection(tid);
+            }
+        }
+    }
     if (state.session_config) |*cfg| cfg.deinit();
     if (state.authenticated_user) |u| alloc.free(u);
     if (state.authenticated_password) |p| {
@@ -1719,6 +1733,25 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
             if (parse_result.has_double_solidus_comment) {
                 try appendFlagIfMissing(allocator, &flags, "GB03:DoubleSolidusComment");
             }
+
+            // GAP-0289: Enforce per-tenant query concurrency quota before execution.
+            const grpc_query_tenant = if (state.session_config) |cfg| cfg.tenant_id else null;
+            var grpc_query_quota_acquired = false;
+            if (grpc_query_tenant) |tid| {
+                if (tenant_quota.getGlobalQuotaManager()) |qm| {
+                    qm.acquireQuery(tid) catch {
+                        return buildErrorResponse(allocator, "42000", "Query quota exceeded for tenant", &.{}, &.{});
+                    };
+                    grpc_query_quota_acquired = true;
+                }
+            }
+            defer if (grpc_query_quota_acquired) {
+                if (grpc_query_tenant) |tid| {
+                    if (tenant_quota.getGlobalQuotaManager()) |qm| {
+                        qm.releaseQuery(tid);
+                    }
+                }
+            };
 
             // #564: Acquire the appropriate store lock based on query type.
             // Without this, gRPC queries ran with no synchronization, allowing

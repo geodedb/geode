@@ -532,6 +532,15 @@ pub fn main() !void {
         rls_filter_mod.setGlobalRLSFilterEngine(&rls_engine);
         defer rls_filter_mod.setGlobalRLSFilterEngine(null);
 
+        // GAP-0289: Initialize per-tenant resource quota manager.
+        // Lives on the main thread's stack; connection/query handlers access it
+        // via the global singleton in tenant_quota.zig.
+        // CANARY: REQ=REQ-MULTI-TENANT-QUOTA-003; FEATURE="PerTenantResourceQuotas"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/security/tenant_quota.zig; OWNER=security; UPDATED=2026-04-01
+        var quota_manager = geode.tenant_quota.TenantQuotaManager.init(gpa);
+        defer quota_manager.deinit();
+        geode.tenant_quota.setGlobalQuotaManager(&quota_manager);
+        defer geode.tenant_quota.setGlobalQuotaManager(null);
+
         // GAP-0268: Wire WAL persistence hooks for checkpoint truncation.
         // The hooks allow the persistence loop to sync and truncate the WAL
         // after each successful checkpoint, preventing unbounded WAL growth.

@@ -56,6 +56,8 @@ const multi_graph_security = @import("../security/multi_graph_security.zig");
 // GAP-0280: Import RLS types for property-level policy management procedures.
 // We import the rls_types module (not rls_filter.zig) to avoid circular module dependencies.
 const rls_types = @import("rls_types");
+// GAP-0289: Import tenant quota manager for quota management procedures.
+const tenant_quota = @import("../security/tenant_quota.zig");
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=PROCEDURE_REGISTRY; STATUS=TESTED; TEST=tests/test_performance_integration.zig; OWNER=refactor; UPDATED=2026-01-15
 
@@ -5607,6 +5609,170 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    }
+    // ---- GAP-0289: Per-tenant resource quota management procedures ----
+    // CANARY: REQ=REQ-MULTI-TENANT-QUOTA-002; FEATURE="PerTenantResourceQuotas"; ASPECT=StoredProcedures; STATUS=TESTED; TEST=src/security/tenant_quota.zig; OWNER=security; UPDATED=2026-04-01
+    else if (std.mem.eql(u8, proc_name, "geode.quota.set")) {
+        // geode.quota.set(tenant_id, max_connections, max_queries, max_graphs, max_nodes)
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
+
+        const args = switch (call_stmt.procedure) {
+            .Call => |call| call.args,
+            else => &[_]*ast.Expr{},
+        };
+
+        if (args.len < 5) {
+            return try buildProcedureErrorResult(allocator, "Usage: CALL geode.quota.set('tenant_id', max_connections, max_queries, max_graphs, max_nodes)");
+        }
+
+        const tid = if (args[0].* == .String) args[0].String else "";
+        if (tid.len == 0) {
+            return try buildProcedureErrorResult(allocator, "tenant_id must be a non-empty string");
+        }
+
+        const max_conn = switch (args[1].*) {
+            .Int => |v| @as(u32, @intCast(v)),
+            else => return try buildProcedureErrorResult(allocator, "max_connections must be an integer"),
+        };
+        const max_q = switch (args[2].*) {
+            .Int => |v| @as(u32, @intCast(v)),
+            else => return try buildProcedureErrorResult(allocator, "max_queries must be an integer"),
+        };
+        const max_g = switch (args[3].*) {
+            .Int => |v| @as(u32, @intCast(v)),
+            else => return try buildProcedureErrorResult(allocator, "max_graphs must be an integer"),
+        };
+        const max_n = switch (args[4].*) {
+            .Int => |v| @as(u64, @intCast(v)),
+            else => return try buildProcedureErrorResult(allocator, "max_nodes must be an integer"),
+        };
+
+        const qm = tenant_quota.getGlobalQuotaManager() orelse {
+            return try buildProcedureErrorResult(allocator, "Quota manager not initialized");
+        };
+
+        qm.setQuota(tid, .{
+            .max_connections = max_conn,
+            .max_concurrent_queries = max_q,
+            .max_graphs = max_g,
+            .max_nodes_per_graph = max_n,
+        }) catch {
+            return try buildProcedureErrorResult(allocator, "Failed to set quota");
+        };
+
+        const columns = try allocator.alloc([]const u8, 1);
+        columns[0] = try allocator.dupe(u8, "status");
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = try allocator.dupe(u8, "Quota set") };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.quota.get")) {
+        // geode.quota.get(tenant_id) -> returns quota and current usage
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
+
+        const args = switch (call_stmt.procedure) {
+            .Call => |call| call.args,
+            else => &[_]*ast.Expr{},
+        };
+
+        if (args.len < 1) {
+            return try buildProcedureErrorResult(allocator, "Usage: CALL geode.quota.get('tenant_id')");
+        }
+
+        const tid = if (args[0].* == .String) args[0].String else "";
+        if (tid.len == 0) {
+            return try buildProcedureErrorResult(allocator, "tenant_id must be a non-empty string");
+        }
+
+        const qm = tenant_quota.getGlobalQuotaManager() orelse {
+            return try buildProcedureErrorResult(allocator, "Quota manager not initialized");
+        };
+
+        const quota = qm.getQuota(tid);
+        const usage = qm.getUsage(tid);
+
+        const columns = try allocator.alloc([]const u8, 6);
+        columns[0] = try allocator.dupe(u8, "max_connections");
+        columns[1] = try allocator.dupe(u8, "max_queries");
+        columns[2] = try allocator.dupe(u8, "max_graphs");
+        columns[3] = try allocator.dupe(u8, "max_nodes");
+        columns[4] = try allocator.dupe(u8, "active_connections");
+        columns[5] = try allocator.dupe(u8, "active_queries");
+
+        const row = try allocator.alloc(Value, 6);
+        row[0] = Value{ .Int = @intCast(quota.max_connections) };
+        row[1] = Value{ .Int = @intCast(quota.max_concurrent_queries) };
+        row[2] = Value{ .Int = @intCast(quota.max_graphs) };
+        row[3] = Value{ .Int = @intCast(quota.max_nodes_per_graph) };
+        row[4] = Value{ .Int = @intCast(usage.connections) };
+        row[5] = Value{ .Int = @intCast(usage.queries) };
+
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.quota.list")) {
+        // geode.quota.list() -> lists all configured tenant quotas
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
+
+        const qm = tenant_quota.getGlobalQuotaManager() orelse {
+            return try buildProcedureErrorResult(allocator, "Quota manager not initialized");
+        };
+
+        const columns = try allocator.alloc([]const u8, 7);
+        columns[0] = try allocator.dupe(u8, "tenant_id");
+        columns[1] = try allocator.dupe(u8, "max_connections");
+        columns[2] = try allocator.dupe(u8, "max_queries");
+        columns[3] = try allocator.dupe(u8, "max_graphs");
+        columns[4] = try allocator.dupe(u8, "max_nodes");
+        columns[5] = try allocator.dupe(u8, "active_connections");
+        columns[6] = try allocator.dupe(u8, "active_queries");
+
+        // Count entries to allocate result rows.
+        qm.mu.lock();
+        const count = qm.quotas.count();
+        qm.mu.unlock();
+
+        if (count == 0) {
+            const rows = try allocator.alloc([]Value, 0);
+            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        }
+
+        const rows = try allocator.alloc([]Value, count);
+        qm.mu.lock();
+        var iter = qm.quotas.iterator();
+        var i: usize = 0;
+        while (iter.next()) |entry| {
+            if (i >= count) break;
+            const tid = entry.key_ptr.*;
+            const q = entry.value_ptr.*;
+            var conn_count: u32 = 0;
+            var query_count: u32 = 0;
+            if (qm.usage.get(tid)) |u| {
+                conn_count = u.active_connections.load(.monotonic);
+                query_count = u.active_queries.load(.monotonic);
+            }
+
+            const row = allocator.alloc(Value, 7) catch {
+                qm.mu.unlock();
+                return error.OutOfMemory;
+            };
+            row[0] = Value{ .Str = allocator.dupe(u8, tid) catch {
+                qm.mu.unlock();
+                return error.OutOfMemory;
+            } };
+            row[1] = Value{ .Int = @intCast(q.max_connections) };
+            row[2] = Value{ .Int = @intCast(q.max_concurrent_queries) };
+            row[3] = Value{ .Int = @intCast(q.max_graphs) };
+            row[4] = Value{ .Int = @intCast(q.max_nodes_per_graph) };
+            row[5] = Value{ .Int = @intCast(conn_count) };
+            row[6] = Value{ .Int = @intCast(query_count) };
+            rows[i] = row;
+            i += 1;
+        }
+        qm.mu.unlock();
+
+        return .{ .columns = columns, .rows = rows[0..i], .flags = std.ArrayList([]const u8).empty };
     } else {
         // Unknown procedure - return error
         log.warn("Unknown procedure", &.{

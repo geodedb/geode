@@ -32,6 +32,8 @@ const mtls_provider = geode.mtls_provider;
 const fle_integration = geode.fle_integration;
 // GAP-0283: Import multi-graph security for graph-scoped RBAC enforcement
 const multi_graph_security = geode.multi_graph_security;
+// GAP-0289: Import tenant quota manager for per-tenant resource limits
+const tenant_quota = geode.tenant_quota;
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-012; FEATURE="ServerRefactoring"; ASPECT=QUIC_HANDLERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.3 - QUIC Connection Handlers Module (Eighth Increment)
@@ -768,8 +770,19 @@ pub fn handleQuicConnection(
     // Initialize evaluator callbacks for execution engine.
     execution.initEvaluator();
 
+    // GAP-0289: Track which tenant acquired a connection quota slot so we can release it on close.
+    var quota_tenant_id: ?[]const u8 = null;
+
     // Ensure cleanup of per-connection state.
     defer {
+        // GAP-0289: Release connection quota slot for this tenant.
+        if (quota_tenant_id) |tid| {
+            if (tenant_quota.getGlobalQuotaManager()) |qm| {
+                qm.releaseConnection(tid);
+            }
+            gpa.free(tid);
+        }
+
         state.resetResult();
         if (state.exec_session) |*sess| sess.deinit();
         if (state.session_config) |*cfg| cfg.deinit();
@@ -917,6 +930,23 @@ pub fn handleQuicConnection(
         break :hello_blk false;
     };
     if (!hello_done) return;
+
+    // GAP-0289: After HELLO, enforce per-tenant connection quota.
+    // The tenant_id is now stored in state.session_config by handleClientMessage.
+    if (state.session_config) |cfg| {
+        if (cfg.tenant_id) |tid| {
+            if (tenant_quota.getGlobalQuotaManager()) |qm| {
+                qm.acquireConnection(tid) catch {
+                    log.warn("Connection quota exceeded for tenant — closing connection", &.{
+                        Attr.string("tenant", tid),
+                    });
+                    sendExecuteError(gpa, stream, "42000", "Connection quota exceeded for tenant", &.{}, &.{}) catch {};
+                    return;
+                };
+                quota_tenant_id = gpa.dupe(u8, tid) catch null;
+            }
+        }
+    }
 
     // ── Phase 2: Stream multiplexing ─────────────────────────────────────
     // CANARY: REQ=REQ-QUIC-MUX-004; FEATURE="StreamMultiplexing"; ASPECT=AcceptorSpawn; STATUS=IMPL; OWNER=server; UPDATED=2026-03-27
@@ -1794,6 +1824,26 @@ fn handleClientMessage(
             if (parse_result.has_double_solidus_comment) {
                 try appendFlagIfMissing(gpa, &flags, "GB03:DoubleSolidusComment");
             }
+
+            // GAP-0289: Enforce per-tenant query concurrency quota before execution.
+            const query_tenant = if (state.session_config) |cfg| cfg.tenant_id else null;
+            var query_quota_acquired = false;
+            if (query_tenant) |tid| {
+                if (tenant_quota.getGlobalQuotaManager()) |qm| {
+                    qm.acquireQuery(tid) catch {
+                        try sendExecuteError(gpa, stream, "42000", "Query quota exceeded for tenant", &.{}, &.{});
+                        return;
+                    };
+                    query_quota_acquired = true;
+                }
+            }
+            defer if (query_quota_acquired) {
+                if (query_tenant) |tid| {
+                    if (tenant_quota.getGlobalQuotaManager()) |qm| {
+                        qm.releaseQuery(tid);
+                    }
+                }
+            };
 
             // GAP-0001: Acquire the appropriate store lock based on query type.
             // Mutations (CREATE, MERGE, DELETE, INSERT, DDL) take the exclusive
