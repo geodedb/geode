@@ -12,6 +12,10 @@ const Attr = logging.Attr;
 // CANARY: REQ=REQ-LIB-MIGRATION-CLI-001; FEATURE="External Library Migration"; ASPECT=CLIFramework; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // External CLI framework library - Cobra/Viper-class features with shell completion generation
 const cli_lib = @import("cli");
+const CliCommand = cli_lib.Command;
+const CliFlagSpec = cli_lib.FlagSpec;
+const CliFlagType = cli_lib.FlagType;
+const CliShell = cli_lib.cli.Shell;
 
 // CANARY: REQ=REQ-LIB-MIGRATION-MCP-006; FEATURE="External Library Migration"; ASPECT=MCPModule; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 // MCP server module for AI/LLM integration
@@ -289,7 +293,7 @@ pub fn dispatch(
         try audit_cli.verifyFile(allocator, path, algo, 100, require_digest, pubkey, is_default_path);
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcommand, "completion") or std.mem.eql(u8, subcommand, "completions")) {
-        // CANARY: REQ=REQ-LIB-MIGRATION-CLI-002; FEATURE="External Library Migration"; ASPECT=ShellCompletions; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
+        // CANARY: REQ=REQ-LIB-MIGRATION-CLI-002; FEATURE="External Library Migration"; ASPECT=ShellCompletions; STATUS=TESTED; TEST=test_completion_scripts_use_external_cli_library; OWNER=cli; UPDATED=2026-04-01
         // Shell completion script generation using external CLI library
         try handleCompletionsCommand(allocator, argv, subcommand_start);
         std.process.exit(@intFromEnum(ExitCode.success));
@@ -404,10 +408,245 @@ pub fn cmdQueryImplicit(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx:
 // Shell Completion Generation
 // ============================================================================
 
+const geode_completion_global_flags = [_]CliFlagSpec{
+    .{ .name = "help", .short = 'h', .help = "Show help", .ftype = CliFlagType.bool },
+    .{ .name = "version", .help = "Show version", .ftype = CliFlagType.bool },
+    .{ .name = "verbose", .short = 'v', .help = "Enable verbose output", .ftype = CliFlagType.bool },
+    .{ .name = "json", .help = "Output in JSON format", .ftype = CliFlagType.bool },
+    .{ .name = "config", .help = "Configuration file path", .ftype = CliFlagType.path },
+    .{ .name = "audit", .help = "Enable audit logging", .ftype = CliFlagType.bool },
+    .{ .name = "audit-syslog", .help = "Syslog host:port for audit", .ftype = CliFlagType.string },
+    .{ .name = "audit-file", .help = "Audit log file path", .ftype = CliFlagType.path },
+};
+
+const geode_completion_serve_flags = [_]CliFlagSpec{
+    .{ .name = "listen", .short = 'l', .help = "Listen address (host:port)", .ftype = CliFlagType.string },
+    .{ .name = "listen-grpc", .help = "Listen address for gRPC", .ftype = CliFlagType.string },
+    .{ .name = "data-dir", .short = 'd', .help = "Data directory path", .ftype = CliFlagType.path },
+    .{ .name = "cert", .help = "TLS certificate path", .ftype = CliFlagType.path },
+    .{ .name = "key", .help = "TLS private key path", .ftype = CliFlagType.path },
+    .{ .name = "idle-timeout", .help = "QUIC idle timeout in milliseconds", .ftype = CliFlagType.int },
+    .{ .name = "persist-interval", .help = "Background persistence interval in milliseconds", .ftype = CliFlagType.int },
+};
+
+const geode_completion_query_flags = [_]CliFlagSpec{
+    .{ .name = "server", .short = 's', .help = "Server address", .ftype = CliFlagType.string },
+    .{ .name = "format", .short = 'f', .help = "Output format", .ftype = CliFlagType.string, .completions = &.{ "json", "table", "csv" } },
+    .{ .name = "param", .help = "Query parameter", .ftype = CliFlagType.string_array, .is_repeatable = true },
+    .{ .name = "page-size", .help = "Page size for paginated output", .ftype = CliFlagType.int },
+};
+
+const geode_completion_shell_flags = [_]CliFlagSpec{
+    .{ .name = "server", .short = 's', .help = "Server address", .ftype = CliFlagType.string },
+    .{ .name = "insecure-tls-skip-verify", .help = "Skip TLS verification", .ftype = CliFlagType.bool },
+    .{ .name = "insecure", .help = "Skip TLS verification (deprecated)", .ftype = CliFlagType.bool, .is_deprecated = true },
+    .{ .name = "client-cert", .help = "Client certificate path", .ftype = CliFlagType.path },
+    .{ .name = "client-key", .help = "Client private key path", .ftype = CliFlagType.path },
+};
+
+const geode_completion_completion_flags = [_]CliFlagSpec{
+    .{ .name = "shell", .short = 's', .help = "Shell type", .ftype = CliFlagType.string, .completions = &.{ "bash", "zsh", "fish", "powershell" } },
+};
+
+const geode_completion_mcp_flags = [_]CliFlagSpec{
+    .{ .name = "stdio", .help = "Use stdio transport (stdin/stdout JSONRPC)", .ftype = CliFlagType.bool },
+    .{ .name = "port", .help = "HTTP port", .ftype = CliFlagType.int },
+    .{ .name = "endpoint", .short = 'e', .help = "Geode server endpoint", .ftype = CliFlagType.string },
+};
+
+const geode_completion_audit_verify_flags = [_]CliFlagSpec{
+    .{ .name = "file", .help = "Audit log file path", .ftype = CliFlagType.path },
+    .{ .name = "algo", .help = "Hash algorithm", .ftype = CliFlagType.string, .completions = &.{ "sha256", "blake3" } },
+    .{ .name = "require-digest", .help = "Require all entries to have digest", .ftype = CliFlagType.bool },
+    .{ .name = "pubkey", .help = "Ed25519 public key (hex)", .ftype = CliFlagType.string },
+};
+
+const geode_completion_audit_verify_cmd = CliCommand{
+    .name = "verify",
+    .summary = "Verify audit log integrity",
+    .flags = &geode_completion_audit_verify_flags,
+};
+
+const geode_completion_audit_subcommands = [_]*const CliCommand{
+    &geode_completion_audit_verify_cmd,
+};
+
+const geode_completion_serve_cmd = CliCommand{
+    .name = "serve",
+    .summary = "Start the Geode server",
+    .flags = &geode_completion_serve_flags,
+};
+
+const geode_completion_query_cmd = CliCommand{
+    .name = "query",
+    .summary = "Execute a GQL query",
+    .flags = &geode_completion_query_flags,
+};
+
+const geode_completion_shell_cmd = CliCommand{
+    .name = "shell",
+    .summary = "Start interactive shell (REPL)",
+    .flags = &geode_completion_shell_flags,
+};
+
+const geode_completion_lsp_cmd = CliCommand{
+    .name = "lsp",
+    .summary = "Start Language Server Protocol server",
+};
+
+const geode_completion_backup_cmd = CliCommand{
+    .name = "backup",
+    .summary = "Create database backup",
+};
+
+const geode_completion_restore_cmd = CliCommand{
+    .name = "restore",
+    .summary = "Restore database from backup",
+};
+
+const geode_completion_migrate_cmd = CliCommand{
+    .name = "migrate",
+    .summary = "Database migration commands",
+};
+
+const geode_completion_user_cmd = CliCommand{
+    .name = "user",
+    .summary = "Manage users",
+};
+
+const geode_completion_role_cmd = CliCommand{
+    .name = "role",
+    .summary = "Manage roles",
+};
+
+const geode_completion_policy_cmd = CliCommand{
+    .name = "policy",
+    .summary = "Manage policies",
+};
+
+const geode_completion_grant_cmd = CliCommand{
+    .name = "grant",
+    .summary = "Grant permissions",
+};
+
+const geode_completion_revoke_cmd = CliCommand{
+    .name = "revoke",
+    .summary = "Revoke permissions",
+};
+
+const geode_completion_auth_cmd = CliCommand{
+    .name = "auth",
+    .summary = "Authentication commands",
+};
+
+const geode_completion_login_cmd = CliCommand{
+    .name = "login",
+    .summary = "Authenticate and create a session",
+};
+
+const geode_completion_logout_cmd = CliCommand{
+    .name = "logout",
+    .summary = "End the current session",
+};
+
+const geode_completion_fle_cmd = CliCommand{
+    .name = "fle",
+    .summary = "Field-Level Encryption management",
+};
+
+const geode_completion_storage_cmd = CliCommand{
+    .name = "storage",
+    .summary = "Storage engine management",
+};
+
+const geode_completion_audit_cmd = CliCommand{
+    .name = "audit",
+    .summary = "Audit log management",
+    .subcommands = &geode_completion_audit_subcommands,
+};
+
+const geode_completion_completion_cmd = CliCommand{
+    .name = "completion",
+    .summary = "Generate shell completion scripts",
+    .aliases = &.{"completions"},
+    .flags = &geode_completion_completion_flags,
+};
+
+const geode_completion_mtls_cmd = CliCommand{
+    .name = "mtls",
+    .summary = "Mutual TLS certificate mapping management",
+};
+
+const geode_completion_mcp_cmd = CliCommand{
+    .name = "mcp",
+    .summary = "Model Context Protocol server (AI/LLM integration)",
+    .flags = &geode_completion_mcp_flags,
+};
+
+const geode_completion_session_cmd = CliCommand{
+    .name = "session",
+    .summary = "Session management commands",
+};
+
+const geode_completion_authn_cmd = CliCommand{
+    .name = "authn",
+    .summary = "Authentication provider configuration",
+};
+
+const geode_completion_apikey_cmd = CliCommand{
+    .name = "apikey",
+    .summary = "API key management",
+};
+
+const geode_completion_subcommands = [_]*const CliCommand{
+    &geode_completion_serve_cmd,
+    &geode_completion_query_cmd,
+    &geode_completion_shell_cmd,
+    &geode_completion_lsp_cmd,
+    &geode_completion_backup_cmd,
+    &geode_completion_restore_cmd,
+    &geode_completion_migrate_cmd,
+    &geode_completion_user_cmd,
+    &geode_completion_role_cmd,
+    &geode_completion_policy_cmd,
+    &geode_completion_grant_cmd,
+    &geode_completion_revoke_cmd,
+    &geode_completion_auth_cmd,
+    &geode_completion_login_cmd,
+    &geode_completion_logout_cmd,
+    &geode_completion_fle_cmd,
+    &geode_completion_storage_cmd,
+    &geode_completion_audit_cmd,
+    &geode_completion_completion_cmd,
+    &geode_completion_mtls_cmd,
+    &geode_completion_mcp_cmd,
+    &geode_completion_session_cmd,
+    &geode_completion_authn_cmd,
+    &geode_completion_apikey_cmd,
+};
+
+const geode_completion_root_cmd = CliCommand{
+    .name = "geode",
+    .summary = "Enterprise graph database implementing ISO/IEC 39075:2024",
+    .flags = &geode_completion_global_flags,
+    .subcommands = &geode_completion_subcommands,
+};
+
+fn parseCompletionShell(shell_str: []const u8) ?CliShell {
+    if (std.mem.eql(u8, shell_str, "bash")) return .bash;
+    if (std.mem.eql(u8, shell_str, "zsh")) return .zsh;
+    if (std.mem.eql(u8, shell_str, "fish")) return .fish;
+    if (std.mem.eql(u8, shell_str, "powershell") or std.mem.eql(u8, shell_str, "pwsh")) return .powershell;
+    return null;
+}
+
+fn generateCompletionScript(allocator: std.mem.Allocator, shell: CliShell) ![]const u8 {
+    return try cli_lib.generateCompletions(shell, &geode_completion_root_cmd, allocator);
+}
+
 /// Handle the completions subcommand using external CLI library
 /// Generates shell completion scripts for bash, zsh, fish, and powershell
-fn handleCompletionsCommand(_: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Access Shell enum from cli sub-module
+fn handleCompletionsCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var shell_str: []const u8 = "bash"; // default to bash
     var ai: usize = start_idx + 1;
 
@@ -415,12 +654,7 @@ fn handleCompletionsCommand(_: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         if (std.mem.eql(u8, argv[ai], "--shell") or std.mem.eql(u8, argv[ai], "-s")) {
             if (ai + 1 < argv.len) {
                 shell_str = argv[ai + 1];
-                if (!std.mem.eql(u8, shell_str, "bash") and
-                    !std.mem.eql(u8, shell_str, "zsh") and
-                    !std.mem.eql(u8, shell_str, "fish") and
-                    !std.mem.eql(u8, shell_str, "powershell") and
-                    !std.mem.eql(u8, shell_str, "pwsh"))
-                {
+                if (parseCompletionShell(shell_str) == null) {
                     std.debug.print("Error: Unknown shell type '{s}'. Supported: bash, zsh, fish, powershell\n", .{shell_str});
                     std.process.exit(@intFromEnum(ExitCode.usage_error));
                 }
@@ -432,18 +666,23 @@ fn handleCompletionsCommand(_: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         }
     }
 
-    // Output a hand-crafted completion script based on shell type
-    // This uses the external CLI library's concepts but generates directly to avoid
-    // complexities with static command tree pointers in comptime
-    if (std.mem.eql(u8, shell_str, "bash")) {
-        printBashCompletions();
-    } else if (std.mem.eql(u8, shell_str, "zsh")) {
-        printZshCompletions();
-    } else if (std.mem.eql(u8, shell_str, "fish")) {
-        printFishCompletions();
-    } else {
-        printPowershellCompletions();
-    }
+    // CANARY: REQ=REQ-LIB-MIGRATION-CLI-002; FEATURE="External Library Migration"; ASPECT=ShellCompletions; STATUS=TESTED; TEST=test_completion_scripts_use_external_cli_library; OWNER=cli; UPDATED=2026-04-01
+    const shell = parseCompletionShell(shell_str) orelse unreachable;
+    const script = try generateCompletionScript(allocator, shell);
+    defer allocator.free(script);
+    std.debug.print("{s}", .{script});
+}
+
+test "completion scripts use external cli library" {
+    const bash = try generateCompletionScript(std.testing.allocator, .bash);
+    defer std.testing.allocator.free(bash);
+
+    try std.testing.expect(std.mem.indexOf(u8, bash, "serve") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bash, "query") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bash, "completion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bash, "session") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bash, "apikey") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bash, "--shell") != null);
 }
 
 fn printCompletionsHelp() void {

@@ -1,11 +1,13 @@
 const std = @import("std");
 const testing = std.testing;
-const events = @import("../src/audit/events.zig");
-const config = @import("../src/audit/config.zig");
-const logger = @import("../src/audit/logger.zig");
+const audit_lib = @import("audit_lib");
+const events = audit_lib.events;
+const config = audit_lib.config;
+const logger = audit_lib.logger;
 const db_adapter = @import("../src/audit/db_adapter.zig");
-const syslog = @import("../src/audit/syslog.zig");
-const time = @import("../src/audit/time.zig");
+const syslog = audit_lib.syslog;
+const time = audit_lib.time;
+const test_support = @import("../src/audit/test_support.zig");
 
 // Test Case 1: Auth login success → exact RFC 5424 + CEF
 test "Case 1: Auth login success with exact syslog output" {
@@ -17,7 +19,7 @@ test "Case 1: Auth login success with exact syslog output" {
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
     var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
 
-    var test_config = try config.loadTestConfig(allocator);
+    var test_config = try test_support.loadTestConfig(allocator);
     defer test_config.deinit();
 
     const audit_logger = try logger.AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
@@ -64,7 +66,7 @@ test "Case 2: Sensitive data redaction" {
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
     var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
 
-    var test_config = try config.loadTestConfig(allocator);
+    var test_config = try test_support.loadTestConfig(allocator);
     defer test_config.deinit();
 
     const audit_logger = try logger.AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
@@ -135,7 +137,7 @@ test "Case 3: Database operation audit" {
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
     var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
 
-    var test_config = try config.loadTestConfig(allocator);
+    var test_config = try test_support.loadTestConfig(allocator);
     defer test_config.deinit();
 
     const audit_logger = try logger.AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
@@ -219,7 +221,7 @@ test "Case 4: File rotation functionality" {
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     // Custom config with small file size for testing
-    var test_config = try config.loadTestConfig(allocator);
+    var test_config = try test_support.loadTestConfig(allocator);
     defer test_config.deinit();
 
     // Override file config for testing
@@ -275,7 +277,7 @@ test "Case 5: Default deny filtering" {
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
     var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
 
-    var test_config = try config.loadTestConfig(allocator);
+    var test_config = try test_support.loadTestConfig(allocator);
     defer test_config.deinit();
 
     const audit_logger = try logger.AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
@@ -343,7 +345,7 @@ test "Case 6: Fail closed behavior" {
     std.fs.cwd().makePath(test_dir) catch {};
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var test_config = try config.loadTestConfig(allocator);
+    var test_config = try test_support.loadTestConfig(allocator);
     defer test_config.deinit();
 
     // Override file path for testing

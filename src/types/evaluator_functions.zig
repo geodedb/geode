@@ -6,7 +6,7 @@ const datetime = @import("datetime.zig");
 const jsonb = @import("jsonb.zig");
 const xml = @import("xml.zig");
 const url = @import("url.zig");
-const uuid = @import("uuid.zig");
+const uuid = @import("uuid");
 const arrays = @import("arrays.zig");
 const bitstring = @import("bitstring.zig");
 const range = @import("range.zig");
@@ -735,11 +735,11 @@ pub fn domain_labels(allocator: std.mem.Allocator, val: Value) EvaluatorError!Va
 }
 
 pub fn uuid_v4() Value {
-    return Value{ .UUID = uuid.UUID.v4() };
+    return Value{ .UUID = uuid.newV4() catch unreachable };
 }
 
 pub fn uuid_v7() Value {
-    return Value{ .UUID = uuid.UUID.v7() };
+    return Value{ .UUID = uuid.newV7() catch unreachable };
 }
 
 pub fn uuid_equal(a: Value, b: Value) EvaluatorError!Value {
@@ -752,7 +752,7 @@ pub fn uuid_equal(a: Value, b: Value) EvaluatorError!Value {
         else => return EvaluatorError.TypeMismatch,
     };
 
-    return Value{ .Bool = uuid.UUID.equal(uuid_a, uuid_b) };
+    return Value{ .Bool = uuid_a.eql(uuid_b) };
 }
 
 pub fn array_length(val: Value) EvaluatorError!Value {

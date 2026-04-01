@@ -74,7 +74,7 @@ fn handleRotateKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
 
     // Instantiate KeyManager (Offline mode assumption)
     // In strict enterprise mode, this would require connecting to the server or loading secure config.
-    var manager = try fle_key_manager.KeyManager.init(allocator);
+    const manager = try fle_key_manager.initFromEnv(allocator);
     defer manager.deinit();
 
     if (std.mem.eql(u8, scope, "fek")) {
@@ -94,10 +94,10 @@ fn handleRotateKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
         }
         const schema = argv[start_idx + 2];
 
-        try manager.rewrapSK(tenant, schema);
+        try fle_key_manager.rewrapSchemaKey(allocator, manager, tenant, schema);
         std.debug.print("✓ Rewrapped SK for {s}.{s}\n", .{ tenant, schema });
     } else if (std.mem.eql(u8, scope, "trk")) {
-        try manager.rewrapTRK(tenant);
+        try fle_key_manager.rewrapTenantRootKey(allocator, manager, tenant);
         std.debug.print("✓ Rewrapped TRK for {s}\n", .{tenant});
     } else {
         std.debug.print("Error: unknown scope '{s}' (expected: fek, sk, trk)\n", .{scope});

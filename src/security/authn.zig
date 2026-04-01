@@ -15,8 +15,12 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const crypto = std.crypto;
 
-const api_keys = @import("api_keys.zig");
+const api_keys = @import("auth_lib").api_keys;
 const mtls_provider = @import("mtls_provider.zig");
+
+const geode_api_key_config = api_keys.Config{
+    .key_prefix = "gk1",
+};
 
 /// Authentication method used
 pub const AuthMethod = enum {
@@ -191,7 +195,7 @@ pub const AuthProvider = struct {
     pub fn init(allocator: Allocator) Self {
         return .{
             .allocator = allocator,
-            .api_key_manager = api_keys.ApiKeyManager.init(allocator),
+            .api_key_manager = api_keys.ApiKeyManager.init(allocator, geode_api_key_config),
             .mtls = mtls_provider.MtlsProvider.init(allocator),
             .sessions = std.StringHashMap(RotatingSessionToken).init(allocator),
             .mutex = std.Thread.Mutex{},

@@ -1,6 +1,6 @@
 const std = @import("std");
-const timeseries = @import("../src/timeseries/timeseries.zig");
-const chunk_storage = @import("../src/timeseries/chunk_storage.zig");
+const timeseries = @import("timeseries_lib");
+const chunk_storage = @import("timeseries_lib").chunk_storage;
 const gql_functions = @import("../src/timeseries/gql_functions.zig");
 
 test "e2e_timeseries: basic store operations" {

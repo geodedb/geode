@@ -1,6 +1,5 @@
 const std = @import("std");
 const fle_integration = @import("fle_integration.zig");
-const uuid = @import("uuid.zig");
 const id_map_mod = @import("storage/id_map.zig");
 
 // CANARY: REQ=REQ-TDE-GRAPHSTORE-001; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStorePersistence; STATUS=EXEMPT; OWNER=security; UPDATED=2026-03-28

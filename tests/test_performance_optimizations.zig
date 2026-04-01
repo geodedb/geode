@@ -6,6 +6,7 @@ const testing = std.testing;
 
 // Import the modules being tested
 const thread_pool = @import("transport/thread_pool");
+const QueryWorkItem = @import("transport/query_work_item").QueryWorkItem;
 const stream_scheduler = @import("transport/stream_scheduler");
 
 // ============================================================================
@@ -362,7 +363,7 @@ test "StreamScheduler: dynamic stream add/remove" {
 // ============================================================================
 
 test "QueryWorkItem: lifecycle management" {
-    const item = try thread_pool.QueryWorkItem.init(testing.allocator, "RETURN 1 + 2", 42);
+    const item = try QueryWorkItem.init(testing.allocator, "RETURN 1 + 2", 42);
     defer item.deinit();
 
     try testing.expectEqualStrings("RETURN 1 + 2", item.query);
@@ -373,7 +374,7 @@ test "QueryWorkItem: lifecycle management" {
 }
 
 test "QueryWorkItem: result storage" {
-    const item = try thread_pool.QueryWorkItem.init(testing.allocator, "MATCH (n) RETURN n", 1);
+    const item = try QueryWorkItem.init(testing.allocator, "MATCH (n) RETURN n", 1);
     defer item.deinit();
 
     try item.setResult("{\"rows\": [{\"n\": {\"id\": 1}}]}");
@@ -384,7 +385,7 @@ test "QueryWorkItem: result storage" {
 }
 
 test "QueryWorkItem: error handling" {
-    const item = try thread_pool.QueryWorkItem.init(testing.allocator, "INVALID SYNTAX", 1);
+    const item = try QueryWorkItem.init(testing.allocator, "INVALID SYNTAX", 1);
     defer item.deinit();
 
     item.setError(error.SyntaxError);

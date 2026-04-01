@@ -1,6 +1,6 @@
 const std = @import("std");
 const Lexer = @import("src/gql/lexer.zig").Lexer;
-const TokenKind = @import("src/gql/token.zig").TokenKind;
+const TokenKind = @import("gql_lib").token.TokenKind;
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

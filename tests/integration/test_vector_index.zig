@@ -69,7 +69,11 @@ test "vector similarity metrics" {
 
     // Test HNSW directly
     const Hnsw = geode.index.hnsw.Hnsw;
-    var index = Hnsw.init(allocator, 3, 16, 200);
+    var index = try Hnsw.init(allocator, 3, .euclidean, .{
+        .m = 16,
+        .ef_construction = 200,
+        .ef_search = 200,
+    });
     defer index.deinit();
 
     // Insert orthogonal vectors
@@ -79,13 +83,24 @@ test "vector similarity metrics" {
 
     // Test L2 distance
     const query_l2 = [_]f32{ 0.9, 0.1, 0.0 };
-    const results_l2 = try index.knnSearch(&query_l2, 2, .l2);
+    const results_l2 = try index.knnSearch(&query_l2, 2);
     defer allocator.free(results_l2);
 
     try testing.expect(results_l2[0].id == 1);
 
     // Test cosine similarity
-    const results_cosine = try index.knnSearch(&query_l2, 2, .cosine);
+    var cosine_index = try Hnsw.init(allocator, 3, .cosine, .{
+        .m = 16,
+        .ef_construction = 200,
+        .ef_search = 200,
+    });
+    defer cosine_index.deinit();
+
+    try cosine_index.insert(1, &[_]f32{ 1.0, 0.0, 0.0 });
+    try cosine_index.insert(2, &[_]f32{ 0.0, 1.0, 0.0 });
+    try cosine_index.insert(3, &[_]f32{ 0.0, 0.0, 1.0 });
+
+    const results_cosine = try cosine_index.knnSearch(&query_l2, 2);
     defer allocator.free(results_cosine);
 
     try testing.expect(results_cosine[0].id == 1);

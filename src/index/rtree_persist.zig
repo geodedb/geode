@@ -1,5 +1,5 @@
 const std = @import("std");
-const rtree = @import("rtree.zig");
+const rtree = @import("rtree_lib");
 const tde = @import("../storage/tde_file_encryption.zig");
 
 // CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=RTreeIndex; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
@@ -95,7 +95,7 @@ pub fn loadSnapshot(allocator: std.mem.Allocator, path: []const u8) !rtree.RTree
     if (!std.mem.eql(u8, &header.magic, MAGIC)) return error.InvalidMagic;
     if (header.version != 1) return error.InvalidVersion;
 
-    var tree = rtree.RTree.init(allocator, header.M);
+    var tree = try rtree.RTree.init(allocator, header.M);
     tree.count = header.count;
     tree.height = header.height;
 
@@ -111,7 +111,7 @@ fn readNodeStream(allocator: std.mem.Allocator, stream: anytype) !*rtree.RTreeNo
     _ = try stream.reader().readAll(std.mem.asBytes(&record));
 
     var node = try allocator.create(rtree.RTreeNode);
-    node.* = rtree.RTreeNode.init(allocator, record.is_leaf != 0, record.level);
+    node.* = rtree.RTreeNode.init(record.is_leaf != 0, record.level);
 
     var entries = try allocator.alloc(EntryRecord, record.entry_count);
     defer allocator.free(entries);
@@ -136,7 +136,7 @@ fn readNodeStream(allocator: std.mem.Allocator, stream: anytype) !*rtree.RTreeNo
             entry.child = try readNodeStream(allocator, stream);
         }
 
-        try node.entries.append(entry);
+        try node.entries.append(allocator, entry);
     }
 
     return node;

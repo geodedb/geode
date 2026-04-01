@@ -457,7 +457,6 @@ GQL-39075-RQ-0012,GQLStatus/SQLSTATE42004,ConfusableIdentifier,TESTED,,,conforma
 GQL-39075-RQ-0012,GQLStatus/SQLSTATE42004,ConfusableIdentifier,TESTED,,,conformance,2026-02-23,.worktrees/graph-storage-integration/src/gql/status.zig
 GQL-39075-RQ-0012,GQLStatus/SQLSTATE42004,ConfusableIdentifier,TESTED,,,conformance,2026-02-23,.worktrees/session-20260401/src/gql/status.zig
 GQL-39075-RQ-0012,GQLStatus/SQLSTATE42004,ConfusableIdentifier,TESTED,,,conformance,2026-02-23,.worktrees/timeseries-gap-close/src/gql/status.zig
-GQL-39075-RQ-0012,GQLStatus/SQLSTATE42004,ConfusableIdentifier,TESTED,,,conformance,2026-02-23,src/gql/status.zig
 GQL-39075-RQ-0012,Unicode Confusable Detection,ConfusableIdentifierSqlstate42004,IMPL,,,conformance,2026-02-23,.claude/worktrees/agent-a10cae4d/src/unicode/confusables.zig
 GQL-39075-RQ-0012,Unicode Confusable Detection,ConfusableIdentifierSqlstate42004,IMPL,,,conformance,2026-02-23,.claude/worktrees/agent-a37683fc/src/unicode/confusables.zig
 GQL-39075-RQ-0012,Unicode Confusable Detection,ConfusableIdentifierSqlstate42004,IMPL,,,conformance,2026-02-23,.claude/worktrees/agent-a52e4e80/src/unicode/confusables.zig
@@ -729,7 +728,6 @@ GQL-39075-RQ-0019,GQLStatus/SQLSTATE42501,PrivilegeViolation,TESTED,,,conformanc
 GQL-39075-RQ-0019,GQLStatus/SQLSTATE42501,PrivilegeViolation,TESTED,,,conformance,2026-03-22,.worktrees/graph-storage-integration/src/gql/status.zig
 GQL-39075-RQ-0019,GQLStatus/SQLSTATE42501,PrivilegeViolation,TESTED,,,conformance,2026-03-22,.worktrees/session-20260401/src/gql/status.zig
 GQL-39075-RQ-0019,GQLStatus/SQLSTATE42501,PrivilegeViolation,TESTED,,,conformance,2026-03-22,.worktrees/timeseries-gap-close/src/gql/status.zig
-GQL-39075-RQ-0019,GQLStatus/SQLSTATE42501,PrivilegeViolation,TESTED,,,conformance,2026-03-22,src/gql/status.zig
 GQL-39075-RQ-0020,Conformance/ConnectionLoss40003_08007,SQLSTATE,TESTED,,,conformance,2026-02-23,.claude/worktrees/agent-a10cae4d/tests/test_gql_conformance_rq.zig
 GQL-39075-RQ-0020,Conformance/ConnectionLoss40003_08007,SQLSTATE,TESTED,,,conformance,2026-02-23,.claude/worktrees/agent-a37683fc/tests/test_gql_conformance_rq.zig
 GQL-39075-RQ-0020,Conformance/ConnectionLoss40003_08007,SQLSTATE,TESTED,,,conformance,2026-02-23,.claude/worktrees/agent-a52e4e80/tests/test_gql_conformance_rq.zig
@@ -763,7 +761,6 @@ GQL-39075-RQ-0020,GQLStatus/SQLSTATE40003/08007,ConnectionLoss,TESTED,,,conforma
 GQL-39075-RQ-0020,GQLStatus/SQLSTATE40003/08007,ConnectionLoss,TESTED,,,conformance,2026-02-23,.worktrees/graph-storage-integration/src/gql/status.zig
 GQL-39075-RQ-0020,GQLStatus/SQLSTATE40003/08007,ConnectionLoss,TESTED,,,conformance,2026-02-23,.worktrees/session-20260401/src/gql/status.zig
 GQL-39075-RQ-0020,GQLStatus/SQLSTATE40003/08007,ConnectionLoss,TESTED,,,conformance,2026-02-23,.worktrees/timeseries-gap-close/src/gql/status.zig
-GQL-39075-RQ-0020,GQLStatus/SQLSTATE40003/08007,ConnectionLoss,TESTED,,,conformance,2026-02-23,src/gql/status.zig
 GQL-39075-RQ-0021,Conformance/ImplTransactionsExplicit,GT01,TESTED,,,conformance,2026-02-23,.claude/worktrees/agent-a10cae4d/tests/test_gql_conformance_rq.zig
 GQL-39075-RQ-0021,Conformance/ImplTransactionsExplicit,GT01,TESTED,,,conformance,2026-02-23,.claude/worktrees/agent-a37683fc/tests/test_gql_conformance_rq.zig
 GQL-39075-RQ-0021,Conformance/ImplTransactionsExplicit,GT01,TESTED,,,conformance,2026-02-23,.claude/worktrees/agent-a52e4e80/tests/test_gql_conformance_rq.zig
@@ -3500,7 +3497,6 @@ REQ-AUDIT-TLS-001,SyslogTLSTransport,SECURITY,TESTED,,,audit,2026-01-12,.worktre
 REQ-AUDIT-TLS-001,SyslogTLSTransport,SECURITY,TESTED,,,audit,2026-01-12,.worktrees/graph-storage-integration/src/audit/syslog.zig
 REQ-AUDIT-TLS-001,SyslogTLSTransport,SECURITY,TESTED,,,audit,2026-01-12,.worktrees/session-20260401/src/audit/syslog.zig
 REQ-AUDIT-TLS-001,SyslogTLSTransport,SECURITY,TESTED,,,audit,2026-01-12,.worktrees/timeseries-gap-close/src/audit/syslog.zig
-REQ-AUDIT-TLS-001,SyslogTLSTransport,SECURITY,TESTED,,,audit,2026-01-12,src/audit/syslog.zig
 REQ-AUDIT-TLS-PIN-001,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,.claude/worktrees/agent-a10cae4d/src/audit/config.zig
 REQ-AUDIT-TLS-PIN-001,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,.claude/worktrees/agent-a37683fc/src/audit/config.zig
 REQ-AUDIT-TLS-PIN-001,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,.claude/worktrees/agent-a52e4e80/src/audit/config.zig
@@ -3517,7 +3513,6 @@ REQ-AUDIT-TLS-PIN-001,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,.w
 REQ-AUDIT-TLS-PIN-001,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,.worktrees/graph-storage-integration/src/audit/config.zig
 REQ-AUDIT-TLS-PIN-001,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,.worktrees/session-20260401/src/audit/config.zig
 REQ-AUDIT-TLS-PIN-001,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,.worktrees/timeseries-gap-close/src/audit/config.zig
-REQ-AUDIT-TLS-PIN-001,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,src/audit/config.zig
 REQ-AUDIT-TLS-PIN-002,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,.claude/worktrees/agent-a10cae4d/src/audit/syslog.zig
 REQ-AUDIT-TLS-PIN-002,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,.claude/worktrees/agent-a37683fc/src/audit/syslog.zig
 REQ-AUDIT-TLS-PIN-002,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,.claude/worktrees/agent-a52e4e80/src/audit/syslog.zig
@@ -3534,7 +3529,6 @@ REQ-AUDIT-TLS-PIN-002,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,.w
 REQ-AUDIT-TLS-PIN-002,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,.worktrees/graph-storage-integration/src/audit/syslog.zig
 REQ-AUDIT-TLS-PIN-002,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,.worktrees/session-20260401/src/audit/syslog.zig
 REQ-AUDIT-TLS-PIN-002,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,.worktrees/timeseries-gap-close/src/audit/syslog.zig
-REQ-AUDIT-TLS-PIN-002,SyslogTLSCertPinning,SECURITY,TESTED,,,audit,2026-01-12,src/audit/syslog.zig
 REQ-AUDIT-TLS-PIN-003,SyslogTLSCertPinVerify,SECURITY,TESTED,,,audit,2026-01-12,.claude/worktrees/agent-a10cae4d/src/audit/syslog.zig
 REQ-AUDIT-TLS-PIN-003,SyslogTLSCertPinVerify,SECURITY,TESTED,,,audit,2026-01-12,.claude/worktrees/agent-a37683fc/src/audit/syslog.zig
 REQ-AUDIT-TLS-PIN-003,SyslogTLSCertPinVerify,SECURITY,TESTED,,,audit,2026-01-12,.claude/worktrees/agent-a52e4e80/src/audit/syslog.zig
@@ -3551,7 +3545,6 @@ REQ-AUDIT-TLS-PIN-003,SyslogTLSCertPinVerify,SECURITY,TESTED,,,audit,2026-01-12,
 REQ-AUDIT-TLS-PIN-003,SyslogTLSCertPinVerify,SECURITY,TESTED,,,audit,2026-01-12,.worktrees/graph-storage-integration/src/audit/syslog.zig
 REQ-AUDIT-TLS-PIN-003,SyslogTLSCertPinVerify,SECURITY,TESTED,,,audit,2026-01-12,.worktrees/session-20260401/src/audit/syslog.zig
 REQ-AUDIT-TLS-PIN-003,SyslogTLSCertPinVerify,SECURITY,TESTED,,,audit,2026-01-12,.worktrees/timeseries-gap-close/src/audit/syslog.zig
-REQ-AUDIT-TLS-PIN-003,SyslogTLSCertPinVerify,SECURITY,TESTED,,,audit,2026-01-12,src/audit/syslog.zig
 REQ-AUDIT-TLS-POOL-001,SyslogTLSConnectionPool,PERFORMANCE,TESTED,,,audit,2026-01-12,.claude/worktrees/agent-a10cae4d/src/audit/syslog.zig
 REQ-AUDIT-TLS-POOL-001,SyslogTLSConnectionPool,PERFORMANCE,TESTED,,,audit,2026-01-12,.claude/worktrees/agent-a37683fc/src/audit/syslog.zig
 REQ-AUDIT-TLS-POOL-001,SyslogTLSConnectionPool,PERFORMANCE,TESTED,,,audit,2026-01-12,.claude/worktrees/agent-a52e4e80/src/audit/syslog.zig
@@ -3568,7 +3561,6 @@ REQ-AUDIT-TLS-POOL-001,SyslogTLSConnectionPool,PERFORMANCE,TESTED,,,audit,2026-0
 REQ-AUDIT-TLS-POOL-001,SyslogTLSConnectionPool,PERFORMANCE,TESTED,,,audit,2026-01-12,.worktrees/graph-storage-integration/src/audit/syslog.zig
 REQ-AUDIT-TLS-POOL-001,SyslogTLSConnectionPool,PERFORMANCE,TESTED,,,audit,2026-01-12,.worktrees/session-20260401/src/audit/syslog.zig
 REQ-AUDIT-TLS-POOL-001,SyslogTLSConnectionPool,PERFORMANCE,TESTED,,,audit,2026-01-12,.worktrees/timeseries-gap-close/src/audit/syslog.zig
-REQ-AUDIT-TLS-POOL-001,SyslogTLSConnectionPool,PERFORMANCE,TESTED,,,audit,2026-01-12,src/audit/syslog.zig
 REQ-AUDIT-TLS-POOL-002,SyslogTLSConnectionPooling,PERFORMANCE,TESTED,,,audit,2026-01-12,.claude/worktrees/agent-a10cae4d/src/audit/syslog.zig
 REQ-AUDIT-TLS-POOL-002,SyslogTLSConnectionPooling,PERFORMANCE,TESTED,,,audit,2026-01-12,.claude/worktrees/agent-a37683fc/src/audit/syslog.zig
 REQ-AUDIT-TLS-POOL-002,SyslogTLSConnectionPooling,PERFORMANCE,TESTED,,,audit,2026-01-12,.claude/worktrees/agent-a52e4e80/src/audit/syslog.zig
@@ -3585,7 +3577,6 @@ REQ-AUDIT-TLS-POOL-002,SyslogTLSConnectionPooling,PERFORMANCE,TESTED,,,audit,202
 REQ-AUDIT-TLS-POOL-002,SyslogTLSConnectionPooling,PERFORMANCE,TESTED,,,audit,2026-01-12,.worktrees/graph-storage-integration/src/audit/syslog.zig
 REQ-AUDIT-TLS-POOL-002,SyslogTLSConnectionPooling,PERFORMANCE,TESTED,,,audit,2026-01-12,.worktrees/session-20260401/src/audit/syslog.zig
 REQ-AUDIT-TLS-POOL-002,SyslogTLSConnectionPooling,PERFORMANCE,TESTED,,,audit,2026-01-12,.worktrees/timeseries-gap-close/src/audit/syslog.zig
-REQ-AUDIT-TLS-POOL-002,SyslogTLSConnectionPooling,PERFORMANCE,TESTED,,,audit,2026-01-12,src/audit/syslog.zig
 REQ-AUDIT-TLS-TEST-001,AuditTLS,SyslogTests,TESTED,,,audit,2026-01-16,.claude/worktrees/agent-a10cae4d/tests/test_gap_0193_batch2_security.zig
 REQ-AUDIT-TLS-TEST-001,AuditTLS,SyslogTests,TESTED,,,audit,2026-01-16,.claude/worktrees/agent-a37683fc/tests/test_gap_0193_batch2_security.zig
 REQ-AUDIT-TLS-TEST-001,AuditTLS,SyslogTests,TESTED,,,audit,2026-01-16,.claude/worktrees/agent-a52e4e80/tests/test_gap_0193_batch2_security.zig
@@ -3619,7 +3610,6 @@ REQ-AUDIT-TLS-TEST-001,SyslogTLSTests,TESTING,TESTED,,,audit,2026-01-12,.worktre
 REQ-AUDIT-TLS-TEST-001,SyslogTLSTests,TESTING,TESTED,,,audit,2026-01-12,.worktrees/graph-storage-integration/src/audit/syslog.zig
 REQ-AUDIT-TLS-TEST-001,SyslogTLSTests,TESTING,TESTED,,,audit,2026-01-12,.worktrees/session-20260401/src/audit/syslog.zig
 REQ-AUDIT-TLS-TEST-001,SyslogTLSTests,TESTING,TESTED,,,audit,2026-01-12,.worktrees/timeseries-gap-close/src/audit/syslog.zig
-REQ-AUDIT-TLS-TEST-001,SyslogTLSTests,TESTING,TESTED,,,audit,2026-01-12,src/audit/syslog.zig
 REQ-AUDIT-VERIFY-001,Audit Verification,ChainVerification,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a10cae4d/src/cli/geode_audit_verify.zig
 REQ-AUDIT-VERIFY-001,Audit Verification,ChainVerification,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a37683fc/src/cli/geode_audit_verify.zig
 REQ-AUDIT-VERIFY-001,Audit Verification,ChainVerification,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a52e4e80/src/cli/geode_audit_verify.zig
@@ -3772,7 +3762,6 @@ REQ-AUTH-APIKEYS-001,ApiKeyAuthentication,SECURITY,TESTED,,,security,2026-01-29,
 REQ-AUTH-APIKEYS-001,ApiKeyAuthentication,SECURITY,TESTED,,,security,2026-01-29,.worktrees/graph-storage-integration/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-001,ApiKeyAuthentication,SECURITY,TESTED,,,security,2026-01-29,.worktrees/session-20260401/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-001,ApiKeyAuthentication,SECURITY,TESTED,,,security,2026-01-29,.worktrees/timeseries-gap-close/src/security/api_keys.zig
-REQ-AUTH-APIKEYS-001,ApiKeyAuthentication,SECURITY,TESTED,,,security,2026-01-29,src/security/api_keys.zig
 REQ-AUTH-APIKEYS-002,ApiKeyCreation,SECURITY,TESTED,,,security,2026-01-29,.claude/worktrees/agent-a10cae4d/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-002,ApiKeyCreation,SECURITY,TESTED,,,security,2026-01-29,.claude/worktrees/agent-a37683fc/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-002,ApiKeyCreation,SECURITY,TESTED,,,security,2026-01-29,.claude/worktrees/agent-a52e4e80/src/security/api_keys.zig
@@ -3789,7 +3778,6 @@ REQ-AUTH-APIKEYS-002,ApiKeyCreation,SECURITY,TESTED,,,security,2026-01-29,.workt
 REQ-AUTH-APIKEYS-002,ApiKeyCreation,SECURITY,TESTED,,,security,2026-01-29,.worktrees/graph-storage-integration/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-002,ApiKeyCreation,SECURITY,TESTED,,,security,2026-01-29,.worktrees/session-20260401/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-002,ApiKeyCreation,SECURITY,TESTED,,,security,2026-01-29,.worktrees/timeseries-gap-close/src/security/api_keys.zig
-REQ-AUTH-APIKEYS-002,ApiKeyCreation,SECURITY,TESTED,,,security,2026-01-29,src/security/api_keys.zig
 REQ-AUTH-APIKEYS-003,ApiKeyValidation,SECURITY,TESTED,,,security,2026-01-29,.claude/worktrees/agent-a10cae4d/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-003,ApiKeyValidation,SECURITY,TESTED,,,security,2026-01-29,.claude/worktrees/agent-a37683fc/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-003,ApiKeyValidation,SECURITY,TESTED,,,security,2026-01-29,.claude/worktrees/agent-a52e4e80/src/security/api_keys.zig
@@ -3806,7 +3794,6 @@ REQ-AUTH-APIKEYS-003,ApiKeyValidation,SECURITY,TESTED,,,security,2026-01-29,.wor
 REQ-AUTH-APIKEYS-003,ApiKeyValidation,SECURITY,TESTED,,,security,2026-01-29,.worktrees/graph-storage-integration/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-003,ApiKeyValidation,SECURITY,TESTED,,,security,2026-01-29,.worktrees/session-20260401/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-003,ApiKeyValidation,SECURITY,TESTED,,,security,2026-01-29,.worktrees/timeseries-gap-close/src/security/api_keys.zig
-REQ-AUTH-APIKEYS-003,ApiKeyValidation,SECURITY,TESTED,,,security,2026-01-29,src/security/api_keys.zig
 REQ-AUTH-APIKEYS-004,ApiKeyRevocation,SECURITY,TESTED,,,security,2026-01-29,.claude/worktrees/agent-a10cae4d/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-004,ApiKeyRevocation,SECURITY,TESTED,,,security,2026-01-29,.claude/worktrees/agent-a37683fc/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-004,ApiKeyRevocation,SECURITY,TESTED,,,security,2026-01-29,.claude/worktrees/agent-a52e4e80/src/security/api_keys.zig
@@ -3823,7 +3810,6 @@ REQ-AUTH-APIKEYS-004,ApiKeyRevocation,SECURITY,TESTED,,,security,2026-01-29,.wor
 REQ-AUTH-APIKEYS-004,ApiKeyRevocation,SECURITY,TESTED,,,security,2026-01-29,.worktrees/graph-storage-integration/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-004,ApiKeyRevocation,SECURITY,TESTED,,,security,2026-01-29,.worktrees/session-20260401/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-004,ApiKeyRevocation,SECURITY,TESTED,,,security,2026-01-29,.worktrees/timeseries-gap-close/src/security/api_keys.zig
-REQ-AUTH-APIKEYS-004,ApiKeyRevocation,SECURITY,TESTED,,,security,2026-01-29,src/security/api_keys.zig
 REQ-AUTH-APIKEYS-005,BearerTokenParsing,SECURITY,TESTED,,,security,2026-01-29,.claude/worktrees/agent-a10cae4d/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-005,BearerTokenParsing,SECURITY,TESTED,,,security,2026-01-29,.claude/worktrees/agent-a37683fc/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-005,BearerTokenParsing,SECURITY,TESTED,,,security,2026-01-29,.claude/worktrees/agent-a52e4e80/src/security/api_keys.zig
@@ -3840,7 +3826,6 @@ REQ-AUTH-APIKEYS-005,BearerTokenParsing,SECURITY,TESTED,,,security,2026-01-29,.w
 REQ-AUTH-APIKEYS-005,BearerTokenParsing,SECURITY,TESTED,,,security,2026-01-29,.worktrees/graph-storage-integration/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-005,BearerTokenParsing,SECURITY,TESTED,,,security,2026-01-29,.worktrees/session-20260401/src/security/api_keys.zig
 REQ-AUTH-APIKEYS-005,BearerTokenParsing,SECURITY,TESTED,,,security,2026-01-29,.worktrees/timeseries-gap-close/src/security/api_keys.zig
-REQ-AUTH-APIKEYS-005,BearerTokenParsing,SECURITY,TESTED,,,security,2026-01-29,src/security/api_keys.zig
 REQ-AUTH-APIKEYS-CLI-001,ApiKeyCLI,CLI,IMPL,,,cli,2026-02-04,.claude/worktrees/agent-a10cae4d/src/cli/apikey_cli.zig
 REQ-AUTH-APIKEYS-CLI-001,ApiKeyCLI,CLI,IMPL,,,cli,2026-02-04,.claude/worktrees/agent-a37683fc/src/cli/apikey_cli.zig
 REQ-AUTH-APIKEYS-CLI-001,ApiKeyCLI,CLI,IMPL,,,cli,2026-02-04,.claude/worktrees/agent-a52e4e80/src/cli/apikey_cli.zig
@@ -4911,7 +4896,6 @@ REQ-AUTH-HMAC-001,AuthHmacChain,Core,TESTED,,,security,2026-02-24,.worktrees/aud
 REQ-AUTH-HMAC-001,AuthHmacChain,Core,TESTED,,,security,2026-02-24,.worktrees/graph-storage-integration/src/security/auth_hmac.zig
 REQ-AUTH-HMAC-001,AuthHmacChain,Core,TESTED,,,security,2026-02-24,.worktrees/session-20260401/src/security/auth_hmac.zig
 REQ-AUTH-HMAC-001,AuthHmacChain,Core,TESTED,,,security,2026-02-24,.worktrees/timeseries-gap-close/src/security/auth_hmac.zig
-REQ-AUTH-HMAC-001,AuthHmacChain,Core,TESTED,,,security,2026-02-24,src/security/auth_hmac.zig
 REQ-AUTH-HMAC-002,UserStorageHmac,Integration,TESTED,,,security,2026-02-24,.claude/worktrees/agent-a10cae4d/src/storage/user_storage.zig
 REQ-AUTH-HMAC-002,UserStorageHmac,Integration,TESTED,,,security,2026-02-24,.claude/worktrees/agent-a37683fc/src/storage/user_storage.zig
 REQ-AUTH-HMAC-002,UserStorageHmac,Integration,TESTED,,,security,2026-02-24,.claude/worktrees/agent-a52e4e80/src/storage/user_storage.zig
@@ -9229,7 +9213,7 @@ REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,IMPL,,,cli,2026-01-28,.wo
 REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,IMPL,,,cli,2026-01-28,.worktrees/graph-storage-integration/src/cli/main.zig
 REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,IMPL,,,cli,2026-01-28,.worktrees/session-20260401/src/cli/main.zig
 REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,IMPL,,,cli,2026-01-28,.worktrees/timeseries-gap-close/src/cli/main.zig
-REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,IMPL,,,cli,2026-01-28,src/cli/main.zig
+REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,IMPL,,,cli,2026-04-01,src/cli/main.zig
 REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a10cae4d/src/security/user_manager.zig
 REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a37683fc/src/security/user_manager.zig
 REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a52e4e80/src/security/user_manager.zig
@@ -14303,7 +14287,6 @@ REQ-FLE-AEAD-001,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-15,.wor
 REQ-FLE-AEAD-001,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-15,.worktrees/graph-storage-integration/src/crypto/aead.zig
 REQ-FLE-AEAD-001,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-15,.worktrees/session-20260401/src/crypto/aead.zig
 REQ-FLE-AEAD-001,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-15,.worktrees/timeseries-gap-close/src/crypto/aead.zig
-REQ-FLE-AEAD-001,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-15,src/crypto/aead.zig
 REQ-FLE-AST-001,FieldLevelEncryption,AST,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a10cae4d/src/gql/ast.zig
 REQ-FLE-AST-001,FieldLevelEncryption,AST,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a37683fc/src/gql/ast.zig
 REQ-FLE-AST-001,FieldLevelEncryption,AST,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a52e4e80/src/gql/ast.zig
@@ -15289,7 +15272,6 @@ REQ-FLE-FAILSECURE-006,FLEFailSecure,MasterKeyRequired,TESTED,,,security,2026-01
 REQ-FLE-FAILSECURE-006,FLEFailSecure,MasterKeyRequired,TESTED,,,security,2026-01-28,.worktrees/graph-storage-integration/src/keys/manager.zig
 REQ-FLE-FAILSECURE-006,FLEFailSecure,MasterKeyRequired,TESTED,,,security,2026-01-28,.worktrees/session-20260401/src/keys/manager.zig
 REQ-FLE-FAILSECURE-006,FLEFailSecure,MasterKeyRequired,TESTED,,,security,2026-01-28,.worktrees/timeseries-gap-close/src/keys/manager.zig
-REQ-FLE-FAILSECURE-006,FLEFailSecure,MasterKeyRequired,TESTED,,,security,2026-01-28,src/keys/manager.zig
 REQ-FLE-FAILSECURE-007,FLEFailSecure,AuditTrail,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a10cae4d/src/security/test_fle_enforcement.zig
 REQ-FLE-FAILSECURE-007,FLEFailSecure,AuditTrail,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a37683fc/src/security/test_fle_enforcement.zig
 REQ-FLE-FAILSECURE-007,FLEFailSecure,AuditTrail,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a52e4e80/src/security/test_fle_enforcement.zig
@@ -15374,7 +15356,6 @@ REQ-FLE-KEY-002,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-28,.work
 REQ-FLE-KEY-002,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-28,.worktrees/graph-storage-integration/src/keys/manager.zig
 REQ-FLE-KEY-002,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-28,.worktrees/session-20260401/src/keys/manager.zig
 REQ-FLE-KEY-002,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-28,.worktrees/timeseries-gap-close/src/keys/manager.zig
-REQ-FLE-KEY-002,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-28,src/keys/manager.zig
 REQ-FLE-MIGRATE-001,FieldLevelEncryption,Migration,TESTED,,,security,2026-01-16,.claude/worktrees/agent-a10cae4d/src/admin/fle_commands.zig
 REQ-FLE-MIGRATE-001,FieldLevelEncryption,Migration,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a10cae4d/tests/test_gap_0193_high_priority.zig
 REQ-FLE-MIGRATE-001,FieldLevelEncryption,Migration,TESTED,,,security,2026-01-16,.claude/worktrees/agent-a37683fc/src/admin/fle_commands.zig
@@ -16340,7 +16321,7 @@ REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-01-25,.cl
 REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-01-25,.claude/worktrees/nifty-chasing-scroll/src/migration/mod.zig
 REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-01-25,.claude/worktrees/session-2026-04-01/docs/superpowers/plans/2026-04-01-migration-engine-gap-closure.md
 REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-04-01,.claude/worktrees/session-2026-04-01/docs/superpowers/plans/2026-04-01-migration-engine-gap-closure.md
-REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-01-25,.claude/worktrees/session-2026-04-01/src/migration/mod.zig
+REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-04-01,.claude/worktrees/session-2026-04-01/src/migration/mod.zig
 REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-01-25,.worktrees/audit-multi-tenancy/src/migration/mod.zig
 REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-01-25,.worktrees/graph-storage-integration/src/migration/mod.zig
 REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-01-25,.worktrees/session-20260401/src/migration/mod.zig
@@ -16379,7 +16360,6 @@ REQ-GAP-0236,MonitoringUnitTests,Counter,TESTED,,,monitoring,2026-01-25,.worktre
 REQ-GAP-0236,MonitoringUnitTests,Counter,TESTED,,,monitoring,2026-01-25,.worktrees/graph-storage-integration/src/monitoring/metrics.zig
 REQ-GAP-0236,MonitoringUnitTests,Counter,TESTED,,,monitoring,2026-01-25,.worktrees/session-20260401/src/monitoring/metrics.zig
 REQ-GAP-0236,MonitoringUnitTests,Counter,TESTED,,,monitoring,2026-01-25,.worktrees/timeseries-gap-close/src/monitoring/metrics.zig
-REQ-GAP-0236,MonitoringUnitTests,Counter,TESTED,,,monitoring,2026-01-25,src/monitoring/metrics.zig
 REQ-GAP-0237,MVCCAdvancedUnitTests,ConflictRepair,TESTED,,,txn,2026-01-25,.claude/worktrees/agent-a10cae4d/src/transactions/mvcc_adv/conflict_repair_heuristics.zig
 REQ-GAP-0237,MVCCAdvancedUnitTests,ConflictRepair,TESTED,,,txn,2026-01-25,.claude/worktrees/agent-a37683fc/src/transactions/mvcc_adv/conflict_repair_heuristics.zig
 REQ-GAP-0237,MVCCAdvancedUnitTests,ConflictRepair,TESTED,,,txn,2026-01-25,.claude/worktrees/agent-a52e4e80/src/transactions/mvcc_adv/conflict_repair_heuristics.zig
@@ -23336,7 +23316,6 @@ REQ-GQL-040,Raft Consensus,Distributed,BENCHED,,,distributed,2025-09-21,.worktre
 REQ-GQL-040,Raft Consensus,Distributed,BENCHED,,,distributed,2025-09-21,.worktrees/graph-storage-integration/src/distributed/raft.zig
 REQ-GQL-040,Raft Consensus,Distributed,BENCHED,,,distributed,2025-09-21,.worktrees/session-20260401/src/distributed/raft.zig
 REQ-GQL-040,Raft Consensus,Distributed,BENCHED,,,distributed,2025-09-21,.worktrees/timeseries-gap-close/src/distributed/raft.zig
-REQ-GQL-040,Raft Consensus,Distributed,BENCHED,,,distributed,2025-09-21,src/distributed/raft.zig
 REQ-GQL-040,Temporal,TemporalExtremeOffsetArithmetic,TESTED,,,engine,2025-09-21,.claude/worktrees/agent-a10cae4d/tests/test_temporal_extreme_offsets.zig
 REQ-GQL-040,Temporal,TemporalExtremeOffsetArithmetic,TESTED,,,engine,2025-09-21,.claude/worktrees/agent-a37683fc/tests/test_temporal_extreme_offsets.zig
 REQ-GQL-040,Temporal,TemporalExtremeOffsetArithmetic,TESTED,,,engine,2025-09-21,.claude/worktrees/agent-a52e4e80/tests/test_temporal_extreme_offsets.zig
@@ -29222,7 +29201,7 @@ REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-01-11,.claude/worktrees
 REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-01-11,.claude/worktrees/agent-aff1c8ad/src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-01-11,.claude/worktrees/session-2026-04-01/docs/superpowers/plans/2026-04-01-migration-engine-gap-closure.md
 REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-04-01,.claude/worktrees/session-2026-04-01/docs/superpowers/plans/2026-04-01-migration-engine-gap-closure.md
-REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-01-11,.claude/worktrees/session-2026-04-01/src/migration/mod.zig
+REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-04-01,.claude/worktrees/session-2026-04-01/src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-01-11,.worktrees/audit-multi-tenancy/src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-01-11,.worktrees/graph-storage-integration/src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-01-11,.worktrees/session-20260401/src/migration/mod.zig
@@ -29288,7 +29267,7 @@ REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-01-11,.c
 REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-01-11,.claude/worktrees/agent-aff1c8ad/src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-01-11,.claude/worktrees/session-2026-04-01/docs/superpowers/plans/2026-04-01-migration-engine-gap-closure.md
 REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-04-01,.claude/worktrees/session-2026-04-01/docs/superpowers/plans/2026-04-01-migration-engine-gap-closure.md
-REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-01-11,.claude/worktrees/session-2026-04-01/src/migration/mod.zig
+REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-04-01,.claude/worktrees/session-2026-04-01/src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-01-11,.worktrees/audit-multi-tenancy/src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-01-11,.worktrees/graph-storage-integration/src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-01-11,.worktrees/session-20260401/src/migration/mod.zig
@@ -31019,7 +30998,6 @@ REQ-GQL-CAST-KEYWORDS-001,CastTypeKeywords,UnitTests,TESTED,,,parser,2026-01-25,
 REQ-GQL-CAST-KEYWORDS-001,CastTypeKeywords,UnitTests,TESTED,,,parser,2026-01-25,.worktrees/graph-storage-integration/src/gql/token.zig
 REQ-GQL-CAST-KEYWORDS-001,CastTypeKeywords,UnitTests,TESTED,,,parser,2026-01-25,.worktrees/session-20260401/src/gql/token.zig
 REQ-GQL-CAST-KEYWORDS-001,CastTypeKeywords,UnitTests,TESTED,,,parser,2026-01-25,.worktrees/timeseries-gap-close/src/gql/token.zig
-REQ-GQL-CAST-KEYWORDS-001,CastTypeKeywords,UnitTests,TESTED,,,parser,2026-01-25,src/gql/token.zig
 REQ-GQL-CATALOG-001,Enhanced Catalog Operations,RegressionTesting,TESTED,,,parser,2025-10-04,.claude/worktrees/agent-a10cae4d/tests/test_catalog_operations_regression.zig
 REQ-GQL-CATALOG-001,Enhanced Catalog Operations,RegressionTesting,TESTED,,,parser,2025-10-04,.claude/worktrees/agent-a37683fc/tests/test_catalog_operations_regression.zig
 REQ-GQL-CATALOG-001,Enhanced Catalog Operations,RegressionTesting,TESTED,,,parser,2025-10-04,.claude/worktrees/agent-a52e4e80/tests/test_catalog_operations_regression.zig
@@ -33095,7 +33073,6 @@ REQ-GQL-HNSW-JACCARD-001,Jaccard Distance in HNSW,IndexMetric,TESTED,,,index,202
 REQ-GQL-HNSW-JACCARD-001,Jaccard Distance in HNSW,IndexMetric,TESTED,,,index,2026-01-15,.worktrees/graph-storage-integration/src/index/hnsw.zig
 REQ-GQL-HNSW-JACCARD-001,Jaccard Distance in HNSW,IndexMetric,TESTED,,,index,2026-01-15,.worktrees/session-20260401/src/index/hnsw.zig
 REQ-GQL-HNSW-JACCARD-001,Jaccard Distance in HNSW,IndexMetric,TESTED,,,index,2026-01-15,.worktrees/timeseries-gap-close/src/index/hnsw.zig
-REQ-GQL-HNSW-JACCARD-001,Jaccard Distance in HNSW,IndexMetric,TESTED,,,index,2026-01-15,src/index/hnsw.zig
 REQ-GQL-IMPLICIT-GROUPBY-001,ImplicitGroupBy,WithAggregation,TESTED,,,execution,2025-12-26,.claude/worktrees/agent-a10cae4d/src/execution.zig
 REQ-GQL-IMPLICIT-GROUPBY-001,ImplicitGroupBy,WithAggregation,TESTED,,,execution,2025-12-26,.claude/worktrees/agent-a37683fc/src/execution.zig
 REQ-GQL-IMPLICIT-GROUPBY-001,ImplicitGroupBy,WithAggregation,TESTED,,,execution,2025-12-26,.claude/worktrees/agent-a52e4e80/src/execution.zig
@@ -33877,7 +33854,6 @@ REQ-GQL-KEYWORDS-001,GQL Reserved Words,ISO39075Compliance,TESTED,,,parser,2026-
 REQ-GQL-KEYWORDS-001,GQL Reserved Words,ISO39075Compliance,TESTED,,,parser,2026-01-03,.worktrees/graph-storage-integration/src/gql/token.zig
 REQ-GQL-KEYWORDS-001,GQL Reserved Words,ISO39075Compliance,TESTED,,,parser,2026-01-03,.worktrees/session-20260401/src/gql/token.zig
 REQ-GQL-KEYWORDS-001,GQL Reserved Words,ISO39075Compliance,TESTED,,,parser,2026-01-03,.worktrees/timeseries-gap-close/src/gql/token.zig
-REQ-GQL-KEYWORDS-001,GQL Reserved Words,ISO39075Compliance,TESTED,,,parser,2026-01-03,src/gql/token.zig
 REQ-GQL-KMS-BACKEND-001,KMS Backend Safety Check,SECURITY,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a10cae4d/src/security/external_kms_client.zig
 REQ-GQL-KMS-BACKEND-001,KMS Backend Safety Check,SECURITY,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a37683fc/src/security/external_kms_client.zig
 REQ-GQL-KMS-BACKEND-001,KMS Backend Safety Check,SECURITY,TESTED,,,security,2026-01-15,.claude/worktrees/agent-a52e4e80/src/security/external_kms_client.zig
@@ -37430,7 +37406,6 @@ REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,TESTED,,,distributed,2025-
 REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,TESTED,,,distributed,2025-09-25,.worktrees/graph-storage-integration/src/distributed/raft_persistent.zig
 REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,TESTED,,,distributed,2025-09-25,.worktrees/session-20260401/src/distributed/raft_persistent.zig
 REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,TESTED,,,distributed,2025-09-25,.worktrees/timeseries-gap-close/src/distributed/raft_persistent.zig
-REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,TESTED,,,distributed,2025-09-25,src/distributed/raft_persistent.zig
 REQ-GQL-REGEX-FIX-001,RegexMatching,OverflowPrevention,TESTED,,,eval,2026-01-09,.claude/worktrees/agent-a10cae4d/src/eval/logic_helpers.zig
 REQ-GQL-REGEX-FIX-001,RegexMatching,OverflowPrevention,TESTED,,,eval,2026-01-09,.claude/worktrees/agent-a37683fc/src/eval/logic_helpers.zig
 REQ-GQL-REGEX-FIX-001,RegexMatching,OverflowPrevention,TESTED,,,eval,2026-01-09,.claude/worktrees/agent-a52e4e80/src/eval/logic_helpers.zig
@@ -42889,7 +42864,6 @@ REQ-LEXER-METADATA-001,MetadataIntegration,KeywordLookup,EXEMPT,,,lexer,2026-01-
 REQ-LEXER-METADATA-001,MetadataIntegration,KeywordLookup,EXEMPT,,,lexer,2026-01-03,.worktrees/graph-storage-integration/src/gql/token.zig
 REQ-LEXER-METADATA-001,MetadataIntegration,KeywordLookup,EXEMPT,,,lexer,2026-01-03,.worktrees/session-20260401/src/gql/token.zig
 REQ-LEXER-METADATA-001,MetadataIntegration,KeywordLookup,EXEMPT,,,lexer,2026-01-03,.worktrees/timeseries-gap-close/src/gql/token.zig
-REQ-LEXER-METADATA-001,MetadataIntegration,KeywordLookup,EXEMPT,,,lexer,2026-01-03,src/gql/token.zig
 REQ-LEXER-METADATA-002,MetadataIntegration,ComptimeKeywordMap,EXEMPT,,,lexer,2026-01-03,.claude/worktrees/agent-a10cae4d/src/gql/token.zig
 REQ-LEXER-METADATA-002,MetadataIntegration,ComptimeKeywordMap,EXEMPT,,,lexer,2026-01-03,.claude/worktrees/agent-a37683fc/src/gql/token.zig
 REQ-LEXER-METADATA-002,MetadataIntegration,ComptimeKeywordMap,EXEMPT,,,lexer,2026-01-03,.claude/worktrees/agent-a52e4e80/src/gql/token.zig
@@ -42906,7 +42880,6 @@ REQ-LEXER-METADATA-002,MetadataIntegration,ComptimeKeywordMap,EXEMPT,,,lexer,202
 REQ-LEXER-METADATA-002,MetadataIntegration,ComptimeKeywordMap,EXEMPT,,,lexer,2026-01-03,.worktrees/graph-storage-integration/src/gql/token.zig
 REQ-LEXER-METADATA-002,MetadataIntegration,ComptimeKeywordMap,EXEMPT,,,lexer,2026-01-03,.worktrees/session-20260401/src/gql/token.zig
 REQ-LEXER-METADATA-002,MetadataIntegration,ComptimeKeywordMap,EXEMPT,,,lexer,2026-01-03,.worktrees/timeseries-gap-close/src/gql/token.zig
-REQ-LEXER-METADATA-002,MetadataIntegration,ComptimeKeywordMap,EXEMPT,,,lexer,2026-01-03,src/gql/token.zig
 REQ-LIB-MIGRATION-CLI-001,External Library Migration,CLIFramework,EXEMPT,,,core,2026-01-24,.claude/worktrees/agent-a10cae4d/src/cli/cli_dispatcher.zig
 REQ-LIB-MIGRATION-CLI-001,External Library Migration,CLIFramework,EXEMPT,,,core,2026-01-24,.claude/worktrees/agent-a37683fc/src/cli/cli_dispatcher.zig
 REQ-LIB-MIGRATION-CLI-001,External Library Migration,CLIFramework,EXEMPT,,,core,2026-01-24,.claude/worktrees/agent-a52e4e80/src/cli/cli_dispatcher.zig
@@ -42940,7 +42913,8 @@ REQ-LIB-MIGRATION-CLI-002,External Library Migration,ShellCompletions,EXEMPT,,,c
 REQ-LIB-MIGRATION-CLI-002,External Library Migration,ShellCompletions,EXEMPT,,,cli,2026-01-24,.worktrees/graph-storage-integration/src/cli/cli_dispatcher.zig
 REQ-LIB-MIGRATION-CLI-002,External Library Migration,ShellCompletions,EXEMPT,,,cli,2026-01-24,.worktrees/session-20260401/src/cli/cli_dispatcher.zig
 REQ-LIB-MIGRATION-CLI-002,External Library Migration,ShellCompletions,EXEMPT,,,cli,2026-01-24,.worktrees/timeseries-gap-close/src/cli/cli_dispatcher.zig
-REQ-LIB-MIGRATION-CLI-002,External Library Migration,ShellCompletions,EXEMPT,,,cli,2026-01-24,src/cli/cli_dispatcher.zig
+REQ-LIB-MIGRATION-CLI-002,External Library Migration,ShellCompletions,TESTED,,,cli,2026-04-01,src/cli/cli_dispatcher.zig
+REQ-LIB-MIGRATION-CLI-002,External Library Migration,ShellCompletions,TESTED,,,cli,2026-04-01,src/cli/cli_dispatcher.zig
 REQ-LIB-MIGRATION-CONFIG-001,Config Library Migration,ReplConfigXdg,EXEMPT,,,client,2026-01-25,.claude/worktrees/agent-a10cae4d/src/client/repl/repl_config.zig
 REQ-LIB-MIGRATION-CONFIG-001,Config Library Migration,ReplConfigXdg,EXEMPT,,,client,2026-01-25,.claude/worktrees/agent-a37683fc/src/client/repl/repl_config.zig
 REQ-LIB-MIGRATION-CONFIG-001,Config Library Migration,ReplConfigXdg,EXEMPT,,,client,2026-01-25,.claude/worktrees/agent-a52e4e80/src/client/repl/repl_config.zig
@@ -43008,7 +42982,6 @@ REQ-LIB-MIGRATION-DNS-001,External Library Migration,DNSResolution,EXEMPT,,,core
 REQ-LIB-MIGRATION-DNS-001,External Library Migration,DNSResolution,EXEMPT,,,core,2026-01-24,.worktrees/graph-storage-integration/src/audit/syslog.zig
 REQ-LIB-MIGRATION-DNS-001,External Library Migration,DNSResolution,EXEMPT,,,core,2026-01-24,.worktrees/session-20260401/src/audit/syslog.zig
 REQ-LIB-MIGRATION-DNS-001,External Library Migration,DNSResolution,EXEMPT,,,core,2026-01-24,.worktrees/timeseries-gap-close/src/audit/syslog.zig
-REQ-LIB-MIGRATION-DNS-001,External Library Migration,DNSResolution,EXEMPT,,,core,2026-01-24,src/audit/syslog.zig
 REQ-LIB-MIGRATION-JSON-001,JSON Library Migration,Protocol,IMPL,,,core,2026-01-24,.claude/worktrees/agent-a10cae4d/docs/JSON_MIGRATION.md
 REQ-LIB-MIGRATION-JSON-001,JSON Library Migration,Protocol,IMPL,,,core,2026-01-24,.claude/worktrees/agent-a37683fc/docs/JSON_MIGRATION.md
 REQ-LIB-MIGRATION-JSON-001,JSON Library Migration,Protocol,IMPL,,,core,2026-01-24,.claude/worktrees/agent-a52e4e80/docs/JSON_MIGRATION.md
@@ -43093,7 +43066,6 @@ REQ-LIB-MIGRATION-JSON-005,External Library Migration,AuditLogger,EXEMPT,,,core,
 REQ-LIB-MIGRATION-JSON-005,External Library Migration,AuditLogger,EXEMPT,,,core,2026-01-24,.worktrees/graph-storage-integration/src/audit/logger.zig
 REQ-LIB-MIGRATION-JSON-005,External Library Migration,AuditLogger,EXEMPT,,,core,2026-01-24,.worktrees/session-20260401/src/audit/logger.zig
 REQ-LIB-MIGRATION-JSON-005,External Library Migration,AuditLogger,EXEMPT,,,core,2026-01-24,.worktrees/timeseries-gap-close/src/audit/logger.zig
-REQ-LIB-MIGRATION-JSON-005,External Library Migration,AuditLogger,EXEMPT,,,core,2026-01-24,src/audit/logger.zig
 REQ-LIB-MIGRATION-JSON-005,External Library Migration,ExternalKMS,EXEMPT,,,core,2026-01-24,.claude/worktrees/agent-a10cae4d/src/security/external_kms_client.zig
 REQ-LIB-MIGRATION-JSON-005,External Library Migration,ExternalKMS,EXEMPT,,,core,2026-01-24,.claude/worktrees/agent-a37683fc/src/security/external_kms_client.zig
 REQ-LIB-MIGRATION-JSON-005,External Library Migration,ExternalKMS,EXEMPT,,,core,2026-01-24,.claude/worktrees/agent-a52e4e80/src/security/external_kms_client.zig
@@ -43127,7 +43099,6 @@ REQ-LIB-MIGRATION-JSON-005,External Library Migration,FileSink,EXEMPT,,,core,202
 REQ-LIB-MIGRATION-JSON-005,External Library Migration,FileSink,EXEMPT,,,core,2026-01-24,.worktrees/graph-storage-integration/src/audit/file_sink.zig
 REQ-LIB-MIGRATION-JSON-005,External Library Migration,FileSink,EXEMPT,,,core,2026-01-24,.worktrees/session-20260401/src/audit/file_sink.zig
 REQ-LIB-MIGRATION-JSON-005,External Library Migration,FileSink,EXEMPT,,,core,2026-01-24,.worktrees/timeseries-gap-close/src/audit/file_sink.zig
-REQ-LIB-MIGRATION-JSON-005,External Library Migration,FileSink,EXEMPT,,,core,2026-01-24,src/audit/file_sink.zig
 REQ-LIB-MIGRATION-JSON-005,External Library Migration,SecurityAudit,EXEMPT,,,core,2026-01-24,.claude/worktrees/agent-a10cae4d/src/security/audit.zig
 REQ-LIB-MIGRATION-JSON-005,External Library Migration,SecurityAudit,EXEMPT,,,core,2026-01-24,.claude/worktrees/agent-a37683fc/src/security/audit.zig
 REQ-LIB-MIGRATION-JSON-005,External Library Migration,SecurityAudit,EXEMPT,,,core,2026-01-24,.claude/worktrees/agent-a52e4e80/src/security/audit.zig
@@ -43927,6 +43898,7 @@ REQ-LIB-MIGRATION-PROTOBUF-001,Protobuf Wire Protocol,WireProtocolCompatibility,
 REQ-LIB-MIGRATION-PROTOBUF-001,Protobuf Wire Protocol,WireProtocolCompatibility,TESTED,,,protocol,2026-02-03,.worktrees/timeseries-gap-close/tests/protobuf_wire_protocol_compatibility.zig
 REQ-LIB-MIGRATION-PROTOBUF-001,Protobuf Wire Protocol,WireProtocolCompatibility,TESTED,,,protocol,2026-02-03,tests/gql_conformance.zig
 REQ-LIB-MIGRATION-PROTOBUF-001,Protobuf Wire Protocol,WireProtocolCompatibility,TESTED,,,protocol,2026-02-03,tests/protobuf_wire_protocol_compatibility.zig
+REQ-LIB-MIGRATION-REPL-001,External Library Migration,ReplParseDelegation,TESTED,,,client,2026-04-01,src/client/repl/repl_parse.zig
 REQ-LIB-MIGRATION-SLOG-001,External Library Migration,StructuredLogging,EXEMPT,,,core,2026-01-24,.claude/worktrees/agent-a10cae4d/src/audit/logger.zig
 REQ-LIB-MIGRATION-SLOG-001,External Library Migration,StructuredLogging,EXEMPT,,,core,2026-01-24,.claude/worktrees/agent-a37683fc/src/audit/logger.zig
 REQ-LIB-MIGRATION-SLOG-001,External Library Migration,StructuredLogging,EXEMPT,,,core,2026-01-24,.claude/worktrees/agent-a52e4e80/src/audit/logger.zig
@@ -43943,7 +43915,6 @@ REQ-LIB-MIGRATION-SLOG-001,External Library Migration,StructuredLogging,EXEMPT,,
 REQ-LIB-MIGRATION-SLOG-001,External Library Migration,StructuredLogging,EXEMPT,,,core,2026-01-24,.worktrees/graph-storage-integration/src/audit/logger.zig
 REQ-LIB-MIGRATION-SLOG-001,External Library Migration,StructuredLogging,EXEMPT,,,core,2026-01-24,.worktrees/session-20260401/src/audit/logger.zig
 REQ-LIB-MIGRATION-SLOG-001,External Library Migration,StructuredLogging,EXEMPT,,,core,2026-01-24,.worktrees/timeseries-gap-close/src/audit/logger.zig
-REQ-LIB-MIGRATION-SLOG-001,External Library Migration,StructuredLogging,EXEMPT,,,core,2026-01-24,src/audit/logger.zig
 REQ-LIB-MIGRATION-SLOG-002,Centralized Structured Logging,Infrastructure,EXEMPT,,,core,2026-01-24,.claude/worktrees/agent-a10cae4d/src/logging/logger.zig
 REQ-LIB-MIGRATION-SLOG-002,Centralized Structured Logging,Infrastructure,EXEMPT,,,core,2026-01-24,.claude/worktrees/agent-a37683fc/src/logging/logger.zig
 REQ-LIB-MIGRATION-SLOG-002,Centralized Structured Logging,Infrastructure,EXEMPT,,,core,2026-01-24,.claude/worktrees/agent-a52e4e80/src/logging/logger.zig
@@ -43994,7 +43965,6 @@ REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Audit,EXEMPT,,,audit,2026-01-24,.w
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Audit,EXEMPT,,,audit,2026-01-24,.worktrees/graph-storage-integration/src/audit/syslog.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Audit,EXEMPT,,,audit,2026-01-24,.worktrees/session-20260401/src/audit/syslog.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Audit,EXEMPT,,,audit,2026-01-24,.worktrees/timeseries-gap-close/src/audit/syslog.zig
-REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Audit,EXEMPT,,,audit,2026-01-24,src/audit/syslog.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,CLI,EXEMPT,,,cli,2026-01-24,.claude/worktrees/agent-a10cae4d/src/cli/backup_cli.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,CLI,EXEMPT,,,cli,2026-01-24,.claude/worktrees/agent-a10cae4d/src/cli/cli_dispatcher.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,CLI,EXEMPT,,,cli,2026-01-24,.claude/worktrees/agent-a10cae4d/src/cli/main.zig
@@ -54884,7 +54854,6 @@ REQ-PERF-PHASE3-002,MemoryOptimization,HNSW_NEIGHBORS,BENCHED,,,performance,2026
 REQ-PERF-PHASE3-002,MemoryOptimization,HNSW_NEIGHBORS,BENCHED,,,performance,2026-01-15,.worktrees/graph-storage-integration/src/index/hnsw.zig
 REQ-PERF-PHASE3-002,MemoryOptimization,HNSW_NEIGHBORS,BENCHED,,,performance,2026-01-15,.worktrees/session-20260401/src/index/hnsw.zig
 REQ-PERF-PHASE3-002,MemoryOptimization,HNSW_NEIGHBORS,BENCHED,,,performance,2026-01-15,.worktrees/timeseries-gap-close/src/index/hnsw.zig
-REQ-PERF-PHASE3-002,MemoryOptimization,HNSW_NEIGHBORS,BENCHED,,,performance,2026-01-15,src/index/hnsw.zig
 REQ-PERF-PHASE3-BENCH-001,ConcurrencyBenchmarking,BUILD,EXEMPT,,,performance,2025-10-16,.claude/worktrees/agent-a10cae4d/build.zig
 REQ-PERF-PHASE3-BENCH-001,ConcurrencyBenchmarking,BUILD,EXEMPT,,,performance,2025-10-16,.claude/worktrees/agent-a37683fc/build.zig
 REQ-PERF-PHASE3-BENCH-001,ConcurrencyBenchmarking,BUILD,EXEMPT,,,performance,2025-10-16,.claude/worktrees/agent-a52e4e80/build.zig
@@ -55224,7 +55193,6 @@ REQ-PERF-PHASE5-P1-002,MetricsOptimization,LOCK_FREE_HISTOGRAM,EXEMPT,,,performa
 REQ-PERF-PHASE5-P1-002,MetricsOptimization,LOCK_FREE_HISTOGRAM,EXEMPT,,,performance,2025-11-16,.worktrees/graph-storage-integration/src/monitoring/metrics.zig
 REQ-PERF-PHASE5-P1-002,MetricsOptimization,LOCK_FREE_HISTOGRAM,EXEMPT,,,performance,2025-11-16,.worktrees/session-20260401/src/monitoring/metrics.zig
 REQ-PERF-PHASE5-P1-002,MetricsOptimization,LOCK_FREE_HISTOGRAM,EXEMPT,,,performance,2025-11-16,.worktrees/timeseries-gap-close/src/monitoring/metrics.zig
-REQ-PERF-PHASE5-P1-002,MetricsOptimization,LOCK_FREE_HISTOGRAM,EXEMPT,,,performance,2025-11-16,src/monitoring/metrics.zig
 REQ-PERF-PHASE5-P1-002,MetricsOptimization,TESTING,EXEMPT,,,performance,2025-11-16,.claude/worktrees/agent-a10cae4d/benchmarks/phase5_8_metrics_atomic.zig
 REQ-PERF-PHASE5-P1-002,MetricsOptimization,TESTING,EXEMPT,,,performance,2025-11-16,.claude/worktrees/agent-a37683fc/benchmarks/phase5_8_metrics_atomic.zig
 REQ-PERF-PHASE5-P1-002,MetricsOptimization,TESTING,EXEMPT,,,performance,2025-11-16,.claude/worktrees/agent-a52e4e80/benchmarks/phase5_8_metrics_atomic.zig
@@ -55734,7 +55702,6 @@ REQ-PERF-SPICE-014,HNSWSpiceIntegration,IndexParallelism,IMPL,,,performance,2026
 REQ-PERF-SPICE-014,HNSWSpiceIntegration,IndexParallelism,IMPL,,,performance,2026-02-02,.worktrees/graph-storage-integration/src/index/hnsw.zig
 REQ-PERF-SPICE-014,HNSWSpiceIntegration,IndexParallelism,IMPL,,,performance,2026-02-02,.worktrees/session-20260401/src/index/hnsw.zig
 REQ-PERF-SPICE-014,HNSWSpiceIntegration,IndexParallelism,IMPL,,,performance,2026-02-02,.worktrees/timeseries-gap-close/src/index/hnsw.zig
-REQ-PERF-SPICE-014,HNSWSpiceIntegration,IndexParallelism,IMPL,,,performance,2026-02-02,src/index/hnsw.zig
 REQ-PERF-SPICE-015,BatchDistanceSimd,HNSWBatch,IMPL,,,performance,2026-02-02,.claude/worktrees/agent-a10cae4d/src/index/hnsw.zig
 REQ-PERF-SPICE-015,BatchDistanceSimd,HNSWBatch,IMPL,,,performance,2026-02-02,.claude/worktrees/agent-a37683fc/src/index/hnsw.zig
 REQ-PERF-SPICE-015,BatchDistanceSimd,HNSWBatch,IMPL,,,performance,2026-02-02,.claude/worktrees/agent-a52e4e80/src/index/hnsw.zig
@@ -55751,7 +55718,6 @@ REQ-PERF-SPICE-015,BatchDistanceSimd,HNSWBatch,IMPL,,,performance,2026-02-02,.wo
 REQ-PERF-SPICE-015,BatchDistanceSimd,HNSWBatch,IMPL,,,performance,2026-02-02,.worktrees/graph-storage-integration/src/index/hnsw.zig
 REQ-PERF-SPICE-015,BatchDistanceSimd,HNSWBatch,IMPL,,,performance,2026-02-02,.worktrees/session-20260401/src/index/hnsw.zig
 REQ-PERF-SPICE-015,BatchDistanceSimd,HNSWBatch,IMPL,,,performance,2026-02-02,.worktrees/timeseries-gap-close/src/index/hnsw.zig
-REQ-PERF-SPICE-015,BatchDistanceSimd,HNSWBatch,IMPL,,,performance,2026-02-02,src/index/hnsw.zig
 REQ-PERF-SPICE-016,ParallelBatchDistance,HNSWParallel,IMPL,,,performance,2026-02-02,.claude/worktrees/agent-a10cae4d/src/index/hnsw.zig
 REQ-PERF-SPICE-016,ParallelBatchDistance,HNSWParallel,IMPL,,,performance,2026-02-02,.claude/worktrees/agent-a37683fc/src/index/hnsw.zig
 REQ-PERF-SPICE-016,ParallelBatchDistance,HNSWParallel,IMPL,,,performance,2026-02-02,.claude/worktrees/agent-a52e4e80/src/index/hnsw.zig
@@ -55768,7 +55734,6 @@ REQ-PERF-SPICE-016,ParallelBatchDistance,HNSWParallel,IMPL,,,performance,2026-02
 REQ-PERF-SPICE-016,ParallelBatchDistance,HNSWParallel,IMPL,,,performance,2026-02-02,.worktrees/graph-storage-integration/src/index/hnsw.zig
 REQ-PERF-SPICE-016,ParallelBatchDistance,HNSWParallel,IMPL,,,performance,2026-02-02,.worktrees/session-20260401/src/index/hnsw.zig
 REQ-PERF-SPICE-016,ParallelBatchDistance,HNSWParallel,IMPL,,,performance,2026-02-02,.worktrees/timeseries-gap-close/src/index/hnsw.zig
-REQ-PERF-SPICE-016,ParallelBatchDistance,HNSWParallel,IMPL,,,performance,2026-02-02,src/index/hnsw.zig
 REQ-PERF-SPICE-017,ParallelKnnSearch,HNSWMultiQuery,IMPL,,,performance,2026-02-02,.claude/worktrees/agent-a10cae4d/src/index/hnsw.zig
 REQ-PERF-SPICE-017,ParallelKnnSearch,HNSWMultiQuery,IMPL,,,performance,2026-02-02,.claude/worktrees/agent-a37683fc/src/index/hnsw.zig
 REQ-PERF-SPICE-017,ParallelKnnSearch,HNSWMultiQuery,IMPL,,,performance,2026-02-02,.claude/worktrees/agent-a52e4e80/src/index/hnsw.zig
@@ -55785,7 +55750,6 @@ REQ-PERF-SPICE-017,ParallelKnnSearch,HNSWMultiQuery,IMPL,,,performance,2026-02-0
 REQ-PERF-SPICE-017,ParallelKnnSearch,HNSWMultiQuery,IMPL,,,performance,2026-02-02,.worktrees/graph-storage-integration/src/index/hnsw.zig
 REQ-PERF-SPICE-017,ParallelKnnSearch,HNSWMultiQuery,IMPL,,,performance,2026-02-02,.worktrees/session-20260401/src/index/hnsw.zig
 REQ-PERF-SPICE-017,ParallelKnnSearch,HNSWMultiQuery,IMPL,,,performance,2026-02-02,.worktrees/timeseries-gap-close/src/index/hnsw.zig
-REQ-PERF-SPICE-017,ParallelKnnSearch,HNSWMultiQuery,IMPL,,,performance,2026-02-02,src/index/hnsw.zig
 REQ-PERF-SPICE-018,CBOSpiceIntegration,PlannerParallelism,IMPL,,,performance,2026-02-02,.claude/worktrees/agent-a10cae4d/src/planner/cbo.zig
 REQ-PERF-SPICE-018,CBOSpiceIntegration,PlannerParallelism,IMPL,,,performance,2026-02-02,.claude/worktrees/agent-a37683fc/src/planner/cbo.zig
 REQ-PERF-SPICE-018,CBOSpiceIntegration,PlannerParallelism,IMPL,,,performance,2026-02-02,.claude/worktrees/agent-a52e4e80/src/planner/cbo.zig
@@ -56040,7 +56004,6 @@ REQ-PERF-THREAD-POOL-001,ThreadPool,QueryExecution,TESTED,,,transport,2026-04-01
 REQ-PERF-THREAD-POOL-001,ThreadPool,QueryExecution,TESTED,,,transport,2026-01-30,.worktrees/graph-storage-integration/src/transport/thread_pool.zig
 REQ-PERF-THREAD-POOL-001,ThreadPool,QueryExecution,TESTED,,,transport,2026-01-30,.worktrees/session-20260401/src/transport/thread_pool.zig
 REQ-PERF-THREAD-POOL-001,ThreadPool,QueryExecution,TESTED,,,transport,2026-01-30,.worktrees/timeseries-gap-close/src/transport/thread_pool.zig
-REQ-PERF-THREAD-POOL-001,ThreadPool,QueryExecution,TESTED,,,transport,2026-01-30,src/transport/thread_pool.zig
 REQ-PERF-THREAD-POOL-002,ThreadPool,WorkerManagement,TESTED,,,transport,2026-01-30,.claude/worktrees/agent-a10cae4d/src/transport/thread_pool.zig
 REQ-PERF-THREAD-POOL-002,ThreadPool,WorkerManagement,TESTED,,,transport,2026-01-30,.claude/worktrees/agent-a37683fc/src/transport/thread_pool.zig
 REQ-PERF-THREAD-POOL-002,ThreadPool,WorkerManagement,TESTED,,,transport,2026-01-30,.claude/worktrees/agent-a52e4e80/src/transport/thread_pool.zig
@@ -56057,7 +56020,6 @@ REQ-PERF-THREAD-POOL-002,ThreadPool,WorkerManagement,TESTED,,,transport,2026-04-
 REQ-PERF-THREAD-POOL-002,ThreadPool,WorkerManagement,TESTED,,,transport,2026-01-30,.worktrees/graph-storage-integration/src/transport/thread_pool.zig
 REQ-PERF-THREAD-POOL-002,ThreadPool,WorkerManagement,TESTED,,,transport,2026-01-30,.worktrees/session-20260401/src/transport/thread_pool.zig
 REQ-PERF-THREAD-POOL-002,ThreadPool,WorkerManagement,TESTED,,,transport,2026-01-30,.worktrees/timeseries-gap-close/src/transport/thread_pool.zig
-REQ-PERF-THREAD-POOL-002,ThreadPool,WorkerManagement,TESTED,,,transport,2026-01-30,src/transport/thread_pool.zig
 REQ-PERF-THREAD-POOL-003,ThreadPool,QueryWorkItem,TESTED,,,transport,2026-01-30,.claude/worktrees/agent-a10cae4d/src/transport/thread_pool.zig
 REQ-PERF-THREAD-POOL-003,ThreadPool,QueryWorkItem,TESTED,,,transport,2026-01-30,.claude/worktrees/agent-a37683fc/src/transport/thread_pool.zig
 REQ-PERF-THREAD-POOL-003,ThreadPool,QueryWorkItem,TESTED,,,transport,2026-01-30,.claude/worktrees/agent-a52e4e80/src/transport/thread_pool.zig
@@ -56074,7 +56036,6 @@ REQ-PERF-THREAD-POOL-003,ThreadPool,QueryWorkItem,TESTED,,,transport,2026-04-01,
 REQ-PERF-THREAD-POOL-003,ThreadPool,QueryWorkItem,TESTED,,,transport,2026-01-30,.worktrees/graph-storage-integration/src/transport/thread_pool.zig
 REQ-PERF-THREAD-POOL-003,ThreadPool,QueryWorkItem,TESTED,,,transport,2026-01-30,.worktrees/session-20260401/src/transport/thread_pool.zig
 REQ-PERF-THREAD-POOL-003,ThreadPool,QueryWorkItem,TESTED,,,transport,2026-01-30,.worktrees/timeseries-gap-close/src/transport/thread_pool.zig
-REQ-PERF-THREAD-POOL-003,ThreadPool,QueryWorkItem,TESTED,,,transport,2026-01-30,src/transport/thread_pool.zig
 REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,IMPL,,,build,2026-01-26,.claude/worktrees/agent-a10cae4d/build.zig
 REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,IMPL,,,build,2026-01-26,.claude/worktrees/agent-a37683fc/build.zig
 REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,IMPL,,,build,2026-01-26,.claude/worktrees/agent-a52e4e80/build.zig
@@ -56091,7 +56052,7 @@ REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,IMPL,,,build,2026-04-
 REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,IMPL,,,build,2026-01-26,.worktrees/graph-storage-integration/build.zig
 REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,IMPL,,,build,2026-01-26,.worktrees/session-20260401/build.zig
 REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,IMPL,,,build,2026-01-26,.worktrees/timeseries-gap-close/build.zig
-REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,IMPL,,,build,2026-01-26,build.zig
+REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,IMPL,,,build,2026-04-01,build.zig
 REQ-PERF-WAL-001,WriteAheadLog,DeltaPersistence,TESTED,,,storage,2026-03-31,.claude/worktrees/agent-a10cae4d/src/wal.zig
 REQ-PERF-WAL-001,WriteAheadLog,DeltaPersistence,TESTED,,,storage,2026-03-31,.claude/worktrees/agent-a37683fc/src/wal.zig
 REQ-PERF-WAL-001,WriteAheadLog,DeltaPersistence,TESTED,,,storage,2026-03-31,.claude/worktrees/agent-a52e4e80/src/wal.zig
@@ -57070,7 +57031,6 @@ REQ-QUALITY-GAP-413-007,OrphanedTestRemediation,AuditBundle,TESTED,,,quality,202
 REQ-QUALITY-GAP-413-007,OrphanedTestRemediation,AuditBundle,TESTED,,,quality,2026-01-30,.worktrees/graph-storage-integration/src/audit/mod.zig
 REQ-QUALITY-GAP-413-007,OrphanedTestRemediation,AuditBundle,TESTED,,,quality,2026-01-30,.worktrees/session-20260401/src/audit/mod.zig
 REQ-QUALITY-GAP-413-007,OrphanedTestRemediation,AuditBundle,TESTED,,,quality,2026-01-30,.worktrees/timeseries-gap-close/src/audit/mod.zig
-REQ-QUALITY-GAP-413-007,OrphanedTestRemediation,AuditBundle,TESTED,,,quality,2026-01-30,src/audit/mod.zig
 REQ-QUALITY-GAP-413-009,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.claude/worktrees/agent-a10cae4d/src/audit/syslog.zig
 REQ-QUALITY-GAP-413-009,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.claude/worktrees/agent-a37683fc/src/audit/syslog.zig
 REQ-QUALITY-GAP-413-009,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.claude/worktrees/agent-a52e4e80/src/audit/syslog.zig
@@ -57087,7 +57047,6 @@ REQ-QUALITY-GAP-413-009,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-
 REQ-QUALITY-GAP-413-009,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.worktrees/graph-storage-integration/src/audit/syslog.zig
 REQ-QUALITY-GAP-413-009,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.worktrees/session-20260401/src/audit/syslog.zig
 REQ-QUALITY-GAP-413-009,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.worktrees/timeseries-gap-close/src/audit/syslog.zig
-REQ-QUALITY-GAP-413-009,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,src/audit/syslog.zig
 REQ-QUALITY-GAP-413-010,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.claude/worktrees/agent-a10cae4d/src/audit/file_sink.zig
 REQ-QUALITY-GAP-413-010,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.claude/worktrees/agent-a37683fc/src/audit/file_sink.zig
 REQ-QUALITY-GAP-413-010,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.claude/worktrees/agent-a52e4e80/src/audit/file_sink.zig
@@ -57104,7 +57063,6 @@ REQ-QUALITY-GAP-413-010,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-
 REQ-QUALITY-GAP-413-010,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.worktrees/graph-storage-integration/src/audit/file_sink.zig
 REQ-QUALITY-GAP-413-010,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.worktrees/session-20260401/src/audit/file_sink.zig
 REQ-QUALITY-GAP-413-010,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.worktrees/timeseries-gap-close/src/audit/file_sink.zig
-REQ-QUALITY-GAP-413-010,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,src/audit/file_sink.zig
 REQ-QUALITY-GAP-413-011,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.claude/worktrees/agent-a10cae4d/src/audit/time.zig
 REQ-QUALITY-GAP-413-011,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.claude/worktrees/agent-a37683fc/src/audit/time.zig
 REQ-QUALITY-GAP-413-011,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.claude/worktrees/agent-a52e4e80/src/audit/time.zig
@@ -57121,7 +57079,6 @@ REQ-QUALITY-GAP-413-011,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-
 REQ-QUALITY-GAP-413-011,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.worktrees/graph-storage-integration/src/audit/time.zig
 REQ-QUALITY-GAP-413-011,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.worktrees/session-20260401/src/audit/time.zig
 REQ-QUALITY-GAP-413-011,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,.worktrees/timeseries-gap-close/src/audit/time.zig
-REQ-QUALITY-GAP-413-011,OrphanedTestRemediation,Zig015API,TESTED,,,quality,2026-01-30,src/audit/time.zig
 REQ-QUALITY-GAP-413-012,OrphanedTestRemediation,AllocatorPassing,TESTED,,,quality,2026-01-30,.claude/worktrees/agent-a10cae4d/src/audit/filters.zig
 REQ-QUALITY-GAP-413-012,OrphanedTestRemediation,AllocatorPassing,TESTED,,,quality,2026-01-30,.claude/worktrees/agent-a37683fc/src/audit/filters.zig
 REQ-QUALITY-GAP-413-012,OrphanedTestRemediation,AllocatorPassing,TESTED,,,quality,2026-01-30,.claude/worktrees/agent-a52e4e80/src/audit/filters.zig
@@ -57138,7 +57095,6 @@ REQ-QUALITY-GAP-413-012,OrphanedTestRemediation,AllocatorPassing,TESTED,,,qualit
 REQ-QUALITY-GAP-413-012,OrphanedTestRemediation,AllocatorPassing,TESTED,,,quality,2026-01-30,.worktrees/graph-storage-integration/src/audit/filters.zig
 REQ-QUALITY-GAP-413-012,OrphanedTestRemediation,AllocatorPassing,TESTED,,,quality,2026-01-30,.worktrees/session-20260401/src/audit/filters.zig
 REQ-QUALITY-GAP-413-012,OrphanedTestRemediation,AllocatorPassing,TESTED,,,quality,2026-01-30,.worktrees/timeseries-gap-close/src/audit/filters.zig
-REQ-QUALITY-GAP-413-012,OrphanedTestRemediation,AllocatorPassing,TESTED,,,quality,2026-01-30,src/audit/filters.zig
 REQ-QUALITY-GAP-413-013,OrphanedTestRemediation,ConstCorrectness,TESTED,,,quality,2026-01-30,.claude/worktrees/agent-a10cae4d/tests/test_filters.zig
 REQ-QUALITY-GAP-413-013,OrphanedTestRemediation,ConstCorrectness,TESTED,,,quality,2026-01-30,.claude/worktrees/agent-a37683fc/tests/test_filters.zig
 REQ-QUALITY-GAP-413-013,OrphanedTestRemediation,ConstCorrectness,TESTED,,,quality,2026-01-30,.claude/worktrees/agent-a52e4e80/tests/test_filters.zig
@@ -63371,7 +63327,6 @@ REQ-SPATIAL-RTREE-001,RTreeSpatialIndex,Wrapper,TESTED,,,index,2026-03-24,.workt
 REQ-SPATIAL-RTREE-001,RTreeSpatialIndex,Wrapper,TESTED,,,index,2026-03-24,.worktrees/graph-storage-integration/src/index/rtree.zig
 REQ-SPATIAL-RTREE-001,RTreeSpatialIndex,Wrapper,TESTED,,,index,2026-03-24,.worktrees/session-20260401/src/index/rtree.zig
 REQ-SPATIAL-RTREE-001,RTreeSpatialIndex,Wrapper,TESTED,,,index,2026-03-24,.worktrees/timeseries-gap-close/src/index/rtree.zig
-REQ-SPATIAL-RTREE-001,RTreeSpatialIndex,Wrapper,TESTED,,,index,2026-03-24,src/index/rtree.zig
 REQ-SPATIAL-WITHIN-001,SpatialWithin,GeometryRelation,TESTED,,,spatial,2026-01-10,.claude/worktrees/agent-a10cae4d/src/eval_extended.zig
 REQ-SPATIAL-WITHIN-001,SpatialWithin,GeometryRelation,TESTED,,,spatial,2026-01-10,.claude/worktrees/agent-a37683fc/src/eval_extended.zig
 REQ-SPATIAL-WITHIN-001,SpatialWithin,GeometryRelation,TESTED,,,spatial,2026-01-10,.claude/worktrees/agent-a52e4e80/src/eval_extended.zig
@@ -65088,7 +65043,7 @@ REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,,,security,2026-01
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,,,security,2026-01-28,.worktrees/graph-storage-integration/src/index/hnsw_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,,,security,2026-01-28,.worktrees/session-20260401/src/index/hnsw_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,,,security,2026-01-28,.worktrees/timeseries-gap-close/src/index/hnsw_persist.zig
-REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,,,security,2026-01-28,src/index/hnsw_persist.zig
+REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,,,security,2026-04-01,src/index/hnsw_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,IntervalTree,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a10cae4d/src/index/interval_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,IntervalTree,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a37683fc/src/index/interval_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,IntervalTree,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a52e4e80/src/index/interval_persist.zig
@@ -65173,7 +65128,6 @@ REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,RaftState,TESTED,,,security,2026-01
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,RaftState,TESTED,,,security,2026-01-28,.worktrees/graph-storage-integration/src/distributed/raft_persistent.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,RaftState,TESTED,,,security,2026-01-28,.worktrees/session-20260401/src/distributed/raft_persistent.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,RaftState,TESTED,,,security,2026-01-28,.worktrees/timeseries-gap-close/src/distributed/raft_persistent.zig
-REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,RaftState,TESTED,,,security,2026-01-28,src/distributed/raft_persistent.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SECURITY,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a10cae4d/docs/SECURITY_PROGRESS.md
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SECURITY,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a37683fc/docs/SECURITY_PROGRESS.md
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SECURITY,TESTED,,,security,2026-01-28,.claude/worktrees/agent-a52e4e80/docs/SECURITY_PROGRESS.md

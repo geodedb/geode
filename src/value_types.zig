@@ -17,7 +17,7 @@ const decimal128 = @import("types/decimal128.zig");
 const jsonb = @import("types/jsonb.zig");
 const xml = @import("types/xml.zig");
 const url = @import("types/url.zig");
-const uuid = @import("types/uuid.zig");
+const uuid = @import("uuid");
 const arrays = @import("types/arrays.zig");
 const bitstring = @import("types/bitstring.zig");
 const range = @import("types/range.zig");
@@ -156,7 +156,7 @@ pub const Env = struct {
     /// Track whether this Env owns its arrays and should free them
     owned: bool = false,
     /// Reference to TimeSeries store (GAP-004 wiring)
-    timeseries_store: ?*const @import("timeseries/timeseries.zig").Store = null,
+    timeseries_store: ?*const @import("timeseries_lib").Store = null,
     /// Optional opaque execution context pointer for subquery evaluation
     exec_context: ?*anyopaque = null,
 

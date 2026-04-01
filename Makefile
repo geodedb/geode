@@ -493,19 +493,22 @@ canary:
 canary-verify: canary
 	./bin/canaryscan --root . --verify docs/GAP_ANALYSIS.md --strict
 
-.PHONY: verify-all verify-fast ci-verify
+.PHONY: verify-all verify-fast ci-verify dependency-integration-audit
 
 # Full, strict E2E verification. Fails on vendoring issues immediately.
 # Note: For geodetestlab integration tests, use ../geode-test-harness
-verify-all: clean sub quic-init fmt build test integration-test dataset-integration-test cross-compile-strict no-feature-flags status-generate governance-check docker-ci
+verify-all: clean sub quic-init fmt build test dependency-integration-audit integration-test dataset-integration-test cross-compile-strict no-feature-flags status-generate governance-check docker-ci
 	@echo "==> E2E verification: PASSED"
 
 # Faster dev loop (no fuzz/bench/docker/governance)
-verify-fast: build test cross-compile-required
+verify-fast: build test dependency-integration-audit cross-compile-required
 	@echo "==> Fast verification: PASSED"
 
 # CI-friendly alias
 ci-verify: verify-all
+
+dependency-integration-audit:
+	@python3 scripts/verify_dependency_integrations.py
 
 # Generate evidence badge (SVG) from status.csv (run canary first if needed)
 governance-badge: canary

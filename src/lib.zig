@@ -37,8 +37,8 @@ pub const ast = @import("gql/ast.zig");
 // GQL module namespace
 pub const gql = struct {
     pub const ast = @import("gql/ast.zig");
-    pub const token = @import("gql/token.zig");
-    pub const status = @import("gql/status.zig");
+    pub const token = @import("gql_lib").token;
+    pub const status = @import("gql_lib").status;
     pub const parser = @import("gql/parser.zig");
     pub const lexer = @import("gql/lexer.zig");
 };
@@ -139,7 +139,7 @@ pub const types = struct {
     pub const jsonb = @import("types/jsonb.zig");
     pub const xml = @import("types/xml.zig");
     pub const url = @import("types/url.zig");
-    pub const uuid = @import("types/uuid.zig");
+    pub const uuid = @import("uuid");
     pub const arrays = @import("types/arrays.zig");
     pub const bitstring = @import("types/bitstring.zig");
     pub const range = @import("types/range.zig");
@@ -210,14 +210,14 @@ pub const benchmarks = struct {
     // Shared variance configuration helper
     pub const variance_config = @import("benchmarks/variance_config.zig");
 };
-// Time-series module (initial in-memory scaffold)
-pub const timeseries = @import("timeseries/timeseries.zig");
+// Time-series module
+pub const timeseries = @import("timeseries_lib");
 
 // Re-export index modules for specialized data types
 pub const index = struct {
     pub const patricia = @import("index/patricia.zig");
-    pub const rtree = @import("index/rtree.zig");
-    pub const hnsw = @import("index/hnsw.zig");
+    pub const rtree = @import("rtree_lib");
+    pub const hnsw = @import("hnsw_lib");
     pub const interval_tree = @import("index/interval_tree.zig");
     pub const interval_persist = @import("index/interval_persist.zig");
     pub const jsonb_inverted = @import("index/jsonb_inverted.zig");
@@ -239,7 +239,7 @@ pub const distributed = struct {
     pub const raft_consensus = @import("distributed/raft_consensus.zig");
     pub const txn_coordinator = @import("distributed/txn_coordinator.zig");
     pub const cluster = @import("distributed/cluster.zig");
-    pub const raft = @import("distributed/raft.zig");
+    pub const raft = @import("raft");
     pub const query_planner = @import("distributed/query_planner.zig");
 };
 
@@ -325,17 +325,18 @@ pub const gpu = struct {
 // Audit modules for CLI integration
 // GAP-0075: Added syslog export for CLI audit integration
 pub const audit = struct {
-    pub const config = @import("audit/config.zig");
-    pub const logger = @import("audit/logger.zig");
+    pub const config = @import("audit_lib").config;
+    pub const test_support = @import("audit/test_support.zig");
+    pub const logger = @import("audit_lib").logger;
     pub const system_logger = @import("log/logger.zig");
-    pub const events = @import("audit/events.zig");
-    pub const time = @import("audit/time.zig");
-    pub const syslog = @import("audit/syslog.zig");
+    pub const events = @import("audit_lib").events;
+    pub const time = @import("audit_lib").time;
+    pub const syslog = @import("audit_lib").syslog;
 };
 
-// Runtime-flag gated scaffold stub re-exports for acceptance tests
+// Runtime-flag gated test-support exports for acceptance tests
 pub const tde_stub = @import("security/tde.zig");
-pub const mfa_stub = @import("mfa");
+pub const mfa_test_support = @import("mfa");
 
 // Top-level security module exports for tests
 pub const auth = @import("geode_auth");
@@ -511,7 +512,7 @@ pub fn parseGqlOptions(src: []const u8, allocator: std.mem.Allocator, opts: Pars
 
 pub const ParseOutcome = union(enum) {
     Ok: ParseResult,
-    Err: struct { msg: []const u8, line: u32, column: u32, token: @import("gql/token.zig").TokenKind, has_double_dash_comment: bool, has_unwind: bool = false },
+    Err: struct { msg: []const u8, line: u32, column: u32, token: @import("gql_lib").token.TokenKind, has_double_dash_comment: bool, has_unwind: bool = false },
 };
 
 // Parse but capture parser error details instead of throwing; allocation errors still throw.
@@ -534,7 +535,7 @@ pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: Pars
 // Re-export execution and graph_store for integration tests
 pub const execution = @import("execution.zig");
 pub const graph_store = @import("graph_store.zig");
-pub const UuidV7 = @import("uuid.zig").UuidV7;
+pub const uuid = @import("uuid");
 // CANARY: REQ=REQ-PERF-WAL-006; FEATURE="WriteAheadLog"; ASPECT=LibExport; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
 // Re-export WAL for server initialization and tests
 pub const wal = @import("wal.zig");
@@ -545,11 +546,11 @@ pub const fle_key_types = @import("fle_key_types");
 
 // User management and authentication
 pub const user_management = @import("security/user_management.zig");
-pub const api_keys = @import("security/api_keys.zig");
+pub const api_keys = @import("auth_lib").api_keys;
 pub const mtls_provider = @import("security/mtls_provider.zig");
 
 // HMAC chain integrity module for internal auth storage
-pub const auth_hmac = @import("security/auth_hmac.zig");
+pub const auth_hmac = @import("auth_lib").hmac;
 
 // Auth graph manager module is available as a separate build module import:
 // @import("auth_graph_manager") — see build.zig for module registration.

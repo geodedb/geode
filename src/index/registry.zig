@@ -1,7 +1,7 @@
 const std = @import("std");
 const patricia = @import("patricia.zig");
-const rtree = @import("rtree.zig");
-const hnsw = @import("hnsw.zig");
+const rtree = @import("rtree_lib");
+const hnsw = @import("hnsw_lib");
 const heap = @import("../storage/heap.zig");
 
 pub const IndexKind = enum { patricia_v4, patricia_v6, rtree, hnsw };
@@ -16,8 +16,8 @@ pub fn create(kind: IndexKind, allocator: std.mem.Allocator) AnyIndex {
     return switch (kind) {
         .patricia_v4 => .{ .Patricia = patricia.PatriciaTrie.init(allocator, .v4) },
         .patricia_v6 => .{ .Patricia = patricia.PatriciaTrie.init(allocator, .v6) },
-        .rtree => .{ .RTree = rtree.RTree.init(allocator, 16) },
-        .hnsw => .{ .Hnsw = hnsw.Hnsw.init(allocator, 0, 16, 32) },
+        .rtree => .{ .RTree = rtree.RTree.init(allocator, 16) catch unreachable },
+        .hnsw => .{ .Hnsw = hnsw.Hnsw.init(allocator, 1, .euclidean, .{ .m = 16, .ef_construction = 32, .ef_search = 32 }) catch unreachable },
     };
 }
 
