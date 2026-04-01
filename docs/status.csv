@@ -3955,6 +3955,10 @@ REQ-TS-GQL-XCORR-001,TimeSeriesGqlCrossCorrelate,GqlFunction,TESTED,,,timeseries
 REQ-TS-GQL-ZNORM-001,TimeSeriesGqlZNormalize,GqlFunction,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
 REQ-TS-INSERT-001,TimeSeriesInsertMany,DataIngestion,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig
 REQ-TS-LAST-001,TimeSeriesLast,Query,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig
+REQ-TS-PERSIST-001,TimeSeriesPersistence,ServerInit,IMPL,,,server,2026-04-01,src/server/main.zig
+REQ-TS-PERSIST-001,TimeSeriesPersistence,StoreConfig,IMPL,,,timeseries,2026-04-01,src/timeseries/timeseries.zig
+REQ-TS-PERSIST-002,TimeSeriesLoadFromDisk,Startup,IMPL,,,timeseries,2026-04-01,src/timeseries/timeseries.zig
+REQ-TS-PERSIST-003,TimeSeriesSync,Shutdown,IMPL,,,timeseries,2026-04-01,src/timeseries/timeseries.zig
 REQ-TS-POINT-001,TimeSeriesPoint,Types,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig
 REQ-TS-RETENTION-001,ChunkRetention,Lifecycle,TESTED,,,timeseries,2026-04-01,src/timeseries/chunk_storage.zig
 REQ-TS-SAMPLEBY-001,TimeSeriesSampleBy,Aggregation,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig

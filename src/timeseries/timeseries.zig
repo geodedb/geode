@@ -12,6 +12,9 @@
 // CANARY: REQ=REQ-TS-VALUEAT-001; FEATURE="TimeSeriesValueAt"; ASPECT=Query; STATUS=TESTED; TEST=src/timeseries/timeseries.zig:"ts: valueAt and lastValue"; OWNER=timeseries; UPDATED=2026-04-01
 // CANARY: REQ=REQ-TS-SERIESKEY-001; FEATURE="TimeSeriesSeriesKey"; ASPECT=Types; STATUS=TESTED; TEST=src/timeseries/timeseries.zig:"ts: insert/order/last/asof"; OWNER=timeseries; UPDATED=2026-04-01
 // CANARY: REQ=REQ-TS-POINT-001; FEATURE="TimeSeriesPoint"; ASPECT=Types; STATUS=TESTED; TEST=src/timeseries/timeseries.zig:"ts: insert/order/last/asof"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-PERSIST-001; FEATURE="TimeSeriesPersistence"; ASPECT=StoreConfig; STATUS=IMPL; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-PERSIST-002; FEATURE="TimeSeriesLoadFromDisk"; ASPECT=Startup; STATUS=IMPL; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-PERSIST-003; FEATURE="TimeSeriesSync"; ASPECT=Shutdown; STATUS=IMPL; OWNER=timeseries; UPDATED=2026-04-01
 
 const ts_lib = @import("timeseries_lib");
 
@@ -21,6 +24,9 @@ pub const PointF64 = ts_lib.PointF64;
 pub const SeriesKey = ts_lib.SeriesKey;
 pub const Series = ts_lib.Series;
 pub const Store = ts_lib.Store;
+pub const StoreConfig = ts_lib.StoreConfig;
+pub const ChunkConfig = ts_lib.ChunkConfig;
+pub const ChunkStorage = ts_lib.ChunkStorage;
 
 // Re-export the external library's full namespace so advanced consumers
 // (e.g. DTW, matrix profile, features) can reach sub-modules.
@@ -394,4 +400,58 @@ test "ts: timeBucketAvg — boundary: point exactly at bucket start" {
     try std.testing.expectEqual(@as(i64, 10), result[0].avg.?);
     try std.testing.expectEqual(@as(i64, 20), result[1].avg.?);
     try std.testing.expectEqual(@as(i64, 30), result[2].avg.?);
+}
+
+// ---------------------------------------------------------------------------
+// GAP-0292: Persistence round-trip test via wrapper
+// ---------------------------------------------------------------------------
+
+test "ts: persist-restart-query via StoreConfig" {
+    const allocator = std.testing.allocator;
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/geode_ts_persist_{d}", .{pid}) catch unreachable;
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    const key = SeriesKey{ .device_id = 7, .metric = "voltage" };
+
+    // Phase 1: insert and deinit (flush to disk).
+    {
+        var st = try Store.initWithConfig(allocator, .{
+            .data_dir = test_dir,
+            .chunk_config = .{ .max_points_per_chunk = 10 },
+        });
+        defer st.deinit();
+
+        try st.insertMany(key, &.{
+            .{ .ts = 100, .value = 220 },
+            .{ .ts = 200, .value = 221 },
+            .{ .ts = 300, .value = 219 },
+        });
+    }
+
+    // Phase 2: reload and verify.
+    {
+        var st2 = try Store.initWithConfig(allocator, .{
+            .data_dir = test_dir,
+            .chunk_config = .{ .max_points_per_chunk = 10 },
+        });
+        defer st2.deinit();
+
+        try st2.loadFromDisk();
+
+        const last = st2.last(key);
+        try std.testing.expect(last != null);
+        try std.testing.expectEqual(@as(i64, 300), last.?.ts);
+        try std.testing.expectEqual(@as(i64, 219), last.?.value);
+    }
+}
+
+test "ts: StoreConfig re-export available" {
+    // Verify that StoreConfig, ChunkConfig, ChunkStorage are accessible through the wrapper.
+    const cfg = StoreConfig{ .data_dir = null };
+    try std.testing.expect(cfg.data_dir == null);
+    const cc = ChunkConfig{};
+    try std.testing.expect(cc.retention_days == 30);
 }
