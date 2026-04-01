@@ -1,87 +1,73 @@
-# Distributed Module Architecture
+# Distributed Module
 
-## Module Roles
+This module implements Geode's distributed systems layer: consensus, coordination,
+sharding, federation, and distributed query execution.
 
-### Consensus Layer
+## Coordinator Hierarchy
 
-- **`raft_consensus.zig`** -- Canonical Raft wrapper around the external
-  `gitlab.com/devnw/zig/raft` library. Uses u64 node IDs, typed `Command`
-  unions, protobuf wire framing over QUIC, and file-backed
-  `PersistentStorage` for term/votedFor durability.
+### Cluster Coordination
 
-- **`raft.zig`** -- Thin compatibility shim for `mod.zig`. Accepts
-  string-based node IDs (hashed to u64 via Wyhash) and raw byte payloads,
-  then delegates all consensus operations to `raft_consensus.RaftNode`.
+| Coordinator | File | Role | Use When |
+|-------------|------|------|----------|
+| **ClusterCoordinator** | `cluster.zig` | Production coordinator | Production and multi-node deployments |
+| DistributedCoordinator | `mod.zig` | Simplified wrapper (deprecated) | Single-node testing or lightweight integration |
 
-- **`raft_persistent.zig`** -- Standalone persistent Raft node used for
-  cluster membership bookkeeping (member add/remove, snapshots). Reads and
-  writes term state to the filesystem independently of the consensus
-  wrapper.
+**ClusterCoordinator** is the canonical production coordinator. It manages Raft
+consensus (via `raft_consensus.zig`), node health monitoring, data replication,
+protobuf-based cluster messaging, and network transport. All new production code
+should use `ClusterCoordinator`.
 
-### Coordination Layer
+**DistributedCoordinator** is a simpler facade that wraps `raft.zig` (now a thin
+shim over `raft_consensus.zig`) and `twophase.zig`. It is retained for backward
+compatibility and lightweight tests but is **deprecated** in favor of
+`ClusterCoordinator`.
 
-- **`mod.zig`** -- `DistributedCoordinator` facade. Composes Raft (via the
-  `raft.zig` shim), 2PC, and sharding behind a single API. This is the
-  entry point used by the rest of Geode.
+### Query Coordination
 
-- **`cluster.zig`** -- `ClusterCoordinator`. Higher-level coordinator that
-  uses `raft_consensus.RaftNode` directly for production cluster
-  management, health monitoring, and leader-driven operations.
+| Coordinator | File | Role | Use When |
+|-------------|------|------|----------|
+| **EnhancedQueryCoordinator** | `enhanced_query_coordinator.zig` | Full-featured query coordinator | Production distributed queries |
+| QueryCoordinator | `query_coordinator.zig` | Basic scatter-gather (deprecated) | Simple federation without caching |
 
-- **`twophase.zig`** -- Two-phase commit coordinator for distributed
-  transactions spanning multiple shards.
+**EnhancedQueryCoordinator** is the preferred query coordinator. It is a superset
+of `QueryCoordinator`, adding:
 
-- **`txn_coordinator.zig`** -- Transaction lifecycle management integrated
-  with the Raft log for replicated transaction decisions.
+- Distributed query cache (`QueryCache`)
+- Cost-based distributed query optimizer (`DistributedQueryOptimizer`)
+- Shard-aware routing via `ShardRegistry`
+- Node health tracking via `NodeRegistry`
+- Top-K push-down and aggregation push-down
+- Coordinator-level metrics
 
-### Query Layer
+**QueryCoordinator** provides basic scatter-gather execution with CBO statistics
+integration. It is **deprecated** -- use `EnhancedQueryCoordinator` for new work.
 
-- **`query_coordinator.zig`** / **`query_planner.zig`** -- Distributed
-  query planning and execution across shards.
+## Module Entrypoint
 
-- **`enhanced_query_coordinator.zig`** / **`enhanced_query_transport.zig`**
-  -- Extended query coordination with federation awareness and load
-  balancing.
+`mod.zig` re-exports the key types for convenient access:
 
-### Data Distribution
+```zig
+const distributed = @import("distributed");
 
-- **`sharding.zig`** -- Consistent-hash shard manager mapping keys to
-  shard IDs and nodes.
+// Production coordinators (preferred)
+const Cluster = distributed.ClusterCoordinator;
+const QueryCoord = distributed.EnhancedQueryCoordinator;
 
-- **`federation.zig`** / **`federation_flag.zig`** /
-  **`federation_latency_aggregate.zig`** -- Cross-cluster federation,
-  latency tracking, and mismatch detection.
-
-### Transport
-
-- **`network_transport.zig`** / **`query_transport.zig`** -- QUIC-based
-  inter-node transport for Raft messages and query data.
-
-## Layer Diagram
-
-```
- Transport (QUIC/TLS)
-        |
- Consensus (raft_consensus.zig)
-        |
- Cluster  (cluster.zig / mod.zig)
-        |
- Query Coordination (query_coordinator.zig)
+// Legacy (deprecated)
+const Legacy = distributed.DistributedCoordinator;
+const BasicQuery = distributed.QueryCoordinator;
 ```
 
-## Key Design Decisions
+## Other Components
 
-1. **Single consensus implementation.** `raft_consensus.zig` is the only
-   file that wraps the external raft library for consensus operations.
-   `raft.zig` is a backward-compatible shim, not a second implementation.
-
-2. **u64 node identity.** The external raft library requires u64 node IDs.
-   String IDs (used by `mod.zig`) are hashed via Wyhash in the shim layer.
-
-3. **File-backed persistence.** `PersistentStorage` in `raft_consensus.zig`
-   writes `current_term` and `voted_for` to the data directory. Log entry
-   persistence is deferred (requires a WAL implementation).
-
-4. **Protobuf wire format.** Inter-node Raft messages are encoded as
-   protobuf `RaftEnvelope` frames, length-prefixed (4-byte big-endian)
-   over QUIC streams.
+| File | Purpose |
+|------|---------|
+| `raft_consensus.zig` | Full Raft consensus implementation |
+| `raft.zig` | Thin shim delegating to `raft_consensus.zig` |
+| `twophase.zig` | Two-phase commit coordinator |
+| `sharding.zig` | Hash-based shard management |
+| `federation.zig` | Federation configuration and routing |
+| `query_planner.zig` | Partition-aware query planning |
+| `query_transport.zig` | Inter-node query message transport |
+| `network_transport.zig` | Low-level cluster networking |
+| `txn_coordinator.zig` | Distributed transaction coordination |
