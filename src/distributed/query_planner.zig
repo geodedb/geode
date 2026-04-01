@@ -61,13 +61,18 @@ pub const DistributedQueryPlanner = struct {
         return analysis;
     }
 
-    // Generate optimized plans for each participating shard
+    // Generate optimized plans for each participating shard.
+    // Uses label-based routing: if the query references specific labels and
+    // shards advertise labels, only target shards whose labels overlap.
+    // Falls back to all registered shards (or shard IDs 1,2 if registry is empty).
     fn generateShardPlans(self: *DistributedQueryPlanner, query: *const ast.Query, analysis: DistributionAnalysis) ![]ShardPlan {
         var shard_plans = std.ArrayList(ShardPlan).initCapacity(self.allocator, 4) catch return error.OutOfMemory;
 
-        // Simplified shard planning for compilation
-        const shard_ids = [_]u32{ 1, 2 }; // Mock shard IDs
-        for (shard_ids) |shard_id| {
+        // Collect participating shard IDs from the registry
+        const participating = try self.selectParticipatingShards(analysis);
+        defer self.allocator.free(participating);
+
+        for (participating) |shard_id| {
             const shard_query = try self.generateShardQuery(query, shard_id, analysis);
             const local_plan = try self.optimizeShardLocalPlan(shard_query, shard_id);
 
@@ -82,6 +87,61 @@ pub const DistributedQueryPlanner = struct {
         }
 
         return shard_plans.toOwnedSlice(self.allocator);
+    }
+
+    /// Select which shards participate in a query based on label affinity.
+    /// If the analysis specifies labels and shards advertise matching labels,
+    /// only those shards are included (shard pruning). Otherwise all shards
+    /// participate.
+    fn selectParticipatingShards(self: *DistributedQueryPlanner, analysis: DistributionAnalysis) ![]u32 {
+        const registry_count = self.shard_registry.shards.count();
+
+        // If registry is empty, use default shard IDs for backward compatibility
+        if (registry_count == 0) {
+            var defaults = try self.allocator.alloc(u32, 2);
+            defaults[0] = 1;
+            defaults[1] = 2;
+            return defaults;
+        }
+
+        const has_label_affinities = analysis.label_affinities.count() > 0;
+
+        // Try label-based pruning: only include shards whose labels
+        // overlap with the query's label affinities.
+        if (has_label_affinities) {
+            var pruned = std.ArrayList(u32).init(self.allocator);
+            var shard_iter = self.shard_registry.shards.iterator();
+            while (shard_iter.next()) |entry| {
+                const shard_info = entry.value_ptr.*;
+                if (shardMatchesLabels(shard_info, analysis)) {
+                    try pruned.append(self.allocator, entry.key_ptr.*);
+                }
+            }
+            // If pruning produced results, use them; otherwise fall through to all shards
+            if (pruned.items.len > 0) {
+                return pruned.toOwnedSlice(self.allocator);
+            }
+            pruned.deinit(self.allocator);
+        }
+
+        // No pruning possible: include all shards
+        var all_ids = try self.allocator.alloc(u32, registry_count);
+        var it = self.shard_registry.shards.iterator();
+        var i: usize = 0;
+        while (it.next()) |entry| : (i += 1) {
+            all_ids[i] = entry.key_ptr.*;
+        }
+        return all_ids;
+    }
+
+    /// Check whether a shard's advertised labels overlap with the query's label affinities.
+    fn shardMatchesLabels(shard_info: ShardInfo, analysis: DistributionAnalysis) bool {
+        for (shard_info.labels) |shard_label| {
+            if (analysis.label_affinities.get(shard_label) != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Plan coordinator operations for distributed execution
@@ -133,15 +193,6 @@ pub const DistributedQueryPlanner = struct {
             .estimated_cost = total_cost,
             .parallelism_level = self.determineOptimalParallelism(plan),
         };
-    }
-
-    // Analyze MATCH chain for shard affinity patterns
-    fn analyzeMatchChain(self: *DistributedQueryPlanner, analysis: *DistributionAnalysis, chain: []const u8) !void {
-        _ = self;
-        _ = analysis;
-        _ = chain;
-        // Simplified implementation - would analyze actual MATCH patterns
-        // for shard affinity in a real implementation
     }
 
     // Analyze WHERE clause for shard-specific filtering
@@ -678,4 +729,115 @@ test "estimateShardRows: falls back to default when label has no stats" {
 
     const estimate = planner.estimateShardRows(1, analysis);
     try std.testing.expectEqual(@as(usize, 1000), estimate);
+}
+
+test "selectParticipatingShards: returns defaults when registry is empty" {
+    const ally = std.testing.allocator;
+    var fm = FederationManager.init(ally);
+    defer fm.deinit();
+    var planner = DistributedQueryPlanner.init(ally, &fm);
+    defer planner.deinit();
+
+    var analysis = DistributionAnalysis.init(ally);
+    defer analysis.deinit();
+
+    const shards = try planner.selectParticipatingShards(analysis);
+    defer ally.free(shards);
+
+    try std.testing.expectEqual(@as(usize, 2), shards.len);
+    // Default shard IDs: 1, 2
+    try std.testing.expectEqual(@as(u32, 1), shards[0]);
+    try std.testing.expectEqual(@as(u32, 2), shards[1]);
+}
+
+test "selectParticipatingShards: prunes by label affinity" {
+    const ally = std.testing.allocator;
+    var fm = FederationManager.init(ally);
+    defer fm.deinit();
+    var planner = DistributedQueryPlanner.init(ally, &fm);
+    defer planner.deinit();
+
+    // Register 3 shards: shard 1 has Person, shard 2 has Order, shard 3 has Person+Order
+    const person_labels: []const []const u8 = &.{"Person"};
+    const order_labels: []const []const u8 = &.{"Order"};
+    const both_labels: []const []const u8 = &.{ "Person", "Order" };
+    try planner.shard_registry.shards.put(1, ShardInfo{
+        .id = 1,
+        .endpoint = "localhost:3141",
+        .labels = person_labels,
+        .estimated_size = 0,
+        .status = .active,
+    });
+    try planner.shard_registry.shards.put(2, ShardInfo{
+        .id = 2,
+        .endpoint = "localhost:3142",
+        .labels = order_labels,
+        .estimated_size = 0,
+        .status = .active,
+    });
+    try planner.shard_registry.shards.put(3, ShardInfo{
+        .id = 3,
+        .endpoint = "localhost:3143",
+        .labels = both_labels,
+        .estimated_size = 0,
+        .status = .active,
+    });
+
+    // Query only references Person label
+    var analysis = DistributionAnalysis.init(ally);
+    defer analysis.deinit();
+    try analysis.addLabelAffinity("Person");
+
+    const shards = try planner.selectParticipatingShards(analysis);
+    defer ally.free(shards);
+
+    // Should only include shards 1 and 3 (both have Person label)
+    try std.testing.expectEqual(@as(usize, 2), shards.len);
+    // Verify both returned shards have Person label
+    for (shards) |sid| {
+        const info = planner.shard_registry.shards.get(sid).?;
+        var found = false;
+        for (info.labels) |lbl| {
+            if (std.mem.eql(u8, lbl, "Person")) {
+                found = true;
+                break;
+            }
+        }
+        try std.testing.expect(found);
+    }
+}
+
+test "selectParticipatingShards: returns all when no label match" {
+    const ally = std.testing.allocator;
+    var fm = FederationManager.init(ally);
+    defer fm.deinit();
+    var planner = DistributedQueryPlanner.init(ally, &fm);
+    defer planner.deinit();
+
+    const order_labels: []const []const u8 = &.{"Order"};
+    try planner.shard_registry.shards.put(1, ShardInfo{
+        .id = 1,
+        .endpoint = "localhost:3141",
+        .labels = order_labels,
+        .estimated_size = 0,
+        .status = .active,
+    });
+    try planner.shard_registry.shards.put(2, ShardInfo{
+        .id = 2,
+        .endpoint = "localhost:3142",
+        .labels = order_labels,
+        .estimated_size = 0,
+        .status = .active,
+    });
+
+    // Query references a label that no shard advertises
+    var analysis = DistributionAnalysis.init(ally);
+    defer analysis.deinit();
+    try analysis.addLabelAffinity("UnknownLabel");
+
+    const shards = try planner.selectParticipatingShards(analysis);
+    defer ally.free(shards);
+
+    // Falls back to all shards since no match was found
+    try std.testing.expectEqual(@as(usize, 2), shards.len);
 }
