@@ -126,7 +126,7 @@ const _e2e_cbo_v0 = @import("e2e_cbo_v0.zig");
 const _e2e_graph_algos_new = @import("e2e_graph_algos_new.zig");
 
 // New advanced feature tests - commented out due to module import issues
-// const _e2e_distributed_cluster = @import("e2e_distributed_cluster.zig");
+const _e2e_distributed_cluster = @import("e2e_distributed_cluster.zig");
 // const _e2e_recursive_queries = @import("e2e_recursive_queries.zig");
 // const _e2e_materialized_views = @import("e2e_materialized_views.zig");
 // const _e2e_rls_enhanced = @import("e2e_rls_enhanced.zig");
