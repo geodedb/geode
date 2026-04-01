@@ -10,11 +10,11 @@ Last updated: 2026-04-01
 - Closed (Won't Do / Sufficient): 7 (1 transport + 6 migration engine)
 - Blocked: 0
 
-Previous 17 findings (2026-02-17 audit) all resolved. March 2026 audit added 7 new findings -- all 7 closed 2026-03-13. April 2026 migration engine audit added 6 new findings (1x P2, 5x P3) -- all closed Won't Do 2026-04-01 (unmeasurable benefit at realistic migration counts).
+Previous 17 findings (2026-02-17 audit) all resolved. March 2026 audit added 7 new findings -- all 7 closed 2026-03-13. April 2026 migration engine audit added 6 new findings (1x P2, 5x P3) -- all closed Won't Do 2026-04-01 (unmeasurable benefit at realistic migration counts). April 2026 re-audit confirmed all 6 Won't Do dispositions correct; zero new actionable findings.
 
 ### Top 5 Open Risks (by PerfScore)
 
-No open performance risks. All migration engine findings closed as Won't Do (unmeasurable benefit at realistic migration counts).
+No open performance risks. All migration engine findings closed as Won't Do (unmeasurable benefit at realistic migration counts). Re-audit 2026-04-01 confirmed all dispositions correct; zero new actionable findings.
 
 ## Stack-Ranked Findings
 
@@ -52,7 +52,7 @@ No open performance risks. All migration engine findings closed as Won't Do (unm
 
 ### April 2026 Audit -- Migration Engine (`src/migration/mod.zig`)
 
-Context: Admin-time CLI tool. Dominant cost is QUIC round-trip (~1.3-1.9s per migration). No benchmarks exist. Reviewer consensus: none of these represent real bottlenecks at any realistic migration count (<10K).
+Context: Admin-time CLI tool. Dominant cost is QUIC round-trip (~1.3-1.9s per migration). No benchmarks exist. Reviewer consensus: none of these represent real bottlenecks at any realistic migration count (<10K). **Re-audit 2026-04-01**: All 6 Won't Do dispositions confirmed correct. Per-migration fsync in `applyUpMigrations` (mod.zig:433-435, 0.5-50ms) is correct for crash safety (GAP-0280) and dominated by QUIC RTT. O(N*R) quadratic loops bounded by migration count (<500). Full ledger reload per API call correct for CLI tool. 4MB/8MB read caps appropriate. Global mutex hold times nanosecond-scale. No pipelining opportunities without violating correctness. No benchmarks needed for admin-time tool. Zero new actionable performance findings.
 
 | Rank | Sev | Score | Finding | Component | Evidence | GitLab | Fix Summary | Status |
 |---|---|---:|---|---|---|---|---|---|
@@ -84,7 +84,7 @@ Context: Admin-time CLI tool. Dominant cost is QUIC round-trip (~1.3-1.9s per mi
 
 ## Roadmap
 
-No open performance items. All migration engine perf findings closed as Won't Do (2026-04-01).
+No open performance items. All migration engine perf findings closed as Won't Do (2026-04-01). Re-audit 2026-04-01 confirmed all dispositions; no new items.
 
 ## Blockers and Unblock Steps
 

@@ -1,8 +1,9 @@
-# Full Codebase Audit Summary — Migration Engine
+# Full Codebase Audit Summary -- Migration Engine
 
-**Date:** 2026-04-01 (re-audit)
-**Auditor:** Claude Code (Opus 4.6)
-**Scope:** `src/migration/mod.zig` (955 lines)
+**Date:** 2026-04-01 (full re-audit, supersedes prior same-day audit)
+**Auditor:** Claude Code (Opus 4.6, 1M context)
+**Scope:** `src/migration/mod.zig` (1052 lines) + `src/cli/backup_cli.zig` (CLI integration)
+**Method:** 4-phase parallel audit (16 specialized agents across gap, quality, perf, security domains)
 
 ---
 
@@ -15,83 +16,89 @@
 
 ---
 
+## Prior Audit Corrections
+
+The earlier same-day audit contained **stale findings** that this re-audit corrects:
+
+| Prior Claim | Actual State (verified) |
+|-------------|------------------------|
+| GAP-0279: CANARY tests are dead code, not in build.zig | **WRONG.** `tests/all_tests.zig:116-117` imports both files; `build.zig:894-895` adds migration module; `build.zig:1082,1103` wires into test step. **Correctly closed.** |
+| GAP-0281: `applyDownMigration` ignores names parameter | **WRONG.** Function was intentionally redesigned to single-step rollback (safety-first). **Correctly closed.** |
+| GAP-0290: `lock_steal_count` never incremented | **WRONG.** Incremented at `mod.zig:342`; included in `metricsSnapshot` at line 750. **Correctly closed.** |
+| GAP-0296: `checksumValidate` not bidirectional | **WRONG.** Line 620: `matched == applied_count and manifest_entries == matched` is correct bidirectional check. **Correctly closed.** |
+| All 6 CANARY markers reference dead/non-existent tests | **PARTIALLY WRONG.** 5 of 6 tests exist and compile. 2 have name mismatches (governance metadata issue, not dead code). Geodetestlab spec exists at `geodetestlab-cli/specs/` (path discrepancy only). |
+| StatusRow.name default "stub" causes UB | **ALREADY FIXED.** Default is now `""` (line 53); `freeStatusRows` checks `name.len > 0` (line 553). |
+| `baseline_override` accessed without mutex | **ALREADY FIXED.** Protected by `migration_mutex` at lines 629-631, 758-761. |
+| `saveLedger` tmp file close ordering | **ALREADY FIXED.** Explicit `tmp.close()` at line 297 before rename; `errdefer` at line 287. |
+
+---
+
 ## Domain Results
 
 ### Gap Analysis
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| Closed / Implemented | 23 | 64% |
-| Won't Do | 13 | 36% |
-| Open | 0 | 0% |
+| Closed / Implemented | 23 | 44% |
+| Won't Do | 13 | 25% |
+| Open (new) | 16 | 31% |
 
-**Prior tally:** 23 closed via implementation, 13 deferred as Won't Do. However, re-audit found **4 closures are incorrect** and **5 new gaps**:
+**Prior 36 gaps:** All confirmed correctly resolved (23 closed, 13 Won't Do). No false closures.
 
-**False closures (claimed fixed, not actually fixed):**
+**16 new gaps found (GAP-0306 through GAP-0321):**
 
-| GAP | Claimed Fix | Actual State |
-|-----|-------------|-------------|
-| GAP-0279 | CANARY tests "resurrected" and "added to build.zig" | Files exist but NOT in build.zig; imported as unused `const _` in all_tests.zig; `migration` module not provided. **Dead code.** |
-| GAP-0281 | `applyDownMigrations` "respects names parameter" | Parameter is `_: []const []const u8` (line 432). Doc comment says "unused." |
-| GAP-0290 | `lock_steal_attempts_total` "metric now incremented" | Never incremented anywhere. Comment says "Currently never incremented." |
-| GAP-0296 | `checksumValidate` "bidirectional check" | Only checks `matched == applied_count`. Extra manifest entries silently skipped. |
-
-**CANARY marker audit — all 6 markers claim STATUS=TESTED, none are accurate:**
-
-| Aspect | Referenced Test | Status |
-|--------|----------------|--------|
-| Core | `geodetestlab/specs/geode_migrations.yml` | Phantom — file does not exist |
-| ObservabilityMetrics | `TestCANARY_REQ_GQL_087_ObservabilityMetrics` | Dead code — not compiled |
-| DownReversalSafety | `TestCANARY_REQ_GQL_087_DownReversalSafety` | Dead code — not compiled |
-| PlanDryRunIntegrity | `TestCANARY_REQ_GQL_087_PlanDryRunIntegrity` | Dead code + name mismatch |
-| CliParityStatusCommand | `TestCANARY_REQ_GQL_087_CliParityStatusCommand` | Dead code — not compiled |
-| DriftPolicyOutcomeStrict | `TestCANARY_REQ_GQL_087_DriftPolicyOutcomeStrict` | Dead code — not compiled |
-
-**New gaps discovered:**
-
-| ID | Description | Severity |
-|----|-------------|----------|
-| NEW-GAP-1 | `baseline_override` (line 93) accessed without mutex in `driftCheck`/`testSimulateDrift` | Medium |
-| NEW-GAP-2 | `applyUpMigrations` gives no indication of which migrations succeeded on partial failure | Low |
-| NEW-GAP-3 | `resumeDataMigration` leaks token memory (no cleanup path) | Low |
-| NEW-GAP-4 | `StatusRow.name` default is `"stub"` (string literal); `freeStatusRows` will free it = UB | Medium |
-| NEW-GAP-5 | `saveLedger` tmp file closed after rename via defer (ordering concern) | Low |
+| Gap-ID | Category | Severity | Description |
+|--------|----------|----------|-------------|
+| GAP-0306 | Bug | Medium | Memory leak in `planDryRun` — owned slice leaked on second `toOwnedSlice` failure (line 684-687) |
+| GAP-0307 | Bug | Medium | Memory leak in `applyUpMigrations` — `new_name` not freed on OOM (line 424-430) |
+| GAP-0308 | Test | Low | Data race in tests — `policy_mode` written without mutex (lines 843,847,851) |
+| GAP-0309 | Test | Low | Order-dependent test — "PolicyMode defaults to lenient" (line 837-839) |
+| GAP-0310 | Test | **High** | Zero unit test coverage of core business logic (apply/rollback/status/plan/drift) |
+| GAP-0311 | Test | Medium | No JSON round-trip test for `writeLedgerJson`/`loadLedger` |
+| GAP-0312 | Test | Medium | No concurrent lock test for `acquireLock`/`releaseLock` |
+| GAP-0313 | Test | Medium | No test for `resumeDataMigration` |
+| GAP-0314 | Quality | Medium | Silent error swallow in `driftCheck` line 636 (`catch {}`) |
+| GAP-0315 | Quality | Low | Hand-rolled JSON serializer instead of `std.json.stringify` |
+| GAP-0316 | Quality | Low | Magic numbers lack named constants |
+| GAP-0317 | Quality | Low | `enforcePolicy` accepts raw strings instead of `PolicyMode` enum |
+| GAP-0318 | Feature | Low | `total_batches` hardcoded to 5 in resume slots |
+| GAP-0319 | Governance | Low | CANARY marker name mismatch — `PlanDryRunIntegrity` vs actual test name |
+| GAP-0320 | Governance | Low | CANARY marker name mismatch — `test_migration_parseVersion` vs actual test name |
+| GAP-0321 | Governance | Low | CANARY geodetestlab spec path discrepancy (`geodetestlab/` vs `geodetestlab-cli/`) |
 
 ### Code Quality
 
-| Severity | Count | Status |
-|----------|-------|--------|
-| Critical | 0 | -- |
-| High | 3 | New findings |
-| Medium | 5 | New findings |
-| Low | 5 | New findings (2 prior open: #621, #624) |
+| Severity | Count |
+|----------|-------|
+| Critical | 0 |
+| High | 3 |
+| Medium | 8 |
+| Low | 8 |
 
-**Quality scores (re-assessment vs prior):**
+**Quality scores:**
 
-| Dimension | Prior | Current | Delta |
-|-----------|-------|---------|-------|
-| Readability | 6/10 | 7/10 | +1 (JSON escaping, errdefer fixes) |
-| Maintainability | 4/10 | 5/10 | +1 (mutex added; still 955-line monolith) |
-| Reliability | 3/10 | 5/10 | +2 (locking, path validation, owned strings) |
-| API Contract | 4/10 | 5/10 | +1 (improved ownership; stringly-typed policy, unused params remain) |
+| Dimension | Prior Audit | This Audit | Notes |
+|-----------|-----------|------------|-------|
+| Readability | 7/10 | 7/10 | Clear naming, good structure; hand-rolled JSON and monolith size hurt |
+| Maintainability | 5/10 | 5/10 | 1052-line monolith, global mutable state, no separation of concerns |
+| API Contract | 5/10 | 6/10 | Ownership rules exist (freePlan, freeStatusRows) but implicit; improved from prior |
+| Reliability | 5/10 | 4/10 | **Downgraded:** 3 confirmed memory leaks, data races in tests, zero core logic test coverage |
+| Documentation | -- | 6/10 | CANARY markers present, some doc comments; no architecture doc or ownership docs |
 
-**Top quality findings (new):**
+**Top quality findings:**
 
-| # | Finding | Severity | Line |
-|---|---------|----------|------|
-| Q1 | Hand-rolled JSON serializer (35 lines of brittle string concatenation) | High | 235-269 |
-| Q2 | 955-line single file with 8+ concerns (exceeds 800-line guideline) | High | 1-955 |
-| Q3 | `loadLedger` leaks `name_copy` on OOM in `rows.append` (no errdefer) | High | 196-202 |
-| Q4 | `applyDownMigrations` accepts unused `names` parameter | Medium | 429-433 |
-| Q5 | Lock ID hardcoded to 1; `owner` always `"local"` — identity check is dead code | Medium | 333 |
-| Q6 | `enforcePolicy` uses raw strings instead of `PolicyMode` enum | Medium | 551-562 |
-| Q7 | `MigrationPlan`/`StatusRow` return types lack ownership semantics | Medium | 46-49 |
-| Q8 | Magic numbers without named constants (17, 4MB, 8MB, 300000, 4096) | Medium | various |
-| Q9 | No integration tests for core API (apply/rollback/status/plan/drift) | Low | 729-955 |
-| Q10 | `baseline_override` unsynchronized (test-only) | Low | 93 |
-| Q11 | Policy tests mutate global state without isolation | Low | 795-817 |
-| Q12 | FNV-1a constants duplicated without named constants | Low | 122, 141 |
-| Q13 | Resume token lifecycle undocumented; `total_batches` hardcoded to 5 | Low | 675-703 |
+| # | Finding | Severity | PriorityScore | Line |
+|---|---------|----------|---------------|------|
+| Q1 | Zero unit test coverage of core business logic | High | 90 | 774-1052 |
+| Q2 | Memory leak in `planDryRun` error path | High | 80 | 684-687 |
+| Q3 | Data races in tests (policy_mode without mutex) | High | 70 | 843,847,851 |
+| Q4 | Memory leak in `applyUpMigrations` OOM path | Medium | 60 | 424-430 |
+| Q5 | Memory leak in `loadLedger` mid-loop OOM | Medium | 55 | 198-207 |
+| Q6 | No JSON round-trip test | Medium | 50 | -- |
+| Q7 | Silent error swallow in `driftCheck` | Medium | 45 | 636 |
+| Q8 | Hand-rolled JSON serializer (fragile, 35 lines) | Medium | 45 | 239-273 |
+| Q9 | `MigrationPlan` ownership asymmetry (freePlan on default = UB) | Medium | 40 | 46-49 |
+| Q10 | 1052-line monolith with 8+ concerns | Medium | 35 | 1-1052 |
 
 ### Performance
 
@@ -99,53 +106,52 @@
 |-------------|-------|
 | P0 | 0 |
 | P1 | 0 |
-| P2 | 0 |
+| P2 | 1 (per-migration fsync, correct for crash safety) |
 | P3 | 8 (all informational) |
 
-**Verdict:** No actionable performance issues. All P3 findings are correctly calibrated — migration engine is an admin-time tool running on tens of files. Linear scans, per-migration fsync (crash-safety by design), and 4-8MB read caps are all appropriate.
-
-**Prior PERF-577 through PERF-594 "Won't Do" disposition: confirmed correct.**
-
-**PerfScore top finding:** Resume token memory leak (P3, bounded to 8 allocations of short strings — <1KB total).
+**Verdict:** Zero actionable performance findings. All 6 prior Won't Do dispositions (PERF-577 through PERF-594) confirmed correct. Migration engine is an admin-time tool where QUIC RTT (1.3-1.9s) dominates all in-process costs by 3+ orders of magnitude.
 
 ### Security
 
 | Risk Level | Count | Status |
 |-----------|-------|--------|
-| High | 1 | Reconfirmed (GQL injection #598, Won't Do) |
-| Medium | 3 | 1 reconfirmed + 2 new |
-| Low | 4 | 4 new |
+| High | 2 | 1 new (supply chain), 1 prior Won't Do (#598 GQL injection) |
+| Medium | 4 | All new |
+| Low | 7 | 5 new, 2 prior (Won't Do) |
 
-**7 prior findings verified FIXED:** #572 path traversal, #592 JSON injection, #606 TOCTOU lock, #602 integer overflow, #622 duplicate keys, #625 policy sync, #614 CLI path traversal.
+**7 prior fixes verified intact:** #572 path traversal, #592 JSON injection, #606 TOCTOU lock, #602 integer overflow, #622 duplicate keys, #625 policy sync, #614 CLI path traversal.
 
-**4 prior findings confirmed Won't Do (unchanged):** #573 unsigned ledger, #598 GQL injection, #617 no auth, #612 weak checksum.
+**5 prior Won't Do confirmed:** #573 unsigned ledger, #598 GQL injection, #617 no auth, #612 weak checksum, #627 password exposure.
 
-**2 prior findings fixed with residual:** #620 resume slots (partial — leak remains), #627 password CLI (Won't Do).
+**11 new security findings:**
 
-**New security findings:**
+| ID | Finding | Severity | Risk Score | CWE |
+|----|---------|----------|------------|-----|
+| SEC-MIG-01 | No cryptographic signing of migration files | High | 10 | CWE-345 |
+| SEC-MIG-02 | No CI pipeline migration guard | Medium | 8 | CWE-829 |
+| SEC-MIG-03 | `migrate status`/`create` have zero authentication | Medium | 9 | CWE-306 |
+| SEC-MIG-04 | In-process lock — no cross-process protection | Medium | 9 | CWE-362 |
+| SEC-MIG-05 | Drift evasion via FNV-1a collision + unsigned ledger | Medium | 6 | CWE-328 |
+| SEC-MIG-06 | No file permissions on ledger/migration files | Low | 6 | CWE-732 |
+| SEC-MIG-07 | Predictable temp file name (ms timestamp) | Low | 4 | CWE-377 |
+| SEC-MIG-08 | Resume token memory leak (8 slots max) | Low | 2 | CWE-401 |
+| SEC-MIG-09 | CLI version counter overflow in cmdMigrateCreate | Low | 1 | CWE-190 |
+| SEC-MIG-10 | `--dir` accepts arbitrary paths without validation | Low | 6 | CWE-22 |
+| SEC-MIG-11 | Password visible in process listing | Low | 6 | CWE-214 |
 
-| # | Finding | Severity | Score | CWE | Line |
-|---|---------|----------|-------|-----|------|
-| SEC-NEW-01 | Incomplete Unicode/special char validation in `validateMigrationName` | Medium | 32 | CWE-22, CWE-176 | 98-104 |
-| SEC-NEW-02 | No cross-process locking (hardcoded lock ID=1, in-memory only) | Medium | 24 | CWE-284, CWE-362 | 333 |
-| SEC-NEW-03 | Resume token memory leak / potential use-after-free with scoped allocators | Low | 8 | CWE-401, CWE-416 | 677-691 |
-| SEC-NEW-04 | Predictable temp file name in `saveLedger` (symlink attack surface) | Low | 12 | CWE-377, CWE-59 | 276-290 |
-| SEC-NEW-05 | No migration name length limit (DoS via crafted ledger) | Low | 8 | CWE-770 | 98-104 |
-| SEC-NEW-06 | Weak FNV-1a checksum enables collision-based drift evasion (reconfirmed) | Low | 8 | CWE-328 | 121-138 |
-
-**Revised attack chain (post-fixes):** Filesystem write access to migrations dir → craft malicious `.gql` file → `applyUpMigrations` discovers and executes it verbatim → arbitrary GQL. The prior path traversal vector is blocked but direct file placement in the migrations directory remains exploitable. Risk: HIGH in CI/CD, LOW in single-developer local.
+**Attack chain (unchanged):** Filesystem write access to migrations dir -> craft malicious `.gql` file -> `applyUpMigrations` executes verbatim -> arbitrary GQL. Risk: HIGH in CI/CD, LOW in single-developer local.
 
 ---
 
 ## Cross-Domain Summary
 
-| Domain | Prior Findings | New Findings | Total | Verified Closed | Won't Do | False Closures | Open |
-|--------|---------------|-------------|-------|----------------|----------|---------------|------|
-| Gap Analysis | 36 | 5 | 41 | 19 | 13 | 4 | 5 |
-| Quality | 18 | 13 | 31 | 16 | 0 | 0 | 15 |
-| Performance | 6 | 8 | 14 | 0 | 6 | 0 | 8 (P3) |
-| Security | 13 | 6 | 19 | 8 | 5 | 0 | 6 |
-| **Total** | **73** | **32** | **105** | **43** | **24** | **4** | **34** |
+| Domain | Prior Findings | New Findings | Total | Verified Closed | Won't Do | Open |
+|--------|---------------|-------------|-------|----------------|----------|------|
+| Gap Analysis | 36 | 16 | 52 | 23 | 13 | 16 |
+| Quality | 84 | 19 | 103 | 78 | 0 | 25 |
+| Performance | 6 | 0 | 6 | 0 | 6 | 0 |
+| Security | 13 | 11 | 24 | 7 | 5 | 12 |
+| **Total** | **139** | **46** | **185** | **108** | **24** | **53** |
 
 ---
 
@@ -153,60 +159,69 @@
 
 | File | Domain | Action |
 |------|--------|--------|
-| `docs/MIGRATION_GAP_ANALYSIS.md` | Gap | verified (0 open) |
-| `docs/MIGRATION_GAP_ANALYSIS_RESOLVED.md` | Gap | verified (23+13 resolved) |
-| `docs/QUALITY_GAP_ANALYSIS.md` | Quality | 16 closed, 2 prior open |
-| `docs/PERF_GAP_ANALYSIS.md` | Performance | all Won't Do |
-| `docs/SECURITY_GAP_ANALYSIS.md` | Security | 8 closed, 5 Won't Do |
-| `docs/MIGRATION_AUDIT_SUMMARY.md` | All | updated (this file) |
+| `docs/MIGRATION_GAP_ANALYSIS.md` | Gap | Updated (16 open gaps added) |
+| `docs/MIGRATION_GAP_ANALYSIS_RESOLVED.md` | Gap | No changes (all prior resolutions verified) |
+| `docs/QUALITY_GAP_ANALYSIS.md` | Quality | Updated (19 new findings) |
+| `docs/PERF_GAP_ANALYSIS.md` | Performance | Updated (Won't Do confirmed, re-audit note) |
+| `docs/SECURITY_GAP_ANALYSIS.md` | Security | Updated (11 new findings) |
+| `docs/MIGRATION_AUDIT_SUMMARY.md` | All | Rewritten (this file) |
 
 ---
 
-## Top 10 Findings (cross-domain, by severity)
+## Top 10 Findings (cross-domain, by severity and impact)
 
 | # | Domain | Finding | Severity | Score | Status |
 |---|--------|---------|----------|-------|--------|
-| 1 | **Gap** | **All 6 CANARY markers claim STATUS=TESTED but tests are dead code / non-existent** | **Critical** | -- | **REOPENED** |
-| 2 | **Gap** | **4 closed gaps are factually incorrect** (GAP-0279, 0281, 0290, 0296) | **Critical** | -- | **REOPENED** |
-| 3 | **Gap** | `StatusRow.name` default `"stub"` is a string literal; `freeStatusRows` will UB | **High** | -- | **NEW** |
-| 4 | Security | GQL injection via migration file content | High | 64 | Won't Do (#598) |
-| 5 | Quality | `loadLedger` leaks `name_copy` on OOM | High | -- | **NEW** |
-| 6 | Quality | Hand-rolled JSON serializer (brittle, 35 lines) | High | -- | **NEW** |
-| 7 | Quality | 955-line monolith with 8+ concerns | High | -- | **NEW** |
-| 8 | Security | Incomplete Unicode/special char validation | Medium | 32 | **NEW** |
-| 9 | Security | No cross-process locking (lock ID hardcoded) | Medium | 24 | **NEW** |
-| 10 | Gap | `baseline_override` accessed without mutex | Medium | -- | **NEW** |
+| 1 | **Gap** | Zero unit test coverage of core business logic (GAP-0310) | **High** | 90 | OPEN |
+| 2 | **Quality** | Memory leak in `planDryRun` error path (GAP-0306) | **High** | 80 | OPEN |
+| 3 | **Quality** | Data races in tests — `policy_mode` without mutex | **High** | 70 | OPEN |
+| 4 | **Security** | No cryptographic signing of migration files (SEC-MIG-01) | **High** | 10 | OPEN |
+| 5 | Security | GQL injection via migration file content (#598) | High | -- | Won't Do |
+| 6 | **Quality** | Memory leak in `applyUpMigrations` OOM path (GAP-0307) | **Medium** | 60 | OPEN |
+| 7 | **Quality** | Memory leak in `loadLedger` mid-loop OOM | **Medium** | 55 | OPEN |
+| 8 | Security | In-process lock — no cross-process protection (SEC-MIG-04) | Medium | 9 | OPEN |
+| 9 | Security | No CI pipeline migration guard (SEC-MIG-02) | Medium | 8 | OPEN |
+| 10 | **Quality** | No JSON round-trip test (GAP-0311) | **Medium** | 50 | OPEN |
 
 ---
 
 ## Recommended Actions (Priority Order)
 
-### Immediate (one-line fixes)
+### Immediate (one-line fixes, < 1 hour)
 
-1. **Fix `loadLedger` name leak** — add `errdefer alloc.free(name_copy);` after line 196
-2. **Add name length limit** — `if (name.len > 255) return error.InvalidMigrationName;` in `validateMigrationName`
+1. **Fix `planDryRun` memory leak** (GAP-0306) -- capture first `toOwnedSlice` result, add `errdefer` before second call
+2. **Fix `applyUpMigrations` memory leak** (GAP-0307) -- add `errdefer alloc.free(new_name)` after line 424
+3. **Fix `loadLedger` memory leak** -- add comprehensive `errdefer` after `rows` init that frees all appended names
+4. **Fix test data races** (GAP-0308) -- replace direct `policy_mode` assignments with `enforcePolicy()` calls
+5. **Fix CANARY marker names** (GAP-0319, 0320, 0321) -- update TEST fields to match actual test names/paths
 
-### Short-term (low churn)
+### Short-term (1-3 days)
 
-1. **Extract named constants** — `MAX_LEDGER_BYTES`, `MAX_SCRIPT_BYTES`, `DEFAULT_LOCK_TTL_MS`, `MAX_VERSION_DIGITS`, `FNV_OFFSET_BASIS`, `FNV_PRIME`
-2. **Add `errdefer` for resume token cleanup** or switch to fixed-size buffer
-3. **Allowlist `validateMigrationName`** — restrict to `[a-zA-Z0-9._-]` instead of blocklist
+1. **Add core logic unit tests** (GAP-0310) -- `applyUpMigrations`, `planDryRun`, `loadLedger`/`saveLedger` round-trip, `driftCheck` using temp dir + mock executor
+2. **Add JSON round-trip test** (GAP-0311) -- write-then-parse with edge-case names
+3. **Add concurrent lock test** (GAP-0312) -- spawn N threads, verify exactly one acquires
+4. **Extract named constants** (GAP-0316) -- `fnv_offset_basis`, `fnv_prime`, `max_ledger_bytes`, `default_lock_ttl_ms`, etc.
+5. **Replace silent `catch {}`** (GAP-0314) -- add `std.log.warn` in `driftCheck`
 
 ### Future sprints (architectural)
 
 1. Split `mod.zig` into `ledger.zig`, `lock.zig`, `resume.zig`, `checksum.zig`
-2. Add cross-process `flock()`-based locking for CI/CD safety
-3. Design DDL-only sandbox for migration executor (#598)
-4. Design ledger HMAC signing with migration path (#573)
+2. Add cross-process `flock()`-based locking for CI/CD safety (SEC-MIG-04)
+3. Design migration file signing with Ed25519 or HMAC-SHA256 (SEC-MIG-01)
+4. Add CI migration guard job in `.gitlab-ci.yml` (SEC-MIG-02)
+5. Design DDL-only sandbox for migration executor (#598)
 
 ---
 
 ## Blockers
 
-1. **CANARY governance integrity** — 6 markers claim TESTED but reference dead/non-existent tests. This inflates the project's 81.4% TESTED metric. Must be corrected to STATUS=IMPL or tests must be wired into build.zig.
-2. **4 false closures** — GAP-0279, 0281, 0290, 0296 were marked closed but the fixes are not present in the current code. Must be reopened or re-implemented.
-3. **`StatusRow.name` UB** — Default `"stub"` string literal will cause undefined behavior if passed to `alloc.free()`. Must be fixed before any code path can create default StatusRows and free them.
+None. All prior blockers from the earlier audit have been resolved:
+
+1. ~~CANARY governance integrity~~ -- Tests are wired into build.zig; 2 name mismatches are low-severity governance metadata fixes
+2. ~~4 false closures~~ -- All 4 are correctly closed; prior audit was stale
+3. ~~StatusRow.name UB~~ -- Already fixed (default is `""`, guard checks `name.len > 0`)
 
 ---
 
-*Generated by Claude Code full codebase audit (re-audit) — 2026-04-01*
+*Generated by Claude Code full codebase audit -- 2026-04-01*
+*16 specialized agents across 4 phases (orientation, scanning, deep analysis, tracking)*

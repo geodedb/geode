@@ -4,7 +4,7 @@
 >
 > **Source of truth:** GitLab issue tracker. This file is a flatfile mirror.
 
-## Closed / Implemented (23)
+## Closed / Implemented (39)
 
 ### GAP-0279: CANARY integration tests are dead code -- never compiled or run
 
@@ -256,6 +256,182 @@
 - **Resolution date:** 2026-04-01
 - **Resolution summary:** Changed JSON parse option from use_last to error for duplicate keys.
 - **Evidence:** Commit `f64bf2c6` -- `src/migration/mod.zig`.
+
+---
+
+### GAP-0306: Memory leak in planDryRun on second toOwnedSlice failure
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** Medium
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** Added errdefer to free first slice if second toOwnedSlice fails. Also fixed mid-loop OOM leak in loadLedger (bonus Q5 fix).
+- **Evidence:** Commit `279c4883` -- `src/migration/mod.zig` errdefer between toOwnedSlice calls.
+
+---
+
+### GAP-0307: Memory leak in applyUpMigrations OOM path for new_name
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** Medium
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** Added errdefer to free new_name on subsequent failure. Fixed double-free from errdefer scope correction in applyUpMigrations (bonus bug).
+- **Evidence:** Commit `279c4883` -- `src/migration/mod.zig` errdefer on new_name allocation.
+
+---
+
+### GAP-0308: Data race in test code -- policy_mode written without mutex
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** Low
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** Test code now acquires mutex before writing policy_mode, eliminating data race.
+- **Evidence:** Commit `e6b24e21` -- `src/migration/mod.zig` test mutex guards.
+
+---
+
+### GAP-0309: Order-dependent test -- "PolicyMode defaults to lenient"
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** Low
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** Test now resets policy_mode to default before asserting, removing order dependency.
+- **Evidence:** Commit `e6b24e21` -- `src/migration/mod.zig` test isolation fix.
+
+---
+
+### GAP-0310: No unit tests for core business logic (apply/rollback/status/plan/drift)
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** High
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** Added unit tests for apply, rollback, status, plan, and drift functions. Also fixed saveLedger suffix_buf overflow (32->64 bytes) and applyUpMigrations double-free (bonus bugs found by tests).
+- **Evidence:** Commit `2c0faf2c` -- `src/migration/mod.zig` test block; 667 tests passing.
+
+---
+
+### GAP-0311: No JSON round-trip test for writeLedgerJson/loadLedger
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** Medium
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** Added round-trip test: writeLedgerJson then loadLedger, asserting structural equality on a multi-entry ledger with edge cases.
+- **Evidence:** Commit `2c0faf2c` -- `src/migration/mod.zig` test_ledger_json_round_trip.
+
+---
+
+### GAP-0312: No concurrent lock test
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** Medium
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** Added multi-threaded lock contention test verifying mutual exclusion with no deadlocks.
+- **Evidence:** Commit `f02b0d2d` -- `src/migration/mod.zig` test_concurrent_lock_contention.
+
+---
+
+### GAP-0313: No test for resumeDataMigration
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** Medium
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** Added unit tests for resumeDataMigration covering resume from partial state and empty checkpoint.
+- **Evidence:** Commit `f02b0d2d` -- `src/migration/mod.zig` test_resume_data_migration.
+
+---
+
+### GAP-0314: Silent error swallow in driftCheck
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** Medium
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** driftCheck now logs save errors at warning level instead of silently swallowing them.
+- **Evidence:** Commit `6146a839` -- `src/migration/mod.zig` drift save error logging.
+
+---
+
+### GAP-0315: Hand-rolled JSON serializer instead of std.json.stringify
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** Low
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** Replaced hand-rolled JSON construction in writeLedgerJson with std.json.stringify for correctness and maintainability.
+- **Evidence:** Commit `ec492504` -- `src/migration/mod.zig` writeLedgerJson rewrite.
+
+---
+
+### GAP-0316: Magic numbers lack named constants
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** Low
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** Extracted all magic numbers (timeouts, buffer sizes, retry counts) to named constants at module scope.
+- **Evidence:** Commit `6146a839` -- `src/migration/mod.zig` named constants.
+
+---
+
+### GAP-0317: enforcePolicy accepts raw strings instead of PolicyMode enum
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** Low
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** Added typed enforcePolicyMode overload accepting PolicyMode enum; original string-based function retained for backwards compatibility.
+- **Evidence:** Commit `f0e26e31` -- `src/migration/mod.zig` enforcePolicyMode function.
+
+---
+
+### GAP-0318: total_batches hardcoded to 5 in resume slots
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** Low
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** total_batches is now configurable via the resume API; defaults to 5 for backwards compatibility but callers can override.
+- **Evidence:** Commit `f0e26e31` -- `src/migration/mod.zig` configurable total_batches.
+
+---
+
+### GAP-0319: CANARY marker name mismatch -- PlanDryRunIntegrity
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** Low
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** CANARY marker renamed to match canonical requirement ID naming convention.
+- **Evidence:** Commit `b7114574` -- `src/migration/mod.zig` CANARY marker fix.
+
+---
+
+### GAP-0320: CANARY marker name mismatch -- test_migration_parseVersion
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** Low
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** CANARY marker renamed to match canonical requirement ID naming convention.
+- **Evidence:** Commit `b7114574` -- `src/migration/mod.zig` CANARY marker fix.
+
+---
+
+### GAP-0321: CANARY geodetestlab spec path discrepancy
+
+- **Issue:** (not filed -- discovered in re-audit)
+- **Severity:** Low
+- **Resolution:** Closed / Implemented
+- **Resolution date:** 2026-04-01
+- **Resolution summary:** CANARY marker spec path updated to match actual geodetestlab spec file location.
+- **Evidence:** Commit `b7114574` -- `src/migration/mod.zig` CANARY spec path fix.
 
 ---
 
