@@ -611,14 +611,58 @@ pub const GraphStore = struct {
     }
 
     pub fn listGraphNames(self: *const GraphStore, allocator: std.mem.Allocator) ![]const []const u8 {
-        var names = try allocator.alloc([]const u8, self.graphs.count());
-        var i: usize = 0;
+        var names = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (names.items) |name| {
+                allocator.free(name);
+            }
+            names.deinit(allocator);
+        }
+
+        var seen = std.StringHashMap(void).init(allocator);
+        defer {
+            var seen_it = seen.iterator();
+            while (seen_it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+            }
+            seen.deinit();
+        }
+
+        if (global_adapter) |adapter| {
+            const persisted_names = try adapter.listGraphNames(allocator);
+            defer {
+                for (persisted_names) |name| {
+                    allocator.free(name);
+                }
+                allocator.free(persisted_names);
+            }
+
+            for (persisted_names) |name| {
+                const seen_key = try allocator.dupe(u8, name);
+                errdefer allocator.free(seen_key);
+                const seen_result = try seen.getOrPut(seen_key);
+                if (!seen_result.found_existing) {
+                    try names.append(allocator, try allocator.dupe(u8, name));
+                } else {
+                    allocator.free(seen_key);
+                }
+            }
+        }
+
         var it = self.graphs.iterator();
         while (it.next()) |entry| {
-            names[i] = try allocator.dupe(u8, entry.key_ptr.*);
-            i += 1;
+            const name = entry.key_ptr.*;
+            const seen_key = try allocator.dupe(u8, name);
+            errdefer allocator.free(seen_key);
+            const seen_result = try seen.getOrPut(seen_key);
+            if (!seen_result.found_existing) {
+                try names.append(allocator, try allocator.dupe(u8, name));
+            } else {
+                allocator.free(seen_key);
+            }
         }
-        return names;
+
+        return names.toOwnedSlice(allocator);
     }
 
     pub fn createGraph(self: *GraphStore, graph_name: []const u8) !void {
@@ -4184,4 +4228,41 @@ test "QueryReadSession reloads persisted state instead of compatibility cache" {
     const live_name = live_node.properties.get("name") orelse return error.PropertyNotFound;
     try testing.expect(live_name == .String);
     try testing.expectEqualStrings("stale-cache", live_name.String);
+}
+
+test "listGraphNames merges persisted adapter graphs with local cache" {
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(dir_path);
+
+    const store = try initGlobalStore(testing.allocator, dir_path);
+    try store.createGraph("persisted_only");
+
+    if (store.graphs.fetchRemove("persisted_only")) |entry| {
+        testing.allocator.free(entry.key);
+    } else {
+        return error.GraphNotFound;
+    }
+
+    const names = try store.listGraphNames(testing.allocator);
+    defer {
+        for (names) |name| {
+            testing.allocator.free(name);
+        }
+        testing.allocator.free(names);
+    }
+
+    var found = false;
+    for (names) |name| {
+        if (std.mem.eql(u8, name, "persisted_only")) {
+            found = true;
+            break;
+        }
+    }
+    try testing.expect(found);
 }

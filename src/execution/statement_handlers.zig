@@ -53,6 +53,13 @@ fn listNodeLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore) 
 pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: ExecutionContext) !ExecutionResult {
     // M2: Get catalog from context via dependency injection
     const cat = getCatalog(allocator, context);
+    const writable_store = graph_store.getWritableGlobalStore(allocator);
+    var read_session = try graph_store.QueryReadSession.initIfAvailable(allocator, writable_store);
+    defer if (read_session) |*session| session.deinit();
+    const read_store: *graph_store.GraphStore = if (read_session) |*session|
+        session.store()
+    else
+        writable_store;
 
     const column_list = switch (s.show_type) {
         .indexes => &[_][]const u8{ "name", "type", "table", "columns" },
@@ -99,7 +106,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             }
         },
         .graphs => {
-            const storage_graphs = graph_store.getGlobalStore(allocator).listGraphNames(allocator) catch null;
+            const storage_graphs = read_store.listGraphNames(allocator) catch null;
             if (storage_graphs) |names| {
                 defer {
                     for (names) |name| allocator.free(name);
@@ -148,7 +155,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             // CANARY: REQ=REQ-SHOW-TABLES-001; FEATURE="SHOW TABLES"; ASPECT=StatementHandler; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=execution; UPDATED=2026-01-13
             // In a graph database, node labels act as "tables"
             // Return unique node labels from the graph storage
-            const labels = listNodeLabels(allocator, graph_store.getGlobalStore(allocator)) catch &.{};
+            const labels = listNodeLabels(allocator, read_store) catch &.{};
             defer {
                 for (labels) |label| {
                     allocator.free(label);
@@ -1060,4 +1067,52 @@ fn plannedOpName(kind: planned_read_runtime.OpKind) []const u8 {
         .Limit => "Limit",
         .Sort => "Sort",
     };
+}
+
+const Catalog = @import("../schema/catalog.zig").Catalog;
+const testing = std.testing;
+
+test "executeShow tables reads persisted snapshot state" {
+    graph_store.deinitGlobalStore();
+    defer graph_store.deinitGlobalStore();
+
+    var store_tmp = testing.tmpDir(.{});
+    defer store_tmp.cleanup();
+
+    const store_dir = try store_tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(store_dir);
+
+    const store = try graph_store.initGlobalStore(testing.allocator, store_dir);
+    var labels = [_][]const u8{"Person"};
+    _ = try store.createNodeWithGraph(&labels, "default");
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    try adapter.checkpointAll();
+
+    // Simulate a stale compatibility cache; SHOW TABLES must re-read persisted storage.
+    store.clearNodes();
+
+    var catalog_tmp = testing.tmpDir(.{});
+    defer catalog_tmp.cleanup();
+
+    const catalog_dir = try catalog_tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(catalog_dir);
+
+    const catalog = try Catalog.init(testing.allocator, catalog_dir);
+    defer {
+        catalog.deinit();
+        testing.allocator.destroy(catalog);
+    }
+
+    var result = try executeShow(
+        testing.allocator,
+        .{ .show_type = .tables },
+        .{ .catalog = catalog },
+    );
+    defer result.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 1), result.rows.len);
+    try testing.expect(result.rows[0].len >= 1);
+    try testing.expect(result.rows[0][0] == .Str);
+    try testing.expectEqualStrings("Person", result.rows[0][0].Str);
 }
