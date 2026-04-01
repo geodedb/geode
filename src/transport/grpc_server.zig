@@ -120,6 +120,7 @@ const SessionStore = struct {
         role: ?user_mgmt.Role,
         tenant_id: ?[]const u8,
         graph: ?[]const u8,
+        pwd_reset_required: bool,
     ) ![]const u8 {
         const session_id = try generateSessionId(self.allocator);
         const state = try initServerState(self.allocator, self.config);
@@ -132,6 +133,8 @@ const SessionStore = struct {
         if (role) |r| {
             state.authenticated_role = @intFromEnum(r);
         }
+        // GAP-0284: Persist password_reset_required flag so execute handler can enforce it.
+        state.password_reset_required = pwd_reset_required;
         if (tenant_id) |tenant| {
             state.session_config = server_state.SessionConfiguration.init(self.allocator);
             state.session_config.?.tenant_id = try self.allocator.dupe(u8, tenant);
@@ -987,6 +990,156 @@ fn peerIpSlice(buf: *const [45]u8) []const u8 {
     return std.mem.sliceTo(buf, 0);
 }
 
+/// Validate federation HELLO using GEODE_CLUSTER_TOKEN (parity with QUIC handler).
+/// GAP-0284 / GAP-0490: Both nodes must share the same cluster token.
+/// Returns true only if username is "geode-cluster" AND password matches token.
+// CANARY: REQ=REQ-GAP-0284-FEDERATION-GRPC-AUTH; FEATURE="FederationAuth"; ASPECT=GrpcServerValidation; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+fn validateFederationAuth(username: []const u8, password: []const u8) bool {
+    if (!std.mem.eql(u8, username, "geode-cluster")) return false;
+    const expected = if (comptime builtin.os.tag != .windows) std.posix.getenv("GEODE_CLUSTER_TOKEN") else null;
+    const expected_tok = expected orelse return false;
+    if (expected_tok.len == 0 or password.len == 0) return false;
+    if (password.len != expected_tok.len) return false;
+    // Constant-time comparison — pad both to 256 bytes to prevent timing side-channels
+    var buf_a: [256]u8 = [_]u8{0} ** 256;
+    var buf_b: [256]u8 = [_]u8{0} ** 256;
+    const n = @min(password.len, 256);
+    @memcpy(buf_a[0..n], password[0..n]);
+    @memcpy(buf_b[0..n], expected_tok[0..n]);
+    return std.crypto.timing_safe.eql([256]u8, buf_a, buf_b);
+}
+
+/// Parse an ALTER USER <name> SET PASSWORD '<pwd>' statement from raw query text.
+/// Returns the extracted username and new password, or null if the query doesn't match.
+/// GAP-0284: Parity with QUIC handler's parseAlterUserSetPassword.
+// CANARY: REQ=REQ-GAP-0284-ALTER-USER-GRPC; FEATURE="PasswordResetEnforcement"; ASPECT=GrpcAlterUserParse; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+fn parseAlterUserSetPassword(query: []const u8) ?struct { username: []const u8, new_password: []const u8 } {
+    var pos: usize = 0;
+    const q = query;
+    if (q.len < 30) return null; // minimum: "ALTER USER x SET PASSWORD 'y'"
+
+    // Skip leading whitespace
+    while (pos < q.len and (q[pos] == ' ' or q[pos] == '\t')) pos += 1;
+
+    // Match ALTER
+    if (pos + 5 > q.len) return null;
+    if (!std.ascii.eqlIgnoreCase(q[pos..][0..5], "ALTER")) return null;
+    pos += 5;
+
+    // Skip whitespace
+    while (pos < q.len and q[pos] == ' ') pos += 1;
+
+    // Match USER
+    if (pos + 4 > q.len) return null;
+    if (!std.ascii.eqlIgnoreCase(q[pos..][0..4], "USER")) return null;
+    pos += 4;
+
+    // Skip whitespace
+    while (pos < q.len and q[pos] == ' ') pos += 1;
+
+    // Extract username (until next space)
+    const uname_start = pos;
+    while (pos < q.len and q[pos] != ' ') pos += 1;
+    if (pos == uname_start) return null;
+    const username = q[uname_start..pos];
+
+    // Skip whitespace
+    while (pos < q.len and q[pos] == ' ') pos += 1;
+
+    // Match SET
+    if (pos + 3 > q.len) return null;
+    if (!std.ascii.eqlIgnoreCase(q[pos..][0..3], "SET")) return null;
+    pos += 3;
+
+    // Skip whitespace
+    while (pos < q.len and q[pos] == ' ') pos += 1;
+
+    // Match PASSWORD
+    if (pos + 8 > q.len) return null;
+    if (!std.ascii.eqlIgnoreCase(q[pos..][0..8], "PASSWORD")) return null;
+    pos += 8;
+
+    // Skip whitespace
+    while (pos < q.len and q[pos] == ' ') pos += 1;
+
+    // Extract password from single quotes
+    if (pos >= q.len or q[pos] != '\'') return null;
+    pos += 1; // skip opening quote
+    const pwd_start = pos;
+    while (pos < q.len and q[pos] != '\'') pos += 1;
+    if (pos >= q.len) return null; // no closing quote
+    const new_password = q[pwd_start..pos];
+
+    return .{ .username = username, .new_password = new_password };
+}
+
+/// Validate a password against the default geodeSecure policy without requiring
+/// a SecurityManager instance. Returns an error message string if the password
+/// fails validation, or null if it passes.
+/// GAP-0284: Parity with QUIC handler's validatePasswordFallback.
+// CANARY: REQ=REQ-GAP-0284-PWD-VALIDATE-GRPC; FEATURE="PasswordPolicyEnforcement"; ASPECT=GrpcFallbackValidation; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+fn validatePasswordFallback(password: []const u8) ?[]const u8 {
+    const policy = geode_auth.PasswordPolicy.geodeSecure();
+
+    if (password.len < policy.min_length) return "Password too short (minimum 20 characters)";
+    if (password.len > policy.max_length) return "Password too long (maximum 256 characters)";
+
+    if (policy.require_uppercase) {
+        var found = false;
+        for (password) |c| {
+            if (std.ascii.isUpper(c)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return "Password must contain at least one uppercase letter";
+    }
+
+    if (policy.require_lowercase) {
+        var found = false;
+        for (password) |c| {
+            if (std.ascii.isLower(c)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return "Password must contain at least one lowercase letter";
+    }
+
+    if (policy.require_digit) {
+        var found = false;
+        for (password) |c| {
+            if (std.ascii.isDigit(c)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return "Password must contain at least one digit";
+    }
+
+    if (!policy.allow_spaces) {
+        for (password) |c| {
+            if (c == ' ') return "Password must not contain spaces";
+        }
+    }
+
+    if (policy.require_passphrase) {
+        var word_count: usize = 0;
+        var in_word = false;
+        for (password) |c| {
+            if (c == ' ') {
+                in_word = false;
+            } else {
+                if (!in_word) word_count += 1;
+                in_word = true;
+            }
+        }
+        if (word_count < policy.min_words) return "Password must be a passphrase with at least 3 words";
+    }
+
+    return null;
+}
+
 fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: std.mem.Allocator) ![]u8 {
     log.debug("gRPC Handshake", &.{Attr.uint("request_bytes_len", request_bytes.len)});
 
@@ -1023,25 +1176,43 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
     try caps.append(allocator, try allocator.dupe(u8, "PROTOBUF"));
     try caps.append(allocator, try allocator.dupe(u8, "TLS1.3"));
 
-    if (user_mgmt.isAuthEnabled()) {
-        // S12: Use peer IP as rate limiter key (not attacker-controlled username).
-        // This matches the QUIC handler which uses peer_ip at quic_connection_handler.zig:1301.
-        const peer_ip_buf = getPeerIp(trans);
-        const peer_ip = peerIpSlice(&peer_ip_buf);
+    // S12: Use peer IP as rate limiter key (not attacker-controlled username).
+    // This matches the QUIC handler which uses peer_ip at quic_connection_handler.zig:1301.
+    const peer_ip_buf = getPeerIp(trans);
+    const peer_ip = peerIpSlice(&peer_ip_buf);
 
-        // S6: Check auth rate limiter before authentication attempt (parity with QUIC handler).
-        if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
-            if (limiter.isLocked(peer_ip)) {
-                const resp = schema.HelloResponse{
-                    .success = false,
-                    .session_id = "",
-                    .error_message = "Too many failed authentication attempts. Try again later.",
-                    .capabilities = caps,
-                };
-                return encodeMessage(allocator, resp);
-            }
+    // S6: Check auth rate limiter before authentication attempt (parity with QUIC handler).
+    if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
+        if (limiter.isLocked(peer_ip)) {
+            const resp = schema.HelloResponse{
+                .success = false,
+                .session_id = "",
+                .error_message = "Too many failed authentication attempts. Try again later.",
+                .capabilities = caps,
+            };
+            return encodeMessage(allocator, resp);
         }
+    }
 
+    // GAP-0284: Federation inter-node authentication via cluster token — fast-path.
+    // Must be checked BEFORE normal user auth to allow federation when auth is enabled.
+    // CANARY: REQ=REQ-GAP-0284-FEDERATION-GRPC-WIRE; FEATURE="FederationAuth"; ASPECT=GrpcHelloCheck; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+    if (validateFederationAuth(req.username, req.password)) {
+        log.info("Federation node authenticated via cluster token (gRPC)", &.{
+            Attr.string("client", req.client_name),
+        });
+        // Grant federation-level session with ReadWrite role
+        const session_id = try store.createSession(req.username, "", .ReadWrite, req.tenant_id, null, false);
+        const resp = schema.HelloResponse{
+            .success = true,
+            .session_id = try allocator.dupe(u8, session_id),
+            .error_message = "",
+            .capabilities = caps,
+        };
+        return encodeMessage(allocator, resp);
+    }
+
+    if (user_mgmt.isAuthEnabled()) {
         if (req.username.len == 0 or req.password.len == 0) {
             // S6: Record failure for empty credentials.
             if (auth_rate_limiter_mod.getGlobalRateLimiter()) |limiter| {
@@ -1176,7 +1347,32 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
             }
         }
 
-        const session_id = try store.createSession(req.username, req.password, auth_result.role, req.tenant_id, resolved_graph);
+        // GAP-0284: Set FLE role from HELLO request with injection validation (parity with QUIC handler).
+        // Always reset role on new connection to prevent stale role leakage.
+        if (req.role) |requested_role| {
+            if (requested_role.len > 0) {
+                // Validate role: only [a-zA-Z0-9_-] allowed — reject semicolons, commas, wildcards
+                var role_valid = true;
+                for (requested_role) |c| {
+                    if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') {
+                        role_valid = false;
+                        break;
+                    }
+                }
+                if (role_valid) {
+                    fle_integration.setCurrentUserRole(requested_role);
+                } else {
+                    log.warn("Rejected invalid FLE role: contains illegal characters", &.{});
+                    fle_integration.setCurrentUserRole(null);
+                }
+            } else {
+                fle_integration.setCurrentUserRole(null);
+            }
+        } else {
+            fle_integration.setCurrentUserRole(null);
+        }
+
+        const session_id = try store.createSession(req.username, req.password, auth_result.role, req.tenant_id, resolved_graph, auth_result.password_reset_required);
         const resp = schema.HelloResponse{
             .success = true,
             .session_id = try allocator.dupe(u8, session_id),
@@ -1252,7 +1448,7 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
         }
     }
 
-    const session_id = try store.createSession("", "", null, req.tenant_id, noauth_resolved_graph);
+    const session_id = try store.createSession("", "", null, req.tenant_id, noauth_resolved_graph, false);
     const resp = schema.HelloResponse{
         .success = true,
         .session_id = try allocator.dupe(u8, session_id),
@@ -1300,6 +1496,95 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
 
     if (user_mgmt.isAuthEnabled() and state.authenticated_user == null) {
         var resp = try buildErrorResponse(allocator, "28000", "Authentication required", &.{}, &.{});
+        defer resp.deinit(allocator);
+        return encodeMessage(allocator, resp);
+    }
+
+    // GAP-0284: Handle ALTER USER SET PASSWORD — intercept before GQL parser since
+    // ALTER USER is not part of GQL syntax. Works both during forced
+    // password reset and for normal password changes (parity with QUIC handler).
+    // CANARY: REQ=REQ-GAP-0284-ALTER-USER-GRPC-WIRE; FEATURE="PasswordResetEnforcement"; ASPECT=GrpcExecuteIntercept; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+    {
+        const trimmed = std.mem.trim(u8, req.query, " \t\r\n");
+        if (parseAlterUserSetPassword(trimmed)) |parsed| {
+            // Verify the user is changing their own password
+            if (state.authenticated_user) |auth_user| {
+                if (!std.mem.eql(u8, auth_user, parsed.username)) {
+                    var resp = try buildErrorResponse(allocator, "42501", "You can only change your own password", &.{}, &.{});
+                    defer resp.deinit(allocator);
+                    return encodeMessage(allocator, resp);
+                }
+            } else {
+                var resp = try buildErrorResponse(allocator, "42501", "Authentication required to change passwords", &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
+            }
+
+            // Validate password against SecurityManager policy BEFORE updating
+            if (state.security_manager) |sm| {
+                sm.validatePassword(parsed.new_password) catch |err| {
+                    const msg = switch (err) {
+                        error.PasswordTooShort => "Password too short (minimum 20 characters)",
+                        error.PasswordTooLong => "Password too long (maximum 256 characters)",
+                        error.PasswordMissingUppercase => "Password must contain at least one uppercase letter",
+                        error.PasswordMissingLowercase => "Password must contain at least one lowercase letter",
+                        error.PasswordMissingDigit => "Password must contain at least one digit",
+                        error.PasswordContainsSpaces => "Password must not contain spaces",
+                        error.PasswordNotPassphrase => "Password must be a passphrase with at least 3 words",
+                        else => "Password does not meet security policy requirements",
+                    };
+                    var resp = try buildErrorResponse(allocator, "28P01", msg, &.{}, &.{});
+                    defer resp.deinit(allocator);
+                    return encodeMessage(allocator, resp);
+                };
+            } else {
+                // Fallback policy enforcement when SecurityManager is null
+                if (validatePasswordFallback(parsed.new_password)) |msg| {
+                    var resp = try buildErrorResponse(allocator, "28P01", msg, &.{}, &.{});
+                    defer resp.deinit(allocator);
+                    return encodeMessage(allocator, resp);
+                }
+            }
+
+            user_mgmt.updateUserPassword(allocator, parsed.username, parsed.new_password) catch |err| {
+                const msg = switch (err) {
+                    error.PasswordReuse => "New password must not match the current password",
+                    else => "Failed to update password",
+                };
+                var resp = try buildErrorResponse(allocator, "28P01", msg, &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
+            };
+
+            // Persist the password change to the auth graph store so it survives restarts.
+            if (state.security_manager) |sm| {
+                if (sm.getUserIdByUsername(parsed.username)) |user_id| {
+                    sm.updatePassword(user_id, parsed.new_password) catch |err| {
+                        log.warn("Failed to persist password change to auth graph", &.{
+                            Attr.string("username", parsed.username),
+                            Attr.string("error", @errorName(err)),
+                        });
+                    };
+                }
+            }
+
+            state.password_reset_required = false;
+
+            // Send success response as a status-only execution result
+            const status = try proto_util.buildStatus(allocator, "00000", &.{});
+            var resp = schema.ExecutionResponse{
+                .status = status,
+                .payload = null,
+            };
+            defer resp.deinit(allocator);
+            return encodeMessage(allocator, resp);
+        }
+    }
+
+    // GAP-0284: Block all other queries when password reset is required (parity with QUIC handler).
+    // CANARY: REQ=REQ-GAP-0284-PWD-RESET-BLOCK-GRPC; FEATURE="PasswordResetEnforcement"; ASPECT=GrpcExecuteBlock; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+    if (state.password_reset_required) {
+        var resp = try buildErrorResponse(allocator, "08P01", "Password reset required. Change password with: ALTER USER <username> SET PASSWORD '<new_password>'", &.{}, &.{});
         defer resp.deinit(allocator);
         return encodeMessage(allocator, resp);
     }
