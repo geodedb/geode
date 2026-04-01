@@ -1387,6 +1387,53 @@ pub const ContextEvaluator = struct {
         return Value{ .timestamp = std.time.milliTimestamp() };
     }
 
+    /// Parse an IPv4 dotted-decimal string into a u32 in network byte order.
+    /// Returns null on any parse failure (non-numeric octets, wrong count, >255).
+    fn parseIpv4(ip: []const u8) ?u32 {
+        var result: u32 = 0;
+        var octet_count: u8 = 0;
+        var remaining = ip;
+
+        while (octet_count < 4) : (octet_count += 1) {
+            if (octet_count > 0) {
+                if (remaining.len == 0 or remaining[0] != '.') return null;
+                remaining = remaining[1..];
+            }
+            const dot_pos = std.mem.indexOf(u8, remaining, ".");
+            const octet_str = if (dot_pos) |p| remaining[0..p] else remaining;
+            if (octet_str.len == 0) return null;
+            const octet = std.fmt.parseInt(u8, octet_str, 10) catch return null;
+            result = (result << 8) | @as(u32, octet);
+            remaining = if (dot_pos) |p| remaining[p..] else remaining[octet_str.len..];
+        }
+
+        // Must have consumed all input
+        if (remaining.len != 0) return null;
+        return result;
+    }
+
+    /// Proper IPv4 CIDR range check. Supports "A.B.C.D/N" or plain "A.B.C.D" (treated as /32).
+    fn cidrMatch(ip_str: []const u8, range_str: []const u8) bool {
+        const ip_u32 = parseIpv4(ip_str) orelse return false;
+
+        // Split range on '/' for CIDR prefix length
+        var base_str: []const u8 = range_str;
+        var prefix_len: u6 = 32;
+
+        if (std.mem.indexOf(u8, range_str, "/")) |slash_pos| {
+            base_str = range_str[0..slash_pos];
+            prefix_len = std.fmt.parseInt(u6, range_str[slash_pos + 1 ..], 10) catch return false;
+            if (prefix_len > 32) return false;
+        }
+
+        const base_u32 = parseIpv4(base_str) orelse return false;
+
+        if (prefix_len == 0) return true; // 0.0.0.0/0 matches everything
+
+        const mask: u32 = ~(@as(u32, 0)) << @intCast(32 - @as(u6, prefix_len));
+        return (ip_u32 & mask) == (base_u32 & mask);
+    }
+
     fn ipInRange(
         allocator: Allocator,
         args: []const Value,
@@ -1400,9 +1447,8 @@ pub const ContextEvaluator = struct {
             else => return error.InvalidArguments,
         };
 
-        // Simplified IP range check
         return Value{
-            .boolean = std.mem.startsWith(u8, context.environment.ip_address, range),
+            .boolean = cidrMatch(context.environment.ip_address, range),
         };
     }
 };
@@ -2664,11 +2710,73 @@ test "TestCANARY_REQ_RLS_IP_001_IpRangeCheck" {
         .environment = env,
     };
 
-    // Test: IP in range (prefix match)
-    const result1 = try evaluator.evaluate("ip_in_range('192.168')", &row, &context);
+    // Test: IP in /24 CIDR range
+    const result1 = try evaluator.evaluate("ip_in_range('192.168.1.0/24')", &row, &context);
     try std.testing.expect(result1 == true);
 
-    // Test: IP not in range
-    const result2 = try evaluator.evaluate("ip_in_range('10.0')", &row, &context);
+    // Test: IP not in different /24 subnet
+    const result2 = try evaluator.evaluate("ip_in_range('10.0.0.0/24')", &row, &context);
     try std.testing.expect(result2 == false);
+
+    // Test: Exact match with /32
+    const result3 = try evaluator.evaluate("ip_in_range('192.168.1.100/32')", &row, &context);
+    try std.testing.expect(result3 == true);
+
+    // Test: /32 does NOT match different host
+    const result4 = try evaluator.evaluate("ip_in_range('192.168.1.101/32')", &row, &context);
+    try std.testing.expect(result4 == false);
+
+    // Test: Broad /16 match
+    const result5 = try evaluator.evaluate("ip_in_range('192.168.0.0/16')", &row, &context);
+    try std.testing.expect(result5 == true);
+
+    // Test: /0 matches everything
+    const result6 = try evaluator.evaluate("ip_in_range('0.0.0.0/0')", &row, &context);
+    try std.testing.expect(result6 == true);
+}
+
+test "GAP-0287: ipInRange rejects false positive from string prefix" {
+    // This is the exact bug: string prefix "10.1" matched "10.100.0.1"
+    const BuiltinFunctions = ContextEvaluator;
+    try std.testing.expect(!BuiltinFunctions.cidrMatch("10.100.0.1", "10.1.0.0/16"));
+    try std.testing.expect(BuiltinFunctions.cidrMatch("10.1.0.1", "10.1.0.0/16"));
+
+    // Another false positive: "192.168.1" prefix matched "192.168.10.5"
+    try std.testing.expect(!BuiltinFunctions.cidrMatch("192.168.10.5", "192.168.1.0/24"));
+    try std.testing.expect(BuiltinFunctions.cidrMatch("192.168.1.5", "192.168.1.0/24"));
+}
+
+test "GAP-0287: cidrMatch handles edge cases gracefully" {
+    const BuiltinFunctions = ContextEvaluator;
+
+    // Invalid IP strings return false
+    try std.testing.expect(!BuiltinFunctions.cidrMatch("not.an.ip", "192.168.1.0/24"));
+    try std.testing.expect(!BuiltinFunctions.cidrMatch("192.168.1.1", "bad/24"));
+    try std.testing.expect(!BuiltinFunctions.cidrMatch("", "192.168.1.0/24"));
+    try std.testing.expect(!BuiltinFunctions.cidrMatch("192.168.1.1", ""));
+
+    // Plain address (no slash) treated as /32
+    try std.testing.expect(BuiltinFunctions.cidrMatch("192.168.1.1", "192.168.1.1"));
+    try std.testing.expect(!BuiltinFunctions.cidrMatch("192.168.1.2", "192.168.1.1"));
+
+    // /8 subnet
+    try std.testing.expect(BuiltinFunctions.cidrMatch("10.255.255.255", "10.0.0.0/8"));
+    try std.testing.expect(!BuiltinFunctions.cidrMatch("11.0.0.0", "10.0.0.0/8"));
+}
+
+test "GAP-0287: parseIpv4 unit tests" {
+    const BuiltinFunctions = ContextEvaluator;
+
+    // Valid IPs
+    try std.testing.expectEqual(@as(?u32, 0xC0A80101), BuiltinFunctions.parseIpv4("192.168.1.1"));
+    try std.testing.expectEqual(@as(?u32, 0x0A000001), BuiltinFunctions.parseIpv4("10.0.0.1"));
+    try std.testing.expectEqual(@as(?u32, 0x00000000), BuiltinFunctions.parseIpv4("0.0.0.0"));
+    try std.testing.expectEqual(@as(?u32, 0xFFFFFFFF), BuiltinFunctions.parseIpv4("255.255.255.255"));
+
+    // Invalid IPs
+    try std.testing.expectEqual(@as(?u32, null), BuiltinFunctions.parseIpv4(""));
+    try std.testing.expectEqual(@as(?u32, null), BuiltinFunctions.parseIpv4("192.168.1"));
+    try std.testing.expectEqual(@as(?u32, null), BuiltinFunctions.parseIpv4("192.168.1.1.1"));
+    try std.testing.expectEqual(@as(?u32, null), BuiltinFunctions.parseIpv4("abc.def.ghi.jkl"));
+    try std.testing.expectEqual(@as(?u32, null), BuiltinFunctions.parseIpv4("256.0.0.1"));
 }

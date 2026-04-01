@@ -642,20 +642,66 @@ pub const ExpressionCompiler = struct {
             else => return error.InvalidArguments,
         };
 
-        // Enhanced IP range checking with CIDR support
+        // Proper IPv4 CIDR range check
         const user_ip = context.environment.ip_address;
+        return rls.Value{ .boolean = cidrMatch(user_ip, range) };
+    }
 
-        if (std.mem.indexOf(u8, range, "/")) |slash_pos| {
-            // CIDR notation
-            const network = range[0..slash_pos];
-            const prefix_len_str = range[slash_pos + 1 ..];
-            const prefix_len = std.fmt.parseInt(u8, prefix_len_str, 10) catch return rls.Value{ .boolean = false };
+    /// Parse an IPv4 dotted-decimal string into a u32 in network byte order.
+    /// Returns null on any parse failure.
+    fn parseIpv4(ip: []const u8) ?u32 {
+        var result: u32 = 0;
+        var octet_count: u8 = 0;
+        var remaining = ip;
 
-            return rls.Value{ .boolean = ipInCidr(user_ip, network, prefix_len) };
-        } else {
-            // Simple prefix match
-            return rls.Value{ .boolean = std.mem.startsWith(u8, user_ip, range) };
+        while (octet_count < 4) : (octet_count += 1) {
+            if (octet_count > 0) {
+                if (remaining.len == 0 or remaining[0] != '.') return null;
+                remaining = remaining[1..];
+            }
+            const dot_pos = std.mem.indexOf(u8, remaining, ".");
+            const octet_str = if (dot_pos) |p| remaining[0..p] else remaining;
+            if (octet_str.len == 0) return null;
+            const octet = std.fmt.parseInt(u8, octet_str, 10) catch return null;
+            result = (result << 8) | @as(u32, octet);
+            remaining = if (dot_pos) |p| remaining[p..] else remaining[octet_str.len..];
         }
+
+        if (remaining.len != 0) return null;
+        return result;
+    }
+
+    /// Proper IPv4 CIDR match. Supports "A.B.C.D/N" or plain "A.B.C.D" (treated as /32).
+    fn cidrMatch(ip_str: []const u8, range_str: []const u8) bool {
+        const ip_u32 = parseIpv4(ip_str) orelse return false;
+
+        var base_str: []const u8 = range_str;
+        var prefix_len: u6 = 32;
+
+        if (std.mem.indexOf(u8, range_str, "/")) |slash_pos| {
+            base_str = range_str[0..slash_pos];
+            prefix_len = std.fmt.parseInt(u6, range_str[slash_pos + 1 ..], 10) catch return false;
+            if (prefix_len > 32) return false;
+        }
+
+        const base_u32 = parseIpv4(base_str) orelse return false;
+
+        if (prefix_len == 0) return true;
+
+        const mask: u32 = ~(@as(u32, 0)) << @intCast(32 - @as(u6, prefix_len));
+        return (ip_u32 & mask) == (base_u32 & mask);
+    }
+
+    fn ipInCidr(ip: []const u8, network: []const u8, prefix_len: u8) bool {
+        if (prefix_len == 0) return true;
+        if (prefix_len > 32) return false;
+
+        const ip_u32 = parseIpv4(ip) orelse return false;
+        const net_u32 = parseIpv4(network) orelse return false;
+
+        const p: u6 = @intCast(prefix_len);
+        const mask: u32 = ~(@as(u32, 0)) << @intCast(32 - p);
+        return (ip_u32 & mask) == (net_u32 & mask);
     }
 
     fn enhancedDataClassification(
@@ -722,15 +768,6 @@ pub const ExpressionCompiler = struct {
             hour >= start_hour or hour <= end_hour; // Wrap around midnight
 
         return rls.Value{ .boolean = in_range };
-    }
-
-    fn ipInCidr(ip: []const u8, network: []const u8, prefix_len: u8) bool {
-        // Simplified CIDR checking - in production would use proper IP parsing
-        if (prefix_len == 0) return true; // 0.0.0.0/0 matches everything
-
-        // Simple prefix matching for demonstration
-        const prefix_bytes = @min(prefix_len / 8, @min(ip.len, network.len));
-        return std.mem.eql(u8, ip[0..prefix_bytes], network[0..prefix_bytes]);
     }
 };
 
@@ -1039,3 +1076,59 @@ pub const EnhancedCacheManager = struct {
         }
     }
 };
+
+test "GAP-0287: enhanced ipInCidr proper bitwise matching" {
+    const Evaluator = ExpressionCompiler;
+
+    // Basic CIDR matching
+    try std.testing.expect(Evaluator.ipInCidr("192.168.1.1", "192.168.1.0", 24));
+    try std.testing.expect(!Evaluator.ipInCidr("192.168.2.1", "192.168.1.0", 24));
+
+    // The bug: string byte comparison "10.1" prefix matched "10.100.0.1"
+    try std.testing.expect(!Evaluator.ipInCidr("10.100.0.1", "10.1.0.0", 16));
+    try std.testing.expect(Evaluator.ipInCidr("10.1.0.1", "10.1.0.0", 16));
+
+    // /0 matches everything
+    try std.testing.expect(Evaluator.ipInCidr("1.2.3.4", "0.0.0.0", 0));
+
+    // /32 exact match
+    try std.testing.expect(Evaluator.ipInCidr("192.168.1.1", "192.168.1.1", 32));
+    try std.testing.expect(!Evaluator.ipInCidr("192.168.1.2", "192.168.1.1", 32));
+
+    // /8 subnet
+    try std.testing.expect(Evaluator.ipInCidr("10.255.255.255", "10.0.0.0", 8));
+    try std.testing.expect(!Evaluator.ipInCidr("11.0.0.0", "10.0.0.0", 8));
+
+    // Invalid inputs
+    try std.testing.expect(!Evaluator.ipInCidr("not.an.ip", "192.168.1.0", 24));
+    try std.testing.expect(!Evaluator.ipInCidr("192.168.1.1", "bad", 24));
+}
+
+test "GAP-0287: enhanced cidrMatch with CIDR notation string" {
+    const Evaluator = ExpressionCompiler;
+
+    // CIDR notation
+    try std.testing.expect(Evaluator.cidrMatch("192.168.1.100", "192.168.1.0/24"));
+    try std.testing.expect(!Evaluator.cidrMatch("192.168.2.100", "192.168.1.0/24"));
+
+    // The critical bug: "192.168.1" prefix would match "192.168.10.5"
+    try std.testing.expect(!Evaluator.cidrMatch("192.168.10.5", "192.168.1.0/24"));
+
+    // Plain address = /32
+    try std.testing.expect(Evaluator.cidrMatch("10.0.0.1", "10.0.0.1"));
+    try std.testing.expect(!Evaluator.cidrMatch("10.0.0.2", "10.0.0.1"));
+
+    // /16 subnet
+    try std.testing.expect(Evaluator.cidrMatch("172.16.255.1", "172.16.0.0/16"));
+    try std.testing.expect(!Evaluator.cidrMatch("172.17.0.1", "172.16.0.0/16"));
+}
+
+test "GAP-0287: enhanced parseIpv4 unit tests" {
+    const Evaluator = ExpressionCompiler;
+
+    try std.testing.expectEqual(@as(?u32, 0xC0A80101), Evaluator.parseIpv4("192.168.1.1"));
+    try std.testing.expectEqual(@as(?u32, 0x0A000001), Evaluator.parseIpv4("10.0.0.1"));
+    try std.testing.expectEqual(@as(?u32, null), Evaluator.parseIpv4(""));
+    try std.testing.expectEqual(@as(?u32, null), Evaluator.parseIpv4("192.168.1"));
+    try std.testing.expectEqual(@as(?u32, null), Evaluator.parseIpv4("256.0.0.1"));
+}
