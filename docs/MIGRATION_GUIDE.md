@@ -23,15 +23,20 @@ New GQL functions are available for Time-Series data access.
   - Returns `NULL` if no data is found or the store is disconnected.
   - Fully wired through the server execution engine (GAP-0280).
 
-**In Progress (unit-tested, not yet wired to server):**
+**Available (wired through eval dispatch, GAP-0282):**
 
 The following functions are implemented in `src/timeseries/gql_functions.zig`
-with full unit test coverage, but are not yet routed through the server
-execution engine. They will be available in a future release:
+with full unit test coverage and routed through the eval dispatch in
+`src/eval.zig`. Call them as `timeseries.<function_name>(...)` in GQL:
 
-- `last_value`, `value_at`, `sample_by`, `time_bucket`
-- `interpolate` (linear, step, nearest methods)
-- `moving_avg`, `rate`, `derivative`
+- `timeseries.last_value(device_id, metric)` — most recent value
+- `timeseries.value_at(device_id, metric, timestamp)` — value at specific time
+- `timeseries.sample_by(device_id, metric, interval_ms, start_ts, end_ts, aggregation)` — downsampled aggregation
+- `timeseries.time_bucket(device_id, metric, bucket_ms, start_ts, end_ts)` — time-bucketed averages
+- `timeseries.interpolate(device_id, metric, timestamp, method)` — interpolated value (linear/step/nearest)
+- `timeseries.moving_avg(device_id, metric, window_ms, step_ms, start_ts, end_ts)` — sliding window average
+- `timeseries.rate(device_id, metric)` — rate of change
+- `timeseries.derivative(device_id, metric, order)` — Nth-order derivative
 
 ### Graph Centrality
 

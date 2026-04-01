@@ -4396,6 +4396,10 @@ fn tsValueToCanonical(tv: ts_gql.Value, allocator: std.mem.Allocator) EvalError!
 
 /// Resolve the timeseries store from the Env or global, same as timeseries.value dispatch.
 fn resolveTimeseriesStore(env: Env) ?*TimeseriesStore {
+    // Safety: @constCast is required because the external timeseries
+    // library's getSeries/hashKey methods take *Store (mutable pointer)
+    // even though they only perform read operations.  The Store is
+    // effectively read-only at query time.
     if (env.timeseries_store) |ptr| return @constCast(ptr);
     return g_timeseries_store;
 }
