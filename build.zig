@@ -1054,6 +1054,18 @@ pub fn build(b: *std.Build) void {
     });
     const run_federation_auth_tests = b.addRunArtifact(federation_auth_tests);
 
+    // Shared cluster authentication module tests
+    const cluster_auth_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/distributed/cluster_auth.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    cluster_auth_tests.root_module.addImport("schema", schema_mod);
+    cluster_auth_tests.root_module.addImport("logging", logging_mod);
+    const run_cluster_auth_tests = b.addRunArtifact(cluster_auth_tests);
+
     // GAP-0490: Security test — server must validate federation HELLO via validateFederationAuth
     const federation_server_auth_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -1094,6 +1106,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_jsonb_depth_tests.step);
     test_step.dependOn(&run_blake2b_migration_tests.step);
     test_step.dependOn(&run_federation_auth_tests.step);
+    test_step.dependOn(&run_cluster_auth_tests.step);
     test_step.dependOn(&run_federation_server_auth_tests.step);
 
     // E2E tests (slower, require more setup - not run in pre-push hooks)
