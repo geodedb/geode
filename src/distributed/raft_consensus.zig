@@ -399,25 +399,40 @@ pub fn readRaftFrame(allocator: Allocator, stream: anytype) !DecodedRaftFrame {
 // ---- Protobuf conversion helpers ----
 
 fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
-    _ = allocator;
     return switch (msg) {
         .request_vote => |rv| .{ .request_vote = .{
             .term = rv.term,
             .candidate_id = rv.candidate_id,
             .last_log_index = rv.last_log_index,
             .last_log_term = rv.last_log_term,
+            .pre_vote = rv.pre_vote,
         } },
         .request_vote_response => |rvr| .{ .request_vote_response = .{
             .term = rvr.term,
             .vote_granted = rvr.vote_granted,
+            .voter_id = rvr.voter_id,
         } },
-        .append_entries => |ae| .{ .append_entries = .{
-            .term = ae.term,
-            .leader_id = ae.leader_id,
-            .prev_log_index = ae.prev_log_index,
-            .prev_log_term = ae.prev_log_term,
-            .leader_commit = ae.leader_commit,
-        } },
+        .append_entries => |ae| blk: {
+            var proto_entries = std.ArrayList(raft_schema.RaftLogEntry).init(allocator);
+            for (ae.entries) |le| {
+                try proto_entries.append(.{
+                    .term = le.term,
+                    .index = le.index,
+                    .timestamp = le.timestamp,
+                    .client_id = le.client_id,
+                    .serial_number = le.serial_number,
+                    .command = commandToProto(le.command),
+                });
+            }
+            break :blk .{ .append_entries = .{
+                .term = ae.term,
+                .leader_id = ae.leader_id,
+                .prev_log_index = ae.prev_log_index,
+                .prev_log_term = ae.prev_log_term,
+                .entries = proto_entries,
+                .leader_commit = ae.leader_commit,
+            } };
+        },
         .append_entries_response => |aer| .{ .append_entries_response = .{
             .term = aer.term,
             .success = aer.success,
@@ -429,6 +444,7 @@ fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
             .last_included_index = is.last_included_index,
             .last_included_term = is.last_included_term,
             .offset = is.offset,
+            .data = is.data,
             .done = is.done,
         } },
         .install_snapshot_response => |isr| .{ .install_snapshot_response = .{
@@ -439,28 +455,40 @@ fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
 }
 
 fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
-    _ = allocator;
     return switch (msg) {
         .request_vote => |rv| .{ .request_vote = .{
             .term = rv.term,
             .candidate_id = rv.candidate_id,
             .last_log_index = rv.last_log_index,
             .last_log_term = rv.last_log_term,
-            .pre_vote = false,
+            .pre_vote = rv.pre_vote,
         } },
         .request_vote_response => |rvr| .{ .request_vote_response = .{
             .term = rvr.term,
             .vote_granted = rvr.vote_granted,
-            .voter_id = 0,
+            .voter_id = rvr.voter_id,
         } },
-        .append_entries => |ae| .{ .append_entries = .{
-            .term = ae.term,
-            .leader_id = ae.leader_id,
-            .prev_log_index = ae.prev_log_index,
-            .prev_log_term = ae.prev_log_term,
-            .entries = &.{},
-            .leader_commit = ae.leader_commit,
-        } },
+        .append_entries => |ae| blk: {
+            const entries = try allocator.alloc(LogEntry, ae.entries.items.len);
+            for (ae.entries.items, 0..) |proto_le, i| {
+                entries[i] = .{
+                    .term = proto_le.term,
+                    .index = proto_le.index,
+                    .command = if (proto_le.command) |cmd| protoToCommand(cmd) else .noop,
+                    .timestamp = proto_le.timestamp,
+                    .client_id = proto_le.client_id,
+                    .serial_number = proto_le.serial_number,
+                };
+            }
+            break :blk .{ .append_entries = .{
+                .term = ae.term,
+                .leader_id = ae.leader_id,
+                .prev_log_index = ae.prev_log_index,
+                .prev_log_term = ae.prev_log_term,
+                .entries = entries,
+                .leader_commit = ae.leader_commit,
+            } };
+        },
         .append_entries_response => |aer| .{ .append_entries_response = .{
             .term = aer.term,
             .success = aer.success,
@@ -472,7 +500,7 @@ fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
             .last_included_index = is.last_included_index,
             .last_included_term = is.last_included_term,
             .offset = is.offset,
-            .data = &.{},
+            .data = is.data,
             .done = is.done,
         } },
         .install_snapshot_response => |isr| .{ .install_snapshot_response = .{
@@ -482,8 +510,124 @@ fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
     };
 }
 
-fn freeMessage(_: Allocator, _: *Message) void {
-    // Message fields are either stack values or slices pointing into protobuf decode buffers
+fn commandToProto(cmd: Command) raft_schema.RaftCommand {
+    return switch (cmd) {
+        .noop => .{ .noop = .{} },
+        .write => |data| .{ .write = .{ .data = data } },
+        .graph_mutation => |gm| .{ .graph_mutation = .{
+            .graph = gm.graph,
+            .mutation_type = switch (gm.mutation_type) {
+                .create => .CREATE,
+                .update => .UPDATE,
+                .delete => .DELETE,
+                .merge => .MERGE,
+            },
+            .data = gm.data,
+            .txn_id = gm.txn_id,
+        } },
+        .schema_change => |sc| .{ .schema_change = .{
+            .operation = switch (sc.operation) {
+                .create_graph => .CREATE_GRAPH,
+                .drop_graph => .DROP_GRAPH,
+                .alter_graph => .ALTER_GRAPH,
+            },
+            .graph = sc.graph,
+            .schema = sc.schema,
+        } },
+        .config_change => |cc| .{ .config_change = .{
+            .change_type = switch (cc.change_type) {
+                .add_server => .ADD_SERVER,
+                .remove_server => .REMOVE_SERVER,
+                .update_server => .UPDATE_SERVER,
+            },
+            .server_id = cc.server_id,
+            .server_endpoint = cc.server_endpoint,
+            .server_port = if (cc.server_port) |p| @as(?u32, p) else null,
+        } },
+        .snapshot_pointer => |sp| .{ .snapshot_pointer = .{
+            .last_included_index = sp.last_included_index,
+            .last_included_term = sp.last_included_term,
+            .size_bytes = sp.size_bytes,
+            .checksum = sp.checksum,
+        } },
+        .txn_prepare => |tp| .{ .txn_prepare = .{
+            .xid = tp.xid,
+            .shard_id = tp.shard_id,
+            .write_set = tp.write_set,
+            .metadata = tp.metadata,
+        } },
+        .txn_decide => |td| .{ .txn_decide = .{
+            .xid = td.xid,
+            .commit = td.commit,
+        } },
+    };
+}
+
+fn protoToCommand(proto_cmd: raft_schema.RaftCommand) Command {
+    return switch (proto_cmd) {
+        .noop => .noop,
+        .write => |w| .{ .write = w.data },
+        .graph_mutation => |gm| .{ .graph_mutation = .{
+            .graph = gm.graph,
+            .mutation_type = switch (gm.mutation_type) {
+                .CREATE => .create,
+                .UPDATE => .update,
+                .DELETE => .delete,
+                .MERGE => .merge,
+                .MUTATION_TYPE_UNSPECIFIED => .create,
+            },
+            .data = gm.data,
+            .txn_id = gm.txn_id,
+        } },
+        .schema_change => |sc| .{ .schema_change = .{
+            .operation = switch (sc.operation) {
+                .CREATE_GRAPH => .create_graph,
+                .DROP_GRAPH => .drop_graph,
+                .ALTER_GRAPH => .alter_graph,
+                .SCHEMA_OP_UNSPECIFIED => .create_graph,
+            },
+            .graph = sc.graph,
+            .schema = sc.schema,
+        } },
+        .config_change => |cc| .{ .config_change = .{
+            .change_type = switch (cc.change_type) {
+                .ADD_SERVER => .add_server,
+                .REMOVE_SERVER => .remove_server,
+                .UPDATE_SERVER => .update_server,
+                .CONFIG_CHANGE_UNSPECIFIED => .add_server,
+            },
+            .server_id = cc.server_id,
+            .server_endpoint = cc.server_endpoint,
+            .server_port = if (cc.server_port) |p| @as(?u16, @intCast(p)) else null,
+        } },
+        .snapshot_pointer => |sp| .{ .snapshot_pointer = .{
+            .last_included_index = sp.last_included_index,
+            .last_included_term = sp.last_included_term,
+            .size_bytes = sp.size_bytes,
+            .checksum = sp.checksum,
+        } },
+        .txn_prepare => |tp| .{ .txn_prepare = .{
+            .xid = tp.xid,
+            .shard_id = tp.shard_id,
+            .write_set = tp.write_set,
+            .metadata = tp.metadata,
+        } },
+        .txn_decide => |td| .{ .txn_decide = .{
+            .xid = td.xid,
+            .commit = td.commit,
+        } },
+    };
+}
+
+fn freeMessage(allocator: Allocator, msg: *Message) void {
+    switch (msg.*) {
+        .append_entries => |ae| {
+            if (ae.entries.len > 0) {
+                allocator.free(ae.entries);
+            }
+        },
+        else => {},
+    }
 }
 
 fn freeLogEntryDeep(_: Allocator, _: *LogEntry) void {
@@ -611,36 +755,68 @@ pub const RaftNode = struct {
             .request_vote_response => |rvr| .{ .request_vote_response = .{
                 .term = rvr.term,
                 .vote_granted = rvr.vote_granted,
-                .voter_id = rvr.voter_id,
+                .pre_vote = false,
             } },
-            .append_entries => |_| .{ .append_entries = .{
-                .term = 0,
-                .leader_id = from,
-                .prev_log_index = 0,
-                .prev_log_term = 0,
-                .entries = &.{},
-                .leader_commit = 0,
-            } },
+            .append_entries => |ae| blk: {
+                // Convert geode LogEntry[] to raft_lib Entry[]
+                const lib_entries = self.allocator.alloc(raft_lib.Entry, ae.entries.len) catch break :blk raft_lib.Message{ .append_entries = .{
+                    .term = ae.term,
+                    .leader_id = ae.leader_id,
+                    .prev_log_index = ae.prev_log_index,
+                    .prev_log_term = ae.prev_log_term,
+                    .entries = &.{},
+                    .leader_commit = ae.leader_commit,
+                } };
+                for (ae.entries, 0..) |le, i| {
+                    // Serialize command to bytes for the raft_lib entry
+                    const proto_cmd = commandToProto(le.command);
+                    var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(self.allocator, 128) catch {
+                        lib_entries[i] = .{ .index = le.index, .term = le.term, .kind = .normal, .data = &.{} };
+                        continue;
+                    };
+                    protobuf.encode(&aw.writer, self.allocator, proto_cmd) catch {
+                        aw.deinit();
+                        lib_entries[i] = .{ .index = le.index, .term = le.term, .kind = .normal, .data = &.{} };
+                        continue;
+                    };
+                    const entry_data = self.allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]) catch {
+                        aw.deinit();
+                        lib_entries[i] = .{ .index = le.index, .term = le.term, .kind = .normal, .data = &.{} };
+                        continue;
+                    };
+                    aw.deinit();
+                    lib_entries[i] = .{ .index = le.index, .term = le.term, .kind = .normal, .data = entry_data };
+                }
+                break :blk raft_lib.Message{ .append_entries = .{
+                    .term = ae.term,
+                    .leader_id = ae.leader_id,
+                    .prev_log_index = ae.prev_log_index,
+                    .prev_log_term = ae.prev_log_term,
+                    .entries = lib_entries,
+                    .leader_commit = ae.leader_commit,
+                } };
+            },
             .append_entries_response => |aer| .{ .append_entries_response = .{
                 .term = aer.term,
                 .success = aer.success,
                 .match_index = aer.match_index,
+                .conflict_index = 0,
+                .conflict_term = 0,
             } },
-            .install_snapshot => |_| .{ .install_snapshot = .{
-                .term = 0,
-                .leader_id = from,
-                .last_included_index = 0,
-                .last_included_term = 0,
-                .offset = 0,
-                .data = &.{},
-                .done = false,
-                .checksum = 0,
-                .cluster_config = null,
+            .install_snapshot => |is| .{ .install_snapshot = .{
+                .term = is.term,
+                .leader_id = is.leader_id,
+                .last_included_index = is.last_included_index,
+                .last_included_term = is.last_included_term,
+                .offset = is.offset,
+                .data = is.data,
+                .done = is.done,
+                .checksum = std.mem.zeroes([32]u8),
+                .config = .{ .voters = &.{}, .voters_outgoing = &.{}, .is_joint = false },
             } },
             .install_snapshot_response => |isr| .{ .install_snapshot_response = .{
                 .term = isr.term,
                 .success = isr.success,
-                .bytes_stored = 0,
             } },
         };
 
@@ -649,9 +825,16 @@ pub const RaftNode = struct {
     }
 
     pub fn proposeCommand(self: *RaftNode, cmd: Command) !u64 {
-        // Serialize Command to bytes for the external library's propose()
-        _ = cmd;
-        self.inner.propose(&.{});
+        // Serialize Command to bytes via protobuf RaftCommand
+        const proto_cmd = commandToProto(cmd);
+        var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(self.allocator, 256) catch return error.OutOfMemory;
+        errdefer aw.deinit();
+        protobuf.encode(&aw.writer, self.allocator, proto_cmd) catch return error.OutOfMemory;
+        const data = self.allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]) catch return error.OutOfMemory;
+        defer self.allocator.free(data);
+        aw.deinit();
+
+        try self.inner.propose(data);
         self.drainReady();
         return 0;
     }
@@ -680,7 +863,19 @@ pub const RaftNode = struct {
         for (rd.committed_entries) |entry| {
             if (entry.kind == .normal and entry.data.len > 0) {
                 if (self.apply_callback) |callback| {
-                    _ = callback(self.allocator, .{ .write = entry.data }) catch {};
+                    // Attempt to deserialize the command from protobuf;
+                    // fall back to raw .write if deserialization fails.
+                    var reader: std.Io.Reader = .fixed(entry.data);
+                    const cmd: Command = if (protobuf.decode(raft_schema.RaftCommand, &reader, self.allocator)) |decoded| blk: {
+                        var d = decoded;
+                        defer d.deinit(self.allocator);
+                        break :blk protoToCommand(d);
+                    } else |_| .{ .write = entry.data };
+                    callback(self.allocator, cmd) catch |err| {
+                        log.err("apply_callback failed", &.{
+                            Attr.string("error", @errorName(err)),
+                        });
+                    };
                 }
             }
             self.stats.entries_applied += 1;
