@@ -139,6 +139,19 @@ pub const PathFilter = struct {
     edge_predicate: ?*const fn (*const Edge) bool = null,
 };
 
+/// Check whether a byte slice looks like a serialized FLE EnvelopeV1.
+/// Format: alg_id(1) + key_version(2) + nonce(12) + tag(16) + ciphertext_len(4) + ciphertext
+/// Used to prevent double-encryption when callers already encrypted before setNodeProperty.
+fn isLikelyFleEnvelope(data: []const u8) bool {
+    if (data.len < 35) return false;
+    // Valid algorithm IDs: 1 (AES-256-GCM), 2 (ChaCha20-Poly1305), 3 (XChaCha20-Poly1305)
+    const alg_id = data[0];
+    if (alg_id < 1 or alg_id > 3) return false;
+    // Check that the ciphertext length field matches remaining data
+    const ciphertext_len = std.mem.readInt(u32, data[31..35], .little);
+    return data.len == 35 + ciphertext_len;
+}
+
 fn copyPropertyValue(self: *GraphStore, value: PropertyValue) !PropertyValue {
     return switch (value) {
         .String => |s| PropertyValue{ .String = try self.allocator.dupe(u8, s) },
@@ -928,19 +941,56 @@ pub const GraphStore = struct {
     }
 
     pub fn setNodeProperty(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) !void {
+        // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
+        // Some callers already encrypt; isLikelyFleEnvelope() prevents double-encryption.
+        const effective_value = switch (value) {
+            .String => |s| blk: {
+                if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
+                    const node_type: []const u8 = if (self.nodes.get(node_id)) |n|
+                        (if (n.labels.len > 0) n.labels[0] else "Unknown")
+                    else
+                        "Unknown";
+                    if (fle_integration.fieldRequiresEncryption(node_type, key)) {
+                        const fle_ctx = fle_integration.EncryptionContext{
+                            .tenant_id = self.tenant_id,
+                            .schema_name = self.schema_name,
+                            .allocator = self.allocator,
+                            .current_user_role = fle_integration.getCurrentUserRole(),
+                        };
+                        const record_id = std.fmt.allocPrint(self.allocator, "node_{d}", .{node_id}) catch {
+                            break :blk value;
+                        };
+                        defer self.allocator.free(record_id);
+                        const encrypted = fle_integration.encryptFieldIfNeeded(
+                            fle_ctx,
+                            node_type,
+                            key,
+                            s,
+                            record_id,
+                        ) catch {
+                            break :blk value;
+                        };
+                        if (!std.mem.eql(u8, encrypted, s)) {
+                            break :blk PropertyValue{ .String = encrypted };
+                        }
+                    }
+                }
+                break :blk value;
+            },
+            else => value,
+        };
+
         // Dual-write: set property in adapter via IdMap slot translation
         if (global_vtable) |vt| {
             const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "default";
             // Use IdMap to translate UUIDv7 → slot_id for adapter
             const slot_id = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, node_id)) orelse node_id) else node_id;
-            vt.setNodePropertyFn(vt.ctx, gn, slot_id, key, value) catch |err| {
+            vt.setNodePropertyFn(vt.ctx, gn, slot_id, key, effective_value) catch |err| {
                 log.err("dual-write: adapter setNodeProperty failed", &.{Attr.string("error", @errorName(err))});
             };
         }
         if (self.nodes.getPtr(node_id)) |node| {
-            // Note: Encryption is now handled by the caller (execution.zig) before calling setNodeProperty
-            // This ensures consistent parameters (schema, record_id) between encryption and decryption
-            const value_copy = try copyPropertyValue(self, value);
+            const value_copy = try copyPropertyValue(self, effective_value);
             errdefer freePropertyValue(self, value_copy);
 
             // Use getOrPut to avoid memory leak - only allocate key if it doesn't exist
@@ -958,7 +1008,7 @@ pub const GraphStore = struct {
             self.dirty.store(true, .release);
 
             // WAL notification: SetNodeProperty
-            notifyMutation(.set_node_property, node_id, 0, 0, null, key, value, null);
+            notifyMutation(.set_node_property, node_id, 0, 0, null, key, effective_value, null);
         }
     }
 
@@ -1835,6 +1885,41 @@ pub const GraphStore = struct {
     }
 
     pub fn setEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
+        // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
+        const effective_value = switch (value) {
+            .String => |s| blk: {
+                if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
+                    const edge_type: []const u8 = if (self.edges.get(edge_id)) |e| e.label else "Unknown";
+                    if (fle_integration.fieldRequiresEncryption(edge_type, key)) {
+                        const fle_ctx = fle_integration.EncryptionContext{
+                            .tenant_id = self.tenant_id,
+                            .schema_name = self.schema_name,
+                            .allocator = self.allocator,
+                            .current_user_role = fle_integration.getCurrentUserRole(),
+                        };
+                        const record_id = std.fmt.allocPrint(self.allocator, "edge_{d}", .{edge_id}) catch {
+                            break :blk value;
+                        };
+                        defer self.allocator.free(record_id);
+                        const encrypted = fle_integration.encryptFieldIfNeeded(
+                            fle_ctx,
+                            edge_type,
+                            key,
+                            s,
+                            record_id,
+                        ) catch {
+                            break :blk value;
+                        };
+                        if (!std.mem.eql(u8, encrypted, s)) {
+                            break :blk PropertyValue{ .String = encrypted };
+                        }
+                    }
+                }
+                break :blk value;
+            },
+            else => value,
+        };
+
         // Dual-write: set edge property in adapter via IdMap slot translation
         if (global_vtable) |vt| {
             if (vt.setEdgePropertyFn) |f| {
@@ -1843,16 +1928,14 @@ pub const GraphStore = struct {
                     const slot_from = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, edge.from_id)) orelse edge.from_id) else edge.from_id;
                     const slot_to = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, edge.to_id)) orelse edge.to_id) else edge.to_id;
                     const slot_edge = if (self.getIdMap(gn)) |im| (im.edgeSlot(@as(u128, edge_id)) orelse edge_id) else edge_id;
-                    f(vt.ctx, gn, slot_from, slot_to, slot_edge, key, value) catch |err| {
+                    f(vt.ctx, gn, slot_from, slot_to, slot_edge, key, effective_value) catch |err| {
                         log.err("dual-write: adapter setEdgeProperty failed", &.{Attr.string("error", @errorName(err))});
                     };
                 }
             }
         }
         if (self.edges.getPtr(edge_id)) |edge| {
-            // Note: Encryption is now handled by the caller (execution.zig) before calling setEdgeProperty
-            // This ensures consistent parameters (schema, record_id) between encryption and decryption
-            const value_copy = try copyPropertyValue(self, value);
+            const value_copy = try copyPropertyValue(self, effective_value);
             errdefer freePropertyValue(self, value_copy);
 
             // Use getOrPut to avoid memory leak - only allocate key if it doesn't exist
@@ -1870,7 +1953,7 @@ pub const GraphStore = struct {
             self.dirty.store(true, .release);
 
             // WAL notification: SetEdgeProperty
-            notifyMutation(.set_edge_property, edge_id, 0, 0, null, key, value, null);
+            notifyMutation(.set_edge_property, edge_id, 0, 0, null, key, effective_value, null);
         }
     }
 
