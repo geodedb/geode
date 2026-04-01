@@ -23,6 +23,7 @@ pub const QueryCoordinator = struct {
     node_registry: NodeRegistry,
     metrics: CoordinatorMetrics,
     stats_registry: ?*cbo.StatsRegistry = null, // GAP-0077: Optional statistics registry
+    pool: spice_wrapper.SpicePool, // PERF-D007: Reuse pool across queries
 
     const Self = @This();
 
@@ -34,10 +35,12 @@ pub const QueryCoordinator = struct {
             .shard_map = try ShardMap.init(allocator),
             .node_registry = try NodeRegistry.init(allocator),
             .metrics = CoordinatorMetrics.init(),
+            .pool = spice_wrapper.SpicePool.init(allocator, null),
         };
     }
 
     pub fn deinit(self: *Self) void {
+        self.pool.deinit();
         self.shard_map.deinit();
         self.node_registry.deinit();
     }
@@ -145,9 +148,7 @@ pub const QueryCoordinator = struct {
         defer self.allocator.free(errors);
         for (errors) |*e| e.* = null;
 
-        var pool = spice_wrapper.SpicePool.init(self.allocator, null);
-        defer pool.deinit();
-
+        // PERF-D007: Reuse struct-level pool instead of creating per-call
         const Context = struct {
             coordinator: *Self,
             fragments: []const QueryFragment,
@@ -165,7 +166,7 @@ pub const QueryCoordinator = struct {
         };
 
         spice_wrapper.parallelForEach(
-            &pool,
+            &self.pool,
             0,
             fragment_count,
             ctx,

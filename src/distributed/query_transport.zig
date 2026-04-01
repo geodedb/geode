@@ -24,16 +24,19 @@ pub const QueryTransport = struct {
     timeout_ms: u32 = 30000, // 30 second default timeout
     retry_attempts: u32 = 3,
     page_size: u32 = 1000,
+    pool: spice_wrapper.SpicePool, // PERF-D007: Reuse pool across queries
 
-    pub fn init(allocator: std.mem.Allocator, network_transport: *network_transport.NetworkTransport) !QueryTransport {
+    pub fn init(allocator: std.mem.Allocator, net_transport: *network_transport.NetworkTransport) !QueryTransport {
         return QueryTransport{
             .allocator = allocator,
-            .network_transport = network_transport,
+            .network_transport = net_transport,
             .connection_pool = try ConnectionPool.init(allocator),
+            .pool = spice_wrapper.SpicePool.init(allocator, null),
         };
     }
 
     pub fn deinit(self: *QueryTransport) void {
+        self.pool.deinit();
         self.connection_pool.deinit();
     }
 
@@ -81,9 +84,7 @@ pub const QueryTransport = struct {
         defer self.allocator.free(errors);
         for (errors) |*e| e.* = null;
 
-        var pool = spice_wrapper.SpicePool.init(self.allocator, null);
-        defer pool.deinit();
-
+        // PERF-D007: Reuse struct-level pool instead of creating per-call
         const Context = struct {
             transport: *QueryTransport,
             queries: []const NodeQuery,
@@ -99,7 +100,7 @@ pub const QueryTransport = struct {
         };
 
         spice_wrapper.parallelForEach(
-            &pool,
+            &self.pool,
             0,
             queries.len,
             ctx,
