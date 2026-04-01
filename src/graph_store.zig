@@ -3435,18 +3435,6 @@ pub const GraphStore = struct {
     pub fn deleteNodeNoSave(self: *GraphStore, node_id: u64) void {
         const node_ptr = self.nodes.getPtr(node_id) orelse return;
 
-        // Propagate deletion to the storage adapter so that a subsequent
-        // checkpoint + reload does not resurrect the node from disk.
-        if (global_vtable) |vt| {
-            const adapter_gn = if (node_ptr.graph_name.len > 0) node_ptr.graph_name else "default";
-            if (self.requireNodeSlot(adapter_gn, node_id)) |slot_id| {
-                vt.deleteNodeFn(vt.ctx, adapter_gn, slot_id) catch {};
-                if (self.getIdMap(adapter_gn)) |im| {
-                    _ = im.removeNode(@as(u128, node_id));
-                }
-            } else |_| {}
-        }
-
         // Collect connected edges first
         var edge_ids = std.ArrayList(u64){};
         defer edge_ids.deinit(self.allocator);
@@ -3516,19 +3504,6 @@ pub const GraphStore = struct {
     pub fn deleteEdgeNoSave(self: *GraphStore, edge_id: u64) void {
         if (self.edges.fetchRemove(edge_id)) |kv| {
             var edge = kv.value;
-
-            // Propagate deletion to the storage adapter
-            if (global_vtable) |vt| {
-                const adapter_gn = if (edge.graph_name.len > 0) edge.graph_name else "default";
-                if (self.requireEdgeSlot(adapter_gn, edge_id)) |slot_id| {
-                    const from_slot = self.requireNodeSlot(adapter_gn, edge.from_id) catch 0;
-                    const to_slot = self.requireNodeSlot(adapter_gn, edge.to_id) catch 0;
-                    vt.deleteEdgeFn(vt.ctx, adapter_gn, from_slot, to_slot, slot_id) catch {};
-                    if (self.getIdMap(adapter_gn)) |im| {
-                        _ = im.removeEdge(@as(u128, edge_id));
-                    }
-                } else |_| {}
-            }
 
             self.removeFromAdjacencyIndex(edge.from_id, edge.to_id, edge_id);
 

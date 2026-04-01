@@ -535,12 +535,12 @@ pub const UndoLog = struct {
         _ = self;
         switch (entry) {
             .CreateNode => |e| {
-                // Undo: delete the created node
-                store.deleteNodeNoSave(e.node_id);
+                // Undo: delete the created node (full delete propagates to adapter)
+                store.deleteNode(e.node_id);
             },
             .CreateEdge => |e| {
-                // Undo: delete the created edge
-                store.deleteEdgeNoSave(e.edge_id);
+                // Undo: delete the created edge (full delete propagates to adapter)
+                store.deleteEdge(e.edge_id);
             },
             .SetNodeProperty => |e| {
                 // Undo: restore old value or remove property
