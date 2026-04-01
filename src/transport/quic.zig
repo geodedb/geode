@@ -860,12 +860,10 @@ pub const QuicClient = struct {
     }
 
     pub fn deinit(self: *QuicClient) void {
-        if (self.connection) |conn| {
-            // Connection may be in a bad state after handshake failure;
-            // null out first to avoid double-cleanup
-            self.connection = null;
-            api.closeConnection(conn, 0) catch {};
-        }
+        // Let endpointDeinit handle connection cleanup — calling
+        // closeConnection before deinit can leave dangling pointers
+        // in the endpoint's connection map.
+        self.connection = null;
         if (self.endpoint) |ep| {
             api.endpointDeinit(ep);
             self.endpoint = null;
