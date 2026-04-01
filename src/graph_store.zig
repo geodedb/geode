@@ -1097,6 +1097,27 @@ pub const GraphStore = struct {
         }
     }
 
+    pub fn clearNodeProperties(self: *GraphStore, node_id: u64) !void {
+        const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
+
+        var keys = std.ArrayList([]const u8).empty;
+        defer {
+            for (keys.items) |owned_key| {
+                self.allocator.free(owned_key);
+            }
+            keys.deinit(self.allocator);
+        }
+
+        var prop_iter = node.properties.iterator();
+        while (prop_iter.next()) |entry| {
+            try keys.append(self.allocator, try self.allocator.dupe(u8, entry.key_ptr.*));
+        }
+
+        for (keys.items) |owned_key| {
+            self.removeNodeProperty(node_id, owned_key);
+        }
+    }
+
     pub fn addNodeLabel(self: *GraphStore, node_id: u64, label: []const u8) !void {
         if (global_vtable) |vt| {
             if (vt.addNodeLabelFn) |f| {
@@ -3388,7 +3409,12 @@ pub fn getGlobalAdapter() ?*graph_storage_adapter.StorageAdapter {
 }
 
 pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*graph_storage_adapter.StorageAdapter {
-    if (global_adapter) |existing| return existing;
+    if (global_adapter) |existing| {
+        if (std.mem.eql(u8, existing.data_dir, data_dir)) {
+            return existing;
+        }
+        deinitGlobalAdapter();
+    }
 
     const gs = @import("graph_storage");
     const tde = @import("storage/tde_file_encryption.zig");
@@ -3483,6 +3509,20 @@ pub fn deinitGlobalAdapter() void {
     } else if (global_adapter) |adapter| {
         adapter.deinit();
         global_adapter = null;
+    }
+}
+
+fn syncGlobalAdapterForDataDir(data_dir: ?[]const u8) void {
+    if (data_dir) |dir| {
+        _ = initGlobalAdapter(global_gpa.allocator(), dir) catch |err| {
+            log.warn("Failed to initialize engine-backed adapter", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.string("data_dir", dir),
+            });
+            return;
+        };
+    } else if (global_adapter != null) {
+        deinitGlobalAdapter();
     }
 }
 
@@ -3828,6 +3868,8 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
         last_data_dir = null;
     }
 
+    syncGlobalAdapterForDataDir(last_data_dir);
+
     // Use a persistent arena allocator for the global store
     global_arena = std.heap.ArenaAllocator.init(global_gpa.allocator());
     global_store = GraphStore.init(global_arena.?.allocator()) catch @panic("OOM: failed to initialize global graph store");
@@ -3853,14 +3895,19 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
 /// This is the preferred initialization path that sets up both the global
 /// GraphStore and the global StorageAdapter in one call.
 pub fn initGlobalStore(allocator: std.mem.Allocator, data_dir: []const u8) !*GraphStore {
-    // Initialize adapter first
-    _ = try initGlobalAdapter(allocator, data_dir);
-
     // Set data dir override so getGlobalStore picks it up
     setDataDirOverride(allocator, data_dir);
 
     // Get or create the global store (which will now use the adapter)
     const store = getGlobalStore(allocator);
+    const adapter = getGlobalAdapter() orelse {
+        deinitGlobalStore();
+        return error.StorageAdapterUnavailable;
+    };
+    if (!std.mem.eql(u8, adapter.data_dir, data_dir)) {
+        deinitGlobalStore();
+        return error.StorageAdapterMismatch;
+    }
     store.data_dir = data_dir;
     return store;
 }
@@ -3883,6 +3930,7 @@ pub fn deinitGlobalStore() void {
         }
         initialized.store(false, .release);
     }
+    deinitGlobalAdapter();
 }
 
 // Unit tests for label index functionality
@@ -4004,4 +4052,41 @@ test "TestEdgeAdjacencyIndex" {
     var edges_for_node1 = store.getEdgesForNode(node1);
     defer edges_for_node1.deinit(testing.allocator);
     try testing.expect(edges_for_node1.items.len == 2);
+}
+
+test "clearNodeProperties removes all node properties" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"Person"};
+    const node_id = try store.createNodeWithGraph(&labels, "test_graph");
+
+    try store.setNodeProperty(node_id, "name", .{ .String = "alice" });
+    try store.setNodeProperty(node_id, "age", .{ .Int = 42 });
+
+    try store.clearNodeProperties(node_id);
+
+    const node = store.getNodePtr(node_id) orelse return error.NodeNotFound;
+    try testing.expectEqual(@as(usize, 0), node.properties.count());
+    try testing.expect(store.getNodeProperty(node_id, "name") == null);
+    try testing.expect(store.getNodeProperty(node_id, "age") == null);
+}
+
+test "getGlobalStore initializes adapter from data dir override" {
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(dir_path);
+
+    setDataDirOverride(testing.allocator, dir_path);
+    defer setDataDirOverride(testing.allocator, null);
+
+    _ = getGlobalStore(testing.allocator);
+
+    const adapter = getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    try testing.expectEqualStrings(dir_path, adapter.data_dir);
 }
