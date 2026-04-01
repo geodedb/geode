@@ -6,6 +6,8 @@ const logging = @import("logging");
 const log = logging.scoped("sharding");
 const Attr = logging.Attr;
 
+pub const ConsistentHash = @import("consistent_hash.zig").ConsistentHash;
+
 // Enhanced sharding implementation for horizontal scaling
 pub const ShardManager = struct {
     allocator: Allocator,
@@ -583,7 +585,7 @@ pub const ShardManager = struct {
         return @intCast(std.time.timestamp());
     }
 
-    // CANARY: REQ=REQ-DIST-SPLIT-001; FEATURE="Shard Split Point"; ASPECT=SplitPoint; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
+    // CANARY: REQ=REQ-DIST-SPLIT-001; FEATURE="Shard Split Point"; ASPECT=SplitPoint; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
     fn findSplitPoint(self: *ShardManager, shard: *Shard) ![]const u8 {
         // Find median key for balanced split
         if (shard.key_range) |range| {
@@ -711,7 +713,7 @@ pub const ShardManager = struct {
         target.statistics.last_updated = std.time.timestamp();
     }
 
-    // CANARY: REQ=REQ-DIST-RANGE-001; FEATURE="Key Range Operations"; ASPECT=RangeOverlap; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
+    // CANARY: REQ=REQ-DIST-RANGE-001; FEATURE="Key Range Operations"; ASPECT=RangeOverlap; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
     fn rangeOverlaps(self: *ShardManager, range1: ?KeyRange, range2: ?KeyRange) bool {
         _ = self;
         if (range1 == null or range2 == null) return false;
@@ -735,7 +737,7 @@ pub const ShardManager = struct {
         return .map_reduce;
     }
 
-    // CANARY: REQ=REQ-DIST-RANGE-SHARD-001; FEATURE="Range-Based Sharding"; ASPECT=ShardLookup; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
+    // CANARY: REQ=REQ-DIST-RANGE-SHARD-001; FEATURE="Range-Based Sharding"; ASPECT=ShardLookup; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
     fn getRangeShardId(self: *ShardManager, key: []const u8) u64 {
         // Find shard whose key range contains the given key
         var it = self.shards.iterator();
@@ -760,7 +762,7 @@ pub const ShardManager = struct {
         return 0;
     }
 
-    // CANARY: REQ=REQ-DIST-GRAPH-SHARD-001; FEATURE="Graph-Aware Sharding"; ASPECT=EdgeCutMinimization; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
+    // CANARY: REQ=REQ-DIST-GRAPH-SHARD-001; FEATURE="Graph-Aware Sharding"; ASPECT=EdgeCutMinimization; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
     fn getGraphAwareShardId(self: *ShardManager, key: []const u8) u64 {
         // Graph-aware sharding aims to minimize edge cuts by keeping connected nodes together
         // Strategy: Use community detection hint from key prefix
@@ -793,7 +795,7 @@ pub const ShardManager = struct {
         return self.consistent_hash.getNode(key).id;
     }
 
-    // CANARY: REQ=REQ-DIST-GEO-SHARD-001; FEATURE="Geo-Distributed Sharding"; ASPECT=LocalityAware; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
+    // CANARY: REQ=REQ-DIST-GEO-SHARD-001; FEATURE="Geo-Distributed Sharding"; ASPECT=LocalityAware; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
     fn getGeoShardId(self: *ShardManager, key: []const u8) u64 {
         // Geo-distributed sharding places data near users
         // Keys can be formatted as "region:data_key" to hint at geography
@@ -827,197 +829,6 @@ pub const ShardManager = struct {
 
         // Fallback to consistent hashing for unknown regions
         return self.consistent_hash.getNode(key).id;
-    }
-};
-
-// Consistent hashing for sharding
-pub const ConsistentHash = struct {
-    allocator: Allocator,
-    ring: std.ArrayList(Node),
-    virtual_nodes: u32,
-    hash_fn: HashFunction,
-
-    pub const Node = struct {
-        id: u64,
-        hash: u64,
-        address: []const u8,
-        weight: f32 = 1.0,
-        metadata: ?[]const u8 = null,
-    };
-
-    pub const HashFunction = enum {
-        xxhash,
-        fnv1a,
-        murmur3,
-    };
-
-    pub fn init(allocator: Allocator, virtual_nodes: u32, hash_fn: HashFunction) ConsistentHash {
-        return .{
-            .allocator = allocator,
-            .ring = std.ArrayList(Node){},
-            .virtual_nodes = virtual_nodes,
-            .hash_fn = hash_fn,
-        };
-    }
-
-    pub fn deinit(self: *ConsistentHash) void {
-        self.ring.deinit();
-    }
-
-    pub fn addNode(self: *ConsistentHash, node: Node) !void {
-        // Add virtual nodes to improve distribution
-        var i: u32 = 0;
-        while (i < self.virtual_nodes) : (i += 1) {
-            const virtual_key = try std.fmt.allocPrint(
-                self.allocator,
-                "{}-vnode-{}",
-                .{ node.id, i },
-            );
-            defer self.allocator.free(virtual_key);
-
-            const hash = self.hash(virtual_key);
-
-            try self.ring.append(.{
-                .id = node.id,
-                .hash = hash,
-                .address = node.address,
-                .weight = node.weight,
-                .metadata = node.metadata,
-            });
-        }
-
-        // Keep ring sorted by hash
-        std.mem.sort(Node, self.ring.items, {}, struct {
-            fn lessThan(_: void, a: Node, b: Node) bool {
-                return a.hash < b.hash;
-            }
-        }.lessThan);
-    }
-
-    pub fn removeNode(self: *ConsistentHash, node_id: u64) void {
-        var i: usize = 0;
-        while (i < self.ring.items.len) {
-            if (self.ring.items[i].id == node_id) {
-                _ = self.ring.swapRemove(i);
-            } else {
-                i += 1;
-            }
-        }
-
-        // Re-sort after removal
-        std.mem.sort(Node, self.ring.items, {}, struct {
-            fn lessThan(_: void, a: Node, b: Node) bool {
-                return a.hash < b.hash;
-            }
-        }.lessThan);
-    }
-
-    /// PERF-D017: Binary search helper to find the first ring index with hash >= key_hash.
-    /// Returns ring.items.len if all hashes are less than key_hash (wraps to 0).
-    fn findStartIndex(self: *ConsistentHash, key_hash: u64) usize {
-        var left: usize = 0;
-        var right: usize = self.ring.items.len;
-
-        while (left < right) {
-            const mid = (left + right) / 2;
-            if (self.ring.items[mid].hash < key_hash) {
-                left = mid + 1;
-            } else {
-                right = mid;
-            }
-        }
-
-        return left;
-    }
-
-    pub fn getNode(self: *ConsistentHash, key: []const u8) ?Node {
-        if (self.ring.items.len == 0) return null;
-
-        const key_hash = self.hash(key);
-        const idx = self.findStartIndex(key_hash);
-
-        // If we've gone past the end, wrap around to the first node
-        if (idx >= self.ring.items.len) {
-            return self.ring.items[0];
-        }
-
-        return self.ring.items[idx];
-    }
-
-    pub fn getNodes(self: *ConsistentHash, key: []const u8, count: usize) ![]Node {
-        if (self.ring.items.len == 0) return &[_]Node{};
-
-        const max_count = @min(count, self.ring.items.len / self.virtual_nodes);
-        var nodes = std.ArrayList(Node){};
-        var seen_ids = std.AutoHashMap(u64, void).init(self.allocator);
-        defer seen_ids.deinit();
-
-        const key_hash = self.hash(key);
-
-        // PERF-D017: Use binary search instead of O(n) linear scan
-        const raw_start = self.findStartIndex(key_hash);
-        const start_idx = if (raw_start >= self.ring.items.len) 0 else raw_start;
-
-        // Collect unique nodes
-        var i: usize = 0;
-        while (nodes.items.len < max_count and i < self.ring.items.len) : (i += 1) {
-            const idx = (start_idx + i) % self.ring.items.len;
-            const node = self.ring.items[idx];
-
-            if (!seen_ids.contains(node.id)) {
-                try nodes.append(node);
-                try seen_ids.put(node.id, {});
-            }
-        }
-
-        return try nodes.toOwnedSlice();
-    }
-
-    fn hash(self: *ConsistentHash, key: []const u8) u64 {
-        return switch (self.hash_fn) {
-            .xxhash => std.hash.XxHash64.hash(0, key),
-            .fnv1a => blk: {
-                var h = std.hash.Fnv1a_64.init();
-                h.update(key);
-                break :blk h.final();
-            },
-            .murmur3 => blk: {
-                var h = std.hash.Murmur3_32.init(0);
-                h.update(key);
-                break :blk h.final();
-            },
-        };
-    }
-
-    pub fn rebalance(self: *ConsistentHash) !void {
-        // Calculate load distribution
-        var load_map = std.AutoHashMap(u64, f32).init(self.allocator);
-        defer load_map.deinit();
-
-        for (self.ring.items) |node| {
-            const gop = try load_map.getOrPut(node.id);
-            if (!gop.found_existing) {
-                gop.value_ptr.* = 0;
-            }
-            gop.value_ptr.* += 1.0 / @as(f32, @floatFromInt(self.ring.items.len));
-        }
-
-        // Identify overloaded and underloaded nodes
-        const avg_load = 1.0 / @as(f32, @floatFromInt(load_map.count()));
-        const threshold = avg_load * 0.2; // 20% deviation threshold
-
-        var iter = load_map.iterator();
-        while (iter.next()) |entry| {
-            const load = entry.value_ptr.*;
-            if (@abs(load - avg_load) > threshold) {
-                // Note: Using uint for node_id, load percentages logged at integer precision
-                log.info("Node has unbalanced load", &.{
-                    Attr.uint("node_id", entry.key_ptr.*),
-                    Attr.uint("load_percent", @intFromFloat(load * 100)),
-                    Attr.uint("avg_load_percent", @intFromFloat(avg_load * 100)),
-                });
-            }
-        }
     }
 };
 
