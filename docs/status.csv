@@ -637,6 +637,7 @@ REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,EXEMPT,,,distribut
 REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,EXEMPT,,,distributed,2026-01-09,src/distributed/twophase.zig
 REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,EXEMPT,,,distributed,2026-01-09,src/distributed/cluster.zig
 REQ-DIST-CLUSTER-002,ClusterReplication,SnapshotSerialization,IMPL,,,distributed,2026-04-01,src/graph_store.zig
+REQ-DIST-CLUSTER-002,ClusterReplication,SnapshotTransfer,IMPL,,,distributed,2026-04-01,src/distributed/cluster.zig
 REQ-DIST-CLUSTER-002,DistributedCluster,Replication,EXEMPT,,,distributed,2026-01-09,src/distributed/cluster.zig
 REQ-DIST-CLUSTER-003,DistributedCluster,Rebalance,EXEMPT,,,distributed,2026-01-09,src/distributed/cluster.zig
 REQ-DIST-CLUSTER-004,DistributedCluster,Topology,EXEMPT,,,distributed,2026-01-09,src/distributed/cluster.zig

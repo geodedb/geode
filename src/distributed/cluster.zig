@@ -683,12 +683,17 @@ pub const ClusterCoordinator = struct {
         }
     }
 
+    // CANARY: REQ=REQ-DIST-CLUSTER-002; FEATURE="ClusterReplication"; ASPECT=SnapshotTransfer; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn replicateShardToNode(self: *ClusterCoordinator, shard_id: u64, node_id: u64) !void {
         // Checkpoint adapter storage before snapshotting.
         try self.store.saveToFile();
-        // TODO: Replication needs rework for per-graph storage layout.
-        // For now, send an empty snapshot payload.
-        const snapshot = try self.allocator.alloc(u8, 0);
+        // Serialize the current graph store state for replication.
+        const snapshot = self.store.serializeSnapshot(self.allocator) catch |err| blk: {
+            log.err("snapshot serialization failed, sending empty payload", &.{
+                Attr.string("error", @errorName(err)),
+            });
+            break :blk try self.allocator.alloc(u8, 0);
+        };
 
         var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
         defer aw.deinit();
