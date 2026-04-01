@@ -50,6 +50,7 @@ const Archive = struct {
     filled: bool = false,
 };
 
+var g_mutex: std.Thread.Mutex = .{};
 var g_current: Current = .{};
 var g_archive: Archive = .{};
 
@@ -80,9 +81,12 @@ fn resetCycle() void {
 }
 
 pub fn recordLatency(ns: u64, mismatch: bool) void {
+    g_mutex.lock();
+    defer g_mutex.unlock();
+
     if (mismatch) {
         // propagate flag for external observation
-        fed_flag.g_last_federation_mismatch = true;
+        fed_flag.g_last_federation_mismatch.store(true, .release);
         g_current.streak += 1;
     } else {
         g_current.streak = 0;
@@ -106,6 +110,9 @@ pub fn recordLatency(ns: u64, mismatch: bool) void {
 }
 
 pub fn finalizeCycle() Snapshot {
+    g_mutex.lock();
+    defer g_mutex.unlock();
+
     const p95 = p95Estimate(&g_current);
     const snap = Snapshot{
         .cycle_id = g_current.cycle_id,
@@ -129,6 +136,9 @@ pub fn variance(current: *const Current) f128 {
 }
 
 pub fn snapshotCurrent() Snapshot {
+    g_mutex.lock();
+    defer g_mutex.unlock();
+
     return Snapshot{
         .cycle_id = g_current.cycle_id,
         .count = g_current.count,
@@ -141,6 +151,9 @@ pub fn snapshotCurrent() Snapshot {
 }
 
 pub fn findSnapshot(cycle_id: u64) ?Snapshot {
+    g_mutex.lock();
+    defer g_mutex.unlock();
+
     const limit = if (g_archive.filled) g_archive.ring.len else g_archive.next;
     var i: usize = 0;
     while (i < limit) : (i += 1) {
@@ -152,17 +165,26 @@ pub fn findSnapshot(cycle_id: u64) ?Snapshot {
 }
 
 pub fn resetAll() void {
+    g_mutex.lock();
+    defer g_mutex.unlock();
+
     g_current = .{};
     g_archive = .{};
 }
 
 pub fn archiveLen() usize {
+    g_mutex.lock();
+    defer g_mutex.unlock();
+
     return if (g_archive.filled) g_archive.ring.len else g_archive.next;
 }
 
 pub fn schemaValidate() bool {
+    g_mutex.lock();
+    defer g_mutex.unlock();
+
     // Basic invariants: cycle_id monotonic across snapshots; counts non-negative; p95 within [min,max].
-    const len = archiveLen();
+    const len = if (g_archive.filled) g_archive.ring.len else g_archive.next;
     var last_cycle: u64 = 0;
     var i: usize = 0;
     while (i < len) : (i += 1) {

@@ -906,7 +906,7 @@ pub const FederationManager = struct {
                         // In a fuller integration this would propagate via protocol frame flagger.
                         // For now we just leave a CANARY comment for evidence.
                         // CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=Federation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission; OWNER=federation; UPDATED=2025-09-23
-                        fed_flag.g_last_federation_mismatch = true; // consumed by server flag assembly
+                        fed_flag.g_last_federation_mismatch.store(true, .release); // consumed by server flag assembly
                     }
                     return fallback;
                 }
