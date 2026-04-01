@@ -4404,9 +4404,11 @@ fn resolveTimeseriesStore(env: Env) ?*TimeseriesStore {
     return g_timeseries_store;
 }
 
-/// GAP-0282: Dispatch timeseries.last_value, timeseries.value_at, timeseries.sample_by,
-/// timeseries.time_bucket, timeseries.interpolate, timeseries.moving_avg, timeseries.rate,
-/// timeseries.derivative from GQL function calls to gql_functions.executeFunction.
+/// GAP-0282/0290: Dispatch timeseries.* GQL function calls.
+/// Series-based: last_value, value_at, sample_by, time_bucket, interpolate, moving_avg,
+///   rate, derivative, change_points, extract_features, matrix_profile, z_normalize, invariants.
+/// Array-based (delegated to evalArrayBasedTsFunction): dtw, dtw_derivative, dtw_open_end,
+///   dtw_shape, dtw_soft, cosine_similarity, cross_correlate, sbd.
 fn evalTimeseriesFunction(
     allocator: std.mem.Allocator,
     function_name: []const u8,
@@ -4421,6 +4423,11 @@ fn evalTimeseriesFunction(
 
     // Skip "value" -- already handled in the main dispatch above
     if (std.mem.eql(u8, suffix, "value")) return null;
+
+    // GAP-0290: Array-based functions take f64 list args directly (no device_id/metric)
+    if (try evalArrayBasedTsFunction(allocator, suffix, args, env)) |result| {
+        return result;
+    }
 
     const maybe_store = resolveTimeseriesStore(env);
     const store = maybe_store orelse return @as(?Value, .{ .Null = {} });
@@ -4528,6 +4535,76 @@ fn evalTimeseriesFunction(
         if (order_val.Int < 0 or order_val.Int > 255) return EvalError.InvalidArgs;
         call.function_type = .derivative;
         call.params = .{ .derivative = .{ .order = @intCast(order_val.Int) } };
+    } else if (std.mem.eql(u8, suffix, "change_points")) {
+        // GAP-0290: change_points(device_id, metric, start_ts, end_ts, penalty, min_size)
+        if (args.len != 6) return EvalError.InvalidArgs;
+        const start = try evalExpr(allocator, args[2].*, env);
+        const end = try evalExpr(allocator, args[3].*, env);
+        const penalty_val = try evalExpr(allocator, args[4].*, env);
+        const min_size_val = try evalExpr(allocator, args[5].*, env);
+        if (start != .Int or end != .Int or min_size_val != .Int)
+            return EvalError.TypeMismatch;
+        const penalty = switch (penalty_val) {
+            .Double => |d| d,
+            .Int => |i| @as(f64, @floatFromInt(i)),
+            else => return EvalError.TypeMismatch,
+        };
+        if (min_size_val.Int < 1) return EvalError.InvalidArgs;
+        call.function_type = .change_points;
+        call.params = .{ .change_points = .{
+            .start_ts = start.Int,
+            .end_ts = end.Int,
+            .penalty = penalty,
+            .min_size = @intCast(min_size_val.Int),
+        } };
+    } else if (std.mem.eql(u8, suffix, "extract_features")) {
+        // GAP-0290: extract_features(device_id, metric, start_ts, end_ts)
+        if (args.len != 4) return EvalError.InvalidArgs;
+        const start = try evalExpr(allocator, args[2].*, env);
+        const end = try evalExpr(allocator, args[3].*, env);
+        if (start != .Int or end != .Int) return EvalError.TypeMismatch;
+        call.function_type = .extract_features;
+        call.params = .{ .extract_features = .{
+            .start_ts = start.Int,
+            .end_ts = end.Int,
+        } };
+    } else if (std.mem.eql(u8, suffix, "matrix_profile")) {
+        // GAP-0290: matrix_profile(device_id, metric, start_ts, end_ts, subseq_len)
+        if (args.len != 5) return EvalError.InvalidArgs;
+        const start = try evalExpr(allocator, args[2].*, env);
+        const end = try evalExpr(allocator, args[3].*, env);
+        const subseq = try evalExpr(allocator, args[4].*, env);
+        if (start != .Int or end != .Int or subseq != .Int)
+            return EvalError.TypeMismatch;
+        if (subseq.Int < 1) return EvalError.InvalidArgs;
+        call.function_type = .matrix_profile;
+        call.params = .{ .matrix_profile = .{
+            .start_ts = start.Int,
+            .end_ts = end.Int,
+            .subseq_len = @intCast(subseq.Int),
+        } };
+    } else if (std.mem.eql(u8, suffix, "z_normalize")) {
+        // GAP-0290: z_normalize(device_id, metric, start_ts, end_ts)
+        if (args.len != 4) return EvalError.InvalidArgs;
+        const start = try evalExpr(allocator, args[2].*, env);
+        const end = try evalExpr(allocator, args[3].*, env);
+        if (start != .Int or end != .Int) return EvalError.TypeMismatch;
+        call.function_type = .z_normalize;
+        call.params = .{ .z_normalize = .{
+            .start_ts = start.Int,
+            .end_ts = end.Int,
+        } };
+    } else if (std.mem.eql(u8, suffix, "invariants")) {
+        // GAP-0290: invariants(device_id, metric, start_ts, end_ts)
+        if (args.len != 4) return EvalError.InvalidArgs;
+        const start = try evalExpr(allocator, args[2].*, env);
+        const end = try evalExpr(allocator, args[3].*, env);
+        if (start != .Int or end != .Int) return EvalError.TypeMismatch;
+        call.function_type = .invariants;
+        call.params = .{ .invariants = .{
+            .start_ts = start.Int,
+            .end_ts = end.Int,
+        } };
     } else {
         return null; // Unknown timeseries function
     }
@@ -4545,6 +4622,139 @@ fn parseAggregation(s: []const u8) ?@import("timeseries/timeseries.zig").lib.sto
     if (std.mem.eql(u8, s, "first")) return .first;
     if (std.mem.eql(u8, s, "last")) return .last;
     return null;
+}
+
+/// GAP-0290: Dispatch array-based timeseries functions that take f64 list arguments
+/// directly (no series key). Returns null if the suffix doesn't match any array-based function.
+fn evalArrayBasedTsFunction(
+    allocator: std.mem.Allocator,
+    suffix: []const u8,
+    args: []*ast.Expr,
+    env: Env,
+) EvalError!?Value {
+    // Helper: evaluate a Value and extract []f64 from a List of Int/Double values.
+    const extractF64List = struct {
+        fn run(alloc: std.mem.Allocator, val: Value) EvalError!?[]f64 {
+            if (val != .List) return null;
+            const list = val.List;
+            const out = alloc.alloc(f64, list.len) catch return EvalError.OutOfMemory;
+            for (list, 0..) |item, i| {
+                out[i] = switch (item) {
+                    .Double => |d| d,
+                    .Int => |n| @as(f64, @floatFromInt(n)),
+                    else => {
+                        alloc.free(out);
+                        return EvalError.TypeMismatch;
+                    },
+                };
+            }
+            return out;
+        }
+    }.run;
+
+    if (std.mem.eql(u8, suffix, "dtw")) {
+        // dtw(vals_a, vals_b, window)
+        if (args.len != 3) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const w_val = try evalExpr(allocator, args[2].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        if (w_val != .Int) return EvalError.TypeMismatch;
+        const ts_result = ts_gql.executeDTW(allocator, a_arr, b_arr, @intCast(w_val.Int)) catch return EvalError.OutOfMemory;
+        return try tsValueToCanonical(ts_result, allocator);
+    } else if (std.mem.eql(u8, suffix, "dtw_derivative")) {
+        // dtw_derivative(vals_a, vals_b, window)
+        if (args.len != 3) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const w_val = try evalExpr(allocator, args[2].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        if (w_val != .Int) return EvalError.TypeMismatch;
+        const ts_result = ts_gql.executeDTWDerivative(allocator, a_arr, b_arr, @intCast(w_val.Int)) catch return EvalError.OutOfMemory;
+        return try tsValueToCanonical(ts_result, allocator);
+    } else if (std.mem.eql(u8, suffix, "dtw_open_end")) {
+        // dtw_open_end(vals_a, vals_b)
+        if (args.len != 2) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        const ts_result = ts_gql.executeDTWOpenEnd(allocator, a_arr, b_arr) catch return EvalError.OutOfMemory;
+        return try tsValueToCanonical(ts_result, allocator);
+    } else if (std.mem.eql(u8, suffix, "dtw_shape")) {
+        // dtw_shape(vals_a, vals_b, reach)
+        if (args.len != 3) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const r_val = try evalExpr(allocator, args[2].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        if (r_val != .Int) return EvalError.TypeMismatch;
+        const ts_result = ts_gql.executeDTWShape(allocator, a_arr, b_arr, @intCast(r_val.Int)) catch return EvalError.OutOfMemory;
+        return try tsValueToCanonical(ts_result, allocator);
+    } else if (std.mem.eql(u8, suffix, "dtw_soft")) {
+        // dtw_soft(vals_a, vals_b, gamma)
+        if (args.len != 3) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const g_val = try evalExpr(allocator, args[2].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        const gamma = switch (g_val) {
+            .Double => |d| d,
+            .Int => |i| @as(f64, @floatFromInt(i)),
+            else => return EvalError.TypeMismatch,
+        };
+        const ts_result = ts_gql.executeDTWSoft(allocator, a_arr, b_arr, gamma) catch return EvalError.OutOfMemory;
+        return try tsValueToCanonical(ts_result, allocator);
+    } else if (std.mem.eql(u8, suffix, "cosine_similarity")) {
+        // cosine_similarity(vals_a, vals_b)
+        if (args.len != 2) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        const ts_result = ts_gql.executeCosineSimilarity(a_arr, b_arr);
+        return try tsValueToCanonical(ts_result, allocator);
+    } else if (std.mem.eql(u8, suffix, "cross_correlate")) {
+        // cross_correlate(vals_a, vals_b)
+        if (args.len != 2) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        const ts_result = ts_gql.executeCrossCorrelate(allocator, a_arr, b_arr);
+        return try tsValueToCanonical(ts_result, allocator);
+    } else if (std.mem.eql(u8, suffix, "sbd")) {
+        // sbd(vals_a, vals_b)
+        if (args.len != 2) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const a_arr = try extractF64List(allocator, a_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(a_arr);
+        const b_arr = try extractF64List(allocator, b_val) orelse return EvalError.TypeMismatch;
+        defer allocator.free(b_arr);
+        const ts_result = ts_gql.executeSBD(a_arr, b_arr);
+        return try tsValueToCanonical(ts_result, allocator);
+    }
+
+    return null; // Not an array-based function
 }
 
 test "eval: IN/NOT IN with NULL semantics and mixed-type edges" {

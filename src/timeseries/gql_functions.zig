@@ -8,9 +8,32 @@
 // CANARY: REQ=REQ-TS-GQL-RATE-001; FEATURE="TimeSeriesGqlRate"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: last_value"; OWNER=timeseries; UPDATED=2026-04-01
 // CANARY: REQ=REQ-TS-GQL-DERIVATIVE-001; FEATURE="TimeSeriesGqlDerivative"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: last_value"; OWNER=timeseries; UPDATED=2026-04-01
 // CANARY: REQ=REQ-TS-GQL-FUNCTYPE-001; FEATURE="TSFunctionTypeEnum"; ASPECT=Types; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: last_value"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-CHANGEPOINTS-001; FEATURE="TimeSeriesGqlChangePoints"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: change_points"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-EXTRACTFEAT-001; FEATURE="TimeSeriesGqlExtractFeatures"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: extract_features"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-MATPROFILE-001; FEATURE="TimeSeriesGqlMatrixProfile"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: matrix_profile"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-ZNORM-001; FEATURE="TimeSeriesGqlZNormalize"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: z_normalize"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-INVARIANTS-001; FEATURE="TimeSeriesGqlInvariants"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: invariants"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-DTW-001; FEATURE="TimeSeriesGqlDTW"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: dtw constrained"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-DTWDERIV-001; FEATURE="TimeSeriesGqlDTWDerivative"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: dtw_derivative"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-DTWOPENEND-001; FEATURE="TimeSeriesGqlDTWOpenEnd"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: dtw_open_end"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-DTWSHAPE-001; FEATURE="TimeSeriesGqlDTWShape"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: dtw_shape"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-DTWSOFT-001; FEATURE="TimeSeriesGqlDTWSoft"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: dtw_soft"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-COSSIM-001; FEATURE="TimeSeriesGqlCosineSimilarity"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: cosine_similarity"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-XCORR-001; FEATURE="TimeSeriesGqlCrossCorrelate"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: cross_correlate"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-SBD-001; FEATURE="TimeSeriesGqlSBD"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: sbd"; OWNER=timeseries; UPDATED=2026-04-01
 
 const std = @import("std");
 const timeseries = @import("timeseries.zig");
+
+// Sub-module references into the external timeseries library.
+const ts_lib = timeseries.lib;
+const dtw_mod = ts_lib.dtw;
+const distances_mod = ts_lib.distances;
+const mp_mod = ts_lib.matrix_profile;
+const features_mod = ts_lib.features;
+const pelt_mod = ts_lib.pelt;
+const preprocess_mod = ts_lib.preprocess;
+const invariants_mod = ts_lib.invariants;
 
 /// GAP-0282: Value type with canonical field names matching value_types.Value.
 /// Uses the same discriminant names (.Null, .Int, .Bool, .Double, .Str, .List, .Map)
@@ -49,6 +72,71 @@ pub fn deinitValue(val: *Value, allocator: std.mem.Allocator) void {
     }
 }
 
+/// Extract f64 values from a stored time series within a time range.
+/// Returns an owned slice; caller must free via allocator.free(result).
+pub fn extractF64FromSeries(
+    store: *timeseries.Store,
+    key: timeseries.SeriesKey,
+    start_ts: i64,
+    end_ts: i64,
+    allocator: std.mem.Allocator,
+) ![]f64 {
+    const series = store.getSeries(key) orelse return allocator.alloc(f64, 0);
+    const items = series.points.items;
+
+    // Count points in range first to allocate exactly.
+    var count: usize = 0;
+    for (items) |pt| {
+        if (pt.ts >= start_ts and pt.ts <= end_ts) count += 1;
+    }
+    if (count == 0) return allocator.alloc(f64, 0);
+
+    const result = try allocator.alloc(f64, count);
+    var idx: usize = 0;
+    for (items) |pt| {
+        if (pt.ts >= start_ts and pt.ts <= end_ts) {
+            result[idx] = @floatFromInt(pt.value);
+            idx += 1;
+        }
+    }
+    return result;
+}
+
+/// Extract both timestamps (as f64) and values (as f64) from a stored time series.
+/// Returns owned slices; caller must free both via allocator.free().
+pub fn extractTimesAndValues(
+    store: *timeseries.Store,
+    key: timeseries.SeriesKey,
+    start_ts: i64,
+    end_ts: i64,
+    allocator: std.mem.Allocator,
+) !struct { times: []f64, values: []f64 } {
+    const series = store.getSeries(key) orelse return .{
+        .times = try allocator.alloc(f64, 0),
+        .values = try allocator.alloc(f64, 0),
+    };
+    const items = series.points.items;
+
+    var count: usize = 0;
+    for (items) |pt| {
+        if (pt.ts >= start_ts and pt.ts <= end_ts) count += 1;
+    }
+
+    const times = try allocator.alloc(f64, count);
+    errdefer allocator.free(times);
+    const values = try allocator.alloc(f64, count);
+
+    var idx: usize = 0;
+    for (items) |pt| {
+        if (pt.ts >= start_ts and pt.ts <= end_ts) {
+            times[idx] = @floatFromInt(pt.ts);
+            values[idx] = @floatFromInt(pt.value);
+            idx += 1;
+        }
+    }
+    return .{ .times = times, .values = values };
+}
+
 /// Time-series function registry for GQL integration
 pub const TSFunctionType = enum {
     last_value,
@@ -59,6 +147,12 @@ pub const TSFunctionType = enum {
     moving_avg,
     rate,
     derivative,
+    // GAP-0290: Series-based analytics functions
+    change_points,
+    extract_features,
+    matrix_profile,
+    z_normalize,
+    invariants,
 };
 
 /// Time-series function call in GQL
@@ -96,6 +190,30 @@ pub const TSFunctionParams = union(TSFunctionType) {
     },
     derivative: struct {
         order: u8,
+    },
+    // GAP-0290: Series-based analytics params
+    change_points: struct {
+        start_ts: i64,
+        end_ts: i64,
+        penalty: f64,
+        min_size: usize,
+    },
+    extract_features: struct {
+        start_ts: i64,
+        end_ts: i64,
+    },
+    matrix_profile: struct {
+        start_ts: i64,
+        end_ts: i64,
+        subseq_len: usize,
+    },
+    z_normalize: struct {
+        start_ts: i64,
+        end_ts: i64,
+    },
+    invariants: struct {
+        start_ts: i64,
+        end_ts: i64,
     },
 };
 
@@ -360,6 +478,125 @@ pub fn executeFunction(
             return .Null;
         },
 
+        .change_points => |params| {
+            // GAP-0290: PELT change-point detection on stored series
+            const values = try extractF64FromSeries(store, call.series_key, params.start_ts, params.end_ts, allocator);
+            defer allocator.free(values);
+            if (values.len == 0) return .Null;
+
+            const cps = pelt_mod.pelt(allocator, values, params.penalty, params.min_size) catch return .Null;
+            defer allocator.free(cps);
+
+            var array: std.ArrayList(Value) = .{};
+            errdefer {
+                for (array.items) |*item| deinitValue(item, allocator);
+                array.deinit(allocator);
+            }
+            for (cps) |cp| {
+                try array.append(allocator, Value{ .Int = @intCast(cp) });
+            }
+            return Value{ .List = try array.toOwnedSlice(allocator) };
+        },
+
+        .extract_features => |params| {
+            // GAP-0290: 22-element feature extraction on stored series
+            const values = try extractF64FromSeries(store, call.series_key, params.start_ts, params.end_ts, allocator);
+            defer allocator.free(values);
+            if (values.len == 0) return .Null;
+
+            const feats = features_mod.extractFeatures(allocator, values) catch return .Null;
+
+            var array: std.ArrayList(Value) = .{};
+            errdefer {
+                for (array.items) |*item| deinitValue(item, allocator);
+                array.deinit(allocator);
+            }
+            for (feats) |f| {
+                try array.append(allocator, Value{ .Double = f });
+            }
+            return Value{ .List = try array.toOwnedSlice(allocator) };
+        },
+
+        .matrix_profile => |params| {
+            // GAP-0290: Matrix profile computation on stored series
+            const values = try extractF64FromSeries(store, call.series_key, params.start_ts, params.end_ts, allocator);
+            defer allocator.free(values);
+            if (values.len == 0) return .Null;
+
+            const mp_result = mp_mod.matrixProfile(allocator, values, params.subseq_len) catch return .Null;
+            defer mp_result.deinit(allocator);
+
+            var obj = std.StringHashMap(Value).init(allocator);
+            errdefer obj.deinit();
+
+            // Profile as list of doubles
+            var prof_list: std.ArrayList(Value) = .{};
+            errdefer prof_list.deinit(allocator);
+            for (mp_result.profile) |v| {
+                try prof_list.append(allocator, Value{ .Double = v });
+            }
+            try obj.put("profile", Value{ .List = try prof_list.toOwnedSlice(allocator) });
+
+            // Indices as list of ints
+            var idx_list: std.ArrayList(Value) = .{};
+            errdefer idx_list.deinit(allocator);
+            for (mp_result.indices) |v| {
+                try idx_list.append(allocator, Value{ .Int = @intCast(v) });
+            }
+            try obj.put("indices", Value{ .List = try idx_list.toOwnedSlice(allocator) });
+
+            return Value{ .Map = obj };
+        },
+
+        .z_normalize => |params| {
+            // GAP-0290: Z-normalization on stored series
+            const values = try extractF64FromSeries(store, call.series_key, params.start_ts, params.end_ts, allocator);
+            defer allocator.free(values);
+            if (values.len == 0) return .Null;
+
+            const normed = preprocess_mod.zNormalizeAlloc(allocator, values) catch return .Null;
+            defer allocator.free(normed);
+
+            var array: std.ArrayList(Value) = .{};
+            errdefer {
+                for (array.items) |*item| deinitValue(item, allocator);
+                array.deinit(allocator);
+            }
+            for (normed) |v| {
+                try array.append(allocator, Value{ .Double = v });
+            }
+            return Value{ .List = try array.toOwnedSlice(allocator) };
+        },
+
+        .invariants => |params| {
+            // GAP-0290: Shape-invariant statistics on stored series
+            const tv = try extractTimesAndValues(store, call.series_key, params.start_ts, params.end_ts, allocator);
+            defer allocator.free(tv.times);
+            defer allocator.free(tv.values);
+            if (tv.values.len == 0) return .Null;
+
+            const inv = invariants_mod.computeInvariants(tv.times, tv.values);
+
+            var obj = std.StringHashMap(Value).init(allocator);
+            errdefer obj.deinit();
+            try obj.put("duration", Value{ .Double = inv.duration });
+            try obj.put("min", Value{ .Double = inv.min });
+            try obj.put("max", Value{ .Double = inv.max });
+            try obj.put("mean", Value{ .Double = inv.mean });
+            try obj.put("std_dev", Value{ .Double = inv.std_dev });
+            try obj.put("area", Value{ .Double = inv.area });
+
+            // histogram as list
+            var hist_list: std.ArrayList(Value) = .{};
+            errdefer hist_list.deinit(allocator);
+            for (inv.histogram) |h| {
+                try hist_list.append(allocator, Value{ .Double = h });
+            }
+            try obj.put("histogram", Value{ .List = try hist_list.toOwnedSlice(allocator) });
+
+            return Value{ .Map = obj };
+        },
+
         .derivative => |params| {
             // GAP-0283: Support arbitrary derivative order via iterative differentiation.
             // Order 0 returns the raw values; order N applies finite differences N times.
@@ -425,6 +662,98 @@ pub fn executeFunction(
             return .Null;
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// GAP-0290: Array-based analytic functions (take f64 slices directly)
+// ---------------------------------------------------------------------------
+
+/// Constrained DTW distance between two f64 arrays.
+pub fn executeDTW(
+    allocator: std.mem.Allocator,
+    a: []const f64,
+    b: []const f64,
+    window: usize,
+) !Value {
+    const result = dtw_mod.constrainedDTW(allocator, a, b, window) catch return .Null;
+    defer result.deinit(allocator);
+    return Value{ .Double = result.distance };
+}
+
+/// Derivative DTW distance between two f64 arrays.
+pub fn executeDTWDerivative(
+    allocator: std.mem.Allocator,
+    a: []const f64,
+    b: []const f64,
+    window: usize,
+) !Value {
+    const result = dtw_mod.derivativeDTW(allocator, a, b, window) catch return .Null;
+    defer result.deinit(allocator);
+    return Value{ .Double = result.distance };
+}
+
+/// Open-end DTW distance between two f64 arrays.
+pub fn executeDTWOpenEnd(
+    allocator: std.mem.Allocator,
+    a: []const f64,
+    b: []const f64,
+) !Value {
+    const result = dtw_mod.openEndDTW(allocator, a, b, 0) catch return .Null;
+    defer result.deinit(allocator);
+    return Value{ .Double = result.distance };
+}
+
+/// Shape DTW distance between two f64 arrays.
+pub fn executeDTWShape(
+    allocator: std.mem.Allocator,
+    a: []const f64,
+    b: []const f64,
+    reach: usize,
+) !Value {
+    const result = dtw_mod.shapeDTW(allocator, a, b, 0, reach) catch return .Null;
+    defer result.deinit(allocator);
+    return Value{ .Double = result.distance };
+}
+
+/// Soft DTW distance between two f64 arrays.
+pub fn executeDTWSoft(
+    allocator: std.mem.Allocator,
+    a: []const f64,
+    b: []const f64,
+    gamma: f64,
+) !Value {
+    const result = dtw_mod.softDTW(allocator, a, b, gamma) catch return .Null;
+    return Value{ .Double = result };
+}
+
+/// Cosine similarity between two f64 arrays.
+pub fn executeCosineSimilarity(
+    a: []const f64,
+    b: []const f64,
+) Value {
+    return Value{ .Double = features_mod.cosineSimilarity(a, b) };
+}
+
+/// Cross-correlation between two f64 arrays.
+pub fn executeCrossCorrelate(
+    allocator: std.mem.Allocator,
+    a: []const f64,
+    b: []const f64,
+) Value {
+    const result = distances_mod.crossCorrelate(a, b) catch return .Null;
+    var obj_map = std.StringHashMap(Value).init(allocator);
+    obj_map.put("lag", Value{ .Int = result.lag }) catch return .Null;
+    obj_map.put("correlation", Value{ .Double = result.correlation }) catch return .Null;
+    return Value{ .Map = obj_map };
+}
+
+/// Shape-based distance between two f64 arrays.
+pub fn executeSBD(
+    a: []const f64,
+    b: []const f64,
+) Value {
+    const result = distances_mod.sbd(a, b) catch return .Null;
+    return Value{ .Double = result };
 }
 
 fn createPointObject(point: timeseries.Point, allocator: std.mem.Allocator) !std.StringHashMap(Value) {
@@ -912,4 +1241,350 @@ test "ts_functions: derivative order 0 returns Null" {
 
     const result = try executeFunction(&store, call, ally);
     try std.testing.expect(result == .Null);
+}
+
+// ---------------------------------------------------------------------------
+// GAP-0290: Series-based analytics function tests
+// ---------------------------------------------------------------------------
+
+test "ts_functions: change_points" {
+    const ally = std.testing.allocator;
+
+    var store = timeseries.Store.init(ally);
+    defer store.deinit();
+
+    const key = timeseries.SeriesKey{ .device_id = 1, .metric = "cp" };
+    // Create a series with a clear change point: low values then high values
+    var points: [20]timeseries.Point = undefined;
+    for (0..10) |i| {
+        points[i] = .{ .ts = @intCast(i * 1000), .value = 10 };
+    }
+    for (10..20) |i| {
+        points[i] = .{ .ts = @intCast(i * 1000), .value = 100 };
+    }
+    try store.insertMany(key, &points);
+
+    const call = TSFunctionCall{
+        .function_type = .change_points,
+        .series_key = key,
+        .params = .{ .change_points = .{
+            .start_ts = 0,
+            .end_ts = 19000,
+            .penalty = 10.0,
+            .min_size = 2,
+        } },
+    };
+
+    var result = try executeFunction(&store, call, ally);
+    defer deinitValue(&result, ally);
+
+    // Should return a list of change point indices
+    switch (result) {
+        .List => |arr| {
+            // PELT should detect at least one change point around index 10
+            try std.testing.expect(arr.len >= 1);
+        },
+        else => return error.UnexpectedResultType,
+    }
+}
+
+test "ts_functions: extract_features" {
+    const ally = std.testing.allocator;
+
+    var store = timeseries.Store.init(ally);
+    defer store.deinit();
+
+    const key = timeseries.SeriesKey{ .device_id = 1, .metric = "feat" };
+    try store.insertMany(key, &[_]timeseries.Point{
+        .{ .ts = 1000, .value = 10 },
+        .{ .ts = 2000, .value = 20 },
+        .{ .ts = 3000, .value = 30 },
+        .{ .ts = 4000, .value = 40 },
+        .{ .ts = 5000, .value = 50 },
+    });
+
+    const call = TSFunctionCall{
+        .function_type = .extract_features,
+        .series_key = key,
+        .params = .{ .extract_features = .{
+            .start_ts = 1000,
+            .end_ts = 5000,
+        } },
+    };
+
+    var result = try executeFunction(&store, call, ally);
+    defer deinitValue(&result, ally);
+
+    switch (result) {
+        .List => |arr| {
+            // extractFeatures returns a 22-element feature vector
+            try std.testing.expectEqual(@as(usize, 22), arr.len);
+            // First element is length = 5.0
+            try std.testing.expect(arr[0] == .Double);
+            try std.testing.expect(@abs(arr[0].Double - 5.0) < 0.01);
+            // Second element is mean = 30.0
+            try std.testing.expect(@abs(arr[1].Double - 30.0) < 0.01);
+        },
+        else => return error.UnexpectedResultType,
+    }
+}
+
+test "ts_functions: matrix_profile" {
+    const ally = std.testing.allocator;
+
+    var store = timeseries.Store.init(ally);
+    defer store.deinit();
+
+    const key = timeseries.SeriesKey{ .device_id = 1, .metric = "mp" };
+    try store.insertMany(key, &[_]timeseries.Point{
+        .{ .ts = 1000, .value = 1 },
+        .{ .ts = 2000, .value = 2 },
+        .{ .ts = 3000, .value = 3 },
+        .{ .ts = 4000, .value = 1 },
+        .{ .ts = 5000, .value = 2 },
+        .{ .ts = 6000, .value = 3 },
+        .{ .ts = 7000, .value = 5 },
+        .{ .ts = 8000, .value = 6 },
+    });
+
+    const call = TSFunctionCall{
+        .function_type = .matrix_profile,
+        .series_key = key,
+        .params = .{ .matrix_profile = .{
+            .start_ts = 1000,
+            .end_ts = 8000,
+            .subseq_len = 3,
+        } },
+    };
+
+    var result = try executeFunction(&store, call, ally);
+    defer deinitValue(&result, ally);
+
+    switch (result) {
+        .Map => |obj| {
+            // Should have profile and indices keys
+            try std.testing.expect(obj.get("profile") != null);
+            try std.testing.expect(obj.get("indices") != null);
+            const profile = obj.get("profile").?.List;
+            const indices = obj.get("indices").?.List;
+            try std.testing.expect(profile.len > 0);
+            try std.testing.expectEqual(profile.len, indices.len);
+        },
+        else => return error.UnexpectedResultType,
+    }
+}
+
+test "ts_functions: z_normalize" {
+    const ally = std.testing.allocator;
+
+    var store = timeseries.Store.init(ally);
+    defer store.deinit();
+
+    const key = timeseries.SeriesKey{ .device_id = 1, .metric = "zn" };
+    try store.insertMany(key, &[_]timeseries.Point{
+        .{ .ts = 1000, .value = 10 },
+        .{ .ts = 2000, .value = 20 },
+        .{ .ts = 3000, .value = 30 },
+    });
+
+    const call = TSFunctionCall{
+        .function_type = .z_normalize,
+        .series_key = key,
+        .params = .{ .z_normalize = .{
+            .start_ts = 1000,
+            .end_ts = 3000,
+        } },
+    };
+
+    var result = try executeFunction(&store, call, ally);
+    defer deinitValue(&result, ally);
+
+    switch (result) {
+        .List => |arr| {
+            try std.testing.expectEqual(@as(usize, 3), arr.len);
+            // Z-normalized: mean=0, std=1 -> values should be approximately -1.22, 0, 1.22
+            try std.testing.expect(arr[0] == .Double);
+            try std.testing.expect(arr[0].Double < 0);
+            try std.testing.expect(@abs(arr[1].Double) < 0.01);
+            try std.testing.expect(arr[2].Double > 0);
+        },
+        else => return error.UnexpectedResultType,
+    }
+}
+
+test "ts_functions: invariants" {
+    const ally = std.testing.allocator;
+
+    var store = timeseries.Store.init(ally);
+    defer store.deinit();
+
+    const key = timeseries.SeriesKey{ .device_id = 1, .metric = "inv" };
+    try store.insertMany(key, &[_]timeseries.Point{
+        .{ .ts = 1000, .value = 10 },
+        .{ .ts = 2000, .value = 20 },
+        .{ .ts = 3000, .value = 30 },
+    });
+
+    const call = TSFunctionCall{
+        .function_type = .invariants,
+        .series_key = key,
+        .params = .{ .invariants = .{
+            .start_ts = 1000,
+            .end_ts = 3000,
+        } },
+    };
+
+    var result = try executeFunction(&store, call, ally);
+    defer deinitValue(&result, ally);
+
+    switch (result) {
+        .Map => |obj| {
+            try std.testing.expect(obj.get("duration") != null);
+            try std.testing.expect(obj.get("min") != null);
+            try std.testing.expect(obj.get("max") != null);
+            try std.testing.expect(obj.get("mean") != null);
+            try std.testing.expect(obj.get("std_dev") != null);
+            try std.testing.expect(obj.get("area") != null);
+            try std.testing.expect(obj.get("histogram") != null);
+            // Mean should be 20.0
+            try std.testing.expect(@abs(obj.get("mean").?.Double - 20.0) < 0.01);
+            // Min = 10.0, Max = 30.0
+            try std.testing.expect(@abs(obj.get("min").?.Double - 10.0) < 0.01);
+            try std.testing.expect(@abs(obj.get("max").?.Double - 30.0) < 0.01);
+            // Duration = 3000.0 - 1000.0 = 2000.0
+            try std.testing.expect(@abs(obj.get("duration").?.Double - 2000.0) < 0.01);
+        },
+        else => return error.UnexpectedResultType,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GAP-0290: Array-based analytic function tests
+// ---------------------------------------------------------------------------
+
+test "ts_functions: dtw constrained" {
+    const ally = std.testing.allocator;
+    const a = &[_]f64{ 1.0, 2.0, 3.0, 4.0, 5.0 };
+    const b = &[_]f64{ 1.0, 2.0, 3.0, 4.0, 5.0 };
+
+    const result = try executeDTW(ally, a, b, 2);
+    try std.testing.expect(result == .Double);
+    // Identical series -> distance should be 0
+    try std.testing.expect(result.Double < 0.01);
+}
+
+test "ts_functions: dtw_derivative" {
+    const ally = std.testing.allocator;
+    const a = &[_]f64{ 1.0, 3.0, 5.0, 7.0 };
+    const b = &[_]f64{ 1.0, 3.0, 5.0, 7.0 };
+
+    const result = try executeDTWDerivative(ally, a, b, 2);
+    try std.testing.expect(result == .Double);
+    // Same derivative profile -> distance 0
+    try std.testing.expect(result.Double < 0.01);
+}
+
+test "ts_functions: dtw_open_end" {
+    const ally = std.testing.allocator;
+    const a = &[_]f64{ 1.0, 2.0, 3.0 };
+    const b = &[_]f64{ 1.0, 2.0, 3.0, 10.0, 20.0 };
+
+    const result = try executeDTWOpenEnd(ally, a, b);
+    try std.testing.expect(result == .Double);
+    // Open-end: a aligns to prefix of b, should have low distance
+    try std.testing.expect(result.Double < 0.01);
+}
+
+test "ts_functions: dtw_shape" {
+    const ally = std.testing.allocator;
+    const a = &[_]f64{ 1.0, 2.0, 3.0, 4.0, 5.0 };
+    const b = &[_]f64{ 1.0, 2.0, 3.0, 4.0, 5.0 };
+
+    const result = try executeDTWShape(ally, a, b, 2);
+    try std.testing.expect(result == .Double);
+    try std.testing.expect(result.Double < 0.01);
+}
+
+test "ts_functions: dtw_soft" {
+    const ally = std.testing.allocator;
+    const a = &[_]f64{ 1.0, 2.0, 3.0, 4.0 };
+    const b = &[_]f64{ 1.0, 2.0, 3.0, 4.0 };
+
+    const result = try executeDTWSoft(ally, a, b, 1.0);
+    try std.testing.expect(result == .Double);
+    // softDTW returns the soft minimum, identical series -> close to 0
+    try std.testing.expect(result.Double < 0.01);
+}
+
+test "ts_functions: cosine_similarity" {
+    const a = &[_]f64{ 1.0, 0.0, 0.0 };
+    const b = &[_]f64{ 1.0, 0.0, 0.0 };
+
+    const result = executeCosineSimilarity(a, b);
+    try std.testing.expect(result == .Double);
+    // Identical vectors -> cosine similarity = 1.0
+    try std.testing.expect(@abs(result.Double - 1.0) < 0.01);
+}
+
+test "ts_functions: cross_correlate" {
+    const ally = std.testing.allocator;
+    const a = &[_]f64{ 1.0, 2.0, 3.0, 4.0, 5.0 };
+    const b = &[_]f64{ 1.0, 2.0, 3.0, 4.0, 5.0 };
+
+    var result = executeCrossCorrelate(ally, a, b);
+    switch (result) {
+        .Map => |*obj| {
+            try std.testing.expect(obj.get("lag") != null);
+            try std.testing.expect(obj.get("correlation") != null);
+            // Self-correlation at lag 0 -> correlation close to 1.0
+            try std.testing.expectEqual(@as(i64, 0), obj.get("lag").?.Int);
+            try std.testing.expect(obj.get("correlation").?.Double > 0.99);
+            obj.deinit();
+        },
+        else => return error.UnexpectedResultType,
+    }
+}
+
+test "ts_functions: sbd" {
+    const a = &[_]f64{ 1.0, 2.0, 3.0, 4.0, 5.0 };
+    const b = &[_]f64{ 1.0, 2.0, 3.0, 4.0, 5.0 };
+
+    const result = executeSBD(a, b);
+    try std.testing.expect(result == .Double);
+    // SBD of identical series = 1 - max_correlation = 1 - 1 = 0
+    try std.testing.expect(result.Double < 0.01);
+}
+
+test "ts_functions: extractF64FromSeries" {
+    const ally = std.testing.allocator;
+
+    var store = timeseries.Store.init(ally);
+    defer store.deinit();
+
+    const key = timeseries.SeriesKey{ .device_id = 1, .metric = "ext" };
+    try store.insertMany(key, &[_]timeseries.Point{
+        .{ .ts = 1000, .value = 10 },
+        .{ .ts = 2000, .value = 20 },
+        .{ .ts = 3000, .value = 30 },
+        .{ .ts = 4000, .value = 40 },
+    });
+
+    // Extract range [2000, 3000]
+    const values = try extractF64FromSeries(&store, key, 2000, 3000, ally);
+    defer ally.free(values);
+    try std.testing.expectEqual(@as(usize, 2), values.len);
+    try std.testing.expect(@abs(values[0] - 20.0) < 0.01);
+    try std.testing.expect(@abs(values[1] - 30.0) < 0.01);
+}
+
+test "ts_functions: extractF64FromSeries missing series" {
+    const ally = std.testing.allocator;
+
+    var store = timeseries.Store.init(ally);
+    defer store.deinit();
+
+    const key = timeseries.SeriesKey{ .device_id = 999, .metric = "missing" };
+    const values = try extractF64FromSeries(&store, key, 0, 9999, ally);
+    defer ally.free(values);
+    try std.testing.expectEqual(@as(usize, 0), values.len);
 }
