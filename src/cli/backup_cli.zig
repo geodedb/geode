@@ -1249,10 +1249,7 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             std.debug.print("Error: Failed to plan migrations: {}\n", .{err});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
-        defer {
-            allocator.free(plan.up);
-            allocator.free(plan.down);
-        }
+        defer migration.freePlan(allocator, &plan);
         for (plan.up) |name| printStdout("  Would apply: {s}\n", .{name});
         for (plan.down) |name| printStdout("  Could rollback: {s}\n", .{name});
         std.process.exit(@intFromEnum(ExitCode.success));

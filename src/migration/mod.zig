@@ -17,6 +17,7 @@ pub const MigrationError = error{
     LedgerCorrupt,
     ApplyFailed,
     FileSystemError,
+    ResumeSlotsFull,
 };
 
 const StagedMigration = struct {
@@ -354,8 +355,7 @@ pub fn applyUpMigrations(
         };
 
         const prefix = checksumPrefix(script);
-        const new_name = alloc.alloc(u8, entry.name.len) catch return error.OutOfMemory;
-        std.mem.copyForwards(u8, new_name, entry.name);
+        const new_name = alloc.dupe(u8, entry.name) catch return error.OutOfMemory;
         ledger.rows.append(alloc, .{
             .version = entry.version,
             .name = new_name,
@@ -363,10 +363,11 @@ pub fn applyUpMigrations(
             .checksum_prefix = prefix,
         }) catch return error.OutOfMemory;
         ledger.metrics.applied_total += 1;
-    }
 
-    ledger.baseline_fingerprint = computeFingerprint(ledger.rows.items);
-    try saveLedger(alloc, cfg, &ledger);
+        // Save ledger after each successful migration for crash safety (GAP-0280).
+        ledger.baseline_fingerprint = computeFingerprint(ledger.rows.items);
+        try saveLedger(alloc, cfg, &ledger);
+    }
 }
 
 pub fn applyDownMigrations(
@@ -572,7 +573,11 @@ pub fn planDryRun(alloc: std.mem.Allocator, cfg: MigrationConfig, names: []const
     for (names) |nm| {
         const ver = parseVersion(nm) orelse continue;
         if (!versionExists(ledger.rows.items, ver)) {
-            pending_up.append(alloc, nm) catch return error.OutOfMemory;
+            const name_copy = alloc.dupe(u8, nm) catch return error.OutOfMemory;
+            pending_up.append(alloc, name_copy) catch {
+                alloc.free(name_copy);
+                return error.OutOfMemory;
+            };
         }
     }
 
@@ -580,7 +585,11 @@ pub fn planDryRun(alloc: std.mem.Allocator, cfg: MigrationConfig, names: []const
     while (idx > 0) : (idx -= 1) {
         const row = ledger.rows.items[@intCast(idx - 1)];
         if (row.applied and row.version > 1) {
-            pending_down.append(alloc, row.name) catch return error.OutOfMemory;
+            const name_copy = alloc.dupe(u8, row.name) catch return error.OutOfMemory;
+            pending_down.append(alloc, name_copy) catch {
+                alloc.free(name_copy);
+                return error.OutOfMemory;
+            };
         }
     }
 
@@ -598,24 +607,33 @@ pub fn planDryRun(alloc: std.mem.Allocator, cfg: MigrationConfig, names: []const
     };
 }
 
+/// Frees all heap-allocated slices within a MigrationPlan returned by planDryRun.
+pub fn freePlan(alloc: std.mem.Allocator, plan: *const MigrationPlan) void {
+    for (plan.up) |name| alloc.free(name);
+    alloc.free(plan.up);
+    for (plan.down) |name| alloc.free(name);
+    alloc.free(plan.down);
+}
+
 // ------------------ Resume Token Data Migration ------------------
 
-var resume_slots: [8]ResumeState = undefined;
+var resume_slots: [8]ResumeState = .{.{ .token = "", .total_batches = 0, .completed_batches = 0, .done = true }} ** 8;
 var resume_slots_len: usize = 0;
 
-fn getOrInitResume(token: []const u8) *ResumeState {
+fn getOrInitResume(alloc: std.mem.Allocator, token: []const u8) MigrationError!*ResumeState {
     var i: usize = 0;
     while (i < resume_slots_len) : (i += 1) {
         if (std.mem.eql(u8, resume_slots[i].token, token)) return &resume_slots[i];
     }
-    if (resume_slots_len == resume_slots.len) return &resume_slots[resume_slots_len - 1];
-    resume_slots[resume_slots_len] = .{ .token = token, .total_batches = 5, .completed_batches = 0, .done = false };
+    if (resume_slots_len == resume_slots.len) return error.ResumeSlotsFull;
+    const token_copy = alloc.dupe(u8, token) catch return error.OutOfMemory;
+    resume_slots[resume_slots_len] = .{ .token = token_copy, .total_batches = 5, .completed_batches = 0, .done = false };
     resume_slots_len += 1;
     return &resume_slots[resume_slots_len - 1];
 }
 
-pub fn resumeDataMigration(_: std.mem.Allocator, token: []const u8) MigrationError!ResumeState {
-    const rs = getOrInitResume(token);
+pub fn resumeDataMigration(alloc: std.mem.Allocator, token: []const u8) MigrationError!ResumeState {
+    const rs = try getOrInitResume(alloc, token);
     if (!rs.done) {
         if (rs.completed_batches < rs.total_batches) rs.completed_batches += 1;
         if (rs.completed_batches >= rs.total_batches) rs.done = true;
