@@ -2991,6 +2991,106 @@ pub const GraphStore = struct {
         return std.ArrayList(u8).initCapacity(self.allocator, 0);
     }
 
+    // CANARY: REQ=REQ-DIST-CLUSTER-002; FEATURE="ClusterReplication"; ASPECT=SnapshotSerialization; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
+    /// Serialize all nodes and edges to a line-delimited snapshot format for
+    /// cluster replication. Each line is one record:
+    ///   N|<id>|<graph>|<label1>,<label2>|<key>=<val>,<key>=<val>
+    ///   E|<id>|<from>|<to>|<graph>|<label>|<key>=<val>
+    /// Returns owned bytes that the caller must free with `allocator.free`.
+    pub fn serializeSnapshot(self: *GraphStore, allocator: std.mem.Allocator) ![]u8 {
+        var buf = std.ArrayList(u8){};
+        errdefer buf.deinit(allocator);
+
+        // Serialize nodes
+        var node_iter = self.nodes.iterator();
+        while (node_iter.next()) |entry| {
+            const node = entry.value_ptr;
+            try buf.appendSlice(allocator, "N|");
+            try appendU64(&buf, allocator, entry.key_ptr.*);
+            try buf.append(allocator, '|');
+            try buf.appendSlice(allocator, node.graph_name);
+            try buf.append(allocator, '|');
+            // Labels
+            for (node.labels, 0..) |label, i| {
+                if (i > 0) try buf.append(allocator, ',');
+                try buf.appendSlice(allocator, label);
+            }
+            try buf.append(allocator, '|');
+            // Properties
+            try appendProperties(&buf, allocator, &node.properties);
+            try buf.append(allocator, '\n');
+        }
+
+        // Serialize edges
+        var edge_iter = self.edges.iterator();
+        while (edge_iter.next()) |entry| {
+            const edge = entry.value_ptr;
+            try buf.appendSlice(allocator, "E|");
+            try appendU64(&buf, allocator, entry.key_ptr.*);
+            try buf.append(allocator, '|');
+            try appendU64(&buf, allocator, edge.from_id);
+            try buf.append(allocator, '|');
+            try appendU64(&buf, allocator, edge.to_id);
+            try buf.append(allocator, '|');
+            try buf.appendSlice(allocator, edge.graph_name);
+            try buf.append(allocator, '|');
+            try buf.appendSlice(allocator, edge.label);
+            try buf.append(allocator, '|');
+            try appendProperties(&buf, allocator, &edge.properties);
+            try buf.append(allocator, '\n');
+        }
+
+        return try buf.toOwnedSlice(allocator);
+    }
+
+    /// Append a u64 value as decimal text.
+    fn appendU64(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u64) !void {
+        var tmp: [20]u8 = undefined;
+        const slice = std.fmt.bufPrint(&tmp, "{d}", .{value}) catch unreachable;
+        try buf.appendSlice(allocator, slice);
+    }
+
+    /// Append property map as key=value pairs separated by commas.
+    fn appendProperties(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, props: *const std.StringHashMap(PropertyValue)) !void {
+        var first = true;
+        var it = props.iterator();
+        while (it.next()) |prop| {
+            if (!first) try buf.append(allocator, ',');
+            first = false;
+            try buf.appendSlice(allocator, prop.key_ptr.*);
+            try buf.append(allocator, '=');
+            switch (prop.value_ptr.*) {
+                .String => |s| {
+                    try buf.appendSlice(allocator, s);
+                },
+                .Int => |v| {
+                    var tmp: [20]u8 = undefined;
+                    const slice = std.fmt.bufPrint(&tmp, "{d}", .{v}) catch unreachable;
+                    try buf.appendSlice(allocator, slice);
+                },
+                .Float => |v| {
+                    var tmp: [32]u8 = undefined;
+                    const slice = std.fmt.bufPrint(&tmp, "{d}", .{v}) catch unreachable;
+                    try buf.appendSlice(allocator, slice);
+                },
+                .Bool => |v| {
+                    try buf.appendSlice(allocator, if (v) "true" else "false");
+                },
+                .Null => {
+                    try buf.appendSlice(allocator, "null");
+                },
+                .Decimal => |d| {
+                    var tmp: [48]u8 = undefined;
+                    const slice = std.fmt.bufPrint(&tmp, "{d}e-{d}", .{ d.coeff, d.scale }) catch unreachable;
+                    try buf.appendSlice(allocator, slice);
+                },
+                .ExtValue => {
+                    try buf.appendSlice(allocator, "<ext>");
+                },
+            }
+        }
+    }
+
     // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-002; FEATURE="BinaryPersistence"; ASPECT=ConditionalSave; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
     /// Save if dirty — delegates to saveToFile (adapter checkpoint + IdMap save).
     pub fn saveIfDirty(self: *GraphStore) void {
@@ -4004,4 +4104,58 @@ test "TestEdgeAdjacencyIndex" {
     var edges_for_node1 = store.getEdgesForNode(node1);
     defer edges_for_node1.deinit(testing.allocator);
     try testing.expect(edges_for_node1.items.len == 2);
+}
+
+test "TestSerializeSnapshotNonEmpty" {
+    // GAP-D001: serializeSnapshot must produce non-empty output with nodes/edges
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Create nodes (setNodeProperty triggers FLE check requiring libc, so skip props)
+    var labels = [_][]const u8{"Person"};
+    const n1 = try store.createNodeWithGraph(&labels, "test_graph");
+
+    var labels2 = [_][]const u8{"Person"};
+    const n2 = try store.createNodeWithGraph(&labels2, "test_graph");
+
+    // Create an edge
+    _ = try store.createEdgeWithGraph(n1, n2, "KNOWS", "test_graph");
+
+    // Serialize
+    const snapshot = try store.serializeSnapshot(testing.allocator);
+    defer testing.allocator.free(snapshot);
+
+    // Must be non-empty
+    try testing.expect(snapshot.len > 0);
+
+    // Must contain node and edge markers
+    try testing.expect(std.mem.indexOf(u8, snapshot, "N|") != null);
+    try testing.expect(std.mem.indexOf(u8, snapshot, "E|") != null);
+
+    // Must contain graph name
+    try testing.expect(std.mem.indexOf(u8, snapshot, "test_graph") != null);
+
+    // Must contain label
+    try testing.expect(std.mem.indexOf(u8, snapshot, "Person") != null);
+
+    // Must contain edge type
+    try testing.expect(std.mem.indexOf(u8, snapshot, "KNOWS") != null);
+
+    // Count lines — at least 2 nodes + 1 edge = 3 lines
+    var line_count: usize = 0;
+    for (snapshot) |c| {
+        if (c == '\n') line_count += 1;
+    }
+    try testing.expect(line_count >= 3);
+}
+
+test "TestSerializeSnapshotEmpty" {
+    // GAP-D001: empty store produces empty snapshot
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    const snapshot = try store.serializeSnapshot(testing.allocator);
+    defer testing.allocator.free(snapshot);
+
+    try testing.expect(snapshot.len == 0);
 }
