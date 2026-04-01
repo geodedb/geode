@@ -82,11 +82,18 @@ All 7 development phases from the TODO list have been successfully implemented:
 - **Segment Management**: Ordered WAL file processing
 - **Implementation**: `src/cli/backup_cli.zig`
 
-### **Multi-Tenancy Support** ✅ January 2026
+### **Multi-Tenancy Support** -- Partial (January 2026)
 
-- **Session Tenant ID**: Tenant context via QUIC handshake
-- **Data Isolation**: Operations scoped to tenant context
-- **Protocol Support**: tenant_id field in HELLO message
+- **What works:**
+  - **Graph Isolation**: Separate graph stores per tenant
+  - **FLE Per-Tenant Keys**: Field-level encryption with tenant-scoped key management
+  - **Session Tenant ID**: Tenant context via QUIC handshake
+  - **Protocol Support**: tenant_id field in HELLO message
+- **In progress:**
+  - **tenant_id enforcement**: Not yet enforced at query execution layer
+  - **RLS expression engine**: Unrecognized expressions now fail-closed (GAP-0294) but expression coverage is incomplete
+  - **Per-tenant quotas**: Not yet implemented
+  - **Audit tenant tracking**: Infrastructure supports tenant_id but not all call sites populate it (GAP-0282)
 - **Implementation**: `src/protocol.zig`, `src/server/server_state.zig`, `src/graph_store.zig`
 
 ### **TDE Page Storage** ✅ January 2026

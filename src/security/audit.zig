@@ -519,6 +519,12 @@ pub const AuditLogger = struct {
     }
 
     pub fn logDataAccessEvent(self: *AuditLogger, category: []const u8, resource: []const u8, user_id: u64) !void {
+        try self.logDataAccessEventWithTenant(category, resource, user_id, null);
+    }
+
+    /// Log a data access event with optional tenant context.
+    /// Call sites that have tenant information should use this variant directly.
+    pub fn logDataAccessEventWithTenant(self: *AuditLogger, category: []const u8, resource: []const u8, user_id: u64, tenant_id: ?u64) !void {
         const event_type: AuditEventType = if (std.mem.eql(u8, category, "read"))
             .access_granted
         else if (std.mem.eql(u8, category, "write"))
@@ -532,7 +538,7 @@ pub const AuditLogger = struct {
             .timestamp = std.time.milliTimestamp(),
             .event_type = event_type,
             .user_id = user_id,
-            .tenant_id = null,
+            .tenant_id = tenant_id,
             .resource = resource,
             .action = category,
             .policy_id = null,

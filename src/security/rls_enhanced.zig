@@ -2,6 +2,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const auth = @import("geode_auth");
 const rls = @import("rls");
+const logging = @import("logging");
+const log = logging.scoped("rls_enhanced");
 
 // CANARY: REQ=REQ-M10-CONSTANTS-003; FEATURE="CodeQuality"; ASPECT=MAGIC_NUMBERS; STATUS=EXEMPT; OWNER=security; UPDATED=2025-10-17
 // Enhanced RLS cache configuration constants
@@ -510,8 +512,9 @@ pub const ExpressionCompiler = struct {
             }
         }
 
-        // Default to true for unrecognized expressions (fail-open for development)
-        return true;
+        // Default to false for unrecognized expressions (fail-closed for security)
+        log.warn("RLS: unrecognized expression, denying access (fail-closed)", .{});
+        return false;
     }
 
     fn compareValues(self: *ExpressionCompiler, a: rls.Value, b: rls.Value) !bool {

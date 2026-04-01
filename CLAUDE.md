@@ -307,6 +307,8 @@ Never hold a higher-tier mutex while acquiring a lower-tier one. Thread-local at
 
 Based on [TODO.md](docs/TODO.md), all major development priorities have been successfully implemented with comprehensive testing and documentation. The project is now **PRODUCTION READY** with enterprise-grade features.
 
+**Multi-tenancy caveat:** Multi-tenancy isolation is partial. Graph-level isolation and FLE per-tenant keys work, but tenant_id enforcement at the query execution layer, per-tenant quotas, and full RLS expression coverage are still in progress. See [FEATURES_OVERVIEW.md](docs/FEATURES_OVERVIEW.md) for details.
+
 ## 🔧 Unified CLI Architecture
 
 **Complete Migration Achieved**:
