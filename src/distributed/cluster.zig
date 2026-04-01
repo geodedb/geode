@@ -13,6 +13,9 @@ const logging = @import("logging");
 const log = logging.scoped("cluster");
 const Attr = logging.Attr;
 
+pub const cluster_health = @import("cluster_health.zig");
+pub const HealthMonitor = cluster_health.HealthMonitor;
+
 fn envFlagEnabled(allocator: std.mem.Allocator, name: []const u8) bool {
     const raw = std.process.getEnvVarOwned(allocator, name) catch return false;
     defer allocator.free(raw);
@@ -306,28 +309,6 @@ pub const ClusterCoordinator = struct {
             data: []const u8,
             priority: u32,
             retry_count: u32,
-        };
-    };
-
-    pub const HealthMonitor = struct {
-        allocator: Allocator,
-        check_interval_ms: u64,
-        unhealthy_threshold: u32,
-        health_checks: std.ArrayList(HealthCheck),
-
-        pub const HealthCheck = struct {
-            node_id: u64,
-            consecutive_failures: u32,
-            last_check: i64,
-            latency_ms: u64,
-            status: HealthStatus,
-        };
-
-        pub const HealthStatus = enum {
-            healthy,
-            degraded,
-            unhealthy,
-            unknown,
         };
     };
 
@@ -735,40 +716,16 @@ pub const ClusterCoordinator = struct {
     }
 
     fn initHealthMonitor(allocator: Allocator, config: Config) !HealthMonitor {
-        return HealthMonitor{
-            .allocator = allocator,
-            .check_interval_ms = config.health_check_interval_ms,
-            .unhealthy_threshold = config.unhealthy_threshold,
-            .health_checks = std.ArrayList(HealthMonitor.HealthCheck).init(allocator),
-        };
+        return HealthMonitor.init(allocator, config.health_check_interval_ms, config.unhealthy_threshold);
     }
 
     fn checkNodeHealth(self: *ClusterCoordinator, node: *NodeInfo) !HealthMonitor.HealthStatus {
         _ = self;
-        const now = std.time.milliTimestamp();
-        const elapsed = now - node.last_heartbeat;
-
-        if (elapsed < 1000) return .healthy;
-        if (elapsed < 5000) return .degraded;
-        return .unhealthy;
+        return HealthMonitor.evaluateNodeHealth(node.last_heartbeat);
     }
 
     fn updateHealthStatus(self: *ClusterCoordinator, node_id: u64, status: HealthMonitor.HealthStatus) !void {
-        for (self.health_monitor.health_checks.items) |*check| {
-            if (check.node_id == node_id) {
-                check.status = status;
-                check.last_check = std.time.milliTimestamp();
-                return;
-            }
-        }
-
-        try self.health_monitor.health_checks.append(.{
-            .node_id = node_id,
-            .consecutive_failures = 0,
-            .last_check = std.time.milliTimestamp(),
-            .latency_ms = 0,
-            .status = status,
-        });
+        try self.health_monitor.updateHealthStatus(node_id, status);
     }
 
     // CANARY: REQ=REQ-DIST-CLUSTER-001; FEATURE="DistributedCluster"; ASPECT=ReplicationLag; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
@@ -780,17 +737,7 @@ pub const ClusterCoordinator = struct {
                 // Check if node is a replica for this shard
                 for (shard.replica_nodes) |replica| {
                     if (replica == node_id) {
-                        // Use health check latency as a proxy for replication lag
-                        for (self.health_monitor.health_checks.items) |check| {
-                            if (check.node_id == node_id) {
-                                // Lag estimated based on network latency and shard size
-                                // Formula: latency_ms * (shard_size_bytes / 1MB) as estimate
-                                const size_factor = @max(1, shard.size_bytes / (1024 * 1024));
-                                return check.latency_ms * size_factor;
-                            }
-                        }
-                        // If no health check found, return 0 (assume in sync)
-                        return 0;
+                        return self.health_monitor.estimateReplicationLag(node_id, shard.size_bytes);
                     }
                 }
             }
