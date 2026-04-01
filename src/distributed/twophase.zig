@@ -412,9 +412,40 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
     return protobuf.decode(TwoPhaseResponse, &reader, allocator);
 }
 
-/// Apply an undo operation to rollback a change
-fn applyUndoOperation(entry: UndoEntry) !void {
-    _ = entry;
+/// Apply an undo operation to rollback a change.
+/// For CREATE operations, deletes the created node/edge.
+/// UPDATE and DELETE require pre-image storage (not yet available) — logged as warnings.
+fn applyUndoOperation(store: *graph_store.GraphStore, entry: UndoEntry) !void {
+    switch (entry.operation) {
+        .node_op => |node_op| {
+            switch (node_op.op_type) {
+                .CREATE => {
+                    // Undo CREATE by deleting the node (without triggering persistence)
+                    store.deleteNodeNoSave(node_op.node_id);
+                },
+                .UPDATE, .DELETE => {
+                    log.warn("undo for node UPDATE/DELETE not yet supported (pre-image storage required)", &.{
+                        Attr.int("node_id", @intCast(node_op.node_id)),
+                    });
+                },
+                .OPERATION_TYPE_UNSPECIFIED => {},
+            }
+        },
+        .edge_op => |edge_op| {
+            switch (edge_op.op_type) {
+                .CREATE => {
+                    // Undo CREATE by deleting the edge
+                    store.deleteEdgeNoSave(edge_op.edge_id);
+                },
+                .UPDATE, .DELETE => {
+                    log.warn("undo for edge UPDATE/DELETE not yet supported (pre-image storage required)", &.{
+                        Attr.int("edge_id", @intCast(edge_op.edge_id)),
+                    });
+                },
+                .OPERATION_TYPE_UNSPECIFIED => {},
+            }
+        },
+    }
 }
 
 /// 2PC transaction context
@@ -431,6 +462,8 @@ pub const Transaction = struct {
     operations: std.ArrayList(Operation),
     isolation_level: IsolationLevel,
     savepoints: std.ArrayList(Savepoint),
+    /// Optional GraphStore reference for undo operations during abort.
+    store: ?*graph_store.GraphStore = null,
 
     pub fn init(
         allocator: Allocator,
@@ -631,10 +664,19 @@ pub const Transaction = struct {
                 // Log failure but continue aborting other participants
             }
 
+            // CANARY: REQ=REQ-DIST-2PC-003; FEATURE="Two-Phase Commit Messaging"; ASPECT=UndoRollback; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
             // Apply undo log to rollback changes
-            while (participant.undo_log.popOrNull()) |undo_entry| {
-                // Apply undo operation to restore previous state
-                try applyUndoOperation(undo_entry);
+            if (self.store) |store| {
+                while (participant.undo_log.popOrNull()) |undo_entry| {
+                    applyUndoOperation(store, undo_entry) catch |err| {
+                        log.err("undo operation failed during abort", &.{
+                            Attr.string("error", @errorName(err)),
+                        });
+                    };
+                }
+            } else {
+                // No store available — drain undo log without applying
+                while (participant.undo_log.popOrNull()) |_| {}
             }
 
             participant.state = .aborted;
@@ -660,6 +702,8 @@ pub const Coordinator = struct {
     default_timeout_ms: u64 = 30_000,
     send_fn: SendFn = defaultSendMessage,
     send_ctx: ?*anyopaque = null,
+    /// Optional GraphStore reference passed to transactions for undo operations.
+    store: ?*graph_store.GraphStore = null,
 
     pub const LogWriter = struct {
         allocator: Allocator,
@@ -725,7 +769,7 @@ pub const Coordinator = struct {
     }
 
     pub fn beginTransaction(self: *Coordinator, transaction_id: []const u8) !*Transaction {
-        const txn = try Transaction.init(
+        var txn = try Transaction.init(
             self.allocator,
             transaction_id,
             self.node_id,
@@ -733,6 +777,7 @@ pub const Coordinator = struct {
             self.send_ctx,
             self.default_timeout_ms,
         );
+        txn.store = self.store;
         try self.transactions.put(txn.id, txn);
 
         // Log transaction start
@@ -1137,6 +1182,7 @@ pub const TwoPCCoordinator = struct {
         const participant_id = try allocator.dupe(u8, config.participant_id orelse config.coordinator_id);
         var coordinator = Coordinator.init(allocator, coord_id);
         coordinator.default_timeout_ms = config.default_timeout_ms;
+        coordinator.store = config.store;
 
         var result = TwoPCCoordinator{
             .allocator = allocator,
