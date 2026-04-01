@@ -242,6 +242,7 @@ pub const distributed = struct {
     pub const raft = @import("distributed/raft.zig");
     pub const query_planner = @import("distributed/query_planner.zig");
     pub const twophase = @import("distributed/twophase.zig");
+    pub const value_convert = @import("distributed/value_convert.zig");
 };
 
 // REPL modules
