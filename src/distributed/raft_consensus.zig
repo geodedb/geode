@@ -349,14 +349,14 @@ pub fn readRaftFrame(allocator: Allocator, stream: anytype) !DecodedRaftFrame {
     var len_buf: [4]u8 = undefined;
     var read_len: usize = 0;
     var retry_count: usize = 0;
-    const max_retries: usize = 200;
+    const max_retries: usize = 5000;
 
     while (read_len < len_buf.len) {
         const n = stream.read(len_buf[read_len..]) catch |err| {
             if (err == error.WouldBlock) {
                 retry_count += 1;
                 if (retry_count >= max_retries) return error.WouldBlock;
-                std.Thread.sleep(5 * std.time.ns_per_ms);
+                std.Thread.sleep(200 * std.time.ns_per_us);
                 continue;
             }
             return err;
@@ -383,7 +383,7 @@ pub fn readRaftFrame(allocator: Allocator, stream: anytype) !DecodedRaftFrame {
             if (err == error.WouldBlock) {
                 retry_count += 1;
                 if (retry_count >= max_retries) return error.WouldBlock;
-                std.Thread.sleep(5 * std.time.ns_per_ms);
+                std.Thread.sleep(200 * std.time.ns_per_us);
                 continue;
             }
             return err;
