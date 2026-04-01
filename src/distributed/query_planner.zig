@@ -29,6 +29,7 @@ pub const DistributedQueryPlanner = struct {
     }
 
     // Plan distributed query execution across federation shards
+    // CANARY: REQ=REQ-DIST-PLAN-001; FEATURE="DistributedQueryPlanning"; ASPECT=Orchestration; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     pub fn planDistributedQuery(self: *DistributedQueryPlanner, query: *const ast.Query) !DistributedPlan {
         // Analyze query for distribution opportunities
         const distribution_analysis = try self.analyzeQueryDistribution(query);
@@ -89,6 +90,7 @@ pub const DistributedQueryPlanner = struct {
         return shard_plans.toOwnedSlice(self.allocator);
     }
 
+    // CANARY: REQ=REQ-DIST-PLAN-004; FEATURE="ShardPruning"; ASPECT=QueryRouting; STATUS=IMPL; TEST=query_planner.selectParticipatingShards; OWNER=distributed; UPDATED=2026-04-01
     /// Select which shards participate in a query based on label affinity.
     /// If the analysis specifies labels and shards advertise matching labels,
     /// only those shards are included (shard pruning). Otherwise all shards
@@ -230,6 +232,7 @@ pub const DistributedQueryPlanner = struct {
 
     /// Estimate row count for a shard using CBO statistics when available.
     /// Falls back to a default heuristic (1000 rows) when no stats exist.
+    // CANARY: REQ=REQ-DIST-PLAN-002; FEATURE="ShardRowEstimation"; ASPECT=CBO; STATUS=IMPL; TEST=query_planner.estimateShardRows; OWNER=distributed; UPDATED=2026-04-01
     fn estimateShardRows(self: *DistributedQueryPlanner, shard_id: u32, analysis: DistributionAnalysis) usize {
         _ = shard_id;
 
@@ -262,7 +265,7 @@ pub const DistributedQueryPlanner = struct {
         return @min(@as(u8, @intCast(shard_count)), 8); // Max 8 parallel operations
     }
 
-    // Placeholder methods for complex distributed operations
+    // CANARY: REQ=REQ-DIST-PLAN-003; FEATURE="ShardQueryGeneration"; ASPECT=QueryRouting; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-04-01
     fn generateShardQuery(self: *DistributedQueryPlanner, query: *const ast.Query, shard_id: u32, analysis: DistributionAnalysis) !ast.Query {
         _ = self;
         _ = shard_id;
@@ -270,6 +273,7 @@ pub const DistributedQueryPlanner = struct {
         return query.*; // Simplified - would modify query for shard-specific execution
     }
 
+    // CANARY: REQ=REQ-DIST-PLAN-005; FEATURE="ShardLocalOptimization"; ASPECT=QueryPlanning; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-04-01
     fn optimizeShardLocalPlan(self: *DistributedQueryPlanner, query: ast.Query, shard_id: u32) !ShardLocalPlan {
         _ = self;
         _ = query;
@@ -308,6 +312,7 @@ pub const DistributedQueryPlanner = struct {
         }
     }
 
+    // CANARY: REQ=REQ-DIST-PLAN-006; FEATURE="DistributedJoin"; ASPECT=QueryPlanning; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-04-01
     fn planDistributedJoin(self: *DistributedQueryPlanner, query: *const ast.Query, shard_plans: []const ShardPlan) !JoinStrategy {
         _ = self;
         _ = query;
@@ -315,6 +320,7 @@ pub const DistributedQueryPlanner = struct {
         return .hash_join; // Simplified
     }
 
+    // CANARY: REQ=REQ-DIST-PLAN-007; FEATURE="DistributedAggregation"; ASPECT=QueryPlanning; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-04-01
     fn planDistributedAggregation(self: *DistributedQueryPlanner, query: *const ast.Query, shard_plans: []const ShardPlan) !AggregationStrategy {
         _ = self;
         _ = query;
@@ -322,6 +328,7 @@ pub const DistributedQueryPlanner = struct {
         return .two_phase; // Simplified
     }
 
+    // CANARY: REQ=REQ-DIST-PLAN-008; FEATURE="DistributedSort"; ASPECT=QueryPlanning; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-04-01
     fn planDistributedSort(self: *DistributedQueryPlanner, order: ast.OrderBy, shard_plans: []const ShardPlan) !SortStrategy {
         _ = self;
         _ = order;
@@ -329,6 +336,7 @@ pub const DistributedQueryPlanner = struct {
         return .merge_sort; // Simplified
     }
 
+    // CANARY: REQ=REQ-DIST-PLAN-009; FEATURE="DistributedUnion"; ASPECT=QueryPlanning; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-04-01
     fn planDistributedUnion(self: *DistributedQueryPlanner, query: *const ast.Query, shard_plans: []const ShardPlan) !UnionStrategy {
         _ = self;
         _ = query;

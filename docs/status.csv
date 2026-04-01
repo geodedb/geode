@@ -665,6 +665,15 @@ REQ-DIST-MIGRATION-002,Migration State,ProgressTracking,TESTED,,,distributed,202
 REQ-DIST-ORDERBY-001,Distributed ORDER BY,QueryCorrectness,TESTED,,,distributed,2026-01-25,src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ORDERBY-002,Distributed ORDER BY Sort,QueryCorrectness,TESTED,,,distributed,2026-01-25,src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ORDERBY-003,ORDER BY Sort Context,QueryCorrectness,TESTED,,,distributed,2026-01-25,src/distributed/enhanced_query_coordinator.zig
+REQ-DIST-PLAN-001,DistributedQueryPlanning,Orchestration,IMPL,,,distributed,2026-04-01,src/distributed/query_planner.zig
+REQ-DIST-PLAN-002,ShardRowEstimation,CBO,IMPL,,,distributed,2026-04-01,src/distributed/query_planner.zig
+REQ-DIST-PLAN-003,ShardQueryGeneration,QueryRouting,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
+REQ-DIST-PLAN-004,ShardPruning,QueryRouting,IMPL,,,distributed,2026-04-01,src/distributed/query_planner.zig
+REQ-DIST-PLAN-005,ShardLocalOptimization,QueryPlanning,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
+REQ-DIST-PLAN-006,DistributedJoin,QueryPlanning,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
+REQ-DIST-PLAN-007,DistributedAggregation,QueryPlanning,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
+REQ-DIST-PLAN-008,DistributedSort,QueryPlanning,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
+REQ-DIST-PLAN-009,DistributedUnion,QueryPlanning,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
 REQ-DIST-PLANNER-001,DistributedQueryPlanner,PlanGeneration,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
 REQ-DIST-PLANNER-002,DistributedQueryPlanner,DistributionAnalysis,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
 REQ-DIST-PLANNER-003,DistributedQueryPlanner,ShardPlanning,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
