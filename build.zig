@@ -757,6 +757,7 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("fle_blind_index", fle_blind_index_mod);
     graph_store_unit_tests.root_module.addImport("uuid", uuid_ext_mod);
     graph_store_unit_tests.root_module.addImport("wal", wal_ext_mod);
+    graph_store_unit_tests.linkLibC();
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
 
     // Storage migration removed (Phase 2: engine-backed persistence)
