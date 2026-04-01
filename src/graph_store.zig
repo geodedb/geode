@@ -87,6 +87,10 @@ pub fn getPersistenceFilePath(allocator: std.mem.Allocator) ![]u8 {
 /// Default graph name used when no graph is selected
 pub const DEFAULT_GRAPH_NAME = "default";
 
+/// Default tenant ID used when no tenant context is set
+/// GAP-0279: Backward compatible — existing single-tenant data uses this default
+pub const DEFAULT_TENANT_ID = "default";
+
 pub const Node = struct {
     id: u64,
     labels: [][]const u8,
@@ -94,6 +98,9 @@ pub const Node = struct {
     // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphIsolation"; ASPECT=NodeGraphTag; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Graph name this node belongs to - enables per-graph data isolation
     graph_name: []const u8 = DEFAULT_GRAPH_NAME,
+    // CANARY: REQ=REQ-MULTI-TENANT-002; FEATURE="PerTenantIsolation"; ASPECT=NodeTenantTag; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
+    // GAP-0279: Per-tenant data isolation — tenant_id tags each node for query-time filtering
+    tenant_id: []const u8 = DEFAULT_TENANT_ID,
 };
 
 pub const Edge = struct {
@@ -105,6 +112,9 @@ pub const Edge = struct {
     // CANARY: REQ=REQ-MULTI-GRAPH-003; FEATURE="MultiGraphIsolation"; ASPECT=EdgeGraphTag; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Graph name this edge belongs to - enables per-graph data isolation
     graph_name: []const u8 = DEFAULT_GRAPH_NAME,
+    // CANARY: REQ=REQ-MULTI-TENANT-002; FEATURE="PerTenantIsolation"; ASPECT=EdgeTenantTag; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
+    // GAP-0279: Per-tenant data isolation — tenant_id tags each edge for query-time filtering
+    tenant_id: []const u8 = DEFAULT_TENANT_ID,
 };
 
 pub const PropertyValue = union(enum) {
@@ -301,7 +311,9 @@ pub const GraphStore = struct {
     edges: std.AutoHashMap(u64, Edge),
     next_node_id: u64,
     next_edge_id: u64,
-    // Multi-tenancy: tenant_id scopes all data operations
+    // DEPRECATED (GAP-0279): Process-wide tenant_id races under concurrent access.
+    // Tenant scoping should come from ExecutionContext.tenant_id, not this field.
+    // Retained for FLE encryption context backward compatibility.
     tenant_id: []const u8,
     schema_name: []const u8,
     // CANARY: REQ=REQ-MULTI-GRAPH-008; FEATURE="GraphRegistry"; ASPECT=GraphNames; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-03
@@ -363,7 +375,9 @@ pub const GraphStore = struct {
         try self.label_index.ensureTotalCapacity(@intCast(node_capacity));
     }
 
-    /// Set tenant ID for this graph store (used when context changes)
+    /// DEPRECATED (GAP-0279): Set tenant ID on the process-wide singleton.
+    /// This races under concurrent access. Use ExecutionContext.tenant_id instead.
+    /// Retained for FLE encryption context backward compatibility.
     pub fn setTenant(self: *GraphStore, tenant_id: []const u8) void {
         self.tenant_id = tenant_id;
     }
@@ -436,6 +450,10 @@ pub const GraphStore = struct {
             if (entry.value_ptr.graph_name.len > 0) {
                 self.allocator.free(entry.value_ptr.graph_name);
             }
+            // GAP-0279: Free tenant_id (always allocated via create functions)
+            if (entry.value_ptr.tenant_id.len > 0) {
+                self.allocator.free(entry.value_ptr.tenant_id);
+            }
             // Free the properties hashmap
             var prop_iter = entry.value_ptr.properties.iterator();
             while (prop_iter.next()) |prop_entry| {
@@ -456,6 +474,10 @@ pub const GraphStore = struct {
             // Free the graph_name (always allocated via create functions)
             if (entry.value_ptr.graph_name.len > 0) {
                 self.allocator.free(entry.value_ptr.graph_name);
+            }
+            // GAP-0279: Free tenant_id (always allocated via create functions)
+            if (entry.value_ptr.tenant_id.len > 0) {
+                self.allocator.free(entry.value_ptr.tenant_id);
             }
             // Free the properties hashmap
             var prop_iter = entry.value_ptr.properties.iterator();
@@ -683,6 +705,12 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Create node with optional graph name for per-graph data isolation
     pub fn createNodeWithGraph(self: *GraphStore, labels: [][]const u8, graph_name: []const u8) !u64 {
+        return self.createNodeWithGraphAndTenant(labels, graph_name, DEFAULT_TENANT_ID);
+    }
+
+    // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=NodeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
+    // GAP-0279: Create a node tagged with both graph_name and tenant_id for per-tenant isolation
+    pub fn createNodeWithGraphAndTenant(self: *GraphStore, labels: [][]const u8, graph_name: []const u8, tenant: []const u8) !u64 {
         // Dual-write: create in adapter (independent ID space), then fall through to local HashMap
         const adapter_slot_id: ?u64 = if (global_vtable) |vt|
             vt.createNodeFn(vt.ctx, graph_name, labels) catch |err| blk: {
@@ -710,12 +738,14 @@ pub const GraphStore = struct {
         }
 
         const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+        const tenant_id_copy = try self.allocator.dupe(u8, tenant);
 
         const node = Node{
             .id = id,
             .labels = labels_copy,
             .properties = std.StringHashMap(PropertyValue).init(self.allocator),
             .graph_name = graph_name_copy,
+            .tenant_id = tenant_id_copy,
         };
 
         try self.nodes.put(id, node);
@@ -751,12 +781,14 @@ pub const GraphStore = struct {
         }
 
         const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+        const tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
 
         const node = Node{
             .id = node_id,
             .labels = labels_copy,
             .properties = std.StringHashMap(PropertyValue).init(self.allocator),
             .graph_name = graph_name_copy,
+            .tenant_id = tenant_id_copy,
         };
 
         try self.nodes.put(node_id, node);
@@ -1191,6 +1223,27 @@ pub const GraphStore = struct {
         while (iter.next()) |entry| {
             result[i] = entry.key_ptr.*;
             i += 1;
+        }
+        return result;
+    }
+
+    // CANARY: REQ=REQ-MULTI-TENANT-004; FEATURE="PerTenantIsolation"; ASPECT=BulkNodeAccess; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
+    // GAP-0279: Return only nodes belonging to the specified tenant (or all if tenant is null)
+    pub fn getAllNodesForTenant(self: *const GraphStore, allocator: std.mem.Allocator, tenant: ?[]const u8) ![]u64 {
+        const tid = tenant orelse return self.getAllNodes(allocator);
+        var count: usize = 0;
+        var iter = self.nodes.iterator();
+        while (iter.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.tenant_id, tid)) count += 1;
+        }
+        var result = try allocator.alloc(u64, count);
+        iter = self.nodes.iterator();
+        var i: usize = 0;
+        while (iter.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.tenant_id, tid)) {
+                result[i] = entry.key_ptr.*;
+                i += 1;
+            }
         }
         return result;
     }
@@ -1683,6 +1736,12 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphIsolation"; ASPECT=CreateEdge; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Create edge with optional graph name for per-graph data isolation
     pub fn createEdgeWithGraph(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8) !u64 {
+        return self.createEdgeWithGraphAndTenant(from_id, to_id, edge_type, graph_name, DEFAULT_TENANT_ID);
+    }
+
+    // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=EdgeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
+    // GAP-0279: Create an edge tagged with both graph_name and tenant_id for per-tenant isolation
+    pub fn createEdgeWithGraphAndTenant(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8, tenant: []const u8) !u64 {
         // Dual-write: create in adapter (independent ID space).
         // Translate UUID-based node IDs to engine slot IDs via the IdMap,
         // since the engine stores nodes by slot position, not UUID.
@@ -1711,6 +1770,7 @@ pub const GraphStore = struct {
 
         const edge_type_copy = try self.allocator.dupe(u8, edge_type);
         const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+        const tenant_id_copy = try self.allocator.dupe(u8, tenant);
 
         const edge = Edge{
             .id = id,
@@ -1719,6 +1779,7 @@ pub const GraphStore = struct {
             .label = edge_type_copy,
             .properties = std.StringHashMap(PropertyValue).init(self.allocator),
             .graph_name = graph_name_copy,
+            .tenant_id = tenant_id_copy,
         };
 
         try self.edges.put(id, edge);
@@ -1751,6 +1812,7 @@ pub const GraphStore = struct {
 
         const edge_type_copy = try self.allocator.dupe(u8, edge_type);
         const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+        const tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
 
         const edge = Edge{
             .id = edge_id,
@@ -1759,6 +1821,7 @@ pub const GraphStore = struct {
             .label = edge_type_copy,
             .properties = std.StringHashMap(PropertyValue).init(self.allocator),
             .graph_name = graph_name_copy,
+            .tenant_id = tenant_id_copy,
         };
 
         try self.edges.put(edge_id, edge);
@@ -2882,12 +2945,14 @@ pub const GraphStore = struct {
                 } else slot_id;
 
                 const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+                const tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
 
                 var node = Node{
                     .id = node_uuid,
                     .labels = labels,
                     .properties = std.StringHashMap(PropertyValue).init(self.allocator),
                     .graph_name = graph_name_copy,
+                    .tenant_id = tenant_id_copy,
                 };
 
                 // Load properties from adapter (best-effort: node is added
@@ -2960,6 +3025,7 @@ pub const GraphStore = struct {
                     const edge_label_str = mg.label_dict.getString(edge_entry.rel_type) orelse "UNKNOWN";
                     const edge_label_copy = try self.allocator.dupe(u8, edge_label_str);
                     const edge_graph_name_copy = try self.allocator.dupe(u8, graph_name);
+                    const edge_tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
 
                     var edge = Edge{
                         .id = edge_uuid,
@@ -2968,6 +3034,7 @@ pub const GraphStore = struct {
                         .label = edge_label_copy,
                         .properties = std.StringHashMap(PropertyValue).init(self.allocator),
                         .graph_name = edge_graph_name_copy,
+                        .tenant_id = edge_tenant_id_copy,
                     };
 
                     // Load edge properties from adapter (best-effort: edge is
@@ -3086,6 +3153,10 @@ pub const GraphStore = struct {
         if (node_ptr.graph_name.len > 0) {
             self.allocator.free(node_ptr.graph_name);
         }
+        // GAP-0279: Free tenant_id
+        if (node_ptr.tenant_id.len > 0) {
+            self.allocator.free(node_ptr.tenant_id);
+        }
         // Free properties
         var prop_iter = node_ptr.properties.iterator();
         while (prop_iter.next()) |prop_entry| {
@@ -3118,6 +3189,10 @@ pub const GraphStore = struct {
             // Free graph_name
             if (edge.graph_name.len > 0) {
                 self.allocator.free(edge.graph_name);
+            }
+            // GAP-0279: Free tenant_id
+            if (edge.tenant_id.len > 0) {
+                self.allocator.free(edge.tenant_id);
             }
             // Free properties
             var prop_iter = edge.properties.iterator();
@@ -3241,12 +3316,14 @@ pub const GraphStore = struct {
         }
 
         const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+        const tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
 
         const node = Node{
             .id = node_id,
             .labels = labels_copy,
             .properties = std.StringHashMap(PropertyValue).init(self.allocator),
             .graph_name = graph_name_copy,
+            .tenant_id = tenant_id_copy,
         };
 
         try self.nodes.put(node_id, node);
@@ -3261,6 +3338,7 @@ pub const GraphStore = struct {
     pub fn restoreEdgeNoSave(self: *GraphStore, edge_id: u64, from_id: u64, to_id: u64, label: []const u8, graph_name: []const u8) !void {
         const label_copy = try self.allocator.dupe(u8, label);
         const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+        const tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
 
         const edge = Edge{
             .id = edge_id,
@@ -3269,6 +3347,7 @@ pub const GraphStore = struct {
             .label = label_copy,
             .properties = std.StringHashMap(PropertyValue).init(self.allocator),
             .graph_name = graph_name_copy,
+            .tenant_id = tenant_id_copy,
         };
 
         try self.edges.put(edge_id, edge);
@@ -3985,4 +4064,95 @@ test "TestEdgeAdjacencyIndex" {
     var edges_for_node1 = store.getEdgesForNode(node1);
     defer edges_for_node1.deinit(testing.allocator);
     try testing.expect(edges_for_node1.items.len == 2);
+}
+
+// CANARY: REQ=REQ-MULTI-TENANT-005; FEATURE="PerTenantIsolation"; ASPECT=UnitTest; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
+// GAP-0279: Per-tenant data isolation tests
+test "TestTenantIsolationNodeCreation" {
+    // Verify nodes created with different tenant_ids are tagged correctly
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"Person"};
+    const node_t1 = try store.createNodeWithGraphAndTenant(&labels, "default", "tenant_a");
+    const node_t2 = try store.createNodeWithGraphAndTenant(&labels, "default", "tenant_b");
+    const node_default = try store.createNodeWithGraph(&labels, "default");
+
+    // Verify tenant_id tags on nodes
+    const n1 = store.nodes.get(node_t1).?;
+    try testing.expectEqualStrings("tenant_a", n1.tenant_id);
+
+    const n2 = store.nodes.get(node_t2).?;
+    try testing.expectEqualStrings("tenant_b", n2.tenant_id);
+
+    const n3 = store.nodes.get(node_default).?;
+    try testing.expectEqualStrings(DEFAULT_TENANT_ID, n3.tenant_id);
+}
+
+test "TestTenantIsolationEdgeCreation" {
+    // Verify edges created with different tenant_ids are tagged correctly
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"Person"};
+    const n1 = try store.createNodeWithGraphAndTenant(&labels, "default", "tenant_a");
+    const n2 = try store.createNodeWithGraphAndTenant(&labels, "default", "tenant_a");
+
+    const edge_id = try store.createEdgeWithGraphAndTenant(n1, n2, "KNOWS", "default", "tenant_a");
+    const edge = store.edges.get(edge_id).?;
+    try testing.expectEqualStrings("tenant_a", edge.tenant_id);
+
+    // Default tenant edge
+    const edge2_id = try store.createEdgeWithGraph(n1, n2, "LIKES", "default");
+    const edge2 = store.edges.get(edge2_id).?;
+    try testing.expectEqualStrings(DEFAULT_TENANT_ID, edge2.tenant_id);
+}
+
+test "TestGetAllNodesForTenant" {
+    // Verify getAllNodesForTenant returns only nodes for the specified tenant
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"Person"};
+    _ = try store.createNodeWithGraphAndTenant(&labels, "default", "tenant_a");
+    _ = try store.createNodeWithGraphAndTenant(&labels, "default", "tenant_a");
+    _ = try store.createNodeWithGraphAndTenant(&labels, "default", "tenant_b");
+    _ = try store.createNodeWithGraph(&labels, "default"); // default tenant
+
+    // Tenant A should have 2 nodes
+    const result_a = try store.getAllNodesForTenant(testing.allocator, "tenant_a");
+    defer testing.allocator.free(result_a);
+    try testing.expectEqual(@as(usize, 2), result_a.len);
+
+    // Tenant B should have 1 node
+    const result_b = try store.getAllNodesForTenant(testing.allocator, "tenant_b");
+    defer testing.allocator.free(result_b);
+    try testing.expectEqual(@as(usize, 1), result_b.len);
+
+    // Default tenant should have 1 node
+    const result_default = try store.getAllNodesForTenant(testing.allocator, DEFAULT_TENANT_ID);
+    defer testing.allocator.free(result_default);
+    try testing.expectEqual(@as(usize, 1), result_default.len);
+
+    // Null tenant (no filter) should return all 4 nodes
+    const result_all = try store.getAllNodesForTenant(testing.allocator, null);
+    defer testing.allocator.free(result_all);
+    try testing.expectEqual(@as(usize, 4), result_all.len);
+}
+
+test "TestTenantIsolationBackwardCompatible" {
+    // Verify that existing code without tenant_id continues to work
+    // All nodes should get DEFAULT_TENANT_ID
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"Person"};
+    const node_id = try store.createNodeWithGraph(&labels, "default");
+    const node = store.nodes.get(node_id).?;
+
+    // Default tenant_id should be "default"
+    try testing.expectEqualStrings(DEFAULT_TENANT_ID, node.tenant_id);
+
+    // Graph name should still work as before
+    try testing.expectEqualStrings("default", node.graph_name);
 }

@@ -53,6 +53,34 @@ const applyDistinct = result_utils.applyDistinct;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
+// CANARY: REQ=REQ-MULTI-TENANT-005; FEATURE="PerTenantIsolation"; ASPECT=MatchFiltering; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
+// GAP-0279: Get the tenant filter from the active ExecutionContext.
+// Returns null if no tenant scoping should be applied (backward compatible for
+// single-tenant deployments where tenant_id is "default" or unset).
+fn getSessionTenantFilter() ?[]const u8 {
+    if (execution.getActiveContext()) |ctx| {
+        if (ctx.tenant_id) |tid| {
+            // "default" means no filtering — backward compatible
+            if (std.mem.eql(u8, tid, graph_store.DEFAULT_TENANT_ID)) return null;
+            return tid;
+        }
+    }
+    return null;
+}
+
+// GAP-0279: Check if a node passes the tenant filter.
+// Returns true if node should be included in results.
+inline fn passesTenantFilter(node: graph_store.Node, filter_tenant: ?[]const u8) bool {
+    const tid = filter_tenant orelse return true;
+    return std.mem.eql(u8, node.tenant_id, tid);
+}
+
+// GAP-0279: Check if an edge passes the tenant filter.
+inline fn passesTenantFilterEdge(edge: graph_store.Edge, filter_tenant: ?[]const u8) bool {
+    const tid = filter_tenant orelse return true;
+    return std.mem.eql(u8, edge.tenant_id, tid);
+}
+
 /// Resolve a LIMIT or OFFSET value from either a literal or a $param reference.
 fn resolveLimitParam(literal: ?usize, param_name: ?[]const u8, param_names_arr: []const []const u8, param_values_arr: []const Value) ?usize {
     if (literal) |v| return v;
@@ -367,6 +395,8 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
 
     // Get current graph from session context
     const filter_graph = if (context.session_state) |session| (session.graph orelse "default") else "default";
+    // GAP-0279: Get tenant filter from session context
+    const filter_tenant = getSessionTenantFilter();
 
     // Match each chain separately and collect bindings
     // GAP-0220 FIX: Use try for proper error propagation
@@ -402,6 +432,8 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
 
             // Filter by graph - only include nodes from the current graph
             if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+            // GAP-0279: Filter by tenant
+            if (!passesTenantFilter(node, filter_tenant)) continue;
 
             // Check labels
             var matches_labels = true;
@@ -591,6 +623,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     _ = inline_let_bindings;
     const store = graph_store.getGlobalStore(allocator);
     const filter_graph = current_graph orelse "default";
+    // GAP-0279: Get tenant filter from session context
+    const filter_tenant = getSessionTenantFilter();
 
     // CANARY: REQ=REQ-PERF-LIMIT-PUSHDOWN-001; FEATURE="LimitPushdown"; ASPECT=MultiNodeMatch; STATUS=IMPL; OWNER=engine; UPDATED=2026-03-13
     // Determine if we can push LIMIT down into the scan phase.
@@ -698,6 +732,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                 const node = entry.value_ptr;
 
                 if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+                if (!passesTenantFilter(node.*, filter_tenant)) continue;
 
                 var matches_pattern = true;
 
@@ -1226,6 +1261,8 @@ fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
 fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, current_graph: ?[]const u8) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
     const filter_graph = current_graph orelse "default";
+    // GAP-0279: Get tenant filter from session context
+    const filter_tenant = getSessionTenantFilter();
 
     // MatchBinding type for tracking variable->node mappings (named differently to avoid shadowing)
     const MatchBinding = struct {
@@ -1301,6 +1338,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     }
                     if (store.nodes.getPtr(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                        if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!matchesLabels(right_node, right_labels)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
@@ -1315,6 +1353,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     }
                     if (store.nodes.getPtr(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                        if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!matchesLabels(right_node, right_labels)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
@@ -1341,6 +1380,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     }
                     if (store.nodes.getPtr(edge.from_id)) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
+                        if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -1354,6 +1394,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     }
                     if (store.nodes.getPtr(edge.to_id)) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
+                        if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -1371,7 +1412,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 const to_node = store.nodes.getPtr(edge.to_id) orelse continue;
 
                 if (rel_dir == .right or rel_dir == .undirected) {
-                    if (std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph)) {
+                    if (std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant)) {
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, from_node);
                         if (hop.right.name) |v| try binding.vars.put(v, to_node);
@@ -1379,7 +1420,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     }
                 }
                 if (rel_dir == .left or rel_dir == .undirected) {
-                    if (std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph)) {
+                    if (std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant)) {
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, to_node);
                         if (hop.right.name) |v| try binding.vars.put(v, from_node);
@@ -1393,6 +1434,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             while (node_iter.next()) |entry| {
                 const left_node = entry.value_ptr;
                 if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
+                if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
 
                 const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(left_node.id) else &[_]graph_store.Edge{};
                 const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
@@ -1400,6 +1442,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 for (outgoing_edges) |edge| {
                     if (store.nodes.getPtr(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                        if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -1410,6 +1453,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 for (incoming_edges) |edge| {
                     if (store.nodes.getPtr(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                        if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -1435,6 +1479,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             while (node_iter.next()) |entry| {
                 const node = entry.value_ptr;
                 if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+                if (!passesTenantFilter(node.*, filter_tenant)) continue;
                 var binding = MatchBinding.init(allocator);
                 if (node_pattern.name) |v| try binding.vars.put(v, node);
                 try bindings.append(allocator, binding);
@@ -1476,6 +1521,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
                     if (store.nodes.getPtr(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                        if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!matchesLabels(right_node, right_labels)) continue;
 
                         // #557: clone() now pre-sizes HashMap to avoid rehash
@@ -1493,6 +1539,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
                     if (store.nodes.getPtr(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                        if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!matchesLabels(right_node, right_labels)) continue;
 
                         // #557: clone() now pre-sizes HashMap to avoid rehash
@@ -1510,6 +1557,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 while (node_iter.next()) |node_entry| {
                     const new_left_node = node_entry.value_ptr;
                     if (!std.mem.eql(u8, new_left_node.graph_name, filter_graph)) continue;
+                    if (!passesTenantFilter(new_left_node.*, filter_tenant)) continue;
                     if (!matchesLabels(new_left_node, left_labels)) continue;
 
                     // Find matching edges from this node based on direction
@@ -1524,6 +1572,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
                         if (store.nodes.getPtr(edge.to_id)) |right_node| {
                             if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                            if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                             if (!matchesLabels(right_node, right_labels)) continue;
 
                             // Clone existing binding and add both new variables
@@ -1542,6 +1591,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
                         if (store.nodes.getPtr(edge.from_id)) |right_node| {
                             if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                            if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                             if (!matchesLabels(right_node, right_labels)) continue;
 
                             // Clone existing binding and add both new variables
@@ -1641,6 +1691,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     _ = inline_let_bindings;
     const store = graph_store.getGlobalStore(allocator);
     const filter_graph = current_graph orelse "default";
+    // GAP-0279: Get tenant filter from session context
+    const filter_tenant = getSessionTenantFilter();
 
     // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-HOP-002; FEATURE="OptionalMatchWithHops"; ASPECT=FirstChainExecution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2026-01-29
     // Step 1: Execute required chain (first chain) to get base bindings
@@ -1674,6 +1726,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
         // Filter by graph - only include nodes from the current graph
         if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+        // GAP-0279: Filter by tenant
+        if (!passesTenantFilter(node.*, filter_tenant)) continue;
 
         // Filter by labels if specified
         // #561: Use matchesLabels helper (includes pointer equality fast-path)
@@ -1916,6 +1970,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
                 // Filter right node by graph
                 if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                // GAP-0279: Filter by tenant
+                if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
 
                 // Filter by right node labels
                 if (right_labels.len > 0) {
@@ -1993,6 +2049,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
                 // Filter right node by graph
                 if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                // GAP-0279: Filter by tenant
+                if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
 
                 // Filter by right node labels
                 if (right_labels.len > 0) {
@@ -2185,6 +2243,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                     while (opt_node_iter.next()) |entry| {
                         const opt_node = entry.value_ptr;
                         if (!std.mem.eql(u8, opt_node.graph_name, filter_graph)) continue;
+                        if (!passesTenantFilter(opt_node.*, filter_tenant)) continue;
 
                         // Filter by labels
                         if (opt_labels.len > 0) {
@@ -2625,6 +2684,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
                         // Filter by graph
                         if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+                        if (!passesTenantFilter(node.*, filter_tenant)) continue;
 
                         // Filter by labels
                         if (target_labels.len > 0) {
@@ -3180,6 +3240,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     const store = graph_store.getGlobalStore(allocator);
     // Graph to filter by - use "default" if no graph specified
     const filter_graph = current_graph orelse "default";
+    // GAP-0279: Get tenant filter from session context
+    const filter_tenant = getSessionTenantFilter();
 
     // Extract pattern information from MATCH using helper function
     const pattern_info = extractPatternInfo(q);
@@ -3327,6 +3389,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         while (init_iter_mh.next()) |entry| {
                             const node = entry.value_ptr;
                             if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+                            if (!passesTenantFilter(node.*, filter_tenant)) continue;
                             try NodeCollector.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh);
                         }
                     }
@@ -3588,6 +3651,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                     // Filter by graph
                     if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
+                    if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
 
                     // Filter left node by labels if specified
                     if (match_labels.len > 0) {
@@ -4034,6 +4098,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=NodeFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                 // Filter by graph - only include nodes from the current graph
                 if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+                if (!passesTenantFilter(node.*, filter_tenant)) continue;
 
                 // Filter by labels if specified
                 if (match_labels.len > 0) {
@@ -4241,6 +4306,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                     // Filter by graph
                     if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
+                    if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
 
                     // Filter left node by labels if specified
                     if (match_labels.len > 0) {
@@ -4497,6 +4563,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     // CANARY: REQ=REQ-MULTI-GRAPH-021; FEATURE="MultiGraphIsolation"; ASPECT=VarLengthPathFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                     // Filter by graph - only include nodes from the current graph
                     if (!std.mem.eql(u8, start_node.graph_name, filter_graph)) continue;
+                    if (!passesTenantFilter(start_node.*, filter_tenant)) continue;
 
                     // Filter by left node labels
                     if (match_labels.len > 0) {
@@ -4666,6 +4733,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 // Filter by graph - only include nodes from the current graph
                 if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+                if (!passesTenantFilter(node.*, filter_tenant)) continue;
 
                 // Filter by labels if specified
                 if (match_labels.len > 0) {
@@ -5069,6 +5137,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     while (init_iter.next()) |entry| {
                         const node = entry.value_ptr;
                         if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+                        if (!passesTenantFilter(node.*, filter_tenant)) continue;
                         try NodeCollector2.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings);
                     }
                 }
@@ -5497,6 +5566,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // CANARY: REQ=REQ-MULTI-GRAPH-022; FEATURE="MultiGraphIsolation"; ASPECT=RelPatternFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                 // Filter by graph - only include nodes from the current graph
                 if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
+                if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
 
                 // Filter left node by labels if specified
                 if (match_labels.len > 0) {
@@ -6256,6 +6326,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // CANARY: REQ=REQ-MULTI-GRAPH-023; FEATURE="MultiGraphIsolation"; ASPECT=SimpleNodeFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                 // Filter by graph - only include nodes from the current graph
                 if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+                if (!passesTenantFilter(node.*, filter_tenant)) continue;
 
                 // Filter by labels if specified
                 if (match_labels.len > 0) {
