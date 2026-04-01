@@ -576,6 +576,33 @@ fn cloneOrderDirs(allocator: std.mem.Allocator, dirs: []const bool) ![]const boo
     return cloned;
 }
 
+/// Produce a deterministic string key from a BindingRow for deduplication.
+/// Each value is serialized with a type tag so that, e.g., Int(1) != Str("1").
+fn hashBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) ![]u8 {
+    var buf = std.ArrayList(u8).init(allocator);
+    errdefer buf.deinit();
+    const writer = buf.writer();
+
+    for (row.cols, 0..) |val, i| {
+        if (i > 0) try writer.writeByte('|');
+        switch (val) {
+            .Null => try writer.writeAll("N"),
+            .Int => |v| try writer.print("I:{d}", .{v}),
+            .SmallInt => |v| try writer.print("SI:{d}", .{v}),
+            .BigInt => |v| try writer.print("BI:{d}", .{v}),
+            .Bool => |v| try writer.print("B:{}", .{@as(u8, if (v) 1 else 0)}),
+            .Str => |v| try writer.print("S:{s}", .{v}),
+            .Text => |v| try writer.print("T:{s}", .{v}),
+            .Real => |v| try writer.print("R:{d}", .{v}),
+            .Double => |v| try writer.print("D:{d}", .{v}),
+            .Decimal => |d| try writer.print("DC:{d}s{d}", .{ d.coeff, d.scale }),
+            else => try writer.writeAll("?"),
+        }
+    }
+
+    return buf.toOwnedSlice();
+}
+
 fn cloneQueryResults(allocator: std.mem.Allocator, results: QueryResults) !QueryResults {
     var rows = try allocator.alloc(protocol.BindingRow, results.rows.len);
     var idx: usize = 0;
@@ -842,10 +869,63 @@ pub const FederationManager = struct {
                 };
             },
 
+            // CANARY: REQ=REQ-FED-UNION-DISTINCT-001; FEATURE="FederationUnionDistinct"; ASPECT=Deduplication; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
             .union_distinct => {
-                // Remove duplicates during merge
-                // Implementation would use hash set for deduplication
-                return mergeResults(undefined, local, remote, .union_all, allocator);
+                // Real deduplication using hash set to track seen rows
+                var seen = std.StringHashMap(void).init(allocator);
+                defer {
+                    var it = seen.iterator();
+                    while (it.next()) |entry| {
+                        allocator.free(entry.key_ptr.*);
+                    }
+                    seen.deinit();
+                }
+
+                var unique_rows = std.ArrayList(protocol.BindingRow).init(allocator);
+                errdefer {
+                    for (unique_rows.items) |row| freeBindingRow(allocator, row);
+                    unique_rows.deinit();
+                }
+
+                // Process local rows
+                for (local.rows) |row| {
+                    const key = try hashBindingRow(allocator, row);
+                    const gop = try seen.getOrPut(key);
+                    if (gop.found_existing) {
+                        allocator.free(key);
+                    } else {
+                        try unique_rows.append(try cloneBindingRow(allocator, row));
+                    }
+                }
+
+                // Process remote rows
+                for (remote) |r| {
+                    for (r.rows) |row| {
+                        const key = try hashBindingRow(allocator, row);
+                        const gop = try seen.getOrPut(key);
+                        if (gop.found_existing) {
+                            allocator.free(key);
+                        } else {
+                            try unique_rows.append(try cloneBindingRow(allocator, row));
+                        }
+                    }
+                }
+
+                const schema_source = if (local.schema.len > 0)
+                    local.schema
+                else if (remote.len > 0 and remote[0].schema.len > 0)
+                    remote[0].schema
+                else
+                    &.{};
+                const schema_copy = if (schema_source.len > 0) try cloneSchema(allocator, schema_source) else &.{};
+                errdefer if (schema_copy.len > 0) freeSchema(allocator, schema_copy);
+
+                return QueryResults{
+                    .rows = try unique_rows.toOwnedSlice(),
+                    .schema = schema_copy,
+                    .execution_time_ms = local.execution_time_ms,
+                    .ordered = false,
+                };
             },
 
             .merge_sorted => {
@@ -1671,6 +1751,67 @@ test "federation: nulls_last ordering" {
     try std.testing.expect(merged.rows[1].cols[0].Int == 2);
     try std.testing.expect(merged.rows[2].cols[0] == .Null);
     try std.testing.expect(merged.rows[3].cols[0] == .Null);
+}
+
+test "federation: union_distinct deduplicates rows" {
+    const ally = std.testing.allocator;
+    const s = &[_]protocol.ColumnDef{ .{ .name = "a", .data_type = "INT" }, .{ .name = "b", .data_type = "STRING" } };
+
+    // Local: (1,"x"), (2,"y")
+    var lv1 = [_]protocol.BindingValue{ .{ .Int = 1 }, .{ .Str = "x" } };
+    var lv2 = [_]protocol.BindingValue{ .{ .Int = 2 }, .{ .Str = "y" } };
+    const local_rows = &[_]protocol.BindingRow{ .{ .cols = &lv1 }, .{ .cols = &lv2 } };
+    const local = QueryResults{ .rows = local_rows, .schema = s, .execution_time_ms = 0 };
+
+    // Remote: (2,"y"), (3,"z")  -- (2,"y") is a duplicate
+    var rv1 = [_]protocol.BindingValue{ .{ .Int = 2 }, .{ .Str = "y" } };
+    var rv2 = [_]protocol.BindingValue{ .{ .Int = 3 }, .{ .Str = "z" } };
+    const remote_rows = &[_]protocol.BindingRow{ .{ .cols = &rv1 }, .{ .cols = &rv2 } };
+    const r1 = QueryResults{ .rows = remote_rows, .schema = s, .execution_time_ms = 0 };
+
+    var rem = [_]QueryResults{r1};
+    var fm: FederationManager = undefined;
+    var merged = try fm.mergeResults(local, rem[0..], .union_distinct, ally);
+    defer merged.deinit(ally);
+
+    // Should have 3 unique rows: (1,"x"), (2,"y"), (3,"z")
+    try std.testing.expectEqual(@as(usize, 3), merged.rows.len);
+
+    // Verify no duplicates by collecting row keys
+    var seen = std.StringHashMap(void).init(ally);
+    defer {
+        var it = seen.iterator();
+        while (it.next()) |entry| ally.free(entry.key_ptr.*);
+        seen.deinit();
+    }
+    for (merged.rows) |row| {
+        const key = try hashBindingRow(ally, row);
+        const gop = try seen.getOrPut(key);
+        if (gop.found_existing) {
+            ally.free(key);
+            return error.DuplicateFound;
+        }
+    }
+}
+
+test "federation: union_distinct with all duplicates" {
+    const ally = std.testing.allocator;
+    const s = &[_]protocol.ColumnDef{.{ .name = "v", .data_type = "INT" }};
+
+    // Both local and remote have same single row
+    var lv = [_]protocol.BindingValue{.{ .Int = 42 }};
+    var rv = [_]protocol.BindingValue{.{ .Int = 42 }};
+    const local = QueryResults{ .rows = &[_]protocol.BindingRow{.{ .cols = &lv }}, .schema = s, .execution_time_ms = 0 };
+    const r1 = QueryResults{ .rows = &[_]protocol.BindingRow{.{ .cols = &rv }}, .schema = s, .execution_time_ms = 0 };
+
+    var rem = [_]QueryResults{r1};
+    var fm: FederationManager = undefined;
+    var merged = try fm.mergeResults(local, rem[0..], .union_distinct, ally);
+    defer merged.deinit(ally);
+
+    // Deduplication should reduce to 1 row
+    try std.testing.expectEqual(@as(usize, 1), merged.rows.len);
+    try std.testing.expectEqual(@as(i64, 42), merged.rows[0].cols[0].Int);
 }
 
 // Test: mismatch in order_dirs across contributors => fallback to unordered concatenation

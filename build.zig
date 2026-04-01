@@ -1109,6 +1109,17 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_cluster_auth_tests.step);
     test_step.dependOn(&run_federation_server_auth_tests.step);
 
+    // Federation merge correctness tests (union_distinct dedup + hash_aggregate accumulation)
+    const federation_merge_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_federation_merge_correctness.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_federation_merge_tests = b.addRunArtifact(federation_merge_tests);
+    test_step.dependOn(&run_federation_merge_tests.step);
+
     // E2E tests (slower, require more setup - not run in pre-push hooks)
     // Run with: zig build test-e2e
     const test_e2e_step = b.step("test-e2e", "Run end-to-end tests (slower)");
