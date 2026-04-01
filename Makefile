@@ -195,6 +195,7 @@ release:
 install: release
 	@echo "=== Installing geode from current branch ==="
 	sudo systemctl stop geode
+	@sleep 2
 	sudo cp zig-out/bin/geode /usr/bin/geode
 	sudo systemctl start geode
 	@echo "✓ geode installed and restarted"

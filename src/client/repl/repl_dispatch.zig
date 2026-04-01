@@ -622,16 +622,16 @@ pub const ClientSession = struct {
         // Reset the flag
         self.received_schema_response = false;
 
-        // Try a non-blocking read to consume the inline page.
-        // The server sends the inline page immediately after the schema, so it
-        // should arrive very quickly. Use a small number of retries with the
-        // transport's own idle timeout to avoid blocking the REPL for minutes.
+        // Read the inline page that the server sends immediately after the schema.
+        // The server always sends this when inline_results is enabled, so we must
+        // consume it to keep the protocol synchronized. Use enough retries to
+        // handle server load spikes (e.g., concurrent data ingest).
         var retry_count: usize = 0;
-        const max_retries: usize = 3; // 3 retries — enough for normal latency
+        const max_retries: usize = 200; // 200 * 10ms = 2s max wait
         while (retry_count < max_retries) : (retry_count += 1) {
             const response = self.connection.?.readLine(self.allocator, 0) catch |err| {
                 if (err == error.WouldBlock) {
-                    std.Thread.sleep(1 * std.time.ns_per_ms);
+                    std.Thread.sleep(10 * std.time.ns_per_ms);
                     continue;
                 }
                 // Any other error - just return, no inline page
