@@ -10,6 +10,7 @@ const schema = @import("schema");
 const protobuf = @import("protobuf");
 const proto_util = @import("../server/proto_util.zig");
 const value_utilities = @import("../execution/value_utilities.zig");
+const result_utils = @import("result_utils.zig");
 const spice_wrapper = @import("parallel/spice");
 
 const logging = @import("logging");
@@ -776,12 +777,7 @@ fn emitChunkFromPage(
     try handler(chunk);
 }
 
-fn freeBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) void {
-    for (row.cols) |val| {
-        value_utilities.freeValue(allocator, val);
-    }
-    allocator.free(row.cols);
-}
+const freeBindingRow = result_utils.freeBindingRow;
 
 fn captureOrderMeta(
     allocator: std.mem.Allocator,

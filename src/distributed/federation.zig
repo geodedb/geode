@@ -5,8 +5,7 @@ const schema = @import("schema");
 const protobuf = @import("protobuf");
 const proto_util = @import("../server/proto_util.zig");
 const value_utilities = @import("../execution/value_utilities.zig");
-
-const rls_filter = @import("../server/rls_filter.zig");
+const result_utils = @import("result_utils.zig");
 
 const logging = @import("logging");
 const log = logging.scoped("federation");
@@ -40,10 +39,6 @@ pub const FederationConfig = struct {
 
     /// Top-K merge batch size
     topk_merge_batch_size: u32 = 1000,
-
-    /// SEC-D010: Optional tenant ID to propagate in federation HELLO requests.
-    /// When set, remote nodes receive the tenant context for their own RLS evaluation.
-    tenant_id: ?[]const u8 = null,
 
     /// GAP-0184: Enable parallel scatter/gather for distributed queries
     /// When true, query fragments are executed concurrently across shards
@@ -179,22 +174,14 @@ pub const Connection = struct {
 
     /// Build HELLO request for inter-node federation authentication.
     /// GAP-0490: Reads GEODE_CLUSTER_TOKEN from environment; sends as geode-cluster user.
-    /// SEC-D010: Accepts optional tenant_id to propagate tenant context to remote nodes.
-    // CANARY: REQ=REQ-GAP-0490-FEDERATION-CLIENT-AUTH; FEATURE="FederationAuth"; ASPECT=ClientToken; STATUS=TESTED; OWNER=security; UPDATED=2026-04-01
-    // CANARY: REQ=REQ-SEC-TENANT-FED-001; FEATURE="Federation Tenant Propagation"; ASPECT=HelloRequest; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
-    fn buildFederationHelloRequest(allocator: std.mem.Allocator, tenant_id: ?[]const u8) schema.HelloRequest {
-        // Duplicate tenant_id if provided so it has the same lifetime as the HelloRequest.
-        const tid: ?[]const u8 = if (tenant_id) |t|
-            allocator.dupe(u8, t) catch null
-        else
-            null;
-
+    // CANARY: REQ=REQ-GAP-0490-FEDERATION-CLIENT-AUTH; FEATURE="FederationAuth"; ASPECT=ClientToken; STATUS=TESTED; OWNER=security; UPDATED=2026-02-18
+    fn buildFederationHelloRequest(allocator: std.mem.Allocator) schema.HelloRequest {
         const token = std.process.getenv("GEODE_CLUSTER_TOKEN") orelse {
             log.warn("GEODE_CLUSTER_TOKEN not set — federation connections may be rejected by auth-enabled nodes", &.{});
             return schema.HelloRequest{
                 .username = "",
                 .password = "",
-                .tenant_id = tid,
+                .tenant_id = null,
                 .client_name = "geode-federation",
                 .client_version = "",
                 .wanted_conformance = "",
@@ -205,7 +192,7 @@ pub const Connection = struct {
             return schema.HelloRequest{
                 .username = "",
                 .password = "",
-                .tenant_id = tid,
+                .tenant_id = null,
                 .client_name = "geode-federation",
                 .client_version = "",
                 .wanted_conformance = "",
@@ -214,7 +201,7 @@ pub const Connection = struct {
         return schema.HelloRequest{
             .username = "geode-cluster",
             .password = password_copy,
-            .tenant_id = tid,
+            .tenant_id = null,
             .client_name = "geode-federation",
             .client_version = "",
             .wanted_conformance = "",
@@ -224,7 +211,7 @@ pub const Connection = struct {
     /// GAP-0044: Initialize QUIC client and establish connection to remote federation node
     // GAP-0144: Secure TLS connections for federation
     // CANARY: REQ=REQ-FED-TLS-001; FEATURE="Federation TLS"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=distributed; UPDATED=2026-01-13
-    pub fn connect(self: *Connection, endpoint: []const u8, timeout_ms: u64, tenant_id: ?[]const u8) !void {
+    pub fn connect(self: *Connection, endpoint: []const u8, timeout_ms: u64) !void {
         // Parse endpoint like "host:port"
         const colon = std.mem.indexOfScalar(u8, endpoint, ':') orelse return error.InvalidEndpoint;
         const host = endpoint[0..colon];
@@ -262,7 +249,7 @@ pub const Connection = struct {
         // GAP-0490: Use GEODE_CLUSTER_TOKEN for inter-node authentication
         var hello_arena = std.heap.ArenaAllocator.init(self.allocator);
         defer hello_arena.deinit();
-        const hello_req = buildFederationHelloRequest(hello_arena.allocator(), tenant_id);
+        const hello_req = buildFederationHelloRequest(hello_arena.allocator());
         try writeProtoMessage(self.allocator, self.stream.?, .{ .hello = hello_req });
 
         var resp_arena = std.heap.ArenaAllocator.init(self.allocator);
@@ -281,9 +268,9 @@ pub const Connection = struct {
         self.connected = true;
     }
 
-    fn ensureConnected(self: *Connection, endpoint: []const u8, timeout_ms: u64, tenant_id: ?[]const u8) !void {
+    fn ensureConnected(self: *Connection, endpoint: []const u8, timeout_ms: u64) !void {
         if (!self.connected) {
-            try self.connect(endpoint, timeout_ms, tenant_id);
+            try self.connect(endpoint, timeout_ms);
         }
         if (self.session_id == null) return error.NotConnected;
     }
@@ -297,8 +284,7 @@ pub const Connection = struct {
         query: FederatedQuery,
     ) !QueryResults {
         const start_time = std.time.milliTimestamp();
-        // SEC-D010: Pass null tenant_id for now; FederationManager passes it via connect().
-        try self.ensureConnected(endpoint, timeout_ms, null);
+        try self.ensureConnected(endpoint, timeout_ms);
         if (self.stream == null or self.client == null or self.session_id == null) return error.NotConnected;
 
         var params = try buildParams(allocator, query.parameters);
@@ -539,139 +525,10 @@ pub const QueryResults = struct {
     }
 };
 
-fn freeBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) void {
-    for (row.cols) |val| {
-        value_utilities.freeValue(allocator, val);
-    }
-    if (row.cols.len > 0) allocator.free(row.cols);
-}
-
-fn cloneBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) !protocol.BindingRow {
-    var cols = try allocator.alloc(protocol.BindingValue, row.cols.len);
-    errdefer {
-        for (cols) |val| value_utilities.freeValue(allocator, val);
-        allocator.free(cols);
-    }
-    for (row.cols, 0..) |val, i| {
-        cols[i] = try value_utilities.duplicateValue(allocator, val);
-    }
-    return .{ .cols = cols };
-}
-
-// CANARY: REQ=REQ-SEC-RLS-FED-001; FEATURE="RLS Federation Filtering"; ASPECT=PostMergeFilter; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
-// SEC-D007: Apply label-based RLS filtering to federated query results.
-// Uses the same RLSFilterEngine as local queries but operates on BindingRow (protocol.Value)
-// rather than ExecutionResult rows. Since protocol.BindingValue = value_types.Value, the
-// label-checking logic is identical to rls_filter.rowContainsDeniedLabel.
-
-/// Filter federated QueryResults in-place by removing rows that contain nodes/edges
-/// with labels denied by the RLS engine for the given user+graph.
-/// Returns the number of rows removed.
-pub fn applyRLSToFederatedResults(
-    allocator: std.mem.Allocator,
-    results: *QueryResults,
-    engine: *rls_filter.RLSFilterEngine,
-    username: []const u8,
-    graph_name: []const u8,
-) usize {
-    // Fast path: no policies => nothing to filter.
-    if (engine.policyCount() == 0) return 0;
-
-    // Snapshot denied labels once (single lock acquisition).
-    var denied = engine.snapshotDeniedLabels(allocator, graph_name, username) catch return 0;
-    defer denied.deinit();
-
-    if (denied.count() == 0) return 0;
-
-    // We need a mutable copy of the rows slice to do swap-remove.
-    var rows = @constCast(results.rows);
-    var removed: usize = 0;
-    var i: usize = 0;
-    while (i < rows.len) {
-        if (bindingRowContainsDeniedLabel(&denied, rows[i])) {
-            freeBindingRow(allocator, rows[i]);
-
-            // Swap-remove: replace with last element.
-            const last = rows.len - 1;
-            if (i < last) {
-                rows[i] = rows[last];
-            }
-            rows = rows[0..last];
-            removed += 1;
-        } else {
-            i += 1;
-        }
-    }
-
-    results.rows = rows;
-
-    if (removed > 0) {
-        log.info("rls_federation_filter", &.{
-            Attr.string("action", "federated_rows_filtered"),
-            Attr.string("user", username),
-            Attr.string("graph", graph_name),
-        });
-    }
-
-    return removed;
-}
-
-/// Check whether a BindingRow contains any Node or Edge value with a denied label.
-fn bindingRowContainsDeniedLabel(
-    denied_labels: *const std.StringHashMap(void),
-    row: protocol.BindingRow,
-) bool {
-    for (row.cols) |val| {
-        switch (val) {
-            .Node => |node| {
-                for (node.labels) |label| {
-                    if (denied_labels.contains(label)) return true;
-                }
-            },
-            .Edge => |edge| {
-                if (denied_labels.contains(edge.label)) return true;
-            },
-            .Path => |path| {
-                for (path.nodes) |node| {
-                    for (node.labels) |label| {
-                        if (denied_labels.contains(label)) return true;
-                    }
-                }
-                for (path.edges) |edge| {
-                    if (denied_labels.contains(edge.label)) return true;
-                }
-            },
-            else => {},
-        }
-    }
-    return false;
-}
-
-fn freeSchema(allocator: std.mem.Allocator, schema_defs: []const protocol.ColumnDef) void {
-    for (schema_defs) |col| {
-        allocator.free(col.name);
-        allocator.free(col.data_type);
-    }
-    allocator.free(schema_defs);
-}
-
-fn cloneSchema(allocator: std.mem.Allocator, schema_defs: []const protocol.ColumnDef) ![]const protocol.ColumnDef {
-    var cols = try allocator.alloc(protocol.ColumnDef, schema_defs.len);
-    errdefer {
-        for (cols) |col| {
-            allocator.free(col.name);
-            allocator.free(col.data_type);
-        }
-        allocator.free(cols);
-    }
-    for (schema_defs, 0..) |col, i| {
-        cols[i] = .{
-            .name = try allocator.dupe(u8, col.name),
-            .data_type = try allocator.dupe(u8, col.data_type),
-        };
-    }
-    return cols;
-}
+const freeBindingRow = result_utils.freeBindingRow;
+const cloneBindingRow = result_utils.cloneBindingRow;
+const freeSchema = result_utils.freeSchema;
+const cloneSchema = result_utils.cloneSchema;
 
 fn cloneOrderKeys(allocator: std.mem.Allocator, keys: []const []const u8) ![]const []const u8 {
     var cloned = try allocator.alloc([]const u8, keys.len);
@@ -824,23 +681,12 @@ pub const FederationManager = struct {
         }
 
         // Merge results according to strategy
-        var merged_results = try self.mergeResults(
+        const merged_results = try self.mergeResults(
             local_results,
             remote_results,
             plan.merge_strategy,
             allocator,
         );
-
-        // SEC-D007: Apply RLS label filtering to merged federated results.
-        // This ensures that rows containing nodes/edges with denied labels are
-        // removed before caching or returning to the client.
-        if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
-            // Extract graph name from the query text (use "default" as fallback).
-            // In production, the graph context would come from the session/query metadata.
-            const rls_graph = "default";
-            const rls_user = ""; // Federation queries run as cluster user; apply all-user policies.
-            _ = applyRLSToFederatedResults(allocator, &merged_results, rls_engine, rls_user, rls_graph);
-        }
 
         // Cache results if enabled
         if (self.config.enable_cache) {
@@ -866,128 +712,43 @@ pub const FederationManager = struct {
         };
     }
 
-    /// Execute remote operations in parallel using one thread per remote node.
-    /// Thread count is bounded by the number of remote operations (typically small,
-    /// limited by max_nodes in FederationConfig).
-    // CANARY: REQ=REQ-FED-PARALLEL-001; FEATURE="ParallelRemoteOps"; ASPECT=Performance; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn executeRemoteOperations(
         self: *FederationManager,
         operations: []const RemoteOperation,
         allocator: std.mem.Allocator,
     ) ![]QueryResults {
-        const op_count = operations.len;
-        var results = try allocator.alloc(QueryResults, op_count);
-        for (results) |*r| {
-            r.* = QueryResults{
-                .rows = &.{},
-                .schema = &.{},
-                .execution_time_ms = 0,
-            };
-        }
+        var results = try allocator.alloc(QueryResults, operations.len);
+        var filled: usize = 0;
         errdefer {
-            for (results) |*res| res.deinit(allocator);
+            for (results[0..filled]) |*res| res.deinit(allocator);
             allocator.free(results);
         }
 
-        // For 0 or 1 operations, execute sequentially (no thread overhead)
-        if (op_count <= 1) {
-            for (operations, 0..) |op, i| {
-                results[i] = try self.executeSingleRemoteOp(op, allocator);
-            }
-            return results;
-        }
-
-        // Parallel execution: spawn one thread per remote operation
-        var errors = try allocator.alloc(?anyerror, op_count);
-        defer allocator.free(errors);
-        for (errors) |*e| e.* = null;
-
-        var threads = try allocator.alloc(?std.Thread, op_count);
-        defer allocator.free(threads);
-
+        // Execute operations in parallel (simplified sequential for now)
         for (operations, 0..) |op, i| {
-            const ctx = RemoteOpContext{
-                .manager = self,
-                .op = &op,
-                .allocator = allocator,
-                .result = &results[i],
-                .err = &errors[i],
-            };
-            threads[i] = std.Thread.spawn(.{}, executeRemoteOpThread, .{ctx}) catch |e| {
-                // If we can't spawn, fall back to sequential for this op
-                log.warn("Failed to spawn thread for remote op, executing sequentially", &.{
-                    Attr.string("node_id", op.node_id),
-                    Attr.string("error", @errorName(e)),
-                });
-                results[i] = self.executeSingleRemoteOp(op, allocator) catch |exec_err| {
-                    errors[i] = exec_err;
-                    continue;
-                };
-                threads[i] = null;
-                continue;
-            };
-        }
+            const node = self.remote_nodes.get(op.node_id) orelse return error.NodeNotFound;
 
-        // Join all threads
-        for (threads) |maybe_thread| {
-            if (maybe_thread) |thread| {
-                thread.join();
-            }
-        }
+            var conn = try node.connection_pool.acquire();
+            defer node.connection_pool.release(conn);
 
-        // Check for errors - report first error but return partial results
-        for (errors, 0..) |maybe_err, i| {
-            if (maybe_err) |e| {
-                log.err("Remote operation failed", &.{
-                    Attr.uint("op_index", i),
-                    Attr.string("error", @errorName(e)),
-                });
-            }
+            const query = FederatedQuery{
+                .query_text = try self.operationToGQL(op.operation, allocator),
+                .parameters = &.{},
+                .target_nodes = &[_][]const u8{op.node_id},
+                .consistency_level = .eventual,
+            };
+
+            results[i] = try conn.executeQuery(
+                allocator,
+                node.endpoint,
+                self.config.query_timeout_ms,
+                self.config.topk_merge_batch_size,
+                query,
+            );
+            filled = i + 1;
         }
 
         return results;
-    }
-
-    const RemoteOpContext = struct {
-        manager: *FederationManager,
-        op: *const RemoteOperation,
-        allocator: std.mem.Allocator,
-        result: *QueryResults,
-        err: *?anyerror,
-    };
-
-    fn executeRemoteOpThread(ctx: RemoteOpContext) void {
-        ctx.result.* = ctx.manager.executeSingleRemoteOp(ctx.op.*, ctx.allocator) catch |e| {
-            ctx.err.* = e;
-            return;
-        };
-    }
-
-    /// Execute a single remote operation (shared by both sequential and parallel paths).
-    fn executeSingleRemoteOp(
-        self: *FederationManager,
-        op: RemoteOperation,
-        allocator: std.mem.Allocator,
-    ) !QueryResults {
-        const node = self.remote_nodes.get(op.node_id) orelse return error.NodeNotFound;
-
-        var conn = try node.connection_pool.acquire();
-        defer node.connection_pool.release(conn);
-
-        const query = FederatedQuery{
-            .query_text = try self.operationToGQL(op.operation, allocator),
-            .parameters = &.{},
-            .target_nodes = &[_][]const u8{op.node_id},
-            .consistency_level = .eventual,
-        };
-
-        return try conn.executeQuery(
-            allocator,
-            node.endpoint,
-            self.config.query_timeout_ms,
-            self.config.topk_merge_batch_size,
-            query,
-        );
     }
 
     fn operationToGQL(
@@ -1929,127 +1690,4 @@ test "TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission" {
     const merged = try fm.mergeResults(local, rem[0..], .merge_sorted, ally);
     defer merged.deinit(ally);
     try std.testing.expect(!merged.ordered);
-}
-
-// ---- SEC-D007: RLS federation filtering tests ----
-// CANARY: REQ=REQ-SEC-RLS-FED-001; FEATURE="RLS Federation Filtering"; ASPECT=PostMergeFilter; STATUS=TESTED; TEST=federation_rls_filter_removes_denied_label_rows; OWNER=security; UPDATED=2026-04-01
-
-const graph_store = @import("../graph_store.zig");
-
-test "federation: RLS filter removes rows with denied label" {
-    const ally = std.testing.allocator;
-    var engine = rls_filter.RLSFilterEngine.init(ally);
-    defer engine.deinit();
-
-    // Deny the "Secret" label for all users on "default" graph.
-    try engine.addDenyPolicy("default", "Secret", "");
-
-    // Build test nodes: one with "Secret" label, one with "Public" label.
-    var secret_labels = [_][]const u8{"Secret"};
-    var secret_node = graph_store.Node{
-        .id = 1,
-        .labels = &secret_labels,
-        .properties = std.StringHashMap(graph_store.PropertyValue).init(ally),
-    };
-    var public_labels = [_][]const u8{"Public"};
-    var public_node = graph_store.Node{
-        .id = 2,
-        .labels = &public_labels,
-        .properties = std.StringHashMap(graph_store.PropertyValue).init(ally),
-    };
-
-    // Build rows: row 0 has a Secret node, row 1 has a Public node, row 2 has an int.
-    var cols0 = [_]protocol.BindingValue{.{ .Node = &secret_node }};
-    var cols1 = [_]protocol.BindingValue{.{ .Node = &public_node }};
-    var cols2 = [_]protocol.BindingValue{.{ .Int = 42 }};
-    var rows_buf = [_]protocol.BindingRow{
-        .{ .cols = &cols0 },
-        .{ .cols = &cols1 },
-        .{ .cols = &cols2 },
-    };
-
-    // QueryResults with non-owned rows (stack-allocated, no freeing needed).
-    const col_schema = &[_]protocol.ColumnDef{.{ .name = "n", .data_type = "ANY" }};
-    var results = QueryResults{
-        .rows = &rows_buf,
-        .schema = col_schema,
-        .execution_time_ms = 0,
-    };
-
-    const removed = applyRLSToFederatedResults(ally, &results, &engine, "", "default");
-
-    try std.testing.expectEqual(@as(usize, 1), removed);
-    try std.testing.expectEqual(@as(usize, 2), results.rows.len);
-
-    // Remaining rows should not contain the Secret node.
-    for (results.rows) |row| {
-        for (row.cols) |val| {
-            switch (val) {
-                .Node => |node| {
-                    for (node.labels) |label| {
-                        try std.testing.expect(!std.mem.eql(u8, label, "Secret"));
-                    }
-                },
-                else => {},
-            }
-        }
-    }
-}
-
-test "federation: RLS filter no-op when no policies" {
-    const ally = std.testing.allocator;
-    var engine = rls_filter.RLSFilterEngine.init(ally);
-    defer engine.deinit();
-
-    var cols0 = [_]protocol.BindingValue{.{ .Int = 1 }};
-    var rows_buf = [_]protocol.BindingRow{.{ .cols = &cols0 }};
-    const col_schema = &[_]protocol.ColumnDef{.{ .name = "x", .data_type = "ANY" }};
-    var results = QueryResults{
-        .rows = &rows_buf,
-        .schema = col_schema,
-        .execution_time_ms = 0,
-    };
-
-    const removed = applyRLSToFederatedResults(ally, &results, &engine, "alice", "default");
-    try std.testing.expectEqual(@as(usize, 0), removed);
-    try std.testing.expectEqual(@as(usize, 1), results.rows.len);
-}
-
-test "federation: RLS filter user-specific policy" {
-    const ally = std.testing.allocator;
-    var engine = rls_filter.RLSFilterEngine.init(ally);
-    defer engine.deinit();
-
-    // Deny "Restricted" only for user "bob"
-    try engine.addDenyPolicy("default", "Restricted", "bob");
-
-    var restricted_labels = [_][]const u8{"Restricted"};
-    var node = graph_store.Node{
-        .id = 1,
-        .labels = &restricted_labels,
-        .properties = std.StringHashMap(graph_store.PropertyValue).init(ally),
-    };
-
-    var cols0 = [_]protocol.BindingValue{.{ .Node = &node }};
-    var rows_buf = [_]protocol.BindingRow{.{ .cols = &cols0 }};
-    const col_schema = &[_]protocol.ColumnDef{.{ .name = "n", .data_type = "ANY" }};
-
-    // For alice, the row should NOT be filtered.
-    var results_alice = QueryResults{
-        .rows = &rows_buf,
-        .schema = col_schema,
-        .execution_time_ms = 0,
-    };
-    const removed_alice = applyRLSToFederatedResults(ally, &results_alice, &engine, "alice", "default");
-    try std.testing.expectEqual(@as(usize, 0), removed_alice);
-
-    // For bob, the row SHOULD be filtered.
-    var results_bob = QueryResults{
-        .rows = &rows_buf,
-        .schema = col_schema,
-        .execution_time_ms = 0,
-    };
-    const removed_bob = applyRLSToFederatedResults(ally, &results_bob, &engine, "bob", "default");
-    try std.testing.expectEqual(@as(usize, 1), removed_bob);
-    try std.testing.expectEqual(@as(usize, 0), results_bob.rows.len);
 }
