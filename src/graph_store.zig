@@ -2869,10 +2869,17 @@ pub const GraphStore = struct {
                         Attr.int("slot_id", @intCast(slot_id)),
                     });
                 }
-                const node_uuid: u64 = if (id_map) |im|
-                    if (im.nodeUuid(slot_id)) |uuid_val| @truncate(uuid_val) else slot_id
-                else
-                    slot_id;
+                const node_uuid: u64 = if (id_map) |im| blk: {
+                    if (im.nodeUuid(slot_id)) |uuid_val| {
+                        break :blk @truncate(uuid_val);
+                    } else {
+                        log.warn("IdMap lookup miss: node slot_id has no UUID mapping (stale id_map.bin?)", &.{
+                            Attr.string("graph", graph_name),
+                            Attr.int("slot_id", @intCast(slot_id)),
+                        });
+                        break :blk slot_id;
+                    }
+                } else slot_id;
 
                 const graph_name_copy = try self.allocator.dupe(u8, graph_name);
 
@@ -2921,18 +2928,32 @@ pub const GraphStore = struct {
 
                 for (out_edges) |edge_entry| {
                     // Check if this edge is already loaded (could be from another node's outgoing scan)
-                    const edge_uuid: u64 = if (id_map) |im|
-                        if (im.edgeUuid(edge_entry.edge_id)) |uuid_val| @truncate(uuid_val) else edge_entry.edge_id
-                    else
-                        edge_entry.edge_id;
+                    const edge_uuid: u64 = if (id_map) |im| blk: {
+                        if (im.edgeUuid(edge_entry.edge_id)) |uuid_val| {
+                            break :blk @truncate(uuid_val);
+                        } else {
+                            log.warn("IdMap lookup miss: edge slot_id has no UUID mapping", &.{
+                                Attr.string("graph", graph_name),
+                                Attr.int("edge_id", @intCast(edge_entry.edge_id)),
+                            });
+                            break :blk edge_entry.edge_id;
+                        }
+                    } else edge_entry.edge_id;
 
                     if (self.edges.contains(edge_uuid)) continue;
 
                     // Resolve target node UUID
-                    const target_uuid: u64 = if (id_map) |im|
-                        if (im.nodeUuid(edge_entry.neighbor)) |uuid_val| @truncate(uuid_val) else edge_entry.neighbor
-                    else
-                        edge_entry.neighbor;
+                    const target_uuid: u64 = if (id_map) |im| blk: {
+                        if (im.nodeUuid(edge_entry.neighbor)) |uuid_val| {
+                            break :blk @truncate(uuid_val);
+                        } else {
+                            log.warn("IdMap lookup miss: edge target slot_id has no UUID mapping", &.{
+                                Attr.string("graph", graph_name),
+                                Attr.int("target_slot_id", @intCast(edge_entry.neighbor)),
+                            });
+                            break :blk edge_entry.neighbor;
+                        }
+                    } else edge_entry.neighbor;
 
                     // Get edge label from label dict
                     const mg = adapter.getOrCreateGraph(graph_name) catch continue;
@@ -2979,6 +3000,14 @@ pub const GraphStore = struct {
                 }
             }
         }
+
+        // Startup diagnostic: log total loaded data so operators can verify
+        // data loaded correctly (empty counts indicate a loading failure).
+        log.info("loadFromAdapter complete", &.{
+            Attr.int("graphs", @intCast(graph_names.len)),
+            Attr.int("nodes", @intCast(self.nodes.count())),
+            Attr.int("edges", @intCast(self.edges.count())),
+        });
     }
 
     /// DEPRECATED: Legacy buffer serialization stub — adapter handles persistence.
@@ -3442,7 +3471,9 @@ pub fn deinitGlobalAdapter() void {
 // Global instance that persists across queries
 var global_store: ?GraphStore = null;
 var global_arena: ?std.heap.ArenaAllocator = null;
-var initialized = false;
+// Atomic flag: readers use .acquire to see all writes that happened before
+// the store was published; the writer uses .release after full initialization.
+var initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var last_data_dir: ?[]u8 = null;
 
 /// Mutex protecting the re-initialization path in getGlobalStore.
@@ -3692,14 +3723,54 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
         global_allocator_init = true;
     }
 
-    // Check if data directory has changed since last initialization
-    // Priority: API override > environment variable
+    // Fast path: already initialized — atomic acquire ensures we see all
+    // writes (global_store, last_data_dir) that preceded the release store.
+    // Only safe when no data-dir change is possible (the common case during
+    // query processing after startup).
+    if (initialized.load(.acquire)) {
+        // Check if data directory has changed (rare after startup).
+        const current_data_dir: ?[]u8 = if (getDataDirOverride()) |override|
+            allocator.dupe(u8, override) catch null
+        else
+            std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch null;
+        defer if (current_data_dir) |dir| allocator.free(dir);
+
+        // Compare under the init mutex to avoid racing with a concurrent reinit.
+        var needs_reinit = false;
+        g_init_mutex.lock();
+        if (current_data_dir) |curr_dir| {
+            if (last_data_dir) |last_dir| {
+                if (!std.mem.eql(u8, curr_dir, last_dir)) {
+                    needs_reinit = true;
+                }
+            } else {
+                needs_reinit = true;
+            }
+        } else if (last_data_dir != null) {
+            needs_reinit = true;
+        }
+
+        if (!needs_reinit) {
+            g_init_mutex.unlock();
+            return &global_store.?;
+        }
+        // Fall through to reinit with mutex already held.
+        // (unlock handled by defer below after re-lock check)
+        g_init_mutex.unlock();
+    }
+
+    // Slow path: acquire init mutex for first initialization or reinit.
+    g_init_mutex.lock();
+    defer g_init_mutex.unlock();
+
+    // Resolve current data dir under lock.
     const current_data_dir: ?[]u8 = if (getDataDirOverride()) |override|
         allocator.dupe(u8, override) catch null
     else
         std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch null;
     defer if (current_data_dir) |dir| allocator.free(dir);
 
+    // Double-check under lock: another thread may have completed init.
     var needs_reinit = false;
     if (current_data_dir) |curr_dir| {
         if (last_data_dir) |last_dir| {
@@ -3713,64 +3784,49 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
         needs_reinit = true;
     }
 
-    // Fast path: already initialized and no reinit needed — no lock required.
-    if (initialized and !needs_reinit) {
-        return &global_store.?;
-    }
-
-    // Slow path: acquire init mutex so concurrent threads cannot race during
-    // re-initialization (one tears down while another reads half-init state).
-    g_init_mutex.lock();
-    defer g_init_mutex.unlock();
-
-    // Double-check under lock: another thread may have completed init while
-    // we were waiting for the mutex.
-    if (initialized and !needs_reinit) {
+    if (initialized.load(.acquire) and !needs_reinit) {
         return &global_store.?;
     }
 
     // Reinitialize if data dir changed or not initialized yet
-    if (!initialized or needs_reinit) {
-        // Clean up previous instance if it exists
-        if (initialized and global_store != null) {
-            global_store.?.clearNodes(); // Clear all data before reinitializing
-            global_store.?.deinit();
-            global_store = null;
-            if (global_arena != null) {
-                global_arena.?.deinit();
-                global_arena = null;
-            }
+    // Clean up previous instance if it exists
+    if (initialized.load(.monotonic) and global_store != null) {
+        global_store.?.clearNodes();
+        global_store.?.deinit();
+        global_store = null;
+        if (global_arena != null) {
+            global_arena.?.deinit();
+            global_arena = null;
         }
-
-        // Update last_data_dir
-        // P2-3: Use global allocator instead of page_allocator
-        if (last_data_dir) |dir| {
-            global_gpa.allocator().free(dir);
-        }
-        if (current_data_dir) |curr_dir| {
-            last_data_dir = global_gpa.allocator().dupe(u8, curr_dir) catch null;
-        } else {
-            last_data_dir = null;
-        }
-
-        // Use a persistent arena allocator for the global store
-        // P2-3: Use global allocator instead of page_allocator
-        global_arena = std.heap.ArenaAllocator.init(global_gpa.allocator());
-        global_store = GraphStore.init(global_arena.?.allocator()) catch @panic("OOM: failed to initialize global graph store");
-        // Set data_dir for per-graph storage
-        if (last_data_dir) |dir| {
-            global_store.?.data_dir = dir;
-        }
-        // Load from engine-backed storage (adapter) if available
-        if (global_adapter != null) {
-            global_store.?.loadFromFile() catch |err| {
-                log.warn("Failed to load graph store from adapter (starting fresh)", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-            };
-        }
-        initialized = true;
     }
+
+    // Update last_data_dir
+    if (last_data_dir) |dir| {
+        global_gpa.allocator().free(dir);
+    }
+    if (current_data_dir) |curr_dir| {
+        last_data_dir = global_gpa.allocator().dupe(u8, curr_dir) catch null;
+    } else {
+        last_data_dir = null;
+    }
+
+    // Use a persistent arena allocator for the global store
+    global_arena = std.heap.ArenaAllocator.init(global_gpa.allocator());
+    global_store = GraphStore.init(global_arena.?.allocator()) catch @panic("OOM: failed to initialize global graph store");
+    // Set data_dir for per-graph storage
+    if (last_data_dir) |dir| {
+        global_store.?.data_dir = dir;
+    }
+    // Load from engine-backed storage (adapter) if available
+    if (global_adapter != null) {
+        global_store.?.loadFromFile() catch |err| {
+            log.warn("Failed to load graph store from adapter (starting fresh)", &.{
+                Attr.string("error", @errorName(err)),
+            });
+        };
+    }
+    // Release store: all writes above are visible to threads that see initialized=true.
+    initialized.store(true, .release);
     return &global_store.?;
 }
 
@@ -3792,21 +3848,21 @@ pub fn initGlobalStore(allocator: std.mem.Allocator, data_dir: []const u8) !*Gra
 
 /// Get the current global store without initializing (returns null if not initialized)
 pub fn getCurrentGlobalStore() ?*GraphStore {
-    if (initialized and global_store != null) {
+    if (initialized.load(.acquire) and global_store != null) {
         return &global_store.?;
     }
     return null;
 }
 
 pub fn deinitGlobalStore() void {
-    if (initialized and global_store != null) {
+    if (initialized.load(.acquire) and global_store != null) {
         global_store.?.deinit();
         global_store = null;
         if (global_arena != null) {
             global_arena.?.deinit();
             global_arena = null;
         }
-        initialized = false;
+        initialized.store(false, .release);
     }
 }
 
