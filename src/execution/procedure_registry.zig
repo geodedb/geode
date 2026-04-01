@@ -69,6 +69,17 @@ var global_tde_mutex: std.Thread.Mutex = .{};
 var global_cdc_engine: ?*cdc_mod.CDCEngine = null;
 var global_cdc_mutex: std.Thread.Mutex = .{};
 
+/// GAP-0154: Check if password contains at least one letter and one digit.
+fn passwordHasLetterAndDigit(password: []const u8) bool {
+    var has_digit = false;
+    var has_alpha = false;
+    for (password) |c| {
+        if (std.ascii.isDigit(c)) has_digit = true;
+        if (std.ascii.isAlphabetic(c)) has_alpha = true;
+    }
+    return has_digit and has_alpha;
+}
+
 // GAP-0270: Global custom role store for geode.auth.role_create/role_list
 var g_custom_roles: std.StringHashMap([]const u8) = undefined;
 var g_custom_roles_init: bool = false;
@@ -4489,8 +4500,24 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             if (args.len >= 3 and args[2].* == .String) email = args[2].String;
             if (args.len >= 4 and args[3].* == .String) role_str = args[3].String;
         }
+
+        // GAP-0154: Handle auto-generated passwords from CLI --generate-password flag
+        var generated_pw: [32]u8 = undefined;
+        var actual_password = password;
+        if (std.mem.eql(u8, password, "auto_generated_password_placeholder")) {
+            var random_bytes: [16]u8 = undefined;
+            std.crypto.random.bytes(&random_bytes);
+            generated_pw = std.fmt.bytesToHex(random_bytes, .lower);
+            actual_password = &generated_pw;
+        }
+
+        // GAP-0154: Validate password strength (min 8 chars, must contain letter and digit)
+        if (actual_password.len < 8 or !passwordHasLetterAndDigit(actual_password)) {
+            return error.PasswordPolicyViolation;
+        }
+
         const role = user_mgmt.Role.fromString(role_str) orelse .User;
-        user_mgmt.createUser(allocator, username, password, email, role, false) catch |err| {
+        user_mgmt.createUser(allocator, username, actual_password, email, role, false) catch |err| {
             log.warn("geode.auth.user_create failed", &.{Attr.string("error", @errorName(err))});
             const columns = try allocator.alloc([]const u8, 2);
             columns[0] = try allocator.dupe(u8, "status");
@@ -4502,12 +4529,17 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             rows[0] = row;
             return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
         };
-        const columns = try allocator.alloc([]const u8, 2);
+        // Include generated_password column when password was auto-generated
+        const is_generated = std.mem.eql(u8, password, "auto_generated_password_placeholder");
+        const num_cols: usize = if (is_generated) 3 else 2;
+        const columns = try allocator.alloc([]const u8, num_cols);
         columns[0] = try allocator.dupe(u8, "status");
         columns[1] = try allocator.dupe(u8, "username");
-        const row = try allocator.alloc(Value, 2);
+        if (is_generated) columns[2] = try allocator.dupe(u8, "generated_password");
+        const row = try allocator.alloc(Value, num_cols);
         row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "created {s}", .{username}) };
         row[1] = Value{ .Str = username };
+        if (is_generated) row[2] = Value{ .Str = try allocator.dupe(u8, actual_password) };
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };

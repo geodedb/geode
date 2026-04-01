@@ -154,6 +154,7 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },
         error.InvalidGuardrailConfiguration => .{ .code = "42704", .message = "Invalid CDC guardrail configuration" },
+        error.PasswordPolicyViolation => .{ .code = "22000", .message = "password does not meet policy requirements (min 8 chars, letters and numbers)" },
         error.UnknownProcedure => .{ .code = "42883", .message = "Unknown procedure" },
         error.Unauthenticated => .{ .code = "28000", .message = "Authentication required" },
         error.Unauthorized => .{ .code = "42501", .message = "Permission denied" },
