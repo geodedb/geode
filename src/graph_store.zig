@@ -2860,7 +2860,15 @@ pub const GraphStore = struct {
 
                 // Determine the node's UUID — check IdMap reverse lookup, or use slot_id as-is.
                 // Use the lower 64 bits of the u128 UUID (the unique part on little-endian).
+                // When IdMap is missing (e.g. id_map.bin deleted or first-time upgrade),
+                // fall back to identity mapping (slot_id = node_id) so data still loads.
                 const id_map = self.getIdMap(graph_name);
+                if (id_map == null and self.data_dir.len > 0) {
+                    log.warn("IdMap missing for graph — using identity mapping (slot_id as node_id)", &.{
+                        Attr.string("graph", graph_name),
+                        Attr.int("slot_id", @intCast(slot_id)),
+                    });
+                }
                 const node_uuid: u64 = if (id_map) |im|
                     if (im.nodeUuid(slot_id)) |uuid_val| @truncate(uuid_val) else slot_id
                 else
