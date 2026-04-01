@@ -79,7 +79,7 @@ test "TestCANARY_REQ_GQL_087_DownReversalSafety" {
     const cfg = migrate.MigrationConfig{ .migrations_dir = dir_path };
 
     try migrate.applyUpMigrations(alloc, cfg, &.{"002_create_person.gql"}, exec_recorder.executor());
-    try migrate.applyDownMigrations(alloc, cfg, &.{}, exec_recorder.executor());
+    try migrate.applyDownMigration(alloc, cfg, exec_recorder.executor());
 
     const rows = try migrate.statusReport(alloc, cfg);
     defer migrate.freeStatusRows(alloc, rows);

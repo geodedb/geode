@@ -50,7 +50,7 @@ pub const MigrationPlan = struct {
 
 pub const StatusRow = struct {
     version: i64 = 0,
-    name: []const u8 = "stub",
+    name: []const u8 = "",
     applied: bool = false,
     checksum_prefix: [7]u8 = "0000000".*,
 };
@@ -59,7 +59,7 @@ pub const Metrics = struct {
     applied_total: u64 = 0,
     failed_total: u64 = 0,
     drift_detected_total: u64 = 0,
-    /// Reserved for future distributed lock contention tracking. Currently never incremented.
+    /// Tracks how many times an expired lock was stolen by a new acquireLock call.
     lock_steal_attempts_total: u64 = 0,
 };
 
@@ -94,11 +94,14 @@ var baseline_override: ?u64 = null;
 
 // ------------------ Helpers ------------------
 
-/// Validates a migration name to prevent path traversal and injection attacks.
+/// Validates a migration name using an allowlist to prevent path traversal, injection,
+/// and encoding bypass attacks. Only [a-zA-Z0-9._-] characters are permitted.
 pub fn validateMigrationName(name: []const u8) MigrationError!void {
-    if (name.len == 0) return error.InvalidMigrationName;
+    if (name.len == 0 or name.len > 255) return error.InvalidMigrationName;
     for (name) |c| {
-        if (c == '/' or c == '\\' or c == 0) return error.InvalidMigrationName;
+        const ok = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
+            (c >= '0' and c <= '9') or c == '.' or c == '_' or c == '-';
+        if (!ok) return error.InvalidMigrationName;
     }
     if (std.mem.indexOf(u8, name, "..")) |_| return error.InvalidMigrationName;
 }
@@ -194,6 +197,7 @@ fn loadLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Led
     var rows = std.ArrayList(StatusRow).initCapacity(alloc, parsed.value.rows.len) catch return error.OutOfMemory;
     for (parsed.value.rows) |row| {
         const name_copy = alloc.dupe(u8, row.name) catch return error.OutOfMemory;
+        errdefer alloc.free(name_copy);
         rows.append(alloc, .{
             .version = row.version,
             .name = name_copy,
@@ -273,21 +277,28 @@ fn saveLedger(alloc: std.mem.Allocator, cfg: MigrationConfig, ledger: *const Led
     const path = ledgerPath(alloc, cfg) catch return error.OutOfMemory;
     defer alloc.free(path);
 
-    const tmp_path = std.fs.path.join(alloc, &.{ cfg.migrations_dir, ".migration_ledger.tmp" }) catch return error.OutOfMemory;
+    // Use timestamp-based suffix to avoid predictable temp file names (CWE-377).
+    var suffix_buf: [32]u8 = undefined;
+    const suffix = std.fmt.bufPrint(&suffix_buf, ".migration_ledger.{d}.tmp", .{nowMs()}) catch return error.OutOfMemory;
+    const tmp_path = std.fs.path.join(alloc, &.{ cfg.migrations_dir, suffix }) catch return error.OutOfMemory;
     defer alloc.free(tmp_path);
 
     var tmp = std.fs.cwd().createFile(tmp_path, .{ .truncate = true, .read = false }) catch return error.FileSystemError;
-    defer tmp.close();
+    errdefer tmp.close();
 
     // Serialize to a buffer manually
     var buffer = std.ArrayList(u8).initCapacity(alloc, 4096) catch return error.OutOfMemory;
     defer buffer.deinit(alloc);
     writeLedgerJson(&buffer, alloc, ledger) catch return error.OutOfMemory;
 
-    // Write to file
+    // Write to file, then close handle before rename for portability.
     tmp.writeAll(buffer.items) catch return error.FileSystemError;
     tmp.sync() catch return error.FileSystemError;
-    std.fs.cwd().rename(tmp_path, path) catch return error.FileSystemError;
+    tmp.close();
+    std.fs.cwd().rename(tmp_path, path) catch {
+        std.fs.cwd().deleteFile(tmp_path) catch {};
+        return error.FileSystemError;
+    };
 }
 
 fn versionExists(rows: []const StatusRow, v: i64) bool {
@@ -314,9 +325,10 @@ fn joinPath(alloc: std.mem.Allocator, cfg: MigrationConfig, name: []const u8) ![
 
 // ------------------ Lock management ------------------
 
-/// Protects global_lock, policy_mode, and resume_slots from concurrent access.
+/// Protects global_lock, policy_mode, resume_slots, and baseline_override from concurrent access.
 var migration_mutex: std.Thread.Mutex = .{};
 var global_lock: ?LockHandle = null;
+var lock_steal_count: u64 = 0;
 
 /// Acquires the migration lock with the given TTL in milliseconds. Thread-safe.
 pub fn acquireLock(_: std.mem.Allocator, ttl_ms: u64) MigrationError!LockHandle {
@@ -327,6 +339,7 @@ pub fn acquireLock(_: std.mem.Allocator, ttl_ms: u64) MigrationError!LockHandle 
         if (lh.expires_at_ms > now) {
             return error.AlreadyLocked;
         } else {
+            lock_steal_count += 1;
             global_lock = null;
         }
     }
@@ -424,12 +437,10 @@ pub fn applyUpMigrations(
 }
 
 /// Rolls back the single latest applied migration (version > 1).
-/// The `names` parameter is unused; this function always targets only the latest
-/// applied migration. Version 1 is treated as immutable base schema.
-pub fn applyDownMigrations(
+/// Version 1 is treated as immutable base schema.
+pub fn applyDownMigration(
     alloc: std.mem.Allocator,
     cfg: MigrationConfig,
-    _: []const []const u8,
     executor: QueryExecutor,
 ) MigrationError!void {
     var lock = try acquireLock(alloc, 300_000); // 5 minute TTL
@@ -538,7 +549,9 @@ pub fn statusReport(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationErr
 
 /// Frees all heap-allocated names and the slice returned by statusReport.
 pub fn freeStatusRows(alloc: std.mem.Allocator, rows: []StatusRow) void {
-    for (rows) |row| alloc.free(row.name);
+    for (rows) |row| {
+        if (row.name.len > 0) alloc.free(row.name);
+    }
     alloc.free(rows);
 }
 
@@ -575,6 +588,7 @@ pub fn checksumValidate(alloc: std.mem.Allocator, cfg: MigrationConfig, manifest
 
     var it = std.mem.tokenizeAny(u8, manifest, "\n\r");
     var matched: usize = 0;
+    var manifest_entries: usize = 0;
     while (it.next()) |line_raw| {
         const line = std.mem.trim(u8, line_raw, " \t");
         if (line.len == 0 or line[0] == '#') continue;
@@ -583,22 +597,27 @@ pub fn checksumValidate(alloc: std.mem.Allocator, cfg: MigrationConfig, manifest
         const chk_txt = parts.next() orelse continue;
 
         const ver = parseVersion(ver_txt) orelse continue;
+        manifest_entries += 1;
 
+        var found = false;
         for (ledger.rows.items) |row| {
             if (row.version == ver) {
                 if (!row.applied) return false;
                 if (chk_txt.len != 7 or !std.mem.eql(u8, &row.checksum_prefix, chk_txt[0..7])) return false;
                 matched += 1;
+                found = true;
                 break;
             }
         }
+        // Manifest references a version not in ledger — mismatch.
+        if (!found) return false;
     }
 
     var applied_count: usize = 0;
     for (ledger.rows.items) |row| {
         if (row.applied) applied_count += 1;
     }
-    return matched == applied_count;
+    return matched == applied_count and manifest_entries == matched;
 }
 
 /// Compares the current ledger fingerprint against the stored baseline; returns false on drift.
@@ -606,7 +625,11 @@ pub fn driftCheck(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError
     var ledger = try loadLedger(alloc, cfg);
     defer ledger.deinit();
     const current = computeFingerprint(ledger.rows.items);
-    const expected = baseline_override orelse ledger.baseline_fingerprint;
+    const expected = blk: {
+        migration_mutex.lock();
+        defer migration_mutex.unlock();
+        break :blk baseline_override orelse ledger.baseline_fingerprint;
+    };
     const ok = current == expected;
     if (!ok) {
         ledger.metrics.drift_detected_total += 1;
@@ -690,6 +713,18 @@ fn getOrInitResume(alloc: std.mem.Allocator, token: []const u8) MigrationError!*
     return &resume_slots[resume_slots_len - 1];
 }
 
+/// Frees all heap-allocated resume token strings and resets slot count. Thread-safe.
+pub fn resetResumeSlots(alloc: std.mem.Allocator) void {
+    migration_mutex.lock();
+    defer migration_mutex.unlock();
+    var i: usize = 0;
+    while (i < resume_slots_len) : (i += 1) {
+        if (resume_slots[i].token.len > 0) alloc.free(resume_slots[i].token);
+        resume_slots[i] = .{ .token = "", .total_batches = 0, .completed_batches = 0, .done = true };
+    }
+    resume_slots_len = 0;
+}
+
 /// Advances the resume state for a data migration token by one batch. Thread-safe.
 pub fn resumeDataMigration(alloc: std.mem.Allocator, token: []const u8) MigrationError!ResumeState {
     migration_mutex.lock();
@@ -708,7 +743,12 @@ pub fn resumeDataMigration(alloc: std.mem.Allocator, token: []const u8) Migratio
 pub fn metricsSnapshot(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Metrics {
     var ledger = try loadLedger(alloc, cfg);
     defer ledger.deinit();
-    return ledger.metrics;
+    migration_mutex.lock();
+    const steals = lock_steal_count;
+    migration_mutex.unlock();
+    var m = ledger.metrics;
+    m.lock_steal_attempts_total += steals;
+    return m;
 }
 
 /// Deliberately corrupts the baseline fingerprint to trigger drift detection in tests.
@@ -716,6 +756,8 @@ pub fn metricsSnapshot(alloc: std.mem.Allocator, cfg: MigrationConfig) Migration
 pub const testSimulateDrift = if (builtin.is_test) testSimulateDriftImpl else @compileError("testSimulateDrift is test-only");
 
 fn testSimulateDriftImpl() void {
+    migration_mutex.lock();
+    defer migration_mutex.unlock();
     baseline_override = (baseline_override orelse 0xcbf29ce484222325) ^ 0x9e3779b97f4a7c15;
 }
 
@@ -873,7 +915,15 @@ test "StatusRow has correct defaults" {
     const row = StatusRow{};
     try std.testing.expectEqual(@as(i64, 0), row.version);
     try std.testing.expectEqual(false, row.applied);
+    try std.testing.expectEqual(@as(usize, 0), row.name.len);
     try std.testing.expect(std.mem.eql(u8, "0000000", &row.checksum_prefix));
+}
+
+test "freeStatusRows safely handles default-initialized rows" {
+    const alloc = std.testing.allocator;
+    var rows = try alloc.alloc(StatusRow, 1);
+    rows[0] = StatusRow{}; // default name is "" — must not crash on free
+    freeStatusRows(alloc, rows);
 }
 
 test "MigrationConfig has sensible defaults" {
@@ -894,6 +944,35 @@ test "LockHandle has correct defaults" {
     const handle = LockHandle{};
     try std.testing.expectEqual(@as(u64, 0), handle.id);
     try std.testing.expect(std.mem.eql(u8, "local", handle.owner));
+}
+
+test "acquireLock increments lock_steal_count on expired lock" {
+    // Reset global state for this test.
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+
+    // Acquire with a 1ms TTL, then sleep to let it expire.
+    var h = try acquireLock(std.testing.allocator, 1);
+    std.Thread.sleep(2 * std.time.ns_per_ms);
+
+    // Second acquire should steal the expired lock.
+    var h2 = try acquireLock(std.testing.allocator, 60_000);
+
+    migration_mutex.lock();
+    const steals = lock_steal_count;
+    migration_mutex.unlock();
+    try std.testing.expect(steals >= 1);
+
+    releaseLock(&h2) catch {};
+    releaseLock(&h) catch {}; // stale handle, expected to fail
+
+    // Cleanup.
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
 }
 
 test "MigrationPlan has empty defaults" {
@@ -932,6 +1011,24 @@ test "validateMigrationName rejects path traversal" {
     // Valid names should pass
     try validateMigrationName("001_init.gql");
     try validateMigrationName("002_add_users.gql");
+}
+
+test "validateMigrationName rejects special and unicode characters" {
+    try std.testing.expectError(error.InvalidMigrationName, validateMigrationName("name with spaces.gql"));
+    try std.testing.expectError(error.InvalidMigrationName, validateMigrationName("name;drop.gql"));
+    try std.testing.expectError(error.InvalidMigrationName, validateMigrationName("name'inject.gql"));
+    try std.testing.expectError(error.InvalidMigrationName, validateMigrationName("name$var.gql"));
+    try std.testing.expectError(error.InvalidMigrationName, validateMigrationName("\xc3\xa9")); // UTF-8 é
+    try std.testing.expectError(error.InvalidMigrationName, validateMigrationName("name\x7f.gql")); // DEL
+    try std.testing.expectError(error.InvalidMigrationName, validateMigrationName("name\x01.gql")); // control char
+}
+
+test "validateMigrationName rejects names exceeding 255 bytes" {
+    const long_name = "a" ** 256;
+    try std.testing.expectError(error.InvalidMigrationName, validateMigrationName(long_name));
+    // 255 bytes should be fine
+    const max_name = "a" ** 255;
+    try validateMigrationName(max_name);
 }
 
 test "appendJsonEscaped escapes special characters" {
