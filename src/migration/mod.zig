@@ -92,12 +92,23 @@ const LedgerFile = struct {
 
 var baseline_override: ?u64 = null;
 
+// Named constants
+const fnv_offset_basis: u64 = 0xcbf29ce484222325;
+const fnv_prime: u64 = 0x100000001b3;
+const max_ledger_bytes: usize = 4 * 1024 * 1024;
+const max_script_bytes: usize = 8 * 1024 * 1024;
+const default_lock_ttl_ms: u64 = 300_000; // 5 minutes
+const max_migration_name_len: usize = 255;
+const max_version_digits: usize = 17;
+const default_resume_batches: u32 = 5;
+const max_resume_slots: usize = 8;
+
 // ------------------ Helpers ------------------
 
 /// Validates a migration name using an allowlist to prevent path traversal, injection,
 /// and encoding bypass attacks. Only [a-zA-Z0-9._-] characters are permitted.
 pub fn validateMigrationName(name: []const u8) MigrationError!void {
-    if (name.len == 0 or name.len > 255) return error.InvalidMigrationName;
+    if (name.len == 0 or name.len > max_migration_name_len) return error.InvalidMigrationName;
     for (name) |c| {
         const ok = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
             (c >= '0' and c <= '9') or c == '.' or c == '_' or c == '-';
@@ -114,7 +125,7 @@ fn parseVersion(name: []const u8) ?i64 {
     var i: usize = 0;
     var value: i64 = 0;
     while (i < name.len and name[i] >= '0' and name[i] <= '9') : (i += 1) {
-        if (i >= 17) return null;
+        if (i >= max_version_digits) return null;
         value = value * 10 + @as(i64, name[i] - '0');
     }
     if (i == 0) return null;
@@ -122,10 +133,10 @@ fn parseVersion(name: []const u8) ?i64 {
 }
 
 fn checksumPrefix(bytes: []const u8) [7]u8 {
-    var h: u64 = 0xcbf29ce484222325;
+    var h: u64 = fnv_offset_basis;
     for (bytes) |b| {
         h ^= b;
-        h *%= 0x100000001b3;
+        h *%= fnv_prime;
     }
     var hex: [16]u8 = undefined;
     var idx: usize = hex.len;
@@ -141,19 +152,19 @@ fn checksumPrefix(bytes: []const u8) [7]u8 {
 }
 
 fn computeFingerprint(rows: []const StatusRow) u64 {
-    var h: u64 = 0xcbf29ce484222325;
+    var h: u64 = fnv_offset_basis;
     for (rows) |row| {
         if (!row.applied) continue;
         var vtmp: u64 = @bitCast(row.version);
         inline for (0..8) |_| {
             const b: u8 = @intCast(vtmp & 0xFF);
             h ^= b;
-            h *%= 0x100000001b3;
+            h *%= fnv_prime;
             vtmp >>= 8;
         }
         for (row.checksum_prefix) |b| {
             h ^= b;
-            h *%= 0x100000001b3;
+            h *%= fnv_prime;
         }
     }
     return h;
@@ -186,7 +197,7 @@ fn loadLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Led
     };
     defer file.close();
 
-    const data = file.readToEndAlloc(alloc, 4 * 1024 * 1024) catch return error.OutOfMemory;
+    const data = file.readToEndAlloc(alloc, max_ledger_bytes) catch return error.OutOfMemory;
     defer alloc.free(data);
 
     var parsed = std.json.parseFromSlice(LedgerFile, alloc, data, .{ .duplicate_field_behavior = .@"error" }) catch {
@@ -386,7 +397,7 @@ pub fn applyUpMigrations(
     names: []const []const u8,
     executor: QueryExecutor,
 ) MigrationError!void {
-    var lock = try acquireLock(alloc, 300_000); // 5 minute TTL
+    var lock = try acquireLock(alloc, default_lock_ttl_ms); // 5 minute TTL
     defer releaseLock(&lock) catch {};
     var ledger = try loadLedger(alloc, cfg);
     defer ledger.deinit();
@@ -416,7 +427,7 @@ pub fn applyUpMigrations(
     for (staged.items) |entry| {
         const path = joinPath(alloc, cfg, entry.name) catch return error.OutOfMemory;
         defer alloc.free(path);
-        const script = std.fs.cwd().readFileAlloc(alloc, path, 8 * 1024 * 1024) catch return error.MigrationFileMissing;
+        const script = std.fs.cwd().readFileAlloc(alloc, path, max_script_bytes) catch return error.MigrationFileMissing;
         defer alloc.free(script);
 
         executor.execFn(executor.context, script) catch {
@@ -450,7 +461,7 @@ pub fn applyDownMigration(
     cfg: MigrationConfig,
     executor: QueryExecutor,
 ) MigrationError!void {
-    var lock = try acquireLock(alloc, 300_000); // 5 minute TTL
+    var lock = try acquireLock(alloc, default_lock_ttl_ms); // 5 minute TTL
     defer releaseLock(&lock) catch {};
     var ledger = try loadLedger(alloc, cfg);
     defer ledger.deinit();
@@ -463,7 +474,7 @@ pub fn applyDownMigration(
     const path = joinPath(alloc, cfg, down_name) catch return error.OutOfMemory;
     defer alloc.free(path);
 
-    const script = std.fs.cwd().readFileAlloc(alloc, path, 8 * 1024 * 1024) catch return error.DownScriptMissing;
+    const script = std.fs.cwd().readFileAlloc(alloc, path, max_script_bytes) catch return error.DownScriptMissing;
     defer alloc.free(script);
 
     executor.execFn(executor.context, script) catch {
@@ -640,7 +651,9 @@ pub fn driftCheck(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError
     const ok = current == expected;
     if (!ok) {
         ledger.metrics.drift_detected_total += 1;
-        saveLedger(alloc, cfg, &ledger) catch {}; // best-effort metrics save
+        saveLedger(alloc, cfg, &ledger) catch |err| {
+            std.log.warn("migration: failed to persist drift metric: {}", .{err});
+        };
     }
     return ok;
 }
@@ -707,7 +720,7 @@ pub fn freePlan(alloc: std.mem.Allocator, plan: *const MigrationPlan) void {
 
 // ------------------ Resume Token Data Migration ------------------
 
-var resume_slots: [8]ResumeState = [_]ResumeState{.{ .token = "", .total_batches = 0, .completed_batches = 0, .done = true }} ** 8;
+var resume_slots: [max_resume_slots]ResumeState = [_]ResumeState{.{ .token = "", .total_batches = 0, .completed_batches = 0, .done = true }} ** max_resume_slots;
 var resume_slots_len: usize = 0;
 
 fn getOrInitResume(alloc: std.mem.Allocator, token: []const u8) MigrationError!*ResumeState {
@@ -718,7 +731,7 @@ fn getOrInitResume(alloc: std.mem.Allocator, token: []const u8) MigrationError!*
     }
     if (resume_slots_len == resume_slots.len) return error.ResumeSlotsFull;
     const token_copy = alloc.dupe(u8, token) catch return error.OutOfMemory;
-    resume_slots[resume_slots_len] = .{ .token = token_copy, .total_batches = 5, .completed_batches = 0, .done = false };
+    resume_slots[resume_slots_len] = .{ .token = token_copy, .total_batches = default_resume_batches, .completed_batches = 0, .done = false };
     resume_slots_len += 1;
     return &resume_slots[resume_slots_len - 1];
 }
@@ -768,7 +781,7 @@ pub const testSimulateDrift = if (builtin.is_test) testSimulateDriftImpl else @c
 fn testSimulateDriftImpl() void {
     migration_mutex.lock();
     defer migration_mutex.unlock();
-    baseline_override = (baseline_override orelse 0xcbf29ce484222325) ^ 0x9e3779b97f4a7c15;
+    baseline_override = (baseline_override orelse fnv_offset_basis) ^ 0x9e3779b97f4a7c15;
 }
 
 // ------------------ CANARY markers ------------------
