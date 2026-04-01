@@ -180,6 +180,11 @@ pub const ClusterCoordinator = struct {
     network_transport: NetworkTransport,
     health_monitor: HealthMonitor,
     message_callback: ?*const fn (*ClusterCoordinator, *const Message) void = null,
+    shutdown_flag: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    raft_thread: ?std.Thread = null,
+    network_thread: ?std.Thread = null,
+    health_thread: ?std.Thread = null,
+    replication_thread: ?std.Thread = null,
 
     // Helper to access replication map
     fn replication_map(self: *ClusterCoordinator) std.AutoHashMap(u64, []u64) {
@@ -404,24 +409,35 @@ pub const ClusterCoordinator = struct {
 
     pub fn start(self: *ClusterCoordinator) !void {
         // Start Raft consensus
-        const raft_thread = try std.Thread.spawn(.{}, raftLoop, .{self});
-        defer raft_thread.join();
+        self.raft_thread = try std.Thread.spawn(.{}, raftLoop, .{self});
 
         // Start network transport
-        const network_thread = try std.Thread.spawn(.{}, networkLoop, .{self});
-        defer network_thread.join();
+        self.network_thread = try std.Thread.spawn(.{}, networkLoop, .{self});
 
         // Start health monitoring
-        const health_thread = try std.Thread.spawn(.{}, healthLoop, .{self});
-        defer health_thread.join();
+        self.health_thread = try std.Thread.spawn(.{}, healthLoop, .{self});
 
         // Start replication
-        const replication_thread = try std.Thread.spawn(.{}, replicationLoop, .{self});
-        defer replication_thread.join();
+        self.replication_thread = try std.Thread.spawn(.{}, replicationLoop, .{self});
+    }
+
+    pub fn stop(self: *ClusterCoordinator) void {
+        self.shutdown_flag.store(true, .release);
+    }
+
+    pub fn join(self: *ClusterCoordinator) void {
+        if (self.raft_thread) |t| t.join();
+        self.raft_thread = null;
+        if (self.network_thread) |t| t.join();
+        self.network_thread = null;
+        if (self.health_thread) |t| t.join();
+        self.health_thread = null;
+        if (self.replication_thread) |t| t.join();
+        self.replication_thread = null;
     }
 
     fn raftLoop(self: *ClusterCoordinator) !void {
-        while (true) {
+        while (!self.shutdown_flag.load(.acquire)) {
             try self.raft.tick();
             std.time.sleep(10 * std.time.ns_per_ms);
         }
@@ -435,7 +451,7 @@ pub const ClusterCoordinator = struct {
             try self.network_transport.quic_server.?.listen();
         }
 
-        while (true) {
+        while (!self.shutdown_flag.load(.acquire)) {
             const conn = try self.network_transport.quic_server.?.accept();
             const t = try std.Thread.spawn(.{}, handleQuicConnection, .{ self, conn });
             t.detach();
@@ -443,7 +459,7 @@ pub const ClusterCoordinator = struct {
     }
 
     fn healthLoop(self: *ClusterCoordinator) !void {
-        while (true) {
+        while (!self.shutdown_flag.load(.acquire)) {
             for (self.cluster_state.nodes.items) |*node| {
                 if (node.id == self.node_id) continue;
 
@@ -460,7 +476,7 @@ pub const ClusterCoordinator = struct {
     }
 
     fn replicationLoop(self: *ClusterCoordinator) !void {
-        while (true) {
+        while (!self.shutdown_flag.load(.acquire)) {
             if (self.raft.state == .leader) {
                 try self.performReplication();
             }
@@ -530,14 +546,16 @@ pub const ClusterCoordinator = struct {
             }
 
             // Remove from replica list
+            const old_replicas = shard.replica_nodes;
             const new_replicas = try self.allocator.alloc(u64, shard.replica_nodes.len - 1);
             var idx: usize = 0;
-            for (shard.replica_nodes) |replica| {
+            for (old_replicas) |replica| {
                 if (replica != failed_node) {
                     new_replicas[idx] = replica;
                     idx += 1;
                 }
             }
+            self.allocator.free(old_replicas);
             shard.replica_nodes = new_replicas;
         }
 
@@ -578,14 +596,16 @@ pub const ClusterCoordinator = struct {
         shard.primary_node = best_replica;
 
         // Remove from replica list
+        const old_replicas = shard.replica_nodes;
         const new_replicas = try self.allocator.alloc(u64, shard.replica_nodes.len - 1);
         var idx: usize = 0;
-        for (shard.replica_nodes) |replica| {
+        for (old_replicas) |replica| {
             if (replica != best_replica) {
                 new_replicas[idx] = replica;
                 idx += 1;
             }
         }
+        self.allocator.free(old_replicas);
         shard.replica_nodes = new_replicas;
     }
 
@@ -596,6 +616,7 @@ pub const ClusterCoordinator = struct {
             if (current_replicas < self.replication_factor) {
                 const needed = self.replication_factor - current_replicas;
                 const available_nodes = try self.getAvailableNodes(shard);
+                defer self.allocator.free(available_nodes);
 
                 if (available_nodes.len < needed) {
                     log.warn("Insufficient nodes to maintain replication factor for shard", &.{
@@ -606,7 +627,7 @@ pub const ClusterCoordinator = struct {
 
                 // Add new replicas
                 const new_replicas = try self.allocator.alloc(u64, shard.replica_nodes.len + needed);
-                std.mem.copy(u64, new_replicas, shard.replica_nodes);
+                @memcpy(new_replicas[0..shard.replica_nodes.len], shard.replica_nodes);
 
                 for (0..needed) |i| {
                     new_replicas[shard.replica_nodes.len + i] = available_nodes[i];
@@ -1020,6 +1041,7 @@ pub const ClusterCoordinator = struct {
 
         // Distributed write using 2PC
         const affected_shards = try self.determineAffectedShards(msg);
+        defer self.allocator.free(affected_shards);
 
         // Generate transaction ID
         const xid = try self.generateTransactionId();
