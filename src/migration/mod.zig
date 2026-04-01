@@ -140,7 +140,7 @@ fn computeFingerprint(rows: []const StatusRow) u64 {
     var h: u64 = 0xcbf29ce484222325;
     for (rows) |row| {
         if (!row.applied) continue;
-        var vtmp: u64 = @intCast(@as(i64, row.version));
+        var vtmp: u64 = @bitCast(row.version);
         inline for (0..8) |_| {
             const b: u8 = @intCast(vtmp & 0xFF);
             h ^= b;
@@ -296,6 +296,8 @@ fn versionExists(rows: []const StatusRow, v: i64) bool {
     return false;
 }
 
+/// Returns the latest applied migration, excluding version <= 1 (base schema).
+/// Version 1 is treated as the immutable initial migration and cannot be rolled back.
 fn latestApplied(rows: []const StatusRow) ?StatusRow {
     var best: ?StatusRow = null;
     for (rows) |r| {
@@ -405,6 +407,9 @@ pub fn applyUpMigrations(
     }
 }
 
+/// Rolls back the single latest applied migration (version > 1).
+/// The `names` parameter is unused; this function always targets only the latest
+/// applied migration. Version 1 is treated as immutable base schema.
 pub fn applyDownMigrations(
     alloc: std.mem.Allocator,
     cfg: MigrationConfig,
@@ -464,7 +469,7 @@ pub fn statusReport(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationErr
     }
 
     var dir_iter = dir.iterate();
-    while (dir_iter.next() catch null) |entry| {
+    while (dir_iter.next() catch return error.FileSystemError) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".gql") and !std.mem.endsWith(u8, entry.name, ".down.gql")) {
             const name_copy = alloc.dupe(u8, entry.name) catch return error.OutOfMemory;
             migration_files.append(alloc, name_copy) catch {
@@ -482,12 +487,7 @@ pub fn statusReport(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationErr
     }
 
     for (migration_files.items) |filename| {
-        // Extract version from filename (e.g., "001_foo.gql" -> 1)
-        var version: i64 = 0;
-        var j: usize = 0;
-        while (j < filename.len and filename[j] >= '0' and filename[j] <= '9') : (j += 1) {
-            version = version * 10 + @as(i64, filename[j] - '0');
-        }
+        const version = parseVersion(filename) orelse 0;
 
         // Check if this migration is in the ledger as applied
         var applied = false;
@@ -555,20 +555,12 @@ pub fn checksumValidate(alloc: std.mem.Allocator, cfg: MigrationConfig, manifest
         const ver_txt = parts.next() orelse continue;
         const chk_txt = parts.next() orelse continue;
 
-        var ver: i64 = 0;
-        for (ver_txt) |c| {
-            if (c < '0' or c > '9') {
-                ver = -1;
-                break;
-            }
-            ver = ver * 10 + @as(i64, c - '0');
-        }
-        if (ver <= 0) continue;
+        const ver = parseVersion(ver_txt) orelse continue;
 
         for (ledger.rows.items) |row| {
             if (row.version == ver) {
                 if (!row.applied) return false;
-                if (!std.mem.startsWith(u8, &row.checksum_prefix, chk_txt)) return false;
+                if (chk_txt.len != 7 or !std.mem.eql(u8, &row.checksum_prefix, chk_txt[0..7])) return false;
                 matched += 1;
                 break;
             }
@@ -590,7 +582,7 @@ pub fn driftCheck(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError
     const ok = current == expected;
     if (!ok) {
         ledger.metrics.drift_detected_total += 1;
-        try saveLedger(alloc, cfg, &ledger);
+        saveLedger(alloc, cfg, &ledger) catch {}; // best-effort metrics save
     }
     return ok;
 }
@@ -607,7 +599,7 @@ pub fn planDryRun(alloc: std.mem.Allocator, cfg: MigrationConfig, names: []const
     errdefer pending_down.deinit(alloc);
 
     for (names) |nm| {
-        const ver = parseVersion(nm) orelse continue;
+        const ver = parseVersion(nm) orelse return error.InvalidMigrationName;
         if (!versionExists(ledger.rows.items, ver)) {
             const name_copy = alloc.dupe(u8, nm) catch return error.OutOfMemory;
             pending_up.append(alloc, name_copy) catch {
