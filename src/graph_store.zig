@@ -3825,13 +3825,16 @@ pub fn popActiveQueryReadStore(previous: ?*GraphStore) void {
 }
 
 pub const QueryReadSession = struct {
-    arena: std.heap.ArenaAllocator,
+    owner_allocator: std.mem.Allocator,
+    arena: *std.heap.ArenaAllocator,
     snapshot: GraphStore,
 
     pub fn initIfAvailable(allocator: std.mem.Allocator, source_store: *GraphStore) !?QueryReadSession {
         if (global_adapter == null) return null;
 
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = std.heap.ArenaAllocator.init(allocator);
         errdefer arena.deinit();
 
         var snapshot = try GraphStore.initWithTenant(
@@ -3845,6 +3848,7 @@ pub const QueryReadSession = struct {
         try snapshot.loadFromFile();
 
         return .{
+            .owner_allocator = allocator,
             .arena = arena,
             .snapshot = snapshot,
         };
@@ -3853,6 +3857,7 @@ pub const QueryReadSession = struct {
     pub fn deinit(self: *QueryReadSession) void {
         self.snapshot.deinit();
         self.arena.deinit();
+        self.owner_allocator.destroy(self.arena);
     }
 
     pub fn store(self: *QueryReadSession) *GraphStore {

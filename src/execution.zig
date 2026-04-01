@@ -156,6 +156,7 @@ pub const executeReturnClauseWithParams = return_and_sorting.executeReturnClause
 
 // Re-export query execution functions for backward compatibility (M1 Phase 11 extraction)
 pub const executeQueryChain = query_execution.executeQueryChain;
+pub const executeLegacyQueryWithResolvedParams = query_execution.executeLegacyQueryWithResolvedParams;
 pub const executeQueryWithBindingsImpl = query_execution.executeQueryWithBindingsImpl;
 pub const executeQueryWithContext = query_execution.executeQueryWithContext;
 

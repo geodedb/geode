@@ -3316,6 +3316,12 @@ REQ-PLANNER-EXEC-001,PlannedReadRuntime,Execution,TESTED,,,engine,2026-04-01,tes
 REQ-PLANNER-EXEC-002,PlannedReadRuntime,ExplainProfile,TESTED,,,engine,2026-04-01,tests/unit_match_executor.zig
 REQ-PLANNER-EXEC-003,PlannedReadRuntime,WithAggregation,TESTED,,,engine,2026-04-01,tests/unit_match_executor.zig
 REQ-PLANNER-EXEC-004,PlannedReadRuntime,WithDistinct,TESTED,,,engine,2026-04-01,tests/unit_match_executor.zig
+REQ-PLANNER-EXEC-005,PlannedReadRuntime,OptionalMatchDelegation,TESTED,,,engine,2026-04-01,tests/unit_match_executor.zig
+REQ-PLANNER-EXEC-006,PlannedReadRuntime,VarLenDelegation,TESTED,,,engine,2026-04-01,tests/unit_match_executor.zig
+REQ-PLANNER-EXEC-007,PlannedReadRuntime,UnwindDelegation,TESTED,,,engine,2026-04-01,tests/unit_match_executor.zig
+REQ-PLANNER-EXEC-008,PlannedReadRuntime,QueryChainDelegation,TESTED,,,engine,2026-04-01,tests/unit_match_executor.zig
+REQ-PLANNER-EXEC-009,PlannedReadRuntime,ExplainOptionalMatchPlan,TESTED,,,engine,2026-04-01,tests/unit_match_executor.zig
+REQ-PLANNER-EXEC-010,PlannedReadRuntime,ProfileLegacyTrace,TESTED,,,engine,2026-04-01,tests/unit_match_executor.zig
 REQ-PRNG-CRYPTO-001,Cryptographic PRNG,Security,TESTED,,,security,2026-01-13,src/security/kms_remote.zig
 REQ-PROMETHEUS-001,Prometheus Metrics Endpoint,Metrics,TESTED,,,server,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-PROMETHEUS-WIRE-001,Prometheus Metrics Endpoint,HTTPServer,TESTED,,,monitoring,2026-01-14,src/monitoring/metrics_server.zig

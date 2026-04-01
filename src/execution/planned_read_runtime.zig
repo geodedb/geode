@@ -21,6 +21,22 @@ pub const OpKind = enum {
     ExpandOut,
     ExpandIn,
     ExpandEither,
+    OptionalMatch,
+    VarLengthExpand,
+    ShortestPath,
+    PathModeExpand,
+    PathCapture,
+    CallProcedure,
+    CallSubquery,
+    Create,
+    Merge,
+    Unwind,
+    Set,
+    Remove,
+    Delete,
+    RecursiveCTE,
+    QueryChain,
+    LegacyExecute,
     Filter,
     Aggregate,
     Project,
@@ -44,11 +60,17 @@ pub const HopBinding = struct {
     right_index: usize,
 };
 
+const ExecutionMode = enum {
+    storage_native,
+    legacy,
+};
+
 pub const Plan = struct {
     graph_name: []const u8,
     binding_names: [][]const u8,
     binding_kinds: []BindingKind,
     ops: []PlanOp,
+    execution_mode: ExecutionMode = .legacy,
     root_index: ?usize = null,
     hops: []HopBinding,
 
@@ -106,8 +128,6 @@ const PathEdge = struct {
 };
 
 pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, context: ExecutionContext) !?Plan {
-    if (!isSupportedQuery(q)) return null;
-
     var binding_names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
     errdefer {
         for (binding_names.items) |name| allocator.free(name);
@@ -122,67 +142,77 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
 
     const graph_name = try allocator.dupe(u8, resolveGraphName(context));
     errdefer allocator.free(graph_name);
+    const execution_mode: ExecutionMode = if (isStorageNativeQuery(q)) .storage_native else .legacy;
 
     var root_index: ?usize = null;
-    if (q.match.chains.len == 0) {
-        try ops.append(allocator, .{ .kind = .ConstProjection, .est_rows = 1 });
-    } else {
-        const chain = q.match.chains[0];
-        const first_node = if (chain.head) |head| head else chain.hops[0].left;
-        root_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, first_node.name, "node", 0);
-        try ops.append(allocator, .{
-            .kind = if (first_node.labels.len > 0) .LabelScan else .AllNodesScan,
-            .est_rows = try estimateScanRows(allocator, graph_name, first_node),
-        });
-
-        for (chain.hops, 0..) |hop, hop_idx| {
-            try hop_bindings.append(allocator, .{
-                .rel_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .edge, hop.rel.name, "edge", hop_idx),
-                .right_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, hop.right.name, "node", hop_idx + 1),
-            });
+    if (execution_mode == .storage_native) {
+        if (q.match.chains.len == 0) {
+            try ops.append(allocator, .{ .kind = .ConstProjection, .est_rows = 1 });
+        } else {
+            const chain = q.match.chains[0];
+            const first_node = if (chain.head) |head| head else chain.hops[0].left;
+            root_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, first_node.name, "node", 0);
             try ops.append(allocator, .{
-                .kind = switch (hop.rel.dir) {
-                    .right => .ExpandOut,
-                    .left => .ExpandIn,
-                    .undirected => .ExpandEither,
-                },
+                .kind = if (first_node.labels.len > 0) .LabelScan else .AllNodesScan,
+                .est_rows = try estimateScanRows(allocator, graph_name, first_node),
             });
+
+            for (chain.hops, 0..) |hop, hop_idx| {
+                try hop_bindings.append(allocator, .{
+                    .rel_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .edge, hop.rel.name, "edge", hop_idx),
+                    .right_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, hop.right.name, "node", hop_idx + 1),
+                });
+                try ops.append(allocator, .{
+                    .kind = switch (hop.rel.dir) {
+                        .right => .ExpandOut,
+                        .left => .ExpandIn,
+                        .undirected => .ExpandEither,
+                    },
+                });
+            }
+        }
+    } else {
+        try appendLegacyPlanOps(allocator, &ops, q);
+        if (ops.items.len == 0) {
+            try ops.append(allocator, .{ .kind = .LegacyExecute });
         }
     }
 
-    if (hasPreProjectionFilter(q)) {
-        try ops.append(allocator, .{ .kind = .Filter });
-    }
-    if (q.with_clause) |with_clause| {
-        try ops.append(allocator, .{
-            .kind = if (q.group_by != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project,
-        });
-        if (with_clause.distinct) {
-            try ops.append(allocator, .{ .kind = .Distinct });
-        }
-        if (with_clause.order_by != null) {
-            try ops.append(allocator, .{ .kind = .Sort });
-        }
-        if (with_clause.limit != null or with_clause.offset != null or with_clause.limit_param != null or with_clause.offset_param != null) {
-            try ops.append(allocator, .{ .kind = .Limit });
-        }
-        if (q.where_clause != null) {
+    if (execution_mode == .storage_native) {
+        if (hasPreProjectionFilter(q)) {
             try ops.append(allocator, .{ .kind = .Filter });
         }
-    }
+        if (q.with_clause) |with_clause| {
+            try ops.append(allocator, .{
+                .kind = if (q.group_by != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project,
+            });
+            if (with_clause.distinct) {
+                try ops.append(allocator, .{ .kind = .Distinct });
+            }
+            if (with_clause.order_by != null) {
+                try ops.append(allocator, .{ .kind = .Sort });
+            }
+            if (with_clause.limit != null or with_clause.offset != null or with_clause.limit_param != null or with_clause.offset_param != null) {
+                try ops.append(allocator, .{ .kind = .Limit });
+            }
+            if (q.where_clause != null) {
+                try ops.append(allocator, .{ .kind = .Filter });
+            }
+        }
 
-    if (needsFinalProjection(q)) {
-        try ops.append(allocator, .{
-            .kind = if ((q.with_clause == null and q.group_by != null) or hasAggregationItems(q.ret.items)) .Aggregate else .Project,
-        });
-        if (q.ret.distinct) {
-            try ops.append(allocator, .{ .kind = .Distinct });
-        }
-        if (q.order_by != null) {
-            try ops.append(allocator, .{ .kind = .Sort });
-        }
-        if (q.limit != null or q.offset != null or q.limit_param != null or q.offset_param != null) {
-            try ops.append(allocator, .{ .kind = .Limit });
+        if (needsFinalProjection(q)) {
+            try ops.append(allocator, .{
+                .kind = if ((q.with_clause == null and q.group_by != null) or hasAggregationItems(q.ret.items)) .Aggregate else .Project,
+            });
+            if (q.ret.distinct) {
+                try ops.append(allocator, .{ .kind = .Distinct });
+            }
+            if (q.order_by != null) {
+                try ops.append(allocator, .{ .kind = .Sort });
+            }
+            if (q.limit != null or q.offset != null or q.limit_param != null or q.offset_param != null) {
+                try ops.append(allocator, .{ .kind = .Limit });
+            }
         }
     }
 
@@ -191,6 +221,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
         .binding_names = try binding_names.toOwnedSlice(allocator),
         .binding_kinds = try binding_kinds.toOwnedSlice(allocator),
         .ops = try ops.toOwnedSlice(allocator),
+        .execution_mode = execution_mode,
         .root_index = root_index,
         .hops = try hop_bindings.toOwnedSlice(allocator),
     };
@@ -203,9 +234,16 @@ pub fn executeIfSupported(
     param_names: []const []const u8,
     param_values: []const Value,
 ) !?ExecutionResult {
-    var profiled = (try executeProfiledIfSupported(allocator, q, context, param_names, param_values, true)) orelse return null;
-    defer profiled.deinitMetadata(allocator);
-    return profiled.result;
+    if (!isStorageNativeQuery(q) or (q.match.chains.len > 0 and graph_store.getGlobalAdapter() == null)) {
+        return null;
+    }
+
+    if (try executeProfiledIfSupported(allocator, q, context, param_names, param_values, false)) |profiled| {
+        var owned_profiled = profiled;
+        defer owned_profiled.deinitMetadata(allocator);
+        return owned_profiled.result;
+    }
+    return null;
 }
 
 pub fn executeProfiledIfSupported(
@@ -216,12 +254,12 @@ pub fn executeProfiledIfSupported(
     param_values: []const Value,
     apply_window: bool,
 ) !?ProfiledExecution {
-    if (q.match.chains.len > 0 and graph_store.getGlobalAdapter() == null) {
-        return null;
-    }
-
     var plan = (try buildPlanIfSupported(allocator, q, context)) orelse return null;
     errdefer plan.deinit(allocator);
+
+    if (plan.execution_mode != .storage_native or (q.match.chains.len > 0 and graph_store.getGlobalAdapter() == null)) {
+        return try executeLegacyProfiled(allocator, q, context, param_names, param_values, plan);
+    }
 
     var trace = RuntimeTrace{
         .ops = try allocator.alloc(RuntimeOp, plan.ops.len),
@@ -369,6 +407,40 @@ pub fn executeProfiledIfSupported(
     };
 }
 
+fn executeLegacyProfiled(
+    allocator: std.mem.Allocator,
+    q: *const ast.Query,
+    context: ExecutionContext,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    plan: Plan,
+) !ProfiledExecution {
+    var trace = RuntimeTrace{
+        .ops = try allocator.alloc(RuntimeOp, plan.ops.len),
+    };
+    errdefer trace.deinit(allocator);
+    for (plan.ops, 0..) |op, idx| {
+        trace.ops[idx] = .{ .kind = op.kind };
+    }
+
+    const start_ns = std.time.nanoTimestamp();
+    var result = try execution.executeLegacyQueryWithResolvedParams(allocator, q.*, context, param_names, param_values);
+    errdefer result.deinit(allocator);
+
+    if (trace.ops.len > 0) {
+        const last = &trace.ops[trace.ops.len - 1];
+        last.input_rows = @intCast(result.rows.len);
+        last.rows = @intCast(result.rows.len);
+        last.time_ns = elapsedSince(start_ns);
+    }
+
+    return ProfiledExecution{
+        .plan = plan,
+        .result = result,
+        .trace = trace,
+    };
+}
+
 fn buildInitialResult(
     allocator: std.mem.Allocator,
     q: *const ast.Query,
@@ -424,7 +496,16 @@ fn executePatternQuery(
     const start_pattern = if (chain.head) |head| head else chain.hops[0].left;
     const scan_op_index = 0;
     const scan_start_ns = std.time.nanoTimestamp();
-    const start_slots = try collectStartSlots(allocator, adapter, plan.graph_name, start_pattern, param_names, param_values, context);
+    const start_slots = try collectStartSlots(
+        allocator,
+        adapter,
+        plan.graph_name,
+        start_pattern,
+        requiredStartRows(q, param_names, param_values),
+        param_names,
+        param_values,
+        context,
+    );
     defer allocator.free(start_slots);
     trace.ops[scan_op_index].rows = @intCast(start_slots.len);
     trace.ops[scan_op_index].time_ns = elapsedSince(scan_start_ns);
@@ -611,6 +692,7 @@ fn collectStartSlots(
     adapter: *graph_storage_adapter.StorageAdapter,
     graph_name: []const u8,
     pattern: ast.NodePattern,
+    required_rows: ?usize,
     param_names: []const []const u8,
     param_values: []const Value,
     context: ExecutionContext,
@@ -633,6 +715,13 @@ fn collectStartSlots(
     };
     errdefer allocator.free(initial);
 
+    if (required_rows) |needed| {
+        if (pattern.labels.len > 0 and initial.len < needed) {
+            allocator.free(initial);
+            return scanAndFilterStartSlots(allocator, adapter, graph_name, pattern, param_names, param_values, context);
+        }
+    }
+
     if (pattern.labels.len <= 1 and pattern.props == null) {
         return initial;
     }
@@ -645,6 +734,30 @@ fn collectStartSlots(
         }
     }
     allocator.free(initial);
+    return try filtered.toOwnedSlice(allocator);
+}
+
+fn scanAndFilterStartSlots(
+    allocator: std.mem.Allocator,
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    pattern: ast.NodePattern,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    context: ExecutionContext,
+) ![]u64 {
+    const scan_entries = try adapter.scanAllNodes(graph_name, allocator);
+    defer allocator.free(scan_entries);
+
+    var filtered = try std.ArrayList(u64).initCapacity(allocator, scan_entries.len);
+    defer filtered.deinit(allocator);
+
+    for (scan_entries) |entry| {
+        if (try nodeMatchesPatternBySlot(allocator, adapter, graph_name, entry.slot_id, pattern, param_names, param_values, context)) {
+            try filtered.append(allocator, entry.slot_id);
+        }
+    }
+
     return try filtered.toOwnedSlice(allocator);
 }
 
@@ -1259,6 +1372,21 @@ fn elapsedSince(start_ns: i128) u64 {
     return if (now > start_ns) @intCast(now - start_ns) else 0;
 }
 
+fn requiredStartRows(
+    q: *const ast.Query,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) ?usize {
+    const offset = resolveWindowValue(q.offset, q.offset_param, param_names, param_values) orelse 0;
+    if (resolveWindowValue(q.limit, q.limit_param, param_names, param_values)) |limit| {
+        return std.math.add(usize, offset, limit) catch std.math.maxInt(usize);
+    }
+    if (offset != 0) {
+        return std.math.add(usize, offset, 1) catch std.math.maxInt(usize);
+    }
+    return null;
+}
+
 fn hasPreProjectionFilter(q: *const ast.Query) bool {
     return q.filter_clause != null or (q.with_clause == null and q.where_clause != null);
 }
@@ -1279,7 +1407,152 @@ fn needsFinalProjection(q: *const ast.Query) bool {
     return true;
 }
 
-fn isSupportedQuery(q: *const ast.Query) bool {
+fn appendLegacyPlanOps(
+    allocator: std.mem.Allocator,
+    ops: *std.ArrayList(PlanOp),
+    q: *const ast.Query,
+) !void {
+    if (q.cte_list) |cte_list| {
+        for (cte_list.ctes) |cte| {
+            try ops.append(allocator, .{ .kind = .RecursiveCTE });
+            switch (cte.body) {
+                .simple => |subquery| try appendLegacyPlanOps(allocator, ops, subquery),
+                .recursive => |recursive| {
+                    try appendLegacyPlanOps(allocator, ops, recursive.anchor);
+                    try appendLegacyPlanOps(allocator, ops, recursive.recursive_term);
+                },
+            }
+        }
+    }
+
+    if (q.initial_call_subquery) |call_subquery| {
+        try ops.append(allocator, .{ .kind = .CallSubquery });
+        try appendLegacyPlanOps(allocator, ops, call_subquery);
+    }
+
+    if (q.unwind_clause != null) {
+        try ops.append(allocator, .{ .kind = .Unwind });
+    }
+
+    if (q.path_variable != null) {
+        try ops.append(allocator, .{ .kind = .PathCapture });
+    }
+
+    if (q.match.chains.len == 0 and q.unwind_clause == null and q.initial_call_subquery == null) {
+        try ops.append(allocator, .{ .kind = .ConstProjection, .est_rows = 1 });
+    }
+
+    const saw_optional = q.optional_match;
+    for (q.match.chains) |chain| {
+        if (saw_optional or chain.is_optional) {
+            try ops.append(allocator, .{ .kind = .OptionalMatch });
+        }
+        if (chain.head) |head| {
+            try ops.append(allocator, .{
+                .kind = if (head.labels.len > 0) .LabelScan else .AllNodesScan,
+            });
+        } else if (chain.hops.len > 0) {
+            const root = chain.hops[0].left;
+            try ops.append(allocator, .{
+                .kind = if (root.labels.len > 0) .LabelScan else .AllNodesScan,
+            });
+        }
+
+        if (chain.name != null) {
+            try ops.append(allocator, .{ .kind = .PathCapture });
+        }
+
+        for (chain.hops) |hop| {
+            if (chain.is_shortest) {
+                try ops.append(allocator, .{ .kind = .ShortestPath });
+                continue;
+            }
+            if (hop.rel.min_len != null or hop.rel.max_len != null) {
+                try ops.append(allocator, .{ .kind = .VarLengthExpand });
+                continue;
+            }
+            if (chain.path_mode != .walk) {
+                try ops.append(allocator, .{ .kind = .PathModeExpand });
+                continue;
+            }
+            try ops.append(allocator, .{
+                .kind = switch (hop.rel.dir) {
+                    .right => .ExpandOut,
+                    .left => .ExpandIn,
+                    .undirected => .ExpandEither,
+                },
+            });
+        }
+    }
+
+    if (hasPreProjectionFilter(q)) {
+        try ops.append(allocator, .{ .kind = .Filter });
+    }
+
+    if (q.call_clause != null) {
+        try ops.append(allocator, .{ .kind = .CallProcedure });
+    }
+
+    if (q.create_pattern != null) {
+        try ops.append(allocator, .{ .kind = .Create });
+    }
+    if (q.merge_statement != null) {
+        try ops.append(allocator, .{ .kind = .Merge });
+    }
+    if (q.set_clauses.len != 0) {
+        try ops.append(allocator, .{ .kind = .Set });
+    }
+    if (q.remove_clauses.len != 0) {
+        try ops.append(allocator, .{ .kind = .Remove });
+    }
+    if (q.delete_items.len != 0) {
+        try ops.append(allocator, .{ .kind = .Delete });
+    }
+
+    if (q.with_clause) |with_clause| {
+        try ops.append(allocator, .{
+            .kind = if (q.group_by != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project,
+        });
+        if (with_clause.distinct) {
+            try ops.append(allocator, .{ .kind = .Distinct });
+        }
+        if (with_clause.order_by != null) {
+            try ops.append(allocator, .{ .kind = .Sort });
+        }
+        if (with_clause.limit != null or with_clause.offset != null or with_clause.limit_param != null or with_clause.offset_param != null) {
+            try ops.append(allocator, .{ .kind = .Limit });
+        }
+        if (q.where_clause != null) {
+            try ops.append(allocator, .{ .kind = .Filter });
+        }
+    }
+
+    if (needsFinalProjection(q)) {
+        try ops.append(allocator, .{
+            .kind = if ((q.with_clause == null and q.group_by != null) or hasAggregationItems(q.ret.items)) .Aggregate else .Project,
+        });
+        if (q.ret.distinct) {
+            try ops.append(allocator, .{ .kind = .Distinct });
+        }
+        if (q.order_by != null) {
+            try ops.append(allocator, .{ .kind = .Sort });
+        }
+        if (q.limit != null or q.offset != null or q.limit_param != null or q.offset_param != null) {
+            try ops.append(allocator, .{ .kind = .Limit });
+        }
+    }
+
+    if (q.next_query != null or q.for_statement != null) {
+        try ops.append(allocator, .{ .kind = .QueryChain });
+    }
+    if (q.next_query) |next_query| {
+        try appendLegacyPlanOps(allocator, ops, next_query);
+    }
+
+    try ops.append(allocator, .{ .kind = .LegacyExecute });
+}
+
+fn isStorageNativeQuery(q: *const ast.Query) bool {
     if (q.next_query != null or q.optional_match) return false;
     if (q.unwind_clause != null or q.create_pattern != null) return false;
     if (q.call_clause != null or q.initial_call_subquery != null or q.merge_statement != null) return false;
