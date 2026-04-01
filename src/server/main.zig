@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const posix = std.posix;
 const geode = @import("geode");
 const impl_flagger = geode.impl_flagger;
 const diagnostics = @import("geode").diagnostics;
@@ -132,6 +133,14 @@ const computeBaseFlags = server_flags.computeBaseFlags;
 const graph_store = geode.graph_store;
 // Import protocol handler functions (M3.2 Phase 3 backup protocol extraction)
 // Import query executor utility functions (M3.3 Phase 3 query utilities extraction)
+
+/// Global shutdown flag set by SIGTERM/SIGINT handler so the accept loop
+/// exits and deferred cleanup (persistence flush, thread pool drain) runs.
+var g_shutdown_requested = std.atomic.Value(bool).init(false);
+
+fn handleShutdownSignal(_: c_int) callconv(.c) void {
+    g_shutdown_requested.store(true, .release);
+}
 
 // Removed: ServerState struct now in server_state module (M3.2 Phase 3 ServerState extraction)
 // Original: ServerState struct definition (~107 lines, lines 145-252)
@@ -592,7 +601,7 @@ pub fn main() !void {
                 Attr.string("error", @errorName(err)),
             });
             // Fallback to synchronous mode
-            while (true) {
+            while (!g_shutdown_requested.load(.acquire)) {
                 const conn = transport.accept() catch |err2| {
                     log.warn("Failed to accept QUIC connection", &.{
                         Attr.string("error", @errorName(err2)),
@@ -628,10 +637,20 @@ pub fn main() !void {
             poll_thread.join();
         }
 
+        // Install SIGTERM/SIGINT handlers so the accept loop exits cleanly
+        // and deferred cleanup (persistence flush, thread join) runs.
+        const sa = posix.Sigaction{
+            .handler = .{ .handler = handleShutdownSignal },
+            .mask = posix.sigemptyset(),
+            .flags = 0,
+        };
+        posix.sigaction(posix.SIG.TERM, &sa, null);
+        posix.sigaction(posix.SIG.INT, &sa, null);
+
         // Production mode: accept connections in a loop and dispatch to thread pool.
         // The dedicated poll thread handles packet delivery — this loop only checks
         // for completed handshakes via tryAccept().
-        while (true) {
+        while (!g_shutdown_requested.load(.acquire)) {
             // GAP-0203: Process deferred connection cleanups on the main thread.
             transport.drainPendingDestroy();
 
@@ -696,6 +715,7 @@ pub fn main() !void {
                 log.debug("Connection submitted to thread pool", &.{});
             }
         }
+        std.debug.print("[shutdown] signal received, flushing data and stopping...\n", .{});
         return;
     }
 
