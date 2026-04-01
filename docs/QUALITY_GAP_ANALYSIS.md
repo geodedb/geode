@@ -1,16 +1,35 @@
 # Quality Gap Analysis
 
-Last updated: 2026-03-13 (added #549 #550 #551 #552 #553 #554 #555 #556; updated #414)
+Last updated: 2026-04-01 (migration engine gap closure -- 16 findings closed, 2 remain open)
 
 ## Summary
 
-- Total findings: 66
-- Closed / Implemented: 40
+- Total findings: 84
+- Closed / Implemented: 56
 - Blocked: 14
-- Open: 4 (remaining from March 2026 audit)
+- Open: 6 (4 from March 2026 audit + 2 from April 2026 migration engine audit)
 - Closed (Won't Do by policy): 8
 
-15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 8 findings closed as Won't Do per policy. 14 large architectural items blocked pending dedicated sprint planning. 8 new findings identified in March 2026 audit; 4 closed in this session (#550, #552, #554, #556).
+15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 8 findings closed as Won't Do per policy. 14 large architectural items blocked pending dedicated sprint planning. 8 new findings identified in March 2026 audit; 4 closed in that session (#550, #552, #554, #556). 18 new findings from April 2026 migration engine audit of `src/migration/mod.zig` -- 16 closed via gap closure (2026-04-01), 2 remain open (#621 file length, #624 doc-comments).
+
+### Top 5 Risks (April 2026)
+
+All 5 previously-listed migration engine risks have been closed:
+
+1. ~~Thread-unsafe global state~~ (#585) -- closed via GAP-0293/0302 (Mutex + atomics)
+2. ~~Dangling pointer in resume_slots~~ (#588) -- closed via GAP-0289 (alloc.dupe)
+3. ~~No errdefer on partial apply~~ (#590) -- closed via GAP-0280 (errdefer saveLedger)
+4. ~~planDryRun dangling name pointers~~ (#604) -- closed via GAP-0288 (alloc.dupe + freePlan)
+5. ~~Hand-rolled JSON with no escaping~~ (#599) -- closed via GAP-0287 (std.json.stringify)
+
+### Quality Dimension Ratings: Migration Engine
+
+| Dimension | Rating | Notes |
+|-----------|--------|-------|
+| Readability | 6/10 | No doc-comments; file over 800 lines; non-idiomatic alloc patterns |
+| Maintainability | 4/10 | 3x duplicated version parsing; hand-rolled JSON; test helper leaked to API |
+| Reliability | 3/10 | Thread-unsafe globals; dangling pointers; no partial-apply recovery; silent overwrites |
+| API Contract Quality | 4/10 | Ignored parameter; inconsistent error vs skip; undocumented version-1 policy |
 
 ## Policy Notes (Future Agents)
 
@@ -93,6 +112,29 @@ Last updated: 2026-03-13 (added #549 #550 #551 #552 #553 #554 #555 #556; updated
 | 65 | Low | 20 | ci-cd | `confidence::confirmed` 11 CI governance jobs with near-identical structure | ci | `.gitlab-ci.yml:87-390` — 11 jobs share same variables, before_script, image | [#555](https://gitlab.com/devnw/codepros/geode/geode/-/issues/555) | Consolidate into template or matrix job | ci | TBD | Open |
 | 66 | Low | 16 | cleanup | `confidence::confirmed` 12 data_test_* dirs and 19 empty audit files at repo root | repo | Repo root: 12 test data dirs, 19 empty audit*.jsonl files | [#554](https://gitlab.com/devnw/codepros/geode/geode/-/issues/554) | `git rm --cached audit.jsonl`; already in .gitignore | repo | TBD | Closed / Implemented (partial — audit.jsonl removed from tracking; data_test_* dirs already gitignored) |
 
+## April 2026 Migration Engine Audit — New Findings (18)
+
+| Rank | Severity | PriorityScore | Category | Finding | Component | Evidence | GitLab Issue | Fix Summary | Owner | ETA/SLA | Status |
+|---|---|---:|---|---|---|---|---|---|---|---|---|
+| 67 | Critical | 80 | maintainability | `confidence::confirmed` Thread-unsafe global mutable state -- 4 module-level vars with no synchronization | migration | `src/migration/mod.zig:91,279,491,603-604` | [#585](https://gitlab.com/devnw/codepros/geode/geode/-/issues/585) | Covered by GAP-0293 (Mutex) and GAP-0302 (atomics). Commit 0d39cd15. | migration | -- | Closed / Implemented |
+| 68 | Critical | 80 | maintainability | `confidence::confirmed` Dangling pointer in resume_slots -- token slice stored without duplication | migration | `src/migration/mod.zig:612` | [#588](https://gitlab.com/devnw/codepros/geode/geode/-/issues/588) | Covered by GAP-0289 (alloc.dupe). Commit 7c545694. | migration | -- | Closed / Implemented |
+| 69 | Critical | 60 | maintainability | `confidence::confirmed` No errdefer on partial apply -- mid-batch failure leaves ledger out of sync | migration | `src/migration/mod.zig:345-369` | [#590](https://gitlab.com/devnw/codepros/geode/geode/-/issues/590) | Covered by GAP-0280 (errdefer saveLedger). Commit 7c545694. | migration | -- | Closed / Implemented |
+| 70 | High | 64 | maintainability | `confidence::confirmed` Duplicated version-parsing in 3 locations, 2 lacking overflow protection | migration | `src/migration/mod.zig:99-108,449-453,521-528` | [#596](https://gitlab.com/devnw/codepros/geode/geode/-/issues/596) | Covered by GAP-0292 (shared parseVersion). Commit c49dc110. | migration | -- | Closed / Implemented |
+| 71 | High | 48 | maintainability | `confidence::confirmed` Hand-rolled JSON with no escaping in writeLedgerJson | migration | `src/migration/mod.zig:202-233` | [#599](https://gitlab.com/devnw/codepros/geode/geode/-/issues/599) | Covered by GAP-0287 (std.json.stringify). Commit f64bf2c6. | migration | -- | Closed / Implemented |
+| 72 | High | 48 | api-contract | `confidence::confirmed` applyDownMigrations ignores names parameter | migration | `src/migration/mod.zig:376` | [#601](https://gitlab.com/devnw/codepros/geode/geode/-/issues/601) | Covered by GAP-0281 (selective rollback). Commit c49dc110. | migration | -- | Closed / Implemented |
+| 73 | High | 48 | maintainability | `confidence::confirmed` planDryRun returns MigrationPlan with dangling name pointers + no free function | migration | `src/migration/mod.zig:565,583` | [#604](https://gitlab.com/devnw/codepros/geode/geode/-/issues/604) | Covered by GAP-0288 (alloc.dupe + freePlan). Commit 7c545694. | migration | -- | Closed / Implemented |
+| 74 | High | 32 | maintainability | `confidence::confirmed` resume_slots silently overwrites last entry when full | migration | `src/migration/mod.zig:611` | [#608](https://gitlab.com/devnw/codepros/geode/geode/-/issues/608) | Covered by GAP-0303 (return error when full). Commit 7c545694. | migration | -- | Closed / Implemented |
+| 75 | Medium | 36 | api-contract | `confidence::confirmed` latestApplied skips version <= 1 -- undocumented policy | migration | `src/migration/mod.zig:267` | [#610](https://gitlab.com/devnw/codepros/geode/geode/-/issues/610) | Documented in code. No code change needed. | migration | -- | Closed / Implemented |
+| 76 | Medium | 36 | api-contract | `confidence::confirmed` planDryRun silently drops invalid names vs applyUpMigrations returning error | migration | `src/migration/mod.zig:573 vs 329` | [#613](https://gitlab.com/devnw/codepros/geode/geode/-/issues/613) | Covered by GAP-0297 (consistent error handling). Commit c49dc110. | migration | -- | Closed / Implemented |
+| 77 | Medium | 36 | maintainability | `confidence::confirmed` checksumValidate asymmetric matching | migration | `src/migration/mod.zig:534` | [#615](https://gitlab.com/devnw/codepros/geode/geode/-/issues/615) | Covered by GAP-0296 (bidirectional check). Commit c49dc110. | migration | -- | Closed / Implemented |
+| 78 | Medium | 36 | maintainability | `confidence::confirmed` statusReport swallows directory iteration errors | migration | `src/migration/mod.zig:430` | [#616](https://gitlab.com/devnw/codepros/geode/geode/-/issues/616) | Covered by GAP-0298 (error propagation). Commit c49dc110. | migration | -- | Closed / Implemented |
+| 79 | Medium | 24 | maintainability | `confidence::confirmed` computeFingerprint i64->u64 cast panics on negative version | migration | `src/migration/mod.zig:133` | [#618](https://gitlab.com/devnw/codepros/geode/geode/-/issues/618) | Covered by GAP-0295 (@bitCast). Commit c49dc110. | migration | -- | Closed / Implemented |
+| 80 | Medium | 24 | maintainability | `confidence::confirmed` driftCheck loses drift signal on save failure | migration | `src/migration/mod.zig:556` | [#619](https://gitlab.com/devnw/codepros/geode/geode/-/issues/619) | Covered by GAP-0299 (return drift regardless). Commit c49dc110. | migration | -- | Closed / Implemented |
+| 81 | Low | 32 | docs | `confidence::confirmed` No doc-comments on any public function (14 pub fns) | migration | `src/migration/mod.zig` (all pub fn) | [#624](https://gitlab.com/devnw/codepros/geode/geode/-/issues/624) | Add /// doc-comments to all pub fn | migration | <1d | Open |
+| 82 | Low | 20 | readability | `confidence::confirmed` File is 841 lines (above 800-line guideline) | migration | `src/migration/mod.zig` (841 lines) | [#621](https://gitlab.com/devnw/codepros/geode/geode/-/issues/621) | Split into sub-modules | migration | 1-2d | Open |
+| 83 | Low | 8 | cleanup | `confidence::confirmed` testSimulateDrift pub function with runtime is_test guard | migration | `src/migration/mod.zig:634-637` | [#623](https://gitlab.com/devnw/codepros/geode/geode/-/issues/623) | Covered by GAP-0304 (moved to test block). Commit 28e4496c. | migration | -- | Closed / Implemented |
+| 84 | Low | 8 | readability | `confidence::confirmed` alloc.alloc + copyForwards instead of alloc.dupe | migration | `src/migration/mod.zig:357-358` | [#626](https://gitlab.com/devnw/codepros/geode/geode/-/issues/626) | Covered by GAP-0305 (alloc.dupe). Commit 7c545694. | migration | -- | Closed / Implemented |
+
 ## Findings by Category
 
 - `maintainability`: `#401` (Closed), `#461` (Closed), `#522` (Closed)
@@ -104,9 +146,17 @@ Last updated: 2026-03-13 (added #549 #550 #551 #552 #553 #554 #555 #556; updated
 
 New items (2026-03-13 audit):
 
-- `maintainability`: `#553` (Open — procedure dispatch), `#556` (Closed — catch unreachable), `#550` (Closed — shell strict mode), `#551` (Open — test runner duplication), `#549` (Open — Dockerfile duplication)
-- `perf`: `#552` (Closed — collection pre-sizing)
-- `ci-cd`: `#555` (Open — governance job consolidation)
+- `maintainability`: `#553` (Open -- procedure dispatch), `#556` (Closed -- catch unreachable), `#550` (Closed -- shell strict mode), `#551` (Open -- test runner duplication), `#549` (Open -- Dockerfile duplication)
+- `perf`: `#552` (Closed -- collection pre-sizing)
+- `ci-cd`: `#555` (Open -- governance job consolidation)
+
+New items (2026-04-01 migration engine audit):
+
+- `maintainability`: `#585` (Closed -- GAP-0293/0302), `#588` (Closed -- GAP-0289), `#590` (Closed -- GAP-0280), `#596` (Closed -- GAP-0292), `#599` (Closed -- GAP-0287), `#604` (Closed -- GAP-0288), `#608` (Closed -- GAP-0303), `#615` (Closed -- GAP-0296), `#616` (Closed -- GAP-0298), `#618` (Closed -- GAP-0295), `#619` (Closed -- GAP-0299)
+- `api-contract`: `#601` (Closed -- GAP-0281), `#610` (Closed -- documented), `#613` (Closed -- GAP-0297)
+- `docs`: `#624` (Open -- no doc-comments)
+- `readability`: `#621` (Open -- file too long), `#626` (Closed -- GAP-0305)
+- `cleanup`: `#623` (Closed -- GAP-0304)
 - `cleanup`: `#554` (Closed — root directory clutter)
 
 Existing items (2026-02-18 triage):
@@ -136,15 +186,31 @@ Existing items (2026-02-18 triage):
 - **#468** — Requires module group design to batch imports. Low-priority infrastructure work.
 - **#414** — Requires case-by-case analysis: some are intentional (backoff), some are bugs. Cannot safely bulk-replace.
 
-## Quick Wins (March 2026)
+## Quick Wins (< 1 day)
 
 | Issue | Fix | Effort | Impact |
 |-------|-----|--------|--------|
 | [#554](https://gitlab.com/devnw/codepros/geode/geode/-/issues/554) | Add data_test_*/audit*.jsonl to .gitignore; git rm | S | Repo hygiene |
 | [#555](https://gitlab.com/devnw/codepros/geode/geode/-/issues/555) | Add .governance-template to CI; use extends | S | CI maintainability |
 | [#550](https://gitlab.com/devnw/codepros/geode/geode/-/issues/550) | Add set -euo pipefail to all shell scripts | S | Production safety |
+| [#588](https://gitlab.com/devnw/codepros/geode/geode/-/issues/588) | Dupe token slice in resume_slots | S | Fix use-after-free |
+| [#590](https://gitlab.com/devnw/codepros/geode/geode/-/issues/590) | Add errdefer saveLedger in applyUpMigrations | S | Prevent ledger desync |
+| [#596](https://gitlab.com/devnw/codepros/geode/geode/-/issues/596) | Replace 3x duplicated version parsing with parseVersion | S | Overflow protection |
+| [#599](https://gitlab.com/devnw/codepros/geode/geode/-/issues/599) | Replace hand-rolled JSON with std.json.stringify | S | Prevent ledger corruption |
+| [#601](https://gitlab.com/devnw/codepros/geode/geode/-/issues/601) | Use or remove `names` param in applyDownMigrations | S | API correctness |
+| [#604](https://gitlab.com/devnw/codepros/geode/geode/-/issues/604) | Dupe name slices in planDryRun; add freePlan | S | Fix use-after-free |
+| [#608](https://gitlab.com/devnw/codepros/geode/geode/-/issues/608) | Return error when resume_slots full | S | Prevent silent data loss |
+| [#610](https://gitlab.com/devnw/codepros/geode/geode/-/issues/610) | Remove or document version<=1 skip in latestApplied | S | API clarity |
+| [#613](https://gitlab.com/devnw/codepros/geode/geode/-/issues/613) | Consistent error vs skip for invalid names | S | API consistency |
+| [#618](https://gitlab.com/devnw/codepros/geode/geode/-/issues/618) | Use @bitCast in computeFingerprint | S | Prevent panic on negative |
+| [#619](https://gitlab.com/devnw/codepros/geode/geode/-/issues/619) | Save with catch {} in driftCheck | S | Preserve drift signal |
+| [#623](https://gitlab.com/devnw/codepros/geode/geode/-/issues/623) | Move testSimulateDrift into test block | S | API hygiene |
+| [#626](https://gitlab.com/devnw/codepros/geode/geode/-/issues/626) | Replace alloc+copyForwards with alloc.dupe | S | Idiomatic Zig |
+| [#615](https://gitlab.com/devnw/codepros/geode/geode/-/issues/615) | Document checksumValidate matching semantics | S | Behavior clarity |
+| [#616](https://gitlab.com/devnw/codepros/geode/geode/-/issues/616) | Propagate dir iteration errors in statusReport | S | Error visibility |
+| [#624](https://gitlab.com/devnw/codepros/geode/geode/-/issues/624) | Add doc-comments to all 14 pub fns | S | API documentation |
 
-## Medium-Term Improvements (March 2026)
+## Medium-Term Improvements (1-5 days)
 
 | Issue | Fix | Effort | Impact |
 |-------|-----|--------|--------|
@@ -152,12 +218,14 @@ Existing items (2026-02-18 triage):
 | [#552](https://gitlab.com/devnw/codepros/geode/geode/-/issues/552) | Add ensureTotalCapacity to hot-path collections | M | Query performance |
 | [#551](https://gitlab.com/devnw/codepros/geode/geode/-/issues/551) | Consolidate test runners into shared core | M | Test maintenance |
 | [#549](https://gitlab.com/devnw/codepros/geode/geode/-/issues/549) | Extract common Dockerfile base; consolidate variants | M | Container maintenance |
+| [#585](https://gitlab.com/devnw/codepros/geode/geode/-/issues/585) | Refactor migration globals into MigrationEngine struct with mutex | M | Thread safety |
+| [#621](https://gitlab.com/devnw/codepros/geode/geode/-/issues/621) | Split mod.zig into sub-modules (ledger, lock, resume) | M | Readability |
 
-## Strategic Refactoring (March 2026)
+## Strategic Refactoring (> 5 days)
 
 | Issue | Fix | Effort | Impact |
 |-------|-----|--------|--------|
-| [#553](https://gitlab.com/devnw/codepros/geode/geode/-/issues/553) | Procedure dispatch table (4,443→<1,000 lines) | L | Core maintainability |
+| [#553](https://gitlab.com/devnw/codepros/geode/geode/-/issues/553) | Procedure dispatch table (4,443->< 1,000 lines) | L | Core maintainability |
 
 ## Verification Executed for Closed Items
 
