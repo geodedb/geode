@@ -1,5 +1,5 @@
-// CANARY: REQ=REQ-DIST-QUERY-COORD-001; FEATURE="Enhanced Query Coordination"; ASPECT=QueryCoordination; STATUS=TESTED; TEST=TestCANARY_REQ_DIST_QUERY_COORD_001_QueryCoordination; OWNER=dist; UPDATED=2025-10-05
-// CANARY: REQ=REQ-DIST-QUERY-COORD-002; FEATURE="Query Optimization"; ASPECT=DistributedOptimization; STATUS=TESTED; TEST=TestCANARY_REQ_DIST_QUERY_COORD_002_DistributedOptimization; OWNER=dist; UPDATED=2025-10-05
+// CANARY: REQ=REQ-DIST-QUERY-COORD-001; FEATURE="Enhanced Query Coordination"; ASPECT=QueryCoordination; STATUS=IMPL; OWNER=dist; UPDATED=2026-04-01
+// CANARY: REQ=REQ-DIST-QUERY-COORD-002; FEATURE="Query Optimization"; ASPECT=DistributedOptimization; STATUS=IMPL; OWNER=dist; UPDATED=2026-04-01
 
 const std = @import("std");
 const protocol = @import("../protocol.zig");
