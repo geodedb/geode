@@ -531,18 +531,22 @@ pub fn freeStatusRows(alloc: std.mem.Allocator, rows: []StatusRow) void {
 pub const PolicyMode = enum { strict, lenient };
 var policy_mode: PolicyMode = .lenient;
 
-/// Sets the migration policy mode ("STRICT" or "LENIENT").
-pub fn enforcePolicy(mode: []const u8) MigrationError!void {
+/// Sets the migration policy mode directly from a typed enum. Thread-safe.
+pub fn enforcePolicyMode(mode: PolicyMode) void {
     migration_mutex.lock();
     defer migration_mutex.unlock();
+    policy_mode = mode;
+}
+
+/// Sets the migration policy mode from a string ("STRICT" or "LENIENT"). Thread-safe.
+pub fn enforcePolicy(mode: []const u8) MigrationError!void {
     if (std.mem.eql(u8, mode, "STRICT")) {
-        policy_mode = .strict;
-        return;
+        enforcePolicyMode(.strict);
     } else if (std.mem.eql(u8, mode, "LENIENT")) {
-        policy_mode = .lenient;
-        return;
+        enforcePolicyMode(.lenient);
+    } else {
+        return error.NotImplemented;
     }
-    return error.NotImplemented;
 }
 
 /// Returns true if the current policy mode is STRICT.
@@ -676,7 +680,7 @@ pub fn freePlan(alloc: std.mem.Allocator, plan: *const MigrationPlan) void {
 var resume_slots: [max_resume_slots]ResumeState = [_]ResumeState{.{ .token = "", .total_batches = 0, .completed_batches = 0, .done = true }} ** max_resume_slots;
 var resume_slots_len: usize = 0;
 
-fn getOrInitResume(alloc: std.mem.Allocator, token: []const u8) MigrationError!*ResumeState {
+fn getOrInitResume(alloc: std.mem.Allocator, token: []const u8, total_batches: u32) MigrationError!*ResumeState {
     // Caller must hold migration_mutex.
     var i: usize = 0;
     while (i < resume_slots_len) : (i += 1) {
@@ -684,7 +688,7 @@ fn getOrInitResume(alloc: std.mem.Allocator, token: []const u8) MigrationError!*
     }
     if (resume_slots_len == resume_slots.len) return error.ResumeSlotsFull;
     const token_copy = alloc.dupe(u8, token) catch return error.OutOfMemory;
-    resume_slots[resume_slots_len] = .{ .token = token_copy, .total_batches = default_resume_batches, .completed_batches = 0, .done = false };
+    resume_slots[resume_slots_len] = .{ .token = token_copy, .total_batches = total_batches, .completed_batches = 0, .done = false };
     resume_slots_len += 1;
     return &resume_slots[resume_slots_len - 1];
 }
@@ -702,10 +706,11 @@ pub fn resetResumeSlots(alloc: std.mem.Allocator) void {
 }
 
 /// Advances the resume state for a data migration token by one batch. Thread-safe.
-pub fn resumeDataMigration(alloc: std.mem.Allocator, token: []const u8) MigrationError!ResumeState {
+/// If the token is new, creates a slot with the given total_batches count.
+pub fn resumeDataMigration(alloc: std.mem.Allocator, token: []const u8, total_batches: u32) MigrationError!ResumeState {
     migration_mutex.lock();
     defer migration_mutex.unlock();
-    const rs = try getOrInitResume(alloc, token);
+    const rs = try getOrInitResume(alloc, token, total_batches);
     if (!rs.done) {
         if (rs.completed_batches < rs.total_batches) rs.completed_batches += 1;
         if (rs.completed_batches >= rs.total_batches) rs.done = true;
@@ -832,6 +837,13 @@ test "enforcePolicy sets lenient mode" {
 test "enforcePolicy rejects invalid modes" {
     const result = enforcePolicy("INVALID");
     try std.testing.expectError(error.NotImplemented, result);
+}
+
+test "enforcePolicyMode sets mode via typed enum" {
+    enforcePolicyMode(.strict);
+    try std.testing.expect(isStrictPolicy());
+    enforcePolicyMode(.lenient);
+    try std.testing.expect(!isStrictPolicy());
 }
 
 test "latestApplied returns null for empty rows" {
@@ -1394,19 +1406,19 @@ test "resumeDataMigration advances batches to completion" {
     const alloc = std.testing.allocator;
     defer resetResumeSlots(alloc);
 
-    const s1 = try resumeDataMigration(alloc, "token-1");
+    const s1 = try resumeDataMigration(alloc, "token-1", default_resume_batches);
     try std.testing.expectEqual(@as(u32, 1), s1.completed_batches);
     try std.testing.expectEqual(@as(u32, 5), s1.total_batches);
     try std.testing.expect(!s1.done);
 
-    _ = try resumeDataMigration(alloc, "token-1");
-    _ = try resumeDataMigration(alloc, "token-1");
-    _ = try resumeDataMigration(alloc, "token-1");
-    const s5 = try resumeDataMigration(alloc, "token-1");
+    _ = try resumeDataMigration(alloc, "token-1", default_resume_batches);
+    _ = try resumeDataMigration(alloc, "token-1", default_resume_batches);
+    _ = try resumeDataMigration(alloc, "token-1", default_resume_batches);
+    const s5 = try resumeDataMigration(alloc, "token-1", default_resume_batches);
     try std.testing.expectEqual(@as(u32, 5), s5.completed_batches);
     try std.testing.expect(s5.done);
 
-    const s6 = try resumeDataMigration(alloc, "token-1");
+    const s6 = try resumeDataMigration(alloc, "token-1", default_resume_batches);
     try std.testing.expectEqual(@as(u32, 5), s6.completed_batches);
     try std.testing.expect(s6.done);
 }
@@ -1419,9 +1431,24 @@ test "resumeDataMigration returns ResumeSlotsFull when all 8 slots used" {
     while (i < 8) : (i += 1) {
         var buf: [16]u8 = undefined;
         const token = std.fmt.bufPrint(&buf, "token-{d}", .{i}) catch unreachable;
-        _ = try resumeDataMigration(alloc, token);
+        _ = try resumeDataMigration(alloc, token, default_resume_batches);
     }
 
-    const result = resumeDataMigration(alloc, "token-overflow");
+    const result = resumeDataMigration(alloc, "token-overflow", default_resume_batches);
     try std.testing.expectError(error.ResumeSlotsFull, result);
+}
+
+test "resumeDataMigration respects custom total_batches" {
+    const alloc = std.testing.allocator;
+    defer resetResumeSlots(alloc);
+
+    const s1 = try resumeDataMigration(alloc, "custom-token", 3);
+    try std.testing.expectEqual(@as(u32, 3), s1.total_batches);
+    try std.testing.expectEqual(@as(u32, 1), s1.completed_batches);
+    try std.testing.expect(!s1.done);
+
+    _ = try resumeDataMigration(alloc, "custom-token", 3);
+    const s3 = try resumeDataMigration(alloc, "custom-token", 3);
+    try std.testing.expectEqual(@as(u32, 3), s3.completed_batches);
+    try std.testing.expect(s3.done);
 }
