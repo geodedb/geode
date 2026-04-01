@@ -3982,6 +3982,13 @@ REQ-TXN-PHANTOM-004,Phantom Read Prevention,PredicateConflictCheck,TESTED,,,txn,
 REQ-TXN-PHANTOM-MVCC-001,Phantom Read MVCC Integration,SerializableIsolation,TESTED,,,txn,2025-10-05,tests/test_phantom_read_mvcc_integration.zig
 REQ-TXN-PHANTOM-MVCC-002,Phantom Read MVCC Integration,TransactionLifecycle,TESTED,,,txn,2025-10-05,tests/test_phantom_read_mvcc_integration.zig
 REQ-TXN-PHANTOM-MVCC-003,Phantom Read MVCC Integration,ConflictDetection,TESTED,,,txn,2025-10-05,tests/test_phantom_read_mvcc_integration.zig
+REQ-TXN-SAVEPOINT-001,TransactionSavepoints,UndoLogSavepoint,IMPL,,,engine,2026-04-01,src/txn_undo_log.zig
+REQ-TXN-SAVEPOINT-002,TransactionSavepoints,CreateSavepoint,IMPL,,,engine,2026-04-01,src/txn_undo_log.zig
+REQ-TXN-SAVEPOINT-003,TransactionSavepoints,RollbackToSavepoint,IMPL,,,engine,2026-04-01,src/txn_undo_log.zig
+REQ-TXN-SAVEPOINT-004,TransactionSavepoints,QuicSavepoint,IMPL,,,transport,2026-04-01,src/server/quic_connection_handler.zig
+REQ-TXN-SAVEPOINT-005,TransactionSavepoints,QuicRollbackTo,IMPL,,,transport,2026-04-01,src/server/quic_connection_handler.zig
+REQ-TXN-SAVEPOINT-006,TransactionSavepoints,GrpcSavepoint,IMPL,,,transport,2026-04-01,src/transport/grpc_server.zig
+REQ-TXN-SAVEPOINT-007,TransactionSavepoints,GrpcRollbackTo,IMPL,,,transport,2026-04-01,src/transport/grpc_server.zig
 REQ-TXN-UNDO-001,TransactionUndoLog,UndoEntry,TESTED,,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-TXN-UNDO-001,TransactionUndoLog,UndoLogCore,TESTED,,,engine,2025-12-23,src/txn_undo_log.zig
 REQ-TXN-UNDO-001,TransactionUndoLog,UndoLogCore,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig

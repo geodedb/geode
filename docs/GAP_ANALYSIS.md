@@ -5,14 +5,14 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 
 ## Summary
 
-- **Total open gaps:** 4
+- **Total open gaps:** 3
 - **Critical:** 1 (GAP-0256 blocked)
-- **High:** 2 (GAP-0255, GAP-0275)
+- **High:** 1 (GAP-0275)
 - **Medium:** 0
 - **Low:** 0
 - **Blocked (external dependency):** 3 (GAP-0246, GAP-0247, GAP-0256)
 - **Won't Do:** 1 (GAP-0258)
-- **Closed this session (2026-04-01):** ALL 17 multi-tenancy gaps (GAP-0279 through GAP-0295)
+- **Closed this session (2026-04-01):** ALL 17 multi-tenancy gaps (GAP-0279 through GAP-0295), GAP-0255 (savepoint/transport parity)
 - **Opened (2026-03-30):** GAP-0273, GAP-0274, GAP-0275, GAP-0276, GAP-0277, GAP-0278
 - **Closed (2026-03-30):** GAP-0270, GAP-0271, GAP-0272, GAP-0273, GAP-0274, GAP-0276, GAP-0277, GAP-0278
 - **Closed (2026-03-28):** GAP-0264, GAP-0266, GAP-0261, GAP-0263, GAP-0265, GAP-0267, GAP-0268, GAP-0269, GAP-0262
@@ -317,20 +317,18 @@ Bulk data ingestion via stdin is unreliable for medium-sized batches. Users pipi
 - **GitLab issue:** [#399](https://gitlab.com/devnw/codepros/geode/geode/-/issues/399)
 - **Resolution (2026-03-13):** Full ASN.1/DER X.509 parser implemented in `src/security/mtls_provider.zig` (~300 lines). `extractIdentity()` now parses: serial_number, subject_cn, subject_dn, issuer_dn, not_before, not_after, san_dns, san_email, san_uri. 7 unit tests added and passing. See [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
 
-### GAP-0255: gRPC transport missing savepoint support and 7 message types vs QUIC
+### ~~GAP-0255~~: gRPC transport missing savepoint support and 7 message types vs QUIC — **CLOSED / Implemented**
 
 - **GitLab issue:** [#548](https://gitlab.com/devnw/codepros/geode/geode/-/issues/548)
 - **Category:** Feature
 - **Severity:** High
 - **Requirement source:** Transport parity requirement; [#515](https://gitlab.com/devnw/codepros/geode/geode/-/issues/515)
-- **Current state (evidence):**
-  - `src/transport/grpc_server.zig:1510-1512` — `handleSavepoint()` returns `success: false`
-  - `src/transport/grpc_server.zig:1516-1518` — `handleRollbackTo()` returns `success: false`
-  - Issue #515 documents 7 missing message types in gRPC vs QUIC handler
-- **Why this is a gap:** gRPC clients get degraded functionality compared to QUIC. Savepoints required for complex transaction workflows.
-- **Impact/Risk:** Clients using gRPC transport cannot use savepoints or 7 other operations available via QUIC.
-- **Recommended fix:** Implement savepoint/rollback-to in gRPC handler; address missing message types per #515.
-- **Acceptance criteria:** gRPC handler supports all message types that QUIC handler supports.
+- **Resolution (2026-04-01):**
+  - All 14 message types now have full parity between QUIC and gRPC transports: hello, execute, pull, ping, begin, commit, rollback, savepoint, rollback_to, cdc_diag, cdc_ctrl, backup, restore, upload_backup.
+  - `handleSavepoint()` and `handleRollbackTo()` in both transports now use real `UndoLog.createSavepoint()` / `UndoLog.rollbackToSavepoint()` backed by production undo log entries.
+  - Added `Savepoint` struct, `createSavepoint`, `rollbackToSavepoint`, `clearSavepoints`, `freeEntriesFrom` to `src/txn_undo_log.zig`.
+  - gRPC handlers decode `SavepointRequest`/`RollbackToRequest`, look up session state, validate active transaction, and delegate to the global undo log.
+  - Unit tests added for savepoint create, replace, rollback-to, not-found error, and begin/commit cleanup.
 
 ### ~~GAP-0251~~: Code coverage instrumentation — **CLOSED / Implemented**
 

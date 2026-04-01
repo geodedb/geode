@@ -2118,15 +2118,88 @@ fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
 // CANARY: REQ=REQ-GRPC-FULL-ROUTING-001; FEATURE="GrpcFullMessageRouting"; ASPECT=HandlerParity; STATUS=IMPL; OWNER=transport; UPDATED=2026-02-13
 // ============================================================================
 
-fn handleSavepoint(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
-    // Savepoints not yet supported (matches QUIC stub at quic_connection_handler.zig:956)
-    const resp = schema.SavepointResponse{ .success = false };
+// CANARY: REQ=REQ-TXN-SAVEPOINT-006; FEATURE="TransactionSavepoints"; ASPECT=GrpcSavepoint; STATUS=IMPL; OWNER=transport; UPDATED=2026-04-01
+fn handleSavepoint(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    var reader: std.Io.Reader = .fixed(request_bytes);
+    var req = protobuf.decode(schema.SavepointRequest, &reader, allocator) catch {
+        const resp = schema.SavepointResponse{ .success = false };
+        return encodeMessage(allocator, resp);
+    };
+    defer req.deinit(allocator);
+
+    if (req.session_id.len == 0 or req.name.len == 0) {
+        const resp = schema.SavepointResponse{ .success = false };
+        return encodeMessage(allocator, resp);
+    }
+
+    const sess_store = getSessionStore() orelse {
+        const resp = schema.SavepointResponse{ .success = false };
+        return encodeMessage(allocator, resp);
+    };
+    const entry = sess_store.getEntry(req.session_id) orelse {
+        throttleInvalidSessionProbe();
+        const resp = schema.SavepointResponse{ .success = false };
+        return encodeMessage(allocator, resp);
+    };
+
+    entry.mutex.lock();
+    defer entry.mutex.unlock();
+    const state = entry.state;
+
+    if (!state.in_txn) {
+        const resp = schema.SavepointResponse{ .success = false };
+        return encodeMessage(allocator, resp);
+    }
+
+    const undo = txn_undo_log.getGlobalUndoLog(allocator);
+    undo.createSavepoint(req.name) catch {
+        const resp = schema.SavepointResponse{ .success = false };
+        return encodeMessage(allocator, resp);
+    };
+    const resp = schema.SavepointResponse{ .success = true };
     return encodeMessage(allocator, resp);
 }
 
-fn handleRollbackTo(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
-    // Rollback-to-savepoint not yet supported (matches QUIC stub at quic_connection_handler.zig:959)
-    const resp = schema.RollbackToResponse{ .success = false };
+// CANARY: REQ=REQ-TXN-SAVEPOINT-007; FEATURE="TransactionSavepoints"; ASPECT=GrpcRollbackTo; STATUS=IMPL; OWNER=transport; UPDATED=2026-04-01
+fn handleRollbackTo(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    var reader: std.Io.Reader = .fixed(request_bytes);
+    var req = protobuf.decode(schema.RollbackToRequest, &reader, allocator) catch {
+        const resp = schema.RollbackToResponse{ .success = false };
+        return encodeMessage(allocator, resp);
+    };
+    defer req.deinit(allocator);
+
+    if (req.session_id.len == 0 or req.name.len == 0) {
+        const resp = schema.RollbackToResponse{ .success = false };
+        return encodeMessage(allocator, resp);
+    }
+
+    const sess_store = getSessionStore() orelse {
+        const resp = schema.RollbackToResponse{ .success = false };
+        return encodeMessage(allocator, resp);
+    };
+    const entry = sess_store.getEntry(req.session_id) orelse {
+        throttleInvalidSessionProbe();
+        const resp = schema.RollbackToResponse{ .success = false };
+        return encodeMessage(allocator, resp);
+    };
+
+    entry.mutex.lock();
+    defer entry.mutex.unlock();
+    const state = entry.state;
+
+    if (!state.in_txn) {
+        const resp = schema.RollbackToResponse{ .success = false };
+        return encodeMessage(allocator, resp);
+    }
+
+    const store_ptr = graph_store.getGlobalStore(allocator);
+    const undo = txn_undo_log.getGlobalUndoLog(allocator);
+    undo.rollbackToSavepoint(req.name, store_ptr) catch {
+        const resp = schema.RollbackToResponse{ .success = false };
+        return encodeMessage(allocator, resp);
+    };
+    const resp = schema.RollbackToResponse{ .success = true };
     return encodeMessage(allocator, resp);
 }
 

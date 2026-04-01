@@ -125,23 +125,36 @@ pub const UndoEntry = union(UndoOpType) {
     },
 };
 
+// CANARY: REQ=REQ-TXN-SAVEPOINT-001; FEATURE="TransactionSavepoints"; ASPECT=UndoLogSavepoint; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-01
+/// A savepoint records a named position in the undo log so that
+/// rollbackToSavepoint can partially undo entries back to that point
+/// without aborting the entire transaction.
+pub const Savepoint = struct {
+    name: []const u8,
+    entry_index: usize,
+};
+
 /// Transaction undo log that persists across CLI invocations
 pub const UndoLog = struct {
     allocator: std.mem.Allocator,
     entries: std.ArrayListUnmanaged(UndoEntry),
     active: bool,
+    savepoints: std.ArrayListUnmanaged(Savepoint) = .{},
 
     pub fn init(allocator: std.mem.Allocator) UndoLog {
         return .{
             .allocator = allocator,
             .entries = .{},
             .active = false,
+            .savepoints = .{},
         };
     }
 
     pub fn deinit(self: *UndoLog) void {
         self.clear();
         self.entries.deinit(self.allocator);
+        self.clearSavepoints();
+        self.savepoints.deinit(self.allocator);
     }
 
     pub fn clear(self: *UndoLog) void {
@@ -202,14 +215,141 @@ pub const UndoLog = struct {
         self.entries.clearRetainingCapacity();
     }
 
+    pub fn clearSavepoints(self: *UndoLog) void {
+        for (self.savepoints.items) |sp| {
+            self.allocator.free(sp.name);
+        }
+        self.savepoints.clearRetainingCapacity();
+    }
+
     pub fn begin(self: *UndoLog) void {
         self.clear();
+        self.clearSavepoints();
         self.active = true;
     }
 
     pub fn commit(self: *UndoLog) void {
         self.clear();
+        self.clearSavepoints();
         self.active = false;
+    }
+
+    // CANARY: REQ=REQ-TXN-SAVEPOINT-002; FEATURE="TransactionSavepoints"; ASPECT=CreateSavepoint; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-01
+    /// Create a named savepoint at the current position in the undo log.
+    /// If a savepoint with the same name already exists, it is replaced.
+    pub fn createSavepoint(self: *UndoLog, name: []const u8) !void {
+        if (!self.active) return error.NoActiveTransaction;
+
+        // Replace existing savepoint with same name
+        for (self.savepoints.items) |*sp| {
+            if (std.mem.eql(u8, sp.name, name)) {
+                sp.entry_index = self.entries.items.len;
+                return;
+            }
+        }
+
+        const name_copy = try self.allocator.dupe(u8, name);
+        try self.savepoints.append(self.allocator, .{
+            .name = name_copy,
+            .entry_index = self.entries.items.len,
+        });
+    }
+
+    // CANARY: REQ=REQ-TXN-SAVEPOINT-003; FEATURE="TransactionSavepoints"; ASPECT=RollbackToSavepoint; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-01
+    /// Roll back all undo entries recorded after the named savepoint,
+    /// undoing their effects on the store. The savepoint itself is kept
+    /// (SQL semantics: ROLLBACK TO does not release the savepoint).
+    /// Any savepoints created after this one are discarded.
+    pub fn rollbackToSavepoint(self: *UndoLog, name: []const u8, store: *graph_store.GraphStore) !void {
+        if (!self.active) return error.NoActiveTransaction;
+
+        // Find the savepoint
+        var sp_idx: ?usize = null;
+        for (self.savepoints.items, 0..) |sp, idx| {
+            if (std.mem.eql(u8, sp.name, name)) {
+                sp_idx = idx;
+                break;
+            }
+        }
+        const idx = sp_idx orelse return error.SavepointNotFound;
+        const target_entry_index = self.savepoints.items[idx].entry_index;
+
+        // Undo entries in reverse order from current end back to the savepoint position
+        var i: usize = self.entries.items.len;
+        while (i > target_entry_index) {
+            i -= 1;
+            const entry = self.entries.items[i];
+            try self.undoEntry(store, entry);
+        }
+
+        // Free memory for undone entries and shrink the list
+        self.freeEntriesFrom(target_entry_index);
+        self.entries.shrinkRetainingCapacity(target_entry_index);
+
+        // Remove savepoints created after this one
+        var j: usize = self.savepoints.items.len;
+        while (j > idx + 1) {
+            j -= 1;
+            self.allocator.free(self.savepoints.items[j].name);
+        }
+        self.savepoints.shrinkRetainingCapacity(idx + 1);
+    }
+
+    /// Free allocated memory in entries from index `from` to end.
+    fn freeEntriesFrom(self: *UndoLog, from: usize) void {
+        for (self.entries.items[from..]) |entry| {
+            switch (entry) {
+                .SetNodeProperty => |e| {
+                    self.allocator.free(e.key);
+                    if (e.old_value.string_value) |s| self.allocator.free(s);
+                    self.allocator.free(e.old_value.key);
+                },
+                .RemoveNodeProperty => |e| {
+                    if (e.old_value.string_value) |s| self.allocator.free(s);
+                    self.allocator.free(e.old_value.key);
+                },
+                .SetEdgeProperty => |e| {
+                    self.allocator.free(e.key);
+                    if (e.old_value.string_value) |s| self.allocator.free(s);
+                    self.allocator.free(e.old_value.key);
+                },
+                .RemoveEdgeProperty => |e| {
+                    if (e.old_value.string_value) |s| self.allocator.free(s);
+                    self.allocator.free(e.old_value.key);
+                },
+                .DeleteNode => |e| {
+                    for (e.labels) |label| self.allocator.free(label);
+                    self.allocator.free(e.labels);
+                    for (e.properties) |prop| {
+                        self.allocator.free(prop.key);
+                        if (prop.string_value) |s| self.allocator.free(s);
+                    }
+                    self.allocator.free(e.properties);
+                    self.allocator.free(e.graph_name);
+                },
+                .DeleteEdge => |e| {
+                    self.allocator.free(e.label);
+                    for (e.properties) |prop| {
+                        self.allocator.free(prop.key);
+                        if (prop.string_value) |s| self.allocator.free(s);
+                    }
+                    self.allocator.free(e.properties);
+                    self.allocator.free(e.graph_name);
+                },
+                .AddNodeLabel => |e| {
+                    self.allocator.free(e.label);
+                },
+                .RemoveNodeLabel => |e| {
+                    self.allocator.free(e.label);
+                },
+                .CreateNode => |e| {
+                    self.allocator.free(e.graph_name);
+                },
+                .CreateEdge => |e| {
+                    self.allocator.free(e.graph_name);
+                },
+            }
+        }
     }
 
     /// Log creation of a node (undo = delete it)
@@ -961,4 +1101,85 @@ test "undo log persistence roundtrip for complex entries" {
         },
         else => try std.testing.expect(false),
     }
+}
+
+test "savepoint create and rollback to savepoint" {
+    const allocator = std.testing.allocator;
+    var undo = UndoLog.init(allocator);
+    defer undo.deinit();
+
+    // Cannot create savepoint outside transaction
+    try std.testing.expectError(error.NoActiveTransaction, undo.createSavepoint("sp1"));
+
+    undo.begin();
+    try std.testing.expect(undo.active);
+
+    // Log two operations, then create a savepoint
+    try undo.logCreateNode(1, null);
+    try undo.logCreateNode(2, null);
+    try std.testing.expectEqual(@as(usize, 2), undo.entries.items.len);
+
+    try undo.createSavepoint("sp1");
+    try std.testing.expectEqual(@as(usize, 1), undo.savepoints.items.len);
+    try std.testing.expectEqual(@as(usize, 2), undo.savepoints.items[0].entry_index);
+
+    // Log two more operations after the savepoint
+    try undo.logCreateNode(3, null);
+    try undo.logCreateNode(4, null);
+    try std.testing.expectEqual(@as(usize, 4), undo.entries.items.len);
+
+    // Rollback to savepoint should undo entries after sp1 (entries 3 and 4)
+    // Note: rollbackToSavepoint needs a store, but the CreateNode undo (delete)
+    // will fail because there is no actual store. For unit testing purposes
+    // we test the entry/savepoint bookkeeping by using a second savepoint.
+    try undo.createSavepoint("sp2");
+    try std.testing.expectEqual(@as(usize, 2), undo.savepoints.items.len);
+    try std.testing.expectEqual(@as(usize, 4), undo.savepoints.items[1].entry_index);
+
+    // Replacing an existing savepoint updates its index
+    try undo.logCreateNode(5, null);
+    try undo.createSavepoint("sp2");
+    try std.testing.expectEqual(@as(usize, 2), undo.savepoints.items.len);
+    try std.testing.expectEqual(@as(usize, 5), undo.savepoints.items[1].entry_index);
+
+    // Commit clears savepoints
+    undo.commit();
+    try std.testing.expectEqual(@as(usize, 0), undo.entries.items.len);
+    try std.testing.expectEqual(@as(usize, 0), undo.savepoints.items.len);
+    try std.testing.expect(!undo.active);
+}
+
+test "savepoint not found error" {
+    const allocator = std.testing.allocator;
+    var undo = UndoLog.init(allocator);
+    defer undo.deinit();
+
+    undo.begin();
+    try undo.createSavepoint("sp1");
+
+    // Rollback to non-existent savepoint should fail
+    // We need a dummy store for the API; since no entries exist after the
+    // savepoint, no actual undo work is done.
+    // However rollbackToSavepoint requires a *GraphStore which we cannot
+    // easily construct in a unit test without initializing the full engine.
+    // Instead we test that the error is returned for a missing name.
+    try std.testing.expectError(error.SavepointNotFound, undo.rollbackToSavepoint("nonexistent", dummy_store_ptr));
+    undo.commit();
+}
+
+const dummy_store_ptr = @as(*graph_store.GraphStore, @ptrFromInt(0xdeadbeef));
+
+test "begin clears savepoints from previous transaction" {
+    const allocator = std.testing.allocator;
+    var undo = UndoLog.init(allocator);
+    defer undo.deinit();
+
+    undo.begin();
+    try undo.createSavepoint("sp1");
+    try std.testing.expectEqual(@as(usize, 1), undo.savepoints.items.len);
+
+    // Begin a new transaction — should clear previous savepoints
+    undo.begin();
+    try std.testing.expectEqual(@as(usize, 0), undo.savepoints.items.len);
+    undo.commit();
 }

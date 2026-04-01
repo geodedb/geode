@@ -2128,11 +2128,34 @@ fn handleClientMessage(
                 try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false } });
             }
         },
-        .savepoint => |_| {
-            try sendQuicMessage(gpa, stream, .{ .savepoint = .{ .success = false } });
+        .savepoint => |sp_req| {
+            // CANARY: REQ=REQ-TXN-SAVEPOINT-004; FEATURE="TransactionSavepoints"; ASPECT=QuicSavepoint; STATUS=IMPL; OWNER=transport; UPDATED=2026-04-01
+            if (!state.in_txn) {
+                try sendQuicMessage(gpa, stream, .{ .savepoint = .{ .success = false } });
+            } else {
+                const undo = txn_undo_log.getGlobalUndoLog(gpa);
+                undo.createSavepoint(sp_req.name) catch {
+                    try sendQuicMessage(gpa, stream, .{ .savepoint = .{ .success = false } });
+                    return;
+                };
+                try sendQuicMessage(gpa, stream, .{ .savepoint = .{ .success = true } });
+            }
         },
-        .rollback_to => |_| {
-            try sendQuicMessage(gpa, stream, .{ .rollback_to = .{ .success = false } });
+        .rollback_to => |rt_req| {
+            // CANARY: REQ=REQ-TXN-SAVEPOINT-005; FEATURE="TransactionSavepoints"; ASPECT=QuicRollbackTo; STATUS=IMPL; OWNER=transport; UPDATED=2026-04-01
+            if (!state.in_txn) {
+                try sendQuicMessage(gpa, stream, .{ .rollback_to = .{ .success = false } });
+            } else {
+                graph_store.acquireStoreWriteLock();
+                defer graph_store.releaseStoreWriteLock();
+                const store = graph_store.getGlobalStore(gpa);
+                const undo = txn_undo_log.getGlobalUndoLog(gpa);
+                undo.rollbackToSavepoint(rt_req.name, store) catch {
+                    try sendQuicMessage(gpa, stream, .{ .rollback_to = .{ .success = false } });
+                    return;
+                };
+                try sendQuicMessage(gpa, stream, .{ .rollback_to = .{ .success = true } });
+            }
         },
         .cdc_diag => |_| {
             if (state.cdc_engine) |eng| {
