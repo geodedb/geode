@@ -36,7 +36,7 @@ fn spawnServerWithDataDir(allocator: std.mem.Allocator, data_dir: []const u8) !p
     var handle = try proto.spawnServer(
         allocator,
         &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", data_dir },
-        &.{ env_pair },
+        &.{env_pair},
     );
     handle.addr = addr;
     handle.port = port;
@@ -131,7 +131,7 @@ test "restore: full roundtrip" {
     try expect(restore_res.success);
     try expectEqualStrings(data_dir, restore_res.restore_dir);
 
-    const restore_path = try std.fmt.allocPrint(allocator, "{s}/graph_store.dat", .{data_dir});
+    const restore_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{data_dir});
     defer allocator.free(restore_path);
     try std.fs.cwd().access(restore_path, .{});
 }

@@ -1311,29 +1311,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 return error.DuplicateGraph;
             }
 
-            cat.addGraph(graph_name) catch |err| {
-                if (err == error.GraphAlreadyExists and cg.if_not_exists) {
-                    return ExecutionResult{
-                        .columns = try allocator.alloc([]const u8, 0),
-                        .rows = try allocator.alloc([]Value, 0),
-                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
-                    };
-                }
-                return err;
-            };
-
-            _ = store.createGraph(graph_name) catch |err| {
-                log.debug("Graph storage creation failed", &.{
-                    Attr.string("graph_name", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
-
-            // Persist the UUID that the storage adapter assigned so
-            // the graph data directory survives restarts.
-            if (graph_store.GraphStore.getGraphUuid(graph_name)) |uuid| {
-                cat.updateGraphUuid(graph_name, uuid);
-            }
+            try store.createGraph(graph_name);
+            errdefer store.dropGraph(graph_name) catch {};
+            const uuid = graph_store.GraphStore.getGraphUuid(graph_name) orelse return error.GraphUuidUnavailable;
+            try cat.addGraphWithUuid(graph_name, uuid);
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),

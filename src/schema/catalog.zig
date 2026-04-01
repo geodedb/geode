@@ -54,6 +54,13 @@ pub fn isAutoIndex(name: []const u8) bool {
     return std.mem.startsWith(u8, name, "auto_idx_") and std.mem.endsWith(u8, name, "_id");
 }
 
+fn isZeroUuid(uuid: [16]u8) bool {
+    for (uuid) |byte| {
+        if (byte != 0) return false;
+    }
+    return true;
+}
+
 /// Catalog manages database metadata (schemas, graphs, indexes, constraints)
 /// Thread-safe via RwLock for concurrent access
 pub const Catalog = struct {
@@ -81,12 +88,7 @@ pub const Catalog = struct {
             .data_dir = try allocator.dupe(u8, data_dir),
         };
 
-        // Load persisted catalog if it exists
-        self.load() catch |err| {
-            log.warn("Failed to load catalog from disk", &.{
-                Attr.string("error", @errorName(err)),
-            });
-        };
+        try self.load();
 
         return self;
     }
@@ -188,6 +190,7 @@ pub const Catalog = struct {
         while (graph_iter.next()) |entry| {
             const name = entry.key_ptr.*;
             const uuid = entry.value_ptr.*;
+            if (isZeroUuid(uuid)) return error.GraphUuidUnavailable;
             var len_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &len_buf, @intCast(name.len), .little);
             try buffer.appendSlice(self.allocator, &len_buf);
@@ -296,16 +299,15 @@ pub const Catalog = struct {
         var stream = std.io.fixedBufferStream(data);
         var reader = stream.reader();
 
-        // Read header (supports both old 12-byte and new 16-byte format)
+        // Read header
         var header: [16]u8 = undefined;
         const bytes_read = reader.readAll(&header) catch 0;
-        if (bytes_read < 12) return error.InvalidCatalogFile;
+        if (bytes_read < 16) return error.InvalidCatalogFile;
 
         const schema_count = std.mem.readInt(u32, header[0..4], .little);
         const graph_count = std.mem.readInt(u32, header[4..8], .little);
         const index_count = std.mem.readInt(u32, header[8..12], .little);
-        // Constraint count only available in new format (16-byte header)
-        const constraint_count: u32 = if (bytes_read >= 16) std.mem.readInt(u32, header[12..16], .little) else 0;
+        const constraint_count = std.mem.readInt(u32, header[12..16], .little);
 
         // Read schemas
         var i: u32 = 0;
@@ -321,9 +323,7 @@ pub const Catalog = struct {
             try self.schemas.put(name, {});
         }
 
-        // Read graphs (name + 16-byte UUID).  Old catalog files without UUIDs
-        // are detected by checking remaining bytes — if less than 16 bytes
-        // remain after the name, we treat it as the legacy (name-only) format.
+        // Read graphs (name + 16-byte UUID).
         i = 0;
         while (i < graph_count) : (i += 1) {
             var len_buf: [4]u8 = undefined;
@@ -334,81 +334,27 @@ pub const Catalog = struct {
             errdefer self.allocator.free(name);
             if ((try reader.readAll(name)) < name_len) return error.InvalidCatalogFile;
 
-            // Try to read the 16-byte UUID that follows the name.
             var uuid: [16]u8 = .{0} ** 16;
-            const uuid_bytes = reader.readAll(&uuid) catch 0;
-            if (uuid_bytes < 16) {
-                // Legacy format (no UUID) — will generate a new one below.
-                uuid = .{0} ** 16;
-            }
+            if ((try reader.readAll(&uuid)) < 16) return error.InvalidCatalogFile;
+            if (isZeroUuid(uuid)) return error.GraphUuidUnavailable;
 
             try self.graphs.put(name, uuid);
         }
 
-        // Ensure catalog graphs exist in GraphStore registry, using stored
-        // UUIDs so existing data directories are reopened (not orphaned).
+        // Ensure catalog graphs exist in GraphStore registry using the stored
+        // UUIDs so the correct graph-storage directories are reopened.
         const store = graph_store.getGlobalStore(self.allocator);
         var graph_iter = self.graphs.iterator();
         while (graph_iter.next()) |entry| {
             const graph_name = entry.key_ptr.*;
             const uuid = entry.value_ptr.*;
             if (!store.graphExists(graph_name)) {
-                const is_zero_uuid = blk: {
-                    for (uuid) |b| {
-                        if (b != 0) break :blk false;
-                    }
-                    break :blk true;
-                };
-                if (is_zero_uuid) {
-                    // Legacy catalog without UUID — create new engine
-                    _ = store.createGraph(graph_name) catch |err| {
-                        log.err("Failed to ensure graph in store", &.{
-                            Attr.string("name", graph_name),
-                            Attr.string("error", @errorName(err)),
-                        });
-                    };
-                    // Retrieve and store the generated UUID
-                    if (graph_store.GraphStore.getGraphUuid(graph_name)) |new_uuid| {
-                        entry.value_ptr.* = new_uuid;
-                    }
-                } else {
-                    // Known UUID — open existing storage directory.
-                    // Retry once on failure: the adapter may not have been fully
-                    // ready on the first attempt (e.g. engine still flushing WAL).
-                    var graph_opened = false;
-                    var open_attempts: u8 = 0;
-                    while (open_attempts < 2) : (open_attempts += 1) {
-                        store.openOrCreateGraphWithUuid(graph_name, uuid) catch |err| {
-                            log.err("Failed to open graph with UUID (attempt {d}/2)", &.{
-                                Attr.int("attempt", open_attempts + 1),
-                                Attr.string("name", graph_name),
-                                Attr.string("error", @errorName(err)),
-                            });
-                            // Brief pause before retry to allow adapter to settle
-                            if (open_attempts == 0) std.Thread.sleep(10_000_000);
-                            continue;
-                        };
-                        graph_opened = true;
-                        break;
-                    }
-                    if (!graph_opened) {
-                        log.err("Graph loading failed after retries — data for this graph will be missing", &.{
-                            Attr.string("name", graph_name),
-                        });
-                    }
-                }
+                try store.openOrCreateGraphWithUuid(graph_name, uuid);
             }
         }
 
-        // Reload in-memory node/edge model from the now-opened graph engines.
-        // The initial loadFromFile during initGlobalStore ran before graphs were
-        // loaded in the adapter, so it found nothing.  This second pass picks up
-        // the data that was persisted in the storage engines.
-        store.loadFromFile() catch |err| {
-            log.err("Failed to reload store from adapter after catalog load", &.{
-                Attr.string("error", @errorName(err)),
-            });
-        };
+        // Reload the in-memory compatibility cache from the now-opened engines.
+        try store.loadFromFile();
 
         // Read indexes
         i = 0;
@@ -659,9 +605,8 @@ pub const Catalog = struct {
     }
 
     // CANARY: REQ=REQ-GRAPH-META-001; FEATURE="GraphMetadataPersistence"; ASPECT=AddGraph; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-03-29
-    /// Add a graph to the catalog and persist.  Stores a zero UUID initially;
-    /// call `updateGraphUuid` after the storage adapter creates the engine to
-    /// persist the real UUID.
+    /// Add a graph to the catalog without persisting it yet. Call
+    /// `updateGraphUuid()` or `addGraphWithUuid()` before saving.
     pub fn addGraph(self: *Catalog, name: []const u8) !void {
         self.rwlock.lock();
         defer self.rwlock.unlock();
@@ -675,27 +620,38 @@ pub const Catalog = struct {
         const owned_name = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned_name);
 
-        // Store zero UUID initially; updateGraphUuid() fills it in after the
-        // storage adapter assigns a real UUID.
         try self.graphs.put(owned_name, .{0} ** 16);
+    }
+
+    /// Add a graph to the catalog with its assigned storage UUID and persist it.
+    pub fn addGraphWithUuid(self: *Catalog, name: []const u8, uuid: [16]u8) !void {
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
+        if (isZeroUuid(uuid)) return error.GraphUuidUnavailable;
+        if (self.graphs.contains(name)) return error.GraphAlreadyExists;
+
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+
+        try self.graphs.put(owned_name, uuid);
         try self.save();
     }
 
     /// Update the stored UUID for a graph after the storage adapter has
-    /// created the engine.  Called from CREATE GRAPH execution path.
-    pub fn updateGraphUuid(self: *Catalog, name: []const u8, uuid: [16]u8) void {
+    /// created the engine.
+    pub fn updateGraphUuid(self: *Catalog, name: []const u8, uuid: [16]u8) !void {
+        if (isZeroUuid(uuid)) return error.GraphUuidUnavailable;
+
         self.rwlock.lock();
         defer self.rwlock.unlock();
 
         if (self.graphs.getPtr(name)) |ptr| {
             ptr.* = uuid;
-            self.save() catch |err| {
-                log.err("Failed to persist graph UUID update", &.{
-                    Attr.string("name", name),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
+            try self.save();
+            return;
         }
+        return error.GraphNotFound;
     }
 
     // CANARY: REQ=REQ-GRAPH-META-002; FEATURE="GraphMetadataPersistence"; ASPECT=RemoveGraph; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-01-09

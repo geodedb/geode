@@ -1077,14 +1077,6 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
                     const can_create = auth_result.role == .Admin or auth_result.role == .ReadWrite;
 
                     if (can_create) {
-                        cat.addGraph(requested_graph) catch |err| {
-                            if (err != error.GraphAlreadyExists) {
-                                log.err("Failed to add graph to catalog", &.{
-                                    Attr.string("graph", requested_graph),
-                                    Attr.string("error", @errorName(err)),
-                                });
-                            }
-                        };
                         _ = gstore.createGraph(requested_graph) catch |err| {
                             log.err("Graph auto-creation failed", &.{
                                 Attr.string("graph", requested_graph),
@@ -1098,10 +1090,29 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
                             };
                             return encodeMessage(allocator, resp);
                         };
-                        // Persist UUID so graph survives restarts
-                        if (graph_store.GraphStore.getGraphUuid(requested_graph)) |uuid| {
-                            cat.updateGraphUuid(requested_graph, uuid);
-                        }
+                        const uuid = graph_store.GraphStore.getGraphUuid(requested_graph) orelse {
+                            const resp = schema.HelloResponse{
+                                .success = false,
+                                .session_id = "",
+                                .error_message = "Graph created without persistent UUID",
+                                .capabilities = caps,
+                            };
+                            return encodeMessage(allocator, resp);
+                        };
+                        cat.addGraphWithUuid(requested_graph, uuid) catch |err| {
+                            gstore.dropGraph(requested_graph) catch {};
+                            log.err("Failed to persist graph metadata", &.{
+                                Attr.string("graph", requested_graph),
+                                Attr.string("error", @errorName(err)),
+                            });
+                            const resp = schema.HelloResponse{
+                                .success = false,
+                                .session_id = "",
+                                .error_message = "Failed to persist graph metadata",
+                                .capabilities = caps,
+                            };
+                            return encodeMessage(allocator, resp);
+                        };
                         resolved_graph = requested_graph;
                     } else {
                         const resp = schema.HelloResponse{
@@ -1162,14 +1173,6 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
 
             if (!in_store and !in_catalog) {
                 // No auth = always allow auto-create
-                cat.addGraph(requested_graph) catch |err| {
-                    if (err != error.GraphAlreadyExists) {
-                        log.err("Failed to add graph to catalog (no-auth)", &.{
-                            Attr.string("graph", requested_graph),
-                            Attr.string("error", @errorName(err)),
-                        });
-                    }
-                };
                 _ = gstore.createGraph(requested_graph) catch |err| {
                     log.err("Graph auto-creation failed (no-auth)", &.{
                         Attr.string("graph", requested_graph),
@@ -1183,10 +1186,29 @@ fn handleHandshake(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
                     };
                     return encodeMessage(allocator, resp);
                 };
-                // Persist UUID so graph survives restarts
-                if (graph_store.GraphStore.getGraphUuid(requested_graph)) |uuid| {
-                    cat.updateGraphUuid(requested_graph, uuid);
-                }
+                const uuid = graph_store.GraphStore.getGraphUuid(requested_graph) orelse {
+                    const resp = schema.HelloResponse{
+                        .success = false,
+                        .session_id = "",
+                        .error_message = "Graph created without persistent UUID",
+                        .capabilities = caps,
+                    };
+                    return encodeMessage(allocator, resp);
+                };
+                cat.addGraphWithUuid(requested_graph, uuid) catch |err| {
+                    gstore.dropGraph(requested_graph) catch {};
+                    log.err("Failed to persist graph metadata (no-auth)", &.{
+                        Attr.string("graph", requested_graph),
+                        Attr.string("error", @errorName(err)),
+                    });
+                    const resp = schema.HelloResponse{
+                        .success = false,
+                        .session_id = "",
+                        .error_message = "Failed to persist graph metadata",
+                        .capabilities = caps,
+                    };
+                    return encodeMessage(allocator, resp);
+                };
             }
             noauth_resolved_graph = requested_graph;
         }

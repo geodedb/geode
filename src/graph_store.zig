@@ -588,6 +588,20 @@ pub const GraphStore = struct {
         return self.id_maps.getPtr(graph_name);
     }
 
+    fn requireIdMap(self: *GraphStore, graph_name: []const u8) !*id_map_mod.IdMap {
+        return self.getIdMap(graph_name) orelse error.IdMapNotLoaded;
+    }
+
+    fn requireNodeSlot(self: *GraphStore, graph_name: []const u8, node_id: u64) !u64 {
+        const id_map = try self.requireIdMap(graph_name);
+        return id_map.nodeSlot(@as(u128, node_id)) orelse error.NodeSlotMappingMissing;
+    }
+
+    fn requireEdgeSlot(self: *GraphStore, graph_name: []const u8, edge_id: u64) !u64 {
+        const id_map = try self.requireIdMap(graph_name);
+        return id_map.edgeSlot(@as(u128, edge_id)) orelse error.EdgeSlotMappingMissing;
+    }
+
     pub fn graphExists(self: *const GraphStore, graph_name: []const u8) bool {
         // Dual-read: check adapter first, then fall back to local HashMap
         if (global_vtable) |vt| {
@@ -608,11 +622,10 @@ pub const GraphStore = struct {
     }
 
     pub fn createGraph(self: *GraphStore, graph_name: []const u8) !void {
-        // Dual-write: create in adapter, then fall through to local HashMap
+        // Create the persisted graph first so the in-memory registry never
+        // diverges from the adapter-backed storage layout.
         if (global_vtable) |vt| {
-            _ = vt.getOrCreateGraphFn(vt.ctx, graph_name) catch |err| {
-                log.err("dual-write: adapter createGraph failed", &.{ Attr.string("error", @errorName(err)), Attr.string("graph", graph_name) });
-            };
+            _ = try vt.getOrCreateGraphFn(vt.ctx, graph_name);
         }
         if (self.graphs.contains(graph_name)) {
             return error.GraphAlreadyExists;
@@ -622,20 +635,15 @@ pub const GraphStore = struct {
 
         // Initialize IdMap for the new graph
         _ = try self.getOrCreateIdMap(graph_name);
+        self.saveIdMaps();
 
         self.dirty.store(true, .release);
     }
 
-    /// Open a graph using a known UUID (for catalog recovery).  Opens the
-    /// existing on-disk storage directory instead of generating a new UUID.
+    /// Open a graph using a known UUID (for catalog recovery).
     pub fn openOrCreateGraphWithUuid(self: *GraphStore, graph_name: []const u8, graph_uuid: [16]u8) !void {
         if (global_adapter) |adapter| {
-            _ = adapter.openGraphWithUuid(graph_name, graph_uuid) catch |err| {
-                log.err("adapter openGraphWithUuid failed", &.{
-                    Attr.string("error", @errorName(err)),
-                    Attr.string("graph", graph_name),
-                });
-            };
+            _ = try adapter.openGraphWithUuid(graph_name, graph_uuid);
         }
         if (self.graphs.contains(graph_name)) {
             return;
@@ -683,12 +691,8 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Create node with optional graph name for per-graph data isolation
     pub fn createNodeWithGraph(self: *GraphStore, labels: [][]const u8, graph_name: []const u8) !u64 {
-        // Dual-write: create in adapter (independent ID space), then fall through to local HashMap
         const adapter_slot_id: ?u64 = if (global_vtable) |vt|
-            vt.createNodeFn(vt.ctx, graph_name, labels) catch |err| blk: {
-                log.err("dual-write: adapter createNode failed", &.{ Attr.string("error", @errorName(err)), Attr.string("graph", graph_name) });
-                break :blk null;
-            }
+            try vt.createNodeFn(vt.ctx, graph_name, labels)
         else
             null;
         try self.ensureGraph(graph_name);
@@ -697,11 +701,9 @@ pub const GraphStore = struct {
 
         // Store UUID→slot mapping in IdMap for adapter translation
         if (adapter_slot_id) |slot_id| {
-            if (self.getOrCreateIdMap(graph_name)) |im| {
-                im.insertNodeWithSlot(@as(u128, id), slot_id) catch |err| {
-                    log.err("IdMap insertNodeWithSlot failed", &.{Attr.string("error", @errorName(err))});
-                };
-            } else |_| {}
+            const im = try self.getOrCreateIdMap(graph_name);
+            try im.insertNodeWithSlot(@as(u128, id), slot_id);
+            self.saveIdMaps();
         }
 
         const labels_copy = try self.allocator.alloc([]const u8, labels.len);
@@ -980,14 +982,10 @@ pub const GraphStore = struct {
             else => value,
         };
 
-        // Dual-write: set property in adapter via IdMap slot translation
         if (global_vtable) |vt| {
-            const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "default";
-            // Use IdMap to translate UUIDv7 → slot_id for adapter
-            const slot_id = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, node_id)) orelse node_id) else node_id;
-            vt.setNodePropertyFn(vt.ctx, gn, slot_id, key, effective_value) catch |err| {
-                log.err("dual-write: adapter setNodeProperty failed", &.{Attr.string("error", @errorName(err))});
-            };
+            const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
+            const slot_id = try self.requireNodeSlot(node.graph_name, node_id);
+            try vt.setNodePropertyFn(vt.ctx, node.graph_name, slot_id, key, effective_value);
         }
         if (self.nodes.getPtr(node_id)) |node| {
             const value_copy = try copyPropertyValue(self, effective_value);
@@ -1067,12 +1065,23 @@ pub const GraphStore = struct {
     }
 
     pub fn removeNodeProperty(self: *GraphStore, node_id: u64, key: []const u8) void {
-        // Dual-write: remove property in adapter via IdMap slot translation
         if (global_vtable) |vt| {
-            const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "default";
-            const slot_id = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, node_id)) orelse node_id) else node_id;
-            vt.removeNodePropertyFn(vt.ctx, gn, slot_id, key) catch |err| {
-                log.err("dual-write: adapter removeNodeProperty failed", &.{Attr.string("error", @errorName(err))});
+            const node = self.nodes.get(node_id) orelse return;
+            const slot_id = self.requireNodeSlot(node.graph_name, node_id) catch |err| {
+                log.err("adapter node-slot lookup failed during removeNodeProperty", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.int("node_id", @intCast(node_id)),
+                    Attr.string("graph", node.graph_name),
+                });
+                return;
+            };
+            vt.removeNodePropertyFn(vt.ctx, node.graph_name, slot_id, key) catch |err| {
+                log.err("adapter removeNodeProperty failed", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.int("node_id", @intCast(node_id)),
+                    Attr.string("graph", node.graph_name),
+                });
+                return;
             };
         }
         if (self.nodes.getPtr(node_id)) |node| {
@@ -1089,14 +1098,11 @@ pub const GraphStore = struct {
     }
 
     pub fn addNodeLabel(self: *GraphStore, node_id: u64, label: []const u8) !void {
-        // Dual-write: add node label in adapter via IdMap slot translation
         if (global_vtable) |vt| {
             if (vt.addNodeLabelFn) |f| {
-                const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "default";
-                const slot_id = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, node_id)) orelse node_id) else node_id;
-                f(vt.ctx, gn, slot_id, label) catch |err| {
-                    log.err("dual-write: adapter addNodeLabel failed", &.{Attr.string("error", @errorName(err))});
-                };
+                const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
+                const slot_id = try self.requireNodeSlot(node.graph_name, node_id);
+                try f(vt.ctx, node.graph_name, slot_id, label);
             }
         }
         if (self.nodes.getPtr(node_id)) |node| {
@@ -1132,14 +1138,11 @@ pub const GraphStore = struct {
     }
 
     pub fn removeNodeLabel(self: *GraphStore, node_id: u64, label: []const u8) !void {
-        // Dual-write: remove node label in adapter via IdMap slot translation
         if (global_vtable) |vt| {
             if (vt.removeNodeLabelFn) |f| {
-                const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "default";
-                const slot_id = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, node_id)) orelse node_id) else node_id;
-                f(vt.ctx, gn, slot_id, label) catch |err| {
-                    log.err("dual-write: adapter removeNodeLabel failed", &.{Attr.string("error", @errorName(err))});
-                };
+                const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
+                const slot_id = try self.requireNodeSlot(node.graph_name, node_id);
+                try f(vt.ctx, node.graph_name, slot_id, label);
             }
         }
         if (self.nodes.getPtr(node_id)) |node| {
@@ -1683,18 +1686,12 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphIsolation"; ASPECT=CreateEdge; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Create edge with optional graph name for per-graph data isolation
     pub fn createEdgeWithGraph(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8) !u64 {
-        // Dual-write: create in adapter (independent ID space).
-        // Translate UUID-based node IDs to engine slot IDs via the IdMap,
-        // since the engine stores nodes by slot position, not UUID.
         const adapter_slot_id: ?u64 = blk: {
             const vt = global_vtable orelse break :blk null;
-            const im = (self.getOrCreateIdMap(graph_name) catch break :blk null);
-            const from_slot = im.nodeSlot(@as(u128, from_id)) orelse break :blk null;
-            const to_slot = im.nodeSlot(@as(u128, to_id)) orelse break :blk null;
-            break :blk vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type) catch |err| err_blk: {
-                log.err("dual-write: adapter createEdge failed", &.{ Attr.string("error", @errorName(err)), Attr.string("graph", graph_name) });
-                break :err_blk null;
-            };
+            const im = try self.getOrCreateIdMap(graph_name);
+            const from_slot = im.nodeSlot(@as(u128, from_id)) orelse return error.NodeSlotMappingMissing;
+            const to_slot = im.nodeSlot(@as(u128, to_id)) orelse return error.NodeSlotMappingMissing;
+            break :blk try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type);
         };
         try self.ensureGraph(graph_name);
         // Generate UUIDv7-based time-sortable unique ID
@@ -1702,11 +1699,9 @@ pub const GraphStore = struct {
 
         // Store UUID→slot mapping in IdMap for adapter translation
         if (adapter_slot_id) |slot_id| {
-            if (self.getOrCreateIdMap(graph_name)) |im| {
-                im.insertEdgeWithSlot(@as(u128, id), slot_id) catch |err| {
-                    log.err("IdMap insertEdgeWithSlot failed", &.{Attr.string("error", @errorName(err))});
-                };
-            } else |_| {}
+            const im = try self.getOrCreateIdMap(graph_name);
+            try im.insertEdgeWithSlot(@as(u128, id), slot_id);
+            self.saveIdMaps();
         }
 
         const edge_type_copy = try self.allocator.dupe(u8, edge_type);
@@ -1920,18 +1915,13 @@ pub const GraphStore = struct {
             else => value,
         };
 
-        // Dual-write: set edge property in adapter via IdMap slot translation
         if (global_vtable) |vt| {
             if (vt.setEdgePropertyFn) |f| {
-                if (self.edges.get(edge_id)) |edge| {
-                    const gn = edge.graph_name;
-                    const slot_from = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, edge.from_id)) orelse edge.from_id) else edge.from_id;
-                    const slot_to = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, edge.to_id)) orelse edge.to_id) else edge.to_id;
-                    const slot_edge = if (self.getIdMap(gn)) |im| (im.edgeSlot(@as(u128, edge_id)) orelse edge_id) else edge_id;
-                    f(vt.ctx, gn, slot_from, slot_to, slot_edge, key, effective_value) catch |err| {
-                        log.err("dual-write: adapter setEdgeProperty failed", &.{Attr.string("error", @errorName(err))});
-                    };
-                }
+                const edge = self.edges.get(edge_id) orelse return error.EdgeNotFound;
+                const slot_from = try self.requireNodeSlot(edge.graph_name, edge.from_id);
+                const slot_to = try self.requireNodeSlot(edge.graph_name, edge.to_id);
+                const slot_edge = try self.requireEdgeSlot(edge.graph_name, edge_id);
+                try f(vt.ctx, edge.graph_name, slot_from, slot_to, slot_edge, key, effective_value);
             }
         }
         if (self.edges.getPtr(edge_id)) |edge| {
@@ -1958,16 +1948,40 @@ pub const GraphStore = struct {
     }
 
     pub fn removeEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8) void {
-        // Dual-write: remove edge property in adapter via IdMap slot translation
         if (global_vtable) |vt| {
             if (vt.removeEdgePropertyFn) |f| {
                 if (self.edges.get(edge_id)) |edge_info| {
-                    const gn = edge_info.graph_name;
-                    const slot_from = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, edge_info.from_id)) orelse edge_info.from_id) else edge_info.from_id;
-                    const slot_to = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, edge_info.to_id)) orelse edge_info.to_id) else edge_info.to_id;
-                    const slot_edge = if (self.getIdMap(gn)) |im| (im.edgeSlot(@as(u128, edge_id)) orelse edge_id) else edge_id;
-                    f(vt.ctx, gn, slot_from, slot_to, slot_edge, key) catch |err| {
-                        log.err("dual-write: adapter removeEdgeProperty failed", &.{Attr.string("error", @errorName(err))});
+                    const slot_from = self.requireNodeSlot(edge_info.graph_name, edge_info.from_id) catch |err| {
+                        log.err("adapter edge endpoint-slot lookup failed during removeEdgeProperty", &.{
+                            Attr.string("error", @errorName(err)),
+                            Attr.int("edge_id", @intCast(edge_id)),
+                            Attr.string("graph", edge_info.graph_name),
+                        });
+                        return;
+                    };
+                    const slot_to = self.requireNodeSlot(edge_info.graph_name, edge_info.to_id) catch |err| {
+                        log.err("adapter edge endpoint-slot lookup failed during removeEdgeProperty", &.{
+                            Attr.string("error", @errorName(err)),
+                            Attr.int("edge_id", @intCast(edge_id)),
+                            Attr.string("graph", edge_info.graph_name),
+                        });
+                        return;
+                    };
+                    const slot_edge = self.requireEdgeSlot(edge_info.graph_name, edge_id) catch |err| {
+                        log.err("adapter edge-slot lookup failed during removeEdgeProperty", &.{
+                            Attr.string("error", @errorName(err)),
+                            Attr.int("edge_id", @intCast(edge_id)),
+                            Attr.string("graph", edge_info.graph_name),
+                        });
+                        return;
+                    };
+                    f(vt.ctx, edge_info.graph_name, slot_from, slot_to, slot_edge, key) catch |err| {
+                        log.err("adapter removeEdgeProperty failed", &.{
+                            Attr.string("error", @errorName(err)),
+                            Attr.int("edge_id", @intCast(edge_id)),
+                            Attr.string("graph", edge_info.graph_name),
+                        });
+                        return;
                     };
                 }
             }
@@ -2772,6 +2786,29 @@ pub const GraphStore = struct {
         _ = final_path;
     }
 
+    fn resolveIdMapDirPath(self: *GraphStore, graph_name: []const u8, create_if_missing: bool) ![]u8 {
+        _ = create_if_missing;
+        if (self.data_dir.len == 0) return error.InvalidDataDir;
+
+        const graph_uuid = GraphStore.getGraphUuid(graph_name) orelse return error.GraphUuidUnavailable;
+        const uuid_hex = std.fmt.bytesToHex(graph_uuid, .lower);
+        return std.fmt.allocPrint(self.allocator, "{s}/graphs/{s}", .{ self.data_dir, uuid_hex });
+    }
+
+    fn resolveIdMapDirPathForLoad(self: *GraphStore, graph_name: []const u8) !?[]u8 {
+        if (self.data_dir.len == 0) return null;
+
+        const graph_uuid = GraphStore.getGraphUuid(graph_name) orelse return null;
+        const uuid_hex = std.fmt.bytesToHex(graph_uuid, .lower);
+        const uuid_path = try std.fmt.allocPrint(self.allocator, "{s}/graphs/{s}", .{ self.data_dir, uuid_hex });
+        std.fs.cwd().access(uuid_path, .{}) catch |err| {
+            self.allocator.free(uuid_path);
+            if (err == error.FileNotFound) return null;
+            return err;
+        };
+        return uuid_path;
+    }
+
     // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-003; FEATURE="EngineBackedPersistence"; ASPECT=IdMapPersistence; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
     /// Persist all dirty IdMaps to their per-graph data directories.
     pub fn saveIdMaps(self: *GraphStore) void {
@@ -2782,8 +2819,9 @@ pub const GraphStore = struct {
             const graph_name = entry.key_ptr.*;
             const id_map = entry.value_ptr;
 
-            // Open (or create) the per-graph directory: <data_dir>/graphs/<graph_name>/
-            const graph_dir_path = std.fmt.allocPrint(self.allocator, "{s}/graphs/{s}", .{ self.data_dir, graph_name }) catch continue;
+            // Persist the IdMap beside the graph-storage engine files in the
+            // UUID-backed graph directory (`graphs/<uuid_hex>/`).
+            const graph_dir_path = self.resolveIdMapDirPath(graph_name, true) catch continue;
             defer self.allocator.free(graph_dir_path);
 
             std.fs.cwd().makePath(graph_dir_path) catch continue;
@@ -2815,31 +2853,25 @@ pub const GraphStore = struct {
             // Register graph in the registry
             try self.ensureGraphNoDirty(graph_name);
 
-            // Load IdMap from disk if it exists
+            // Current-format storage requires an IdMap alongside each UUID-backed
+            // graph directory so external IDs remain stable across reloads.
             if (self.data_dir.len > 0) {
-                const graph_dir_path = try std.fmt.allocPrint(self.allocator, "{s}/graphs/{s}", .{ self.data_dir, graph_name });
+                const graph_dir_path = (try self.resolveIdMapDirPathForLoad(graph_name)) orelse return error.GraphStorageDirectoryMissing;
                 defer self.allocator.free(graph_dir_path);
 
-                if (std.fs.cwd().openDir(graph_dir_path, .{})) |dir_val| {
-                    var dir = dir_val;
-                    defer dir.close();
-                    if (id_map_mod.IdMap.load(self.allocator, dir)) |loaded_map| {
-                        const key = try self.allocator.dupe(u8, graph_name);
-                        try self.id_maps.put(key, loaded_map);
-                    } else |_| {
-                        // No IdMap on disk — will be created on demand
-                    }
-                } else |_| {}
+                var dir = try std.fs.cwd().openDir(graph_dir_path, .{});
+                defer dir.close();
+
+                try dir.access("id_map.dat", .{});
+                const loaded_map = try id_map_mod.IdMap.load(self.allocator, dir);
+                const key = try self.allocator.dupe(u8, graph_name);
+                errdefer self.allocator.free(key);
+                try self.id_maps.put(key, loaded_map);
             }
 
-            // Scan all nodes from the adapter
-            const scan_entries = adapter.scanAllNodes(graph_name, self.allocator) catch |err| {
-                log.warn("Failed to scan nodes from adapter for graph", &.{
-                    Attr.string("graph", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-                continue;
-            };
+            const id_map = try self.requireIdMap(graph_name);
+
+            const scan_entries = try adapter.scanAllNodes(graph_name, self.allocator);
             defer self.allocator.free(scan_entries);
 
             log.info("loadFromAdapter: scanned nodes", &.{
@@ -2850,36 +2882,8 @@ pub const GraphStore = struct {
             for (scan_entries) |entry| {
                 const slot_id = entry.slot_id;
 
-                // Get labels from adapter
-                const labels = adapter.getNodeLabels(graph_name, slot_id, self.allocator) catch |err| {
-                    log.warn("Failed to get node labels from adapter", &.{
-                        Attr.string("error", @errorName(err)),
-                    });
-                    continue;
-                };
-
-                // Determine the node's UUID — check IdMap reverse lookup, or use slot_id as-is.
-                // Use the lower 64 bits of the u128 UUID (the unique part on little-endian).
-                // When IdMap is missing (e.g. id_map.bin deleted or first-time upgrade),
-                // fall back to identity mapping (slot_id = node_id) so data still loads.
-                const id_map = self.getIdMap(graph_name);
-                if (id_map == null and self.data_dir.len > 0) {
-                    log.warn("IdMap missing for graph — using identity mapping (slot_id as node_id)", &.{
-                        Attr.string("graph", graph_name),
-                        Attr.int("slot_id", @intCast(slot_id)),
-                    });
-                }
-                const node_uuid: u64 = if (id_map) |im| blk: {
-                    if (im.nodeUuid(slot_id)) |uuid_val| {
-                        break :blk @truncate(uuid_val);
-                    } else {
-                        log.warn("IdMap lookup miss: node slot_id has no UUID mapping (stale id_map.bin?)", &.{
-                            Attr.string("graph", graph_name),
-                            Attr.int("slot_id", @intCast(slot_id)),
-                        });
-                        break :blk slot_id;
-                    }
-                } else slot_id;
+                const labels = try adapter.getNodeLabels(graph_name, slot_id, self.allocator);
+                const node_uuid = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse return error.NodeSlotMappingMissing));
 
                 const graph_name_copy = try self.allocator.dupe(u8, graph_name);
 
@@ -2890,24 +2894,20 @@ pub const GraphStore = struct {
                     .graph_name = graph_name_copy,
                 };
 
-                // Load properties from adapter (best-effort: node is added
-                // even if properties fail to load, e.g. props.store empty).
-                load_props: {
-                    var storage_props = adapter.getAllNodeProperties(graph_name, slot_id, self.allocator) catch break :load_props;
-                    defer {
-                        var sp_iter = storage_props.iterator();
-                        while (sp_iter.next()) |sp_entry| {
-                            self.allocator.free(sp_entry.key_ptr.*);
-                        }
-                        storage_props.deinit();
-                    }
-
+                var storage_props = try adapter.getAllNodeProperties(graph_name, slot_id, self.allocator);
+                defer {
                     var sp_iter = storage_props.iterator();
                     while (sp_iter.next()) |sp_entry| {
-                        const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
-                        const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
-                        try node.properties.put(key_copy, pv);
+                        self.allocator.free(sp_entry.key_ptr.*);
                     }
+                    storage_props.deinit();
+                }
+
+                var sp_iter = storage_props.iterator();
+                while (sp_iter.next()) |sp_entry| {
+                    const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
+                    const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
+                    try node.properties.put(key_copy, pv);
                 }
 
                 try self.nodes.put(node_uuid, node);
@@ -2922,41 +2922,19 @@ pub const GraphStore = struct {
                     try self.addToLabelIndex(graph_name, label, node_uuid);
                 }
 
-                // Scan outgoing edges for this node
-                const out_edges = adapter.getOutgoingEdges(graph_name, slot_id, self.allocator) catch continue;
+                const out_edges = try adapter.getOutgoingEdges(graph_name, slot_id, self.allocator);
                 defer self.allocator.free(out_edges);
 
                 for (out_edges) |edge_entry| {
                     // Check if this edge is already loaded (could be from another node's outgoing scan)
-                    const edge_uuid: u64 = if (id_map) |im| blk: {
-                        if (im.edgeUuid(edge_entry.edge_id)) |uuid_val| {
-                            break :blk @truncate(uuid_val);
-                        } else {
-                            log.warn("IdMap lookup miss: edge slot_id has no UUID mapping", &.{
-                                Attr.string("graph", graph_name),
-                                Attr.int("edge_id", @intCast(edge_entry.edge_id)),
-                            });
-                            break :blk edge_entry.edge_id;
-                        }
-                    } else edge_entry.edge_id;
+                    const edge_uuid = @as(u64, @truncate(id_map.edgeUuid(edge_entry.edge_id) orelse return error.EdgeSlotMappingMissing));
 
                     if (self.edges.contains(edge_uuid)) continue;
 
-                    // Resolve target node UUID
-                    const target_uuid: u64 = if (id_map) |im| blk: {
-                        if (im.nodeUuid(edge_entry.neighbor)) |uuid_val| {
-                            break :blk @truncate(uuid_val);
-                        } else {
-                            log.warn("IdMap lookup miss: edge target slot_id has no UUID mapping", &.{
-                                Attr.string("graph", graph_name),
-                                Attr.int("target_slot_id", @intCast(edge_entry.neighbor)),
-                            });
-                            break :blk edge_entry.neighbor;
-                        }
-                    } else edge_entry.neighbor;
+                    const target_uuid = @as(u64, @truncate(id_map.nodeUuid(edge_entry.neighbor) orelse return error.NodeSlotMappingMissing));
 
                     // Get edge label from label dict
-                    const mg = adapter.getOrCreateGraph(graph_name) catch continue;
+                    const mg = try adapter.getOrCreateGraph(graph_name);
                     const edge_label_str = mg.label_dict.getString(edge_entry.rel_type) orelse "UNKNOWN";
                     const edge_label_copy = try self.allocator.dupe(u8, edge_label_str);
                     const edge_graph_name_copy = try self.allocator.dupe(u8, graph_name);
@@ -2970,21 +2948,18 @@ pub const GraphStore = struct {
                         .graph_name = edge_graph_name_copy,
                     };
 
-                    // Load edge properties from adapter (best-effort: edge is
-                    // added even if properties fail to load).
-                    load_edge_props: {
-                        if (edge_entry.prop_head == 0) break :load_edge_props;
-                        var storage_props = adapter.getAllEdgeProperties(graph_name, edge_entry.prop_head, self.allocator) catch break :load_edge_props;
+                    if (edge_entry.prop_head != 0) {
+                        var edge_storage_props = try adapter.getAllEdgeProperties(graph_name, edge_entry.prop_head, self.allocator);
                         defer {
-                            var sp_iter = storage_props.iterator();
-                            while (sp_iter.next()) |sp_entry| {
+                            var edge_sp_iter = edge_storage_props.iterator();
+                            while (edge_sp_iter.next()) |sp_entry| {
                                 self.allocator.free(sp_entry.key_ptr.*);
                             }
-                            storage_props.deinit();
+                            edge_storage_props.deinit();
                         }
 
-                        var sp_iter = storage_props.iterator();
-                        while (sp_iter.next()) |sp_entry| {
+                        var edge_sp_iter = edge_storage_props.iterator();
+                        while (edge_sp_iter.next()) |sp_entry| {
                             const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
                             const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
                             try edge.properties.put(key_copy, pv);
@@ -3031,6 +3006,11 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-005; FEATURE="EngineBackedPersistence"; ASPECT=LoadFromFile; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
     // Load from per-graph storage engine instead of legacy graph_store.dat.
     pub fn loadFromFile(self: *GraphStore) !void {
+        // Reload semantics replace the in-memory compatibility cache with the
+        // latest engine-backed state. This keeps repeated loads idempotent and
+        // avoids duplicate indexes / adjacency entries.
+        self.clearNodes();
+        errdefer self.clearNodes();
         if (global_adapter) |adapter| {
             try self.loadFromAdapter(adapter);
         }
@@ -3134,16 +3114,28 @@ pub const GraphStore = struct {
         // Capture graph_name before deletion for WAL notification and handle routing
         const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "";
 
-        // Dual-write: delete from adapter via IdMap slot translation
         if (global_vtable) |vt| {
             const adapter_gn = if (gn.len > 0) gn else "default";
-            const slot_id = if (self.getIdMap(adapter_gn)) |im| (im.nodeSlot(@as(u128, node_id)) orelse node_id) else node_id;
+            const slot_id = self.requireNodeSlot(adapter_gn, node_id) catch |err| {
+                log.err("adapter node-slot lookup failed during deleteNode", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.int("node_id", @intCast(node_id)),
+                    Attr.string("graph", adapter_gn),
+                });
+                return;
+            };
             vt.deleteNodeFn(vt.ctx, adapter_gn, slot_id) catch |err| {
-                log.err("dual-write: adapter deleteNode failed", &.{Attr.string("error", @errorName(err))});
+                log.err("adapter deleteNode failed", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.int("node_id", @intCast(node_id)),
+                    Attr.string("graph", adapter_gn),
+                });
+                return;
             };
             // Remove from IdMap
             if (self.getIdMap(adapter_gn)) |im| {
                 _ = im.removeNode(@as(u128, node_id));
+                self.saveIdMaps();
             }
         }
 
@@ -3158,18 +3150,44 @@ pub const GraphStore = struct {
         // Capture graph_name before deletion for WAL notification and handle routing
         const gn = if (self.edges.get(edge_id)) |e| e.graph_name else "";
 
-        // Dual-write: delete from adapter via IdMap slot translation
         if (global_vtable) |vt| {
             if (self.edges.get(edge_id)) |edge| {
-                const slot_from = if (self.getIdMap(edge.graph_name)) |im| (im.nodeSlot(@as(u128, edge.from_id)) orelse edge.from_id) else edge.from_id;
-                const slot_to = if (self.getIdMap(edge.graph_name)) |im| (im.nodeSlot(@as(u128, edge.to_id)) orelse edge.to_id) else edge.to_id;
-                const slot_edge = if (self.getIdMap(edge.graph_name)) |im| (im.edgeSlot(@as(u128, edge_id)) orelse edge_id) else edge_id;
+                const slot_from = self.requireNodeSlot(edge.graph_name, edge.from_id) catch |err| {
+                    log.err("adapter edge endpoint-slot lookup failed during deleteEdge", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge.graph_name),
+                    });
+                    return;
+                };
+                const slot_to = self.requireNodeSlot(edge.graph_name, edge.to_id) catch |err| {
+                    log.err("adapter edge endpoint-slot lookup failed during deleteEdge", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge.graph_name),
+                    });
+                    return;
+                };
+                const slot_edge = self.requireEdgeSlot(edge.graph_name, edge_id) catch |err| {
+                    log.err("adapter edge-slot lookup failed during deleteEdge", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge.graph_name),
+                    });
+                    return;
+                };
                 vt.deleteEdgeFn(vt.ctx, edge.graph_name, slot_from, slot_to, slot_edge) catch |err| {
-                    log.err("dual-write: adapter deleteEdge failed", &.{Attr.string("error", @errorName(err))});
+                    log.err("adapter deleteEdge failed", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge.graph_name),
+                    });
+                    return;
                 };
                 // Remove edge from IdMap
                 if (self.getIdMap(edge.graph_name)) |im| {
                     _ = im.removeEdge(@as(u128, edge_id));
+                    self.saveIdMaps();
                 }
             }
         }
@@ -3820,9 +3838,10 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
     // Load from engine-backed storage (adapter) if available
     if (global_adapter != null) {
         global_store.?.loadFromFile() catch |err| {
-            log.warn("Failed to load graph store from adapter (starting fresh)", &.{
+            log.err("Failed to load graph store from adapter", &.{
                 Attr.string("error", @errorName(err)),
             });
+            @panic("graph store adapter load failed");
         };
     }
     // Release store: all writes above are visible to threads that see initialized=true.
