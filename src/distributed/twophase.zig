@@ -139,15 +139,18 @@ pub const TwoPhaseTransport = struct {
 
     /// Get or create a connection to endpoint (format: "host:port")
     pub fn getConnection(self: *TwoPhaseTransport, endpoint: []const u8) !*ConnectionEntry {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        // Check cache under lock
+        {
+            self.mutex.lock();
+            defer self.mutex.unlock();
 
-        if (self.connections.getPtr(endpoint)) |entry| {
-            entry.last_used = std.time.timestamp();
-            return entry;
+            if (self.connections.getPtr(endpoint)) |entry| {
+                entry.last_used = std.time.timestamp();
+                return entry;
+            }
         }
 
-        // Parse endpoint into host and port
+        // Parse endpoint into host and port (no lock needed)
         // GAP-0144: Secure TLS connections for 2PC coordination
         // CANARY: REQ=REQ-2PC-TLS-001; FEATURE="2PC TLS"; ASPECT=Security; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-13
         const colon_pos = std.mem.indexOf(u8, endpoint, ":") orelse return error.InvalidEndpoint;
@@ -168,7 +171,7 @@ pub const TwoPhaseTransport = struct {
             break :blk false;
         };
 
-        // Create new connection with TLS verification by default
+        // Create new connection without holding lock (network I/O)
         var client = quic.QuicClient.init(self.allocator);
         client.connectInsecure(host, port, allow_insecure) catch |err| {
             log.err("2PC transport failed to connect", &.{
@@ -178,7 +181,7 @@ pub const TwoPhaseTransport = struct {
             return error.ConnectionFailed;
         };
 
-        // Wait for handshake
+        // Wait for handshake without holding lock
         client.waitForHandshake(5) catch |err| {
             client.deinit();
             log.err("2PC transport handshake failed", &.{
@@ -188,15 +191,28 @@ pub const TwoPhaseTransport = struct {
             return error.HandshakeFailed;
         };
 
-        const entry = ConnectionEntry{
-            .client = client,
-            .stream = null,
-            .last_used = std.time.timestamp(),
-            .endpoint = try self.allocator.dupe(u8, endpoint),
-        };
+        // Re-lock to insert into cache; handle race where another thread connected first
+        {
+            self.mutex.lock();
+            defer self.mutex.unlock();
 
-        try self.connections.put(endpoint, entry);
-        return self.connections.getPtr(endpoint).?;
+            if (self.connections.getPtr(endpoint)) |entry| {
+                // Another thread already connected; discard our connection and use theirs
+                client.deinit();
+                entry.last_used = std.time.timestamp();
+                return entry;
+            }
+
+            const entry = ConnectionEntry{
+                .client = client,
+                .stream = null,
+                .last_used = std.time.timestamp(),
+                .endpoint = try self.allocator.dupe(u8, endpoint),
+            };
+
+            try self.connections.put(endpoint, entry);
+            return self.connections.getPtr(endpoint).?;
+        }
     }
 
     // CANARY: REQ=REQ-2PC-TIMEOUT-001; FEATURE="2PCTimeout"; ASPECT=Transport; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01

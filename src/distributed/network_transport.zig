@@ -62,12 +62,7 @@ pub const NetworkTransport = struct {
     }
 
     pub fn sendToNode(self: *NetworkTransport, node_id: u32, msg: *const ClusterMessage) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const peer = self.peers.get(node_id) orelse return error.PeerNotFound;
-
-        // Serialize message with length-prefixed protobuf framing
+        // Serialize message with length-prefixed protobuf framing (no lock needed)
         var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 512);
         defer aw.deinit();
         try protobuf.encode(&aw.writer, self.allocator, msg.*);
@@ -78,11 +73,22 @@ pub const NetworkTransport = struct {
         try buffer.writer().writeInt(u32, @intCast(body.len), .big);
         try buffer.writer().writeAll(body);
 
-        // Retry logic: 3 attempts with exponential backoff
+        // Look up peer info and existing connection under lock
+        var existing_conn: ?*quic.QuicConnection = null;
+        var peer_address: []const u8 = undefined;
+        {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            const peer = self.peers.get(node_id) orelse return error.PeerNotFound;
+            existing_conn = peer.connection;
+            peer_address = peer.address;
+        }
+
+        // Retry logic: 3 attempts with exponential backoff (no lock held during I/O)
         const retry_delays = [_]u64{ 50, 100, 200 }; // milliseconds
         var retry: usize = 0;
         while (retry < 3) : (retry += 1) {
-            if (peer.connection) |conn| {
+            if (existing_conn) |conn| {
                 conn.send(buffer.items) catch |err| {
                     if (retry < 2) {
                         std.time.sleep(retry_delays[retry] * std.time.ns_per_ms);
@@ -92,8 +98,8 @@ pub const NetworkTransport = struct {
                 };
                 return;
             } else {
-                // Establish connection
-                const conn = self.quic_transport.connect(peer.address) catch |err| {
+                // Establish connection without holding lock
+                const conn = self.quic_transport.connect(peer_address) catch |err| {
                     if (retry < 2) {
                         std.time.sleep(retry_delays[retry] * std.time.ns_per_ms);
                         continue;
@@ -101,12 +107,18 @@ pub const NetworkTransport = struct {
                     return err;
                 };
 
-                // Update peer connection
-                var updated_peer = self.peers.getPtr(node_id).?;
-                updated_peer.connection = conn;
-                updated_peer.last_seen = std.time.milliTimestamp();
+                // Update peer connection state under lock
+                {
+                    self.mutex.lock();
+                    defer self.mutex.unlock();
+                    if (self.peers.getPtr(node_id)) |updated_peer| {
+                        updated_peer.connection = conn;
+                        updated_peer.last_seen = std.time.milliTimestamp();
+                    }
+                }
+                existing_conn = conn;
 
-                // Send message
+                // Send message without lock
                 conn.send(buffer.items) catch |err| {
                     if (retry < 2) {
                         std.time.sleep(retry_delays[retry] * std.time.ns_per_ms);
