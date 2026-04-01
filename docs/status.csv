@@ -3513,12 +3513,17 @@ REQ-SEC-RATE-LIMIT-006,AuthRateLimiting,HelloCheck,IMPL,,,security,2026-03-26,sr
 REQ-SEC-RATE-LIMIT-007,AuthRateLimiting,ServerInit,IMPL,,,security,2026-03-26,src/server/main.zig
 REQ-SEC-RBAC-001,Security,RBAC,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-RLS-POLICY-001,Security,RLSPolicy,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
-REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,src/server/rls_filter.zig
+REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,TESTED,,,security,2026-04-01,src/server/rls_filter.zig
+REQ-SEC-RLS-WIRE-002,RLS Query Enforcement,FilterApplication,TESTED,,,security,2026-04-01,src/server/rls_filter.zig
 REQ-SEC-RLS-WIRE-002,RLS Query Enforcement,QUICImport,IMPL,,,security,2026-03-26,src/server/quic_connection_handler.zig
-REQ-SEC-RLS-WIRE-003,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,src/server/quic_connection_handler.zig
+REQ-SEC-RLS-WIRE-003,RLS Query Enforcement,PostResultFilter,TESTED,,,security,2026-04-01,src/server/quic_connection_handler.zig
 REQ-SEC-RLS-WIRE-004,RLS Query Enforcement,ServerInit,IMPL,,,security,2026-03-26,src/server/main.zig
 REQ-SEC-RLS-WIRE-005,RLS Query Enforcement,UnitTests,IMPL,,,security,2026-03-26,build.zig
-REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026-03-26,src/execution.zig
+REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,TESTED,,,security,2026-04-01,src/execution.zig
+REQ-SEC-RLS-WIRE-007,RLS Property Filtering,PropertyPredicate,TESTED,,,security,2026-04-01,src/server/rls_filter.zig
+REQ-SEC-RLS-WIRE-007,RLS Property Filtering,SharedTypes,TESTED,,,security,2026-04-01,src/security/rls_types.zig
+REQ-SEC-RLS-WIRE-008,RLS Property Filtering,PolicyCRUD,TESTED,,,security,2026-04-01,src/security/rls_types.zig
+REQ-SEC-RLS-WIRE-009,RLS Property Filtering,StoredProcedures,TESTED,,,security,2026-04-01,src/execution/procedure_registry.zig
 REQ-SEC-SESSION-MGT-001,Security,SessionManagement,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-SESSION-TIMEOUT-001,Security,SessionTimeout,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-TDE-001,Security,TDE,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig

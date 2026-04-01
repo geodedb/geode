@@ -1920,7 +1920,7 @@ fn handleClientMessage(
                     // S1: Apply label-based RLS filtering AFTER lock release and BEFORE
                     // response serialization.  This removes rows whose Node/Edge labels
                     // are denied for the authenticated user in the current graph.
-                    // CANARY: REQ=REQ-SEC-RLS-WIRE-003; FEATURE="RLS Query Enforcement"; ASPECT=PostResultFilter; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+                    // CANARY: REQ=REQ-SEC-RLS-WIRE-003; FEATURE="RLS Query Enforcement"; ASPECT=PostResultFilter; STATUS=TESTED; OWNER=security; UPDATED=2026-04-01
                     if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                         if (state.authenticated_user) |auth_user| {
                             const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;

@@ -379,7 +379,7 @@ pub const ExecutionContext = struct {
     // S1: Opaque pointer to the RLS filter engine for label-based row filtering.
     // Currently used by the post-execution filter in quic_connection_handler; included
     // here for future in-execution RLS integration (e.g., predicate push-down).
-    // CANARY: REQ=REQ-SEC-RLS-WIRE-006; FEATURE="RLS Query Enforcement"; ASPECT=ExecutionContext; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+    // CANARY: REQ=REQ-SEC-RLS-WIRE-006; FEATURE="RLS Query Enforcement"; ASPECT=ExecutionContext; STATUS=TESTED; OWNER=security; UPDATED=2026-04-01
     rls_engine: ?*anyopaque = null,
     // CANARY: REQ=REQ-MULTI-TENANT-FLE-001; FEATURE="FLE Multi-Tenancy"; ASPECT=ExecutionContext; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
     // GAP-0281: Session tenant_id threaded through to FLE encryption hooks

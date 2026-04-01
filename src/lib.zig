@@ -554,6 +554,9 @@ pub const auth_hmac = @import("security/auth_hmac.zig");
 // @import("auth_graph_manager") — see build.zig for module registration.
 // It depends on geode (root_mod) so it cannot be re-exported here without a cycle.
 
+// GAP-0280: RLS types are available as a separate build module: @import("rls_types").
+// Do NOT re-export here -- rls_types.zig is its own module to avoid dual-module conflicts.
+
 // QUIC algorithms and connection management
 pub const algorithms = @import("algorithms.zig");
 pub const connection_manager = @import("transport/connection_manager.zig");

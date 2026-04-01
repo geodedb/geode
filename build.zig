@@ -1589,10 +1589,15 @@ pub fn build(b: *std.Build) void {
     // Add auth module to unified binary for server authentication
     geode_exe.root_module.addImport("geode_auth", auth_mod);
 
+    // GAP-0280: RLS shared types module (property predicates, engine, global accessor).
+    // Must be a standalone module to avoid circular dependencies between server/ and execution/.
+    const rls_types_mod = b.createModule(.{ .root_source_file = b.path("src/security/rls_types.zig"), .target = target, .optimize = optimize });
+
     const rls_mod = b.createModule(.{ .root_source_file = b.path("src/security/rls_core.zig"), .target = target, .optimize = optimize });
     rls_mod.addImport("geode_auth", auth_mod);
     rls_mod.addImport("logging", logging_mod);
     root_mod.addImport("rls", rls_mod);
+    root_mod.addImport("rls_types", rls_types_mod);
 
     // GAP-0496: Security test — RLS QueryRewriter must validate policy expressions to prevent GQL injection
     const rls_injection_tests = b.addTest(.{
@@ -1618,6 +1623,7 @@ pub fn build(b: *std.Build) void {
     });
     rls_filter_tests.root_module.addImport("geode", root_mod);
     rls_filter_tests.root_module.addImport("logging", logging_mod);
+    rls_filter_tests.root_module.addImport("rls_types", rls_types_mod);
     const run_rls_filter_tests = b.addRunArtifact(rls_filter_tests);
     test_step.dependOn(&run_rls_filter_tests.step);
 

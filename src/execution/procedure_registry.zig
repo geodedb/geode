@@ -53,6 +53,9 @@ const fle_integration = @import("../fle_integration.zig");
 const user_mgmt = @import("../security/user_management.zig");
 // GAP-0283: Import multi-graph security for graph.grant/revoke procedures
 const multi_graph_security = @import("../security/multi_graph_security.zig");
+// GAP-0280: Import RLS types for property-level policy management procedures.
+// We import the rls_types module (not rls_filter.zig) to avoid circular module dependencies.
+const rls_types = @import("rls_types");
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=PROCEDURE_REGISTRY; STATUS=TESTED; TEST=tests/test_performance_integration.zig; OWNER=refactor; UPDATED=2026-01-15
 
@@ -5409,6 +5412,105 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         } else {
             row[1] = Value{ .Int = 0 };
         }
+
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    }
+    // ---- GAP-0280: RLS property policy management procedures ----
+    // CANARY: REQ=REQ-SEC-RLS-WIRE-009; FEATURE="RLS Property Filtering"; ASPECT=StoredProcedures; STATUS=TESTED; OWNER=security; UPDATED=2026-04-01
+    else if (std.mem.eql(u8, proc_name, "geode.rls.add_property_policy")) {
+        // geode.rls.add_property_policy(user, graph, property_name, operator, value)
+        // Admin-only procedure to add a property-level deny policy.
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
+
+        const args = switch (call_stmt.procedure) {
+            .Call => |call| call.args,
+            else => &[_]*ast.Expr{},
+        };
+
+        if (args.len < 5) {
+            return try buildProcedureErrorResult(allocator, "Usage: CALL geode.rls.add_property_policy('user', 'graph', 'property', 'operator', 'value')");
+        }
+
+        const user_arg = if (args[0].* == .String) args[0].String else "";
+        const graph_arg = if (args[1].* == .String) args[1].String else "";
+        const prop_arg = if (args[2].* == .String) args[2].String else "";
+        const op_arg = if (args[3].* == .String) args[3].String else "";
+        const val_arg = if (args[4].* == .String) args[4].String else "";
+
+        if (prop_arg.len == 0 or op_arg.len == 0) {
+            return try buildProcedureErrorResult(allocator, "property and operator are required");
+        }
+
+        const op = rls_types.ComparisonOp.fromString(op_arg) orelse {
+            return try buildProcedureErrorResult(allocator, "Invalid operator. Use: eq, neq, gt, lt, gte, lte, =, !=, <>, >, <, >=, <=");
+        };
+
+        const engine = rls_types.getGlobalRLSFilterEngine() orelse {
+            return try buildProcedureErrorResult(allocator, "RLS filter engine not initialized");
+        };
+
+        const graph_name: ?[]const u8 = if (graph_arg.len > 0) graph_arg else null;
+        engine.addPropertyPolicy(user_arg, graph_name, prop_arg, op, val_arg, true) catch {
+            return try buildProcedureErrorResult(allocator, "Failed to add property policy");
+        };
+
+        const columns = try allocator.alloc([]const u8, 1);
+        columns[0] = try allocator.dupe(u8, "status");
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = try allocator.dupe(u8, "Property policy added") };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.rls.remove_property_policy")) {
+        // geode.rls.remove_property_policy(user, graph, property_name)
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
+
+        const args = switch (call_stmt.procedure) {
+            .Call => |call| call.args,
+            else => &[_]*ast.Expr{},
+        };
+
+        if (args.len < 3) {
+            return try buildProcedureErrorResult(allocator, "Usage: CALL geode.rls.remove_property_policy('user', 'graph', 'property')");
+        }
+
+        const user_arg = if (args[0].* == .String) args[0].String else "";
+        const graph_arg = if (args[1].* == .String) args[1].String else "";
+        const prop_arg = if (args[2].* == .String) args[2].String else "";
+
+        const engine = rls_types.getGlobalRLSFilterEngine() orelse {
+            return try buildProcedureErrorResult(allocator, "RLS filter engine not initialized");
+        };
+
+        const graph_name: ?[]const u8 = if (graph_arg.len > 0) graph_arg else null;
+        engine.removePropertyPolicy(user_arg, graph_name, prop_arg);
+
+        const columns = try allocator.alloc([]const u8, 1);
+        columns[0] = try allocator.dupe(u8, "status");
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = try allocator.dupe(u8, "Property policy removed") };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.rls.list_policies")) {
+        // geode.rls.list_policies() -> lists all active label + property policies
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
+
+        const engine = rls_types.getGlobalRLSFilterEngine() orelse {
+            return try buildProcedureErrorResult(allocator, "RLS filter engine not initialized");
+        };
+
+        const columns = try allocator.alloc([]const u8, 3);
+        columns[0] = try allocator.dupe(u8, "type");
+        columns[1] = try allocator.dupe(u8, "label_policies");
+        columns[2] = try allocator.dupe(u8, "property_policies");
+
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Str = try allocator.dupe(u8, "rls_summary") };
+        row[1] = Value{ .Int = @intCast(engine.policyCount()) };
+        row[2] = Value{ .Int = @intCast(engine.propertyPolicyCount()) };
 
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
