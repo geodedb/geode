@@ -225,9 +225,9 @@ test "e2e_timeseries: GQL function integration" {
     var last_result = try gql_functions.executeFunction(&store, last_value_call, allocator);
     defer gql_functions.deinitValue(&last_result, allocator);
     switch (last_result) {
-        .object => |obj| {
-            const ts = obj.get("ts").?.integer;
-            const val = obj.get("value").?.integer;
+        .Map => |obj| {
+            const ts = obj.get("ts").?.Int;
+            const val = obj.get("value").?.Int;
             try std.testing.expect(ts == 1000059000);
             try std.testing.expect(val >= 30 and val <= 100);
         },
@@ -244,8 +244,8 @@ test "e2e_timeseries: GQL function integration" {
     var at_result = try gql_functions.executeFunction(&store, value_at_call, allocator);
     defer gql_functions.deinitValue(&at_result, allocator);
     switch (at_result) {
-        .object => |obj| {
-            const val = obj.get("value").?.integer;
+        .Map => |obj| {
+            const val = obj.get("value").?.Int;
             try std.testing.expect(val >= 80); // Should be high during spike
         },
         else => return error.UnexpectedResult,
@@ -265,7 +265,7 @@ test "e2e_timeseries: GQL function integration" {
 
     var interp_result = try gql_functions.executeFunction(&store, interpolate_call, allocator);
     defer gql_functions.deinitValue(&interp_result, allocator);
-    try std.testing.expect(interp_result == .object);
+    try std.testing.expect(interp_result == .Map);
 
     // Test moving average
     const moving_avg_call = gql_functions.TSFunctionCall{
@@ -282,16 +282,16 @@ test "e2e_timeseries: GQL function integration" {
     var avg_result = try gql_functions.executeFunction(&store, moving_avg_call, allocator);
     defer gql_functions.deinitValue(&avg_result, allocator);
     switch (avg_result) {
-        .array => |arr| {
+        .List => |arr| {
             try std.testing.expect(arr.len > 50); // Should have many averaged points
 
             // Check that averages during spike are higher
             var spike_found = false;
             for (arr) |item| {
                 switch (item) {
-                    .object => |obj| {
-                        const ts = obj.get("ts").?.integer;
-                        const avg = obj.get("avg").?.integer;
+                    .Map => |obj| {
+                        const ts = obj.get("ts").?.Int;
+                        const avg = obj.get("avg").?.Int;
                         if (ts >= 1000020000 and ts <= 1000030000) {
                             if (avg > 60) spike_found = true;
                         }
@@ -318,15 +318,15 @@ test "e2e_timeseries: GQL function integration" {
     var rate_result = try gql_functions.executeFunction(&store, rate_call, allocator);
     defer gql_functions.deinitValue(&rate_result, allocator);
     switch (rate_result) {
-        .array => |arr| {
+        .List => |arr| {
             try std.testing.expect(arr.len == points.items.len - 1);
 
             // Check for high rate during spike onset
             for (arr) |item| {
                 switch (item) {
-                    .object => |obj| {
-                        const ts = obj.get("ts").?.integer;
-                        const rate = obj.get("rate").?.float;
+                    .Map => |obj| {
+                        const ts = obj.get("ts").?.Int;
+                        const rate = obj.get("rate").?.Double;
                         if (ts == 1000020000) { // Start of spike
                             try std.testing.expect(rate > 10.0); // High positive rate
                         }
@@ -387,7 +387,7 @@ test "e2e_timeseries: performance benchmark" {
     std.debug.print("  Query time: {} ms\n", .{query_time});
 
     // Memory usage approximation
-    const series = store.by_key.get(store.hashKey(key)).?;
+    const series = store.getSeries(key).?;
     const memory_used = series.points.capacity * @sizeOf(timeseries.Point);
     const bytes_per_point = @as(f64, @floatFromInt(memory_used)) / @as(f64, @floatFromInt(num_points));
 
