@@ -648,6 +648,7 @@ REQ-DIST-FRAG-003,Fragment Serialization Tests,Testing,TESTED,,,distributed,2026
 REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,IMPL,,,distributed,2026-04-01,src/distributed/sharding.zig
 REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,IMPL,,,distributed,2026-04-01,src/distributed/sharding.zig
 REQ-DIST-HASH-AGG-001,DistributedHashAggregate,ValueAccumulation,TESTED,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-federation-correctness.md
+REQ-DIST-HASH-AGG-001,DistributedHashAggregate,ValueAccumulation,IMPL,,,distributed,2026-04-01,src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-HASH-AGG-001,DistributedHashAggregate,ValueAccumulation,TESTED,,,distributed,2026-04-01,tests/test_federation_merge_correctness.zig
 REQ-DIST-LB-001,Load Balancing,ShardSelection,TESTED,,,distributed,2026-01-08,src/distributed/enhanced_query_transport.zig
 REQ-DIST-LOCAL-001,DistributedLocalExecution,Distributed,TESTED,,,distributed,2026-01-25,src/distributed/query_coordinator.zig

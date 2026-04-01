@@ -461,6 +461,7 @@ pub const EnhancedQueryCoordinator = struct {
         };
     }
 
+    // CANARY: REQ=REQ-DIST-HASH-AGG-001; FEATURE="DistributedHashAggregate"; ASPECT=ValueAccumulation; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     /// Hash aggregate results (for GROUP BY queries)
     fn hashAggregateResults(
         self: *EnhancedQueryCoordinator,
@@ -469,8 +470,6 @@ pub const EnhancedQueryCoordinator = struct {
     ) !federation.QueryResults {
         _ = options;
 
-        // Simple aggregation placeholder
-        // In practice, would implement sophisticated aggregation merging
         var groups = std.StringHashMap(AggregateGroup).init(self.allocator);
         defer {
             var it = groups.iterator();
@@ -484,15 +483,19 @@ pub const EnhancedQueryCoordinator = struct {
         for (shard_results) |result| {
             for (result.rows) |row| {
                 const group_key = try self.hashRow(row);
+
+                // Extract numeric value from the last column for sum accumulation
+                const numeric_val: f64 = extractLastNumericValue(row);
+
                 const gop = try groups.getOrPut(group_key);
                 if (gop.found_existing) {
                     self.allocator.free(group_key);
                     gop.value_ptr.count += 1;
-                    // Update aggregates
+                    gop.value_ptr.sum += numeric_val;
                 } else {
                     gop.value_ptr.* = AggregateGroup{
                         .count = 1,
-                        .sum = 0, // Would extract from row
+                        .sum = numeric_val,
                         .representative_row = try cloneBindingRow(self.allocator, row),
                     };
                 }
@@ -941,6 +944,31 @@ const AggregateGroup = struct {
     sum: f64,
     representative_row: protocol.BindingRow,
 };
+
+/// Extract the numeric value from the last column of a row for aggregation.
+/// Supports Int, SmallInt, BigInt, Real, Double, and Decimal types.
+/// Returns 0.0 for non-numeric or empty rows.
+fn extractLastNumericValue(row: protocol.BindingRow) f64 {
+    if (row.cols.len == 0) return 0.0;
+    const last = row.cols[row.cols.len - 1];
+    return switch (last) {
+        .Int => |v| @floatFromInt(v),
+        .SmallInt => |v| @floatFromInt(v),
+        .BigInt => |v| @floatFromInt(v),
+        .Real => |v| @floatCast(v),
+        .Double => |v| v,
+        .Decimal => |d| blk: {
+            const coeff_f: f64 = @floatFromInt(d.coeff);
+            var scale_divisor: f64 = 1.0;
+            var i: u8 = 0;
+            while (i < d.scale) : (i += 1) {
+                scale_divisor *= 10.0;
+            }
+            break :blk coeff_f / scale_divisor;
+        },
+        else => 0.0,
+    };
+}
 
 // Registry and optimization types (simplified placeholders)
 
