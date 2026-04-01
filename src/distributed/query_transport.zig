@@ -573,13 +573,7 @@ const Connection = struct {
 
         // GAP-0144: Use TLS verification for inter-node communication
         // Check if insecure mode is explicitly allowed via environment variable
-        const builtin = @import("builtin");
         const allow_insecure = blk: {
-            if (builtin.mode == .Debug) {
-                // Debug builds allow insecure for testing
-                break :blk true;
-            }
-            // Production builds require explicit env var to skip TLS
             const env = std.process.getEnvVarOwned(self.allocator, "GEODE_CLUSTER_INSECURE") catch null;
             if (env) |v| {
                 defer self.allocator.free(v);

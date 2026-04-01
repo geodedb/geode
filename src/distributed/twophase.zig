@@ -156,9 +156,7 @@ pub const TwoPhaseTransport = struct {
         const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidPort;
 
         // Check if insecure mode is explicitly allowed
-        const builtin = @import("builtin");
         const allow_insecure = blk: {
-            if (builtin.mode == .Debug) break :blk true;
             const env = std.process.getEnvVarOwned(self.allocator, "GEODE_CLUSTER_INSECURE") catch null;
             if (env) |v| {
                 defer self.allocator.free(v);
@@ -339,9 +337,7 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
     const allocator = gpa.allocator();
 
     // Check if insecure mode is explicitly allowed
-    const builtin = @import("builtin");
     const allow_insecure = blk: {
-        if (builtin.mode == .Debug) break :blk true;
         const env = std.process.getEnvVarOwned(allocator, "GEODE_CLUSTER_INSECURE") catch null;
         if (env) |v| {
             defer allocator.free(v);
