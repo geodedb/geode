@@ -632,6 +632,25 @@ pub const GraphStore = struct {
         return self.getIdMap(graph_name) orelse error.IdMapNotLoaded;
     }
 
+    fn cloneIdMapsFrom(self: *GraphStore, source: *const GraphStore) !void {
+        var it = source.id_maps.iterator();
+        while (it.next()) |entry| {
+            const graph_name = entry.key_ptr.*;
+            if (self.id_maps.contains(graph_name)) continue;
+
+            const key_copy = try self.allocator.dupe(u8, graph_name);
+            errdefer self.allocator.free(key_copy);
+
+            const map_copy = try entry.value_ptr.clone(self.allocator);
+            errdefer {
+                var map = map_copy;
+                map.deinit();
+            }
+
+            try self.id_maps.put(key_copy, map_copy);
+        }
+    }
+
     fn requireNodeSlot(self: *GraphStore, graph_name: []const u8, node_id: u64) !u64 {
         const id_map = try self.requireIdMap(graph_name);
         return id_map.nodeSlot(@as(u128, node_id)) orelse error.NodeSlotMappingMissing;
@@ -3037,7 +3056,7 @@ pub const GraphStore = struct {
 
             // Current-format storage requires an IdMap alongside each UUID-backed
             // graph directory so external IDs remain stable across reloads.
-            if (self.data_dir.len > 0) {
+            if (self.getIdMap(graph_name) == null and self.data_dir.len > 0) {
                 const graph_dir_path = (try self.resolveIdMapDirPathForLoad(graph_name)) orelse return error.GraphStorageDirectoryMissing;
                 defer self.allocator.free(graph_dir_path);
 
@@ -3942,34 +3961,46 @@ pub fn popActiveQueryReadStore(previous: ?*GraphStore) void {
 }
 
 pub const QueryReadSession = struct {
-    arena: std.heap.ArenaAllocator,
+    parent_allocator: std.mem.Allocator,
+    arena: *std.heap.ArenaAllocator,
     snapshot: GraphStore,
 
     pub fn initIfAvailable(allocator: std.mem.Allocator, source_store: *GraphStore) !?QueryReadSession {
-        if (global_adapter == null) return null;
+        const adapter = global_adapter orelse return null;
 
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = std.heap.ArenaAllocator.init(allocator);
         errdefer arena.deinit();
 
-        var snapshot = try GraphStore.initWithTenant(
-            arena.allocator(),
+        var session = QueryReadSession{
+            .parent_allocator = allocator,
+            .arena = arena,
+            .snapshot = undefined,
+        };
+        errdefer {
+            session.arena.deinit();
+            session.parent_allocator.destroy(session.arena);
+        }
+
+        session.snapshot = try GraphStore.initWithTenant(
+            session.arena.allocator(),
             source_store.tenant_id,
             source_store.schema_name,
         );
-        errdefer snapshot.deinit();
+        errdefer session.snapshot.deinit();
 
-        snapshot.data_dir = source_store.data_dir;
-        try snapshot.loadFromFile();
+        session.snapshot.data_dir = source_store.data_dir;
+        try session.snapshot.cloneIdMapsFrom(source_store);
+        try session.snapshot.loadFromAdapter(adapter);
 
-        return .{
-            .arena = arena,
-            .snapshot = snapshot,
-        };
+        return session;
     }
 
     pub fn deinit(self: *QueryReadSession) void {
         self.snapshot.deinit();
         self.arena.deinit();
+        self.parent_allocator.destroy(self.arena);
     }
 
     pub fn store(self: *QueryReadSession) *GraphStore {
@@ -4347,6 +4378,39 @@ test "QueryReadSession reloads persisted state instead of compatibility cache" {
     try testing.expectEqualStrings("stale-cache", live_name.String);
 }
 
+test "QueryReadSession uses live adapter mappings instead of requiring id_map.dat" {
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(dir_path);
+
+    const store = try initGlobalStore(testing.allocator, dir_path);
+
+    var labels = [_][]const u8{"Person"};
+    const node_id = try store.createNodeWithGraph(&labels, "default");
+    try store.setNodeProperty(node_id, "name", .{ .String = "live-adapter" });
+
+    const graph_uuid = GraphStore.getGraphUuid("default") orelse return error.GraphUuidUnavailable;
+    const uuid_hex = std.fmt.bytesToHex(graph_uuid, .lower);
+    const id_map_path = try std.fmt.allocPrint(testing.allocator, "{s}/graphs/{s}/id_map.dat", .{ dir_path, uuid_hex });
+    defer testing.allocator.free(id_map_path);
+    try std.fs.cwd().deleteFile(id_map_path);
+
+    var read_session = (try QueryReadSession.initIfAvailable(testing.allocator, store)) orelse {
+        return error.AdapterNotInitialized;
+    };
+    defer read_session.deinit();
+
+    const snapshot_node = read_session.store().getNodePtr(node_id) orelse return error.NodeNotFound;
+    const snapshot_name = snapshot_node.properties.get("name") orelse return error.PropertyNotFound;
+    try testing.expect(snapshot_name == .String);
+    try testing.expectEqualStrings("live-adapter", snapshot_name.String);
+}
+
 test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
     deinitGlobalStore();
     defer deinitGlobalStore();
@@ -4430,9 +4494,7 @@ test "listGraphNames merges persisted adapter graphs with local cache" {
     const store = try initGlobalStore(testing.allocator, dir_path);
     try store.createGraph("persisted_only");
 
-    if (store.graphs.fetchRemove("persisted_only")) |entry| {
-        testing.allocator.free(entry.key);
-    } else {
+    if (!store.graphs.remove("persisted_only")) {
         return error.GraphNotFound;
     }
 
