@@ -536,7 +536,7 @@ REQ-0006,Distributed Query Federation,ConcurrentExecution,EXEMPT,,,distributed,2
 REQ-0006,Distributed Query Federation,ConcurrentExecution,EXEMPT,,,distributed,2026-01-14,.claude/worktrees/session-2026-04-01/src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,ConcurrentExecution,EXEMPT,,,distributed,2026-01-14,.worktrees/audit-multi-tenancy/src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,ConcurrentExecution,EXEMPT,,,distributed,2026-01-14,.worktrees/graph-storage-integration/src/distributed/query_coordinator.zig
-REQ-0006,Distributed Query Federation,ConcurrentExecution,EXEMPT,,,distributed,2026-01-14,.worktrees/session-20260401/src/distributed/query_coordinator.zig
+REQ-0006,Distributed Query Federation,ConcurrentExecution,TESTED,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,ConcurrentExecution,EXEMPT,,,distributed,2026-01-14,.worktrees/timeseries-gap-close/src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,ConcurrentExecution,EXEMPT,,,distributed,2026-01-14,src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,Metrics,TESTED,,,distributed,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/query_coordinator.zig
@@ -545,7 +545,7 @@ REQ-0006,Distributed Query Federation,Metrics,EXEMPT,,,distributed,2026-01-14,.c
 REQ-0006,Distributed Query Federation,Metrics,EXEMPT,,,distributed,2026-01-14,.claude/worktrees/session-2026-04-01/src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,Metrics,EXEMPT,,,distributed,2026-01-14,.worktrees/audit-multi-tenancy/src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,Metrics,EXEMPT,,,distributed,2026-01-14,.worktrees/graph-storage-integration/src/distributed/query_coordinator.zig
-REQ-0006,Distributed Query Federation,Metrics,EXEMPT,,,distributed,2026-01-14,.worktrees/session-20260401/src/distributed/query_coordinator.zig
+REQ-0006,Distributed Query Federation,Metrics,TESTED,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,Metrics,EXEMPT,,,distributed,2026-01-14,.worktrees/timeseries-gap-close/src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,Metrics,EXEMPT,,,distributed,2026-01-14,src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,ParallelScatter,EXEMPT,,,distributed,2026-01-14,.claude/worktrees/agent-a37683fc/src/distributed/federation.zig
@@ -563,7 +563,7 @@ REQ-0006,Distributed Query Federation,UnitTests,EXEMPT,,,distributed,2026-01-14,
 REQ-0006,Distributed Query Federation,UnitTests,EXEMPT,,,distributed,2026-01-14,.claude/worktrees/session-2026-04-01/src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,UnitTests,EXEMPT,,,distributed,2026-01-14,.worktrees/audit-multi-tenancy/src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,UnitTests,EXEMPT,,,distributed,2026-01-14,.worktrees/graph-storage-integration/src/distributed/query_coordinator.zig
-REQ-0006,Distributed Query Federation,UnitTests,EXEMPT,,,distributed,2026-01-14,.worktrees/session-20260401/src/distributed/query_coordinator.zig
+REQ-0006,Distributed Query Federation,UnitTests,TESTED,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,UnitTests,EXEMPT,,,distributed,2026-01-14,.worktrees/timeseries-gap-close/src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,UnitTests,EXEMPT,,,distributed,2026-01-14,src/distributed/query_coordinator.zig
 REQ-0006,Distributed Query Federation,Verification,TESTED,,,distributed,2026-01-15,.claude/worktrees/agent-a37683fc/tests/test_requirement_traceability.zig
@@ -662,7 +662,7 @@ REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01
 REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/session-2026-04-01/src/distributed/twophase.zig
 REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01-10,.worktrees/audit-multi-tenancy/src/distributed/twophase.zig
 REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01-10,.worktrees/graph-storage-integration/src/distributed/twophase.zig
-REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01-10,.worktrees/session-20260401/src/distributed/twophase.zig
+REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/twophase.zig
 REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01-10,.worktrees/timeseries-gap-close/src/distributed/twophase.zig
 REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,EXEMPT,,,distributed,2026-01-10,src/distributed/twophase.zig
 REQ-2PC-COMMIT-001,2PC,Commit,TESTED,,,txn,2026-01-16,.claude/worktrees/agent-a37683fc/tests/test_gap_0193_batch4_comprehensive.zig
@@ -680,7 +680,7 @@ REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,20
 REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/session-2026-04-01/src/distributed/twophase.zig
 REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,2026-01-10,.worktrees/audit-multi-tenancy/src/distributed/twophase.zig
 REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,2026-01-10,.worktrees/graph-storage-integration/src/distributed/twophase.zig
-REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,2026-01-10,.worktrees/session-20260401/src/distributed/twophase.zig
+REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/twophase.zig
 REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,2026-01-10,.worktrees/timeseries-gap-close/src/distributed/twophase.zig
 REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,2026-01-10,src/distributed/twophase.zig
 REQ-2PC-COORD-001,2PC,Coordinator,TESTED,,,txn,2026-01-16,.claude/worktrees/agent-a37683fc/tests/test_gap_0193_batch6_comprehensive.zig
@@ -707,7 +707,7 @@ REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,202
 REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/session-2026-04-01/src/distributed/twophase.zig
 REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,.worktrees/audit-multi-tenancy/src/distributed/twophase.zig
 REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,.worktrees/graph-storage-integration/src/distributed/twophase.zig
-REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,.worktrees/session-20260401/src/distributed/twophase.zig
+REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/twophase.zig
 REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,.worktrees/timeseries-gap-close/src/distributed/twophase.zig
 REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,src/distributed/twophase.zig
 REQ-2PC-PREPARE-001,2PC,Prepare,TESTED,,,txn,2026-01-16,.claude/worktrees/agent-a37683fc/tests/test_gap_0193_batch4_comprehensive.zig
@@ -734,7 +734,7 @@ REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,EXEMPT,,,distributed,2026-01-09,.claude
 REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,EXEMPT,,,distributed,2026-01-09,.claude/worktrees/session-2026-04-01/src/distributed/twophase.zig
 REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,EXEMPT,,,distributed,2026-01-09,.worktrees/audit-multi-tenancy/src/distributed/twophase.zig
 REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,EXEMPT,,,distributed,2026-01-09,.worktrees/graph-storage-integration/src/distributed/twophase.zig
-REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,EXEMPT,,,distributed,2026-01-09,.worktrees/session-20260401/src/distributed/twophase.zig
+REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/twophase.zig
 REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,EXEMPT,,,distributed,2026-01-09,.worktrees/timeseries-gap-close/src/distributed/twophase.zig
 REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,EXEMPT,,,distributed,2026-01-09,src/distributed/twophase.zig
 REQ-2PC-TLS-001,2PC,TLSSecurity,TESTED,,,distributed,2026-01-16,.claude/worktrees/agent-a37683fc/tests/test_gap_0193_batch2_security.zig
@@ -5684,7 +5684,7 @@ REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,EXEMPT,,,distributed,2026-01
 REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,EXEMPT,,,distributed,2026-01-08,.claude/worktrees/session-2026-04-01/src/distributed/twophase.zig
 REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,EXEMPT,,,distributed,2026-01-08,.worktrees/audit-multi-tenancy/src/distributed/twophase.zig
 REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,EXEMPT,,,distributed,2026-01-08,.worktrees/graph-storage-integration/src/distributed/twophase.zig
-REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,EXEMPT,,,distributed,2026-01-08,.worktrees/session-20260401/src/distributed/twophase.zig
+REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/twophase.zig
 REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,EXEMPT,,,distributed,2026-01-08,.worktrees/timeseries-gap-close/src/distributed/twophase.zig
 REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,EXEMPT,,,distributed,2026-01-08,src/distributed/twophase.zig
 REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,IMPL,,,distributed,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/twophase.zig
@@ -5693,7 +5693,7 @@ REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,EXEMPT,,,distributed,2026-01-
 REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,EXEMPT,,,distributed,2026-01-08,.claude/worktrees/session-2026-04-01/src/distributed/twophase.zig
 REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,EXEMPT,,,distributed,2026-01-08,.worktrees/audit-multi-tenancy/src/distributed/twophase.zig
 REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,EXEMPT,,,distributed,2026-01-08,.worktrees/graph-storage-integration/src/distributed/twophase.zig
-REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,EXEMPT,,,distributed,2026-01-08,.worktrees/session-20260401/src/distributed/twophase.zig
+REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/twophase.zig
 REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,EXEMPT,,,distributed,2026-01-08,.worktrees/timeseries-gap-close/src/distributed/twophase.zig
 REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,EXEMPT,,,distributed,2026-01-08,src/distributed/twophase.zig
 REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,IMPL,,,distributed,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/twophase.zig
@@ -5702,7 +5702,7 @@ REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,EXEMPT,,,distributed,2026-01-0
 REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,EXEMPT,,,distributed,2026-01-08,.claude/worktrees/session-2026-04-01/src/distributed/twophase.zig
 REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,EXEMPT,,,distributed,2026-01-08,.worktrees/audit-multi-tenancy/src/distributed/twophase.zig
 REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,EXEMPT,,,distributed,2026-01-08,.worktrees/graph-storage-integration/src/distributed/twophase.zig
-REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,EXEMPT,,,distributed,2026-01-08,.worktrees/session-20260401/src/distributed/twophase.zig
+REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/twophase.zig
 REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,EXEMPT,,,distributed,2026-01-08,.worktrees/timeseries-gap-close/src/distributed/twophase.zig
 REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,EXEMPT,,,distributed,2026-01-08,src/distributed/twophase.zig
 REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,IMPL,,,distributed,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/twophase.zig
@@ -5711,7 +5711,7 @@ REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,EXEMPT,,,distribut
 REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,EXEMPT,,,distributed,2026-01-08,.claude/worktrees/session-2026-04-01/src/distributed/twophase.zig
 REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,EXEMPT,,,distributed,2026-01-08,.worktrees/audit-multi-tenancy/src/distributed/twophase.zig
 REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,EXEMPT,,,distributed,2026-01-08,.worktrees/graph-storage-integration/src/distributed/twophase.zig
-REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,EXEMPT,,,distributed,2026-01-08,.worktrees/session-20260401/src/distributed/twophase.zig
+REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/twophase.zig
 REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,EXEMPT,,,distributed,2026-01-08,.worktrees/timeseries-gap-close/src/distributed/twophase.zig
 REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,EXEMPT,,,distributed,2026-01-08,src/distributed/twophase.zig
 REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,IMPL,,,distributed,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/twophase.zig
@@ -5720,7 +5720,7 @@ REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,EXEM
 REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,EXEMPT,,,distributed,2026-01-09,.claude/worktrees/session-2026-04-01/src/distributed/twophase.zig
 REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,EXEMPT,,,distributed,2026-01-09,.worktrees/audit-multi-tenancy/src/distributed/twophase.zig
 REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,EXEMPT,,,distributed,2026-01-09,.worktrees/graph-storage-integration/src/distributed/twophase.zig
-REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,EXEMPT,,,distributed,2026-01-09,.worktrees/session-20260401/src/distributed/twophase.zig
+REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/twophase.zig
 REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,EXEMPT,,,distributed,2026-01-09,.worktrees/timeseries-gap-close/src/distributed/twophase.zig
 REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,EXEMPT,,,distributed,2026-01-09,src/distributed/twophase.zig
 REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,IMPL,,,distributed,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/cluster.zig
@@ -5729,7 +5729,7 @@ REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,EXEMPT,,,distributed,2026
 REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,EXEMPT,,,distributed,2026-01-09,.claude/worktrees/session-2026-04-01/src/distributed/cluster.zig
 REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,EXEMPT,,,distributed,2026-01-09,.worktrees/audit-multi-tenancy/src/distributed/cluster.zig
 REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,EXEMPT,,,distributed,2026-01-09,.worktrees/graph-storage-integration/src/distributed/cluster.zig
-REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,EXEMPT,,,distributed,2026-01-09,.worktrees/session-20260401/src/distributed/cluster.zig
+REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/cluster.zig
 REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,EXEMPT,,,distributed,2026-01-09,.worktrees/timeseries-gap-close/src/distributed/cluster.zig
 REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,EXEMPT,,,distributed,2026-01-09,src/distributed/cluster.zig
 REQ-DIST-CLUSTER-002,DistributedCluster,Replication,EXEMPT,,,distributed,2026-01-09,.claude/worktrees/agent-a37683fc/src/distributed/cluster.zig
@@ -5747,7 +5747,7 @@ REQ-DIST-CLUSTER-003,DistributedCluster,Rebalance,EXEMPT,,,distributed,2026-01-0
 REQ-DIST-CLUSTER-003,DistributedCluster,Rebalance,EXEMPT,,,distributed,2026-01-09,.claude/worktrees/session-2026-04-01/src/distributed/cluster.zig
 REQ-DIST-CLUSTER-003,DistributedCluster,Rebalance,EXEMPT,,,distributed,2026-01-09,.worktrees/audit-multi-tenancy/src/distributed/cluster.zig
 REQ-DIST-CLUSTER-003,DistributedCluster,Rebalance,EXEMPT,,,distributed,2026-01-09,.worktrees/graph-storage-integration/src/distributed/cluster.zig
-REQ-DIST-CLUSTER-003,DistributedCluster,Rebalance,EXEMPT,,,distributed,2026-01-09,.worktrees/session-20260401/src/distributed/cluster.zig
+REQ-DIST-CLUSTER-003,DistributedCluster,Rebalance,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/cluster.zig
 REQ-DIST-CLUSTER-003,DistributedCluster,Rebalance,EXEMPT,,,distributed,2026-01-09,.worktrees/timeseries-gap-close/src/distributed/cluster.zig
 REQ-DIST-CLUSTER-003,DistributedCluster,Rebalance,EXEMPT,,,distributed,2026-01-09,src/distributed/cluster.zig
 REQ-DIST-CLUSTER-004,DistributedCluster,Topology,IMPL,,,distributed,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/cluster.zig
@@ -5756,7 +5756,7 @@ REQ-DIST-CLUSTER-004,DistributedCluster,Topology,EXEMPT,,,distributed,2026-01-09
 REQ-DIST-CLUSTER-004,DistributedCluster,Topology,EXEMPT,,,distributed,2026-01-09,.claude/worktrees/session-2026-04-01/src/distributed/cluster.zig
 REQ-DIST-CLUSTER-004,DistributedCluster,Topology,EXEMPT,,,distributed,2026-01-09,.worktrees/audit-multi-tenancy/src/distributed/cluster.zig
 REQ-DIST-CLUSTER-004,DistributedCluster,Topology,EXEMPT,,,distributed,2026-01-09,.worktrees/graph-storage-integration/src/distributed/cluster.zig
-REQ-DIST-CLUSTER-004,DistributedCluster,Topology,EXEMPT,,,distributed,2026-01-09,.worktrees/session-20260401/src/distributed/cluster.zig
+REQ-DIST-CLUSTER-004,DistributedCluster,Topology,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/cluster.zig
 REQ-DIST-CLUSTER-004,DistributedCluster,Topology,EXEMPT,,,distributed,2026-01-09,.worktrees/timeseries-gap-close/src/distributed/cluster.zig
 REQ-DIST-CLUSTER-004,DistributedCluster,Topology,EXEMPT,,,distributed,2026-01-09,src/distributed/cluster.zig
 REQ-DIST-CMP-001,Distributed Value Comparison,Distributed,TESTED,,,protocol,2026-02-03,.claude/worktrees/agent-a37683fc/src/protocol.zig
@@ -5810,7 +5810,7 @@ REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,EXEMPT,,,distribut
 REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,EXEMPT,,,distributed,2026-01-08,.claude/worktrees/session-2026-04-01/src/distributed/sharding.zig
 REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,EXEMPT,,,distributed,2026-01-08,.worktrees/audit-multi-tenancy/src/distributed/sharding.zig
 REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,EXEMPT,,,distributed,2026-01-08,.worktrees/graph-storage-integration/src/distributed/sharding.zig
-REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,EXEMPT,,,distributed,2026-01-08,.worktrees/session-20260401/src/distributed/sharding.zig
+REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/sharding.zig
 REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,EXEMPT,,,distributed,2026-01-08,.worktrees/timeseries-gap-close/src/distributed/sharding.zig
 REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,EXEMPT,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,IMPL,,,distributed,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/sharding.zig
@@ -5819,7 +5819,7 @@ REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,EXEMPT,,,distr
 REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,EXEMPT,,,distributed,2026-01-08,.claude/worktrees/session-2026-04-01/src/distributed/sharding.zig
 REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,EXEMPT,,,distributed,2026-01-08,.worktrees/audit-multi-tenancy/src/distributed/sharding.zig
 REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,EXEMPT,,,distributed,2026-01-08,.worktrees/graph-storage-integration/src/distributed/sharding.zig
-REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,EXEMPT,,,distributed,2026-01-08,.worktrees/session-20260401/src/distributed/sharding.zig
+REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/sharding.zig
 REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,EXEMPT,,,distributed,2026-01-08,.worktrees/timeseries-gap-close/src/distributed/sharding.zig
 REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,EXEMPT,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-LB-001,Load Balancing,ShardSelection,TESTED,,,distributed,2026-01-08,.claude/worktrees/agent-a37683fc/src/distributed/enhanced_query_transport.zig
@@ -5909,7 +5909,7 @@ REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,QueryCoordination,TESTED,,,
 REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,QueryCoordination,TESTED,,,dist,2025-10-05,.claude/worktrees/session-2026-04-01/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,QueryCoordination,TESTED,,,dist,2025-10-05,.worktrees/audit-multi-tenancy/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,QueryCoordination,TESTED,,,dist,2025-10-05,.worktrees/graph-storage-integration/src/distributed/enhanced_query_coordinator.zig
-REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,QueryCoordination,TESTED,,,dist,2025-10-05,.worktrees/session-20260401/src/distributed/enhanced_query_coordinator.zig
+REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,QueryCoordination,IMPL,,,dist,2026-04-01,.worktrees/session-20260401/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,QueryCoordination,TESTED,,,dist,2025-10-05,.worktrees/timeseries-gap-close/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,QueryCoordination,TESTED,,,dist,2025-10-05,src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-QUERY-COORD-002,Query Optimization,DistributedOptimization,IMPL,,,dist,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/enhanced_query_coordinator.zig
@@ -5918,7 +5918,7 @@ REQ-DIST-QUERY-COORD-002,Query Optimization,DistributedOptimization,TESTED,,,dis
 REQ-DIST-QUERY-COORD-002,Query Optimization,DistributedOptimization,TESTED,,,dist,2025-10-05,.claude/worktrees/session-2026-04-01/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-QUERY-COORD-002,Query Optimization,DistributedOptimization,TESTED,,,dist,2025-10-05,.worktrees/audit-multi-tenancy/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-QUERY-COORD-002,Query Optimization,DistributedOptimization,TESTED,,,dist,2025-10-05,.worktrees/graph-storage-integration/src/distributed/enhanced_query_coordinator.zig
-REQ-DIST-QUERY-COORD-002,Query Optimization,DistributedOptimization,TESTED,,,dist,2025-10-05,.worktrees/session-20260401/src/distributed/enhanced_query_coordinator.zig
+REQ-DIST-QUERY-COORD-002,Query Optimization,DistributedOptimization,IMPL,,,dist,2026-04-01,.worktrees/session-20260401/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-QUERY-COORD-002,Query Optimization,DistributedOptimization,TESTED,,,dist,2025-10-05,.worktrees/timeseries-gap-close/src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-QUERY-COORD-002,Query Optimization,DistributedOptimization,TESTED,,,dist,2025-10-05,src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-QUERY-COORD-INT-001,Distributed Query Coordination Integration Tests,IntegrationTests,EXEMPT,,,dist,2025-10-05,.claude/worktrees/agent-a37683fc/tests/test_distributed_query_coordination_integration.zig
@@ -5954,7 +5954,7 @@ REQ-DIST-QUERY-TRANSPORT-001,Distributed Query Transport,QueryTransport,TESTED,,
 REQ-DIST-QUERY-TRANSPORT-001,Distributed Query Transport,QueryTransport,TESTED,,,dist,2025-10-05,.claude/worktrees/session-2026-04-01/src/distributed/query_transport.zig
 REQ-DIST-QUERY-TRANSPORT-001,Distributed Query Transport,QueryTransport,TESTED,,,dist,2025-10-05,.worktrees/audit-multi-tenancy/src/distributed/query_transport.zig
 REQ-DIST-QUERY-TRANSPORT-001,Distributed Query Transport,QueryTransport,TESTED,,,dist,2025-10-05,.worktrees/graph-storage-integration/src/distributed/query_transport.zig
-REQ-DIST-QUERY-TRANSPORT-001,Distributed Query Transport,QueryTransport,TESTED,,,dist,2025-10-05,.worktrees/session-20260401/src/distributed/query_transport.zig
+REQ-DIST-QUERY-TRANSPORT-001,Distributed Query Transport,QueryTransport,IMPL,,,dist,2026-04-01,.worktrees/session-20260401/src/distributed/query_transport.zig
 REQ-DIST-QUERY-TRANSPORT-001,Distributed Query Transport,QueryTransport,TESTED,,,dist,2025-10-05,.worktrees/timeseries-gap-close/src/distributed/query_transport.zig
 REQ-DIST-QUERY-TRANSPORT-001,Distributed Query Transport,QueryTransport,TESTED,,,dist,2025-10-05,src/distributed/query_transport.zig
 REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,IMPL,,,dist,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/query_transport.zig
@@ -5963,7 +5963,7 @@ REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,TESTED,,,dis
 REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,TESTED,,,dist,2025-10-05,.claude/worktrees/session-2026-04-01/src/distributed/query_transport.zig
 REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,TESTED,,,dist,2025-10-05,.worktrees/audit-multi-tenancy/src/distributed/query_transport.zig
 REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,TESTED,,,dist,2025-10-05,.worktrees/graph-storage-integration/src/distributed/query_transport.zig
-REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,TESTED,,,dist,2025-10-05,.worktrees/session-20260401/src/distributed/query_transport.zig
+REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,IMPL,,,dist,2026-04-01,.worktrees/session-20260401/src/distributed/query_transport.zig
 REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,TESTED,,,dist,2025-10-05,.worktrees/timeseries-gap-close/src/distributed/query_transport.zig
 REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,TESTED,,,dist,2025-10-05,src/distributed/query_transport.zig
 REQ-DIST-RANGE-001,Key Range Operations,RangeOverlap,IMPL,,,distributed,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/sharding.zig
@@ -5972,7 +5972,7 @@ REQ-DIST-RANGE-001,Key Range Operations,RangeOverlap,EXEMPT,,,distributed,2026-0
 REQ-DIST-RANGE-001,Key Range Operations,RangeOverlap,EXEMPT,,,distributed,2026-01-08,.claude/worktrees/session-2026-04-01/src/distributed/sharding.zig
 REQ-DIST-RANGE-001,Key Range Operations,RangeOverlap,EXEMPT,,,distributed,2026-01-08,.worktrees/audit-multi-tenancy/src/distributed/sharding.zig
 REQ-DIST-RANGE-001,Key Range Operations,RangeOverlap,EXEMPT,,,distributed,2026-01-08,.worktrees/graph-storage-integration/src/distributed/sharding.zig
-REQ-DIST-RANGE-001,Key Range Operations,RangeOverlap,EXEMPT,,,distributed,2026-01-08,.worktrees/session-20260401/src/distributed/sharding.zig
+REQ-DIST-RANGE-001,Key Range Operations,RangeOverlap,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/sharding.zig
 REQ-DIST-RANGE-001,Key Range Operations,RangeOverlap,EXEMPT,,,distributed,2026-01-08,.worktrees/timeseries-gap-close/src/distributed/sharding.zig
 REQ-DIST-RANGE-001,Key Range Operations,RangeOverlap,EXEMPT,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-RANGE-SHARD-001,Range-Based Sharding,ShardLookup,IMPL,,,distributed,2026-04-01,.claude/worktrees/agent-a37683fc/src/distributed/sharding.zig
@@ -5981,7 +5981,7 @@ REQ-DIST-RANGE-SHARD-001,Range-Based Sharding,ShardLookup,EXEMPT,,,distributed,2
 REQ-DIST-RANGE-SHARD-001,Range-Based Sharding,ShardLookup,EXEMPT,,,distributed,2026-01-08,.claude/worktrees/session-2026-04-01/src/distributed/sharding.zig
 REQ-DIST-RANGE-SHARD-001,Range-Based Sharding,ShardLookup,EXEMPT,,,distributed,2026-01-08,.worktrees/audit-multi-tenancy/src/distributed/sharding.zig
 REQ-DIST-RANGE-SHARD-001,Range-Based Sharding,ShardLookup,EXEMPT,,,distributed,2026-01-08,.worktrees/graph-storage-integration/src/distributed/sharding.zig
-REQ-DIST-RANGE-SHARD-001,Range-Based Sharding,ShardLookup,EXEMPT,,,distributed,2026-01-08,.worktrees/session-20260401/src/distributed/sharding.zig
+REQ-DIST-RANGE-SHARD-001,Range-Based Sharding,ShardLookup,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/sharding.zig
 REQ-DIST-RANGE-SHARD-001,Range-Based Sharding,ShardLookup,EXEMPT,,,distributed,2026-01-08,.worktrees/timeseries-gap-close/src/distributed/sharding.zig
 REQ-DIST-RANGE-SHARD-001,Range-Based Sharding,ShardLookup,EXEMPT,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-REGISTRY-001,Node Registry,NodeLookup,EXEMPT,,,distributed,2026-01-10,.claude/worktrees/agent-a37683fc/src/distributed/query_transport.zig
@@ -6026,7 +6026,7 @@ REQ-DIST-SPLIT-001,Shard Split Point,SplitPoint,EXEMPT,,,distributed,2026-01-08,
 REQ-DIST-SPLIT-001,Shard Split Point,SplitPoint,EXEMPT,,,distributed,2026-01-08,.claude/worktrees/session-2026-04-01/src/distributed/sharding.zig
 REQ-DIST-SPLIT-001,Shard Split Point,SplitPoint,EXEMPT,,,distributed,2026-01-08,.worktrees/audit-multi-tenancy/src/distributed/sharding.zig
 REQ-DIST-SPLIT-001,Shard Split Point,SplitPoint,EXEMPT,,,distributed,2026-01-08,.worktrees/graph-storage-integration/src/distributed/sharding.zig
-REQ-DIST-SPLIT-001,Shard Split Point,SplitPoint,EXEMPT,,,distributed,2026-01-08,.worktrees/session-20260401/src/distributed/sharding.zig
+REQ-DIST-SPLIT-001,Shard Split Point,SplitPoint,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/sharding.zig
 REQ-DIST-SPLIT-001,Shard Split Point,SplitPoint,EXEMPT,,,distributed,2026-01-08,.worktrees/timeseries-gap-close/src/distributed/sharding.zig
 REQ-DIST-SPLIT-001,Shard Split Point,SplitPoint,EXEMPT,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-STATS-001,DistributedStatsIntegration,QueryPlanning,TESTED,,,distributed,2026-01-25,.claude/worktrees/agent-a37683fc/src/distributed/query_coordinator.zig
@@ -6311,7 +6311,7 @@ REQ-DISTRIBUTED-QUERY-004,Enhanced Query Transport Integration,NetworkTransport,
 REQ-DISTRIBUTED-QUERY-004,Enhanced Query Transport Integration,NetworkTransport,TESTED,,,distributed,2025-10-05,.worktrees/audit-multi-tenancy/tests/test_enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-004,Enhanced Query Transport Integration,NetworkTransport,TESTED,,,distributed,2025-10-05,.worktrees/graph-storage-integration/src/distributed/enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-004,Enhanced Query Transport Integration,NetworkTransport,TESTED,,,distributed,2025-10-05,.worktrees/graph-storage-integration/tests/test_enhanced_query_transport.zig
-REQ-DISTRIBUTED-QUERY-004,Enhanced Query Transport Integration,NetworkTransport,TESTED,,,distributed,2025-10-05,.worktrees/session-20260401/src/distributed/enhanced_query_transport.zig
+REQ-DISTRIBUTED-QUERY-004,Enhanced Query Transport Integration,NetworkTransport,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-004,Enhanced Query Transport Integration,NetworkTransport,TESTED,,,distributed,2025-10-05,.worktrees/session-20260401/tests/test_enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-004,Enhanced Query Transport Integration,NetworkTransport,TESTED,,,distributed,2025-10-05,.worktrees/timeseries-gap-close/src/distributed/enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-004,Enhanced Query Transport Integration,NetworkTransport,TESTED,,,distributed,2025-10-05,.worktrees/timeseries-gap-close/tests/test_enhanced_query_transport.zig
@@ -6329,7 +6329,7 @@ REQ-DISTRIBUTED-QUERY-005,Cross-Shard Query Coordination,QueryCoordination,TESTE
 REQ-DISTRIBUTED-QUERY-005,Cross-Shard Query Coordination,QueryCoordination,TESTED,,,distributed,2025-10-05,.worktrees/audit-multi-tenancy/tests/test_enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-005,Cross-Shard Query Coordination,QueryCoordination,TESTED,,,distributed,2025-10-05,.worktrees/graph-storage-integration/src/distributed/enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-005,Cross-Shard Query Coordination,QueryCoordination,TESTED,,,distributed,2025-10-05,.worktrees/graph-storage-integration/tests/test_enhanced_query_transport.zig
-REQ-DISTRIBUTED-QUERY-005,Cross-Shard Query Coordination,QueryCoordination,TESTED,,,distributed,2025-10-05,.worktrees/session-20260401/src/distributed/enhanced_query_transport.zig
+REQ-DISTRIBUTED-QUERY-005,Cross-Shard Query Coordination,QueryCoordination,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-005,Cross-Shard Query Coordination,QueryCoordination,TESTED,,,distributed,2025-10-05,.worktrees/session-20260401/tests/test_enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-005,Cross-Shard Query Coordination,QueryCoordination,TESTED,,,distributed,2025-10-05,.worktrees/timeseries-gap-close/src/distributed/enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-005,Cross-Shard Query Coordination,QueryCoordination,TESTED,,,distributed,2025-10-05,.worktrees/timeseries-gap-close/tests/test_enhanced_query_transport.zig
@@ -6347,7 +6347,7 @@ REQ-DISTRIBUTED-QUERY-006,Shard-Aware Query Execution,ShardOptimization,TESTED,,
 REQ-DISTRIBUTED-QUERY-006,Shard-Aware Query Execution,ShardOptimization,TESTED,,,distributed,2025-10-05,.worktrees/audit-multi-tenancy/tests/test_enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-006,Shard-Aware Query Execution,ShardOptimization,TESTED,,,distributed,2025-10-05,.worktrees/graph-storage-integration/src/distributed/enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-006,Shard-Aware Query Execution,ShardOptimization,TESTED,,,distributed,2025-10-05,.worktrees/graph-storage-integration/tests/test_enhanced_query_transport.zig
-REQ-DISTRIBUTED-QUERY-006,Shard-Aware Query Execution,ShardOptimization,TESTED,,,distributed,2025-10-05,.worktrees/session-20260401/src/distributed/enhanced_query_transport.zig
+REQ-DISTRIBUTED-QUERY-006,Shard-Aware Query Execution,ShardOptimization,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-006,Shard-Aware Query Execution,ShardOptimization,TESTED,,,distributed,2025-10-05,.worktrees/session-20260401/tests/test_enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-006,Shard-Aware Query Execution,ShardOptimization,TESTED,,,distributed,2025-10-05,.worktrees/timeseries-gap-close/src/distributed/enhanced_query_transport.zig
 REQ-DISTRIBUTED-QUERY-006,Shard-Aware Query Execution,ShardOptimization,TESTED,,,distributed,2025-10-05,.worktrees/timeseries-gap-close/tests/test_enhanced_query_transport.zig
@@ -10824,7 +10824,7 @@ REQ-GQL-020,Cluster QUIC Messaging,SendToNode,TESTED,,,distributed,2025-09-25,.c
 REQ-GQL-020,Cluster QUIC Messaging,SendToNode,TESTED,,,distributed,2025-09-25,.claude/worktrees/session-2026-04-01/src/distributed/cluster.zig
 REQ-GQL-020,Cluster QUIC Messaging,SendToNode,TESTED,,,distributed,2025-09-25,.worktrees/audit-multi-tenancy/src/distributed/cluster.zig
 REQ-GQL-020,Cluster QUIC Messaging,SendToNode,TESTED,,,distributed,2025-09-25,.worktrees/graph-storage-integration/src/distributed/cluster.zig
-REQ-GQL-020,Cluster QUIC Messaging,SendToNode,TESTED,,,distributed,2025-09-25,.worktrees/session-20260401/src/distributed/cluster.zig
+REQ-GQL-020,Cluster QUIC Messaging,SendToNode,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/cluster.zig
 REQ-GQL-020,Cluster QUIC Messaging,SendToNode,TESTED,,,distributed,2025-09-25,.worktrees/timeseries-gap-close/src/distributed/cluster.zig
 REQ-GQL-020,Cluster QUIC Messaging,SendToNode,TESTED,,,distributed,2025-09-25,src/distributed/cluster.zig
 REQ-GQL-020,QueryOptimization,MemoryEstimation,TESTED,,,engine,2025-10-03,.claude/worktrees/agent-a37683fc/tests/query_plan_cache_test.zig
@@ -15909,7 +15909,7 @@ REQ-GQL-2PC-005,Distributed Query Processing,Distributed,TESTED,,,distributed,20
 REQ-GQL-2PC-005,Distributed Query Processing,Distributed,TESTED,,,distributed,2025-09-29,.claude/worktrees/session-2026-04-01/src/distributed/cluster.zig
 REQ-GQL-2PC-005,Distributed Query Processing,Distributed,TESTED,,,distributed,2025-09-29,.worktrees/audit-multi-tenancy/src/distributed/cluster.zig
 REQ-GQL-2PC-005,Distributed Query Processing,Distributed,TESTED,,,distributed,2025-09-29,.worktrees/graph-storage-integration/src/distributed/cluster.zig
-REQ-GQL-2PC-005,Distributed Query Processing,Distributed,TESTED,,,distributed,2025-09-29,.worktrees/session-20260401/src/distributed/cluster.zig
+REQ-GQL-2PC-005,Distributed Query Processing,Distributed,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/cluster.zig
 REQ-GQL-2PC-005,Distributed Query Processing,Distributed,TESTED,,,distributed,2025-09-29,.worktrees/timeseries-gap-close/src/distributed/cluster.zig
 REQ-GQL-2PC-005,Distributed Query Processing,Distributed,TESTED,,,distributed,2025-09-29,src/distributed/cluster.zig
 REQ-GQL-2PC-APPLY-001,2PC,WriteSetApplication,TESTED,,,distributed,2026-01-16,.claude/worktrees/agent-a37683fc/tests/test_gap_0193_batch2_misc.zig
@@ -27569,6 +27569,12 @@ REQ-MULTI-TENANT-002,Multi-Tenancy Session,TenantId,TESTED,,,session,2026-01-09,
 REQ-MULTI-TENANT-002,Multi-Tenancy Session,TenantId,TESTED,,,session,2026-01-09,.worktrees/session-20260401/src/server/server_state.zig
 REQ-MULTI-TENANT-002,Multi-Tenancy Session,TenantId,TESTED,,,session,2026-01-09,.worktrees/timeseries-gap-close/src/server/server_state.zig
 REQ-MULTI-TENANT-002,Multi-Tenancy Session,TenantId,TESTED,,,session,2026-01-09,src/server/server_state.zig
+REQ-MULTI-TENANT-002,PerTenantIsolation,EdgeTenantTag,TESTED,,,enterprise,2026-04-01,.worktrees/audit-multi-tenancy/src/graph_store.zig
+REQ-MULTI-TENANT-002,PerTenantIsolation,NodeTenantTag,TESTED,,,enterprise,2026-04-01,.worktrees/audit-multi-tenancy/src/graph_store.zig
+REQ-MULTI-TENANT-003,PerTenantIsolation,EdgeCreation,TESTED,,,enterprise,2026-04-01,.worktrees/audit-multi-tenancy/src/graph_store.zig
+REQ-MULTI-TENANT-003,PerTenantIsolation,NodeCreation,TESTED,,,enterprise,2026-04-01,.worktrees/audit-multi-tenancy/src/graph_store.zig
+REQ-MULTI-TENANT-004,PerTenantIsolation,BulkNodeAccess,TESTED,,,enterprise,2026-04-01,.worktrees/audit-multi-tenancy/src/graph_store.zig
+REQ-MULTI-TENANT-005,PerTenantIsolation,MatchFiltering,TESTED,,,enterprise,2026-04-01,.worktrees/audit-multi-tenancy/src/execution/match_operations.zig
 REQ-MULTI-TENANT-FLE-001,FLE Multi-Tenancy,ExecutionContext,IMPL,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/execution.zig
 REQ-MULTI-TENANT-FLE-002,FLE Multi-Tenancy,PerThreadTenant,IMPL,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/fle_integration.zig
 REQ-MV-CANCEL-001,MVRefreshCancellation,Cancel,TESTED,,,mv,2026-01-09,.claude/worktrees/agent-a37683fc/src/query/enhanced_materialized_views.zig
@@ -31567,11 +31573,12 @@ REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026
 REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.claude/worktrees/agent-a6b71590/src/server/rls_filter.zig
 REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.claude/worktrees/nifty-chasing-scroll/src/server/rls_filter.zig
 REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.claude/worktrees/session-2026-04-01/src/server/rls_filter.zig
-REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.worktrees/audit-multi-tenancy/src/server/rls_filter.zig
+REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/server/rls_filter.zig
 REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.worktrees/graph-storage-integration/src/server/rls_filter.zig
 REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.worktrees/session-20260401/src/server/rls_filter.zig
 REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.worktrees/timeseries-gap-close/src/server/rls_filter.zig
 REQ-SEC-RLS-WIRE-001,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,src/server/rls_filter.zig
+REQ-SEC-RLS-WIRE-002,RLS Query Enforcement,FilterApplication,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/server/rls_filter.zig
 REQ-SEC-RLS-WIRE-002,RLS Query Enforcement,QUICImport,IMPL,,,security,2026-03-26,.claude/worktrees/agent-a37683fc/src/server/quic_connection_handler.zig
 REQ-SEC-RLS-WIRE-002,RLS Query Enforcement,QUICImport,IMPL,,,security,2026-03-26,.claude/worktrees/agent-a6b71590/src/server/quic_connection_handler.zig
 REQ-SEC-RLS-WIRE-002,RLS Query Enforcement,QUICImport,IMPL,,,security,2026-03-26,.claude/worktrees/nifty-chasing-scroll/src/server/quic_connection_handler.zig
@@ -31585,7 +31592,7 @@ REQ-SEC-RLS-WIRE-003,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026
 REQ-SEC-RLS-WIRE-003,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.claude/worktrees/agent-a6b71590/src/server/quic_connection_handler.zig
 REQ-SEC-RLS-WIRE-003,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.claude/worktrees/nifty-chasing-scroll/src/server/quic_connection_handler.zig
 REQ-SEC-RLS-WIRE-003,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.claude/worktrees/session-2026-04-01/src/server/quic_connection_handler.zig
-REQ-SEC-RLS-WIRE-003,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.worktrees/audit-multi-tenancy/src/server/quic_connection_handler.zig
+REQ-SEC-RLS-WIRE-003,RLS Query Enforcement,PostResultFilter,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/server/quic_connection_handler.zig
 REQ-SEC-RLS-WIRE-003,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.worktrees/graph-storage-integration/src/server/quic_connection_handler.zig
 REQ-SEC-RLS-WIRE-003,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.worktrees/session-20260401/src/server/quic_connection_handler.zig
 REQ-SEC-RLS-WIRE-003,RLS Query Enforcement,PostResultFilter,IMPL,,,security,2026-03-26,.worktrees/timeseries-gap-close/src/server/quic_connection_handler.zig
@@ -31612,11 +31619,16 @@ REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026
 REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026-03-26,.claude/worktrees/agent-a6b71590/src/execution.zig
 REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026-03-26,.claude/worktrees/nifty-chasing-scroll/src/execution.zig
 REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026-03-26,.claude/worktrees/session-2026-04-01/src/execution.zig
-REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026-03-26,.worktrees/audit-multi-tenancy/src/execution.zig
+REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/execution.zig
 REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026-03-26,.worktrees/graph-storage-integration/src/execution.zig
 REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026-03-26,.worktrees/session-20260401/src/execution.zig
 REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026-03-26,.worktrees/timeseries-gap-close/src/execution.zig
 REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026-03-26,src/execution.zig
+REQ-SEC-RLS-WIRE-007,RLS Property Filtering,PropertyPredicate,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/server/rls_filter.zig
+REQ-SEC-RLS-WIRE-007,RLS Property Filtering,SharedTypes,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/security/rls_types.zig
+REQ-SEC-RLS-WIRE-008,RLS Property Filtering,PolicyCRUD,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/security/rls_types.zig
+REQ-SEC-RLS-WIRE-008,RLS Property Filtering,PolicyCRUD,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/server/rls_filter.zig
+REQ-SEC-RLS-WIRE-009,RLS Property Filtering,StoredProcedures,TESTED,,,security,2026-04-01,.worktrees/audit-multi-tenancy/src/execution/procedure_registry.zig
 REQ-SEC-SESSION-MGT-001,Security,SessionManagement,TESTED,,,security,2026-01-16,.claude/worktrees/agent-a37683fc/tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-SESSION-MGT-001,Security,SessionManagement,TESTED,,,security,2026-01-16,.claude/worktrees/agent-a6b71590/tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-SESSION-MGT-001,Security,SessionManagement,TESTED,,,security,2026-01-16,.claude/worktrees/nifty-chasing-scroll/tests/test_gap_0193_batch4_comprehensive.zig
@@ -32271,7 +32283,7 @@ REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,EXEMPT,,,distributed,2026-01-
 REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,EXEMPT,,,distributed,2026-01-09,.claude/worktrees/session-2026-04-01/src/distributed/query_coordinator.zig
 REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,EXEMPT,,,distributed,2026-01-09,.worktrees/audit-multi-tenancy/src/distributed/query_coordinator.zig
 REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,EXEMPT,,,distributed,2026-01-09,.worktrees/graph-storage-integration/src/distributed/query_coordinator.zig
-REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,EXEMPT,,,distributed,2026-01-09,.worktrees/session-20260401/src/distributed/query_coordinator.zig
+REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,IMPL,,,distributed,2026-04-01,.worktrees/session-20260401/src/distributed/query_coordinator.zig
 REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,EXEMPT,,,distributed,2026-01-09,.worktrees/timeseries-gap-close/src/distributed/query_coordinator.zig
 REQ-SHARD-PRUNE-001,ShardPruning,QueryOptimization,EXEMPT,,,distributed,2026-01-09,src/distributed/query_coordinator.zig
 REQ-SHELL-AUTH-001,ShellAuthRequired,HelloAuthCheck,IMPL,,,cli,2026-01-28,.claude/worktrees/agent-a37683fc/src/client/repl/repl_dispatch.zig
@@ -35338,16 +35350,29 @@ REQ-TS-CHUNK-001,ChunkStorage,Storage,TESTED,,,timeseries,2026-04-01,.worktrees/
 REQ-TS-COMPRESS-STATS-001,CompressionStats,Observability,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/chunk_storage.zig
 REQ-TS-GORILLA-DEC-001,GorillaDecoder,Compression,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/chunk_storage.zig
 REQ-TS-GORILLA-ENC-001,GorillaEncoder,Compression,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/chunk_storage.zig
+REQ-TS-GQL-CHANGEPOINTS-001,TimeSeriesGqlChangePoints,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
+REQ-TS-GQL-COSSIM-001,TimeSeriesGqlCosineSimilarity,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
 REQ-TS-GQL-DERIVATIVE-001,TimeSeriesGqlDerivative,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
+REQ-TS-GQL-DTW-001,TimeSeriesGqlDTW,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
+REQ-TS-GQL-DTWDERIV-001,TimeSeriesGqlDTWDerivative,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
+REQ-TS-GQL-DTWOPENEND-001,TimeSeriesGqlDTWOpenEnd,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
+REQ-TS-GQL-DTWSHAPE-001,TimeSeriesGqlDTWShape,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
+REQ-TS-GQL-DTWSOFT-001,TimeSeriesGqlDTWSoft,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
 REQ-TS-GQL-EXEC-001,TimeSeriesGqlExecute,Integration,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
+REQ-TS-GQL-EXTRACTFEAT-001,TimeSeriesGqlExtractFeatures,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
 REQ-TS-GQL-FUNCTYPE-001,TSFunctionTypeEnum,Types,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
 REQ-TS-GQL-INTERPOLATE-001,TimeSeriesGqlInterpolate,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
+REQ-TS-GQL-INVARIANTS-001,TimeSeriesGqlInvariants,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
 REQ-TS-GQL-LASTVAL-001,TimeSeriesLastValue,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
+REQ-TS-GQL-MATPROFILE-001,TimeSeriesGqlMatrixProfile,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
 REQ-TS-GQL-MOVINGAVG-001,TimeSeriesGqlMovingAvg,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
 REQ-TS-GQL-RATE-001,TimeSeriesGqlRate,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
 REQ-TS-GQL-SAMPLEBY-001,TimeSeriesGqlSampleBy,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
+REQ-TS-GQL-SBD-001,TimeSeriesGqlSBD,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
 REQ-TS-GQL-TIMEBUCKET-001,TimeSeriesGqlTimeBucket,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
 REQ-TS-GQL-VALUEAT-001,TimeSeriesGqlValueAt,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
+REQ-TS-GQL-XCORR-001,TimeSeriesGqlCrossCorrelate,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
+REQ-TS-GQL-ZNORM-001,TimeSeriesGqlZNormalize,GqlFunction,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/gql_functions.zig
 REQ-TS-INSERT-001,TimeSeriesInsertMany,DataIngestion,TESTED,,,timeseries,2026-04-01,.worktrees/timeseries-gap-close/src/timeseries/timeseries.zig
 REQ-TS-INTERVAL-001,TimestampIntervalArithmetic,Addition,TESTED,,,eval,2026-04-01,.claude/worktrees/nifty-chasing-scroll/src/eval.zig
 REQ-TS-INTERVAL-001,TimestampIntervalArithmetic,ts_add,TESTED,,,eval,2026-04-01,.claude/worktrees/nifty-chasing-scroll/src/eval.zig

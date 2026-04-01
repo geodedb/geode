@@ -238,6 +238,7 @@ pub const BackupManager = struct {
         if (self.metadata_log.items.len == 0) {
             _ = try self.loadMetadata();
         }
+        const reload_live_store = self.store.data_dir.len > 0 and std.mem.eql(u8, self.store.data_dir, restore_dir);
         const recovery = try self.findRecoveryPoint(target_time);
         defer self.allocator.free(recovery.backup_chain);
 
@@ -295,8 +296,11 @@ pub const BackupManager = struct {
             return error.UnsupportedBackupFormat;
         }
 
-        const active_data_dir = if (graph_store.getDataDirOverride()) |ov| ov else self.store.data_dir;
-        if (active_data_dir.len > 0 and std.mem.eql(u8, active_data_dir, restore_dir)) {
+        if (reload_live_store) {
+            // Reopen the adapter on the restored directory before rebuilding the
+            // compatibility cache so reads reflect the restored graph-storage files.
+            graph_store.deinitGlobalAdapter();
+            _ = try graph_store.initGlobalAdapter(self.allocator, restore_dir);
             try self.store.loadFromFile();
         }
     }
