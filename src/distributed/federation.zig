@@ -173,20 +173,11 @@ pub const Connection = struct {
 
     /// Build HELLO request for inter-node federation authentication.
     /// GAP-0490: Reads GEODE_CLUSTER_TOKEN from environment; sends as geode-cluster user.
-    // CANARY: REQ=REQ-GAP-0490-FEDERATION-CLIENT-AUTH; FEATURE="FederationAuth"; ASPECT=ClientToken; STATUS=TESTED; OWNER=security; UPDATED=2026-02-18
+    /// Delegates to shared cluster_auth module and overrides client_name for federation.
+    // CANARY: REQ=REQ-GAP-0490-FEDERATION-CLIENT-AUTH; FEATURE="FederationAuth"; ASPECT=ClientToken; STATUS=TESTED; OWNER=security; UPDATED=2026-04-01
     fn buildFederationHelloRequest(allocator: std.mem.Allocator) schema.HelloRequest {
-        const token = std.process.getenv("GEODE_CLUSTER_TOKEN") orelse {
-            log.warn("GEODE_CLUSTER_TOKEN not set — federation connections may be rejected by auth-enabled nodes", &.{});
-            return schema.HelloRequest{
-                .username = "",
-                .password = "",
-                .tenant_id = null,
-                .client_name = "geode-federation",
-                .client_version = "",
-                .wanted_conformance = "",
-            };
-        };
-        const password_copy = allocator.dupe(u8, token) catch {
+        const cluster_auth = @import("cluster_auth.zig");
+        var req = cluster_auth.buildClusterHelloRequest(allocator) catch {
             log.warn("GEODE_CLUSTER_TOKEN: allocation failed, sending empty credentials", &.{});
             return schema.HelloRequest{
                 .username = "",
@@ -197,14 +188,8 @@ pub const Connection = struct {
                 .wanted_conformance = "",
             };
         };
-        return schema.HelloRequest{
-            .username = "geode-cluster",
-            .password = password_copy,
-            .tenant_id = null,
-            .client_name = "geode-federation",
-            .client_version = "",
-            .wanted_conformance = "",
-        };
+        req.client_name = "geode-federation";
+        return req;
     }
 
     /// GAP-0044: Initialize QUIC client and establish connection to remote federation node
@@ -221,10 +206,14 @@ pub const Connection = struct {
 
         // GAP-0144: Use TLS verification for federation by default
         // Check if insecure mode is explicitly allowed via environment variable
-        const builtin = @import("builtin");
+        const cluster_auth_mod = @import("cluster_auth.zig");
         const allow_insecure = blk: {
-            // All builds require explicit env var to skip TLS verification.
-            // Debug builds no longer auto-allow insecure connections.
+            // Check the cluster-wide insecure flag first
+            if (cluster_auth_mod.isInsecureModeAllowed()) {
+                log.warn("SECURITY WARNING: Federation TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
+                break :blk true;
+            }
+            // Backwards compat: also check federation-specific flag
             const env = std.process.getEnvVarOwned(self.allocator, "GEODE_FEDERATION_INSECURE") catch null;
             if (env) |v| {
                 defer self.allocator.free(v);
