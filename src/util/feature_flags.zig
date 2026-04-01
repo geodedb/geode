@@ -11,17 +11,31 @@ var flags_gpa_init = false;
 
 pub const Flag = struct {
     env_var: []const u8,
+    test_override: ?bool = null,
 
     pub fn init(env_var: []const u8) Flag {
         return Flag{ .env_var = env_var };
     }
 
     pub fn enabled(self: *Flag) bool {
+        if (self.test_override) |override| return override;
         // P2-3: Use static GPA for env var check
         if (!flags_gpa_init) {
             flags_gpa_init = true;
         }
         return std.process.hasEnvVar(flags_gpa.allocator(), self.env_var) catch false;
+    }
+
+    pub fn enableForTests(self: *Flag) void {
+        self.test_override = true;
+    }
+
+    pub fn disableForTests(self: *Flag) void {
+        self.test_override = false;
+    }
+
+    pub fn clearTestOverride(self: *Flag) void {
+        self.test_override = null;
     }
 };
 

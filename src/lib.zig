@@ -215,8 +215,8 @@ pub const timeseries = @import("timeseries_lib");
 // Re-export index modules for specialized data types
 pub const index = struct {
     pub const patricia = @import("index/patricia.zig");
-    pub const rtree = @import("index/rtree.zig");
-    pub const hnsw = @import("index/hnsw.zig");
+    pub const rtree = @import("rtree_lib");
+    pub const hnsw = @import("hnsw_lib");
     pub const interval_tree = @import("index/interval_tree.zig");
     pub const interval_persist = @import("index/interval_persist.zig");
     pub const jsonb_inverted = @import("index/jsonb_inverted.zig");
@@ -238,7 +238,7 @@ pub const distributed = struct {
     pub const raft_consensus = @import("distributed/raft_consensus.zig");
     pub const txn_coordinator = @import("distributed/txn_coordinator.zig");
     pub const cluster = @import("distributed/cluster.zig");
-    pub const raft = @import("distributed/raft.zig");
+    pub const raft = @import("raft");
     pub const query_planner = @import("distributed/query_planner.zig");
 };
 
@@ -333,9 +333,9 @@ pub const audit = struct {
     pub const syslog = @import("audit_lib").syslog;
 };
 
-// Runtime-flag gated scaffold stub re-exports for acceptance tests
+// Runtime-flag gated test-support exports for acceptance tests
 pub const tde_stub = @import("security/tde.zig");
-pub const mfa_stub = @import("mfa");
+pub const mfa_test_support = @import("mfa");
 
 // Top-level security module exports for tests
 pub const auth = @import("geode_auth");

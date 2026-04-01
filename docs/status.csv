@@ -820,7 +820,6 @@ REQ-FLE-008,FieldLevelEncryption,KMSIntegration,TESTED,,,security,2026-01-15,tes
 REQ-FLE-009,FieldLevelEncryption,BulkEncryption,TESTED,,,security,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-FLE-010,FieldLevelEncryption,EncryptionMetadata,TESTED,,,security,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-FLE-ADMIN-001,FieldLevelEncryption,ADMIN,TESTED,,,security,2026-01-15,src/admin/fle_commands.zig
-REQ-FLE-AEAD-001,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-15,src/crypto/aead.zig
 REQ-FLE-AST-001,FieldLevelEncryption,AST,TESTED,,,security,2026-01-15,src/gql/ast.zig
 REQ-FLE-BATCH-001,FLE Batch Re-encryption,ProgressTracking,TESTED,,,security,2026-01-16,src/admin/fle_commands.zig
 REQ-FLE-BI-001,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-15,src/crypto/hmac.zig
@@ -878,12 +877,10 @@ REQ-FLE-FAILSECURE-004,FLEFailSecure,FieldRequiresEncryptionCheck,TESTED,,,secur
 REQ-FLE-FAILSECURE-005,FLEFailSecure,CatalogErrorDenyAccess,TESTED,,,security,2026-01-28,src/fle_integration.zig
 REQ-FLE-FAILSECURE-005,FLEFailSecure,EdgePropertyEncryption,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-FAILSECURE-006,FLEFailSecure,AllErrorsDeny,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
-REQ-FLE-FAILSECURE-006,FLEFailSecure,MasterKeyRequired,TESTED,,,security,2026-01-28,src/keys/manager.zig
 REQ-FLE-FAILSECURE-007,FLEFailSecure,AuditTrail,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
 REQ-FLE-HKDF-001,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-15,src/crypto/hkdf.zig
 REQ-FLE-INTEGRATION-001,FieldLevelEncryption,INTEGRATION,TESTED,,,security,2026-01-15,src/fle_integration.zig
 REQ-FLE-KEY-001,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-15,src/keys/types.zig
-REQ-FLE-KEY-002,FieldLevelEncryption,SECURITY,TESTED,,,security,2026-01-28,src/keys/manager.zig
 REQ-FLE-MIGRATE-001,FieldLevelEncryption,Migration,TESTED,,,security,2026-01-16,src/admin/fle_commands.zig
 REQ-FLE-MIGRATE-001,FieldLevelEncryption,Migration,TESTED,,,security,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-FLE-MIGRATE-CLI-001,FLEMigrateCLI,CLI,TESTED,,,security,2026-01-15,src/cli/fle_cli.zig
@@ -942,7 +939,6 @@ REQ-GAP-0193-PRIORITY,IMPLBatchPromotion,PriorityCategories,TESTED,,,test,2026-0
 REQ-GAP-0193-REMAINING,IMPLBatchPromotion,RemainingCategories,TESTED,,,test,2026-01-15,tests/test_gap_0193_remaining_categories.zig
 REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-01-25,src/migration/mod.zig
 REQ-GAP-0234,SyntaxValidationTests,ParserErrors,TESTED,,,parser,2026-01-25,tests/test_syntax_validation.zig
-REQ-GAP-0236,MonitoringUnitTests,Counter,TESTED,,,monitoring,2026-01-25,src/monitoring/metrics.zig
 REQ-GAP-0237,MVCCAdvancedUnitTests,ConflictRepair,TESTED,,,txn,2026-01-25,src/transactions/mvcc_adv/conflict_repair_heuristics.zig
 REQ-GAP-0237,MVCCAdvancedUnitTests,EarlyDetect,TESTED,,,txn,2026-01-25,src/transactions/mvcc_adv/early_detect.zig
 REQ-GAP-0237,MVCCAdvancedUnitTests,PartialRollback,TESTED,,,txn,2026-01-25,src/transactions/mvcc_adv/partial_rollback.zig
@@ -1351,7 +1347,6 @@ REQ-GQL-032-COMPOSITE,Constraints,Composite,TESTED,,,schema,2026-01-16,tests/tes
 REQ-GQL-032-PATTERN,Constraints,Pattern,TESTED,,,schema,2026-01-16,tests/test_gap_0193_batch2_engine.zig
 REQ-GQL-032-RANGE,Constraints,Range,TESTED,,,schema,2026-01-16,tests/test_gap_0193_batch2_engine.zig
 REQ-GQL-032-UNIQUE,Constraints,Unique,TESTED,,,schema,2026-01-16,tests/test_gap_0193_batch2_engine.zig
-REQ-GQL-040,Raft Consensus,Distributed,BENCHED,,,distributed,2025-09-21,src/distributed/raft.zig
 REQ-GQL-040,Temporal,TemporalExtremeOffsetArithmetic,TESTED,,,engine,2025-09-21,tests/test_temporal_extreme_offsets.zig
 REQ-GQL-041,Cluster Networking,InterNodeMessaging,TESTED,,,distributed,2025-09-25,src/distributed/network_transport.zig
 REQ-GQL-042,CDC,AdaptiveJitterThresholds,TESTED,,,streaming,2025-09-21,tests/canary_cdc_jitter_thresholds.zig
@@ -1925,7 +1920,6 @@ REQ-GQL-HEAD-001,ListFunctions,HeadElement,TESTED,,,eval,2026-01-09,src/eval.zig
 REQ-GQL-HEAD-001,ListFunctions,HeadElement,TESTED,,,eval,2026-01-09,src/eval/call_handlers.zig
 REQ-GQL-HITS-001,Centrality,HITS,TESTED,,,graph,2026-01-16,tests/test_gap_0193_batch2_misc.zig
 REQ-GQL-HITS-001,HITSAlgorithm,Centrality,TESTED,,,graph,2026-01-03,src/execution/centrality_algorithms.zig
-REQ-GQL-HNSW-JACCARD-001,Jaccard Distance in HNSW,IndexMetric,TESTED,,,index,2026-01-15,src/index/hnsw.zig
 REQ-GQL-IMPLICIT-GROUPBY-001,ImplicitGroupBy,WithAggregation,TESTED,,,execution,2025-12-26,src/execution.zig
 REQ-GQL-IMPLICIT-GROUPBY-002,ImplicitGroupBy,GroupingLogic,TESTED,,,execution,2025-12-26,src/execution.zig
 REQ-GQL-IMPLICIT-GROUPBY-FIX-001,ImplicitGroupByInMatchAgg,NonAggExprCheck,TESTED,,,execution,2025-12-26,src/execution/match_operations.zig
@@ -2179,7 +2173,6 @@ REQ-GQL-PROPERTIES-001,GQLProperties,PropertyAccess,TESTED,,,engine,2026-01-15,t
 REQ-GQL-PROPERTIES-001,PropertiesFunction,NodeProperties,TESTED,,,eval,2025-12-28,src/eval.zig
 REQ-GQL-PROPERTY-001,PropertyPersistence,MemoryManagement,TESTED,,,engine,2025-10-04,tests/test_property_persistence_regression.zig
 REQ-GQL-PROPERTY-001,PropertyPersistence,MemoryManagement,TESTED,,,engine,2026-02-04,tests/test_property_persistence_regression.zig
-REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,TESTED,,,distributed,2025-09-25,src/distributed/raft_persistent.zig
 REQ-GQL-REGEX-FIX-001,RegexMatching,OverflowPrevention,TESTED,,,eval,2026-01-09,src/eval/logic_helpers.zig
 REQ-GQL-REL-AGG-NO-GROUPBY-001,RelationshipAggregationNoGroupBy,EdgeCollection,TESTED,,,execution,2025-12-28,src/execution/match_operations.zig
 REQ-GQL-S3-001,S3 Cloud Backups,Storage,TESTED,,,storage,2026-01-17,src/storage/s3_backup.zig
@@ -3199,7 +3192,6 @@ REQ-PERF-PHASE2-BENCH-001,PerfPhase2,StorageBench,TESTED,,,performance,2026-01-1
 REQ-PERF-PHASE2-BENCH-001,StorageBenchmarking,BUILD,EXEMPT,,,performance,2025-10-16,build.zig
 REQ-PERF-PHASE2-BENCH-001,StorageOptimization,TESTING,EXEMPT,,,performance,2025-10-16,benchmarks/phase2_benchmarks.zig
 REQ-PERF-PHASE3-001,ConcurrencyOptimization,CATALOG_LOCK,EXEMPT,,,performance,2025-10-17,src/schema/catalog.zig
-REQ-PERF-PHASE3-002,MemoryOptimization,HNSW_NEIGHBORS,BENCHED,,,performance,2026-01-15,src/index/hnsw.zig
 REQ-PERF-PHASE3-BENCH-001,ConcurrencyBenchmarking,BUILD,EXEMPT,,,performance,2025-10-16,build.zig
 REQ-PERF-PHASE3-BENCH-001,ConcurrencyOptimization,TESTING,EXEMPT,,,performance,2025-10-16,benchmarks/phase3_benchmarks.zig
 REQ-PERF-PHASE5-001,ColumnOptimization,BATCH_ALLOC,EXEMPT,,,performance,2025-10-16,src/execution.zig
@@ -3219,7 +3211,6 @@ REQ-PERF-PHASE5-003,VectorOptimization,TESTING,TESTED,,,performance,2025-11-16,b
 REQ-PERF-PHASE5-006,ConcurrencyOptimization,TESTING,EXEMPT,,,performance,2025-11-16,benchmarks/phase5_6_concurrent_catalog.zig
 REQ-PERF-PHASE5-P1-001,PageRankOptimization,EDGE_INDEX_CACHE,TESTED,,,performance,2025-11-16,src/graph/centrality_pagerank.zig
 REQ-PERF-PHASE5-P1-001,PageRankOptimization,TESTING,TESTED,,,performance,2025-11-16,benchmarks/phase5_7_pagerank_edges.zig
-REQ-PERF-PHASE5-P1-002,MetricsOptimization,LOCK_FREE_HISTOGRAM,EXEMPT,,,performance,2025-11-16,src/monitoring/metrics.zig
 REQ-PERF-PHASE5-P1-002,MetricsOptimization,TESTING,EXEMPT,,,performance,2025-11-16,benchmarks/phase5_8_metrics_atomic.zig
 REQ-PERF-PHASE5-P2-001,StructOptimization,TESTING,IMPL,,,performance,2025-11-16,benchmarks/phase5_9_struct_by_value.zig
 REQ-PERF-PLAN-LIFECYCLE-001,PlanCacheLifecycle,CompiledPlan,TESTED,,,engine,2026-02-17,src/server/query_plan_cache.zig
@@ -3249,10 +3240,6 @@ REQ-PERF-SPICE-007,ParallelForEach,ForEachOperation,IMPL,,,performance,2026-02-0
 REQ-PERF-SPICE-008,SpiceParallelModule,BuildIntegration,IMPL,,,performance,2026-02-02,build.zig
 REQ-PERF-SPICE-008,SpicePoolMap,InPlaceMap,IMPL,,,performance,2026-02-03,src/parallel/spice.zig
 REQ-PERF-SPICE-009,SpiceIntegration,ExecutionPool,IMPL,,,performance,2026-02-02,src/execution/parallel.zig
-REQ-PERF-SPICE-014,HNSWSpiceIntegration,IndexParallelism,IMPL,,,performance,2026-02-02,src/index/hnsw.zig
-REQ-PERF-SPICE-015,BatchDistanceSimd,HNSWBatch,IMPL,,,performance,2026-02-02,src/index/hnsw.zig
-REQ-PERF-SPICE-016,ParallelBatchDistance,HNSWParallel,IMPL,,,performance,2026-02-02,src/index/hnsw.zig
-REQ-PERF-SPICE-017,ParallelKnnSearch,HNSWMultiQuery,IMPL,,,performance,2026-02-02,src/index/hnsw.zig
 REQ-PERF-SPICE-018,CBOSpiceIntegration,PlannerParallelism,IMPL,,,performance,2026-02-02,src/planner/cbo.zig
 REQ-PERF-SPICE-019,CBOSpicePool,PlannerField,IMPL,,,performance,2026-02-02,src/planner/cbo.zig
 REQ-PERF-SPICE-020,ParallelDPJoinEnum,JoinOrderingParallel,IMPL,,,performance,2026-02-02,src/planner/cbo.zig
@@ -3267,10 +3254,7 @@ REQ-PERF-TEST-001,PerformanceTests,UnitTests,IMPL,,,test,2026-01-26,tests/test_p
 REQ-PERF-TEST-002,PerfTest,MemoryUsage,TESTED,,,performance,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-PERF-TEST-003,PerfTest,IndexPerf,TESTED,,,performance,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-PERF-TEST-BUILD-001,PerformanceTests,BuildIntegration,IMPL,,,build,2026-01-26,build.zig
-REQ-PERF-THREAD-POOL-001,ThreadPool,QueryExecution,TESTED,,,transport,2026-01-30,src/transport/thread_pool.zig
-REQ-PERF-THREAD-POOL-002,ThreadPool,WorkerManagement,TESTED,,,transport,2026-01-30,src/transport/thread_pool.zig
-REQ-PERF-THREAD-POOL-003,ThreadPool,QueryWorkItem,TESTED,,,transport,2026-01-30,src/transport/thread_pool.zig
-REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,IMPL,,,build,2026-01-26,build.zig
+REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,IMPL,,,build,2026-04-01,build.zig
 REQ-PERF-WAL-001,WriteAheadLog,DeltaPersistence,TESTED,,,storage,2026-03-31,src/wal.zig
 REQ-PERF-WAL-001,WriteAheadLog,UnitTest,TESTED,,,storage,2026-02-17,tests/test_wal.zig
 REQ-PERF-WAL-002,WriteAheadLog,MutationCallback,TESTED,,,storage,2026-02-17,src/graph_store.zig
@@ -3691,7 +3675,6 @@ REQ-SPATIAL-INTERSECTS-001,SpatialIntersects,GeometryRelation,TESTED,,,spatial,2
 REQ-SPATIAL-POINT-001,SpatialPoint,PointCreation,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-POINT-001,SpatialTypes,Point,TESTED,,,types,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-SPATIAL-POINT-001,SpatialTypes,PointType,TESTED,,,types,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
-REQ-SPATIAL-RTREE-001,RTreeSpatialIndex,Wrapper,TESTED,,,index,2026-03-24,src/index/rtree.zig
 REQ-SPATIAL-WITHIN-001,SpatialWithin,GeometryRelation,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-WKB-ENDIAN-001,WKBByteOrderParsing,UnitTest,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
 REQ-SPATIAL-X-001,SpatialX,CoordinateExtraction,TESTED,,,spatial,2026-01-10,src/eval_extended.zig
@@ -3792,12 +3775,11 @@ REQ-TDE-ENFORCE-015,TDEEnforcement,BuildIntegration,TESTED,,,security,2026-01-28
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,<Component>,TESTED,,,security,2026-01-28,docs/TDE_FILE_LEVEL_ENCRYPTION.md
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,DomainTrie,TESTED,,,security,2026-01-28,src/index/domain_trie_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,FLECatalog,TESTED,,,security,2026-01-28,src/schema/fle_catalog.zig
-REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,,,security,2026-01-28,src/index/hnsw_persist.zig
+REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,,,security,2026-04-01,src/index/hnsw_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,IntervalTree,TESTED,,,security,2026-01-28,src/index/interval_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,JSONBIndex,TESTED,,,security,2026-01-28,src/index/jsonb_inverted_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,PatriciaTrie,TESTED,,,security,2026-01-28,src/index/patricia_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,RTreeIndex,TESTED,,,security,2026-01-28,src/index/rtree_persist.zig
-REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,RaftState,TESTED,,,security,2026-01-28,src/distributed/raft_persistent.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SECURITY,TESTED,,,security,2026-01-28,docs/SECURITY_PROGRESS.md
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SchemaCatalog,TESTED,,,security,2026-01-28,src/schema/catalog.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SharedUtility,TESTED,,,security,2026-01-28,src/storage/tde_file_encryption.zig

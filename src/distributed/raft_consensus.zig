@@ -1,7 +1,7 @@
-// Raft consensus — compatibility wrapper around the external raft library
-// (gitlab.com/devnw/zig/raft). Preserves all geode-specific domain types
-// (Command, TxnPrepare, TxnDecide, etc.) and wire format (protobuf frames
-// over QUIC) while delegating the core consensus protocol to the external library.
+// Raft consensus integration over the external raft library.
+// This module owns Geode-specific command types, protobuf framing, and QUIC
+// transport wiring while delegating consensus state transitions to the
+// external raft package.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

@@ -3,7 +3,7 @@ const ast = @import("../gql/ast.zig");
 const heap = @import("../storage/heap.zig");
 const vector_index = @import("../index/vector_index.zig");
 const spatial_index = @import("../index/spatial_index.zig");
-const hnsw = @import("../index/hnsw.zig");
+const hnsw = @import("hnsw_lib");
 
 // CANARY: REQ=REQ-GQL-ADVANCED-TYPES-OPTIMIZER; FEATURE="Advanced Types Query Optimizer"; ASPECT=Optimizer; STATUS=TESTED; TEST=src/optimizer/advanced_types_optimizer.zig; OWNER=optimizer; UPDATED=2026-01-15
 

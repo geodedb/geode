@@ -10,7 +10,7 @@ test "FLE complete lifecycle" {
     const allocator = gpa.allocator();
 
     // 1. Init Manager
-    var manager = try fle_key_manager.KeyManager.init(allocator);
+    const manager = try fle_key_manager.initFromEnv(allocator);
     defer manager.deinit();
 
     // 2. Derive initial keys
@@ -49,11 +49,11 @@ test "FLE complete lifecycle" {
 
     // 5. Rewrap SK
     // `geode fle rotate-key tenant1 sk Person`
-    try manager.rewrapSK("tenant1", "Person");
+    try fle_key_manager.rewrapSchemaKey(allocator, manager, "tenant1", "Person");
 
     // 6. Rewrap TRK
     // `geode fle rotate-key tenant1 trk`
-    try manager.rewrapTRK("tenant1");
+    try fle_key_manager.rewrapTenantRootKey(allocator, manager, "tenant1");
 
     // 7. Verify post-rotation derivation still works
     // After TRK/SK rewrap, getFEK should still work (it derives from new/current defaults)

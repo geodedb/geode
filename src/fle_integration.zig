@@ -85,7 +85,7 @@ fn getGlobalKeyManager(allocator: std.mem.Allocator) !*key_manager_mod.KeyManage
         return km;
     }
 
-    const km = try key_manager_mod.KeyManager.init(allocator);
+    const km = try key_manager_mod.initFromEnv(allocator);
     global_key_manager_instance = km;
     return km;
 }
@@ -120,7 +120,7 @@ pub fn getCurrentKeyVersion(ctx: EncryptionContext, field_name: []const u8) !u16
     defer ctx.allocator.free(key_path);
 
     // Get version from key manager (defaults to 1 if not set)
-    return key_manager.getKeyVersion(key_path);
+    return key_manager_mod.currentKeyVersion(key_manager, key_path);
 }
 
 /// Rotate the FLE key for a field to a new version
@@ -279,7 +279,7 @@ pub fn encryptFieldIfNeeded(
         &fek,
         aad,
         plaintext,
-        null, // Random nonce
+        key_ids.version,
     );
     defer envelope.deinit(ctx.allocator);
 

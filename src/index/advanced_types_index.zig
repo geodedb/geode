@@ -3,8 +3,8 @@ const heap = @import("../storage/heap.zig");
 const vector = @import("../types/vector.zig");
 const geographic = @import("../types/geographic.zig");
 const cryptographic = @import("../types/cryptographic.zig");
-const hnsw = @import("hnsw.zig");
-const rtree = @import("rtree.zig");
+const hnsw = @import("hnsw_lib");
+const rtree = @import("rtree_lib");
 const patricia = @import("patricia.zig");
 const interval_tree = @import("interval_tree.zig");
 const interval_persist = @import("interval_persist.zig");
@@ -463,7 +463,11 @@ pub const VectorIndexWrapper = struct {
 
     pub fn init(allocator: std.mem.Allocator, dim: u16, metric: DistanceMetric) !VectorIndexWrapper {
         // HNSW parameters: M=16, ef_construction=200 for good recall/performance balance
-        const hnsw_index = hnsw.Hnsw.init(allocator, dim, 16, 200);
+        const hnsw_index = try hnsw.Hnsw.init(allocator, dim, toHnswMetric(metric), .{
+            .m = 16,
+            .ef_construction = 200,
+            .ef_search = 200,
+        });
 
         return VectorIndexWrapper{
             .allocator = allocator,
@@ -477,11 +481,11 @@ pub const VectorIndexWrapper = struct {
     }
 
     pub fn insert(self: *VectorIndexWrapper, node_id: u64, vec: vector.VectorF32) !void {
-        try self.hnsw_index.add(node_id, vec.data);
+        try self.hnsw_index.insert(node_id, vec.data);
     }
 
     pub fn search(self: *VectorIndexWrapper, query: vector.VectorF32, k: u32, allocator: std.mem.Allocator) ![]VectorSearchResult {
-        const results = try self.hnsw_index.search(query.data, k, self.toHnswMetric(self.metric));
+        const results = try self.hnsw_index.knnSearch(query.data, k);
         defer allocator.free(results);
 
         const search_results = try allocator.alloc(VectorSearchResult, results.len);
@@ -496,12 +500,11 @@ pub const VectorIndexWrapper = struct {
         return search_results;
     }
 
-    fn toHnswMetric(self: VectorIndexWrapper, metric: DistanceMetric) hnsw.DistanceMetric {
-        _ = self;
+    fn toHnswMetric(metric: DistanceMetric) hnsw.DistanceMetric {
         return switch (metric) {
-            .l2 => .l2,
+            .l2 => .euclidean,
             .cosine => .cosine,
-            .dot_product => .dot,
+            .dot_product => .dot_product,
         };
     }
 
@@ -526,7 +529,7 @@ pub const SpatialIndexWrapper = struct {
     pub fn init(allocator: std.mem.Allocator) !SpatialIndexWrapper {
         return SpatialIndexWrapper{
             .allocator = allocator,
-            .rtree_index = rtree.RTree.init(allocator, 16),
+            .rtree_index = try rtree.RTree.init(allocator, 16),
             .coordinate_map = std.AutoHashMap(u64, geographic.LatLon).init(allocator),
         };
     }
@@ -556,7 +559,7 @@ pub const SpatialIndexWrapper = struct {
             .max_x = point.lon,
             .max_y = point.lat,
         };
-        const removed = self.rtree_index.remove(mbr, node_id);
+        const removed = self.rtree_index.remove(mbr, node_id) catch false;
         if (removed) {
             _ = self.coordinate_map.remove(node_id);
         }
@@ -583,13 +586,14 @@ pub const SpatialIndexWrapper = struct {
             .max_y = center.lat + lat_radius,
         };
 
-        const candidates = try self.rtree_index.search(search_mbr, allocator);
-        defer allocator.free(candidates);
+        var candidates = std.ArrayList(u64).init(allocator);
+        defer candidates.deinit();
+        try self.rtree_index.search(search_mbr, allocator, &candidates);
 
         var results = std.ArrayList(SpatialSearchResult).init(allocator);
         defer results.deinit();
 
-        for (candidates) |candidate_id| {
+        for (candidates.items) |candidate_id| {
             // GAP-0205 FIX: Retrieve actual coordinates from the coordinate map
             const candidate_point = self.coordinate_map.get(candidate_id) orelse {
                 // If coordinates not found, skip this candidate (shouldn't happen in normal operation)

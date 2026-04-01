@@ -99,7 +99,7 @@ test "spatial containment queries" {
     const allocator = std.testing.allocator;
 
     // Test R-tree directly
-    var rtree = geode.index.rtree.RTree.init(allocator, 4);
+    var rtree = try geode.index.rtree.RTree.init(allocator, 4);
     defer rtree.deinit();
 
     // Insert nested rectangles
@@ -144,7 +144,7 @@ test "spatial containment queries" {
     var results = std.ArrayList(u64).init(allocator);
     defer results.deinit();
 
-    try rtree.search(point_query, &results);
+    try rtree.search(point_query, allocator, &results);
 
     // All three rectangles contain the point
     try testing.expect(results.items.len == 3);

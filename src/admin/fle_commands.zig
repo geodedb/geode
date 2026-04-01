@@ -220,7 +220,7 @@ fn executeMigrationWithStorage(
                 fek,
                 aad,
                 record.field_value,
-                null, // Random nonce
+                key_ids.version,
             ) catch {
                 state.error_count += 1;
                 continue;
@@ -430,7 +430,7 @@ pub fn migrateEncrypt(allocator: std.mem.Allocator, args: MigrationArgs) !void {
     };
 
     // 2. Initialize key manager and get FEK (Field Encryption Key)
-    const key_manager = try fle_key_manager.KeyManager.init(allocator);
+    const key_manager = try fle_key_manager.initFromEnv(allocator);
     defer key_manager.deinit();
 
     // Build key identifier: tenant_id:schema_name:field_name

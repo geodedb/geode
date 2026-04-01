@@ -1,5 +1,5 @@
 const std = @import("std");
-const thread_pool = @import("transport/thread_pool.zig");
+const thread_pool = @import("concurrency_lib");
 
 // CANARY: REQ=REQ-PERF-ASYNC-CONN-TEST-001; FEATURE="AsyncConnectionHandling"; ASPECT=UnitTests; STATUS=TESTED; OWNER=server; UPDATED=2026-01-27
 // GAP-0202: Unit tests for async connection handling infrastructure
