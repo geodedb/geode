@@ -912,12 +912,9 @@ pub const ConsistentHash = struct {
         }.lessThan);
     }
 
-    pub fn getNode(self: *ConsistentHash, key: []const u8) ?Node {
-        if (self.ring.items.len == 0) return null;
-
-        const key_hash = self.hash(key);
-
-        // Binary search for the first node with hash >= key_hash
+    /// PERF-D017: Binary search helper to find the first ring index with hash >= key_hash.
+    /// Returns ring.items.len if all hashes are less than key_hash (wraps to 0).
+    fn findStartIndex(self: *ConsistentHash, key_hash: u64) usize {
         var left: usize = 0;
         var right: usize = self.ring.items.len;
 
@@ -930,12 +927,21 @@ pub const ConsistentHash = struct {
             }
         }
 
+        return left;
+    }
+
+    pub fn getNode(self: *ConsistentHash, key: []const u8) ?Node {
+        if (self.ring.items.len == 0) return null;
+
+        const key_hash = self.hash(key);
+        const idx = self.findStartIndex(key_hash);
+
         // If we've gone past the end, wrap around to the first node
-        if (left >= self.ring.items.len) {
+        if (idx >= self.ring.items.len) {
             return self.ring.items[0];
         }
 
-        return self.ring.items[left];
+        return self.ring.items[idx];
     }
 
     pub fn getNodes(self: *ConsistentHash, key: []const u8, count: usize) ![]Node {
@@ -947,15 +953,10 @@ pub const ConsistentHash = struct {
         defer seen_ids.deinit();
 
         const key_hash = self.hash(key);
-        var start_idx: usize = 0;
 
-        // Find starting position
-        for (self.ring.items, 0..) |node, i| {
-            if (node.hash >= key_hash) {
-                start_idx = i;
-                break;
-            }
-        }
+        // PERF-D017: Use binary search instead of O(n) linear scan
+        const raw_start = self.findStartIndex(key_hash);
+        const start_idx = if (raw_start >= self.ring.items.len) 0 else raw_start;
 
         // Collect unique nodes
         var i: usize = 0;
